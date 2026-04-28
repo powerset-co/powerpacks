@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/search-network-task.schema.json",
+  "title": "SearchNetworkTask",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task", "version", "steps"],
+  "properties": {
+    "task": {
+      "type": "string",
+      "enum": ["search_network"]
+    },
+    "version": { "type": "integer" },
+    "description": { "type": "string" },
+    "default_constraints": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "primitive"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["reasoning", "primitive", "control"]
+          },
+          "primitive": { "type": "string" },
+          "output_schema": { "type": "string" },
+          "optional": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

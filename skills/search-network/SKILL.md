@@ -17,6 +17,7 @@ Give the user one operational entrypoint that does the work end to end.
 
 The agent should:
 
+- create a JSON task run before retrieval
 - decompose the request into the Powerpacks role-search schema
 - decide whether to search directly, count first, or generate slices
 - execute retrieval through TurboPuffer
@@ -25,15 +26,18 @@ The agent should:
 
 ## Strategy Loop
 
-1. Expand the request with `expand_search_request`.
-2. Choose the initial strategy with `decide_search_strategy`.
-3. Run one of:
+1. Create task state from `powerpacks/tasks/search-network.task.json`.
+2. Expand the request with `expand_search_request`.
+3. Record the expansion output.
+4. Choose the initial strategy with `decide_search_strategy`.
+5. Run one of:
    - direct role search
    - count then search
    - multi-slice retrieval
-4. Assess the frontier with `assess_frontier`.
-5. Decide the next action with `plan_candidate_review`.
-6. Stop when the frontier is coherent enough to present or hydrate.
+6. Record every primitive output into task state.
+7. Assess the frontier with `assess_frontier`.
+8. Decide the next action with `plan_candidate_review`.
+9. Stop when the frontier is coherent enough to present or hydrate.
 
 ## Rules
 
@@ -58,7 +62,7 @@ The agent should:
 
 ## Decision Trace
 
-For every run, keep a concise trace with:
+For every run, keep a JSON trace with:
 
 - expanded constraints
 - strategy decision and reason
@@ -70,9 +74,13 @@ For every run, keep a concise trace with:
 The trace is part of the result. It lets the user inspect why the claw searched
 that way.
 
+Use `powerpacks/primitives/task_state/task_state.py` when a local filesystem is
+available. If not, keep the same shape in the final response.
+
 ## Primary Primitives
 
 - `expand_search_request`
+- `task_state`
 - `decide_search_strategy`
 - `count_candidates`
 - `execute_role_search`
@@ -101,8 +109,12 @@ When needed, consult these reference files in the installed repo:
 
 - `powerpacks/docs/search-surface.md`
 - `powerpacks/docs/expand-execute.md`
+- `powerpacks/docs/task-harness.md`
 - `powerpacks/docs/slice-planning.md`
 - `powerpacks/docs/turbopuffer-contract.md`
+- `powerpacks/tasks/search-network.task.json`
+- `powerpacks/schemas/search-network-task.schema.json`
+- `powerpacks/schemas/task-run.schema.json`
 - `powerpacks/schemas/decomposed-query.schema.json`
 - `powerpacks/schemas/role-search-filters.schema.json`
 - `powerpacks/schemas/search-slice.schema.json`

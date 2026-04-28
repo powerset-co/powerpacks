@@ -1,0 +1,74 @@
+{
+  "task": "search_network",
+  "version": 1,
+  "description": "Plan and execute a role-first people search with explicit state, primitive outputs, and frontier assessment.",
+  "default_constraints": {
+    "no_llm_enrichment": true,
+    "no_summary_search": true,
+    "no_company_signal_search": true,
+    "no_expensive_scoring": true
+  },
+  "steps": [
+    {
+      "id": "expand",
+      "kind": "reasoning",
+      "primitive": "expand_search_request",
+      "output_schema": "decomposed-query.schema.json"
+    },
+    {
+      "id": "decide_search_strategy",
+      "kind": "reasoning",
+      "primitive": "decide_search_strategy",
+      "output_schema": "search-strategy-decision.schema.json"
+    },
+    {
+      "id": "direct_count",
+      "kind": "primitive",
+      "primitive": "count_candidates",
+      "optional": true
+    },
+    {
+      "id": "generate_search_slices",
+      "kind": "reasoning",
+      "primitive": "generate_search_slices",
+      "output_schema": "search-slice.schema.json",
+      "optional": true
+    },
+    {
+      "id": "execute_search_slices",
+      "kind": "primitive",
+      "primitive": "execute_search_slice",
+      "optional": true
+    },
+    {
+      "id": "direct_execute",
+      "kind": "primitive",
+      "primitive": "execute_role_search",
+      "optional": true
+    },
+    {
+      "id": "merge_candidate_frontier",
+      "kind": "primitive",
+      "primitive": "merge_candidate_frontier",
+      "optional": true
+    },
+    {
+      "id": "assess_frontier",
+      "kind": "reasoning",
+      "primitive": "assess_frontier",
+      "output_schema": "frontier-assessment.schema.json"
+    },
+    {
+      "id": "plan_candidate_review",
+      "kind": "reasoning",
+      "primitive": "plan_candidate_review",
+      "output_schema": "candidate-review-plan.schema.json"
+    },
+    {
+      "id": "hydrate_people",
+      "kind": "primitive",
+      "primitive": "hydrate_people",
+      "optional": true
+    }
+  ]
+}

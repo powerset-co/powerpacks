@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/task-run.schema.json",
+  "title": "TaskRun",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "task", "status", "query", "created_at", "updated_at", "steps"],
+  "properties": {
+    "task_id": { "type": "string" },
+    "task": {
+      "type": "string",
+      "enum": ["search_network"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "completed", "failed", "paused"]
+    },
+    "query": { "type": "string" },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "plan": {
+      "type": "object"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "recorded_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "running", "completed", "failed", "skipped"]
+          },
+          "recorded_at": { "type": "string" },
+          "elapsed_ms": { "type": "integer" },
+          "output": {},
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "summary": {
+      "type": "object"
+    }
+  }
+}

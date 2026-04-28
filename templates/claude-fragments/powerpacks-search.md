@@ -5,6 +5,7 @@ Use the Powerpacks docs as a hard contract when calling search tools.
 - Decompose free text first.
 - Treat that decomposition as the `expand` phase.
 - Use `$search-network` as the top-level operational entrypoint.
+- Create and update a JSON task run while searching.
 - Choose a strategy before retrieval: direct, count-first, slices, or clarify.
 - Generate multiple bounded retrieval slices only when the query warrants it.
 - Assess the frontier before hydration or presentation.
@@ -14,6 +15,10 @@ Use the Powerpacks docs as a hard contract when calling search tools.
 - Do not invent field names, operators, or enum values.
 - If a filter shape is unclear, consult:
   - `powerpacks/docs/turbopuffer-contract.md`
+  - `powerpacks/docs/task-harness.md`
+  - `powerpacks/tasks/search-network.task.json`
+  - `powerpacks/schemas/search-network-task.schema.json`
+  - `powerpacks/schemas/task-run.schema.json`
   - `powerpacks/schemas/role-search-filters.schema.json`
   - `powerpacks/schemas/search-slice.schema.json`
   - `powerpacks/schemas/search-strategy-decision.schema.json`

@@ -38,11 +38,13 @@ rm -rf "$TARGET/powerpacks/mcp"
 rm -rf "$TARGET/powerpacks/templates"
 rm -rf "$TARGET/powerpacks/docs"
 rm -rf "$TARGET/powerpacks/schemas"
+rm -rf "$TARGET/powerpacks/tasks"
 cp -R "$SCRIPT_DIR/primitives" "$TARGET/powerpacks/primitives"
 cp -R "$SCRIPT_DIR/mcp" "$TARGET/powerpacks/mcp"
 cp -R "$SCRIPT_DIR/templates" "$TARGET/powerpacks/templates"
 cp -R "$SCRIPT_DIR/docs" "$TARGET/powerpacks/docs"
 cp -R "$SCRIPT_DIR/schemas" "$TARGET/powerpacks/schemas"
+cp -R "$SCRIPT_DIR/tasks" "$TARGET/powerpacks/tasks"
 cp -R "$SCRIPT_DIR/skills" "$TARGET/powerpacks/skills"
 
 cat > "$TARGET/powerpacks/install-manifest.json" <<EOF

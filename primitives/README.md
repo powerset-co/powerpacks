@@ -14,6 +14,7 @@ V1 focuses on:
 
 Public V1 primitives:
 
+- `task_state`
 - `expand_search_request`
 - `decide_search_strategy`
 - `generate_search_slices`

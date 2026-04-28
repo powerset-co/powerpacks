@@ -23,6 +23,7 @@ It is intentionally not a NanoClaw fork.
 - `templates/` contains config fragments the installer can merge or copy
 - `docs/` contains the public search surface and query rules
 - `schemas/` contains JSON schemas for decomposed queries and filter shapes
+- `tasks/` contains task templates for plan/execute workflows
 
 ## Install
 
@@ -36,7 +37,7 @@ The installer currently:
 - copies `skills/` into `.claude/skills/`
 - copies `primitives/` into `powerpacks/primitives/`
 - copies template config into `powerpacks/templates/`
-- copies `docs/` and `schemas/` into `powerpacks/`
+- copies `docs/`, `schemas/`, and `tasks/` into `powerpacks/`
 - writes an install manifest for traceability
 
 ## Current Scope
