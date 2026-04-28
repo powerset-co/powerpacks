@@ -15,6 +15,66 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "company_names": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_cities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_states": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_countries": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_metro_areas": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_macro_regions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "entity_types": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "sector_types": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "technology_types": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "customer_types": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "investors": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "yc_batches": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "funding_stage_min": { "type": "string" },
+    "funding_stage_max": { "type": "string" },
+    "funding_amount_min": { "type": "number" },
+    "funding_amount_max": { "type": "number" },
+    "headcount_min": { "type": "integer" },
+    "headcount_max": { "type": "integer" },
+    "last_funding_before": { "type": "string" },
+    "last_funding_after": { "type": "string" },
+    "valuation_min": { "type": "number" },
+    "valuation_max": { "type": "number" },
+    "founded_year_min": { "type": "integer" },
+    "founded_year_max": { "type": "integer" },
     "education_ids": {
       "type": "array",
       "items": { "type": "string" }

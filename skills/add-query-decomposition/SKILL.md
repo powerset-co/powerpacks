@@ -26,6 +26,13 @@ into a normalized search plan and a schema-valid execute payload.
   - years of experience
   - age
   - tenure/date windows
+- support company-side parity constraints inside role search:
+  - headcount
+  - funding
+  - valuation
+  - founded year
+  - sector/entity types
+  - company geography
 
 ## Required Outputs
 

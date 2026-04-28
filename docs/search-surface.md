@@ -17,6 +17,8 @@ requests without leaking private internal systems.
 - "stanford engineers in sf"
 - "founders under 35"
 - "people who worked at meta after 2020"
+- "senior engineers at series a fintech companies"
+- "operators at developer tools companies with 50-200 employees"
 
 ## Public Execution Model
 
@@ -39,6 +41,8 @@ The expand step should:
 - normalize the user request
 - extract role/title constraints
 - extract company-name constraints
+- extract company attribute constraints such as headcount, funding, sector, and
+  company geography
 - extract recall-style constraints such as education, tenure, years of
   experience, and age
 - produce a schema-valid role-search payload

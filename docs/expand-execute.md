@@ -22,6 +22,7 @@ The expand step should be able to extract:
 - role/title intent
 - location
 - company names
+- company attributes such as headcount, funding stage, sector, and company geography
 - seniority
 - education
 - years of experience
