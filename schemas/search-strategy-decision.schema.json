@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/search-strategy-decision.schema.json",
+  "title": "SearchStrategyDecision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["strategy", "reason", "recommended_initial_limit"],
+  "properties": {
+    "strategy": {
+      "type": "string",
+      "enum": ["direct_execute", "count_then_execute", "generate_slices", "ask_for_clarification"]
+    },
+    "reason": { "type": "string" },
+    "recommended_initial_limit": { "type": "integer" },
+    "broadness": {
+      "type": "string",
+      "enum": ["narrow", "medium", "broad", "unknown"]
+    },
+    "ambiguity_flags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

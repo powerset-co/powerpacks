@@ -33,10 +33,11 @@ The intended user-facing entrypoint is:
 ## Public Primitive Flow
 
 1. `expand_search_request`
-2. choose a strategy based on the expanded request
+2. `decide_search_strategy`
 3. run direct search, count-first search, or slice search
-4. `plan_candidate_review`
-5. `hydrate_people` only for the selected frontier
+4. `assess_frontier`
+5. `plan_candidate_review`
+6. `hydrate_people` only for the selected frontier
 
 ## Expand Step
 
@@ -53,6 +54,18 @@ The expand step should:
 - produce a schema-valid role-search seed payload plus planning notes
 
 It should not run retrieval.
+
+## Strategy Step
+
+The strategy step should:
+
+- choose `direct_execute`, `count_then_execute`, `generate_slices`, or
+  `ask_for_clarification`
+- explain the decision
+- estimate broadness and ambiguity
+- choose a bounded initial limit
+
+It should use the decomposed request and schema, not raw prose alone.
 
 ## Slice Generation Step
 
@@ -91,7 +104,9 @@ The frontier review step should:
 - merge and dedupe candidates across slices
 - preserve slice provenance on every candidate
 - report per-slice yield and overlap
+- assess whether the frontier is too broad, too narrow, or coherent
 - recommend whether to narrow, widen, hydrate, or stop
+- include a short decision trace
 - avoid expensive scoring in V1
 
 ## Explicitly Out Of Scope In V1

@@ -31,13 +31,14 @@ The expand step should be able to extract:
 - age
 - tenure/date constraints
 
-## Step 2: Choose A Strategy
+## Step 2: `decide_search_strategy`
 
 Use the expanded request to decide between:
 
-- direct role search
-- count then search
-- slice search
+- `direct_execute`
+- `count_then_execute`
+- `generate_slices`
+- `ask_for_clarification`
 
 Do not force slices when the query is already narrow and explicit.
 
@@ -86,7 +87,22 @@ Output:
 - overlap summary
 - per-slice yield
 
-## Step 6: `plan_candidate_review`
+## Step 6: `assess_frontier`
+
+Input:
+
+- direct result or merged slice frontier
+- counts and overlap
+- decomposition context
+
+Output:
+
+- frontier size
+- whether the frontier is too broad, too narrow, or coherent
+- recommended review path
+- reasons
+
+## Step 7: `plan_candidate_review`
 
 Input:
 

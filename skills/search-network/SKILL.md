@@ -26,19 +26,20 @@ The agent should:
 ## Strategy Loop
 
 1. Expand the request with `expand_search_request`.
-2. Decide the initial strategy.
+2. Choose the initial strategy with `decide_search_strategy`.
 3. Run one of:
    - direct role search
    - count then search
    - multi-slice retrieval
-4. Assess the frontier.
-5. Decide the next action.
+4. Assess the frontier with `assess_frontier`.
+5. Decide the next action with `plan_candidate_review`.
 6. Stop when the frontier is coherent enough to present or hydrate.
 
 ## Rules
 
 - do not force slices when the query is already specific
 - use counts and frontier feedback to decide whether to widen or narrow
+- produce a short decision trace after each stage
 - keep role, location, seniority, education, yoe, age, and company constraints
   explicit
 - use only documented filter fields, operators, and enum values
@@ -55,16 +56,46 @@ The agent should:
 - stop and present when the frontier is already coherent
 - hydrate only a bounded shortlist
 
+## Decision Trace
+
+For every run, keep a concise trace with:
+
+- expanded constraints
+- strategy decision and reason
+- retrieval path used
+- counts or per-slice yield
+- frontier assessment
+- next action and reason
+
+The trace is part of the result. It lets the user inspect why the claw searched
+that way.
+
 ## Primary Primitives
 
 - `expand_search_request`
+- `decide_search_strategy`
 - `count_candidates`
 - `execute_role_search`
 - `generate_search_slices`
 - `execute_search_slice`
 - `merge_candidate_frontier`
+- `assess_frontier`
 - `plan_candidate_review`
 - `hydrate_people`
+
+## Helper References
+
+The installed user-facing skill is `search-network`. Do not require the user to
+invoke helper skills directly.
+
+When needed, consult these reference files in the installed repo:
+
+- `powerpacks/skills/add-query-decomposition/SKILL.md`
+- `powerpacks/skills/add-role-search/SKILL.md`
+- `powerpacks/skills/add-slice-search/SKILL.md`
+- `powerpacks/skills/add-candidate-review-planning/SKILL.md`
+- `powerpacks/skills/add-turbopuffer-schema-guard/SKILL.md`
+- `powerpacks/skills/add-postgres-hydration/SKILL.md`
 
 ## Source Of Truth
 
@@ -75,4 +106,6 @@ The agent should:
 - `powerpacks/schemas/decomposed-query.schema.json`
 - `powerpacks/schemas/role-search-filters.schema.json`
 - `powerpacks/schemas/search-slice.schema.json`
+- `powerpacks/schemas/search-strategy-decision.schema.json`
+- `powerpacks/schemas/frontier-assessment.schema.json`
 - `powerpacks/schemas/candidate-review-plan.schema.json`

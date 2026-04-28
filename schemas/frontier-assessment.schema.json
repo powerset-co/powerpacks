@@ -1,22 +1,26 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://powerpacks/schemas/candidate-review-plan.schema.json",
-  "title": "CandidateReviewPlan",
+  "$id": "https://powerpacks/schemas/frontier-assessment.schema.json",
+  "title": "FrontierAssessment",
   "type": "object",
   "additionalProperties": false,
-  "required": ["next_action", "frontier_size", "suggested_hydration_count", "reasons"],
+  "required": ["frontier_size", "quality_signal", "recommended_next_action", "reasons"],
   "properties": {
-    "next_action": {
+    "frontier_size": { "type": "integer" },
+    "quality_signal": {
+      "type": "string",
+      "enum": ["too_broad", "too_narrow", "coherent", "mixed", "unknown"]
+    },
+    "recommended_next_action": {
       "type": "string",
       "enum": ["hydrate_frontier", "narrow_filters", "widen_with_new_slice", "run_additional_direct_query", "ask_for_clarification", "stop_and_present"]
     },
-    "frontier_size": { "type": "integer" },
     "suggested_hydration_count": { "type": "integer" },
-    "reasons": {
+    "best_slices": {
       "type": "array",
       "items": { "type": "string" }
     },
-    "best_slices": {
+    "reasons": {
       "type": "array",
       "items": { "type": "string" }
     },

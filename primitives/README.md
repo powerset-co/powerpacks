@@ -15,11 +15,13 @@ V1 focuses on:
 Public V1 primitives:
 
 - `expand_search_request`
+- `decide_search_strategy`
 - `generate_search_slices`
 - `resolve_companies`
 - `count_candidates`
 - `execute_search_slice`
 - `merge_candidate_frontier`
+- `assess_frontier`
 - `plan_candidate_review`
 - `execute_role_search`
 - `hydrate_people`
