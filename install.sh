@@ -24,19 +24,23 @@ fi
 mkdir -p "$TARGET/.claude/skills"
 mkdir -p "$TARGET/powerpacks"
 
-rm -rf "$TARGET/.claude/skills/add-network-search"
-rm -rf "$TARGET/.claude/skills/add-enrichment"
-rm -rf "$TARGET/.claude/skills/add-storage-sync"
-rm -rf "$TARGET/.claude/skills/add-internal-joins"
-rm -rf "$TARGET/.claude/skills/add-sales-nav"
+rm -rf "$TARGET/.claude/skills/add-query-decomposition"
+rm -rf "$TARGET/.claude/skills/add-role-search"
+rm -rf "$TARGET/.claude/skills/add-company-search"
+rm -rf "$TARGET/.claude/skills/add-turbopuffer-schema-guard"
+rm -rf "$TARGET/.claude/skills/add-postgres-hydration"
 cp -R "$SCRIPT_DIR/skills/." "$TARGET/.claude/skills/"
 
 rm -rf "$TARGET/powerpacks/primitives"
 rm -rf "$TARGET/powerpacks/mcp"
 rm -rf "$TARGET/powerpacks/templates"
+rm -rf "$TARGET/powerpacks/docs"
+rm -rf "$TARGET/powerpacks/schemas"
 cp -R "$SCRIPT_DIR/primitives" "$TARGET/powerpacks/primitives"
 cp -R "$SCRIPT_DIR/mcp" "$TARGET/powerpacks/mcp"
 cp -R "$SCRIPT_DIR/templates" "$TARGET/powerpacks/templates"
+cp -R "$SCRIPT_DIR/docs" "$TARGET/powerpacks/docs"
+cp -R "$SCRIPT_DIR/schemas" "$TARGET/powerpacks/schemas"
 
 cat > "$TARGET/powerpacks/install-manifest.json" <<EOF
 {
@@ -46,4 +50,3 @@ cat > "$TARGET/powerpacks/install-manifest.json" <<EOF
 EOF
 
 echo "powerpacks installed into $TARGET"
-

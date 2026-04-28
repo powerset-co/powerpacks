@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/decomposed-query.schema.json",
+  "title": "DecomposedQuery",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intent_type",
+    "source_type",
+    "normalized_query",
+    "verticals"
+  ],
+  "properties": {
+    "intent_type": {
+      "type": "string",
+      "enum": ["people_search", "company_search", "mixed_search"]
+    },
+    "source_type": {
+      "type": "string",
+      "enum": ["query", "job_description", "url"]
+    },
+    "normalized_query": {
+      "type": "string"
+    },
+    "verticals": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["people_by_role", "people_by_company"]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "role_search_filters": {
+      "$ref": "./role-search-filters.schema.json"
+    },
+    "company_search_filters": {
+      "$ref": "./company-search-filters.schema.json"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

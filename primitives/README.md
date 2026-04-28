@@ -1,16 +1,20 @@
 # Primitives
 
-This directory will hold deterministic Powerpacks primitives and wrappers.
+This directory holds the public V1 Powerpacks primitive surface.
 
-Suggested first set:
+V1 focuses on:
 
-- `expand_search_query`
-- `execute_search_plan`
-- `extract_entities`
-- `enrich_person`
-- `enrich_company`
-- `upsert_supabase`
-- `upsert_turbopuffer`
-- `query_internal_records`
-- `join_internal_results`
-- `query_sales_nav`
+- decomposing free text into schema-valid filters
+- simple people search by role
+- simple people search by company criteria
+- hydration via Postgres after retrieval
+
+Public V1 primitives:
+
+- `decompose_search_request`
+- `resolve_companies`
+- `count_candidates`
+- `search_people_roles`
+- `search_people_company_signals`
+- `hydrate_people`
+- `query_postgres_profiles`

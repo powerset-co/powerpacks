@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/role-search-filters.schema.json",
+  "title": "RoleSearchFilters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["semantic_query"],
+  "properties": {
+    "semantic_query": { "type": "string" },
+    "bm25_queries": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "role_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "cities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "states": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "countries": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metro_areas": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "macro_regions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "seniority_bands": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "entry",
+          "junior",
+          "mid",
+          "senior",
+          "staff",
+          "principal",
+          "manager",
+          "director",
+          "vice_president",
+          "c_suite"
+        ]
+      }
+    },
+    "role_tracks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "engineering",
+          "data",
+          "product",
+          "design",
+          "sales",
+          "marketing",
+          "operations",
+          "business_dev",
+          "finance",
+          "strategy"
+        ]
+      }
+    },
+    "is_current": { "type": "boolean" },
+    "years_experience_min": { "type": "number" },
+    "years_experience_max": { "type": "number" }
+  }
+}
