@@ -11,6 +11,8 @@ Prevent the agent from making common mistakes with:
 - wrong scalar types
 - mixing raw company names with execute-time company IDs
 - dropping recall-style constraints during execute
+- generating slices that silently change the meaning of the query
+- hydrating or presenting a giant frontier without a review plan
 
 ## Core Rule
 
@@ -25,9 +27,13 @@ hard contract, not as suggestions.
 - use `ContainsAny` only for array-backed fields
 - use `In` for scalar categorical fields
 - use `Gte` and `Lte` for numeric bounds
+- keep each search slice faithful to the decomposed query intent
+- do not hydrate or present a broad frontier until `plan_candidate_review`
+  says to do so
 - if uncertain about a field, stop and inspect the schema doc rather than guess
 
 ## Source Of Truth
 
 - `powerpacks/docs/turbopuffer-contract.md`
 - `powerpacks/schemas/role-search-filters.schema.json`
+- `powerpacks/schemas/search-slice.schema.json`

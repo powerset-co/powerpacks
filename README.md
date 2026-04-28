@@ -12,6 +12,8 @@ It is intentionally not a NanoClaw fork.
 - install everything with one idempotent script
 - make the TurboPuffer and Postgres contract explicit enough that agents do not
   guess wrong field names, operators, or value types
+- make search planning explicit enough that agents do not default to one giant
+  retrieval pass with no review strategy
 
 ## Layout
 
@@ -41,9 +43,10 @@ The installer currently:
 
 V1 is intentionally narrow:
 
-- simple people search by role
-- simple people search by company criteria
 - query decomposition from natural language, job descriptions, or URLs
+- multi-slice people search by role
+- company criteria only as constraints inside role search
+- explicit candidate-frontier review planning without expensive scoring
 - TurboPuffer as the primary search surface
 - Postgres as the hydration/supporting data surface
 
@@ -59,4 +62,4 @@ Excluded from the initial public surface:
 - implement real wrappers around TurboPuffer MCP and Postgres MCP
 - wire schema guidance into NanoClaw runtime config
 - add package install steps for MCP dependencies
-- add optional enrichment and connector packs later
+- add optional expensive scoring later, behind a separate primitive

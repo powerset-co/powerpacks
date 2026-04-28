@@ -10,7 +10,7 @@ Convert one of these inputs:
 - a job description
 - a URL with role or company context
 
-into a normalized search plan and a schema-valid execute payload.
+into a normalized search plan and a schema-valid retrieval seed payload.
 
 ## Rules
 
@@ -18,9 +18,12 @@ into a normalized search plan and a schema-valid execute payload.
 - do not jump straight into TurboPuffer filters from raw prose
 - output both:
   - a normalized query summary
-  - a schema-valid execute payload
+  - a schema-valid retrieval seed payload
 - keep V1 narrow:
   - `people_by_role`
+- make seniority and geography explicit
+- output planning notes when the query is open-ended or can benefit from
+  multiple slices
 - support recall-style constraints:
   - education
   - years of experience
@@ -42,6 +45,7 @@ into a normalized search plan and a schema-valid execute payload.
 - `vertical`
 - `role_search_filters`
 - optional `company_names`
+- optional `notes`
 
 ## Schema Source Of Truth
 

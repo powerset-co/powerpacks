@@ -2,6 +2,9 @@
 
 Execute a role search using the role vertical contract.
 
+This is the underlying retrieval primitive. In the slice-planning flow, it
+should usually be called through `execute_search_slice`.
+
 Expected inputs:
 
 - `semantic_query`

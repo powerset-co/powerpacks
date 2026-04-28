@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/search-slice.schema.json",
+  "title": "SearchSlice",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["slice_id", "label", "reason", "role_search_filters"],
+  "properties": {
+    "slice_id": { "type": "string" },
+    "label": { "type": "string" },
+    "reason": { "type": "string" },
+    "priority": { "type": "integer" },
+    "role_search_filters": { "$ref": "./role-search-filters.schema.json" },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

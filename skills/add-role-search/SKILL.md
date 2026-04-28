@@ -1,6 +1,7 @@
 # Add Role Search
 
-Install and maintain the execute phase for simple role-first people search.
+Install and maintain the retrieval phase for multi-slice role-first people
+search.
 
 ## Intent
 
@@ -19,12 +20,15 @@ Support requests like:
 
 - call `expand_search_request` first unless the user already provided a valid
   role-search filter payload
+- generate multiple bounded slices before broad retrieval when the query is
+  open-ended
 - use only the public V1 role filter contract
 - prefer TurboPuffer MCP for candidate retrieval
 - use Postgres only for hydration or follow-up details
 - do not invent filter keys or operators
 - support recall-style filters when they are present in the payload
 - support company-side parity filters when they are present in the payload
+- do not run expensive scoring in V1
 
 ## Required Contract
 
@@ -40,7 +44,10 @@ Support requests like:
 ## Primary Primitives
 
 - `expand_search_request`
+- `generate_search_slices`
 - `resolve_companies`
 - `count_candidates`
-- `execute_role_search`
+- `execute_search_slice`
+- `merge_candidate_frontier`
+- `plan_candidate_review`
 - `hydrate_people`

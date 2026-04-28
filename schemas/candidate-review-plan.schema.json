@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/candidate-review-plan.schema.json",
+  "title": "CandidateReviewPlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["next_action", "frontier_size", "suggested_hydration_count", "reasons"],
+  "properties": {
+    "next_action": {
+      "type": "string",
+      "enum": ["hydrate_frontier", "narrow_filters", "widen_with_new_slice", "stop_and_present"]
+    },
+    "frontier_size": { "type": "integer" },
+    "suggested_hydration_count": { "type": "integer" },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "best_slices": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
