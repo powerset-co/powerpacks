@@ -1,6 +1,6 @@
 # Add Query Decomposition
 
-Install and maintain the decomposition workflow for search requests.
+Install and maintain the expand phase for search requests.
 
 ## Intent
 
@@ -10,7 +10,7 @@ Convert one of these inputs:
 - a job description
 - a URL with role or company context
 
-into a normalized search plan and vertical-specific filters.
+into a normalized search plan and a schema-valid execute payload.
 
 ## Rules
 
@@ -18,24 +18,27 @@ into a normalized search plan and vertical-specific filters.
 - do not jump straight into TurboPuffer filters from raw prose
 - output both:
   - a normalized query summary
-  - a schema-valid filter payload per vertical
+  - a schema-valid execute payload
 - keep V1 narrow:
   - `people_by_role`
-  - `people_by_company`
+- support recall-style constraints:
+  - education
+  - years of experience
+  - age
+  - tenure/date windows
 
 ## Required Outputs
 
 - `intent_type`
 - `source_type`
 - `normalized_query`
-- `verticals`
+- `vertical`
 - `role_search_filters`
-- `company_search_filters`
+- optional `company_names`
 
 ## Schema Source Of Truth
 
 - `powerpacks/schemas/decomposed-query.schema.json`
 - `powerpacks/schemas/role-search-filters.schema.json`
-- `powerpacks/schemas/company-search-filters.schema.json`
 
 If a field cannot be grounded in the schema, omit it.

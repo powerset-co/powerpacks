@@ -12,3 +12,4 @@ V1 assumes:
 - TurboPuffer MCP is the primary retrieval surface
 - Postgres MCP is a supporting hydration surface
 - Supabase MCP is optional and not part of the initial public contract
+- summary and company-signal search are not part of the initial public contract

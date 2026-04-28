@@ -3,6 +3,7 @@
 Use the Powerpacks docs as a hard contract when calling search tools.
 
 - Decompose free text first.
+- Treat that decomposition as the `expand` phase.
 - Prefer TurboPuffer for retrieval.
 - Prefer Postgres for hydration after retrieval.
 - Do not invent field names, operators, or enum values.

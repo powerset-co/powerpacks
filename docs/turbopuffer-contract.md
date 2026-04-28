@@ -17,27 +17,23 @@ Use these person-level fields and operators only:
 | `company_id` | string | `In` | canonical company IDs only |
 | `is_current` | boolean | `Eq` | current position filter |
 | `total_years_experience` | number | `Gte`, `Lte` | numeric range |
+| `education_ids` via base-ID prefilter | string[] | `In` | school/alumni constraint |
+| `inferred_birth_year` | number | `Gte`, `Lte` | age proxy after expand maps age to birth-year bounds |
+| `start_date_epoch` | integer | `Lte` | tenure/date overlap logic |
+| `end_date_epoch` | integer | `Gte`, `Eq` | tenure/date overlap logic |
 | `role_track` | string | `In` | enum-backed |
 | `role_ids` | string[] | `ContainsAny` | array-backed role IDs |
 | `base_id` | string | `In` | person IDs used for hydration/prefilter |
 | `allowed_operator_ids` | string[] | `ContainsAny` | keep private; not part of public V1 |
 
-## Company Search Filter Contract
+## Company Constraint Contract
 
-Use these company-level concepts in the public V1 payload:
+Use these company-level concepts only as constraints inside role search:
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `company_ids` | string[] | preferred once resolved |
-| `entity_types` | string[] | company-type enums |
-| `sector_types` | string[] | company-sector enums |
-| `funding_stage_min` | string | enum-like stage token |
-| `funding_stage_max` | string | enum-like stage token |
-| `company_cities` | string[] | company location |
-| `company_states` | string[] | company location |
-| `company_countries` | string[] | company location |
-| `company_metro_areas` | string[] | company location |
-| `company_macro_regions` | string[] | company location |
+| `company_names` | string[] | expand-time only; resolve before execute |
 
 ## Operator Rules
 
@@ -45,7 +41,7 @@ Use these company-level concepts in the public V1 payload:
 - `ContainsAny` is for array-backed fields
 - `Eq` is for booleans
 - `Gte` and `Lte` are for numeric bounds
-- do not mix company location fields with person location fields
+- do not invent company filter families that are not in the public V1 schema
 
 ## Public Enum Hints
 
@@ -75,6 +71,17 @@ Common `role_tracks`:
 - `finance`
 - `strategy`
 
+Supported recall-style constraints in the public role payload:
+
+- `education_ids`
+- `degree_levels`
+- `years_experience_min`
+- `years_experience_max`
+- `age_min`
+- `age_max`
+- `position_after_date`
+- `position_before_date`
+
 ## Example
 
 For "who are software engineers in sf" a safe role-search payload is:
@@ -86,6 +93,22 @@ For "who are software engineers in sf" a safe role-search payload is:
   "cities": ["San Francisco"],
   "states": ["California"],
   "role_tracks": ["engineering"],
+  "is_current": true
+}
+```
+
+For "software engineers from Stanford with 3-5 yoe in sf" a safe role-search
+payload is:
+
+```json
+{
+  "semantic_query": "software engineer",
+  "bm25_queries": ["software engineer", "software developer"],
+  "cities": ["San Francisco"],
+  "role_tracks": ["engineering"],
+  "education_ids": ["resolved-school-id"],
+  "years_experience_min": 3,
+  "years_experience_max": 5,
   "is_current": true
 }
 ```

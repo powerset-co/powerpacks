@@ -9,7 +9,8 @@ Prevent the agent from making common mistakes with:
 - wrong attribute names
 - wrong operator names
 - wrong scalar types
-- mixing person filters with company filters
+- mixing raw company names with execute-time company IDs
+- dropping recall-style constraints during execute
 
 ## Core Rule
 
@@ -20,7 +21,7 @@ hard contract, not as suggestions.
 
 - use only documented fields
 - use only documented operators
-- keep location filters on person records separate from company location filters
+- keep location filters on person records separate from company-name resolution
 - use `ContainsAny` only for array-backed fields
 - use `In` for scalar categorical fields
 - use `Gte` and `Lte` for numeric bounds
@@ -30,4 +31,3 @@ hard contract, not as suggestions.
 
 - `powerpacks/docs/turbopuffer-contract.md`
 - `powerpacks/schemas/role-search-filters.schema.json`
-- `powerpacks/schemas/company-search-filters.schema.json`

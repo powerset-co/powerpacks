@@ -26,7 +26,6 @@ mkdir -p "$TARGET/powerpacks"
 
 rm -rf "$TARGET/.claude/skills/add-query-decomposition"
 rm -rf "$TARGET/.claude/skills/add-role-search"
-rm -rf "$TARGET/.claude/skills/add-company-search"
 rm -rf "$TARGET/.claude/skills/add-turbopuffer-schema-guard"
 rm -rf "$TARGET/.claude/skills/add-postgres-hydration"
 cp -R "$SCRIPT_DIR/skills/." "$TARGET/.claude/skills/"
