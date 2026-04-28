@@ -28,7 +28,10 @@ rm -rf "$TARGET/.claude/skills/add-query-decomposition"
 rm -rf "$TARGET/.claude/skills/add-role-search"
 rm -rf "$TARGET/.claude/skills/add-turbopuffer-schema-guard"
 rm -rf "$TARGET/.claude/skills/add-postgres-hydration"
-cp -R "$SCRIPT_DIR/skills/." "$TARGET/.claude/skills/"
+rm -rf "$TARGET/.claude/skills/add-slice-search"
+rm -rf "$TARGET/.claude/skills/add-candidate-review-planning"
+rm -rf "$TARGET/.claude/skills/search-network"
+cp -R "$SCRIPT_DIR/skills/search-network" "$TARGET/.claude/skills/search-network"
 
 rm -rf "$TARGET/powerpacks/primitives"
 rm -rf "$TARGET/powerpacks/mcp"
@@ -40,6 +43,7 @@ cp -R "$SCRIPT_DIR/mcp" "$TARGET/powerpacks/mcp"
 cp -R "$SCRIPT_DIR/templates" "$TARGET/powerpacks/templates"
 cp -R "$SCRIPT_DIR/docs" "$TARGET/powerpacks/docs"
 cp -R "$SCRIPT_DIR/schemas" "$TARGET/powerpacks/schemas"
+cp -R "$SCRIPT_DIR/skills" "$TARGET/powerpacks/skills"
 
 cat > "$TARGET/powerpacks/install-manifest.json" <<EOF
 {

@@ -43,6 +43,7 @@ The installer currently:
 
 V1 is intentionally narrow:
 
+- one operational skill entrypoint: `$search-network <query>`
 - query decomposition from natural language, job descriptions, or URLs
 - multi-slice people search by role
 - company criteria only as constraints inside role search
@@ -56,6 +57,9 @@ Excluded from the initial public surface:
 - Sales Nav
 - repo-specific internal connector details
 - broad enrichment workflows
+
+Helper skill docs remain in this repo as internal references, but the install
+step exposes one user-facing skill in NanoClaw: `search-network`.
 
 ## Next
 

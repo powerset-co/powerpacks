@@ -1,4 +1,4 @@
-# Expand / Slice / Review
+# Search Network Flow
 
 Powerpacks V1 should expose one role-first search flow with explicit planning
 between expansion and review.
@@ -31,7 +31,17 @@ The expand step should be able to extract:
 - age
 - tenure/date constraints
 
-## Step 2: `generate_search_slices`
+## Step 2: Choose A Strategy
+
+Use the expanded request to decide between:
+
+- direct role search
+- count then search
+- slice search
+
+Do not force slices when the query is already narrow and explicit.
+
+## Step 3: `generate_search_slices`
 
 Input:
 
@@ -43,7 +53,9 @@ Output:
 - explicit reason for each slice
 - one schema-valid role-search payload per slice
 
-## Step 3: `execute_search_slice`
+This step is optional.
+
+## Step 4: `execute_search_slice`
 
 Input:
 
@@ -59,7 +71,9 @@ Output:
 - slice-local counts
 - retrieval summary
 
-## Step 4: `merge_candidate_frontier`
+Direct search can skip slicing and execute the role payload directly.
+
+## Step 5: `merge_candidate_frontier`
 
 Input:
 
@@ -72,7 +86,7 @@ Output:
 - overlap summary
 - per-slice yield
 
-## Step 5: `plan_candidate_review`
+## Step 6: `plan_candidate_review`
 
 Input:
 
@@ -92,6 +106,7 @@ primitive later.
 ## Why This Split
 
 - it mirrors your existing `expand` / `execute` endpoint model
+- it gives the claw a real strategy decision instead of forcing slicing
 - it allows multiple targeted retrieval passes instead of one giant search
 - it gives the claw an explicit planning trace before hydration or review
 - it avoids making retrieval logic guess at raw prose

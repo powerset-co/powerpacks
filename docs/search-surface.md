@@ -3,6 +3,10 @@
 `powerpacks` V1 exposes a narrow search surface designed to succeed on simple
 requests without leaking private internal systems.
 
+The intended user-facing entrypoint is:
+
+- `$search-network <query>`
+
 ## Supported Inputs
 
 - natural-language search query
@@ -29,13 +33,10 @@ requests without leaking private internal systems.
 ## Public Primitive Flow
 
 1. `expand_search_request`
-2. `generate_search_slices`
-3. `resolve_companies` per slice if needed
-4. `count_candidates` per slice when useful
-5. `execute_search_slice`
-6. `merge_candidate_frontier`
-7. `plan_candidate_review`
-8. `hydrate_people` only for the selected frontier
+2. choose a strategy based on the expanded request
+3. run direct search, count-first search, or slice search
+4. `plan_candidate_review`
+5. `hydrate_people` only for the selected frontier
 
 ## Expand Step
 
@@ -66,6 +67,9 @@ The slice generation step should:
 
 It should not score people.
 
+It is optional. Use it only when the query is broad enough that one retrieval
+pass is likely to miss good variants or produce an unreviewable frontier.
+
 ## Execute Step
 
 The execute step should:
@@ -76,6 +80,9 @@ The execute step should:
   and counts
 
 It should not redo query decomposition from raw prose.
+
+If the strategy is direct search, the same role-search contract can be executed
+without generating slices first.
 
 ## Frontier Review Step
 

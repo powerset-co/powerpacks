@@ -36,3 +36,6 @@ The goal is to:
 ## V1 Rule
 
 Do not run expensive candidate scoring here.
+
+Do not treat slicing as mandatory. It is one strategy available to
+`$search-network`, not the only strategy.
