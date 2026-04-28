@@ -12,6 +12,8 @@
     },
     "reason": { "type": "string" },
     "recommended_initial_limit": { "type": "integer" },
+    "recommended_slice_count": { "type": "integer" },
+    "recommended_hydrate_limit": { "type": "integer" },
     "broadness": {
       "type": "string",
       "enum": ["narrow", "medium", "broad", "unknown"]

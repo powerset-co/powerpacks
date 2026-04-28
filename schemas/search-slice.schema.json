@@ -10,6 +10,35 @@
     "label": { "type": "string" },
     "reason": { "type": "string" },
     "priority": { "type": "integer" },
+    "knobs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title_strictness": {
+          "type": "string",
+          "enum": ["exact", "close_variants", "adjacent"]
+        },
+        "geography_strictness": {
+          "type": "string",
+          "enum": ["city_only", "metro", "regional"]
+        },
+        "seniority_strictness": {
+          "type": "string",
+          "enum": ["as_expanded", "ic_only", "senior_plus", "manager_plus", "any"]
+        },
+        "currentness": {
+          "type": "string",
+          "enum": ["current_only", "past_only", "any"]
+        },
+        "company_strictness": {
+          "type": "string",
+          "enum": ["none", "resolved_company_ids", "company_attributes"]
+        },
+        "count_first": { "type": "boolean" },
+        "candidate_limit": { "type": "integer" },
+        "hydrate_limit": { "type": "integer" }
+      }
+    },
     "role_search_filters": { "$ref": "./role-search-filters.schema.json" },
     "notes": {
       "type": "array",

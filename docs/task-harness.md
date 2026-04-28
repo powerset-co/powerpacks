@@ -33,6 +33,15 @@ The run state should include:
 Run one step, record its output, then decide the next step from current state.
 Do not assume slicing is mandatory.
 
+For slice searches, every slice must record:
+
+- knobs used
+- count result
+- candidate limit
+- hydration limit
+- returned candidate IDs
+- slice-local summary
+
 ## V1 Constraints
 
 - no summary search

@@ -49,6 +49,14 @@ The agent should:
 - use only documented filter fields, operators, and enum values
 - resolve raw company names before execute-time company filtering
 - preserve slice reasons and provenance when slices are used
+- make slice knobs explicit when slicing:
+  - title strictness
+  - geography strictness
+  - seniority strictness
+  - currentness
+  - company strictness
+  - candidate limit
+  - hydration limit
 - do not run expensive scoring in V1
 
 ## Decision Heuristics
