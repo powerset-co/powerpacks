@@ -1,0 +1,20 @@
+{
+  "name": "schools",
+  "type": "turbopuffer_namespace",
+  "version": "2026-04-29",
+  "namespace": "aleph_education_v1",
+  "document_grain": "canonical_school",
+  "description": "School autocomplete/lookup namespace. Use to resolve school names to canonical education IDs before querying the people-education prefilter namespace.",
+  "attributes": [
+    {"name": "id", "type": "string", "notes": "Canonical school URN."},
+    {"name": "school_name", "type": "string"},
+    {"name": "person_count", "type": "integer"}
+  ],
+  "filters": [
+    {"field": "school_name", "operators": ["ContainsAllTokens"], "value_type": "string"}
+  ],
+  "rules": [
+    "Use this only to resolve names like Stanford, MIT, Berkeley to school IDs.",
+    "Use aleph_people_education_v1 for person base-ID prefiltering after IDs are resolved."
+  ]
+}

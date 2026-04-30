@@ -18,6 +18,9 @@ The goal is to:
 - seniority strictness
 - currentness
 - company strictness
+- adjacency mode
+- hard filter expression
+- prefilter execution plan
 
 ## Slice Knobs
 
@@ -28,6 +31,12 @@ Each slice should declare the knobs it intentionally changed:
 - `seniority_strictness`: as expanded, IC only, senior plus, manager plus, or any
 - `currentness`: current only, past only, or any
 - `company_strictness`: none, resolved company IDs, or company attributes
+- `adjacency_mode`: off, ask user, company-domain union, company-domain
+  intersection, or title adjacent
+- `hard_filters`: executable filter expression using the documented fields and
+  operators
+- `prefilters`: execution plan for filters that produce/intersect a base-ID
+  candidate set before role retrieval
 - `count_first`: whether to count before executing
 - `candidate_limit`: max candidate IDs to return from the slice
 - `hydrate_limit`: max profiles to hydrate from the slice
@@ -36,6 +45,10 @@ Each slice should declare the knobs it intentionally changed:
 
 - generating near-duplicate slices that widen nothing useful
 - widening title, geography, and company constraints all at once
+- adding company-domain adjacency without either explicit user request,
+  confirmation, or a recorded reason
+- dropping any hard filter while slicing unless the slice is intentionally a
+  recall-widening diagnostic and says so
 - hiding why a slice exists
 - reviewing a huge frontier without per-slice yield or overlap
 
@@ -44,6 +57,7 @@ Each slice should declare the knobs it intentionally changed:
 - keep slices explicit and few enough to inspect
 - compare slice yield before hydrating broadly
 - prefer tightening or widening one dimension at a time
+- keep strict and adjacent slices separate so overlap and yield are visible
 - use `candidate_limit` and `hydrate_limit` deliberately; do not hydrate every
   candidate returned by a broad slice
 - stop and present when the frontier is already coherent
@@ -53,4 +67,4 @@ Each slice should declare the knobs it intentionally changed:
 Do not run expensive candidate scoring here.
 
 Do not treat slicing as mandatory. It is one strategy available to
-`$search-network`, not the only strategy.
+`/search-network`, not the only strategy.

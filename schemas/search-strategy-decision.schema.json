@@ -10,6 +10,13 @@
       "type": "string",
       "enum": ["direct_execute", "count_then_execute", "generate_slices", "ask_for_clarification"]
     },
+    "adjacency_decision": {
+      "type": "string",
+      "enum": ["off", "ask_user", "include_company_domain", "include_title_adjacent"]
+    },
+    "hard_filter_decision": { "$ref": "./filter-expression.schema.json" },
+    "prefilter_decision": { "$ref": "./prefilter-plan.schema.json" },
+    "requires_user_confirmation": { "type": "boolean" },
     "reason": { "type": "string" },
     "recommended_initial_limit": { "type": "integer" },
     "recommended_slice_count": { "type": "integer" },

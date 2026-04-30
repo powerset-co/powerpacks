@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/prefilter-plan.schema.json",
+  "title": "PrefilterPlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["stages"],
+  "properties": {
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "mode"],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "education",
+              "tech_skills",
+              "social_metrics",
+              "interaction_metrics",
+              "large_company_intersection",
+              "network_scope"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["intersect_base_ids", "visibility_scope"]
+          },
+          "reason": { "type": "string" },
+          "input_fields": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "output": {
+            "type": "string",
+            "enum": ["base_candidate_ids", "allowed_operator_ids"]
+          }
+        }
+      }
+    }
+  }
+}

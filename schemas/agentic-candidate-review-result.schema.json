@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/agentic-candidate-review-result.schema.json",
+  "title": "AgenticCandidateReviewResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "manifest", "reviewed_count", "artifacts"],
+  "properties": {
+    "mode": { "const": "agentic_candidate_review" },
+    "manifest": { "type": "string" },
+    "reviewed_count": { "type": "integer" },
+    "strong_yes_count": { "type": "integer" },
+    "yes_count": { "type": "integer" },
+    "maybe_count": { "type": "integer" },
+    "no_count": { "type": "integer" },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ranked_jsonl", "ranked_csv", "summary"],
+      "properties": {
+        "ranked_jsonl": { "type": "string" },
+        "ranked_csv": { "type": "string" },
+        "summary": { "type": "string" }
+      }
+    }
+  }
+}

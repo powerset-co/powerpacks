@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/llm-filter-candidates.schema.json",
+  "title": "LLMFilterCandidatesResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "model",
+    "threshold",
+    "candidate_count",
+    "hydrated_count",
+    "scored_count",
+    "passed_count",
+    "filtered_count",
+    "passed_candidate_ids",
+    "filtered_candidate_ids"
+  ],
+  "properties": {
+    "model": { "type": "string" },
+    "threshold": { "type": "number" },
+    "batch_size": { "type": "integer" },
+    "candidate_count": { "type": "integer" },
+    "hydrated_count": { "type": "integer" },
+    "scored_count": { "type": "integer" },
+    "missing_hydration_count": { "type": "integer" },
+    "passed_count": { "type": "integer" },
+    "filtered_count": { "type": "integer" },
+    "passed_candidate_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "filtered_candidate_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "filtered_results": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["person_id", "score", "reason"],
+        "properties": {
+          "person_id": { "type": "string" },
+          "score": { "type": "number" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scores_jsonl": { "type": "string" },
+        "filtered_jsonl": { "type": "string" }
+      }
+    }
+  }
+}

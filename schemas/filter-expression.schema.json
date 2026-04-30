@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/filter-expression.schema.json",
+  "title": "FilterExpression",
+  "oneOf": [
+    { "$ref": "#/$defs/comparison" },
+    { "$ref": "#/$defs/group" }
+  ],
+  "$defs": {
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "op", "value"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "enum": [
+            "base_id",
+            "city",
+            "state",
+            "country",
+            "metro_areas",
+            "macro_region",
+            "seniority_band",
+            "company_id",
+            "is_current",
+            "total_years_experience",
+            "inferred_birth_year",
+            "start_date_epoch",
+            "end_date_epoch",
+            "role_track",
+            "role_ids",
+            "allowed_operator_ids",
+            "x_twitter_followers",
+            "linkedin_followers",
+            "linkedin_connections",
+            "ig_followers"
+          ]
+        },
+        "op": {
+          "type": "string",
+          "enum": ["Eq", "In", "NotIn", "ContainsAny", "Gte", "Lte"]
+        },
+        "value": {}
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "clauses"],
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": ["And", "Or"]
+        },
+        "clauses": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#" }
+        }
+      }
+    }
+  }
+}

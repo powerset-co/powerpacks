@@ -1,0 +1,179 @@
+import importlib.util
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+LIB = ROOT / "primitives" / "lib"
+sys.path.insert(0, str(LIB))
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+turbopuffer_client = load_module("turbopuffer_client", LIB / "turbopuffer_client.py")
+resolve_companies = load_module("resolve_companies", ROOT / "primitives" / "resolve_companies" / "resolve_companies.py")
+hydrate_people = load_module("hydrate_people", ROOT / "primitives" / "hydrate_people" / "hydrate_people.py")
+results_io = load_module("results_io", ROOT / "primitives" / "persist_search_results" / "results_io.py")
+
+
+class TurbopufferPrimitiveTests(unittest.TestCase):
+    def test_filters_from_role_payload_uses_contract_fields(self) -> None:
+        filters = turbopuffer_client.filters_from_role_payload(
+            {
+                "semantic_query": "Builds software systems in production with hands-on coding responsibilities.",
+                "cities": ["San Francisco"],
+                "states": ["California"],
+                "role_tracks": ["engineering"],
+                "is_current": True,
+                "years_experience_min": 3,
+            }
+        )
+
+        self.assertEqual(filters[0], "And")
+        self.assertIn(("city", "In", ["San Francisco"]), filters[1])
+        self.assertIn(("state", "In", ["California"]), filters[1])
+        self.assertFalse(any(clause[0] == "Or" and ("state", "In", ["California"]) in clause[1] for clause in filters[1]))
+        self.assertIn(("role_track", "In", ["engineering"]), filters[1])
+        self.assertIn(("is_current", "Eq", True), filters[1])
+        self.assertIn(("total_years_experience", "Gte", 3), filters[1])
+
+    def test_position_window_converts_to_overlap_filters(self) -> None:
+        filters = turbopuffer_client.filters_from_role_payload(
+            {
+                "semantic_query": "Builds software systems in production with hands-on coding responsibilities.",
+                "company_ids": ["urn:harmonic:company:box"],
+                "position_after_date": "2019",
+                "position_before_date": "2022",
+            }
+        )
+
+        self.assertEqual(filters[0], "And")
+        self.assertIn(("company_id", "In", ["urn:harmonic:company:box"]), filters[1])
+        self.assertTrue(any(clause[0] == "start_date_epoch" and clause[1] == "Lte" for clause in filters[1]))
+        self.assertTrue(any(clause[0] == "Or" for clause in filters[1]))
+
+    def test_prefilter_base_ids_become_people_filter(self) -> None:
+        filters = turbopuffer_client.filters_from_role_payload(
+            {
+                "semantic_query": "Builds software systems in production with hands-on coding responsibilities.",
+                "role_tracks": ["engineering"],
+                "base_candidate_ids": ["p1", "p2"],
+            }
+        )
+
+        self.assertEqual(filters[0], "And")
+        self.assertIn(("base_id", "In", ["p1", "p2"]), filters[1])
+
+    def test_summarize_filter_truncates_large_id_lists(self) -> None:
+        filters = ("base_id", "In", [f"p{i}" for i in range(25)])
+        summary = turbopuffer_client.summarize_filter(filters, max_list_values=3)
+
+        self.assertEqual(summary[0], "base_id")
+        self.assertEqual(summary[2]["count"], 25)
+        self.assertEqual(summary[2]["sample"], ["p0", "p1", "p2"])
+        self.assertTrue(summary[2]["truncated"])
+
+    def test_role_payload_from_state_uses_resolved_ids(self) -> None:
+        state = {
+            "steps": [
+                {
+                    "id": "expand_search_request",
+                    "output": {
+                        "role_search_filters": {
+                            "semantic_query": "Builds software systems in production with hands-on coding responsibilities.",
+                            "education_names": ["Stanford"],
+                        }
+                    },
+                },
+                {"id": "resolve_education", "output": {"education_ids": ["urn:harmonic:school:stanford"]}},
+                {"id": "resolve_companies", "output": {"company_ids": ["urn:harmonic:company:meta"]}},
+                {"id": "resolve_investors", "output": {"investor_urns": ["urn:harmonic:person:8352"]}},
+                {"id": "apply_prefilters", "output": {"base_candidate_ids": ["p1", "p2"]}},
+            ]
+        }
+
+        payload = turbopuffer_client.role_payload_from_state(state)
+        self.assertEqual(payload["education_ids"], ["urn:harmonic:school:stanford"])
+        self.assertEqual(payload["company_ids"], ["urn:harmonic:company:meta"])
+        self.assertEqual(payload["investors"], ["urn:harmonic:person:8352"])
+        self.assertEqual(payload["base_candidate_ids"], ["p1", "p2"])
+
+    def test_company_sector_filters_are_configurable(self) -> None:
+        payload = {
+            "company_semantic_queries": ["database infrastructure companies"],
+            "sector_types": ["data"],
+            "entity_types": ["venture_backed_startup"],
+        }
+
+        hard = resolve_companies.company_attribute_filters(payload, include_soft=False)
+        soft = resolve_companies.company_attribute_filters(payload, only_soft=True)
+        combined = resolve_companies.combine_filters(hard, soft)
+
+        self.assertEqual(hard[0], "entity_types")
+        self.assertEqual(soft, ("sector_types", "ContainsAny", ["data"]))
+        self.assertEqual(combined[0], "And")
+        self.assertIn(("entity_types", "ContainsAny", ["venture_backed_startup"]), combined[1])
+        self.assertIn(("sector_types", "ContainsAny", ["data"]), combined[1])
+        self.assertEqual(resolve_companies.sector_strategy({"company_sector_strategy": "staged"}, "soft_union"), "staged")
+
+    def test_frontier_ids_read_execute_role_search(self) -> None:
+        state = {
+            "steps": [
+                {
+                    "id": "execute_role_search",
+                    "output": {"candidate_ids": ["p1", "p2", "p1"]},
+                }
+            ]
+        }
+
+        self.assertEqual(hydrate_people.frontier_ids(state), ["p1", "p2"])
+        self.assertEqual(results_io.frontier_ids(state), ["p1", "p2"])
+
+    def test_result_rows_use_execute_role_search_order(self) -> None:
+        state = {
+            "task_id": "task",
+            "query": "software engineers in sf",
+            "steps": [
+                {"id": "execute_role_search", "output": {"candidate_ids": ["p2", "p1"]}},
+                {
+                    "id": "hydrate_people",
+                    "output": {
+                        "profiles": [
+                            {"person_id": "p1", "name": "One", "positions": []},
+                            {"person_id": "p2", "name": "Two", "positions": []},
+                        ]
+                    },
+                },
+            ],
+        }
+
+        rows = results_io.result_rows(state)
+        self.assertEqual([row["person_id"] for row in rows], ["p2", "p1"])
+        self.assertEqual([row["name"] for row in rows], ["Two", "One"])
+
+    def test_scripts_do_not_import_aleph_mvp(self) -> None:
+        for path in [
+            LIB / "turbopuffer_client.py",
+            ROOT / "primitives" / "count_candidates" / "count_candidates.py",
+            ROOT / "primitives" / "execute_role_search" / "execute_role_search.py",
+            ROOT / "primitives" / "execute_search_slice" / "execute_search_slice.py",
+            ROOT / "primitives" / "resolve_education" / "resolve_education.py",
+            ROOT / "primitives" / "resolve_investors" / "resolve_investors.py",
+            ROOT / "primitives" / "resolve_companies" / "resolve_companies.py",
+            ROOT / "primitives" / "apply_prefilters" / "apply_prefilters.py",
+        ]:
+            text = path.read_text()
+            self.assertNotIn("aleph-mvp", text)
+            self.assertNotIn("api_v2", text)
+            self.assertNotIn("shared.env_config", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

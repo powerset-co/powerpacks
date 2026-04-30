@@ -16,10 +16,36 @@
       "output_schema": "decomposed-query.schema.json"
     },
     {
+      "id": "plan_adjacency_search",
+      "kind": "reasoning",
+      "primitive": "plan_adjacency_search",
+      "output_schema": "adjacency-plan.schema.json",
+      "optional": true
+    },
+    {
       "id": "decide_search_strategy",
       "kind": "reasoning",
       "primitive": "decide_search_strategy",
       "output_schema": "search-strategy-decision.schema.json"
+    },
+    {
+      "id": "resolve_education",
+      "kind": "primitive",
+      "primitive": "resolve_education",
+      "optional": true
+    },
+    {
+      "id": "resolve_companies",
+      "kind": "primitive",
+      "primitive": "resolve_companies",
+      "optional": true
+    },
+    {
+      "id": "apply_prefilters",
+      "kind": "primitive",
+      "primitive": "apply_prefilters",
+      "optional": true,
+      "note": "Run before count/search when education, tech skills, social/interaction, or large company intersections must produce base IDs."
     },
     {
       "id": "direct_count",
@@ -68,7 +94,19 @@
       "id": "hydrate_people",
       "kind": "primitive",
       "primitive": "hydrate_people",
+      "note": "Hydrate the full candidate frontier before LLM filtering."
+    },
+    {
+      "id": "llm_filter_candidates",
+      "kind": "primitive",
+      "primitive": "llm_filter_candidates",
+      "output_schema": "llm-filter-candidates.schema.json",
       "optional": true
+    },
+    {
+      "id": "persist_search_results",
+      "kind": "primitive",
+      "primitive": "persist_search_results"
     }
   ]
 }

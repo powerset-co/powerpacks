@@ -1,0 +1,9 @@
+[flake8]
+exclude =
+    .git,
+    .powerpacks,
+    __pycache__,
+    adapters/nanoclaw/runtime/nanoclaw,
+    docs
+extend-ignore = E203,E402,E501,W503
+max-line-length = 120

@@ -1,0 +1,33 @@
+{
+  "name": "education",
+  "type": "turbopuffer_namespace",
+  "version": "2026-04-29",
+  "namespace": "aleph_people_education_v1",
+  "document_grain": "person_education",
+  "description": "Education recall/prefilter namespace. Use to produce base person ids before role search when education is a hard recall constraint.",
+  "attributes": [
+    {"name": "person_id", "type": "string", "notes": "Base person id."},
+    {"name": "base_id", "type": "string", "notes": "Base person id on some uploads."},
+    {"name": "canonical_education_id", "type": "string", "notes": "Parent/canonical school id."},
+    {"name": "school_name", "type": "string"},
+    {"name": "degree", "type": "string"},
+    {"name": "degree_normalized", "type": "string"},
+    {"name": "field_of_study", "type": "string"},
+    {"name": "start_year", "type": "integer"},
+    {"name": "end_year", "type": "integer"},
+    {"name": "graduation_year", "type": "integer"},
+    {"name": "allowed_operator_ids", "type": "string[]"}
+  ],
+  "filters": [
+    {"field": "school_name", "operators": ["ContainsAllTokens", "Eq"], "value_type": "string"},
+    {"field": "canonical_education_id", "operators": ["In"], "value_type": "string[]"},
+    {"field": "degree_normalized", "operators": ["In"], "value_type": "string[]"},
+    {"field": "field_of_study", "operators": ["ContainsAllTokens"], "value_type": "string"},
+    {"field": "graduation_year", "operators": ["Gte", "Lte"], "value_type": "integer"},
+    {"field": "allowed_operator_ids", "operators": ["ContainsAny"], "value_type": "string[]"}
+  ],
+  "rules": [
+    "Use this as a base-id prefilter when education is hard, e.g. Stanford engineers.",
+    "Intersect returned base_ids with people namespace searches through a base_id In filter."
+  ]
+}

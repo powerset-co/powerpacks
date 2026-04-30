@@ -1,0 +1,42 @@
+[project]
+name = "powerpacks"
+version = "0.1.0"
+description = "Portable recruiting-search skills, primitives, schemas, and contracts for agent runtimes."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "psycopg2-binary>=2.9.10",
+    "snowballstemmer>=3.0.1",
+    "turbopuffer>=1.12.1",
+]
+
+[dependency-groups]
+dev = [
+    "flake8>=7.1.0",
+    "ruff>=0.9.7",
+]
+
+[tool.ruff]
+extend-exclude = [
+    ".git",
+    ".powerpacks",
+    "__pycache__",
+    "adapters/nanoclaw/runtime/nanoclaw",
+    "docs",
+]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["E402", "E501"]
+
+[tool.flake8]
+exclude = [
+    ".git",
+    ".powerpacks",
+    "__pycache__",
+    "adapters/nanoclaw/runtime/nanoclaw",
+    "docs",
+]
+extend-ignore = ["E203", "E402", "E501", "W503"]
+max-line-length = 120

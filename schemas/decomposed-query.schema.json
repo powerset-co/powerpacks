@@ -35,6 +35,18 @@
         "type": "string"
       }
     },
+    "adjacency_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["off", "ask_user", "company_domain_union", "company_domain_intersection", "title_adjacent"]
+        },
+        "explicitly_requested": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    },
     "notes": {
       "type": "array",
       "items": {

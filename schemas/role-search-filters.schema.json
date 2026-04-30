@@ -6,7 +6,11 @@
   "additionalProperties": false,
   "required": ["semantic_query"],
   "properties": {
-    "semantic_query": { "type": "string" },
+    "semantic_query": {
+      "type": "string",
+      "minLength": 80,
+      "description": "Dense semantic retrieval text describing what the person does and the experience they should have. Use 2-3 natural-language sentences, not just a title or keyword phrase."
+    },
     "bm25_queries": {
       "type": "array",
       "items": { "type": "string" }
@@ -18,6 +22,19 @@
     "company_names": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "company_semantic_queries": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_sector_strategy": {
+      "type": "string",
+      "enum": ["hard_filter", "soft_union", "semantic_only", "staged"],
+      "description": "How resolve_companies should combine company_semantic_queries with sector_types. hard_filter intersects sectors, soft_union unions sector matches, semantic_only ignores sector broadening, and staged starts hard then broadens when the hard semantic frontier is too small."
+    },
+    "company_sector_min_results": {
+      "type": "integer",
+      "description": "Minimum hard semantic company matches before staged company_sector_strategy broadens with sector union."
     },
     "company_cities": {
       "type": "array",
@@ -57,7 +74,13 @@
     },
     "investors": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "type": "string" },
+      "description": "Resolved investor URNs for company investor_urns filtering. Use resolve_investors for names."
+    },
+    "investor_names": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Raw investor person or firm names that must be resolved before company filtering."
     },
     "yc_batches": {
       "type": "array",
@@ -79,7 +102,37 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "education_names": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Expand-time school names that must be resolved to education_ids before apply_prefilters."
+    },
+    "school_names": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Alias for education_names."
+    },
+    "education_op": {
+      "type": "string",
+      "enum": ["or", "and"]
+    },
     "role_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "adjacent_role_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "adjacent_departments": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "adjacent_seniority": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_adjacency_queries": {
       "type": "array",
       "items": { "type": "string" }
     },
@@ -146,11 +199,46 @@
         "enum": ["bachelors", "masters", "phd", "mba"]
       }
     },
+    "fields_of_study": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "graduation_year_min": { "type": "integer" },
+    "graduation_year_max": { "type": "integer" },
+    "tech_skills": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "hard_filters": { "$ref": "./filter-expression.schema.json" },
+    "prefilters": { "$ref": "./prefilter-plan.schema.json" },
+    "adjacency_mode": {
+      "type": "string",
+      "enum": ["off", "ask_user", "company_domain_union", "company_domain_intersection", "title_adjacent"]
+    },
+    "has_domain_intent": { "type": "boolean" },
+    "set_id": { "type": "string" },
+    "base_candidate_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Internal execution field produced by apply_prefilters. Do not invent manually during query decomposition."
+    },
     "is_current": { "type": "boolean" },
     "years_experience_min": { "type": "number" },
     "years_experience_max": { "type": "number" },
     "age_min": { "type": "integer" },
     "age_max": { "type": "integer" },
+    "x_followers_min": { "type": "integer" },
+    "x_followers_max": { "type": "integer" },
+    "li_followers_min": { "type": "integer" },
+    "li_followers_max": { "type": "integer" },
+    "li_connections_min": { "type": "integer" },
+    "li_connections_max": { "type": "integer" },
+    "ig_followers_min": { "type": "integer" },
+    "ig_followers_max": { "type": "integer" },
+    "operator_interaction_min": { "type": "integer" },
+    "operator_interaction_max": { "type": "integer" },
+    "set_interaction_min": { "type": "integer" },
+    "set_interaction_max": { "type": "integer" },
     "position_after_date": { "type": "string" },
     "position_before_date": { "type": "string" }
   }

@@ -6,6 +6,7 @@ Inputs:
 
 - decomposed query
 - role-search seed filters
+- adjacency plan
 - company names or resolved company IDs
 - planning notes
 
@@ -20,8 +21,14 @@ Expected output:
 
 - strategy
 - reason
+- adjacency decision
+- hard-filter expression decision
+- prefilter execution plan
 - broadness estimate
 - ambiguity flags
 - recommended initial limit
+
+Use `ask_for_clarification` when company-domain adjacency could materially
+change recall and the user did not request it explicitly.
 
 This primitive should not run retrieval.

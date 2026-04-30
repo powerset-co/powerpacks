@@ -1,0 +1,22 @@
+{
+  "name": "summaries",
+  "type": "turbopuffer_namespace",
+  "version": "2026-04-29",
+  "namespace": "aleph_summaries_v1",
+  "document_grain": "person_summary",
+  "description": "Optional person summary namespace. Public V1 search should not depend on summary/company-signal generation.",
+  "attributes": [
+    {"name": "id", "type": "string", "notes": "Base person id."},
+    {"name": "tech_skills", "type": "string[]"},
+    {"name": "allowed_operator_ids", "type": "string[]"}
+  ],
+  "filters": [
+    {"field": "tech_skills", "operators": ["ContainsAny"], "value_type": "string[]"},
+    {"field": "allowed_operator_ids", "operators": ["ContainsAny"], "value_type": "string[]"}
+  ],
+  "rules": [
+    "Do not require this namespace for core role search.",
+    "Prefer people namespace retrieval plus Postgres hydration.",
+    "Use only for hard tech-skill base-ID prefilters when the query explicitly requires skills."
+  ]
+}

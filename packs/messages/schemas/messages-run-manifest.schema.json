@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/packs/messages/schemas/messages-run-manifest.schema.json",
+  "title": "MessagesRunManifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["run_id", "created_at", "primitive"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "created_at": {"type": "string"},
+    "primitive": {"type": "string"},
+    "channel": {"type": "string"},
+    "command": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "returncode": {"type": ["integer", "null"]},
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": {"type": "integer"}
+    }
+  }
+}

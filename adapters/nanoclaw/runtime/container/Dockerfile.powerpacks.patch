@@ -1,0 +1,11 @@
+# Powerpacks runtime requirements for NanoClaw agent containers.
+#
+# Apply these package additions to NanoClaw's `container/Dockerfile`:
+#
+# - python3
+# - python3-venv
+# - uv
+#
+# This file is documentation for the installer patch. The installer edits the
+# target Dockerfile directly and then rebuilds the target's per-checkout
+# NanoClaw agent image.

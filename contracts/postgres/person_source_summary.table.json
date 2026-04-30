@@ -1,0 +1,14 @@
+{
+  "name": "person_source_summary",
+  "type": "postgres_table",
+  "version": "2026-04-29",
+  "optional": true,
+  "description": "Optional interaction summary table. Missing table or rows should not fail hydration.",
+  "required_for": [
+    "hydrate_people"
+  ],
+  "columns": [
+    {"name": "person_id", "type": "uuid", "required": true},
+    {"name": "total_interactions", "type": "integer", "required": true}
+  ]
+}

@@ -1,5 +1,8 @@
 # TurboPuffer Contract
 
+For the fixed namespace and attribute schema, also see
+`powerpacks/docs/turbopuffer-schema.md`.
+
 This document exists to stop agents from guessing field names and types.
 
 ## Role Search Filter Contract
@@ -97,6 +100,7 @@ Common `role_tracks`:
 Supported recall-style constraints in the public role payload:
 
 - `education_ids`
+- `education_names`
 - `degree_levels`
 - `years_experience_min`
 - `years_experience_max`
@@ -132,8 +136,8 @@ For "who are software engineers in sf" a safe role-search payload is:
 
 ```json
 {
-  "semantic_query": "software engineer",
-  "bm25_queries": ["software engineer", "software developer"],
+  "semantic_query": "Builds and maintains software products or systems, implements features, debugs issues, reviews code, and contributes to technical design. Works hands-on with application, backend, frontend, mobile, platform, infrastructure, or systems code in production environments.",
+  "bm25_queries": ["software engineer", "software developer", "SWE", "software engineering"],
   "cities": ["San Francisco"],
   "states": ["California"],
   "role_tracks": ["engineering"],
@@ -146,8 +150,8 @@ payload is:
 
 ```json
 {
-  "semantic_query": "software engineer",
-  "bm25_queries": ["software engineer", "software developer"],
+  "semantic_query": "Builds and maintains software products or systems, implements features, debugs issues, reviews code, and contributes to technical design. Works hands-on with application, backend, frontend, mobile, platform, infrastructure, or systems code in production environments.",
+  "bm25_queries": ["software engineer", "software developer", "SWE", "software engineering"],
   "cities": ["San Francisco"],
   "role_tracks": ["engineering"],
   "education_ids": ["resolved-school-id"],
@@ -162,7 +166,7 @@ safe role-search payload is:
 
 ```json
 {
-  "semantic_query": "senior engineer",
+  "semantic_query": "Owns meaningful technical areas, leads design or architecture decisions, mentors other engineers, and still contributes to production software systems. Shows responsibility for complex technical projects, platform or application reliability, and execution beyond entry-level implementation work.",
   "role_tracks": ["engineering"],
   "seniority_bands": ["senior", "staff", "principal"],
   "sector_types": ["fintech"],

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/adjacency-plan.schema.json",
+  "title": "AdjacencyPlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "reason", "requires_user_confirmation"],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["off", "ask_user", "company_domain_union", "company_domain_intersection", "title_adjacent"]
+    },
+    "reason": { "type": "string" },
+    "requires_user_confirmation": { "type": "boolean" },
+    "company_semantic_queries": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_sector_strategy": {
+      "type": "string",
+      "enum": ["hard_filter", "soft_union", "semantic_only", "staged"]
+    },
+    "company_sector_min_results": { "type": "integer" },
+    "company_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "sector_types": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "entity_types": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "company_adjacency_queries": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Powerpacks Hydrated Profile",
+  "type": "object",
+  "required": [
+    "person_id",
+    "name",
+    "positions",
+    "education"
+  ],
+  "properties": {
+    "person_id": {"type": "string"},
+    "name": {"type": "string"},
+    "location": {"type": ["string", "null"]},
+    "headline": {"type": ["string", "null"]},
+    "summary": {"type": ["string", "null"]},
+    "positions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "position_title": {"type": ["string", "null"]},
+          "description": {"type": ["string", "null"]},
+          "dense_text": {"type": ["string", "null"]},
+          "seniority_band": {"type": ["string", "null"]},
+          "role_track": {"type": ["string", "null"]},
+          "company_name": {"type": ["string", "null"]},
+          "company_id": {"type": ["string", "null"]},
+          "company_domain": {"type": ["string", "null"]},
+          "company_linkedin_url": {"type": ["string", "null"]},
+          "company_description": {"type": ["string", "null"]},
+          "company_sector_types": {},
+          "company_entity_types": {},
+          "company_headcount": {"type": ["integer", "number", "string", "null"]},
+          "company_funding_total": {"type": ["integer", "number", "string", "null"]},
+          "company_stage": {"type": ["string", "null"]},
+          "investor_names": {},
+          "start_date": {"type": ["string", "null"]},
+          "end_date": {"type": ["string", "null"]},
+          "is_current": {"type": ["boolean", "null"]}
+        }
+      }
+    },
+    "education": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "school_name": {"type": ["string", "null"]},
+          "degree": {"type": ["string", "null"]},
+          "field_of_study": {"type": ["string", "null"]},
+          "start_year": {"type": ["integer", "string", "null"]},
+          "end_year": {"type": ["integer", "string", "null"]}
+        }
+      }
+    },
+    "tech_skills": {},
+    "linkedin_url": {"type": ["string", "null"]},
+    "profile_picture_url": {"type": ["string", "null"]},
+    "linkedin_followers": {"type": ["integer", "number", "string", "null"]},
+    "linkedin_connections": {"type": ["integer", "number", "string", "null"]},
+    "x_twitter_handle": {"type": ["string", "null"]},
+    "x_twitter_followers": {"type": ["integer", "number", "string", "null"]},
+    "instagram_handle": {"type": ["string", "null"]},
+    "instagram_followers": {"type": ["integer", "number", "string", "null"]},
+    "inferred_age": {"type": ["integer", "number", "null"]},
+    "years_of_experience": {"type": ["integer", "number", "string", "null"]},
+    "total_interactions": {"type": ["integer", "number", "string", "null"]},
+    "base_score": {"type": ["integer", "number", "string", "null"]},
+    "matched_position_indexes": {},
+    "trait_scores": {},
+    "vertical_sources": {}
+  }
+}

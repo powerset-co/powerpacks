@@ -1,0 +1,75 @@
+[
+  {
+    "id": "software-engineers-sf",
+    "query": "who are software engineers in sf",
+    "must_include": [
+      "task_state",
+      "expand_search_request",
+      "decide_search_strategy",
+      "count_candidates",
+      "hydrate_people",
+      "persist_search_results",
+      "metro_areas",
+      "is_current",
+      "top_k"
+    ],
+    "must_not_include": [
+      "llm enrichment",
+      "company signal",
+      "expensive scoring",
+      "current_role_category",
+      "employment_status",
+      "company_size",
+      "profile updated"
+    ]
+  },
+  {
+    "id": "stanford-swe-3-5-yoe-nyc",
+    "query": "stanford software engineers with 3-5 yoe in new york",
+    "must_include": [
+      "education",
+      "prefilter",
+      "years_experience",
+      "base_id",
+      "hydrate_people"
+    ],
+    "must_not_include": [
+      "expensive scoring",
+      "current_role_category",
+      "employment_status"
+    ]
+  },
+  {
+    "id": "box-tenure-window",
+    "query": "people who worked at Box between 2019 and 2022",
+    "must_include": [
+      "tenure",
+      "company",
+      "start_date_epoch",
+      "end_date_epoch",
+      "overlap"
+    ],
+    "must_not_include": [
+      "company signal",
+      "summary generation",
+      "current_role_category",
+      "employment_status"
+    ]
+  },
+  {
+    "id": "adjacent-infra-engineers",
+    "query": "find adjacent infra engineers, including people from infra companies even if their title is broader",
+    "must_include": [
+      "plan_adjacency_search",
+      "adjacency",
+      "company",
+      "slice",
+      "role"
+    ],
+    "must_not_include": [
+      "company signal",
+      "current_role_category",
+      "employment_status"
+    ]
+  }
+]

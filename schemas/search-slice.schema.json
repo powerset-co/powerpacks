@@ -32,8 +32,14 @@
         },
         "company_strictness": {
           "type": "string",
-          "enum": ["none", "resolved_company_ids", "company_attributes"]
+          "enum": ["none", "resolved_company_ids", "company_attributes", "company_domain"]
         },
+        "adjacency_mode": {
+          "type": "string",
+          "enum": ["off", "ask_user", "company_domain_union", "company_domain_intersection", "title_adjacent"]
+        },
+        "hard_filters": { "$ref": "./filter-expression.schema.json" },
+        "prefilters": { "$ref": "./prefilter-plan.schema.json" },
         "count_first": { "type": "boolean" },
         "candidate_limit": { "type": "integer" },
         "hydrate_limit": { "type": "integer" }

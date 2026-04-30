@@ -13,7 +13,7 @@
     },
     "status": {
       "type": "string",
-      "enum": ["running", "completed", "failed", "paused"]
+      "enum": ["running", "awaiting_approval", "completed", "failed", "paused"]
     },
     "query": { "type": "string" },
     "created_at": { "type": "string" },
@@ -46,6 +46,51 @@
     },
     "summary": {
       "type": "object"
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "changes_requested"]
+        },
+        "requested_at": { "type": "string" },
+        "approved_at": { "type": "string" },
+        "changed_at": { "type": "string" },
+        "approved_by": { "type": "string" },
+        "requested_by": { "type": "string" },
+        "execution_mode": {
+          "type": "string",
+          "enum": ["search_only", "rerank"]
+        },
+        "reason": { "type": "string" },
+        "proposed_next_step": { "type": "string" },
+        "note": { "type": "string" },
+        "plan": { "type": "object" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_id": { "type": "string" },
+        "query": { "type": "string" },
+        "state": { "type": "string" },
+        "created_at": { "type": "string" },
+        "artifact_dir": { "type": "string" },
+        "csv": { "type": "string" },
+        "jsonl": { "type": "string" },
+        "manifest": { "type": "string" },
+        "row_count": { "type": "integer" },
+        "hydrated_count": { "type": "integer" },
+        "frontier_count": { "type": "integer" },
+        "agentic_candidate_review": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Sharded review manifest, shard paths, expected output paths, and final ranked artifacts."
+        }
+      }
     }
   }
 }

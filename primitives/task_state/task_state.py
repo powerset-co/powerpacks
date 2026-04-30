@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,15 +31,39 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
+def event_log_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".events.jsonl")
+
+
+def append_event(path: Path, event: dict[str, Any]) -> None:
+    log_path = event_log_path(path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.open("a").write(json.dumps(event, sort_keys=True) + "\n")
+
+
+def slugify(value: str, max_length: int = 48) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return (slug[:max_length].strip("-") or "query")
+
+
+def init_output_path(args: argparse.Namespace, task_id: str) -> Path:
+    if args.out:
+        return Path(args.out)
+    out_dir = Path(args.out_dir)
+    return out_dir / f"{task_id}-{slugify(args.query)}.json"
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     task_id = args.task_id or f"search-network-{uuid4()}"
+    out_path = init_output_path(args, task_id)
+    now = now_iso()
     state = {
         "task_id": task_id,
         "task": "search_network",
         "status": "running",
         "query": args.query,
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
+        "created_at": now,
+        "updated_at": now,
         "constraints": {
             "no_llm_enrichment": True,
             "no_summary_search": True,
@@ -48,17 +73,25 @@ def cmd_init(args: argparse.Namespace) -> None:
         "plan": load_json_arg(args.plan_json) or {},
         "steps": [],
     }
-    write_state(Path(args.out), state)
-    print(json.dumps({"task_id": task_id, "state": args.out}, indent=2))
+    write_state(out_path, state)
+    append_event(out_path, {
+        "event": "init",
+        "task_id": task_id,
+        "state": str(out_path),
+        "status": "running",
+        "timestamp": now,
+    })
+    print(json.dumps({"task_id": task_id, "state": str(out_path), "event_log": str(event_log_path(out_path))}, indent=2))
 
 
 def cmd_record_step(args: argparse.Namespace) -> None:
     path = Path(args.state)
     state = read_state(path)
+    now = now_iso()
     step = {
         "id": args.step_id,
         "status": args.status,
-        "recorded_at": now_iso(),
+        "recorded_at": now,
     }
     output = load_json_arg(args.output_json)
     if output is not None:
@@ -69,19 +102,117 @@ def cmd_record_step(args: argparse.Namespace) -> None:
         step["elapsed_ms"] = args.elapsed_ms
 
     state.setdefault("steps", []).append(step)
-    state["updated_at"] = now_iso()
+    state["updated_at"] = now
     write_state(path, state)
-    print(json.dumps({"state": str(path), "recorded_step": args.step_id}, indent=2))
+    append_event(path, {
+        "event": "record_step",
+        "task_id": state.get("task_id"),
+        "state": str(path),
+        "step_id": args.step_id,
+        "status": args.status,
+        "timestamp": now,
+        "elapsed_ms": args.elapsed_ms,
+    })
+    print(json.dumps({"state": str(path), "event_log": str(event_log_path(path)), "recorded_step": args.step_id}, indent=2))
 
 
 def cmd_set_summary(args: argparse.Namespace) -> None:
     path = Path(args.state)
     state = read_state(path)
+    now = now_iso()
     state["summary"] = load_json_arg(args.summary_json) or {}
     state["status"] = args.status
-    state["updated_at"] = now_iso()
+    state["updated_at"] = now
     write_state(path, state)
-    print(json.dumps({"state": str(path), "status": args.status}, indent=2))
+    append_event(path, {
+        "event": "set_summary",
+        "task_id": state.get("task_id"),
+        "state": str(path),
+        "status": args.status,
+        "timestamp": now,
+        "step_count": len(state.get("steps", [])),
+    })
+    print(json.dumps({"state": str(path), "event_log": str(event_log_path(path)), "status": args.status}, indent=2))
+
+
+def cmd_request_approval(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    state = read_state(path)
+    now = now_iso()
+    approval = {
+        "status": "pending",
+        "requested_at": now,
+        "reason": args.reason,
+        "proposed_next_step": args.proposed_next_step,
+        "plan": load_json_arg(args.plan_json) or {},
+    }
+    state["approval"] = approval
+    state["status"] = "awaiting_approval"
+    state["updated_at"] = now
+    write_state(path, state)
+    append_event(path, {
+        "event": "request_approval",
+        "task_id": state.get("task_id"),
+        "state": str(path),
+        "timestamp": now,
+        "reason": args.reason,
+        "proposed_next_step": args.proposed_next_step,
+    })
+    print(json.dumps({"state": str(path), "event_log": str(event_log_path(path)), "status": "awaiting_approval"}, indent=2))
+
+
+def cmd_approve(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    state = read_state(path)
+    now = now_iso()
+    approval = state.get("approval") if isinstance(state.get("approval"), dict) else {}
+    approval.update({
+        "status": "approved",
+        "approved_at": now,
+        "approved_by": args.approved_by,
+        "execution_mode": args.execution_mode,
+        "note": args.note,
+    })
+    state["approval"] = approval
+    state["status"] = "running"
+    state["updated_at"] = now
+    write_state(path, state)
+    append_event(path, {
+        "event": "approve",
+        "task_id": state.get("task_id"),
+        "state": str(path),
+        "timestamp": now,
+        "approved_by": args.approved_by,
+        "execution_mode": args.execution_mode,
+        "note": args.note,
+    })
+    print(json.dumps({"state": str(path), "event_log": str(event_log_path(path)), "status": "running"}, indent=2))
+
+
+def cmd_request_changes(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    state = read_state(path)
+    now = now_iso()
+    approval = state.get("approval") if isinstance(state.get("approval"), dict) else {}
+    approval.update({
+        "status": "changes_requested",
+        "changed_at": now,
+        "requested_by": args.requested_by,
+        "note": args.note,
+    })
+    state["approval"] = approval
+    state["status"] = "paused"
+    state["updated_at"] = now
+    write_state(path, state)
+    append_event(path, {
+        "event": "request_changes",
+        "task_id": state.get("task_id"),
+        "state": str(path),
+        "timestamp": now,
+        "requested_by": args.requested_by,
+        "note": args.note,
+    })
+    print(json.dumps({"state": str(path), "event_log": str(event_log_path(path)), "status": "paused"}, indent=2))
 
 
 def main() -> None:
@@ -90,7 +221,8 @@ def main() -> None:
 
     init = sub.add_parser("init")
     init.add_argument("--query", required=True)
-    init.add_argument("--out", required=True)
+    init.add_argument("--out")
+    init.add_argument("--out-dir", default=".powerpacks/runs")
     init.add_argument("--task-id")
     init.add_argument("--plan-json")
     init.set_defaults(func=cmd_init)
@@ -109,6 +241,26 @@ def main() -> None:
     summary.add_argument("--summary-json", required=True)
     summary.add_argument("--status", default="completed")
     summary.set_defaults(func=cmd_set_summary)
+
+    approval = sub.add_parser("request-approval")
+    approval.add_argument("--state", required=True)
+    approval.add_argument("--reason", required=True)
+    approval.add_argument("--proposed-next-step", required=True)
+    approval.add_argument("--plan-json")
+    approval.set_defaults(func=cmd_request_approval)
+
+    approve = sub.add_parser("approve")
+    approve.add_argument("--state", required=True)
+    approve.add_argument("--approved-by", default="user")
+    approve.add_argument("--note", default="")
+    approve.add_argument("--execution-mode", choices=["search_only", "rerank"], default="search_only")
+    approve.set_defaults(func=cmd_approve)
+
+    changes = sub.add_parser("request-changes")
+    changes.add_argument("--state", required=True)
+    changes.add_argument("--requested-by", default="user")
+    changes.add_argument("--note", required=True)
+    changes.set_defaults(func=cmd_request_changes)
 
     args = parser.parse_args()
     args.func(args)

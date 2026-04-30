@@ -1,0 +1,34 @@
+{
+  "name": "persons",
+  "type": "postgres_table",
+  "version": "2026-04-29",
+  "primary_key": "id",
+  "description": "Base people table used to hydrate candidate frontiers after TurboPuffer retrieval.",
+  "required_for": [
+    "hydrate_people",
+    "llm_filter_candidates",
+    "persist_search_results"
+  ],
+  "columns": [
+    {"name": "id", "type": "uuid", "required": true, "notes": "Base person id. TurboPuffer position ids are normalized back to this id before hydration."},
+    {"name": "public_identifier", "type": "text", "required": true},
+    {"name": "public_profile_url", "type": "text", "required": true},
+    {"name": "provider_entity_urn", "type": "text", "required": true, "notes": "Harmonic person URN used by company investor_urns for person investors."},
+    {"name": "full_name", "type": "text", "required": true},
+    {"name": "headline", "type": "text", "required": true},
+    {"name": "summary", "type": "text", "required": true},
+    {"name": "profile_picture_url", "type": "text", "required": true},
+    {"name": "location_raw", "type": "text", "required": true},
+    {"name": "city", "type": "text", "required": true},
+    {"name": "state", "type": "text", "required": true},
+    {"name": "country", "type": "text", "required": true},
+    {"name": "hydrated_context", "type": "jsonb", "required": true, "notes": "Canonical nested profile context with positions, education, skills, scores, sources, and matched position indexes."},
+    {"name": "x_twitter_handle", "type": "text", "required": true},
+    {"name": "x_twitter_followers", "type": "integer", "required": true},
+    {"name": "linkedin_followers", "type": "integer", "required": true},
+    {"name": "linkedin_connections", "type": "integer", "required": true},
+    {"name": "ig_handle", "type": "text", "required": true},
+    {"name": "ig_followers", "type": "integer", "required": true},
+    {"name": "inferred_birth_year", "type": "integer", "required": true}
+  ]
+}

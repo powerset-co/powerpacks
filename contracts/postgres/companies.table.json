@@ -1,0 +1,28 @@
+{
+  "name": "companies",
+  "type": "postgres_table",
+  "version": "2026-04-29",
+  "primary_key": "id",
+  "description": "Company metadata table used for company filters, display hydration, and future company constraint resolution.",
+  "required_for": [
+    "resolve_companies",
+    "hydrate_people"
+  ],
+  "columns": [
+    {"name": "id", "type": "uuid/text", "required": true},
+    {"name": "name", "type": "text", "required": true},
+    {"name": "harmonic_urn", "type": "text", "required": true},
+    {"name": "domain", "type": "text", "required": true},
+    {"name": "website_domain", "type": "text", "required": true},
+    {"name": "linkedin_url", "type": "text", "required": true},
+    {"name": "description", "type": "text", "required": true},
+    {"name": "headcount", "type": "integer", "required": true},
+    {"name": "funding_total", "type": "numeric", "required": true},
+    {"name": "funding_stage", "type": "text", "required": true},
+    {"name": "entity_types", "type": "text[]/jsonb", "required": true},
+    {"name": "sector_types", "type": "text[]/jsonb", "required": true},
+    {"name": "founded_year", "type": "integer", "required": true},
+    {"name": "location", "type": "text/jsonb", "required": true},
+    {"name": "li_company_id", "type": "text", "required": true}
+  ]
+}

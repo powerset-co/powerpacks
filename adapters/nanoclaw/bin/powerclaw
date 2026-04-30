@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""PowerClaw CLI entrypoint."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def read_jsonish_state(path: Path) -> bool:
+    return path.is_file() and path.name.endswith(".json") and not path.name.endswith(".manifest.json")
+
+
+def discover_latest_state(runs_dir: Path) -> Path | None:
+    if not runs_dir.exists():
+        return None
+    candidates = [
+        path
+        for path in runs_dir.glob("*.json")
+        if read_jsonish_state(path) and ".events." not in path.name
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def discover_latest_thread(threads_dir: Path) -> str | None:
+    if not threads_dir.exists():
+        return None
+    candidates = [path for path in threads_dir.glob("*.json") if path.is_file()]
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda path: path.stat().st_mtime)
+    try:
+        data = json.loads(latest.read_text())
+    except (OSError, json.JSONDecodeError):
+        return latest.stem
+    return str(data.get("thread_id") or latest.stem)
+
+
+def write_thread(threads_dir: Path, thread_id: str) -> None:
+    threads_dir.mkdir(parents=True, exist_ok=True)
+    path = threads_dir / f"{thread_id}.json"
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    data = {"thread_id": thread_id, "updated_at": now}
+    if path.exists():
+        try:
+            data = {**json.loads(path.read_text()), **data}
+        except (OSError, json.JSONDecodeError):
+            pass
+    else:
+        data["created_at"] = now
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def powerpacks_root() -> Path:
+    configured = os.environ.get("POWERPACKS_ROOT")
+    if configured:
+        return Path(configured)
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "schemas").is_dir() and (parent / "contracts").is_dir():
+            return parent
+    return Path(__file__).resolve().parents[1]
+
+
+def search_tui_path(root: Path) -> Path:
+    adapter_path = root / "adapters" / "nanoclaw" / "primitives" / "view_search_results" / "search_tui.py"
+    if adapter_path.exists():
+        return adapter_path
+    return root / "primitives" / "view_search_results" / "search_tui.py"
+
+
+def default_nanoclaw_dir(root: Path) -> Path:
+    configured = os.environ.get("NANOCLAW_DIR")
+    if configured:
+        return Path(configured)
+
+    candidates = [
+        root.parent,
+        Path("/Users/arthur/workspace/nanoclaw-powerpacks"),
+        Path("/Users/arthur/workspace/nanoclaw-e2b"),
+        Path.cwd(),
+    ]
+    for candidate in candidates:
+        if (candidate / "nanoclaw.sh").exists():
+            return candidate
+    return candidates[1]
+
+
+def main() -> int:
+    root = powerpacks_root()
+    parser = argparse.ArgumentParser(
+        prog="powerclaw",
+        description="Open the PowerClaw terminal workspace backed by NanoClaw.",
+    )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="__latest__",
+        metavar="THREAD_ID",
+        help="Resume the latest threaded NanoClaw CLI session, or resume THREAD_ID if provided.",
+    )
+    parser.add_argument("--resume-run", action="store_true", help="Open the most recent Powerpacks search run if one exists.")
+    parser.add_argument("--new", dest="new_thread", action="store_true", help="Start a new threaded NanoClaw CLI session.")
+    parser.add_argument("--thread-id", "--thread", dest="thread_id", help="Resume a specific threaded NanoClaw CLI session.")
+    parser.add_argument("--threads-dir", default=str(root / ".powerpacks" / "threads"))
+    parser.add_argument("--state", help="Open a specific Powerpacks task state JSON.")
+    parser.add_argument("--runs-dir", default=str(root / ".powerpacks" / "runs"))
+    parser.add_argument("--review-log")
+    parser.add_argument("--nanoclaw-dir")
+    parser.add_argument("--no-auto-start", action="store_true")
+    parser.add_argument("--agent-command")
+    parser.add_argument("--nanoclaw-start-command")
+    parser.add_argument("--dump", action="store_true", help="Print status/debug information instead of opening the TUI.")
+    parser.add_argument("--suggest", help="Print autocomplete suggestions for input text and exit.")
+    parser.add_argument("--command", action="append", help="Run a TUI command non-interactively; repeatable.")
+    parser.add_argument("--limit", type=int, default=5)
+    args = parser.parse_args()
+
+    runs_dir = Path(args.runs_dir)
+    threads_dir = Path(args.threads_dir)
+    state = args.state
+    if args.resume_run and not state:
+        latest = discover_latest_state(runs_dir)
+        if latest:
+            state = str(latest)
+
+    thread_id = args.thread_id
+    if args.resume and args.resume != "__latest__":
+        thread_id = args.resume
+    if not thread_id:
+        thread_id = None if args.new_thread else discover_latest_thread(threads_dir)
+    if not thread_id:
+        thread_id = f"thread-{uuid.uuid4()}"
+    write_thread(threads_dir, thread_id)
+
+    nanoclaw_dir = Path(args.nanoclaw_dir) if args.nanoclaw_dir else default_nanoclaw_dir(root)
+    tui = search_tui_path(root)
+    argv = [
+        sys.executable,
+        str(tui),
+        "--runs-dir",
+        str(runs_dir),
+        "--nanoclaw-dir",
+        str(nanoclaw_dir),
+        "--limit",
+        str(args.limit),
+        "--thread-id",
+        thread_id,
+    ]
+    if state:
+        argv.extend(["--state", state])
+    if args.review_log:
+        argv.extend(["--review-log", args.review_log])
+    if args.no_auto_start:
+        argv.append("--no-auto-start")
+    if args.agent_command:
+        argv.extend(["--agent-command", args.agent_command])
+    if args.nanoclaw_start_command:
+        argv.extend(["--nanoclaw-start-command", args.nanoclaw_start_command])
+    if args.dump:
+        argv.append("--dump")
+    if args.suggest is not None:
+        argv.extend(["--suggest", args.suggest])
+    for command in args.command or []:
+        argv.extend(["--command", command])
+
+    return subprocess.call(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
