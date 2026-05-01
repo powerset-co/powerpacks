@@ -18,6 +18,7 @@ Give the user one operational entrypoint that does the work end to end.
 The agent should:
 
 - create a unique JSON task run before retrieval
+- orchestrate helper skills when they produce a cleaner intermediate artifact
 - decompose the request into the Powerpacks role-search schema
 - decide whether adjacent/domain search is off, confirmed, or should be asked
   about
@@ -32,12 +33,53 @@ The agent should:
   reduce shard outputs into one sorted review artifact
 - persist CSV/JSONL result artifacts for refinement and interoperability
 
+## Skill Composition
+
+`search-network` is the high-level orchestration skill. It may sequence other
+skills, but every handoff must be explicit and durable. Do not rely on chat
+memory as the boundary between steps.
+
+When a sub-step is covered by another installed skill:
+
+- load that skill's instructions for that step
+- give it a concrete input artifact or task-state path
+- require a concrete output artifact or recorded task-state step
+- feed that artifact into the next step
+
+Default composition:
+
+- `extract-search-query`: always use this first to produce
+  `expand_search_request` JSON
+- `search-company`: use when natural-language company criteria, investors,
+  sectors, funding, headcount, or company-domain intent must resolve into
+  canonical company IDs before people retrieval
+- `fix-people`: use only when the user explicitly asks to reconcile, merge, or
+  clean persisted person artifacts after search
+
+Useful handoff artifacts:
+
+- task state: `.powerpacks/runs/search-network-<id>.json`
+- extracted query: recorded at `steps[].id = "expand_search_request"`
+- planned checklist: recorded in `planned_steps[]` at approval time
+- company resolution: recorded at `steps[].id = "resolve_companies"` and, when
+  useful for debugging, mirrored to `artifacts/company_ids.json`
+- candidate frontier: recorded by retrieval steps and exported as JSONL
+- hydrated output: persisted CSV/JSONL/manifest from `persist_search_results`
+- rerank output: `ranked_candidates.csv` and `ranked_candidates.jsonl`
+
+If a future workflow chains more skills, keep the same pattern: each task
+consumes a path or task-state step and produces a path or task-state step.
+Example: `search-company` -> `search-network` -> `fix-people` is valid only if
+each boundary has a written artifact.
+
 ## Strategy Loop
 
 1. Create task state from `powerpacks/tasks/search-network.task.json`.
    Use `task_state.py init --query "<query>"` so the default run file is
    unique under `.powerpacks/runs/`.
-2. Expand the request with `expand_search_request`.
+2. Invoke the `extract-search-query` skill instructions to produce
+   `expand_search_request` JSON. Do not hide query extraction inside eval or
+   retrieval code.
 3. Record the expansion output.
 4. If the request mentions adjacency or domain intent, run
    `plan_adjacency_search` and record whether to include adjacency, ask the
@@ -56,7 +98,9 @@ The agent should:
    - direct role search
    - count then search
    - multi-slice retrieval
-8. Record every primitive output into task state.
+8. Record every primitive output into task state. `steps[]` is the append-only
+   execution log; `planned_steps[]` is the mutable checklist that should move
+   from pending to completed/failed/skipped as matching steps run.
 9. Assess the frontier with `assess_frontier`.
 10. Decide the next action with `plan_candidate_review`.
 11. Hydrate the full candidate frontier with `hydrate_people`.
@@ -175,6 +219,7 @@ Before showing the approval prompt, perform this payload quality gate:
 - after `agentic_candidate_review reduce`, present final ranked artifact paths
   from `artifacts.agentic_candidate_review`
 - after planning, use `task_state request-approval` before real retrieval
+  with `plan.planned_steps` populated in execution order
 - if the user chooses search only or says approve, use
   `task_state approve --execution-mode search_only`
 - if the user chooses rerank, use `task_state approve --execution-mode rerank`
@@ -321,6 +366,7 @@ artifact rather than mutating the original run.
 - `decide_search_strategy`
 - `resolve_education`
 - `resolve_companies`
+- `resolve_investors`
 - `apply_prefilters`
 - `count_candidates`
 - `execute_role_search`

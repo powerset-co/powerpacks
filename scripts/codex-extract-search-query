@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "usage: scripts/codex-extract-search-query PROMPT_FILE OUTPUT_JSON" >&2
+  exit 2
+fi
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROMPT_FILE="$1"
+OUTPUT_JSON="$2"
+MODEL="${CODEX_MODEL:-}"
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "error: codex CLI not found on PATH" >&2
+  exit 127
+fi
+
+mkdir -p "$(dirname "$OUTPUT_JSON")"
+
+args=(
+  exec
+  --cd "$ROOT"
+  --sandbox workspace-write
+  --output-last-message "$OUTPUT_JSON"
+)
+
+if [[ -n "$MODEL" ]]; then
+  args+=(--model "$MODEL")
+fi
+
+args+=(-)
+
+stdout_log="$OUTPUT_JSON.codex.stdout.log"
+stderr_log="$OUTPUT_JSON.codex.stderr.log"
+if ! codex "${args[@]}" < "$PROMPT_FILE" >"$stdout_log" 2>"$stderr_log"; then
+  echo "error: codex exec failed" >&2
+  echo "stdout log: $stdout_log" >&2
+  echo "stderr log: $stderr_log" >&2
+  exit 1
+fi
+
+python3 - "$OUTPUT_JSON" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+raw = path.read_text().strip()
+try:
+    value = json.loads(raw)
+except json.JSONDecodeError:
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        raise
+    value = json.loads(match.group(0))
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+payload = value.get("role_search_filters")
+if not isinstance(payload, dict):
+    raise SystemExit("missing role_search_filters object")
+semantic_query = payload.get("semantic_query")
+if not isinstance(semantic_query, str) or len(semantic_query) < 80:
+    raise SystemExit("semantic_query must be prose with at least 80 characters")
+print(json.dumps(value, indent=2, sort_keys=True))
+PY

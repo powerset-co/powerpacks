@@ -44,6 +44,27 @@
         }
       }
     },
+    "planned_steps": {
+      "type": "array",
+      "description": "Mutable checklist of the intended plan. The append-only steps array remains the execution log.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "running", "completed", "failed", "skipped"]
+          },
+          "planned_at": { "type": "string" },
+          "started_at": { "type": "string" },
+          "completed_at": { "type": "string" },
+          "updated_at": { "type": "string" },
+          "note": { "type": "string" }
+        }
+      }
+    },
     "summary": {
       "type": "object"
     },

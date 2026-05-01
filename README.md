@@ -18,7 +18,10 @@ run the primitives.
 
 ## Layout
 
-- `skills/search-network/` is the only user-facing skill
+- skills: `skills/search-network/`, `skills/extract-search-query/`,
+  `skills/search-company/`, `packs/messages/skills/import-imessage/`,
+  `packs/messages/skills/import-whatsapp/`, and
+  `packs/messages/skills/import-contacts-review/`
 - `primitives/` contains deterministic scripts and primitive contracts
 - `primitives/lib/` contains shared runtime contracts and service clients
 - `schemas/` contains JSON schemas for query, filter, task, and result shapes
@@ -58,8 +61,9 @@ Direct adapter installs also work:
 ```
 
 The NanoClaw adapter copies the core Powerpacks directory into the target,
-installs `search-network` as the only skill, wires the threaded CLI channel,
-and keeps NanoClaw-specific TUI/runtime code under `powerpacks/adapters/nanoclaw`.
+installs `search-network` and its `extract-search-query` sub-skill, wires the
+threaded CLI channel, and keeps NanoClaw-specific TUI/runtime code under
+`powerpacks/adapters/nanoclaw`.
 
 Claude Code adapter is intentionally not implemented yet.
 
@@ -77,14 +81,25 @@ python powerpacks/primitives/contracts/contracts.py dump-postgres --env-file .en
 `dump-postgres` writes a diagnostic artifact. It does not mutate the checked-in
 contracts.
 
+## Task Flow
+
+See `docs/task-flow.md` for the current search task lifecycle, the extraction
+sub-skill boundary, and the difference between primitive parity harnesses and
+agent extraction harnesses.
+
 ## Development
 
 ```bash
-bin/lint-powerpacks
-bin/test-powerpacks
+scripts/lint-powerpacks
+scripts/test-powerpacks
 ```
 
 The lint command runs `ruff` and `flake8` through `uv` using the repo lockfile.
+
+## Testing
+
+Use `scripts/test-search-network check` for local readiness. For headless Codex
+extraction and recall harness details, see `docs/testing.md`.
 
 ## Current Scope
 

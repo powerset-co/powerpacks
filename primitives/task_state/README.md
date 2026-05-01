@@ -19,10 +19,25 @@ when an explicit path is required.
 Every write also appends an audit event to
 `.powerpacks/runs/<run-file>.events.jsonl`.
 
+Use `request-approval --plan-json` to record the intended checklist before
+retrieval:
+
+```bash
+python powerpacks/primitives/task_state/task_state.py request-approval \
+  --state .powerpacks/runs/search-network-<uuid>-software-engineers-in-sf.json \
+  --reason "Search requires external retrieval." \
+  --proposed-next-step "Resolve education, prefilter, count, retrieve, hydrate, export." \
+  --plan-json '{"planned_steps":["resolve_education","apply_prefilters","count_candidates","execute_role_search","hydrate_people","persist_search_results"]}'
+```
+
+This writes `planned_steps[]` as a mutable checklist. `steps[]` stays the
+append-only execution log. When `record-step` is called for a matching planned
+step, the planned step is marked completed/failed/skipped with timestamps.
+
 ```bash
 python powerpacks/primitives/task_state/task_state.py record-step \
   --state .powerpacks/runs/search-network-<uuid>-software-engineers-in-sf.json \
-  --step-id direct_count \
+  --step-id count_candidates \
   --status completed \
   --output-json '{"total_count":2543}'
 ```

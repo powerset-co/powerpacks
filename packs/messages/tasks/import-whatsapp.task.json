@@ -1,0 +1,54 @@
+{
+  "task": "import_whatsapp",
+  "version": 2,
+  "description": "Import WhatsApp contacts via a user-controlled local WAHA Docker container. No contact-exporter dependency.",
+  "default_constraints": {
+    "no_message_content": true,
+    "docker_install_requires_explicit_user_request": true,
+    "extraction_requires_explicit_user_request": true
+  },
+  "steps": [
+    {
+      "id": "check_docker_and_waha",
+      "kind": "primitive",
+      "primitive": "waha_runtime",
+      "command": "check"
+    },
+    {
+      "id": "start_waha_container",
+      "kind": "primitive",
+      "primitive": "waha_runtime",
+      "command": "up",
+      "requires_explicit_user_request": true
+    },
+    {
+      "id": "authenticate_session",
+      "kind": "primitive",
+      "primitive": "waha_session",
+      "command": "start",
+      "args": {"open": true, "wait": true},
+      "requires_explicit_user_request": true,
+      "user_action": "Scan the QR PNG opened in the system image viewer with WhatsApp > Settings > Linked Devices."
+    },
+    {
+      "id": "extract_whatsapp_contacts",
+      "kind": "primitive",
+      "primitive": "extract_whatsapp_contacts",
+      "command": "extract",
+      "requires_explicit_user_request": true
+    },
+    {
+      "id": "normalize_contacts",
+      "kind": "primitive",
+      "primitive": "normalize_message_contacts",
+      "output_schema": "message-contact.schema.json"
+    },
+    {
+      "id": "merge_contacts",
+      "kind": "primitive",
+      "primitive": "merge_message_contacts",
+      "command": "merge",
+      "description": "Dedupe with imessage.contacts.csv (if present) into a single contacts.csv."
+    }
+  ]
+}

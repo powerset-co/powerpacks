@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/codex-decomposed-query-output.schema.json",
+  "title": "CodexDecomposedQueryOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intent_type",
+    "source_type",
+    "normalized_query",
+    "vertical",
+    "role_search_filters",
+    "notes"
+  ],
+  "properties": {
+    "intent_type": {
+      "type": "string",
+      "enum": [
+        "role_search"
+      ]
+    },
+    "source_type": {
+      "type": "string",
+      "enum": [
+        "query",
+        "job_description",
+        "url"
+      ]
+    },
+    "normalized_query": {
+      "type": "string"
+    },
+    "vertical": {
+      "type": "string",
+      "enum": [
+        "people_by_role"
+      ]
+    },
+    "role_search_filters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semantic_query"
+      ],
+      "properties": {
+        "semantic_query": {
+          "type": "string",
+          "minLength": 80
+        },
+        "bm25_queries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "role_tracks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "role_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "countries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metro_areas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "education_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "education_op": {
+          "type": "string",
+          "enum": [
+            "or",
+            "and"
+          ]
+        },
+        "company_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "company_semantic_queries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "investor_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "is_current": {
+          "type": "boolean"
+        },
+        "position_after_date": {
+          "type": "string"
+        },
+        "position_before_date": {
+          "type": "string"
+        },
+        "company_sector_strategy": {
+          "type": "string",
+          "enum": [
+            "hard_filter",
+            "soft_union",
+            "semantic_only",
+            "staged"
+          ]
+        },
+        "company_sector_min_results": {
+          "type": "integer"
+        },
+        "company_cities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "company_states": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "company_countries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "company_metro_areas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "entity_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sector_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "technology_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "customer_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "yc_batches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "funding_stage_min": {
+          "type": "string"
+        },
+        "funding_stage_max": {
+          "type": "string"
+        },
+        "funding_amount_min": {
+          "type": "number"
+        },
+        "funding_amount_max": {
+          "type": "number"
+        },
+        "headcount_min": {
+          "type": "integer"
+        },
+        "headcount_max": {
+          "type": "integer"
+        },
+        "last_funding_before": {
+          "type": "string"
+        },
+        "last_funding_after": {
+          "type": "string"
+        },
+        "valuation_min": {
+          "type": "number"
+        },
+        "valuation_max": {
+          "type": "number"
+        },
+        "founded_year_min": {
+          "type": "integer"
+        },
+        "founded_year_max": {
+          "type": "integer"
+        },
+        "education_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "school_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "degree_levels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fields_of_study": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "graduation_year_min": {
+          "type": "integer"
+        },
+        "graduation_year_max": {
+          "type": "integer"
+        },
+        "seniority_bands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "years_experience_min": {
+          "type": "number"
+        },
+        "years_experience_max": {
+          "type": "number"
+        },
+        "age_min": {
+          "type": "integer"
+        },
+        "age_max": {
+          "type": "integer"
+        },
+        "tech_skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "adjacency_mode": {
+          "type": "string"
+        },
+        "has_domain_intent": {
+          "type": "boolean"
+        }
+      }
+    },
+    "company_names": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "adjacency_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "explicitly_requested": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

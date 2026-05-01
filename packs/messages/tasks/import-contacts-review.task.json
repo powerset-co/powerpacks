@@ -1,0 +1,81 @@
+{
+  "task": "import_contacts_review",
+  "version": 1,
+  "description": "Authenticate to Powerset, sync the operator candidate catalog, run local matching, and LLM-review unmatched/suggested contacts.",
+  "default_constraints": {
+    "no_message_content": true,
+    "no_phone_numbers_in_llm": true,
+    "browser_login_requires_explicit_user_request": true,
+    "llm_review_requires_explicit_user_request": true
+  },
+  "steps": [
+    {
+      "id": "check_login",
+      "kind": "primitive",
+      "primitive": "powerset_auth",
+      "command": "whoami"
+    },
+    {
+      "id": "login",
+      "kind": "primitive",
+      "primitive": "powerset_auth",
+      "command": "login",
+      "requires_explicit_user_request": true,
+      "user_action": "Approve the browser-based Auth0 login."
+    },
+    {
+      "id": "sync_candidates",
+      "kind": "primitive",
+      "primitive": "sync_powerset_candidates",
+      "command": "sync"
+    },
+    {
+      "id": "match_local",
+      "kind": "primitive",
+      "primitive": "match_local_candidates",
+      "command": "match"
+    },
+    {
+      "id": "estimate_llm_cost",
+      "kind": "primitive",
+      "primitive": "llm_review_contacts",
+      "command": "estimate"
+    },
+    {
+      "id": "llm_review",
+      "kind": "primitive",
+      "primitive": "llm_review_contacts",
+      "command": "review",
+      "requires_explicit_user_request": true,
+      "user_action": "Approve OpenRouter spend after seeing the cost estimate."
+    },
+    {
+      "id": "prepare_research_queue",
+      "kind": "primitive",
+      "primitive": "prepare_research_queue",
+      "command": "prepare",
+      "description": "Filter + reshape contacts.csv into the deep-research input CSV."
+    },
+    {
+      "id": "estimate_research_cost",
+      "kind": "primitive",
+      "primitive": "deep_research_contacts",
+      "command": "estimate"
+    },
+    {
+      "id": "deep_research",
+      "kind": "primitive",
+      "primitive": "deep_research_contacts",
+      "command": "run",
+      "requires_explicit_user_request": true,
+      "user_action": "Approve Parallel.ai spend after seeing the cost estimate."
+    },
+    {
+      "id": "build_review_csv",
+      "kind": "primitive",
+      "primitive": "build_research_review_csv",
+      "command": "build",
+      "description": "Flatten per-handle research artifacts into a research-review CSV compatible with contact-exporter's yes/maybe/no TUI."
+    }
+  ]
+}

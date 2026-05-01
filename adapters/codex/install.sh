@@ -6,6 +6,7 @@ CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 SKILLS_DIR="${1:-$CODEX_HOME/skills}"
 
 mkdir -p "$SKILLS_DIR"
+rm -rf "$SKILLS_DIR/import-messages"
 
 copy_powerpacks_bundle() {
   local dest="$1"
@@ -17,6 +18,10 @@ copy_powerpacks_bundle() {
   cp -R "$REPO_ROOT/evals" "$dest/powerpacks/evals"
   if [[ -d "$REPO_ROOT/packs" ]]; then
     cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
+
+    # Keep only the top-level skill entrypoint; avoid nested skill duplication
+    # from copied packs during discovery.
+    find "$dest/powerpacks/packs" -type f -path "*/SKILL.md" -delete
   fi
 }
 
@@ -45,8 +50,11 @@ EOF
 }
 
 install_skill search-network "$REPO_ROOT/skills/search-network/SKILL.md"
+install_skill extract-search-query "$REPO_ROOT/skills/extract-search-query/SKILL.md"
 install_skill search-company "$REPO_ROOT/skills/search-company/SKILL.md"
-install_skill import-messages "$REPO_ROOT/packs/messages/skills/import-messages/SKILL.md"
+install_skill import-imessage "$REPO_ROOT/packs/messages/skills/import-imessage/SKILL.md"
+install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
+install_skill import-contacts-review "$REPO_ROOT/packs/messages/skills/import-contacts-review/SKILL.md"
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-company import-messages"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company import-imessage import-whatsapp import-contacts-review"
 echo "restart Codex to pick up the skill list"

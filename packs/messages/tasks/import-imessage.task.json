@@ -1,7 +1,7 @@
 {
-  "task": "import_messages",
+  "task": "import_imessage",
   "version": 1,
-  "description": "Plan and execute a local-first iMessage/WhatsApp contact import through powerset-contacts and Powerpacks normalization.",
+  "description": "Import local iMessage contacts through Powerpacks primitives.",
   "default_constraints": {
     "no_message_content": true,
     "local_extraction_only": true,
@@ -27,18 +27,10 @@
       "output_schema": "message-contact.schema.json"
     },
     {
-      "id": "compat_review_or_whatsapp",
+      "id": "merge_contacts",
       "kind": "primitive",
-      "primitive": "powerset_contacts_harness",
-      "optional": true,
-      "note": "Compatibility backend until WhatsApp/review/upload are ported to bare primitives."
-    },
-    {
-      "id": "upload_contacts",
-      "kind": "primitive",
-      "primitive": "powerset_contacts_harness",
-      "optional": true,
-      "requires_explicit_user_request": true
+      "primitive": "merge_message_contacts",
+      "command": "merge"
     }
   ]
 }

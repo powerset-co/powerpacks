@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "openai>=1.0.0",
     "psycopg2-binary>=2.9.10",
+    "pyyaml>=6.0.2",
     "snowballstemmer>=3.0.1",
     "turbopuffer>=1.12.1",
 ]

@@ -10,9 +10,10 @@
   },
   "steps": [
     {
-      "id": "expand",
+      "id": "expand_search_request",
       "kind": "reasoning",
       "primitive": "expand_search_request",
+      "skill": "extract-search-query",
       "output_schema": "decomposed-query.schema.json"
     },
     {
@@ -41,6 +42,13 @@
       "optional": true
     },
     {
+      "id": "resolve_investors",
+      "kind": "primitive",
+      "primitive": "resolve_investors",
+      "optional": true,
+      "note": "Run before resolve_companies when investor names must become investor URNs for company filtering."
+    },
+    {
       "id": "apply_prefilters",
       "kind": "primitive",
       "primitive": "apply_prefilters",
@@ -48,7 +56,7 @@
       "note": "Run before count/search when education, tech skills, social/interaction, or large company intersections must produce base IDs."
     },
     {
-      "id": "direct_count",
+      "id": "count_candidates",
       "kind": "primitive",
       "primitive": "count_candidates",
       "optional": true
@@ -61,13 +69,13 @@
       "optional": true
     },
     {
-      "id": "execute_search_slices",
+      "id": "execute_search_slice",
       "kind": "primitive",
       "primitive": "execute_search_slice",
       "optional": true
     },
     {
-      "id": "direct_execute",
+      "id": "execute_role_search",
       "kind": "primitive",
       "primitive": "execute_role_search",
       "optional": true

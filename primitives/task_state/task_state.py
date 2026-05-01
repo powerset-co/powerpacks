@@ -53,6 +53,59 @@ def init_output_path(args: argparse.Namespace, task_id: str) -> Path:
     return out_dir / f"{task_id}-{slugify(args.query)}.json"
 
 
+def normalize_planned_step(item: Any, now: str) -> dict[str, Any]:
+    if isinstance(item, str):
+        return {
+            "id": item,
+            "status": "pending",
+            "planned_at": now,
+        }
+    if not isinstance(item, dict):
+        raise TypeError(f"planned step must be a string or object, got {type(item).__name__}")
+    step_id = item.get("id") or item.get("step_id")
+    if not step_id:
+        raise ValueError("planned step object requires id")
+    step = dict(item)
+    step["id"] = str(step_id)
+    step.pop("step_id", None)
+    step.setdefault("status", "pending")
+    step.setdefault("planned_at", now)
+    return step
+
+
+def planned_steps_from_plan(plan: dict[str, Any], now: str) -> list[dict[str, Any]]:
+    raw_steps = plan.get("planned_steps")
+    if raw_steps is None:
+        raw_steps = plan.get("steps")
+    if not raw_steps:
+        return []
+    if not isinstance(raw_steps, list):
+        raise TypeError("approval plan planned_steps must be an array")
+    return [normalize_planned_step(item, now) for item in raw_steps]
+
+
+def update_planned_step(state: dict[str, Any], step_id: str, status: str, now: str, note: str | None = None) -> bool:
+    planned_steps = state.get("planned_steps")
+    if not isinstance(planned_steps, list):
+        return False
+    updated = False
+    for planned in planned_steps:
+        if not isinstance(planned, dict) or planned.get("id") != step_id:
+            continue
+        planned["status"] = status
+        if status == "running":
+            planned.setdefault("started_at", now)
+        elif status in {"completed", "failed", "skipped"}:
+            planned.setdefault("started_at", now)
+            planned["completed_at"] = now
+        else:
+            planned["updated_at"] = now
+        if note:
+            planned["note"] = note
+        updated = True
+    return updated
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     task_id = args.task_id or f"search-network-{uuid4()}"
     out_path = init_output_path(args, task_id)
@@ -102,6 +155,7 @@ def cmd_record_step(args: argparse.Namespace) -> None:
         step["elapsed_ms"] = args.elapsed_ms
 
     state.setdefault("steps", []).append(step)
+    planned_step_updated = update_planned_step(state, args.step_id, args.status, now, args.note)
     state["updated_at"] = now
     write_state(path, state)
     append_event(path, {
@@ -112,8 +166,14 @@ def cmd_record_step(args: argparse.Namespace) -> None:
         "status": args.status,
         "timestamp": now,
         "elapsed_ms": args.elapsed_ms,
+        "planned_step_updated": planned_step_updated,
     })
-    print(json.dumps({"state": str(path), "event_log": str(event_log_path(path)), "recorded_step": args.step_id}, indent=2))
+    print(json.dumps({
+        "state": str(path),
+        "event_log": str(event_log_path(path)),
+        "recorded_step": args.step_id,
+        "planned_step_updated": planned_step_updated,
+    }, indent=2))
 
 
 def cmd_set_summary(args: argparse.Namespace) -> None:
@@ -139,14 +199,18 @@ def cmd_request_approval(args: argparse.Namespace) -> None:
     path = Path(args.state)
     state = read_state(path)
     now = now_iso()
+    plan = load_json_arg(args.plan_json) or {}
     approval = {
         "status": "pending",
         "requested_at": now,
         "reason": args.reason,
         "proposed_next_step": args.proposed_next_step,
-        "plan": load_json_arg(args.plan_json) or {},
+        "plan": plan,
     }
     state["approval"] = approval
+    planned_steps = planned_steps_from_plan(plan, now)
+    if planned_steps:
+        state["planned_steps"] = planned_steps
     state["status"] = "awaiting_approval"
     state["updated_at"] = now
     write_state(path, state)
@@ -157,8 +221,14 @@ def cmd_request_approval(args: argparse.Namespace) -> None:
         "timestamp": now,
         "reason": args.reason,
         "proposed_next_step": args.proposed_next_step,
+        "planned_step_count": len(planned_steps),
     })
-    print(json.dumps({"state": str(path), "event_log": str(event_log_path(path)), "status": "awaiting_approval"}, indent=2))
+    print(json.dumps({
+        "state": str(path),
+        "event_log": str(event_log_path(path)),
+        "status": "awaiting_approval",
+        "planned_step_count": len(planned_steps),
+    }, indent=2))
 
 
 def cmd_approve(args: argparse.Namespace) -> None:

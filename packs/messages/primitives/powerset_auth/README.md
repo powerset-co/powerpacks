@@ -1,0 +1,38 @@
+# powerset_auth
+
+Auth0 PKCE login for the Powerset / search-api. Stdlib-only.
+
+Stores credentials at `~/.powerpacks/credentials.json` (parent dir 0700,
+file 0600). Deliberately separate from `contact-exporter`'s
+`~/.powerset/credentials.json` so the two tools don't fight over token state.
+
+## Usage
+
+```bash
+# Interactive login: opens browser, captures Auth0 callback on 127.0.0.1:9876.
+python packs/messages/primitives/powerset_auth/powerset_auth.py login
+
+# Show stored credentials (no refresh).
+python packs/messages/primitives/powerset_auth/powerset_auth.py whoami
+
+# Get a fresh access token (auto-refreshes if expiring within 60s).
+python packs/messages/primitives/powerset_auth/powerset_auth.py token
+
+# Plain bearer token on stdout, useful for shell pipelines:
+TOKEN=$(python ... powerset_auth.py token --bearer-only)
+curl -H "Authorization: Bearer $TOKEN" https://...
+
+# Wipe credentials.
+python packs/messages/primitives/powerset_auth/powerset_auth.py logout
+```
+
+## Environment overrides
+
+| Variable | Default |
+| --- | --- |
+| `POWERPACKS_AUTH0_DOMAIN` | `aleph-mvp.us.auth0.com` |
+| `POWERPACKS_AUTH0_CLIENT_ID` | `U7p09NWeJ0jy9M4GiaWa4cz0YVCdDVBl` |
+| `POWERPACKS_AUTH0_AUDIENCE` | `https://api.powerset.dev` |
+| `POWERPACKS_AUTH0_SCOPES` | `openid profile email offline_access` |
+| `POWERPACKS_AUTH_CALLBACK_PORT` | `9876` |
+| `POWERPACKS_CREDENTIALS_PATH` | `~/.powerpacks/credentials.json` |

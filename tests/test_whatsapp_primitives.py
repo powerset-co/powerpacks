@@ -1,0 +1,192 @@
+"""End-to-end tests for the WhatsApp pack primitives.
+
+Exercise:
+- waha_runtime check (just confirms it returns valid JSON without erroring)
+- waha_session status / health against a connection-refused URL (fast path)
+- extract_whatsapp_contacts extract against a fake in-process WAHA server
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import socket
+import subprocess
+import tempfile
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+
+ROOT = Path(__file__).resolve().parents[1]
+WAHA_RUNTIME = ROOT / "packs/messages/primitives/waha_runtime/waha_runtime.py"
+WAHA_SESSION = ROOT / "packs/messages/primitives/waha_session/waha_session.py"
+EXTRACT_WHATSAPP = ROOT / "packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py"
+
+
+# ---------------------------------------------------------------------------
+# Fake WAHA HTTP server
+# ---------------------------------------------------------------------------
+
+class FakeWAHAHandler(BaseHTTPRequestHandler):
+    """Minimal WAHA-shaped HTTP server for extraction tests."""
+
+    routes: dict[str, object] = {}
+
+    def log_message(self, format, *args):  # noqa: A002 - silence test logs
+        return
+
+    def do_GET(self):  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path
+        params = parse_qs(parsed.query)
+        # /api/sessions/{name}
+        if path == "/api/sessions/default":
+            return self._json(200, {"name": "default", "status": "WORKING", "engine": {"engine": "NOWEB"}})
+        if path == "/api/sessions":
+            return self._json(200, [{"name": "default", "status": "WORKING"}])
+        if path == "/api/default/chats":
+            return self._json(200, self.routes["chats"])
+        if path == "/api/contacts/all":
+            return self._json(200, self.routes["contacts"])
+        # Group participants endpoint — not used in this fixture.
+        if path.startswith("/api/default/groups/"):
+            return self._json(200, [])
+        if path.startswith("/api/default/chats/") and path.endswith("/messages"):
+            chat_id = path.split("/")[-2]
+            offset = int(params.get("offset", ["0"])[0])
+            messages = self.routes["messages_by_chat"].get(chat_id, [])
+            return self._json(200, messages[offset:offset + 500])
+        return self._json(404, {"error": "not found", "path": path})
+
+    def _json(self, status: int, payload: object) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class WhatsAppPrimitiveTests(unittest.TestCase):
+    def test_waha_runtime_check_returns_valid_json(self) -> None:
+        result = subprocess.run(
+            ["python3", str(WAHA_RUNTIME), "check"],
+            cwd=ROOT, capture_output=True, text=True, timeout=30,
+        )
+        # exit code 0 if docker is healthy, 1 if not — both fine.
+        self.assertIn(result.returncode, (0, 1))
+        manifest = json.loads(result.stdout)
+        self.assertEqual(manifest["primitive"], "waha_runtime")
+        self.assertIn("docker", manifest)
+        self.assertIn("alternatives", manifest["docker"])
+        self.assertGreater(len(manifest["docker"]["alternatives"]), 0)
+
+    def test_waha_session_status_handles_unreachable_server(self) -> None:
+        port = _free_port()
+        result = subprocess.run(
+            ["python3", str(WAHA_SESSION), "status",
+             "--base-url", f"http://127.0.0.1:{port}",
+             "--api-key", "test"],
+            cwd=ROOT, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["primitive"], "waha_session")
+        self.assertFalse(payload["state"].get("reachable"))
+
+    def test_extract_whatsapp_contacts_against_fake_waha(self) -> None:
+        FakeWAHAHandler.routes = {
+            "contacts": [
+                {
+                    "id": {"_serialized": "14155550101@c.us"},
+                    "name": "Jane Doe",
+                    "pushname": "Jane",
+                },
+                {
+                    "id": {"_serialized": "14155550202@c.us"},
+                    "name": "Op Bob",
+                },
+            ],
+            "chats": [
+                {
+                    "id": {"_serialized": "14155550101@c.us"},
+                    "timestamp": 1735689600,
+                    "messagesCount": 42,
+                },
+                {
+                    "id": {"_serialized": "987654321@g.us"},
+                    "name": "Founders",
+                    "groupMetadata": {
+                        "subject": "Founders",
+                        "participants": [
+                            {"id": {"_serialized": "14155550101@c.us"}},
+                            {"id": {"_serialized": "14155550202@c.us"}},
+                        ],
+                    },
+                },
+            ],
+            "messages_by_chat": {},
+        }
+        port = _free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), FakeWAHAHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                csv_path = tmp / "wa.csv"
+                jsonl_path = tmp / "wa.jsonl"
+                manifest_path = tmp / "wa.manifest.json"
+                result = subprocess.run(
+                    [
+                        "python3", str(EXTRACT_WHATSAPP), "extract",
+                        "--base-url", f"http://127.0.0.1:{port}",
+                        "--api-key", "test",
+                        "--session", "default",
+                        "--output-csv", str(csv_path),
+                        "--output-jsonl", str(jsonl_path),
+                        "--manifest", str(manifest_path),
+                        "--run-id", "test-run",
+                        "--skip-message-counts",
+                    ],
+                    cwd=ROOT, capture_output=True, text=True, timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["status"], "completed")
+                self.assertGreaterEqual(manifest["counts"]["contacts"], 2)
+
+                with csv_path.open(encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                phones = {row["phone"] for row in rows}
+                self.assertIn("+14155550101", phones)
+                self.assertIn("+14155550202", phones)
+
+                # Jane: in group + has hinted message_count from chat payload.
+                jane = next(row for row in rows if row["phone"] == "+14155550101")
+                self.assertEqual(jane["name"], "Jane Doe")
+                self.assertEqual(jane["source"], "whatsapp")
+                self.assertEqual(jane["is_in_group_chats"], "true")
+                self.assertEqual(jane["group_names"], "Founders")
+                self.assertEqual(jane["message_count"], "42")
+
+                # JSONL records carry the same shape used by normalize_message_contacts.
+                jsonl_rows = [json.loads(line) for line in jsonl_path.read_text().splitlines()]
+                self.assertEqual(len(jsonl_rows), len(rows))
+                self.assertEqual(jsonl_rows[0]["sources"], ["whatsapp"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
+if __name__ == "__main__":
+    unittest.main()

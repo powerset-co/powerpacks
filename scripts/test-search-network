@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+usage: scripts/test-search-network COMMAND [ARGS]
+
+Commands:
+  check
+      Run local readiness checks: install Codex skills, lint, tests, and
+      dry-run the agent extraction harness prompt generation.
+
+  primitive-recall [--bucket BUCKET] [--case-glob REGEX] [--max-cases N]
+      Run recall YAMLs through deterministic Powerpacks decomposition and
+      primitives. This hits TurboPuffer/Postgres when cases execute.
+
+  agent-extract-dry-run [--bucket BUCKET] [--case-glob REGEX] [--max-cases N]
+      Write headless-agent extraction prompts without invoking Codex or
+      retrieval primitives.
+
+  agent-extract [--bucket BUCKET] [--case-glob REGEX] [--max-cases N]
+      Invoke Codex headlessly for extraction, save extracted JSON per case,
+      then feed the result into the primitive recall path. This may hit
+      model, TurboPuffer, and Postgres APIs.
+
+Environment:
+  CODEX_MODEL       Optional model override for codex exec.
+  APP_DIR           Defaults to /Users/arthur/workspace/aleph-mvp.
+  RECALL_DIR        Defaults to $APP_DIR/tests/recall.
+  ENV_FILE          Retrieval primitive env file. Defaults to .env under APP_DIR.
+  LIMIT_CAP         Defaults to 1000.
+EOF
+}
+
+run_agent_harness() {
+  local mode="$1"
+  shift
+  local args=(
+    uv run python "$ROOT/evals/run_agent_extraction_harness.py"
+    --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}"
+    --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/aleph-mvp}/tests/recall}"
+    --env-file "${ENV_FILE:-.env}"
+    --limit-cap "${LIMIT_CAP:-1000}"
+  )
+  if [[ "$mode" == "dry" ]]; then
+    args+=(--dry-run)
+  else
+    args+=(--agent-command "$ROOT/scripts/codex-extract-search-query {prompt_file} {output_json}")
+  fi
+  args+=("$@")
+  "${args[@]}"
+}
+
+command="${1:-}"
+if [[ -n "$command" ]]; then
+  shift
+fi
+
+case "$command" in
+  check)
+    "$ROOT/install.sh" codex
+    "$ROOT/scripts/lint-powerpacks"
+    "$ROOT/scripts/test-powerpacks"
+    run_agent_harness dry --bucket education --max-cases 1
+    ;;
+  primitive-recall)
+    uv run python "$ROOT/evals/run_recall_parity.py" \
+      --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}" \
+      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/aleph-mvp}/tests/recall}" \
+      --env-file "${ENV_FILE:-.env}" \
+      --limit-cap "${LIMIT_CAP:-1000}" \
+      "$@"
+    ;;
+  agent-extract-dry-run)
+    run_agent_harness dry "$@"
+    ;;
+  agent-extract)
+    run_agent_harness live "$@"
+    ;;
+  ""|-h|--help|help)
+    usage
+    ;;
+  *)
+    echo "error: unknown command: $command" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
