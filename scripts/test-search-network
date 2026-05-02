@@ -10,7 +10,15 @@ usage: scripts/test-search-network COMMAND [ARGS]
 Commands:
   check
       Run local readiness checks: install Codex skills, lint, tests, and
-      dry-run the agent extraction harness prompt generation.
+      dry-run the agent extraction and company-search harnesses.
+
+  company-dry-run [--case-glob REGEX] [--max-cases N]
+      Validate search-company contract cases without hitting TurboPuffer.
+
+  company-live [--case-glob REGEX] [--max-cases N]
+      Run search-company contract cases through resolve_investors and
+      resolve_companies. This hits TurboPuffer/OpenAI when semantic company
+      search is used.
 
   primitive-recall [--bucket BUCKET] [--case-glob REGEX] [--max-cases N]
       Run recall YAMLs through deterministic Powerpacks decomposition and
@@ -53,6 +61,21 @@ run_agent_harness() {
   "${args[@]}"
 }
 
+run_company_harness() {
+  local mode="$1"
+  shift
+  local args=(
+    uv run python "$ROOT/evals/run_company_search_harness.py"
+    --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}"
+    --env-file "${ENV_FILE:-.env}"
+  )
+  if [[ "$mode" == "live" ]]; then
+    args+=(--live)
+  fi
+  args+=("$@")
+  "${args[@]}"
+}
+
 command="${1:-}"
 if [[ -n "$command" ]]; then
   shift
@@ -64,6 +87,13 @@ case "$command" in
     "$ROOT/scripts/lint-powerpacks"
     "$ROOT/scripts/test-powerpacks"
     run_agent_harness dry --bucket education --max-cases 1
+    run_company_harness dry
+    ;;
+  company-dry-run)
+    run_company_harness dry "$@"
+    ;;
+  company-live)
+    run_company_harness live "$@"
     ;;
   primitive-recall)
     uv run python "$ROOT/evals/run_recall_parity.py" \

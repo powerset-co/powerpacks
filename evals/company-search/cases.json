@@ -1,0 +1,140 @@
+[
+  {
+    "id": "company_exact_meta_alias",
+    "query": "look up facebook",
+    "payload": {
+      "company_names": ["Facebook"]
+    },
+    "expected": {
+      "requires_investor_resolution": false,
+      "requires_company_resolution": true,
+      "expected_name_aliases": ["Facebook", "Meta"],
+      "expected_strategy": "staged"
+    }
+  },
+  {
+    "id": "company_exact_twitter_alias",
+    "query": "look up twitter or x",
+    "payload": {
+      "company_names": ["Twitter"]
+    },
+    "expected": {
+      "requires_investor_resolution": false,
+      "requires_company_resolution": true,
+      "expected_name_aliases": ["Twitter", "X"],
+      "expected_strategy": "staged"
+    }
+  },
+  {
+    "id": "company_semantic_database_staged",
+    "query": "database companies",
+    "payload": {
+      "company_semantic_queries": [
+        "Companies building database systems, hosted databases, data storage engines, SQL or NoSQL databases, data warehouses, or developer platforms for managing application data."
+      ],
+      "sector_types": ["data"],
+      "company_sector_strategy": "staged",
+      "company_sector_min_results": 500
+    },
+    "expected": {
+      "requires_investor_resolution": false,
+      "requires_company_resolution": true,
+      "expected_strategy": "staged"
+    }
+  },
+  {
+    "id": "company_semantic_developer_tools_soft_union",
+    "query": "developer tools and infra companies",
+    "payload": {
+      "company_semantic_queries": [
+        "Companies building developer tooling, infrastructure software, cloud infrastructure, observability, CI/CD, APIs, databases, or technical platforms used by engineering teams."
+      ],
+      "sector_types": ["infra_devtools"],
+      "company_sector_strategy": "soft_union"
+    },
+    "expected": {
+      "requires_investor_resolution": false,
+      "requires_company_resolution": true,
+      "expected_strategy": "soft_union"
+    }
+  },
+  {
+    "id": "company_hard_sector_healthcare",
+    "query": "healthcare companies using strict healthcare sector labels",
+    "payload": {
+      "company_semantic_queries": [
+        "Healthcare companies building clinical, provider, payer, digital health, biotech, medical, patient care, or healthcare operations products and services."
+      ],
+      "sector_types": ["healthcare"],
+      "company_sector_strategy": "hard_filter"
+    },
+    "expected": {
+      "requires_investor_resolution": false,
+      "requires_company_resolution": true,
+      "expected_strategy": "hard_filter"
+    }
+  },
+  {
+    "id": "company_series_a_sf_startups",
+    "query": "series a startups in san francisco",
+    "payload": {
+      "entity_types": ["venture_backed_startup"],
+      "funding_stage_min": "series_a",
+      "funding_stage_max": "series_a",
+      "company_cities": ["San Francisco"]
+    },
+    "expected": {
+      "requires_investor_resolution": false,
+      "requires_company_resolution": true,
+      "expected_strategy": "staged"
+    }
+  },
+  {
+    "id": "company_headcount_50_200_fintech",
+    "query": "fintech companies with 50 to 200 employees",
+    "payload": {
+      "company_semantic_queries": [
+        "Financial technology companies building payments, lending, banking, credit, investing, insurance, payroll, accounting, crypto finance, or software for financial services."
+      ],
+      "sector_types": ["fintech"],
+      "headcount_min": 50,
+      "headcount_max": 200,
+      "company_sector_strategy": "staged"
+    },
+    "expected": {
+      "requires_investor_resolution": false,
+      "requires_company_resolution": true,
+      "expected_strategy": "staged"
+    }
+  },
+  {
+    "id": "company_backed_by_sequoia",
+    "query": "companies backed by sequoia",
+    "payload": {
+      "investor_names": ["Sequoia Capital"]
+    },
+    "expected": {
+      "requires_investor_resolution": true,
+      "requires_company_resolution": true,
+      "expected_strategy": "staged"
+    }
+  },
+  {
+    "id": "company_yc_ai_seed",
+    "query": "yc ai seed companies",
+    "payload": {
+      "company_semantic_queries": [
+        "Artificial intelligence companies building applied AI products, machine learning infrastructure, model tooling, agents, automation software, or AI-native applications."
+      ],
+      "sector_types": ["ai_ml"],
+      "yc_batches": ["YC"],
+      "funding_stage_max": "seed",
+      "company_sector_strategy": "soft_union"
+    },
+    "expected": {
+      "requires_investor_resolution": false,
+      "requires_company_resolution": true,
+      "expected_strategy": "soft_union"
+    }
+  }
+]

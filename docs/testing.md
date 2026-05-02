@@ -10,7 +10,40 @@ scripts/test-search-network check
 
 This installs the current skills into `~/.codex/skills`, runs lint, runs unit
 tests, and writes one extraction-harness prompt without invoking Codex or
-retrieval APIs.
+retrieval APIs. It also dry-runs the company-search harness.
+
+## Company Search Harness
+
+Company search answers: can the `search-company` skill decompose direct company
+lookups, aliases, sectors, semantic verticals, funding/headcount constraints,
+and investor-backed filters into resolver-ready payloads?
+
+Dry-run contract validation:
+
+```bash
+scripts/test-search-network company-dry-run
+scripts/test-search-network company-dry-run --case-glob investor
+```
+
+Live resolver execution:
+
+```bash
+scripts/test-search-network company-live --max-cases 2
+```
+
+The live mode creates task state, resolves investors when needed, runs
+`resolve_companies`, and writes primitive logs under:
+
+```text
+/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/company-search/
+/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/company-search-logs/
+```
+
+The rollup report is:
+
+```text
+evals/company_search.md
+```
 
 ## Primitive Recall
 
@@ -80,6 +113,7 @@ state, and primitive logs under:
 - `*.raw.log`: Codex command/stdout/stderr.
 - task state JSON: planned steps versus actual `steps[]`.
 - `evals/recall_parity.md`: pass/fail rollup.
+- `evals/company_search.md`: company lookup pass/fail rollup.
 
 ## Test Gate
 
@@ -87,6 +121,7 @@ For a small external test, require:
 
 - `scripts/test-search-network check` passes.
 - Representative primitive recall buckets pass or have documented known gaps.
+- `scripts/test-search-network company-dry-run` passes.
 - At least 5 headless extraction cases produce schema-valid JSON.
 - For real searches, every run returns a task state path plus CSV/JSONL/manifest
   artifacts.

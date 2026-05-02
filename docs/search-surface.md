@@ -3,9 +3,10 @@
 `powerpacks` V1 exposes a narrow search surface designed to succeed on simple
 requests without leaking private internal systems.
 
-The intended user-facing entrypoint is:
+The intended user-facing entrypoints are:
 
 - `/search-network <query>`
+- `/search-company <query>`
 
 ## Supported Inputs
 
@@ -14,6 +15,8 @@ The intended user-facing entrypoint is:
 - URL with role or company context
 
 ## Supported User Stories
+
+People search:
 
 - "who are software engineers in sf"
 - "product managers at stripe"
@@ -27,16 +30,37 @@ The intended user-facing entrypoint is:
 - "senior engineers at series a fintech companies"
 - "operators at developer tools companies with 50-200 employees"
 
+Company lookup:
+
+- "look up facebook"
+- "database companies"
+- "developer tools companies"
+- "series a startups in san francisco"
+- "fintech companies with 50 to 200 employees"
+- "companies backed by sequoia"
+- "yc ai seed companies"
+
 ## Public Execution Model
 
 - `people_by_role`
   Start with role/title intent and optional location/company constraints.
   This is the only public execution vertical in V1.
+- `companies`
+  Resolve exact company names, aliases, vertical/domain descriptions, sectors,
+  funding/headcount constraints, geography, YC batch, and investor-backed
+  filters into canonical company IDs for inspection or downstream people
+  search.
 
 The role vertical may use company-domain adjacency inside the same role-search
 contract. It should not call separate summary or company-signal search in V1.
 
+The company lookup surface should use the same resolver primitives that
+`search-network` uses for company handoffs. It should not invent a separate
+company schema.
+
 ## Public Primitive Flow
+
+People search:
 
 1. `expand_search_request`
 2. `decide_search_strategy`
@@ -48,6 +72,15 @@ contract. It should not call separate summary or company-signal search in V1.
 8. optionally `llm_filter_candidates` to remove clear non-matches
 9. `persist_search_results`
 10. host UI or CLI tooling reads persisted artifacts for review/refinement
+
+Company lookup:
+
+1. extract company fields from the query
+2. optionally `resolve_investors`
+3. `resolve_companies`
+4. persist or present company IDs, sample companies, sector strategy, and
+   resolver artifacts
+5. optionally hand company IDs to `search-network`
 
 ## Expand Step
 

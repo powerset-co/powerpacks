@@ -24,6 +24,14 @@ class CoreLayoutTests(unittest.TestCase):
         text = (ROOT / "skills" / "search-company" / "SKILL.md").read_text()
         self.assertIn("resolve_companies", text)
         self.assertIn("company_semantic_queries", text)
+        self.assertIn("investor_names", text)
+        self.assertIn("company_sector_strategy", text)
+
+    def test_search_surface_documents_company_entrypoint(self) -> None:
+        text = (ROOT / "docs" / "search-surface.md").read_text()
+        self.assertIn("/search-network <query>", text)
+        self.assertIn("/search-company <query>", text)
+        self.assertIn("company lookup", text.lower())
 
     def test_search_network_uses_extraction_skill(self) -> None:
         task = json.loads((ROOT / "tasks" / "search-network.task.json").read_text())
