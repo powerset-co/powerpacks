@@ -27,6 +27,7 @@ SELF_DIR = Path(__file__).resolve().parent
 PACK_DIR = SELF_DIR.parent
 AUTH = PACK_DIR / "auth" / "auth.py"
 PROVISION = PACK_DIR / "provision_runtime_env" / "provision_runtime_env.py"
+MCP_INSTALL = PACK_DIR / "mcp_install" / "mcp_install.py"
 
 DEFAULT_CREDS = Path(os.environ.get(
     "POWERPACKS_CREDENTIALS_PATH",
@@ -288,6 +289,52 @@ def check_user_secrets(profile: str, project: str) -> dict[str, Any]:
     return check("user_secrets", "fail", f"probe returned unexpected status: {status}")
 
 
+def check_mcp_powerset_search() -> dict[str, Any]:
+    """Confirm the powerset-search MCP is registered in at least one host on the box.
+
+    The MCP is the surface for /sales-nav-search and any future Powerpacks
+    skill that needs the hosted search-api tools. Registering it is auto-
+    fixable since the bearer token comes from the cached Auth0 JWT.
+    """
+    if not MCP_INSTALL.exists():
+        return check(
+            "mcp_powerset_search", "fail",
+            f"missing mcp_install primitive at {MCP_INSTALL}",
+        )
+    code, out, _ = run([sys.executable, str(MCP_INSTALL), "status", "--host", "all"])
+    try:
+        payload = json.loads(out) if out else {}
+    except json.JSONDecodeError:
+        return check("mcp_powerset_search", "fail",
+                     "mcp_install status produced no parseable output")
+    hosts = payload.get("hosts") or []
+    installed_in = [h.get("host") for h in hosts if h.get("installed")]
+    available_hosts = [h.get("host") for h in hosts if not h.get("error", "").startswith("claude CLI not") and not h.get("error", "").startswith("codex CLI not")]
+    if not available_hosts:
+        return check(
+            "mcp_powerset_search", "warn",
+            "no MCP host CLI on PATH (install Claude Code or Codex)",
+            fix_kind="shell_install",
+            fix_command={
+                "claude": "https://docs.claude.com/en/docs/claude-code/setup",
+                "codex": "https://docs.openai.com/codex/cli",
+            },
+        )
+    if installed_in:
+        return check(
+            "mcp_powerset_search", "ok",
+            f"powerset-search MCP registered in {','.join(installed_in)}",
+            installed_in=installed_in,
+        )
+    return check(
+        "mcp_powerset_search", "missing",
+        "powerset-search MCP is not registered in any host on this box",
+        fix_kind="auto",
+        fix_command=f"python {MCP_INSTALL} install --host all",
+        fix_args=[sys.executable, str(MCP_INSTALL), "install", "--host", "all"],
+    )
+
+
 def check_env_file(env_file: Path, profile: str) -> dict[str, Any]:
     code, out, _ = run([
         sys.executable, str(PROVISION),
@@ -344,6 +391,8 @@ def collect_checks(args: argparse.Namespace) -> list[dict[str, Any]]:
             checks.append(check_user_secrets(args.profile, args.gcp_project))
 
     checks.append(check_env_file(args.env_file, args.profile))
+    if not args.skip_mcp:
+        checks.append(check_mcp_powerset_search())
     return checks
 
 
@@ -471,6 +520,8 @@ def main() -> None:
         p.add_argument("--gcp-project", default=DEFAULT_PROJECT)
         p.add_argument("--skip-adc", action="store_true",
                        help="Skip the application-default credentials check")
+        p.add_argument("--skip-mcp", action="store_true",
+                       help="Skip the powerset-search MCP install check")
 
     runp = sub.add_parser("run", help="Read-only: run every prereq check and emit a structured report")
     common(runp)

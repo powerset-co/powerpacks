@@ -48,20 +48,16 @@ rm -rf "$TARGET/powerpacks/primitives"
 rm -rf "$TARGET/powerpacks/mcp"
 rm -rf "$TARGET/powerpacks/templates"
 rm -rf "$TARGET/powerpacks/docs"
-rm -rf "$TARGET/powerpacks/schemas"
-rm -rf "$TARGET/powerpacks/skills"
 rm -rf "$TARGET/powerpacks/packs"
+rm -rf "$TARGET/powerpacks/templates"
 rm -rf "$TARGET/powerpacks/bin"
 rm -rf "$TARGET/powerpacks/adapters"
-# Cross-pack platform pieces (always present at the top level).
-cp -R "$REPO_ROOT/primitives" "$TARGET/powerpacks/primitives"
-cp -R "$REPO_ROOT/mcp" "$TARGET/powerpacks/mcp"
-cp -R "$REPO_ROOT/templates" "$TARGET/powerpacks/templates"
+# Cross-pack docs + host-install templates (no top-level primitives/skills/
+# schemas anymore — every domain lives in packs/).
 cp -R "$REPO_ROOT/docs" "$TARGET/powerpacks/docs"
-cp -R "$REPO_ROOT/schemas" "$TARGET/powerpacks/schemas"
-cp -R "$REPO_ROOT/skills" "$TARGET/powerpacks/skills"
-# Domain packs (search, messages, ...) carry their own primitives,
-# schemas, contracts, tasks, evals, and docs.
+cp -R "$REPO_ROOT/templates" "$TARGET/powerpacks/templates"
+# Domain packs (powerset, search, messages, sales-nav, ...) carry their own
+# primitives, schemas, contracts, tasks, evals, and docs.
 cp -R "$REPO_ROOT/packs" "$TARGET/powerpacks/packs"
 mkdir -p "$TARGET/powerpacks/adapters"
 cp -R "$REPO_ROOT/adapters/nanoclaw" "$TARGET/powerpacks/adapters/nanoclaw"

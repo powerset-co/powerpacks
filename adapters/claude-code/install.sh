@@ -19,19 +19,16 @@ rm -rf "$SKILLS_DIR/import-messages"
 
 copy_powerpacks_bundle() {
   local dest="$1"
-  # Cross-pack platform pieces (always present at the top level).
+  # Cross-pack docs + host-install templates (no top-level primitives/skills/
+  # schemas anymore — every domain lives in packs/).
   cp -R "$REPO_ROOT/docs" "$dest/powerpacks/docs"
-  cp -R "$REPO_ROOT/primitives" "$dest/powerpacks/primitives"
-  cp -R "$REPO_ROOT/schemas" "$dest/powerpacks/schemas"
   cp -R "$REPO_ROOT/templates" "$dest/powerpacks/templates"
-  # Domain packs (search, messages, ...) carry their own primitives, schemas,
-  # contracts, tasks, evals, and docs.
-  if [[ -d "$REPO_ROOT/packs" ]]; then
-    cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
-    # Keep only the top-level skill entrypoint; avoid nested skill duplication
-    # from copied packs during discovery.
-    find "$dest/powerpacks/packs" -type f -path "*/SKILL.md" -delete
-  fi
+  # Domain packs (powerset, search, messages, sales-nav, ...) carry their own
+  # primitives, schemas, contracts, tasks, evals, and docs.
+  cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
+  # Keep only the top-level skill entrypoint; avoid nested skill duplication
+  # from copied packs during discovery.
+  find "$dest/powerpacks/packs" -type f -path "*/SKILL.md" -delete
 }
 
 install_skill() {
@@ -65,9 +62,10 @@ install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SK
 install_skill import-imessage "$REPO_ROOT/packs/messages/skills/import-imessage/SKILL.md"
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill import-contacts-review "$REPO_ROOT/packs/messages/skills/import-contacts-review/SKILL.md"
+install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search-network extract-search-query search-company powerset-login"
+echo "  search-network extract-search-query search-company powerset-login sales-nav-search"
 echo "  import-imessage import-whatsapp import-contacts-review"
 echo
 echo "restart Claude Code to pick up the skill list"

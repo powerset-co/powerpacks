@@ -72,6 +72,8 @@ python powerpacks/packs/powerset/primitives/doctor/doctor.py fix --interactive \
 This will:
 
 - Pull `.env` from the user's per-user GCP secrets (auto, no prompt)
+- Register the `powerset-search` MCP into Claude Code and/or Codex
+  (auto, no prompt; uses the cached Auth0 token)
 - Pop a browser for Auth0 login if needed (browser is the consent)
 - Pop a browser for `gcloud auth login` if needed (browser is the consent)
 - Pop a browser for `gcloud auth application-default login` if needed

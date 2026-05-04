@@ -55,18 +55,25 @@ self-contained slice of the system.
 ```text
 powerpacks/
 ├── packs/
-│   ├── powerset/           identity + runtime env (depended on by every pack)
+│   ├── powerset/           identity + runtime env + MCP install
+│   │   │                   (depended on by every other pack)
 │   │   ├── skills/         powerset-login (one unified login flow)
 │   │   ├── primitives/     auth/ (Auth0 PKCE),
-│   │   │                   provision_runtime_env/ (best-effort GCP),
-│   │   │                   task_state/ (run-state JSON)
-│   │   ├── schemas/        task-run.schema.json
+│   │   │                   provision_runtime_env/ (best-effort GCP pull),
+│   │   │                   provision_user_secrets/ (admin: per-user GCP),
+│   │   │                   doctor/ (one-shot setup health check),
+│   │   │                   mcp_install/ (powerset-search MCP into
+│   │   │                                 Claude Code / Codex)
 │   │   └── templates/      env.example
+│   ├── sales-nav/          Sales Navigator search via the powerset-search MCP
+│   │   └── skills/         sales-nav-search
 │   ├── search/             recruiting people / company search
 │   │   ├── skills/         search-network, search-company,
 │   │   │                   extract-search-query
-│   │   ├── primitives/     ~21 search primitives + lib/ + contracts CLI
-│   │   ├── schemas/        decomposed-query, role-search-filters, etc.
+│   │   ├── primitives/     ~21 search primitives + lib/ + contracts CLI +
+│   │   │                   task_state/
+│   │   ├── schemas/        decomposed-query, role-search-filters,
+│   │   │                   task-run.schema.json, etc.
 │   │   ├── contracts/      checked-in Postgres + TurboPuffer schemas
 │   │   ├── tasks/          search-network.task.json
 │   │   ├── docs/           search-surface, slice-planning, turbopuffer-*,
@@ -84,9 +91,8 @@ powerpacks/
 ├── docs/                   cross-pack docs (quickstart.md, testing.md)
 ├── scripts/                test-powerpacks, lint-powerpacks, smoke-messages.sh
 ├── tests/                  cross-pack test suite
-├── templates/              host-install templates (claude-fragments,
-│                           container.json, mcp.json)
-└── mcp/                    MCP placeholder
+└── templates/              host-install templates (claude-fragments,
+                            container.json)
 ```
 
 The `powerset` pack is the foundation — every other pack depends on its
