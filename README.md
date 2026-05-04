@@ -85,11 +85,11 @@ contracts.
 
 ## Runtime Provisioning
 
-Internal Powerset users can log in and provision a local `.env` without pasting
-raw secrets into chat:
+Internal Powerset users can provision a local `.env` from GCP Secret Manager
+without pasting raw secrets into chat:
 
 ```bash
-python powerpacks/primitives/powerset_auth/powerset_auth.py login
+gcloud auth login
 python powerpacks/primitives/provision_runtime_env/provision_runtime_env.py pull \
   --profile search-core \
   --env-file .env \
@@ -97,9 +97,9 @@ python powerpacks/primitives/provision_runtime_env/provision_runtime_env.py pull
 ```
 
 The provisioning primitive redacts secret values in output and only writes
-allowlisted keys. Search-api provisioning is the preferred long-term path for
-per-user usage attribution; GCP Secret Manager is an internal bootstrap
-fallback.
+allowlisted keys. Authorization is enforced by GCP IAM on Secret Manager
+resources. For user-scoped keys, create per-user/per-capability secrets and
+grant access on those specific secret resources or groups.
 
 ## Task Flow
 

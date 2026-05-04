@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision a local Powerpacks .env from Powerset or GCP Secret Manager.
+"""Provision a local Powerpacks .env from GCP Secret Manager.
 
 The primitive never prints secret values. It writes only allowlisted runtime
 keys and reports redacted metadata for auditability.
@@ -8,27 +8,14 @@ keys and reports redacted metadata for auditability.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import subprocess
-import sys
 import tempfile
-import urllib.error
-import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[2]
-AUTH = ROOT / "primitives" / "powerset_auth" / "powerset_auth.py"
-DEFAULT_CREDENTIALS_PATH = Path.home() / ".powerpacks" / "credentials.json"
-DEFAULT_SEARCH_API_URL = os.environ.get("POWERPACKS_SEARCH_API_URL", "https://api.powerset.dev")
-DEFAULT_SEARCH_API_ENDPOINT = os.environ.get(
-    "POWERPACKS_SECRETS_ENDPOINT",
-    "/v2/powerpacks/runtime-secrets",
-)
 DEFAULT_SECRET_MAP = {
     "TURBOPUFFER_API_KEY": "powerpacks-turbopuffer-api-key",
     "TURBOPUFFER_REGION": "powerpacks-turbopuffer-region",
@@ -64,21 +51,8 @@ PROFILES["all"] = list(dict.fromkeys(key for keys in PROFILES.values() for key i
 ALLOWED_KEYS = set(DEFAULT_SECRET_MAP)
 
 
-@dataclass
-class AuthContext:
-    email: str
-    token: str
-
-
 def emit(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
-
-
-def run_json(args: list[str]) -> dict[str, Any]:
-    proc = subprocess.run(args, text=True, capture_output=True)
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "command failed").strip())
-    return json.loads(proc.stdout)
 
 
 def run_text(args: list[str]) -> str:
@@ -88,35 +62,17 @@ def run_text(args: list[str]) -> str:
     return proc.stdout.strip()
 
 
-def decode_jwt_email(token: str) -> str | None:
-    try:
-        payload_b64 = token.split(".")[1]
-        payload_b64 += "=" * (-len(payload_b64) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-        return payload.get("email") or payload.get("https://api.powerset.dev/email")
-    except Exception:
-        return None
+def gcloud_account() -> str:
+    return run_text(["gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"])
 
 
-def auth_context(credentials_path: Path) -> AuthContext:
-    whoami = run_json([sys.executable, str(AUTH), "whoami", "--credentials-path", str(credentials_path)])
-    if whoami.get("status") != "logged_in":
-        raise RuntimeError("not logged in; run powerset-login first")
-    email = str(whoami.get("email") or "")
-    token = run_text([
-        sys.executable,
-        str(AUTH),
-        "token",
-        "--bearer-only",
-        "--credentials-path",
-        str(credentials_path),
-    ])
-    token_email = decode_jwt_email(token)
-    if token_email:
-        email = token_email
-    if not email.endswith("@powerset.co"):
-        raise PermissionError(f"refusing to provision secrets for non-powerset.co account: {email or 'unknown'}")
-    return AuthContext(email=email, token=token)
+def assert_powerset_gcloud_account() -> str:
+    account = gcloud_account().splitlines()[0].strip()
+    if not account:
+        raise RuntimeError("no active gcloud account; run gcloud auth login")
+    if not account.endswith("@powerset.co"):
+        raise PermissionError(f"refusing to provision secrets for non-powerset.co gcloud account: {account}")
+    return account
 
 
 def requested_keys(profile: str, includes: list[str] | None) -> list[str]:
@@ -227,42 +183,6 @@ def fetch_from_gcp(keys: list[str], mapping: dict[str, str], project: str | None
     return secrets
 
 
-def fetch_from_search_api(
-    keys: list[str],
-    *,
-    token: str,
-    base_url: str,
-    endpoint: str,
-    profile: str,
-) -> dict[str, str]:
-    url = base_url.rstrip("/") + "/" + endpoint.lstrip("/")
-    body = json.dumps({"profile": profile, "keys": keys}).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"search-api provisioning failed (HTTP {exc.code}): {details}") from exc
-    raw_secrets = payload.get("secrets") if isinstance(payload, dict) else None
-    if not isinstance(raw_secrets, dict):
-        raise RuntimeError("search-api response missing object field: secrets")
-    return {
-        str(key): str(value)
-        for key, value in raw_secrets.items()
-        if key in keys and key in ALLOWED_KEYS and value
-    }
-
-
 def cmd_plan(args: argparse.Namespace) -> int:
     keys = requested_keys(args.profile, args.include)
     _, existing = read_env(args.env_file)
@@ -275,8 +195,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
         "requested_keys": keys,
         "present": sorted(set(keys) - set(missing)),
         "missing": missing,
-        "sources": ["search-api", "gcp"],
-        "note": "pull requires powerset.co Auth0 login and --confirm",
+        "source": "gcp",
+        "gcp_project": args.gcp_project,
+        "note": "pull requires active @powerset.co gcloud auth and --confirm",
     })
     return 0
 
@@ -302,29 +223,10 @@ def cmd_pull(args: argparse.Namespace) -> int:
     if not args.confirm:
         raise SystemExit("refusing to write secrets without --confirm")
     keys = requested_keys(args.profile, args.include)
-    auth = auth_context(args.credentials_path)
+    account = assert_powerset_gcloud_account()
     mapping = secret_map(args.secret)
-    source = args.source
 
-    errors: list[str] = []
-    secrets: dict[str, str] = {}
-    if source in {"auto", "search-api"}:
-        try:
-            secrets = fetch_from_search_api(
-                keys,
-                token=auth.token,
-                base_url=args.search_api_url,
-                endpoint=args.search_api_endpoint,
-                profile=args.profile,
-            )
-            source = "search-api"
-        except Exception as exc:
-            if args.source == "search-api":
-                raise
-            errors.append(str(exc))
-    if not secrets and source in {"auto", "gcp"}:
-        secrets = fetch_from_gcp(keys, mapping, args.gcp_project)
-        source = "gcp"
+    secrets = fetch_from_gcp(keys, mapping, args.gcp_project)
 
     missing = [key for key in keys if key not in secrets]
     result = write_env(args.env_file, secrets, overwrite=args.overwrite)
@@ -332,14 +234,14 @@ def cmd_pull(args: argparse.Namespace) -> int:
         "primitive": "provision_runtime_env",
         "command": "pull",
         "status": "ok" if not missing else "partial",
-        "source": source,
+        "source": "gcp",
         "profile": args.profile,
-        "email": auth.email,
+        "gcloud_account": account,
+        "gcp_project": args.gcp_project,
         "env_file": str(args.env_file),
         "written": result["written"],
         "skipped_existing": result["skipped_existing"],
         "missing": missing,
-        "fallback_errors": errors,
         "secrets": redact_keys(secrets),
     })
     return 0 if not missing else 1
@@ -349,6 +251,7 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", choices=sorted(PROFILES), default="search-core")
     parser.add_argument("--include", action="append", choices=sorted(ALLOWED_KEYS))
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
+    parser.add_argument("--gcp-project", default=os.environ.get("POWERPACKS_GCP_PROJECT"))
 
 
 def main() -> None:
@@ -367,11 +270,6 @@ def main() -> None:
     add_common(pull)
     pull.add_argument("--confirm", action="store_true")
     pull.add_argument("--overwrite", action="store_true")
-    pull.add_argument("--source", choices=["auto", "search-api", "gcp"], default="auto")
-    pull.add_argument("--credentials-path", type=Path, default=DEFAULT_CREDENTIALS_PATH)
-    pull.add_argument("--search-api-url", default=DEFAULT_SEARCH_API_URL)
-    pull.add_argument("--search-api-endpoint", default=DEFAULT_SEARCH_API_ENDPOINT)
-    pull.add_argument("--gcp-project", default=os.environ.get("POWERPACKS_GCP_PROJECT"))
     pull.add_argument("--secret", action="append", help="Override Secret Manager id as KEY=SECRET_ID")
     pull.set_defaults(func=cmd_pull)
 

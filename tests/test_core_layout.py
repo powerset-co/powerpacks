@@ -29,11 +29,11 @@ class CoreLayoutTests(unittest.TestCase):
 
     def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:
         text = (ROOT / "skills" / "powerset-login" / "SKILL.md").read_text()
-        self.assertIn("powerset_auth", text)
         self.assertIn("provision_runtime_env", text)
         self.assertIn("@powerset.co", text)
-        self.assertIn("search-api", text)
         self.assertIn("GCP Secret Manager", text)
+        self.assertIn("Do not use search-api for provisioning", text)
+        self.assertIn("gcloud auth login", text)
 
     def test_search_surface_documents_company_entrypoint(self) -> None:
         text = (ROOT / "docs" / "search-surface.md").read_text()
