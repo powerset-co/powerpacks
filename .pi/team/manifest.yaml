@@ -1,0 +1,34 @@
+version: 1
+project: powerpacks
+repo_role: powerset-powerpacks
+description: Reusable Powerset skills, primitives, packs, contracts, and eval harnesses.
+features:
+  - id: messaging-syncs
+    dossier: features/messaging-syncs.md
+    owner_session: powerpacks-messaging-syncs
+    powerpacks:
+      - messages
+      - imessage
+      - whatsapp
+  - id: network-search
+    dossier: features/network-search.md
+    owner_session: powerpacks-network-search
+    powerpacks:
+      - search-network
+      - search-company
+      - people-search
+      - company-search
+  - id: data-ingestion
+    dossier: features/data-ingestion.md
+    owner_session: powerpacks-data-ingestion
+    powerpacks:
+      - data-ingestion
+      - data-pipeline-v2
+      - contracts
+  - id: tester
+    dossier: features/tester.md
+    owner_session: powerpacks-tester
+    powerpacks:
+      - pi-tester
+      - test-runner
+      - evals
