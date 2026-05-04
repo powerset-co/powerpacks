@@ -14,6 +14,7 @@ V1 focuses on:
 - conservative LLM filtering after full-frontier hydration
 - sharded agentic candidate review with deterministic final reduction
 - artifact persistence for refinement and host UI integrations
+- Powerset login and runtime env provisioning for internal operator setup
 
 Public V1 primitives:
 
@@ -21,7 +22,7 @@ Public V1 primitives:
   `build_investor_index`, `resolve_education`, `resolve_investors`, `resolve_companies`, `apply_prefilters`,
   `count_candidates`, `execute_role_search`, `execute_search_slice`,
   `hydrate_people`, `llm_filter_candidates`, `agentic_candidate_review`,
-  `persist_search_results`
+  `persist_search_results`, `powerset_auth`, `provision_runtime_env`
 - agent-planned reasoning primitives: `expand_search_request`,
   `plan_adjacency_search`, `decide_search_strategy`, `generate_search_slices`,
   `merge_candidate_frontier`, `assess_frontier`, `plan_candidate_review`

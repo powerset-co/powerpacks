@@ -11,7 +11,8 @@ run the primitives.
 
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
-- give the agent one operational search entrypoint: `/search-network <query>`
+- give the agent operational entrypoints: `/search-network <query>`,
+  `/search-company <query>`, and `$powerset-login`
 - decompose broad recruiting queries into bounded retrieval plans
 - persist task state and CSV/JSONL artifacts so users can refine prior runs
 - keep host-specific runtime glue isolated under `adapters/`
@@ -19,7 +20,8 @@ run the primitives.
 ## Layout
 
 - skills: `skills/search-network/`, `skills/extract-search-query/`,
-  `skills/search-company/`, `packs/messages/skills/import-imessage/`,
+  `skills/search-company/`, `skills/powerset-login/`,
+  `packs/messages/skills/import-imessage/`,
   `packs/messages/skills/import-whatsapp/`, and
   `packs/messages/skills/import-contacts-review/`
 - `primitives/` contains deterministic scripts and primitive contracts
@@ -80,6 +82,24 @@ python powerpacks/primitives/contracts/contracts.py dump-postgres --env-file .en
 
 `dump-postgres` writes a diagnostic artifact. It does not mutate the checked-in
 contracts.
+
+## Runtime Provisioning
+
+Internal Powerset users can log in and provision a local `.env` without pasting
+raw secrets into chat:
+
+```bash
+python powerpacks/primitives/powerset_auth/powerset_auth.py login
+python powerpacks/primitives/provision_runtime_env/provision_runtime_env.py pull \
+  --profile search-core \
+  --env-file .env \
+  --confirm
+```
+
+The provisioning primitive redacts secret values in output and only writes
+allowlisted keys. Search-api provisioning is the preferred long-term path for
+per-user usage attribution; GCP Secret Manager is an internal bootstrap
+fallback.
 
 ## Task Flow
 

@@ -52,9 +52,10 @@ EOF
 install_skill search-network "$REPO_ROOT/skills/search-network/SKILL.md"
 install_skill extract-search-query "$REPO_ROOT/skills/extract-search-query/SKILL.md"
 install_skill search-company "$REPO_ROOT/skills/search-company/SKILL.md"
+install_skill powerset-login "$REPO_ROOT/skills/powerset-login/SKILL.md"
 install_skill import-imessage "$REPO_ROOT/packs/messages/skills/import-imessage/SKILL.md"
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill import-contacts-review "$REPO_ROOT/packs/messages/skills/import-contacts-review/SKILL.md"
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company import-imessage import-whatsapp import-contacts-review"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company powerset-login import-imessage import-whatsapp import-contacts-review"
 echo "restart Codex to pick up the skill list"

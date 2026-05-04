@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class CoreLayoutTests(unittest.TestCase):
     def test_user_facing_skills(self) -> None:
         skills = sorted(path.name for path in (ROOT / "skills").iterdir() if path.is_dir())
-        self.assertEqual(skills, ["extract-search-query", "search-company", "search-network"])
+        self.assertEqual(skills, ["extract-search-query", "powerset-login", "search-company", "search-network"])
 
     def test_no_legacy_add_skill_references_in_core_skill(self) -> None:
         text = (ROOT / "skills" / "search-network" / "SKILL.md").read_text()
@@ -26,6 +26,14 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("company_semantic_queries", text)
         self.assertIn("investor_names", text)
         self.assertIn("company_sector_strategy", text)
+
+    def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:
+        text = (ROOT / "skills" / "powerset-login" / "SKILL.md").read_text()
+        self.assertIn("powerset_auth", text)
+        self.assertIn("provision_runtime_env", text)
+        self.assertIn("@powerset.co", text)
+        self.assertIn("search-api", text)
+        self.assertIn("GCP Secret Manager", text)
 
     def test_search_surface_documents_company_entrypoint(self) -> None:
         text = (ROOT / "docs" / "search-surface.md").read_text()
