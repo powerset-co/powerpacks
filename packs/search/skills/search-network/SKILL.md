@@ -276,7 +276,7 @@ For every run, keep a JSON trace with:
 The trace is part of the result. It lets the user inspect why the claw searched
 that way.
 
-Use `powerpacks/packs/powerset/primitives/task_state/task_state.py` when a local filesystem is
+Use `powerpacks/packs/search/primitives/task_state/task_state.py` when a local filesystem is
 available and include the state-file path in the final response. If not, keep
 the same shape in the final response.
 
@@ -412,7 +412,7 @@ When needed, consult these reference files in the installed repo:
 - `powerpacks/contracts/profiles/hydrated-profile.schema.json`
 - `powerpacks/tasks/search-network.task.json`
 - `powerpacks/schemas/search-network-task.schema.json`
-- `powerpacks/packs/powerset/schemas/task-run.schema.json`
+- `powerpacks/packs/search/schemas/task-run.schema.json`
 - `powerpacks/schemas/decomposed-query.schema.json`
 - `powerpacks/schemas/role-search-filters.schema.json`
 - `powerpacks/schemas/search-slice.schema.json`

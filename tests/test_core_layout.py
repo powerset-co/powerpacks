@@ -105,7 +105,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("--execution-mode rerank", text)
 
     def test_task_state_tracks_planned_steps_separately_from_execution_log(self) -> None:
-        task_state = ROOT / "packs/powerset/primitives/task_state/task_state.py"
+        task_state = ROOT / "packs/search/primitives/task_state/task_state.py"
         with tempfile.TemporaryDirectory() as td:
             state_path = Path(td) / "run.json"
             subprocess.run(

@@ -8,7 +8,7 @@ file. It is intentionally local and simple.
 Examples:
 
 ```bash
-python powerpacks/primitives/task_state/task_state.py init \
+python powerpacks/packs/search/primitives/task_state/task_state.py init \
   --query "software engineers in sf"
 ```
 
@@ -23,7 +23,7 @@ Use `request-approval --plan-json` to record the intended checklist before
 retrieval:
 
 ```bash
-python powerpacks/primitives/task_state/task_state.py request-approval \
+python powerpacks/packs/search/primitives/task_state/task_state.py request-approval \
   --state .powerpacks/runs/search-network-<uuid>-software-engineers-in-sf.json \
   --reason "Search requires external retrieval." \
   --proposed-next-step "Resolve education, prefilter, count, retrieve, hydrate, export." \
@@ -35,7 +35,7 @@ append-only execution log. When `record-step` is called for a matching planned
 step, the planned step is marked completed/failed/skipped with timestamps.
 
 ```bash
-python powerpacks/primitives/task_state/task_state.py record-step \
+python powerpacks/packs/search/primitives/task_state/task_state.py record-step \
   --state .powerpacks/runs/search-network-<uuid>-software-engineers-in-sf.json \
   --step-id count_candidates \
   --status completed \
@@ -48,13 +48,13 @@ Approval records both execution approval and whether post-hydration agentic
 review should run:
 
 ```bash
-python powerpacks/primitives/task_state/task_state.py approve \
+python powerpacks/packs/search/primitives/task_state/task_state.py approve \
   --state .powerpacks/runs/search-network-<uuid>-software-engineers-in-sf.json \
   --execution-mode search_only
 ```
 
 ```bash
-python powerpacks/primitives/task_state/task_state.py approve \
+python powerpacks/packs/search/primitives/task_state/task_state.py approve \
   --state .powerpacks/runs/search-network-<uuid>-software-engineers-in-sf.json \
   --execution-mode rerank
 ```

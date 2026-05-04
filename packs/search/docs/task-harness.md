@@ -16,7 +16,7 @@ The task template lives at:
 
 Each run should create state that validates against:
 
-- `powerpacks/packs/powerset/schemas/task-run.schema.json`
+- `powerpacks/packs/search/schemas/task-run.schema.json`
 
 By default, initialize a unique state file under:
 
