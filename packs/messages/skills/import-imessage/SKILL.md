@@ -5,7 +5,7 @@ description: Import local iMessage relationship signals through the Powerpacks m
 
 # Import iMessage
 
-Use this skill for local iMessage-only message-contact imports.
+Use this skill for local iMessage-only message-contact imports on macOS.
 
 The pack is privacy-first:
 
@@ -14,6 +14,19 @@ The pack is privacy-first:
   last message timestamp, skip/review/match metadata
 - do not run extraction or upload unless the user explicitly asks for that action
 - keep message contact normalization as explicit steps the run can replay
+
+## Prereqs
+
+- macOS (this skill is macOS-only)
+- Python 3.9+ (stdlib only, no extra packages)
+- **Full Disk Access** granted to the terminal / IDE Codex or Claude Code is
+  running from. Without it, `chat.db` reads will fail with permission errors.
+  Open `System Settings → Privacy & Security → Full Disk Access`, add the app,
+  and restart it.
+
+If step 2 reports `chat_db.readable: false` or addressbook errors, that is
+almost always a Full Disk Access issue. Do not retry blindly — surface the
+diagnostic to the user and ask them to grant access.
 
 ## Workflow
 

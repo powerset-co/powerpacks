@@ -68,13 +68,13 @@ Bad:
 ## Commands
 
 ```bash
-python powerpacks/primitives/resolve_investors/resolve_investors.py \
+python powerpacks/packs/search/primitives/resolve_investors/resolve_investors.py \
   --payload-json '<json>' \
   --env-file .env
 ```
 
 ```bash
-python powerpacks/primitives/resolve_companies/resolve_companies.py \
+python powerpacks/packs/search/primitives/resolve_companies/resolve_companies.py \
   --payload-json '<json>' \
   --env-file .env
 ```

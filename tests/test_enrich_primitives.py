@@ -28,7 +28,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-POWERSET_AUTH = ROOT / "packs/messages/primitives/powerset_auth/powerset_auth.py"
+POWERSET_AUTH = ROOT / "packs/powerset/primitives/auth/auth.py"
 SYNC_CANDIDATES = ROOT / "packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py"
 MATCH_LOCAL = ROOT / "packs/messages/primitives/match_local_candidates/match_local_candidates.py"
 LLM_REVIEW = ROOT / "packs/messages/primitives/llm_review_contacts/llm_review_contacts.py"

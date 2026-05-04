@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "primitives" / "agentic_candidate_review" / "agentic_candidate_review.py"
+SCRIPT = ROOT / "packs/search/primitives/agentic_candidate_review" / "agentic_candidate_review.py"
 
 
 def load_module():

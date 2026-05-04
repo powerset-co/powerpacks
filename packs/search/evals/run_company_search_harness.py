@@ -21,8 +21,9 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 PRIMITIVES = ROOT / "primitives"
-TASK_STATE = PRIMITIVES / "task_state" / "task_state.py"
+TASK_STATE = REPO_ROOT / "primitives" / "task_state" / "task_state.py"
 DEFAULT_CASES = ROOT / "evals" / "company-search" / "cases.json"
 DEFAULT_APP_DIR = Path("/Users/arthur/workspace/aleph-mvp")
 REPORT_PATH = ROOT / "evals" / "company_search.md"

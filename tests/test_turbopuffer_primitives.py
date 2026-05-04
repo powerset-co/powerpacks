@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LIB = ROOT / "primitives" / "lib"
+LIB = ROOT / "packs/search/primitives/lib"
 sys.path.insert(0, str(LIB))
 
 
@@ -18,9 +18,9 @@ def load_module(name: str, path: Path):
 
 
 turbopuffer_client = load_module("turbopuffer_client", LIB / "turbopuffer_client.py")
-resolve_companies = load_module("resolve_companies", ROOT / "primitives" / "resolve_companies" / "resolve_companies.py")
-hydrate_people = load_module("hydrate_people", ROOT / "primitives" / "hydrate_people" / "hydrate_people.py")
-results_io = load_module("results_io", ROOT / "primitives" / "persist_search_results" / "results_io.py")
+resolve_companies = load_module("resolve_companies", ROOT / "packs/search/primitives/resolve_companies" / "resolve_companies.py")
+hydrate_people = load_module("hydrate_people", ROOT / "packs/search/primitives/hydrate_people" / "hydrate_people.py")
+results_io = load_module("results_io", ROOT / "packs/search/primitives/persist_search_results" / "results_io.py")
 
 
 class TurbopufferPrimitiveTests(unittest.TestCase):
@@ -161,13 +161,13 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
     def test_scripts_do_not_import_aleph_mvp(self) -> None:
         for path in [
             LIB / "turbopuffer_client.py",
-            ROOT / "primitives" / "count_candidates" / "count_candidates.py",
-            ROOT / "primitives" / "execute_role_search" / "execute_role_search.py",
-            ROOT / "primitives" / "execute_search_slice" / "execute_search_slice.py",
-            ROOT / "primitives" / "resolve_education" / "resolve_education.py",
-            ROOT / "primitives" / "resolve_investors" / "resolve_investors.py",
-            ROOT / "primitives" / "resolve_companies" / "resolve_companies.py",
-            ROOT / "primitives" / "apply_prefilters" / "apply_prefilters.py",
+            ROOT / "packs/search/primitives/count_candidates" / "count_candidates.py",
+            ROOT / "packs/search/primitives/execute_role_search" / "execute_role_search.py",
+            ROOT / "packs/search/primitives/execute_search_slice" / "execute_search_slice.py",
+            ROOT / "packs/search/primitives/resolve_education" / "resolve_education.py",
+            ROOT / "packs/search/primitives/resolve_investors" / "resolve_investors.py",
+            ROOT / "packs/search/primitives/resolve_companies" / "resolve_companies.py",
+            ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py",
         ]:
             text = path.read_text()
             self.assertNotIn("aleph-mvp", text)

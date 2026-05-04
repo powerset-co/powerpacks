@@ -16,7 +16,7 @@ def load_module(name: str, path: Path):
     return module
 
 
-company_harness = load_module("company_harness", ROOT / "evals" / "run_company_search_harness.py")
+company_harness = load_module("company_harness", ROOT / "packs/search/evals/run_company_search_harness.py")
 
 
 class CompanySearchHarnessTests(unittest.TestCase):

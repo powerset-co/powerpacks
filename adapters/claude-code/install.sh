@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
+# Install Powerpacks skills into a Claude Code skills directory.
+#
+# By default installs to user-level skills at `~/.claude/skills/`. Pass an
+# explicit target directory to install project-level instead, e.g.
+# `./install.sh /path/to/repo/.claude/skills`.
+#
+# Each skill is installed as `<dest>/<skill-name>/SKILL.md` plus a bundled
+# `powerpacks/` directory next to it that holds primitives, schemas, contracts,
+# tasks, evals, and packs the skill's commands resolve relative to.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-SKILLS_DIR="${1:-$CODEX_HOME/skills}"
+DEFAULT_SKILLS_DIR="$HOME/.claude/skills"
+SKILLS_DIR="${1:-$DEFAULT_SKILLS_DIR}"
 
 mkdir -p "$SKILLS_DIR"
 rm -rf "$SKILLS_DIR/import-messages"
@@ -35,13 +44,13 @@ install_skill() {
   cp -R "$source_skill" "$dest/SKILL.md"
   copy_powerpacks_bundle "$dest"
 
-  cat > "$dest/powerpacks/README.codex-install.md" <<EOF
-# Codex Powerpacks Bundle
+  cat > "$dest/powerpacks/README.claude-code-install.md" <<EOF
+# Claude Code Powerpacks Bundle
 
 This directory is copied by:
 
 \`\`\`bash
-$REPO_ROOT/adapters/codex/install.sh
+$REPO_ROOT/adapters/claude-code/install.sh
 \`\`\`
 
 The installed \`$skill_name\` skill resolves \`powerpacks/...\` references
@@ -57,5 +66,8 @@ install_skill import-imessage "$REPO_ROOT/packs/messages/skills/import-imessage/
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill import-contacts-review "$REPO_ROOT/packs/messages/skills/import-contacts-review/SKILL.md"
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company powerset-login import-imessage import-whatsapp import-contacts-review"
-echo "restart Codex to pick up the skill list"
+echo "installed Powerpacks skills into $SKILLS_DIR:"
+echo "  search-network extract-search-query search-company powerset-login"
+echo "  import-imessage import-whatsapp import-contacts-review"
+echo
+echo "restart Claude Code to pick up the skill list"

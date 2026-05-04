@@ -1,65 +1,167 @@
 # Powerpacks
 
-`powerpacks` is a portable recruiting-search pack: one user-facing skill,
-deterministic primitives, schemas, and checked-in data contracts.
+`powerpacks` is a portable bundle of skills + deterministic primitives +
+check-in data contracts that turn a coding-agent host (Codex, Claude Code,
+NanoClaw) into a recruiting-search and contact-import workstation backed by
+Powerset.
 
-The core package is host-agnostic. It should work with NanoClaw, Codex, Claude
-Code, or another agent runtime once that host knows how to expose the skill and
-run the primitives.
+The core package is host-agnostic. The same skills run unchanged across hosts;
+only the install adapter differs.
+
+## Skills
+
+User-facing skill entrypoints, grouped by purpose. Each skill ships its own
+`SKILL.md` with the full workflow.
+
+### Search
+
+| Skill | Trigger | What it does |
+| --- | --- | --- |
+| [`search-network`](packs/search/skills/search-network/SKILL.md) | `/search-network <query>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. |
+| [`search-company`](packs/search/skills/search-company/SKILL.md) | `/search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
+| [`extract-search-query`](packs/search/skills/extract-search-query/SKILL.md) | called by `search-network` | Sub-skill for headless query decomposition. |
+
+### Setup
+
+| Skill | Trigger | What it does |
+| --- | --- | --- |
+| [`powerset-login`](packs/powerset/skills/powerset-login/SKILL.md) | `$powerset-login` | Single Powerset login flow: Auth0 PKCE for your user JWT, then best-effort `.env` provisioning from GCP Secret Manager. Privileged users get TurboPuffer / Postgres / OpenAI / OpenRouter / Parallel / RapidAPI keys; everyone else still ends up with a usable Auth0 token. |
+
+### Messages pack
+
+| Skill | Trigger | What it does |
+| --- | --- | --- |
+| [`import-imessage`](packs/messages/skills/import-imessage/SKILL.md) | manual | Read local macOS Messages SQLite, extract phone+name+volume metadata only. No bodies. |
+| [`import-whatsapp`](packs/messages/skills/import-whatsapp/SKILL.md) | manual | Run a local [WAHA](https://github.com/devlikeapro/waha) Docker container, scan a QR with your phone, extract WhatsApp contact metadata. No bodies. |
+| [`import-contacts-review`](packs/messages/skills/import-contacts-review/SKILL.md) | manual | After import: log in to Powerset, sync your operator catalog, run local name matching, LLM-review the unmatched contacts (ENRICH/SKIP). |
 
 ## Goal
 
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
 - give the agent operational entrypoints: `/search-network <query>`,
-  `/search-company <query>`, and `$powerset-login`
+  `/search-company <query>`, `$powerset-login`, and the messages-pack import
+  skills
 - decompose broad recruiting queries into bounded retrieval plans
 - persist task state and CSV/JSONL artifacts so users can refine prior runs
 - keep host-specific runtime glue isolated under `adapters/`
 
 ## Layout
 
-- skills: `skills/search-network/`, `skills/extract-search-query/`,
-  `skills/search-company/`, `skills/powerset-login/`,
-  `packs/messages/skills/import-imessage/`,
-  `packs/messages/skills/import-whatsapp/`, and
-  `packs/messages/skills/import-contacts-review/`
-- `primitives/` contains deterministic scripts and primitive contracts
-- `primitives/lib/` contains shared runtime contracts and service clients
-- `schemas/` contains JSON schemas for query, filter, task, and result shapes
-- `contracts/` contains checked-in Postgres, TurboPuffer, and hydrated-profile
-  contracts
-- `tasks/` contains plan/execute task templates
-- `packs/` contains optional domain packs with their own skills, primitives,
-  schemas, tasks, and docs
-- `docs/workflows/` contains helper workflow references previously exposed as
-  `add-*` skills
-- `evals/` contains lightweight plan cases
-- `adapters/` contains host-specific installers, runtime patches, CLIs, and
-  harnesses
+**Everything is a pack.** No more top-level `skills/`, `primitives/`,
+`schemas/`, `contracts/`, `tasks/`, or `evals/`. Each domain pack is a
+self-contained slice of the system.
+
+```text
+powerpacks/
+├── packs/
+│   ├── powerset/           identity + runtime env (depended on by every pack)
+│   │   ├── skills/         powerset-login (one unified login flow)
+│   │   ├── primitives/     auth/ (Auth0 PKCE),
+│   │   │                   provision_runtime_env/ (best-effort GCP),
+│   │   │                   task_state/ (run-state JSON)
+│   │   ├── schemas/        task-run.schema.json
+│   │   └── templates/      env.example
+│   ├── search/             recruiting people / company search
+│   │   ├── skills/         search-network, search-company,
+│   │   │                   extract-search-query
+│   │   ├── primitives/     ~21 search primitives + lib/ + contracts CLI
+│   │   ├── schemas/        decomposed-query, role-search-filters, etc.
+│   │   ├── contracts/      checked-in Postgres + TurboPuffer schemas
+│   │   ├── tasks/          search-network.task.json
+│   │   ├── docs/           search-surface, slice-planning, turbopuffer-*,
+│   │   │                   harnesses/, workflows/
+│   │   └── evals/          recall, company-search, founder parity
+│   └── messages/           iMessage + WhatsApp + Powerset enrichment
+│       ├── skills/         import-imessage, import-whatsapp,
+│       │                   import-contacts-review
+│       ├── primitives/     iMessage / WAHA / matching / LLM-review /
+│       │                   deep-research primitives
+│       ├── schemas/        message-contact, messages-run-manifest
+│       ├── tasks/          import-*.task.json
+│       └── docs/           harness.md
+├── adapters/               codex/, claude-code/, nanoclaw/ installers
+├── docs/                   cross-pack docs (quickstart.md, testing.md)
+├── scripts/                test-powerpacks, lint-powerpacks, smoke-messages.sh
+├── tests/                  cross-pack test suite
+├── templates/              host-install templates (claude-fragments,
+│                           container.json, mcp.json)
+└── mcp/                    MCP placeholder
+```
+
+The `powerset` pack is the foundation — every other pack depends on its
+`auth` and `task_state` primitives. Anyone using Powerpacks runs
+`$powerset-login` first.
+
+## Quickstart for a fresh account
+
+A full first-run walkthrough — prereqs, install, and your first command per
+skill — is in [`docs/quickstart.md`](docs/quickstart.md). The short version:
+
+```bash
+# 1. clone
+git clone https://github.com/<org>/powerpacks.git && cd powerpacks
+
+# 2. install skills into your agent host (pick one)
+./install.sh codex                # → ~/.codex/skills/
+./install.sh claude-code          # → ~/.claude/skills/
+./install.sh nanoclaw /path/to/nanoclaw
+
+# 3. restart the agent host so it reloads the skill list
+
+# 4. inside the agent, run any of:
+/search-network senior infra eng at fintech
+/search-company stripe-like fintech infra companies
+$powerset-login                   # provisions .env from GCP Secret Manager
+# or trigger the messages pack manually:
+#   "import my iMessage contacts" → import-imessage
+#   "import my whatsapp contacts" → import-whatsapp
+#   "review my imported contacts" → import-contacts-review
+```
+
+### Prereqs by skill family
+
+| You want to use… | Install on the host running Codex / Claude Code |
+| --- | --- |
+| Any skill | Python 3.9+ (`python3 --version`), git |
+| `search-network` / `search-company` | `.env` with `TURBOPUFFER_API_KEY`, `DATABASE_URL`, `OPENAI_API_KEY` (use `$powerset-login` to populate) |
+| `powerset-login` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
+| `import-imessage` | macOS, **Full Disk Access** for your terminal (`System Settings > Privacy & Security > Full Disk Access`) so Python can read `~/Library/Messages/chat.db` |
+| `import-whatsapp` | Docker (`brew install --cask docker` or `brew install colima docker`), the WhatsApp app on your phone for QR scan |
+| `import-contacts-review` | Auth0 login via browser (popped automatically), `OPENROUTER_API_KEY` for the LLM-review step |
 
 ## Install
 
-NanoClaw adapter:
+The top-level `install.sh` dispatches to a per-host adapter. All three adapters
+are independent and idempotent — re-run them any time skills change.
+
+### Codex
+
+```bash
+./install.sh codex                          # default: ~/.codex/skills/
+./install.sh codex /custom/skills/dir       # explicit target
+```
+
+### Claude Code
+
+```bash
+./install.sh claude-code                    # default: ~/.claude/skills/
+./install.sh claude-code ./.claude/skills   # project-level install
+```
+
+### NanoClaw
 
 ```bash
 ./install.sh nanoclaw /path/to/nanoclaw
 ```
 
-Codex adapter:
+Restart the agent host after install so it reloads the skill list. Direct
+adapter installs also work:
 
 ```bash
-./install.sh codex
-```
-
-This installs the Powerpacks skills into `${CODEX_HOME:-~/.codex}/skills`.
-Restart Codex after installing so the skill list is reloaded.
-
-Direct adapter installs also work:
-
-```bash
+./adapters/codex/install.sh                    [skills-dir]
+./adapters/claude-code/install.sh               [skills-dir]
 ./adapters/nanoclaw/install.sh /path/to/nanoclaw
-./adapters/codex/install.sh
 ```
 
 The NanoClaw adapter copies the core Powerpacks directory into the target,
@@ -67,7 +169,7 @@ installs `search-network` and its `extract-search-query` sub-skill, wires the
 threaded CLI channel, and keeps NanoClaw-specific TUI/runtime code under
 `powerpacks/adapters/nanoclaw`.
 
-Claude Code adapter is intentionally not implemented yet.
+
 
 ## Contracts
 
@@ -75,9 +177,9 @@ Powerpacks treats Postgres and TurboPuffer schema as checked-in contracts, not
 something the agent should rediscover on each run:
 
 ```bash
-python powerpacks/primitives/contracts/contracts.py list
-python powerpacks/primitives/contracts/contracts.py check-postgres --env-file .env
-python powerpacks/primitives/contracts/contracts.py dump-postgres --env-file .env --out .powerpacks/schema-dumps/postgres-live.json
+python powerpacks/packs/search/primitives/contracts/contracts.py list
+python powerpacks/packs/search/primitives/contracts/contracts.py check-postgres --env-file .env
+python powerpacks/packs/search/primitives/contracts/contracts.py dump-postgres --env-file .env --out .powerpacks/schema-dumps/postgres-live.json
 ```
 
 `dump-postgres` writes a diagnostic artifact. It does not mutate the checked-in
@@ -90,7 +192,7 @@ without pasting raw secrets into chat:
 
 ```bash
 gcloud auth login
-python powerpacks/primitives/provision_runtime_env/provision_runtime_env.py pull \
+python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
   --profile search-core \
   --env-file .env \
   --confirm
@@ -103,9 +205,9 @@ grant access on those specific secret resources or groups.
 
 ## Task Flow
 
-See `docs/task-flow.md` for the current search task lifecycle, the extraction
-sub-skill boundary, and the difference between primitive parity harnesses and
-agent extraction harnesses.
+See `packs/search/docs/task-flow.md` for the current search task lifecycle,
+the extraction sub-skill boundary, and the difference between primitive parity
+harnesses and agent extraction harnesses.
 
 ## Development
 

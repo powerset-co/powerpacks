@@ -21,7 +21,7 @@ The pack is privacy-first:
 
 Four small primitives:
 
-1. `powerset_auth` — Auth0 PKCE login → JWT cached at
+1. `auth` (in `packs/powerset/primitives/auth/`) — Auth0 PKCE login → JWT cached at
    `~/.powerpacks/credentials.json`
 2. `sync_powerset_candidates` — paginated GET `/v2/contacts` using the JWT,
    writes a flat candidate CSV
@@ -40,13 +40,13 @@ user to run `import-imessage` or `import-whatsapp` first.
 ### 2. Log in to Powerset (if needed)
 
 ```bash
-python packs/messages/primitives/powerset_auth/powerset_auth.py whoami
+python packs/powerset/primitives/auth/auth.py whoami
 ```
 
 If `status: anonymous`, ask the user for permission to open a browser, then:
 
 ```bash
-python packs/messages/primitives/powerset_auth/powerset_auth.py login
+python packs/powerset/primitives/auth/auth.py login
 ```
 
 This opens the user's browser to Auth0, runs a localhost callback on

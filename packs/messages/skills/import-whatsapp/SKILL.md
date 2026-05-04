@@ -16,6 +16,20 @@ The pack is privacy-first:
 - every Docker / WAHA / extraction action is gated on explicit user approval
 - the WAHA container is yours to start and stop; nothing runs on a remote service
 
+## Prereqs
+
+- Python 3.9+ (stdlib only)
+- Docker Engine reachable as the current user
+  - macOS GUI: `brew install --cask docker && open -a Docker`
+  - macOS lightweight: `brew install colima docker && colima start --memory 2 --vm-type vz --vz-rosetta`
+  - Linux: `curl -fsSL https://get.docker.com | sh && sudo systemctl start docker`
+- WhatsApp on the user's phone (for the QR scan in step 3)
+
+The `waha_runtime check` primitive surfaces these alternatives in its JSON
+manifest if Docker is missing. Always show that manifest to the user and
+**ask explicit permission** before running any `install_cmd`. Do not
+auto-install.
+
 ## Architecture
 
 The skill is composed of three small primitives:

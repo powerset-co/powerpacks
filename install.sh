@@ -13,17 +13,21 @@ case "$TARGET" in
     shift
     exec "$ROOT/adapters/codex/install.sh" "$@"
     ;;
-  claude-code)
-    echo "error: $TARGET adapter is not implemented yet" >&2
-    exit 2
+  claude-code|claude)
+    shift
+    exec "$ROOT/adapters/claude-code/install.sh" "$@"
     ;;
   "")
-    echo "usage: ./install.sh nanoclaw /path/to/nanoclaw | codex [skills-dir]" >&2
+    echo "usage: ./install.sh codex [skills-dir]" >&2
+    echo "       ./install.sh claude-code [skills-dir]" >&2
+    echo "       ./install.sh nanoclaw /path/to/nanoclaw" >&2
     exit 1
     ;;
   *)
     echo "error: unknown adapter '$TARGET'" >&2
-    echo "usage: ./install.sh nanoclaw /path/to/nanoclaw | codex [skills-dir]" >&2
+    echo "usage: ./install.sh codex [skills-dir]" >&2
+    echo "       ./install.sh claude-code [skills-dir]" >&2
+    echo "       ./install.sh nanoclaw /path/to/nanoclaw" >&2
     exit 1
     ;;
 esac

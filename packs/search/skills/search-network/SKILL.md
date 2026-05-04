@@ -276,7 +276,7 @@ For every run, keep a JSON trace with:
 The trace is part of the result. It lets the user inspect why the claw searched
 that way.
 
-Use `powerpacks/primitives/task_state/task_state.py` when a local filesystem is
+Use `powerpacks/packs/powerset/primitives/task_state/task_state.py` when a local filesystem is
 available and include the state-file path in the final response. If not, keep
 the same shape in the final response.
 
@@ -286,42 +286,42 @@ After approval, use the packaged primitive scripts rather than writing ad hoc
 code:
 
 ```bash
-python powerpacks/primitives/resolve_education/resolve_education.py \
+python powerpacks/packs/search/primitives/resolve_education/resolve_education.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
   --write-state
 ```
 
 ```bash
-python powerpacks/primitives/resolve_companies/resolve_companies.py \
+python powerpacks/packs/search/primitives/resolve_companies/resolve_companies.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
   --write-state
 ```
 
 ```bash
-python powerpacks/primitives/resolve_investors/resolve_investors.py \
+python powerpacks/packs/search/primitives/resolve_investors/resolve_investors.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
   --write-state
 ```
 
 ```bash
-python powerpacks/primitives/apply_prefilters/apply_prefilters.py \
+python powerpacks/packs/search/primitives/apply_prefilters/apply_prefilters.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
   --write-state
 ```
 
 ```bash
-python powerpacks/primitives/count_candidates/count_candidates.py \
+python powerpacks/packs/search/primitives/count_candidates/count_candidates.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
   --write-state
 ```
 
 ```bash
-python powerpacks/primitives/execute_role_search/execute_role_search.py \
+python powerpacks/packs/search/primitives/execute_role_search/execute_role_search.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
   --limit 200 \
@@ -329,7 +329,7 @@ python powerpacks/primitives/execute_role_search/execute_role_search.py \
 ```
 
 ```bash
-python powerpacks/primitives/execute_search_slice/execute_search_slice.py \
+python powerpacks/packs/search/primitives/execute_search_slice/execute_search_slice.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --slice-id <slice-id> \
   --env-file .env \
@@ -337,14 +337,14 @@ python powerpacks/primitives/execute_search_slice/execute_search_slice.py \
 ```
 
 ```bash
-python powerpacks/primitives/hydrate_people/hydrate_people.py \
+python powerpacks/packs/search/primitives/hydrate_people/hydrate_people.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
   --write-state
 ```
 
 ```bash
-python powerpacks/primitives/persist_search_results/results_io.py export \
+python powerpacks/packs/search/primitives/persist_search_results/results_io.py export \
   --state .powerpacks/runs/search-network-<id>.json
 ```
 
@@ -412,7 +412,7 @@ When needed, consult these reference files in the installed repo:
 - `powerpacks/contracts/profiles/hydrated-profile.schema.json`
 - `powerpacks/tasks/search-network.task.json`
 - `powerpacks/schemas/search-network-task.schema.json`
-- `powerpacks/schemas/task-run.schema.json`
+- `powerpacks/packs/powerset/schemas/task-run.schema.json`
 - `powerpacks/schemas/decomposed-query.schema.json`
 - `powerpacks/schemas/role-search-filters.schema.json`
 - `powerpacks/schemas/search-slice.schema.json`

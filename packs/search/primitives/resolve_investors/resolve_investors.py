@@ -122,7 +122,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as exc:
         raise RuntimeError(
             f"failed to query TurboPuffer investor namespace {namespace_name('investors')!r}; "
-            "build it with primitives/build_investor_index/build_investor_index.py"
+            "build it with packs/search/primitives/build_investor_index/build_investor_index.py"
         ) from exc
 
     tp_urns = [str(row["urn"]) for row in tp_rows if row.get("urn")]

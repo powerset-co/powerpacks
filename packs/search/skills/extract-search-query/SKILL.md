@@ -125,7 +125,7 @@ The output should include a string note such as:
 After producing the JSON, the orchestrating skill or harness should record it:
 
 ```bash
-python powerpacks/primitives/task_state/task_state.py record-step \
+python powerpacks/packs/powerset/primitives/task_state/task_state.py record-step \
   --state "$STATE" \
   --step-id expand_search_request \
   --output-json '<the extraction JSON>'

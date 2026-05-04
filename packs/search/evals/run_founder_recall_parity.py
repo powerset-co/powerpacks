@@ -19,8 +19,9 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 PRIMITIVES = ROOT / "primitives"
-TASK_STATE = PRIMITIVES / "task_state" / "task_state.py"
+TASK_STATE = REPO_ROOT / "primitives" / "task_state" / "task_state.py"
 REPORT_PATH = ROOT / "evals" / "harness_parity.md"
 
 FOUNDER_SEMANTIC = (

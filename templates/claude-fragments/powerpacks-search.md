@@ -18,7 +18,7 @@ Use the Powerpacks docs as a hard contract when calling search tools.
   - `powerpacks/docs/task-harness.md`
   - `powerpacks/tasks/search-network.task.json`
   - `powerpacks/schemas/search-network-task.schema.json`
-  - `powerpacks/schemas/task-run.schema.json`
+  - `powerpacks/packs/powerset/schemas/task-run.schema.json`
   - `powerpacks/schemas/role-search-filters.schema.json`
   - `powerpacks/schemas/search-slice.schema.json`
   - `powerpacks/schemas/search-strategy-decision.schema.json`
