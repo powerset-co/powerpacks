@@ -11,38 +11,61 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CoreLayoutTests(unittest.TestCase):
     def test_user_facing_skills(self) -> None:
-        skills = sorted(path.name for path in (ROOT / "skills").iterdir() if path.is_dir())
-        self.assertEqual(skills, ["extract-search-query", "powerset-login", "search-company", "search-network"])
+        powerset_pack = sorted(
+            path.name for path in (ROOT / "packs/powerset/skills").iterdir() if path.is_dir()
+        )
+        self.assertEqual(powerset_pack, ["powerset-login"])
+        search_pack = sorted(
+            path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
+        )
+        self.assertEqual(
+            search_pack, ["extract-search-query", "search-company", "search-network"]
+        )
+        messages_pack = sorted(
+            path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
+        )
+        self.assertIn("import-imessage", messages_pack)
+        self.assertIn("import-whatsapp", messages_pack)
+        self.assertIn("import-contacts-review", messages_pack)
 
     def test_no_legacy_add_skill_references_in_core_skill(self) -> None:
-        text = (ROOT / "skills" / "search-network" / "SKILL.md").read_text()
+        text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
         self.assertNotIn("skills/add-", text)
         self.assertNotIn("view_search_results", text)
-        self.assertIn("docs/workflows/query-decomposition.md", text)
+        self.assertIn("workflows/query-decomposition.md", text)
 
     def test_search_company_skill_uses_company_resolver(self) -> None:
-        text = (ROOT / "skills" / "search-company" / "SKILL.md").read_text()
+        text = (ROOT / "packs/search/skills/search-company/SKILL.md").read_text()
         self.assertIn("resolve_companies", text)
         self.assertIn("company_semantic_queries", text)
         self.assertIn("investor_names", text)
         self.assertIn("company_sector_strategy", text)
 
     def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:
-        text = (ROOT / "skills" / "powerset-login" / "SKILL.md").read_text()
-        self.assertIn("provision_runtime_env", text)
+        text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
         self.assertIn("@powerset.co", text)
-        self.assertIn("GCP Secret Manager", text)
-        self.assertIn("Do not use search-api for provisioning", text)
+        # The skill is built around the doctor primitive as the entrypoint:
+        # `doctor run` for read-only check, `doctor fix --interactive` for
+        # the aggressive auto+browser pass.
+        self.assertIn("packs/powerset/primitives/doctor/doctor.py run", text)
+        self.assertIn("packs/powerset/primitives/doctor/doctor.py fix", text)
+        # Per-user secret naming.
+        self.assertIn("powerpacks-users-", text)
+        # gcloud login is part of the interactive happy path.
         self.assertIn("gcloud auth login", text)
+        # Maintainer onboarding command must be discoverable.
+        self.assertIn("provision_user_secrets", text)
+        # The aggressive UX classification must be documented.
+        self.assertIn("fix_kind", text)
 
     def test_search_surface_documents_company_entrypoint(self) -> None:
-        text = (ROOT / "docs" / "search-surface.md").read_text()
+        text = (ROOT / "packs/search/docs/search-surface.md").read_text()
         self.assertIn("/search-network <query>", text)
         self.assertIn("/search-company <query>", text)
         self.assertIn("company lookup", text.lower())
 
     def test_search_network_uses_extraction_skill(self) -> None:
-        task = json.loads((ROOT / "tasks" / "search-network.task.json").read_text())
+        task = json.loads((ROOT / "packs/search/tasks/search-network.task.json").read_text())
         task_step_ids = [step["id"] for step in task["steps"]]
         self.assertIn("resolve_investors", task_step_ids)
         self.assertIn("count_candidates", task_step_ids)
@@ -53,25 +76,22 @@ class CoreLayoutTests(unittest.TestCase):
         expand_step = next(step for step in task["steps"] if step["id"] == "expand_search_request")
         self.assertEqual(expand_step["skill"], "extract-search-query")
 
-        text = (ROOT / "skills" / "search-network" / "SKILL.md").read_text()
+        text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
         self.assertIn("## Skill Composition", text)
         self.assertIn("extract-search-query", text)
         self.assertIn("search-company", text)
         self.assertIn("handoff", text.lower())
         self.assertIn("Do not hide query extraction inside eval or", text)
 
-    def test_public_primitives_exclude_host_adapter_tools(self) -> None:
-        text = (ROOT / "primitives" / "README.md").read_text()
-        self.assertNotIn("nanoclaw_plan_harness", text)
-        self.assertNotIn("view_search_results", text)
-        self.assertIn("Host-specific", text)
-
     def test_json_contracts_and_schemas_parse(self) -> None:
         roots = [
-            ROOT / "contracts",
-            ROOT / "schemas",
-            ROOT / "tasks",
-            ROOT / "evals",
+            ROOT / "packs/powerset/schemas",
+            ROOT / "packs/search/contracts",
+            ROOT / "packs/search/schemas",
+            ROOT / "packs/search/tasks",
+            ROOT / "packs/search/evals",
+            ROOT / "packs/messages/schemas",
+            ROOT / "packs/messages/tasks",
         ]
         for root in roots:
             with self.subTest(root=root):
@@ -79,13 +99,13 @@ class CoreLayoutTests(unittest.TestCase):
                     json.loads(path.read_text())
 
     def test_search_network_offers_rerank_approval_mode(self) -> None:
-        text = (ROOT / "skills" / "search-network" / "SKILL.md").read_text()
+        text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
         self.assertIn("search only", text)
         self.assertIn("rerank", text)
         self.assertIn("--execution-mode rerank", text)
 
     def test_task_state_tracks_planned_steps_separately_from_execution_log(self) -> None:
-        task_state = ROOT / "primitives" / "task_state" / "task_state.py"
+        task_state = ROOT / "packs/powerset/primitives/task_state/task_state.py"
         with tempfile.TemporaryDirectory() as td:
             state_path = Path(td) / "run.json"
             subprocess.run(

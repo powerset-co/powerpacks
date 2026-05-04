@@ -26,12 +26,17 @@ DEFAULT_SECRET_MAP = {
     "OPENAI_API_KEY": "powerpacks-openai-api-key",
     "OPENROUTER_API_KEY": "powerpacks-openrouter-api-key",
     "PARALLEL_API_KEY": "powerpacks-parallel-api-key",
-    "RAPIDAPI_KEY": "powerpacks-rapidapi-key",
+    # RapidAPI: split per-product so a future rotation can give them
+    # separate keys without changing call sites. For now both source from
+    # the same prod secret, see provision_user_secrets.PROVISION_PLAN.
+    "RAPIDAPI_LINKEDIN_KEY": "powerpacks-rapidapi-linkedin-key",
+    "RAPIDAPI_TWITTER_KEY": "powerpacks-rapidapi-twitter-key",
 }
 PROFILES = {
     "search-core": [
+        # TURBOPUFFER_REGION is a static config value (default `gcp-us-central1`)
+        # in env.example, not a per-user secret, so it is not in this profile.
         "TURBOPUFFER_API_KEY",
-        "TURBOPUFFER_REGION",
         "DATABASE_URL",
         "OPENAI_API_KEY",
     ],
@@ -40,7 +45,10 @@ PROFILES = {
         "PARALLEL_API_KEY",
     ],
     "sales-nav": [
-        "RAPIDAPI_KEY",
+        "RAPIDAPI_LINKEDIN_KEY",
+    ],
+    "twitter": [
+        "RAPIDAPI_TWITTER_KEY",
     ],
     "supabase-admin": [
         "SUPABASE_URL",
@@ -183,6 +191,75 @@ def fetch_from_gcp(keys: list[str], mapping: dict[str, str], project: str | None
     return secrets
 
 
+# ---------------------------------------------------------------------------
+# Per-user Secret Manager scope
+# ---------------------------------------------------------------------------
+
+def _email_slug(email: str) -> str:
+    """Derive the per-user secret-name slug from an email.
+
+    The local part (before `@`) is lower-cased and reduced to ASCII letters,
+    digits, and dashes so it composes safely with Secret Manager's flat
+    namespace (e.g. `arthur@powerset.co` -> `arthur`).
+    """
+    local = (email or "").split("@", 1)[0].lower()
+    cleaned = []
+    for ch in local:
+        if ch.isalnum():
+            cleaned.append(ch)
+        elif ch in (".", "_", "-"):
+            cleaned.append("-")
+    slug = "".join(cleaned).strip("-")
+    return slug or "unknown"
+
+
+def per_user_secret_id(default_id: str, email: str) -> str:
+    """Compose a per-user Secret Manager id from a base id + email.
+
+    `powerpacks-turbopuffer-api-key` + `arthur@powerset.co`
+        -> `powerpacks-users-arthur-turbopuffer-api-key`
+    """
+    slug = _email_slug(email)
+    suffix = default_id
+    if suffix.startswith("powerpacks-"):
+        suffix = suffix[len("powerpacks-"):]
+    return f"powerpacks-users-{slug}-{suffix}"
+
+
+def per_user_secret_map(
+    overrides: list[str] | None, email: str
+) -> dict[str, str]:
+    """Like `secret_map`, but every default id is rewritten as a per-user id."""
+    base = secret_map(overrides)
+    return {key: per_user_secret_id(value, email) for key, value in base.items()}
+
+
+def _gcloud_describe_secret(name: str, project: str | None) -> dict[str, Any]:
+    """Read-only IAM probe for a Secret Manager id.
+
+    Returns `{exists, accessible, error}`. Uses `secrets describe` so the
+    secret value is never fetched. `accessible=True` means the active
+    gcloud account can read the secret resource (does not mean it can read
+    the latest version, but that grant is normally bundled).
+    """
+    command = ["gcloud", "secrets", "describe", name, "--format=value(name)"]
+    if project:
+        command.extend(["--project", project])
+    proc = subprocess.run(command, text=True, capture_output=True)
+    if proc.returncode == 0:
+        return {"exists": True, "accessible": True, "error": None}
+    err = (proc.stderr or proc.stdout or "").strip().lower()
+    if "permission_denied" in err or "permission denied" in err or "forbidden" in err:
+        return {"exists": True, "accessible": False, "error": "permission_denied"}
+    if "not_found" in err or "not found" in err or "does not exist" in err:
+        return {"exists": False, "accessible": False, "error": "not_found"}
+    return {
+        "exists": False,
+        "accessible": False,
+        "error": (proc.stderr or proc.stdout or "unknown").strip()[:200],
+    }
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     keys = requested_keys(args.profile, args.include)
     _, existing = read_env(args.env_file)
@@ -199,6 +276,78 @@ def cmd_plan(args: argparse.Namespace) -> int:
         "gcp_project": args.gcp_project,
         "note": "pull requires active @powerset.co gcloud auth and --confirm",
     })
+    return 0
+
+
+def cmd_probe(args: argparse.Namespace) -> int:
+    """IAM-probe per-user Secret Manager resources without writing anything.
+
+    Resolves expected per-user secret ids for `--email` (or the active
+    gcloud account) and reports which the user can read. No values are
+    fetched. Always exits 0; the structured payload is the answer.
+    """
+    keys = requested_keys(args.profile, args.include)
+    base_map = secret_map(getattr(args, "secret", None))
+
+    email = args.email
+    if not email:
+        try:
+            email = gcloud_account().splitlines()[0].strip()
+        except RuntimeError as exc:
+            emit({
+                "primitive": "provision_runtime_env",
+                "command": "probe",
+                "status": "gcloud_missing",
+                "profile": args.profile,
+                "requested_keys": keys,
+                "error": str(exc),
+                "message": (
+                    "gcloud is not signed in. Run `gcloud auth login` and"
+                    " re-run, or pass --email to probe a specific user."
+                ),
+            })
+            return 0
+
+    results: list[dict[str, Any]] = []
+    accessible_ids: list[str] = []
+    denied_ids: list[str] = []
+    missing_ids: list[str] = []
+    for key in keys:
+        secret_id = per_user_secret_id(base_map[key], email)
+        probe = _gcloud_describe_secret(secret_id, args.gcp_project)
+        results.append({"key": key, "secret_id": secret_id, **probe})
+        if probe.get("accessible"):
+            accessible_ids.append(key)
+        elif probe.get("error") == "not_found":
+            missing_ids.append(key)
+        else:
+            denied_ids.append(key)
+
+    if accessible_ids and not denied_ids and not missing_ids:
+        status = "ok"
+    elif accessible_ids:
+        status = "partial"
+    elif missing_ids and not denied_ids:
+        status = "not_provisioned"
+    else:
+        status = "not_privileged"
+
+    payload = {
+        "primitive": "provision_runtime_env",
+        "command": "probe",
+        "status": status,
+        "profile": args.profile,
+        "email": email,
+        "slug": _email_slug(email),
+        "gcp_project": args.gcp_project,
+        "results": results,
+        "accessible": accessible_ids,
+        "denied": denied_ids,
+        "not_provisioned": missing_ids,
+    }
+    if status != "ok":
+        payload["message"] = _CONTACT_MESSAGE
+    emit(payload)
     return 0
 
 
@@ -219,32 +368,116 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if not missing else 1
 
 
+_CONTACT_MESSAGE = (
+    "You are signed in but do not have access to Powerset's shared runtime"
+    " secrets. Contact a Powerpacks maintainer (#powerpacks on Slack) to be"
+    " added, or bring your own keys via .env."
+)
+
+
 def cmd_pull(args: argparse.Namespace) -> int:
     if not args.confirm:
         raise SystemExit("refusing to write secrets without --confirm")
     keys = requested_keys(args.profile, args.include)
-    account = assert_powerset_gcloud_account()
-    mapping = secret_map(args.secret)
+    base_map = secret_map(args.secret)
+    # Per-user is the production model. Each gcloud account reads only its
+    # own `powerpacks-users-<slug>-<capability>` secrets. Pass --shared to
+    # fall back to the legacy flat mapping (for emergency / shared-key debug).
+    use_per_user = not args.shared
 
-    secrets = fetch_from_gcp(keys, mapping, args.gcp_project)
+    # Best-effort: if gcloud is missing or the active account is not allowed,
+    # don't error — emit a structured "not_privileged" status so the skill can
+    # tell the user what to do without dropping them out of the flow.
+    try:
+        account = assert_powerset_gcloud_account()
+    except RuntimeError as exc:  # gcloud not signed in
+        emit({
+            "primitive": "provision_runtime_env",
+            "command": "pull",
+            "status": "gcloud_missing",
+            "profile": args.profile,
+            "env_file": str(args.env_file),
+            "requested_keys": keys,
+            "error": str(exc),
+            "message": (
+                "gcloud is not signed in. Run `gcloud auth login` to populate"
+                " Powerset's shared runtime keys, or skip this step and bring"
+                " your own keys in .env."
+            ),
+        })
+        return 0 if args.best_effort else 1
+    except PermissionError as exc:
+        emit({
+            "primitive": "provision_runtime_env",
+            "command": "pull",
+            "status": "not_privileged",
+            "profile": args.profile,
+            "env_file": str(args.env_file),
+            "requested_keys": keys,
+            "error": str(exc),
+            "message": _CONTACT_MESSAGE,
+        })
+        return 0 if args.best_effort else 1
+
+    if use_per_user:
+        scope_email = args.email or account
+        mapping = {key: per_user_secret_id(base_map[key], scope_email) for key in keys}
+        scope = {"mode": "per_user", "email": scope_email, "slug": _email_slug(scope_email)}
+    else:
+        mapping = base_map
+        scope = {"mode": "shared"}
+
+    try:
+        secrets = fetch_from_gcp(keys, mapping, args.gcp_project)
+    except RuntimeError as exc:
+        # Could be IAM (denied on every secret), missing project, network, etc.
+        # Treat as not_privileged when best-effort.
+        emit({
+            "primitive": "provision_runtime_env",
+            "command": "pull",
+            "status": "not_privileged",
+            "profile": args.profile,
+            "env_file": str(args.env_file),
+            "requested_keys": keys,
+            "gcloud_account": account,
+            "gcp_project": args.gcp_project,
+            "error": str(exc),
+            "message": _CONTACT_MESSAGE,
+        })
+        return 0 if args.best_effort else 1
 
     missing = [key for key in keys if key not in secrets]
     result = write_env(args.env_file, secrets, overwrite=args.overwrite)
-    emit({
+    if not secrets:
+        status = "not_privileged"
+    elif missing:
+        status = "partial"
+    else:
+        status = "ok"
+    payload = {
         "primitive": "provision_runtime_env",
         "command": "pull",
-        "status": "ok" if not missing else "partial",
+        "status": status,
         "source": "gcp",
         "profile": args.profile,
+        "scope": scope,
         "gcloud_account": account,
         "gcp_project": args.gcp_project,
         "env_file": str(args.env_file),
+        "secret_ids": dict(sorted(mapping.items())),
         "written": result["written"],
         "skipped_existing": result["skipped_existing"],
         "missing": missing,
         "secrets": redact_keys(secrets),
-    })
-    return 0 if not missing else 1
+    }
+    if status == "not_privileged":
+        payload["message"] = _CONTACT_MESSAGE
+    emit(payload)
+    if status == "ok":
+        return 0
+    if args.best_effort:
+        return 0
+    return 1
 
 
 def add_common(parser: argparse.ArgumentParser) -> None:
@@ -266,11 +499,47 @@ def main() -> None:
     add_common(check)
     check.set_defaults(func=cmd_check)
 
+    probe = sub.add_parser(
+        "probe",
+        help=(
+            "IAM-probe per-user Secret Manager resources without fetching"
+            " values. Always exits 0; the structured payload describes"
+            " exactly what the user can read."
+        ),
+    )
+    add_common(probe)
+    probe.add_argument("--email", help="Email to scope the probe to (default: active gcloud account)")
+    probe.set_defaults(func=cmd_probe)
+
     pull = sub.add_parser("pull", help="Fetch secrets and merge them into an env file")
     add_common(pull)
     pull.add_argument("--confirm", action="store_true")
     pull.add_argument("--overwrite", action="store_true")
     pull.add_argument("--secret", action="append", help="Override Secret Manager id as KEY=SECRET_ID")
+    pull.add_argument(
+        "--email",
+        help=(
+            "User email scope for per-user secrets (default: active gcloud account)."
+            " Ignored with --shared."
+        ),
+    )
+    pull.add_argument(
+        "--shared",
+        action="store_true",
+        help=(
+            "Fall back to the legacy flat shared-secret mapping. Default is"
+            " per-user (powerpacks-users-<slug>-<capability>)."
+        ),
+    )
+    pull.add_argument(
+        "--best-effort",
+        action="store_true",
+        help=(
+            "Exit 0 even when gcloud is missing or the user is not privileged."
+            " Used by the powerset-login skill so unprivileged users still get"
+            " their Auth0 JWT and a clear contact-us message."
+        ),
+    )
     pull.set_defaults(func=cmd_pull)
 
     args = parser.parse_args()

@@ -125,22 +125,81 @@ def _generate_pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-def _decode_jwt_email(token: str) -> str | None:
-    """Read `email` from a JWT payload without verifying signature.
+def _decode_jwt_payload(token: str) -> dict[str, Any] | None:
+    """Decode a JWT payload without verifying the signature.
 
-    Safe enough for display: we just received the token over HTTPS from Auth0.
+    Safe enough for inspection: we just received the token over HTTPS from
+    Auth0 and we are only reading our own claims.
     """
     try:
         payload_b64 = token.split(".")[1]
         payload_b64 += "=" * (-len(payload_b64) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-        return (
-            payload.get("email")
-            or payload.get("https://api.powerset.dev/email")
-            or None
-        )
+        return json.loads(base64.urlsafe_b64decode(payload_b64))
     except Exception:
         return None
+
+
+def _decode_jwt_email(token: str) -> str | None:
+    payload = _decode_jwt_payload(token) or {}
+    return (
+        payload.get("email")
+        or payload.get("https://api.powerset.dev/email")
+        or None
+    )
+
+
+# Auth0 may surface roles under a custom namespace, in `permissions`, or via
+# the standard `scope` string. Check all of them so we don't miss a role.
+_ROLE_CLAIMS = (
+    "https://api.powerset.dev/roles",
+    "https://api.powerset.dev/role",
+    "https://powerset.dev/roles",
+    "roles",
+)
+
+
+def _decode_jwt_roles(token: str) -> list[str]:
+    payload = _decode_jwt_payload(token) or {}
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: Any) -> None:
+        if isinstance(value, str):
+            for raw in value.split():
+                role = raw.strip().lower()
+                if role and role not in seen:
+                    seen.add(role)
+                    out.append(role)
+        elif isinstance(value, list):
+            for item in value:
+                _add(item)
+
+    for claim in _ROLE_CLAIMS:
+        if claim in payload:
+            _add(payload[claim])
+
+    permissions = payload.get("permissions")
+    if isinstance(permissions, list):
+        for raw in permissions:
+            role = str(raw).strip().lower()
+            if role and role not in seen:
+                seen.add(role)
+                out.append(role)
+
+    scope = payload.get("scope")
+    _add(scope)
+    return out
+
+
+_REQUIRED_ROLES = ("user", "admin")
+
+
+def _classify_authorization(roles: list[str]) -> str:
+    if "admin" in roles:
+        return "admin"
+    if "user" in roles:
+        return "user"
+    return "unauthorized"
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +513,51 @@ def cmd_token(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inspect(args: argparse.Namespace) -> int:
+    """Show identity + role classification from the cached JWT.
+
+    Refreshes the token if needed, then decodes it locally to surface email,
+    roles, and a coarse `authorization` (admin / user / unauthorized) so
+    `powerset-login` can decide what to do next.
+    """
+    try:
+        creds = _credentials_with_fresh_token(
+            args.credentials_path, args.auth0_domain, args.client_id
+        )
+    except SystemExit as exc:
+        emit({
+            "primitive": "powerset_auth",
+            "command": "inspect",
+            "status": "failed",
+            "error": str(exc),
+        })
+        return 1
+
+    token = creds["access_token"]
+    payload = _decode_jwt_payload(token) or {}
+    roles = _decode_jwt_roles(token)
+    authorization = _classify_authorization(roles)
+
+    out = {
+        "primitive": "powerset_auth",
+        "command": "inspect",
+        "status": "ok" if authorization != "unauthorized" else "unauthorized",
+        "credentials_path": str(args.credentials_path),
+        "email": _decode_jwt_email(token),
+        "sub": payload.get("sub"),
+        "audience": payload.get("aud"),
+        "issuer": payload.get("iss"),
+        "expires_at": creds.get("expires_at"),
+        "roles": roles,
+        "authorization": authorization,
+        "required_any_of": list(_REQUIRED_ROLES),
+    }
+    emit(out)
+    if authorization == "unauthorized" and not args.allow_unauthorized:
+        return 2
+    return 0
+
+
 def cmd_logout(args: argparse.Namespace) -> int:
     existed = args.credentials_path.exists()
     if existed:
@@ -515,6 +619,18 @@ def main() -> None:
     add_common_args(token)
     token.add_argument("--bearer-only", action="store_true", help="Print just the access token, no JSON")
     token.set_defaults(func=cmd_token)
+
+    inspect = sub.add_parser(
+        "inspect",
+        help="Decode the cached JWT, return email + roles + authorization class",
+    )
+    add_common_args(inspect)
+    inspect.add_argument(
+        "--allow-unauthorized",
+        action="store_true",
+        help="Exit 0 even when the user has neither user nor admin role.",
+    )
+    inspect.set_defaults(func=cmd_inspect)
 
     logout = sub.add_parser("logout", help="Delete the stored credentials")
     add_common_args(logout)

@@ -1,126 +1,165 @@
 ---
 name: powerset-login
-description: Set up local Powerpacks runtime secrets from GCP Secret Manager for Powerset employees, including TurboPuffer, Postgres/Supabase, OpenAI, OpenRouter, Parallel, and RapidAPI keys.
+description: One-command Powerset login flow. Runs the doctor, auto-fixes everything safe to auto-fix, only stops to ask the user when an OS-level install or human action is genuinely required. Designed to feel like one click on a fresh box.
 ---
 
 # Powerset Login
 
 Use this skill when the user asks for `$powerset-login`, secret provisioning,
-runtime setup, API key bootstrap, or checking whether Powerpacks has the
-credentials needed to operate.
+runtime setup, API key bootstrap, or "log me in to Powerset". Also the right
+skill when an unrelated Powerpacks command failed because of a missing key
+or expired session.
 
-## Security Model
+**This skill is built to be fast and quiet.** The user said "log me in" — do
+that. Don't ask permission for every step. Use the doctor's `fix_kind`
+classification to decide what needs asking and what doesn't.
 
-- Never print secret values.
-- Only write allowlisted env keys through `provision_runtime_env`.
-- Require active `gcloud` auth before pulling secrets.
-- Reject non-`@powerset.co` active gcloud accounts locally.
-- Treat local email checks as UX guardrails only. Real authorization must be
-  enforced by GCP IAM on Secret Manager resources.
-- Do not use search-api for provisioning.
+## The two-command happy path
 
-## Recommended Key Strategy
+When everything is already in good shape (or only needs auto-fixes), this is
+the entire flow:
 
-Use GCP Secret Manager as the source of truth:
+```bash
+# 1. Read-only check.
+python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
+  --profile search-core \
+  --env-file .env \
+  --gcp-project powerset-search
 
-- user authenticates with Google via `gcloud auth login`
-- GCP IAM checks whether that user can access each secret
-- Powerpacks pulls allowlisted secrets directly from Secret Manager
-- Powerpacks writes the local `.env` with mode `0600`
-- Powerpacks output only includes redacted metadata
+# 2. Run safe automatic fixes + browser-flow logins.
+python powerpacks/packs/powerset/primitives/doctor/doctor.py fix --interactive \
+  --profile search-core \
+  --env-file .env \
+  --gcp-project powerset-search
+```
 
-User-scoped keys should be represented as GCP resources, not a server-side
-lookup table:
+If `doctor fix` returns `after.overall == "ok"` (or `warn`), tell the user
+"You're set up." and stop.
 
-- create one secret resource per user/capability when a provider supports
-  per-user keys
-- grant `roles/secretmanager.secretAccessor` only to the intended user or group
-- use naming such as `powerpacks/users/<email>/<capability>` conceptually, but
-  remember Secret Manager secret IDs are flat resource IDs, not filesystem
-  paths
-- prefer labels/annotations for owner, capability, provider, and environment
-- rotate by replacing the user's secret version or deleting the user secret
+## How to handle the doctor's report
 
-Supabase/Postgres caveat: a shared `DATABASE_URL` cannot provide clean
-per-user attribution. If you need accountable user-level access, issue
-per-user database roles/connection strings or use RLS. TurboPuffer support for
-subkeys should be verified before promising user-level metering; otherwise
-usage is attributable only to the shared key or to Powerpacks-side logs.
+`doctor run` returns one JSON object. The two fields you care about are
+`by_fix_kind` and `next_actions`. Each missing/fail check has a `fix_kind`:
+
+| `fix_kind` | What to do | Ask the user? |
+| --- | --- | --- |
+| `auto` | Just run it. No network spend, no new credentials, no install. | **no** |
+| `interactive` | Pops a browser the user clicks through (auth0 login, gcloud auth login). The browser dialog *is* the consent. | **no** |
+| `shell_install` | OS-level install (`brew install`, etc.). | **yes**, with the exact command shown |
+| `human_action` | Cannot be fixed by the skill (Slack ping, IAM grant from a maintainer). | tell the user, don't loop |
+
+`doctor fix` (with `--interactive`) handles `auto` + `interactive` for you in
+one pass. You only need to step in for `shell_install` and `human_action`.
 
 ## Workflow
 
-1. Check Google auth:
+### Step 0 — Run the doctor
 
 ```bash
-gcloud auth list --filter=status:ACTIVE
+python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
+  --profile search-core --env-file .env --gcp-project powerset-search
 ```
 
-2. If needed, ask before opening a browser, then run:
+If `overall == "ok"`, tell the user "Already set up as `<email>`" and stop.
+
+### Step 1 — Apply auto + interactive fixes in one shot
 
 ```bash
-gcloud auth login
+python powerpacks/packs/powerset/primitives/doctor/doctor.py fix --interactive \
+  --profile search-core --env-file .env --gcp-project powerset-search
 ```
 
-3. Show the provisioning plan:
+This will:
 
-```bash
-python powerpacks/primitives/provision_runtime_env/provision_runtime_env.py plan \
-  --profile search-core \
-  --env-file .env
-```
+- Pull `.env` from the user's per-user GCP secrets (auto, no prompt)
+- Pop a browser for Auth0 login if needed (browser is the consent)
+- Pop a browser for `gcloud auth login` if needed (browser is the consent)
+- Pop a browser for `gcloud auth application-default login` if needed
 
-4. Pull secrets only after the user explicitly asks to provision:
+Tell the user once before running this: "I'm going to log you in. A browser
+window may pop up for Auth0 and/or Google — sign in there." Then run it.
 
-```bash
-python powerpacks/primitives/provision_runtime_env/provision_runtime_env.py pull \
-  --profile search-core \
-  --env-file .env \
-  --confirm
-```
+### Step 2 — Handle anything `doctor fix` skipped
 
-5. Validate:
+The `skipped` list in `doctor fix`'s output contains everything that needs
+the user beyond clicking a browser. Group them and ask **once** with all
+relevant info — never one prompt per item.
 
-```bash
-python powerpacks/primitives/provision_runtime_env/provision_runtime_env.py check \
-  --profile search-core \
-  --env-file .env
-```
+**`shell_install`** entries (almost always `gcloud_installed` on a fresh
+box):
+
+> "I need to install `gcloud` to provision your `.env`. The command is:
+> `brew install --cask google-cloud-sdk` (macOS) or
+> `curl https://sdk.cloud.google.com | bash` (Linux). OK to run?"
+
+After installation, re-run `doctor fix --interactive` — `gcloud auth login`
+and `application-default login` will run as interactive steps in the same
+pass.
+
+**`human_action`** entries:
+
+- `auth0_role` warn → "You're logged in but haven't been granted a Powerpacks
+  role on Auth0. Ping #powerpacks on Slack with your @powerset.co email and
+  ask to be added to the Powerpacks role."
+- `user_secrets` `not_provisioned` / `not_privileged` → "You're set up
+  locally but don't have GCP per-user secrets yet. Ping #powerpacks on
+  Slack with your @powerset.co email — a maintainer will run
+  `provision_user_secrets apply --users <you>` and you can re-run
+  `$powerset-login`."
+
+These are not blockers for unrelated workflows — the user still has a valid
+Auth0 JWT for anything that doesn't require shared infra keys.
+
+### Step 3 — Final state
+
+Re-run `doctor run` and report a one-line summary:
+
+- `overall: ok` → "Logged in as `<email>`. `.env` populated from per-user
+  secrets (`<N>` keys)."
+- `overall: warn` → same, but mention the optional `gcloud_adc` warn if
+  present.
+- `overall: needs_setup` → list the still-blocked items and what the user
+  needs to do.
+
+## Hard rules
+
+- **Never print secret values.** Every primitive redacts.
+- **Never run an OS install command without explicit user approval.** That's
+  the `shell_install` line.
+- **Never write `.env` without `--confirm`.** All primitive paths refuse
+  without it.
+- The `@powerset.co` check is a UX guardrail; real authorization is enforced
+  by GCP IAM on Secret Manager resources.
+- Per-user secret IDs follow `powerpacks-users-<slug>-<capability>`. The
+  active `gcloud` account decides scope.
 
 ## Profiles
 
-- `search-core`: `TURBOPUFFER_API_KEY`, `TURBOPUFFER_REGION`,
-  `DATABASE_URL`, `OPENAI_API_KEY`
-- `messages`: `OPENROUTER_API_KEY`, `PARALLEL_API_KEY`
-- `sales-nav`: `RAPIDAPI_KEY`
-- `supabase-admin`: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-- `all`: every allowlisted key
+| Profile | Includes | When to pick |
+| --- | --- | --- |
+| `search-core` | TurboPuffer + Postgres + OpenAI | `/search-network`, `/search-company` |
+| `messages` | OpenRouter + Parallel | `import-contacts-review` LLM/research |
+| `sales-nav` | RapidAPI LinkedIn | LinkedIn enrichment |
+| `twitter` | RapidAPI Twitter | Twitter pipelines |
+| `supabase-admin` | Supabase URL + service role | admin only |
+| `all` | every allowlisted key | one-shot full setup |
 
-Use `--include KEY` for one-off additions.
+Pass `--profile <name>` to both `doctor run` and `doctor fix`.
 
-## Source Selection
+## Maintainer-only: provisioning a new user
 
-There is only one source: GCP Secret Manager.
-
-```bash
-POWERPACKS_GCP_PROJECT=powerset-prod \
-python powerpacks/primitives/provision_runtime_env/provision_runtime_env.py pull \
-  --profile search-core \
-  --env-file .env \
-  --confirm
-```
-
-Override a GCP Secret Manager id when the default mapping does not match:
+If a user shows up in `#powerpacks` with `user_secrets: not_provisioned`, a
+maintainer (anyone with `roles/owner` on `powerset-search`) runs:
 
 ```bash
-python powerpacks/primitives/provision_runtime_env/provision_runtime_env.py pull \
-  --secret TURBOPUFFER_API_KEY=my-secret-id \
-  --env-file .env \
-  --confirm
+python powerpacks/packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py plan \
+  --users newperson@powerset.co \
+  --project powerset-search --with-diff
+
+python powerpacks/packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py apply \
+  --users newperson@powerset.co \
+  --project powerset-search --confirm
 ```
 
-## Failure Handling
-
-- If pull reports no active gcloud account, run `gcloud auth login`.
-- If pull fails with non-Powerset email, switch gcloud accounts.
-- If GCP fails, check `gcloud auth login`,
-  `gcloud auth application-default login`, project selection, and IAM.
+Idempotent. Re-running on an existing user reconciles missing IAM bindings
+or refreshes secret versions when the source value changed.
