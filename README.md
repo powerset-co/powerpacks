@@ -262,6 +262,5 @@ NanoClaw-specific pieces now live under `adapters/nanoclaw/`:
 - `runtime/` contains the threaded CLI channel and container patches
 - `bin/powerclaw` is the legacy NanoClaw terminal wrapper
 - `primitives/view_search_results/` is the legacy NanoClaw TUI
-- `primitives/nanoclaw_plan_harness/` is the NanoClaw plan-only harness
 
 Those pieces are not part of the portable primitive surface.
