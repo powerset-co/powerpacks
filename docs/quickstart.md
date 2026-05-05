@@ -170,10 +170,10 @@ Pick a profile based on what you'll use:
 | `supabase-admin` | Supabase URL + service role |
 | `all` | every allowlisted key |
 
-### `/search-network` — recruiting search
+### `$search-network` — recruiting search
 
 ```text
-/search-network senior infra engineers at fintech infra startups in NYC, Stanford
+$search-network senior infra engineers at fintech infra startups in NYC, Stanford
 ```
 
 The skill walks you through decomposition → plan → user approval → retrieval →
@@ -182,10 +182,10 @@ hydration → CSV/JSONL artifact. Outputs land under `.powerpacks/runs/...`.
 See `packs/search/docs/task-flow.md` for the full lifecycle and the
 `extract-search-query` sub-skill boundary.
 
-### `/search-company` — company resolution
+### `$search-company` — company resolution
 
 ```text
-/search-company crypto trading infra companies that raised series B
+$search-company crypto trading infra companies that raised series B
 ```
 
 Resolves to canonical TurboPuffer company IDs you can hand to
@@ -193,14 +193,13 @@ Resolves to canonical TurboPuffer company IDs you can hand to
 
 ### Messages pack — import-imessage → import-whatsapp → import-contacts-review
 
-These run as a chain. Trigger each by name in the agent (e.g. "use the
-import-imessage skill" or, in Claude Code, "$import-imessage").
+These run as a chain. Trigger each by name in the agent:
 
 ```text
-import-imessage              # extracts ~/Library/Messages/chat.db → imessage.contacts.csv
-import-whatsapp              # boots WAHA, you scan a QR, → whatsapp.contacts.csv
+$import-imessage              # extracts ~/Library/Messages/chat.db → imessage.contacts.csv
+$import-whatsapp              # boots WAHA, you scan a QR, → whatsapp.contacts.csv
                              # both also auto-merge into contacts.csv
-import-contacts-review       # login → sync candidates → match → LLM ENRICH/SKIP
+$import-contacts-review       # login → sync candidates → match → LLM ENRICH/SKIP
 ```
 
 Artifacts land under `.powerpacks/messages/`:

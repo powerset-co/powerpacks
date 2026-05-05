@@ -17,8 +17,8 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`search-network`](packs/search/skills/search-network/SKILL.md) | `/search-network <query>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. |
-| [`search-company`](packs/search/skills/search-company/SKILL.md) | `/search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
+| [`search-network`](packs/search/skills/search-network/SKILL.md) | `$search-network <query>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. |
+| [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
 | [`extract-search-query`](packs/search/skills/extract-search-query/SKILL.md) | called by `search-network` | Sub-skill for headless query decomposition. |
 
 ### Setup
@@ -45,8 +45,8 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
-- give the agent operational entrypoints: `/search-network <query>`,
-  `/search-company <query>`, `$powerset-login`, and the messages-pack import
+- give the agent operational entrypoints: `$search-network <query>`,
+  `$search-company <query>`, `$powerset-login`, and the messages-pack import
   skills
 - decompose broad recruiting queries into bounded retrieval plans
 - persist task state and CSV/JSONL artifacts so users can refine prior runs
@@ -133,13 +133,13 @@ codex mcp get powerset-search
 # 5. Restart the agent host so it reloads skills and MCP config.
 
 # 6. Inside the agent, run what you need:
-/search-network senior infra eng at fintech
-/search-company stripe-like fintech infra companies
+$search-network senior infra eng at fintech
+$search-company stripe-like fintech infra companies
 $powerset-login                   # provisions .env from GCP Secret Manager
 # or trigger the messages pack manually:
-#   "import my iMessage contacts" → import-imessage
-#   "import my whatsapp contacts" → import-whatsapp
-#   "review my imported contacts" → import-contacts-review
+#   $import-imessage
+#   $import-whatsapp
+#   $import-contacts-review
 ```
 
 ### Prereqs by skill family
@@ -256,7 +256,7 @@ Then, **inside the agent host**, sanity-check each skill family:
 | Skill | Test prompt |
 | --- | --- |
 | `powerset-login` | Type `$powerset-login` — the agent should run `gcloud auth list`, show the secret plan, ask for approval, and finish with `mcp_install`. |
-| `search-network` | `/search-network senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
+| `search-network` | `$search-network senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
 | `import-imessage` | "import my iMessage contacts" — the agent should detect Full Disk Access status before reading. |
 
