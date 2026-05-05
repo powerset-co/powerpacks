@@ -39,9 +39,13 @@ PACK_DIR = SELF_DIR.parent
 AUTH = PACK_DIR / "auth" / "auth.py"
 
 DEFAULT_NAME = os.environ.get("POWERPACKS_MCP_NAME", "powerset-search")
+# Trailing slash matters: Cloud Run + FastAPI mount returns 307 from
+# `/mcp` -> `/mcp/`, and many MCP host clients (Claude Code, Codex) do not
+# re-POST after a 307. Always register with `/mcp/` so initialization is a
+# single round-trip.
 DEFAULT_URL = os.environ.get(
     "POWERPACKS_MCP_URL",
-    "https://search-api-7wk4uhe77q-uw.a.run.app/mcp",
+    "https://search-api-7wk4uhe77q-uw.a.run.app/mcp/",
 )
 DEFAULT_CLAUDE_SCOPE = os.environ.get("POWERPACKS_MCP_SCOPE", "user")
 DEFAULT_TOKEN_ENV_VAR = os.environ.get("POWERPACKS_TOKEN_ENV_VAR", "POWERPACKS_POWERSET_TOKEN")
