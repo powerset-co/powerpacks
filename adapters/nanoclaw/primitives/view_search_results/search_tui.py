@@ -25,14 +25,25 @@ def default_powerpacks_root() -> Path:
     configured = os.environ.get("POWERPACKS_ROOT")
     if configured:
         return Path(configured)
+    # Post-reorg layout: the root is whichever ancestor contains a `packs/`
+    # directory. Works on host (repo root) and inside the nanoclaw runtime
+    # (install.sh copies packs/ into $TARGET/powerpacks/packs).
     for parent in Path(__file__).resolve().parents:
-        if (parent / "schemas").is_dir() and (parent / "contracts").is_dir():
+        if (parent / "packs").is_dir():
             return parent
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 POWERPACKS_ROOT = default_powerpacks_root()
-RESULTS_IO = POWERPACKS_ROOT / "primitives" / "persist_search_results" / "results_io.py"
+# `results_io.py` lives in the search pack post-reorg.
+RESULTS_IO = (
+    POWERPACKS_ROOT
+    / "packs"
+    / "search"
+    / "primitives"
+    / "persist_search_results"
+    / "results_io.py"
+)
 DEFAULT_RUNS_DIR = POWERPACKS_ROOT / ".powerpacks" / "runs"
 TRANSCRIPT_REPLAY_LIMIT = int(os.environ.get("POWERPACKS_TUI_TRANSCRIPT_REPLAY_LIMIT", "500"))
 MESSAGE_HISTORY_LIMIT = int(os.environ.get("POWERPACKS_TUI_MESSAGE_HISTORY_LIMIT", "3000"))
