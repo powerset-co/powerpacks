@@ -107,25 +107,32 @@ The `powerset` pack is the foundation — every other pack depends on its
 
 ## Quickstart for a fresh account
 
-A full first-run walkthrough — prereqs, install, and your first command per
-skill — is in [`docs/quickstart.md`](docs/quickstart.md). The short version:
+Use this path for a new Codex or Claude Code setup. A fuller walkthrough is in
+[`docs/quickstart.md`](docs/quickstart.md).
 
 ```bash
-# 1. clone
-git clone https://github.com/<org>/powerpacks.git && cd powerpacks
+# 1. Clone the repo.
+git clone git@github.com:powerset-co/powerpacks.git
+cd powerpacks
 
-# 2. install skills into your agent host (pick one)
-./install.sh codex                # → ~/.codex/skills/
-./install.sh claude-code          # → ~/.claude/skills/
-./install.sh nanoclaw /path/to/nanoclaw
+# 2. Install the Powerpacks skills into your agent host.
+./install.sh codex
+# or: ./install.sh claude-code
 
-# 3. install/auth the Powerset MCP for MCP-backed skills (pick your host)
+# 3. Install/auth the Powerset MCP for MCP-backed skills.
+# This starts Auth0 login if needed and writes the bearer token into host config.
 ./install-powerset-mcp.sh --host codex
 # or: ./install-powerset-mcp.sh --host claude
 
-# 4. restart the agent host so it reloads skills and MCP config
+# 4. Verify MCP config.
+codex mcp get powerset-search
+# Expected for Codex:
+#   bearer_token_env_var: -
+#   http_headers: Authorization=*****
 
-# 5. inside the agent, run any of:
+# 5. Restart the agent host so it reloads skills and MCP config.
+
+# 6. Inside the agent, run what you need:
 /search-network senior infra eng at fintech
 /search-company stripe-like fintech infra companies
 $powerset-login                   # provisions .env from GCP Secret Manager
