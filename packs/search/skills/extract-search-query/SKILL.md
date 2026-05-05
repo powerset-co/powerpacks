@@ -76,6 +76,18 @@ Omit null or empty fields in the final payload unless they clarify intent.
   filters.
 - Treat query words like "current" or "currently" as `is_current: true`.
   Otherwise leave currentness unset unless the user clearly asks for past-only.
+- For role or company queries, include a `notes` entry that makes currentness
+  semantics explicit: current-only, all-time, or past-only. If the user's
+  wording does not make currentness clear, do not choose silently; leave a note
+  for the orchestrator to ask before retrieval. If `is_current` is set, say
+  whether it is intended to mean current at the requested company, current in
+  the requested role, or both on the same matched position row.
+- Remember that `role_search_filters.is_current` applies to a matched position
+  row. When company and role constraints are both present in one payload,
+  `is_current: true` means the same position row must satisfy currentness and
+  those company/role constraints. If the user's wording requires split
+  semantics, such as current at a company but any past role, leave a note for
+  the orchestrator to ask or plan separate filters/prefilters.
 - For recall-style tests, do not add seniority unless the query or test
   explicitly requires it.
 
