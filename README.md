@@ -25,7 +25,13 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`powerset-login`](packs/powerset/skills/powerset-login/SKILL.md) | `$powerset-login` | Single Powerset login flow: Auth0 PKCE for your user JWT, then best-effort `.env` provisioning from GCP Secret Manager. Privileged users get TurboPuffer / Postgres / OpenAI / OpenRouter / Parallel / RapidAPI keys; everyone else still ends up with a usable Auth0 token. |
+| [`powerset-login`](packs/powerset/skills/powerset-login/SKILL.md) | `$powerset-login` | Single Powerset login flow: Auth0 PKCE for your user JWT, then best-effort `.env` provisioning from GCP Secret Manager. Privileged users get TurboPuffer / Postgres / OpenAI / OpenRouter / Parallel / RapidAPI keys; everyone else still ends up with a usable Auth0 token. Also installs the `powerset-search` MCP into Claude Code / Codex. |
+
+### Sales Nav
+
+| Skill | Trigger | What it does |
+| --- | --- | --- |
+| [`sales-nav-search`](packs/sales-nav/skills/sales-nav-search/SKILL.md) | `$sales-nav-search` | Run a Sales Navigator search through the `powerset-search` MCP. Resolves company / title filters, runs a paginated lead search with server-side artifact persistence on by default, paginates via `get_artifact`. Depends on `$powerset-login` having run first. |
 
 ### Messages pack
 
@@ -135,11 +141,13 @@ $powerset-login                   # provisions .env from GCP Secret Manager
 | `import-imessage` | macOS, **Full Disk Access** for your terminal (`System Settings > Privacy & Security > Full Disk Access`) so Python can read `~/Library/Messages/chat.db` |
 | `import-whatsapp` | Docker (`brew install --cask docker` or `brew install colima docker`), the WhatsApp app on your phone for QR scan |
 | `import-contacts-review` | Auth0 login via browser (popped automatically), `OPENROUTER_API_KEY` for the LLM-review step |
+| `sales-nav-search` | `$powerset-login` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
 
 ## Install
 
-The top-level `install.sh` dispatches to a per-host adapter. All three adapters
-are independent and idempotent — re-run them any time skills change.
+The top-level `install.sh` dispatches to a per-host adapter. **All three
+adapters are idempotent — re-run them any time skills change** (you do not need
+to uninstall first; each adapter wipes and re-copies the skill directories).
 
 ### Codex
 
@@ -174,6 +182,74 @@ The NanoClaw adapter copies the core Powerpacks directory into the target,
 installs `search-network` and its `extract-search-query` sub-skill, wires the
 threaded CLI channel, and keeps NanoClaw-specific TUI/runtime code under
 `powerpacks/adapters/nanoclaw`.
+
+### Reinstall after pulling new changes
+
+```bash
+cd ~/workspace/powerpacks
+git pull
+./install.sh codex          # or claude-code, or nanoclaw <path>
+# then restart Codex / Claude Code so it re-reads the skill list
+```
+
+This is the only command needed for skill / primitive changes. The `mcp_install`
+registrations are written to host config files (`~/.codex/config.toml`,
+`~/.claude.json`) and only need re-running when the MCP URL or token format
+changes — `$powerset-login` covers that path.
+
+### MCP install (powerset-search)
+
+The `sales-nav-search` skill and any future MCP-driven skills need the remote
+`powerset-search` MCP registered with your agent host. `$powerset-login`
+does this for you as part of its setup flow, but you can also run it directly:
+
+```bash
+python3 packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+# verify
+claude mcp list                  # for Claude Code
+codex mcp list 2>/dev/null \
+  || python3 packs/powerset/primitives/mcp_install/mcp_install.py status --host codex
+```
+
+Claude Code bakes the bearer token into `~/.claude.json` at install time.
+Codex reads it from `POWERPACKS_POWERSET_TOKEN` at runtime, so after
+`$powerset-login` you also need:
+
+```bash
+eval "$(python3 packs/powerset/primitives/mcp_install/mcp_install.py token-env)"
+```
+
+## Verify your install
+
+Quick checks that each layer works — run from the repo root after
+`./install.sh <host>`:
+
+```bash
+# 1. Skill files actually copied to the host
+ls ~/.codex/skills/                # or ~/.claude/skills/
+
+# 2. Powerpacks unit tests
+python3 -m unittest discover -s tests
+
+# 3. Messages-pack end-to-end smoke (synthetic data, no network/spend)
+scripts/smoke-messages.sh
+
+# 4. MCP reachability (after $powerset-login)
+claude mcp list                    # "powerset-search ... ✓ Connected"
+python3 packs/powerset/primitives/doctor/doctor.py run
+```
+
+Then, **inside the agent host**, sanity-check each skill family:
+
+| Skill | Test prompt |
+| --- | --- |
+| `powerset-login` | Type `$powerset-login` — the agent should run `gcloud auth list`, show the secret plan, ask for approval, and finish with `mcp_install`. |
+| `search-network` | `/search-network senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
+| `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
+| `import-imessage` | "import my iMessage contacts" — the agent should detect Full Disk Access status before reading. |
+
+If the agent host doesn't see a skill at all: re-run `./install.sh <host>`
+and restart the host (skills are loaded once at startup).
 
 
 
