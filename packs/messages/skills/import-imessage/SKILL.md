@@ -13,6 +13,8 @@ The pack is privacy-first:
 - only work with contact metadata: phone, name, source, groups, message counts,
   last message timestamp, skip/review/match metadata
 - do not run extraction or upload unless the user explicitly asks for that action
+- before extraction, explicitly say it will read local Messages metadata and
+  local Contacts/AddressBook phone/name metadata to fill the `name` column
 - keep message contact normalization as explicit steps the run can replay
 
 ## Prereqs
@@ -23,17 +25,34 @@ The pack is privacy-first:
   running from. Without it, `chat.db` reads will fail with permission errors.
   Open `System Settings → Privacy & Security → Full Disk Access`, add the app,
   and restart it.
+- **Contacts access** may also be required by macOS when reading the local
+  AddressBook database. If macOS prompts, the user must approve it for name
+  matching; otherwise extraction can still produce phone/message metadata with
+  fewer names.
 
-If step 2 reports `chat_db.readable: false` or addressbook errors, that is
-almost always a Full Disk Access issue. Do not retry blindly — surface the
-diagnostic to the user and ask them to grant access.
+If step 2 reports `chat_db.readable: false`, `addressbook.readable: false`,
+or AddressBook diagnostics with errors, that is almost always a macOS privacy
+permission issue. Do not retry blindly — surface the diagnostic to the user
+and ask them to grant access.
+
+To open the relevant macOS panes for the user, run:
+
+`python packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py open-privacy-settings --target full-disk-access`
+
+or, for local Contacts / AddressBook name matching:
+
+`python packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py open-privacy-settings --target contacts`
 
 ## Workflow
 
 1. Inspect `packs/messages/docs/harness.md`.
 2. Check local iMessage access:
    `python packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py check`
-3. After explicit user approval, run:
+   If permission is missing, offer to open the relevant privacy settings pane
+   with `open-privacy-settings`; opening System Settings itself is OK, but do
+   not rerun extraction until the user has granted access and explicitly asks.
+3. After explicit user approval that mentions both Messages and Contacts /
+   AddressBook metadata, run:
    `python packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py extract --output-csv .powerpacks/messages/imessage.contacts.csv --output-jsonl .powerpacks/messages/imessage.contacts.jsonl`
 4. Normalize the exported rows to the canonical schema:
    `python packs/messages/primitives/normalize_message_contacts/normalize_message_contacts.py normalize --input .powerpacks/messages/imessage.contacts.csv --out-jsonl .powerpacks/messages/imessage.contacts.normalized.jsonl`

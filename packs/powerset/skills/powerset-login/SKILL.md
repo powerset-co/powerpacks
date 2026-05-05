@@ -1,6 +1,6 @@
 ---
 name: powerset-login
-description: One-command Powerset login flow. Runs the doctor, auto-fixes everything safe to auto-fix, only stops to ask the user when an OS-level install or human action is genuinely required. Designed to feel like one click on a fresh box.
+description: One-command Powerset login flow. Uses the doctor as a read-only checker, self-heals missing setup from the current shell, and only stops for OS installs, visible auth codes, or human actions.
 ---
 
 # Powerset Login
@@ -12,91 +12,132 @@ or expired session.
 
 **This skill is built to be fast and quiet.** The user said "log me in" — do
 that. Don't ask permission for every step. Use the doctor's `fix_kind`
-classification to decide what needs asking and what doesn't.
+classification to decide what needs asking, but run fixes yourself from the
+current invocation/shell so prompts, URLs, and failures are visible.
 
-## The two-command happy path
+## Core rule
 
-When everything is already in good shape (or only needs auto-fixes), this is
-the entire flow:
+`doctor.py run` is a checker. In the normal skill flow, do **not** run
+`doctor.py fix`; it hides interactive work inside a nested subprocess and can
+swallow browser/code prompts. Let the skill self-heal by running the relevant
+primitive or CLI command directly.
+
+Only use install commands when something is actually missing. Do not reinstall
+Powerpacks adapters, MCP config, `gcloud`, or credentials when the doctor says
+the check is already `ok`.
+
+## Path setup
+
+Resolve primitive paths from the current environment:
+
+- From the Powerpacks repo root, use `packs/powerset/primitives/...`.
+- From an installed skill bundle, use `powerpacks/packs/powerset/primitives/...`.
+- If the example command path does not exist, locate it with `rg --files -g
+  'doctor.py' -g 'auth.py' -g 'provision_runtime_env.py' -g 'mcp_install.py'`.
+
+Prefer `python3` if `python` is not on PATH.
+
+## Happy path
+
+Run one read-only check:
 
 ```bash
-# 1. Read-only check.
-python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
+python3 packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env \
   --gcp-project powerset-search
-
-# 2. Run safe automatic fixes + browser-flow logins.
-python powerpacks/packs/powerset/primitives/doctor/doctor.py fix --interactive \
-  --profile search-core \
-  --env-file .env \
-  --gcp-project powerset-search
-```
-
-If `doctor fix` returns `after.overall == "ok"` (or `warn`), tell the user
-"You're set up." and stop.
-
-## How to handle the doctor's report
-
-`doctor run` returns one JSON object. The two fields you care about are
-`by_fix_kind` and `next_actions`. Each missing/fail check has a `fix_kind`:
-
-| `fix_kind` | What to do | Ask the user? |
-| --- | --- | --- |
-| `auto` | Just run it. No network spend, no new credentials, no install. | **no** |
-| `interactive` | Pops a browser the user clicks through (auth0 login, gcloud auth login). The browser dialog *is* the consent. | **no** |
-| `shell_install` | OS-level install (`brew install`, etc.). | **yes**, with the exact command shown |
-| `human_action` | Cannot be fixed by the skill (Slack ping, IAM grant from a maintainer). | tell the user, don't loop |
-
-`doctor fix` (with `--interactive`) handles `auto` + `interactive` for you in
-one pass. You only need to step in for `shell_install` and `human_action`.
-
-## Workflow
-
-### Step 0 — Run the doctor
-
-```bash
-python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
-  --profile search-core --env-file .env --gcp-project powerset-search
 ```
 
 If `overall == "ok"`, tell the user "Already set up as `<email>`" and stop.
+If `overall == "warn"` and the only warning is `gcloud_adc`, tell the user
+they are set up for normal Powerpacks search workflows and mention ADC is only
+needed for SDK clients.
 
-### Step 1 — Apply auto + interactive fixes in one shot
+## How to handle the doctor's report
+
+`doctor run` returns one JSON object. The fields you care about are `checks`,
+`by_fix_kind`, and `next_actions`. Each missing/fail check has a `fix_kind`:
+
+| `fix_kind` | What to do | Ask the user? |
+| --- | --- | --- |
+| `auto` | Run the specific primitive directly from this shell. | **no** |
+| `interactive` | Run the CLI directly from this shell. For `gcloud`, use `--no-launch-browser`, echo the login URL, ask for the code, and write it to stdin. | **no**, except asking for the auth code |
+| `shell_install` | OS-level install (`brew install`, etc.). | **yes**, with the exact command shown |
+| `human_action` | Cannot be fixed by the skill (Slack ping, IAM grant from a maintainer). | tell the user, don't loop |
+
+## Workflow
+
+### Step 1 — Install/bootstrap only when missing
+
+If `gcloud_installed` is missing, ask before running the exact OS install
+command from the doctor (`brew install --cask google-cloud-sdk` on macOS).
+
+If the Powerpacks skill bundle or host adapter is missing and you are in the
+Powerpacks repo, run the repo installer for the current host instead of trying
+to repair it through the doctor:
 
 ```bash
-python powerpacks/packs/powerset/primitives/doctor/doctor.py fix --interactive \
-  --profile search-core --env-file .env --gcp-project powerset-search
+./install.sh codex
+./install.sh claude-code
 ```
 
-This will:
+Pick the host the user is currently using. If both hosts need repair, run both.
+Because this writes outside the repo, request escalation if the sandbox
+requires it.
 
-- Pull `.env` from the user's per-user GCP secrets (auto, no prompt)
-- Register the `powerset-search` MCP into Claude Code and/or Codex
-  (auto, no prompt; uses the cached Auth0 token)
-- Pop a browser for Auth0 login if needed (browser is the consent)
-- Pop a browser for `gcloud auth login` if needed (browser is the consent)
-- Pop a browser for `gcloud auth application-default login` if needed
+### Step 2 — Login directly from this shell
 
-Tell the user once before running this: "I'm going to log you in. A browser
-window may pop up for Auth0 and/or Google — sign in there." Then run it.
+If `auth0_login` is missing or expired, run:
 
-### Step 2 — Handle anything `doctor fix` skipped
+```bash
+python3 packs/powerset/primitives/auth/auth.py login
+```
 
-The `skipped` list in `doctor fix`'s output contains everything that needs
-the user beyond clicking a browser. Group them and ask **once** with all
-relevant info — never one prompt per item.
+If `gcloud_account` is missing, run:
 
-**`shell_install`** entries (almost always `gcloud_installed` on a fresh
-box):
+```bash
+gcloud auth login --no-launch-browser
+```
 
-> "I need to install `gcloud` to provision your `.env`. The command is:
-> `brew install --cask google-cloud-sdk` (macOS) or
-> `curl https://sdk.cloud.google.com | bash` (Linux). OK to run?"
+Relay the full `https://accounts.google.com/...` URL from stdout to the user.
+When `gcloud` asks for the verification code, ask the user for it and write it
+to the running command's stdin. If `gcloud` cannot read or write
+`~/.config/gcloud`, request escalation for `gcloud auth ...`.
 
-After installation, re-run `doctor fix --interactive` — `gcloud auth login`
-and `application-default login` will run as interactive steps in the same
-pass.
+If `gcloud_account` is a non-`@powerset.co` account, do not guess. Tell the
+user to log in as a Powerset account or run:
+
+```bash
+gcloud config set account you@powerset.co
+```
+
+If `gcloud_adc` is the only warning, do not block. Only run
+`gcloud auth application-default login --no-launch-browser` when the requested
+workflow needs SDK application-default credentials.
+
+### Step 3 — Pull secrets and register MCP directly
+
+If `env_file` is missing keys and `user_secrets` is accessible, run:
+
+```bash
+python3 packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
+  --profile search-core \
+  --env-file .env \
+  --confirm \
+  --best-effort
+```
+
+If `mcp_powerset_search` is missing but a host CLI exists, run:
+
+```bash
+python3 packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+```
+
+If `mcp_powerset_search` says no MCP host CLI is on PATH, that is an install
+gap: use `./install.sh codex` or `./install.sh claude-code` only for the host
+the user is using, or tell the user which host CLI is missing.
+
+### Step 4 — Human-action blockers
 
 **`human_action`** entries:
 
@@ -109,10 +150,10 @@ pass.
   `provision_user_secrets apply --users <you>` and you can re-run
   `$powerset-login`."
 
-These are not blockers for unrelated workflows — the user still has a valid
-Auth0 JWT for anything that doesn't require shared infra keys.
+These are not blockers for unrelated workflows unless that workflow needs the
+missing shared infra key.
 
-### Step 3 — Final state
+### Step 5 — Final state
 
 Re-run `doctor run` and report a one-line summary:
 
@@ -146,7 +187,8 @@ Re-run `doctor run` and report a one-line summary:
 | `supabase-admin` | Supabase URL + service role | admin only |
 | `all` | every allowlisted key | one-shot full setup |
 
-Pass `--profile <name>` to both `doctor run` and `doctor fix`.
+Pass `--profile <name>` to `doctor run` and to the direct provisioning
+primitive.
 
 ## Maintainer-only: provisioning a new user
 

@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -56,6 +57,10 @@ DEFAULT_OUT_DIR = Path(".powerpacks/messages")
 APPLE_EPOCH_OFFSET = 978_307_200
 NS_PER_SEC = 1_000_000_000
 GROUP_SEPARATOR = " | "
+PRIVACY_SETTINGS_URLS = {
+    "full-disk-access": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    "contacts": "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts",
+}
 
 
 @dataclass
@@ -176,6 +181,22 @@ def check_chat_db(path: Path) -> dict[str, Any]:
     except sqlite3.Error as exc:
         result["error"] = str(exc)
     return result
+
+
+def check_addressbook(addressbook_glob: str) -> dict[str, Any]:
+    matches = sorted(glob.glob(addressbook_glob))
+    contacts, diagnostics = read_addressbook_contacts(addressbook_glob)
+    error_diagnostics = [item for item in diagnostics if item.get("status") == "error"]
+    read_diagnostics = [item for item in diagnostics if item.get("status") == "read"]
+    return {
+        "glob": addressbook_glob,
+        "matches": len(matches),
+        "readable": bool(read_diagnostics) and not error_diagnostics,
+        "readable_databases": len(read_diagnostics),
+        "error_databases": len(error_diagnostics),
+        "contacts": len(contacts),
+        "diagnostics": diagnostics,
+    }
 
 
 def read_addressbook_contacts(addressbook_glob: str) -> tuple[dict[str, str], list[dict[str, Any]]]:
@@ -368,18 +389,55 @@ def write_jsonl(path: Path, contacts: list[Contact]) -> None:
 
 def cmd_check(args: argparse.Namespace) -> None:
     chat_db = Path(args.chat_db).expanduser()
+    addressbook = check_addressbook(args.addressbook_glob)
     result = {
         "primitive": "extract_imessage_contacts",
         "checked_at": now_iso(),
         "chat_db": check_chat_db(chat_db),
+        "addressbook": addressbook,
         "addressbook_glob": args.addressbook_glob,
-        "addressbook_matches": len(glob.glob(args.addressbook_glob)),
+        "addressbook_matches": addressbook["matches"],
         "python": sys.version.split()[0],
         "platform": sys.platform,
     }
     print(json.dumps(result, indent=2, sort_keys=True))
-    if args.strict and (not result["chat_db"]["readable"] or result["chat_db"]["missing_tables"]):
+    if args.strict and (
+        not result["chat_db"]["readable"]
+        or result["chat_db"]["missing_tables"]
+        or (addressbook["matches"] > 0 and not addressbook["readable"])
+    ):
         raise SystemExit(1)
+
+
+def cmd_open_privacy_settings(args: argparse.Namespace) -> None:
+    targets = ["full-disk-access", "contacts"] if args.target == "both" else [args.target]
+    urls = [PRIVACY_SETTINGS_URLS[target] for target in targets]
+    result: dict[str, Any] = {
+        "primitive": "extract_imessage_contacts",
+        "command": "open-privacy-settings",
+        "platform": sys.platform,
+        "targets": targets,
+        "urls": urls,
+        "opened": False,
+        "error": None,
+    }
+    if sys.platform != "darwin":
+        result["error"] = "privacy settings helper is macOS-only"
+        print(json.dumps(result, indent=2, sort_keys=True))
+        raise SystemExit(2)
+    if args.print_only:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    try:
+        for url in urls:
+            subprocess.run(["open", url], check=True)
+        result["opened"] = True
+    except (OSError, subprocess.CalledProcessError) as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        print(json.dumps(result, indent=2, sort_keys=True))
+        raise SystemExit(2)
+    print(json.dumps(result, indent=2, sort_keys=True))
 
 
 def failure_manifest(args: argparse.Namespace, run_id: str, started_at: str, error: str, diagnostics: dict[str, Any]) -> dict[str, Any]:
@@ -502,6 +560,16 @@ def main() -> None:
     check = sub.add_parser("check")
     check.add_argument("--strict", action="store_true")
     check.set_defaults(func=cmd_check)
+
+    privacy = sub.add_parser("open-privacy-settings", help="Open macOS privacy settings for Messages/Contacts access")
+    privacy.add_argument(
+        "--target",
+        choices=["full-disk-access", "contacts", "both"],
+        default="full-disk-access",
+        help="Privacy pane to open. Use contacts for AddressBook name matching.",
+    )
+    privacy.add_argument("--print-only", action="store_true", help="Print target URLs without opening System Settings")
+    privacy.set_defaults(func=cmd_open_privacy_settings)
 
     extract = sub.add_parser("extract")
     extract.add_argument("--output-csv", type=Path, default=DEFAULT_OUT_DIR / "imessage.contacts.csv")

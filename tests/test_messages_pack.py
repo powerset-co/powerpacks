@@ -197,6 +197,27 @@ class MessagesPackTests(unittest.TestCase):
                     """
                 )
 
+            check_result = subprocess.run(
+                [
+                    "python3",
+                    str(IMESSAGE),
+                    "--chat-db",
+                    str(chat_db),
+                    "--addressbook-glob",
+                    str(tmp / "AddressBook/Sources/*/AddressBook-v22.abcddb"),
+                    "check",
+                    "--strict",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            check_payload = json.loads(check_result.stdout)
+            self.assertTrue(check_payload["addressbook"]["readable"])
+            self.assertEqual(check_payload["addressbook"]["contacts"], 1)
+            self.assertEqual(check_payload["addressbook"]["readable_databases"], 1)
+
             output_csv = tmp / "out.csv"
             output_jsonl = tmp / "out.jsonl"
             manifest = tmp / "manifest.json"
@@ -232,6 +253,28 @@ class MessagesPackTests(unittest.TestCase):
             self.assertEqual(rows[0]["message_count"], 2)
             self.assertTrue(rows[0]["is_in_group_chats"])
             self.assertEqual(rows[0]["group_names"], ["Founders"])
+
+    def test_extract_imessage_privacy_settings_print_only(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(IMESSAGE),
+                "open-privacy-settings",
+                "--target",
+                "both",
+                "--print-only",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["command"], "open-privacy-settings")
+        self.assertEqual(payload["targets"], ["full-disk-access", "contacts"])
+        self.assertFalse(payload["opened"])
+        self.assertIn("Privacy_AllFiles", payload["urls"][0])
+        self.assertIn("Privacy_Contacts", payload["urls"][1])
 
 
 if __name__ == "__main__":
