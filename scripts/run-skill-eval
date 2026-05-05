@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""Generic skill-eval harness.
+
+Drives any installed Powerpacks skill through a host agent (Codex, Claude
+Code, or any shell-invokable model command) and validates the output
+against `must_include` / `must_not_include` expectations declared in a
+case file. Generalisation of `packs/search/evals/run_agent_extraction_harness.py`.
+
+Usage:
+    scripts/run-skill-eval --skill powerset-login --mode dry-run
+    scripts/run-skill-eval --skill sales-nav-search --mode live --host codex
+    scripts/run-skill-eval --skill search-network --case '^stanford'
+
+Modes:
+    dry-run  (default)  Build the prompt, validate case structure, do NOT
+                        invoke the model. Cheap, deterministic, CI-safe.
+    live                Actually invoke the host agent. Costs model spend.
+
+Hosts:
+    codex     Default. Runs `codex exec --skill <name> < <prompt_file>`.
+    claude    Runs `claude --print --skill <name> < <prompt_file>`.
+    custom    Pass `--agent-command "<template>"` with placeholders
+              {prompt_file}, {skill}, {skill_path}, {case_id}, {query}.
+
+Case file format (JSON array):
+    [
+      {
+        "id": "fresh-machine",
+        "query": "Set me up to use Powerpacks for the first time.",
+        "must_include": ["gcloud auth", "auth.py login"],
+        "must_not_include": ["skip the consent"]
+      },
+      ...
+    ]
+
+Cases live at one of:
+    packs/<pack>/evals/<skill>/cases.json
+    packs/<pack>/skills/<skill>/evals/cases.json
+
+Stdlib only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PACKS_DIR = ROOT / "packs"
+DEFAULT_OUT_DIR = ROOT / ".powerpacks" / "skill-evals"
+
+DEFAULT_AGENT_COMMANDS = {
+    "codex": "codex exec < {prompt_file}",
+    "claude": "claude --print < {prompt_file}",
+}
+
+
+# ---------------------------------------------------------------------------
+# Case loading
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Case:
+    id: str
+    query: str
+    must_include: list[str] = field(default_factory=list)
+    must_not_include: list[str] = field(default_factory=list)
+    expected_tools: list[str] = field(default_factory=list)
+    notes: str = ""
+
+
+def find_skill(skill_name: str) -> tuple[Path, Path]:
+    """Locate (skill_dir, skill_md) for `skill_name` under packs/."""
+    candidates = list(PACKS_DIR.glob(f"*/skills/{skill_name}/SKILL.md"))
+    if not candidates:
+        raise FileNotFoundError(
+            f"skill '{skill_name}' not found under {PACKS_DIR}/*/skills/"
+        )
+    if len(candidates) > 1:
+        raise FileNotFoundError(
+            f"skill '{skill_name}' is ambiguous: {[str(c) for c in candidates]}"
+        )
+    skill_md = candidates[0]
+    return skill_md.parent, skill_md
+
+
+def find_cases(skill_name: str, skill_dir: Path) -> Path:
+    """Locate the cases.json for `skill_name`."""
+    pack_dir = skill_dir.parent.parent  # packs/<pack>/skills/<skill> -> packs/<pack>
+    candidates = [
+        pack_dir / "evals" / skill_name / "cases.json",
+        skill_dir / "evals" / "cases.json",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise FileNotFoundError(
+        f"no cases.json for skill '{skill_name}'. Looked at:\n  "
+        + "\n  ".join(str(c) for c in candidates)
+    )
+
+
+def load_cases(cases_path: Path) -> list[Case]:
+    raw = json.loads(cases_path.read_text())
+    if not isinstance(raw, list):
+        raise ValueError(f"{cases_path}: expected a JSON array of cases")
+    cases: list[Case] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ValueError(f"{cases_path}[{i}]: expected an object")
+        if "id" not in entry or "query" not in entry:
+            raise ValueError(f"{cases_path}[{i}]: missing required keys 'id' / 'query'")
+        cases.append(
+            Case(
+                id=str(entry["id"]),
+                query=str(entry["query"]),
+                must_include=list(entry.get("must_include", [])),
+                must_not_include=list(entry.get("must_not_include", [])),
+                expected_tools=list(entry.get("expected_tools", [])),
+                notes=str(entry.get("notes", "")),
+            )
+        )
+    if not cases:
+        raise ValueError(f"{cases_path}: case file is empty")
+    return cases
+
+
+def select_cases(cases: list[Case], pattern: str | None, max_cases: int | None) -> list[Case]:
+    out = cases
+    if pattern:
+        rx = re.compile(pattern)
+        out = [c for c in out if rx.search(c.id)]
+    if max_cases is not None:
+        out = out[:max_cases]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Prompt construction
+# ---------------------------------------------------------------------------
+
+
+def build_prompt(skill_md: Path, case: Case) -> str:
+    return (
+        f"Use the Powerpacks `{skill_md.parent.name}` skill to handle the "
+        f"following user request.\n\n"
+        f"Skill file: {skill_md}\n\n"
+        f"User request:\n{case.query}\n\n"
+        f"Walk through the skill's workflow. Reference the exact "
+        f"primitive / tool names from the skill body. If a step requires "
+        f"approval, surface the approval prompt instead of executing it."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent invocation
+# ---------------------------------------------------------------------------
+
+
+def invoke_agent(
+    command_template: str,
+    prompt_file: Path,
+    skill_md: Path,
+    case: Case,
+    timeout_sec: int,
+) -> tuple[int, str, str]:
+    command = command_template.format(
+        prompt_file=shlex.quote(str(prompt_file)),
+        skill=shlex.quote(skill_md.parent.name),
+        skill_path=shlex.quote(str(skill_md)),
+        case_id=shlex.quote(case.id),
+        query=shlex.quote(case.query),
+    )
+    completed = subprocess.run(
+        command,
+        shell=True,
+        text=True,
+        capture_output=True,
+        cwd=str(ROOT),
+        timeout=timeout_sec,
+    )
+    return completed.returncode, completed.stdout, completed.stderr
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+
+def validate_output(case: Case, output: str) -> dict[str, Any]:
+    """Return {'ok': bool, 'missing': [...], 'forbidden_present': [...]}."""
+    missing = [s for s in case.must_include if s.lower() not in output.lower()]
+    forbidden_present = [s for s in case.must_not_include if s.lower() in output.lower()]
+    return {
+        "ok": not missing and not forbidden_present,
+        "missing": missing,
+        "forbidden_present": forbidden_present,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def write_report(out_dir: Path, skill: str, mode: str, results: list[dict[str, Any]]) -> Path:
+    report_path = out_dir / "report.md"
+    total = len(results)
+    passed = sum(1 for r in results if r["validation"]["ok"])
+    lines = [
+        f"# Skill eval: `{skill}`",
+        "",
+        f"- mode: `{mode}`",
+        f"- generated: `{now_iso()}`",
+        f"- cases: {passed}/{total} passed",
+        "",
+        "| case | ok | missing | forbidden present |",
+        "| --- | --- | --- | --- |",
+    ]
+    for r in results:
+        v = r["validation"]
+        ok = "✅" if v["ok"] else "❌"
+        miss = ", ".join(f"`{m}`" for m in v["missing"]) or "—"
+        forb = ", ".join(f"`{m}`" for m in v["forbidden_present"]) or "—"
+        lines.append(f"| `{r['id']}` | {ok} | {miss} | {forb} |")
+    report_path.write_text("\n".join(lines) + "\n")
+    return report_path
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--skill", required=True, help="Skill name, e.g. powerset-login")
+    parser.add_argument("--mode", choices=("dry-run", "live"), default="dry-run")
+    parser.add_argument("--host", choices=("codex", "claude", "custom"), default="codex")
+    parser.add_argument("--agent-command", help="Custom shell command template (overrides --host)")
+    parser.add_argument("--case", help="Regex to filter case ids")
+    parser.add_argument("--max-cases", type=int)
+    parser.add_argument("--out-dir", type=Path, help="Override output directory")
+    parser.add_argument("--timeout-sec", type=int, default=300)
+    parser.add_argument("--cases-file", type=Path, help="Override cases.json path")
+    parser.add_argument("--json", action="store_true", help="Print summary as JSON")
+    args = parser.parse_args()
+
+    try:
+        skill_dir, skill_md = find_skill(args.skill)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        cases_path = args.cases_file or find_cases(args.skill, skill_dir)
+        cases = load_cases(cases_path)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    selected = select_cases(cases, args.case, args.max_cases)
+    if not selected:
+        print(f"no cases matched filter (cases={len(cases)}, filter={args.case!r})", file=sys.stderr)
+        return 2
+
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    out_dir = args.out_dir or (DEFAULT_OUT_DIR / args.skill / run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.agent_command:
+        command_template = args.agent_command
+    elif args.host in DEFAULT_AGENT_COMMANDS:
+        command_template = DEFAULT_AGENT_COMMANDS[args.host]
+    else:
+        print(f"error: --host=custom requires --agent-command", file=sys.stderr)
+        return 2
+
+    results: list[dict[str, Any]] = []
+    for case in selected:
+        case_dir = out_dir / case.id
+        case_dir.mkdir(parents=True, exist_ok=True)
+        prompt = build_prompt(skill_md, case)
+        prompt_file = case_dir / "prompt.txt"
+        prompt_file.write_text(prompt)
+
+        if args.mode == "dry-run":
+            # Dry-run: skip invocation, mark validation as N/A.
+            result = {
+                "id": case.id,
+                "query": case.query,
+                "prompt_file": str(prompt_file),
+                "mode": "dry-run",
+                "validation": {"ok": True, "missing": [], "forbidden_present": []},
+                "skipped": True,
+            }
+        else:
+            try:
+                rc, stdout, stderr = invoke_agent(
+                    command_template, prompt_file, skill_md, case, args.timeout_sec
+                )
+            except subprocess.TimeoutExpired:
+                stdout = ""
+                stderr = f"timeout after {args.timeout_sec}s"
+                rc = 124
+            (case_dir / "stdout.txt").write_text(stdout)
+            (case_dir / "stderr.txt").write_text(stderr)
+            (case_dir / "exit-code.txt").write_text(str(rc) + "\n")
+
+            validation = validate_output(case, stdout)
+            result = {
+                "id": case.id,
+                "query": case.query,
+                "exit_code": rc,
+                "stdout_len": len(stdout),
+                "validation": validation,
+                "mode": "live",
+            }
+        (case_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        results.append(result)
+
+    report_path = write_report(out_dir, args.skill, args.mode, results)
+
+    summary = {
+        "skill": args.skill,
+        "mode": args.mode,
+        "host": args.host,
+        "out_dir": str(out_dir),
+        "report": str(report_path),
+        "cases_total": len(selected),
+        "cases_passed": sum(1 for r in results if r["validation"]["ok"]),
+    }
+    if args.json:
+        print(json.dumps(summary, indent=2))
+    else:
+        print(f"skill: {args.skill}")
+        print(f"mode:  {args.mode}")
+        print(f"out:   {out_dir}")
+        print(f"cases: {summary['cases_passed']}/{summary['cases_total']} passed")
+        print(f"report: {report_path}")
+    return 0 if summary["cases_passed"] == summary["cases_total"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

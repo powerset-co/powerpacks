@@ -7,7 +7,8 @@
 #   - waha_runtime check (real Docker)
 #   - waha_session status (expects no WAHA running)
 #   - extract_whatsapp_contacts (against synthetic CSV — WAHA-less mode)
-#   - powerset_auth whoami (likely anonymous on a fresh box)
+#   - auth.py whoami (likely anonymous on a fresh box; primitive moved
+#     from packs/messages/primitives/powerset_auth -> packs/powerset/primitives/auth)
 #   - sync_powerset_candidates --use-cached (validates a hand-rolled candidate CSV)
 #   - match_local_candidates (synthetic catalog)
 #   - llm_review_contacts estimate (no spend, no API key)
@@ -122,12 +123,15 @@ $PY -c "import json; d=json.load(open('$TMP/wa_check.json')); print(f'  ready={d
 ok "extract_whatsapp_contacts gates on session WORKING"
 
 # ---------------------------------------------------------------------------
-step "6. powerset_auth whoami (no creds expected)"
+step "6. auth.py whoami (no creds expected)"
 # ---------------------------------------------------------------------------
-$PY "$PRIMS/powerset_auth/powerset_auth.py" whoami \
+# Path note: the messages pack used to ship its own `powerset_auth`
+# primitive. Auth was promoted into packs/powerset during the reorg.
+AUTH_PY="$ROOT/packs/powerset/primitives/auth/auth.py"
+$PY "$AUTH_PY" whoami \
     --credentials-path "$TMP/credentials.json" > "$TMP/whoami.json" || true
 $PY -c "import json; d=json.load(open('$TMP/whoami.json')); print(f'  status={d[\"status\"]}')"
-ok "powerset_auth.whoami reports anonymous cleanly"
+ok "auth.whoami reports anonymous cleanly"
 
 # ---------------------------------------------------------------------------
 step "7. sync_powerset_candidates --use-cached (synthetic catalog)"

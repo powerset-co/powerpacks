@@ -44,11 +44,13 @@ class CoreLayoutTests(unittest.TestCase):
     def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
         self.assertIn("@powerset.co", text)
-        # The skill is built around the doctor primitive as the entrypoint:
-        # `doctor run` for read-only check, `doctor fix --interactive` for
-        # the aggressive auto+browser pass.
+        # `doctor run` is the diagnosis entrypoint; the agent executes fixes
+        # step-by-step instead of nesting them inside `doctor fix`.
         self.assertIn("packs/powerset/primitives/doctor/doctor.py run", text)
-        self.assertIn("packs/powerset/primitives/doctor/doctor.py fix", text)
+        # Skill must explicitly steer agents AWAY from `doctor.py fix`
+        # (which hides interactive work inside a subprocess).
+        self.assertIn("do **not** run", text)
+        self.assertIn("doctor.py fix", text)
         # Per-user secret naming.
         self.assertIn("powerpacks-users-", text)
         # gcloud login is part of the interactive happy path.

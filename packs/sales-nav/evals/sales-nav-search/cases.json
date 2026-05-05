@@ -1,0 +1,83 @@
+[
+  {
+    "id": "vps-at-stripe",
+    "query": "Find VPs of engineering at Stripe.",
+    "must_include": [
+      "sales_nav_resolve",
+      "sales_nav_search",
+      "set_id",
+      "persist_artifact",
+      "conversation_id"
+    ],
+    "must_not_include": [
+      "sales_nav_search without persist_artifact",
+      "skip the set"
+    ],
+    "expected_tools": [
+      "sales_nav_resolve",
+      "sales_nav_search"
+    ],
+    "notes": "Happy path. Must call sales_nav_resolve to translate 'Stripe' -> org_id, then sales_nav_search with persist_artifact:true and a conversation_id. Default count: 25."
+  },
+  {
+    "id": "narrow-by-geography-after-search",
+    "query": "I just ran a sales nav search for 'staff engineers at Anthropic' and got back 187 leads. Narrow it to NYC only.",
+    "must_include": [
+      "geography_ids",
+      "sales_nav_search",
+      "new artifact_id"
+    ],
+    "must_not_include": [
+      "get_artifact",
+      "filter the existing"
+    ],
+    "notes": "Refinement = NEW search, not a get_artifact filter. The skill body explicitly says refining filters produces a new artifact_id."
+  },
+  {
+    "id": "page-back-through-existing",
+    "query": "Show me the next 25 leads from artifact_id art_abc123.",
+    "must_include": [
+      "get_artifact",
+      "art_abc123",
+      "offset",
+      "limit"
+    ],
+    "must_not_include": [
+      "sales_nav_search",
+      "sales_nav_resolve"
+    ],
+    "expected_tools": [
+      "get_artifact"
+    ],
+    "notes": "Pagination of an existing result set goes through get_artifact, not a new sales_nav_search."
+  },
+  {
+    "id": "missing-mcp",
+    "query": "Find VPs at Stripe. (Note: my powerset-search MCP is not installed yet.)",
+    "must_include": [
+      "powerset-login",
+      "mcp_install"
+    ],
+    "must_not_include": [
+      "sales_nav_search"
+    ],
+    "notes": "If the MCP is missing, the skill must route the user through powerset-login first. It must NOT pretend to call sales_nav_search."
+  },
+  {
+    "id": "resolve-mutuals-to-urls",
+    "query": "Lead 12345 has mutual_member_ids [67890, 11111, 22222] from a previous search. Show me their LinkedIn URLs.",
+    "must_include": [
+      "sales_nav_resolve_member_ids",
+      "67890",
+      "linkedin"
+    ],
+    "must_not_include": [
+      "enrich_extended_profiles",
+      "RapidAPI"
+    ],
+    "expected_tools": [
+      "sales_nav_resolve_member_ids"
+    ],
+    "notes": "Cheap URL resolution path. Must NOT use enrich_extended_profiles (which costs paid API calls per id) for a simple URL lookup."
+  }
+]
