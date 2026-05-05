@@ -14,7 +14,7 @@ class CoreLayoutTests(unittest.TestCase):
         powerset_pack = sorted(
             path.name for path in (ROOT / "packs/powerset/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(powerset_pack, ["powerset-login"])
+        self.assertEqual(powerset_pack, ["powerset-login", "powerset-set"])
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
@@ -165,6 +165,49 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertEqual(planned_by_id["resolve_education"]["status"], "completed")
             self.assertIn("completed_at", planned_by_id["resolve_education"])
             self.assertEqual(planned_by_id["count_candidates"]["status"], "pending")
+
+    def test_task_state_accepts_bare_planned_steps_array(self) -> None:
+        task_state = ROOT / "packs/search/primitives/task_state/task_state.py"
+        with tempfile.TemporaryDirectory() as td:
+            state_path = Path(td) / "run.json"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(task_state),
+                    "init",
+                    "--query",
+                    "software engineers in sf",
+                    "--out",
+                    str(state_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(task_state),
+                    "request-approval",
+                    "--state",
+                    str(state_path),
+                    "--reason",
+                    "test",
+                    "--proposed-next-step",
+                    "run planned steps",
+                    "--plan-json",
+                    json.dumps(["resolve_education", "count_candidates"]),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            state = json.loads(state_path.read_text())
+            self.assertEqual(
+                [step["id"] for step in state["planned_steps"]],
+                ["resolve_education", "count_candidates"],
+            )
 
 
 if __name__ == "__main__":

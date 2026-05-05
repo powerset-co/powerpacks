@@ -73,10 +73,15 @@ def normalize_planned_step(item: Any, now: str) -> dict[str, Any]:
     return step
 
 
-def planned_steps_from_plan(plan: dict[str, Any], now: str) -> list[dict[str, Any]]:
-    raw_steps = plan.get("planned_steps")
-    if raw_steps is None:
-        raw_steps = plan.get("steps")
+def planned_steps_from_plan(plan: Any, now: str) -> list[dict[str, Any]]:
+    if isinstance(plan, list):
+        raw_steps = plan
+    elif isinstance(plan, dict):
+        raw_steps = plan.get("planned_steps")
+        if raw_steps is None:
+            raw_steps = plan.get("steps")
+    else:
+        raise TypeError("approval plan must be an object or a planned steps array")
     if not raw_steps:
         return []
     if not isinstance(raw_steps, list):

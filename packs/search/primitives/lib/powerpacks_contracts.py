@@ -62,6 +62,18 @@ POSTGRES_TABLES = {
         "required_columns": ["person_id", "total_interactions"],
         "optional": True,
     },
+    "sets": {
+        "primary_key": "id",
+        "required_columns": ["id", "name", "created_by", "is_active", "is_personal"],
+    },
+    "set_members": {
+        "primary_key": "id",
+        "required_columns": ["id", "set_id", "user_id", "role", "joined_at"],
+    },
+    "users": {
+        "primary_key": "id",
+        "required_columns": ["id", "user_id", "email", "name"],
+    },
 }
 
 

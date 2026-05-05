@@ -18,6 +18,7 @@ sys.path.insert(0, str(LIB_DIR))
 
 from turbopuffer_client import (  # noqa: E402
     STRONG_CONSISTENCY,
+    allowed_operator_ids_from_payload,
     comparison,
     embedding,
     filter_only_rows_for_namespace,
@@ -135,6 +136,10 @@ def company_attribute_filters(payload: dict[str, Any], *, include_soft: bool = T
         values = payload.get(payload_key)
         if values:
             filters.append(comparison(field, op, values))
+
+    operator_ids = allowed_operator_ids_from_payload(payload)
+    if operator_ids:
+        filters.append(comparison("allowed_operator_ids", "ContainsAny", operator_ids))
 
     if only_soft:
         return None if not filters else filters[0] if len(filters) == 1 else ("And", filters)

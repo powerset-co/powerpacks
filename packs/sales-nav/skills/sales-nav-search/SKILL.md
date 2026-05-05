@@ -33,8 +33,12 @@ server.
   registered, route the user through `$powerset-login` →
   `mcp_install install --host all`.
 - Every Sales Nav call is **scoped to a `set_id`**. The MCP server enforces
-  the set context. Do not invent or guess `set_id`s — pass the one the user
-  specifies, or ask which set to search if it is not obvious from context.
+  the set context. Pass the one the user specifies. If the user does not
+  specify one, resolve the default with
+  `packs/search/primitives/resolve_set_operators/resolve_set_operators.py`
+  so it can inherit `POWERPACKS_DEFAULT_SET_ID` / `POWERSET_DEFAULT_SET_ID`, or
+  fall back to the logged-in operator's active personal set. Do not invent or
+  guess `set_id`s.
 - **Default to `persist_artifact: true` on every `sales_nav_search` call.**
   Persistence is cheap and lets the user (or the agent in a later turn) page
   large result sets via `get_artifact`. Only pass `persist_artifact: false`
@@ -60,11 +64,11 @@ python powerpacks/packs/powerset/primitives/auth/auth.py login
 python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
-If on Codex, also export the bearer token env var that Codex reads at
-runtime:
+If on Codex, rerun MCP install when the Auth0 token needs to be refreshed.
+The installer writes a fresh `Authorization` header into `~/.codex/config.toml`:
 
 ```bash
-eval "$(python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py token-env)"
+python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host codex
 ```
 
 ## conversation_id playbook
@@ -95,6 +99,19 @@ python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py status --
 
 If `installed: false` for the host the user is on, route to
 `$powerset-login` first.
+
+### Step 0b — Resolve set scope
+
+If the user provided a `set_id`, use it. Otherwise run:
+
+```bash
+python powerpacks/packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
+  --env-file .env
+```
+
+Use the returned `set_id` in Sales Nav MCP calls. The returned
+`operator_ids` are useful for parity with local TurboPuffer searches, but the
+Sales Nav MCP is still scoped by `set_id`.
 
 ### Step 1 — Decide whether to resolve filters
 

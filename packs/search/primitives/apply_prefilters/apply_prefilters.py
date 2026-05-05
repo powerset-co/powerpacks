@@ -17,6 +17,7 @@ LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 sys.path.insert(0, str(LIB_DIR))
 
 from turbopuffer_client import (  # noqa: E402
+    allowed_operator_ids_from_payload,
     comparison,
     extract_base_ids,
     filter_only_rows_for_namespace,
@@ -82,8 +83,9 @@ def education_filter(payload: dict[str, Any], education_ids: list[str] | None = 
         clauses.append(comparison("graduation_year", "Gte", payload["graduation_year_min"]))
     if payload.get("graduation_year_max") is not None:
         clauses.append(comparison("graduation_year", "Lte", payload["graduation_year_max"]))
-    if payload.get("set_id"):
-        clauses.append(comparison("allowed_operator_ids", "ContainsAny", [payload["set_id"]]))
+    operator_ids = allowed_operator_ids_from_payload(payload)
+    if operator_ids:
+        clauses.append(comparison("allowed_operator_ids", "ContainsAny", operator_ids))
     return and_filter(clauses)
 
 
@@ -122,8 +124,9 @@ async def tech_skill_base_ids(payload: dict[str, Any], *, page_size: int, max_id
     if not skills:
         return None
     clauses = [comparison("tech_skills", "ContainsAny", skills)]
-    if payload.get("set_id"):
-        clauses.append(comparison("allowed_operator_ids", "ContainsAny", [payload["set_id"]]))
+    operator_ids = allowed_operator_ids_from_payload(payload)
+    if operator_ids:
+        clauses.append(comparison("allowed_operator_ids", "ContainsAny", operator_ids))
     rows = await filter_only_rows_for_namespace("summaries", and_filter(clauses), [], page_size=page_size, max_results=max_ids)
     ids = extract_base_ids(rows)
     return ids, {"stage": "tech_skills", "input_count": len(skills), "matched": len(ids)}

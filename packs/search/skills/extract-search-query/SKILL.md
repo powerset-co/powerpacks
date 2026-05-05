@@ -60,9 +60,12 @@ Omit null or empty fields in the final payload unless they clarify intent.
 - Do not invent schema fields.
 - Preserve hard constraints: role, location, seniority, currentness, education,
   YOE, age, tenure/date windows, company names, company domains, funding,
-  headcount, investors, and social thresholds.
+  headcount, investors, social thresholds, and `set_id`.
 - Use `education_names` for unresolved school names. Do not invent school IDs.
 - Use `company_names` for explicit companies. Do not invent company IDs.
+- Use `set_id` only when the user provides one or a prior task state already
+  has one. If no `set_id` is present, leave it unset; the orchestrating skill
+  will run `resolve_set_operators` to use the env/default/personal set.
 - Use `investor_names` for unresolved investors. Do not invent investor URNs.
 - Use `company_semantic_queries` for vertical/domain company intent such as
   database companies, fintech startups, AI infrastructure, healthcare, or

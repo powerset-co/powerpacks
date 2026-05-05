@@ -1,0 +1,17 @@
+{
+  "name": "set_members",
+  "type": "postgres_table",
+  "version": "2026-05-05",
+  "primary_key": "id",
+  "description": "Membership table mapping Powerset sets to Auth0 user/operator IDs. These user IDs are the values stored in TurboPuffer allowed_operator_ids.",
+  "required_for": [
+    "resolve_set_operators"
+  ],
+  "columns": [
+    {"name": "id", "type": "uuid", "required": true},
+    {"name": "set_id", "type": "uuid", "required": true},
+    {"name": "user_id", "type": "text", "required": true},
+    {"name": "role", "type": "text/varchar", "required": true},
+    {"name": "joined_at", "type": "timestamp with time zone", "required": true}
+  ]
+}

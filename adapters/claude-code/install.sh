@@ -59,13 +59,14 @@ install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKIL
 install_skill extract-search-query "$REPO_ROOT/packs/search/skills/extract-search-query/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
+install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill import-imessage "$REPO_ROOT/packs/messages/skills/import-imessage/SKILL.md"
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill import-contacts-review "$REPO_ROOT/packs/messages/skills/import-contacts-review/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search-network extract-search-query search-company powerset-login sales-nav-search"
+echo "  search-network extract-search-query search-company powerset-login powerset-set sales-nav-search"
 echo "  import-imessage import-whatsapp import-contacts-review"
 echo
 echo "restart Claude Code to pick up the skill list"

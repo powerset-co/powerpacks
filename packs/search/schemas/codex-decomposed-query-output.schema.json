@@ -123,6 +123,15 @@
         "is_current": {
           "type": "boolean"
         },
+        "set_id": {
+          "type": "string"
+        },
+        "operator_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "position_after_date": {
           "type": "string"
         },

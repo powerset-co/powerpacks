@@ -2,21 +2,21 @@
 """Install / status / remove the Powerset Search MCP for Claude Code or Codex.
 
 The MCP server lives at https://search-api-7wk4uhe77q-uw.a.run.app/mcp and
-exposes `expand_query`, `count`, `search`, `query_results`,
-`sales_nav_resolve`, and `sales_nav_search` to any MCP-aware host on the
-machine.
+exposes `expand_query`, `list_sets`, `count`, `search`, `query_results`,
+`sales_nav_resolve`, `sales_nav_search`, and artifact/extended lead tools to
+any MCP-aware host on the machine.
 
 Authentication is a Bearer Auth0 access token (the same JWT cached at
 `~/.powerpacks/credentials.json` by the `auth` primitive). The two hosts
-handle that token differently:
+store that token in their MCP config:
 
 - **Claude Code** (`claude mcp add ... --header "Authorization: Bearer <T>"`)
   bakes the token into config. Re-run `install --host claude` after token
   rotation.
-- **Codex** (`codex mcp add --bearer-token-env-var <NAME>`) reads the token
-  from the named env var at runtime. The user (or a launcher) just keeps
-  `POWERPACKS_POWERSET_TOKEN` exported. Use `token-env` to print a fresh
-  `export` line.
+- **Codex** is registered with the HTTP URL, then this primitive writes
+  `[mcp_servers.<name>.http_headers] Authorization = "Bearer <T>"` into
+  `~/.codex/config.toml`, matching Codex's first-party config shape. Re-run
+  `install --host codex` to refresh the token in config.
 
 Stdlib-only.
 """
@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,7 @@ DEFAULT_URL = os.environ.get(
 )
 DEFAULT_CLAUDE_SCOPE = os.environ.get("POWERPACKS_MCP_SCOPE", "user")
 DEFAULT_TOKEN_ENV_VAR = os.environ.get("POWERPACKS_TOKEN_ENV_VAR", "POWERPACKS_POWERSET_TOKEN")
+DEFAULT_CODEX_HOME = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
 DEFAULT_CREDENTIALS = Path(os.environ.get(
     "POWERPACKS_CREDENTIALS_PATH",
     str(Path.home() / ".powerpacks" / "credentials.json"),
@@ -56,11 +58,22 @@ DEFAULT_CREDENTIALS = Path(os.environ.get(
 
 EXPECTED_TOOLS = [
     "expand_query",
+    "list_sets",
+    "list_conversations",
+    "create_set",
+    "create_set_invite",
+    "delete_set",
     "count",
     "search",
     "query_results",
     "sales_nav_resolve",
     "sales_nav_search",
+    "query_extended_leads",
+    "enrich_extended_profiles",
+    "score_extended_leads",
+    "sales_nav_resolve_member_ids",
+    "find_mutuals",
+    "get_artifact",
 ]
 
 SUPPORTED_HOSTS = ("claude", "codex")
@@ -184,8 +197,46 @@ def codex_status(name: str) -> dict[str, Any]:
     return {"installed": True, "host": "codex", "details": out.strip()[:400]}
 
 
-def codex_install(name: str, url: str, token_env_var: str) -> dict[str, Any]:
-    """Register the MCP in Codex. Token is read at runtime from `token_env_var`."""
+def toml_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def codex_config_path() -> Path:
+    return DEFAULT_CODEX_HOME / "config.toml"
+
+
+def remove_toml_sections(text: str, section_names: set[str]) -> str:
+    out: list[str] = []
+    skip = False
+    header_re = re.compile(r"^\[([^\]]+)\]\s*$")
+    for line in text.splitlines():
+        match = header_re.match(line.strip())
+        if match:
+            skip = match.group(1) in section_names
+        if not skip:
+            out.append(line)
+    return "\n".join(out).rstrip() + ("\n" if out else "")
+
+
+def write_codex_bearer_header(name: str, url: str, token: str) -> Path:
+    config_path = codex_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = config_path.read_text() if config_path.exists() else ""
+    section = f"mcp_servers.{name}"
+    header_section = f"{section}.http_headers"
+    existing = remove_toml_sections(existing, {section, header_section})
+    addition = (
+        f"\n[{section}]\n"
+        f"url = {toml_string(url)}\n\n"
+        f"[{header_section}]\n"
+        f"Authorization = {toml_string('Bearer ' + token)}\n"
+    )
+    config_path.write_text(existing.rstrip() + addition)
+    return config_path
+
+
+def codex_install(name: str, url: str, token: str) -> dict[str, Any]:
+    """Register the MCP in Codex with a bearer Authorization header in config."""
     if not host_cli("codex"):
         return {"host": "codex", "ok": False, "error": "codex CLI not on PATH"}
     state = codex_status(name)
@@ -196,7 +247,6 @@ def codex_install(name: str, url: str, token_env_var: str) -> dict[str, Any]:
         "codex", "mcp", "add",
         name,
         "--url", url,
-        "--bearer-token-env-var", token_env_var,
     ]
     code, out, err = run(add_cmd, timeout=30)
     if code != 0:
@@ -205,16 +255,15 @@ def codex_install(name: str, url: str, token_env_var: str) -> dict[str, Any]:
             "error": (err or out or "codex mcp add failed").strip()[:400],
             "command_line": add_cmd,
         }
+    config_path = write_codex_bearer_header(name, url, token)
     return {
         "host": "codex",
         "ok": True,
         "url": url,
         "replaced_existing": replaced,
-        "bearer_token_env_var": token_env_var,
-        "token_handling": (
-            f"read from ${token_env_var} at runtime; rotate by re-exporting,"
-            f" no re-install needed"
-        ),
+        "config_path": str(config_path),
+        "auth_header": "Authorization: Bearer <redacted>",
+        "token_handling": "baked into Codex config; re-run install to refresh",
         "details": codex_status(name).get("details"),
     }
 
@@ -273,7 +322,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         if h == "claude":
             results.append(claude_install(args.name, args.url, args.scope, token))
         elif h == "codex":
-            results.append(codex_install(args.name, args.url, args.token_env_var))
+            results.append(codex_install(args.name, args.url, token))
 
     overall_ok = all(r.get("ok") for r in results)
     payload = {
@@ -287,17 +336,6 @@ def cmd_install(args: argparse.Namespace) -> int:
         "hosts": results,
         "installed_at": now_iso(),
     }
-    if any(r.get("host") == "codex" and r.get("ok") for r in results):
-        payload["codex_post_install"] = {
-            "env_var": args.token_env_var,
-            "shell_export": _shell_export_line(args.token_env_var, token),
-            "tip": (
-                f"Codex reads ${args.token_env_var} when it spawns the MCP."
-                f" Either export it in your shell rc or wrap codex in a launcher"
-                f" that runs `eval $(python {SELF_DIR / 'mcp_install.py'} token-env)`"
-                f" before exec'ing codex."
-            ),
-        }
     emit(payload)
     return 0 if overall_ok else 2
 
@@ -372,7 +410,7 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--scope", default=DEFAULT_CLAUDE_SCOPE, choices=("user", "project", "local"),
                    help="Claude Code config scope (ignored by codex).")
     p.add_argument("--token-env-var", default=DEFAULT_TOKEN_ENV_VAR,
-                   help="Codex env var that holds the bearer token (ignored by claude).")
+                   help="Legacy token-env output variable name; ignored by install/status/remove.")
 
 
 def main() -> None:
@@ -396,7 +434,7 @@ def main() -> None:
 
     tokenenv = sub.add_parser(
         "token-env",
-        help="Print a single `export POWERPACKS_POWERSET_TOKEN=...` line for shell eval (Codex launcher pattern)",
+        help="Print a single `export POWERPACKS_POWERSET_TOKEN=...` line for manual shell use",
     )
     tokenenv.add_argument("--credentials-path", type=Path, default=DEFAULT_CREDENTIALS)
     tokenenv.add_argument("--auth0-domain")

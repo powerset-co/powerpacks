@@ -63,6 +63,8 @@ Useful handoff artifacts:
 - planned checklist: recorded in `planned_steps[]` at approval time
 - company resolution: recorded at `steps[].id = "resolve_companies"` and, when
   useful for debugging, mirrored to `artifacts/company_ids.json`
+- set resolution: recorded at `steps[].id = "resolve_set_operators"` and
+  consumed as `role_search_filters.operator_ids`
 - candidate frontier: recorded by retrieval steps and exported as JSONL
 - hydrated output: persisted CSV/JSONL/manifest from `persist_search_results`
 - rerank output: `ranked_candidates.csv` and `ranked_candidates.jsonl`
@@ -85,7 +87,14 @@ each boundary has a written artifact.
    `plan_adjacency_search` and record whether to include adjacency, ask the
    user, or stay strict.
 5. Choose the initial strategy with `decide_search_strategy`.
-6. Resolve ID-producing constraints before retrieval:
+6. Resolve set scoping before retrieval:
+   - if the user provides `set_id`, preserve it in `role_search_filters.set_id`
+   - otherwise allow `resolve_set_operators` to use
+     `POWERPACKS_DEFAULT_SET_ID` / `POWERSET_DEFAULT_SET_ID`, or the logged-in
+     operator's active personal set from `~/.powerpacks/credentials.json`
+   - record the returned `operator_ids`; these are the values used for
+     TurboPuffer `allowed_operator_ids`, not the raw set UUID
+7. Resolve ID-producing constraints before retrieval:
    - run `resolve_education` when `education_names` or unresolved school names
      are present
    - run `resolve_investors` when `investor_names` or unresolved investor names
@@ -94,24 +103,24 @@ each boundary has a written artifact.
      become company IDs
    - run `apply_prefilters` when education, tech skills, social/interaction
      metrics, or large company intersections must become `base_candidate_ids`
-7. Run one of:
+8. Run one of:
    - direct role search
    - count then search
    - multi-slice retrieval
-8. Record every primitive output into task state. `steps[]` is the append-only
+9. Record every primitive output into task state. `steps[]` is the append-only
    execution log; `planned_steps[]` is the mutable checklist that should move
    from pending to completed/failed/skipped as matching steps run.
-9. Assess the frontier with `assess_frontier`.
-10. Decide the next action with `plan_candidate_review`.
-11. Hydrate the full candidate frontier with `hydrate_people`.
-12. If LLM filtering is enabled, run `llm_filter_candidates` after hydration.
-13. Persist CSV/JSONL artifacts with `persist_search_results`.
-14. If approval recorded `execution_mode = "rerank"`, run
+10. Assess the frontier with `assess_frontier`.
+11. Decide the next action with `plan_candidate_review`.
+12. Hydrate the full candidate frontier with `hydrate_people`.
+13. If LLM filtering is enabled, run `llm_filter_candidates` after hydration.
+14. Persist CSV/JSONL artifacts with `persist_search_results`.
+15. If approval recorded `execution_mode = "rerank"`, run
     `agentic_candidate_review prepare`, dispatch shard review through the host
     harness, then run `agentic_candidate_review reduce --write-state`.
-15. Present artifact paths, a compact result summary, and recommended follow-up
+16. Present artifact paths, a compact result summary, and recommended follow-up
     refinements.
-16. Stop when the frontier is coherent enough to present.
+17. Stop when the frontier is coherent enough to present.
 
 ## First Response Contract
 
@@ -122,6 +131,8 @@ the user operational status:
 - the state file path, or the exact state path you are about to create
 - whether this is direct, count-first, or sliced
 - the hard filters and prefilters you plan to use
+- the set scope: explicit `set_id`, env/default set, or personal-set fallback,
+  plus whether `operator_ids` have already been resolved
 - the currentness semantics: whether `is_current` is unset, current at the
   requested company, current in the requested role, or current for both role
   and company on the same matched position row
@@ -177,6 +188,14 @@ Before showing the approval prompt, perform this payload quality gate:
 - use only documented filter fields, operators, and enum values
 - consult `powerpacks/contracts/` before using Postgres columns or TurboPuffer
   attributes; do not discover live schema during normal search execution
+- include a `set_id` whenever the user provides one. If they do not provide
+  one, run `resolve_set_operators` without `--set-id` so it inherits
+  `POWERPACKS_DEFAULT_SET_ID` / `POWERSET_DEFAULT_SET_ID`, or falls back to the
+  logged-in operator's active personal set. Record the returned `operator_ids`
+  before retrieval.
+- never pass a raw `set_id` as a TurboPuffer `allowed_operator_ids` value.
+  `set_id` is a Powerset set UUID; `operator_ids` are the Auth0 user IDs from
+  `set_members.user_id`.
 - resolve raw company names before execute-time company filtering
 - resolve raw investor names before company investor filtering
 - use `company_semantic_queries` for company-domain intent such as database
@@ -298,6 +317,13 @@ the same shape in the final response.
 
 After approval, use the packaged primitive scripts rather than writing ad hoc
 code:
+
+```bash
+python powerpacks/packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
+  --state .powerpacks/runs/search-network-<id>.json \
+  --env-file .env \
+  --write-state
+```
 
 ```bash
 python powerpacks/packs/search/primitives/resolve_education/resolve_education.py \

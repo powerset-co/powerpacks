@@ -30,6 +30,13 @@
       "output_schema": "search-strategy-decision.schema.json"
     },
     {
+      "id": "resolve_set_operators",
+      "kind": "primitive",
+      "primitive": "resolve_set_operators",
+      "optional": true,
+      "note": "Run before company, prefilter, count, or role retrieval so set_id/default-set scoping becomes TurboPuffer operator_ids."
+    },
+    {
       "id": "resolve_education",
       "kind": "primitive",
       "primitive": "resolve_education",

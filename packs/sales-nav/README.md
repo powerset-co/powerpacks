@@ -20,8 +20,8 @@ Sales Nav lives in its own pack instead of under `packs/powerset` because:
 
 This pack **depends on `packs/powerset`** for:
 
-- `auth` — Auth0 PKCE login that mints the bearer token used by the MCP
-  server (`POWERPACKS_POWERSET_TOKEN`).
+- `auth` — Auth0 PKCE login that mints the bearer token written into MCP host
+  config.
 - `mcp_install` — registers the remote `powerset-search` MCP with each
   host (Claude Code, Codex, nanoclaw).
 - `doctor` — verifies the MCP is reachable and the token is fresh.

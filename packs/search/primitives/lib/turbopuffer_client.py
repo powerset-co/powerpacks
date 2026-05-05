@@ -193,6 +193,30 @@ def comparison(field: str, op: str, value: Any) -> tuple:
     return result
 
 
+def allowed_operator_ids_from_payload(payload: dict[str, Any]) -> list[str]:
+    explicit = payload.get("operator_ids") or payload.get("allowed_operator_ids")
+    if explicit:
+        return list(dict.fromkeys(str(value) for value in explicit if value))
+
+    # `set_id` is a Powerset set UUID, not a TurboPuffer operator id. Resolve it
+    # through Postgres before applying the `allowed_operator_ids` filter. When no
+    # set_id is present, low-level filters only inherit explicit env defaults;
+    # personal-set fallback lives in the resolve_set_operators primitive so
+    # import-time/unit-test filter construction never unexpectedly hits Postgres.
+    set_id = str(payload["set_id"]) if payload.get("set_id") else (
+        os.getenv("POWERPACKS_DEFAULT_SET_ID") or os.getenv("POWERSET_DEFAULT_SET_ID")
+    )
+    if not set_id:
+        return []
+    try:
+        from postgres_client import fetch_set_operator_ids  # type: ignore
+
+        resolved = fetch_set_operator_ids(set_id)
+        return list(dict.fromkeys(str(value) for value in resolved.get("operator_ids") or [] if value))
+    except RuntimeError:
+        raise
+
+
 def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
     hard = filter_expression_to_tuple(payload.get("hard_filters"))
     if hard is not None:
@@ -227,8 +251,9 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
         filters.append(comparison("role_ids", "ContainsAny", payload["role_ids"]))
     if payload.get("base_candidate_ids"):
         filters.append(comparison("base_id", "In", payload["base_candidate_ids"]))
-    if payload.get("set_id"):
-        filters.append(comparison("allowed_operator_ids", "ContainsAny", [payload["set_id"]]))
+    operator_ids = allowed_operator_ids_from_payload(payload)
+    if operator_ids:
+        filters.append(comparison("allowed_operator_ids", "ContainsAny", operator_ids))
     if payload.get("position_before_date"):
         filters.append(comparison("start_date_epoch", "Lte", epoch_for_date(payload["position_before_date"], end_of_period=True)))
     if payload.get("position_after_date"):
@@ -329,6 +354,12 @@ def role_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
     prefilters = latest_step_output(state, "apply_prefilters")
     if isinstance(prefilters, dict) and prefilters.get("base_candidate_ids") is not None:
         payload["base_candidate_ids"] = list(dict.fromkeys(str(pid) for pid in prefilters["base_candidate_ids"] if pid))
+
+    resolved_set = latest_step_output(state, "resolve_set_operators")
+    if isinstance(resolved_set, dict) and resolved_set.get("operator_ids"):
+        payload["operator_ids"] = list(dict.fromkeys(str(oid) for oid in resolved_set["operator_ids"] if oid))
+        if resolved_set.get("set_id") and not payload.get("set_id"):
+            payload["set_id"] = str(resolved_set["set_id"])
 
     return payload
 

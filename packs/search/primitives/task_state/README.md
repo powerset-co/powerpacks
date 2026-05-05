@@ -33,6 +33,8 @@ python powerpacks/packs/search/primitives/task_state/task_state.py request-appro
 This writes `planned_steps[]` as a mutable checklist. `steps[]` stays the
 append-only execution log. When `record-step` is called for a matching planned
 step, the planned step is marked completed/failed/skipped with timestamps.
+`--plan-json` should normally be an object with `planned_steps`, but a bare
+array of planned step IDs is also accepted and normalized as `planned_steps`.
 
 ```bash
 python powerpacks/packs/search/primitives/task_state/task_state.py record-step \

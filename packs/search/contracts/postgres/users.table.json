@@ -1,0 +1,16 @@
+{
+  "name": "users",
+  "type": "postgres_table",
+  "version": "2026-05-05",
+  "primary_key": "id",
+  "description": "Application users table mapping Auth0 user IDs to internal operator UUIDs stored in TurboPuffer allowed_operator_ids.",
+  "required_for": [
+    "resolve_set_operators"
+  ],
+  "columns": [
+    {"name": "id", "type": "uuid", "required": true},
+    {"name": "user_id", "type": "text", "required": true},
+    {"name": "email", "type": "text", "required": true},
+    {"name": "name", "type": "text", "required": true}
+  ]
+}

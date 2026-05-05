@@ -212,11 +212,11 @@ codex mcp list 2>/dev/null \
 ```
 
 Claude Code bakes the bearer token into `~/.claude.json` at install time.
-Codex reads it from `POWERPACKS_POWERSET_TOKEN` at runtime, so after
-`$powerset-login` you also need:
+Codex stores the bearer header in `~/.codex/config.toml`, matching Codex's
+HTTP MCP config shape. Re-run the installer to refresh the token:
 
 ```bash
-eval "$(python3 packs/powerset/primitives/mcp_install/mcp_install.py token-env)"
+python3 packs/powerset/primitives/mcp_install/mcp_install.py install --host codex
 ```
 
 ## Verify your install

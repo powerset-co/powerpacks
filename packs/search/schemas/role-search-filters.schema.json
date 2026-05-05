@@ -217,6 +217,11 @@
     },
     "has_domain_intent": { "type": "boolean" },
     "set_id": { "type": "string" },
+    "operator_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Resolved Auth0 user/operator IDs for TurboPuffer allowed_operator_ids filtering. Produced by resolve_set_operators from set_id or default set resolution."
+    },
     "base_candidate_ids": {
       "type": "array",
       "items": { "type": "string" },

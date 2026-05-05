@@ -1,0 +1,17 @@
+{
+  "name": "sets",
+  "type": "postgres_table",
+  "version": "2026-05-05",
+  "primary_key": "id",
+  "description": "Powerset set metadata used to resolve a set_id into the operator IDs that scope private network search.",
+  "required_for": [
+    "resolve_set_operators"
+  ],
+  "columns": [
+    {"name": "id", "type": "uuid", "required": true},
+    {"name": "name", "type": "text/varchar", "required": true},
+    {"name": "created_by", "type": "text", "required": true},
+    {"name": "is_active", "type": "boolean", "required": true},
+    {"name": "is_personal", "type": "boolean", "required": true}
+  ]
+}

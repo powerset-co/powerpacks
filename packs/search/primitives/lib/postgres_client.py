@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import base64
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,148 @@ def json_value(value: Any) -> Any:
         except json.JSONDecodeError:
             return value
     return value
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    try:
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload_b64))
+    except Exception:
+        return {}
+
+
+def credentials_subject(credentials_path: Path | None = None) -> str | None:
+    path = credentials_path or Path.home() / ".powerpacks" / "credentials.json"
+    if not path.exists():
+        return None
+    try:
+        creds = json.loads(path.read_text())
+    except Exception:
+        return None
+    token = str(creds.get("access_token") or "")
+    if not token:
+        return None
+    return _decode_jwt_payload(token).get("sub")
+
+
+def fetch_default_set_id(env_file: Path | None = None, credentials_path: Path | None = None) -> dict[str, Any]:
+    load_env_file(env_file)
+    explicit = os.getenv("POWERPACKS_DEFAULT_SET_ID") or os.getenv("POWERSET_DEFAULT_SET_ID")
+    if explicit:
+        return {"set_id": explicit, "source": "env"}
+
+    subject = credentials_subject(credentials_path)
+    if not subject:
+        return {"set_id": None, "source": "missing_credentials_subject"}
+
+    assert_columns_in_contract("sets", ["id", "name", "created_by", "is_active", "is_personal"])
+    assert_columns_in_contract("users", ["id", "user_id"])
+    psycopg2 = ensure_psycopg2()
+    query = """
+        SELECT id::text, name, is_personal
+        FROM sets
+        WHERE created_by = %s
+          AND is_active IS TRUE
+        ORDER BY is_personal DESC, created_at DESC
+        LIMIT 1
+    """
+    with psycopg2.connect(database_url()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (subject,))
+            row = cur.fetchone()
+    if not row:
+        return {"set_id": None, "source": "no_active_set_for_credentials_subject", "subject": subject}
+    return {"set_id": str(row[0]), "set_name": row[1], "is_personal": bool(row[2]), "source": "credentials_subject", "subject": subject}
+
+
+def fetch_set_operator_ids(
+    set_id: str | None = None,
+    env_file: Path | None = None,
+    credentials_path: Path | None = None,
+) -> dict[str, Any]:
+    load_env_file(env_file)
+    source = "argument"
+    resolved_set_id = set_id
+    default_info: dict[str, Any] = {}
+    if not resolved_set_id:
+        default_info = fetch_default_set_id(env_file, credentials_path)
+        resolved_set_id = default_info.get("set_id")
+        source = str(default_info.get("source") or "default")
+    if not resolved_set_id:
+        raise RuntimeError("set_id not provided and no default set could be resolved")
+
+    assert_columns_in_contract("sets", ["id", "name", "created_by", "is_active", "is_personal"])
+    assert_columns_in_contract("set_members", ["id", "set_id", "user_id", "role", "joined_at"])
+    assert_columns_in_contract("users", ["id", "user_id", "email", "name"])
+    psycopg2 = ensure_psycopg2()
+    query = """
+        SELECT
+            s.id::text AS set_id,
+            s.name AS set_name,
+            s.created_by,
+            s.is_personal,
+            sm.user_id AS auth0_user_id,
+            u.id::text AS operator_id,
+            u.email,
+            u.name AS operator_name,
+            sm.role
+        FROM sets s
+        LEFT JOIN set_members sm
+          ON sm.set_id = s.id
+        LEFT JOIN users u
+          ON u.user_id = sm.user_id
+        WHERE s.id = %s::uuid
+          AND s.is_active IS TRUE
+        ORDER BY
+            CASE WHEN sm.role = 'owner' THEN 0 ELSE 1 END,
+            sm.joined_at ASC NULLS LAST,
+            sm.user_id ASC NULLS LAST
+    """
+    with psycopg2.connect(database_url()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (resolved_set_id,))
+            rows = cur.fetchall()
+    if not rows:
+        raise RuntimeError(f"active set not found: {resolved_set_id}")
+
+    set_name = rows[0][1]
+    created_by = rows[0][2]
+    is_personal = bool(rows[0][3])
+    members: list[dict[str, str]] = []
+    seen: set[str] = set()
+    auth0_user_ids: list[str] = []
+    for _, _, _, _, auth0_user_id, operator_id, email, operator_name, role in rows:
+        if auth0_user_id:
+            auth0_user_ids.append(str(auth0_user_id))
+        if not operator_id:
+            continue
+        resolved_operator_id = str(operator_id)
+        if resolved_operator_id in seen:
+            continue
+        seen.add(resolved_operator_id)
+        members.append({
+            "operator_id": resolved_operator_id,
+            "auth0_user_id": str(auth0_user_id or ""),
+            "email": str(email or ""),
+            "name": str(operator_name or ""),
+            "role": str(role or ""),
+        })
+
+    if created_by and str(created_by) not in auth0_user_ids:
+        auth0_user_ids.insert(0, str(created_by))
+
+    return {
+        "set_id": str(resolved_set_id),
+        "set_name": set_name,
+        "is_personal": is_personal,
+        "source": source,
+        "default_resolution": default_info,
+        "operator_ids": [member["operator_id"] for member in members],
+        "auth0_user_ids": list(dict.fromkeys(auth0_user_ids)),
+        "operator_count": len(members),
+        "members": members,
+    }
 
 
 def fetch_person_rows(person_ids: list[str], env_file: Path | None = None) -> list[dict[str, Any]]:
