@@ -119,9 +119,13 @@ git clone https://github.com/<org>/powerpacks.git && cd powerpacks
 ./install.sh claude-code          # → ~/.claude/skills/
 ./install.sh nanoclaw /path/to/nanoclaw
 
-# 3. restart the agent host so it reloads the skill list
+# 3. install/auth the Powerset MCP for MCP-backed skills (pick your host)
+./install-powerset-mcp.sh --host codex
+# or: ./install-powerset-mcp.sh --host claude
 
-# 4. inside the agent, run any of:
+# 4. restart the agent host so it reloads skills and MCP config
+
+# 5. inside the agent, run any of:
 /search-network senior infra eng at fintech
 /search-company stripe-like fintech infra companies
 $powerset-login                   # provisions .env from GCP Secret Manager
@@ -200,11 +204,12 @@ changes — `$powerset-login` covers that path.
 ### MCP install (powerset-search)
 
 The `sales-nav-search` skill and any future MCP-driven skills need the remote
-`powerset-search` MCP registered with your agent host. `$powerset-login`
-does this for you as part of its setup flow, but you can also run it directly:
+`powerset-search` MCP registered with your agent host. The wrapper below
+handles Auth0 login when credentials are missing or expired, installs the MCP,
+and writes the bearer token into host config:
 
 ```bash
-python3 packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+./install-powerset-mcp.sh --host codex      # or claude/all
 # verify
 claude mcp list                  # for Claude Code
 codex mcp list 2>/dev/null \
@@ -216,7 +221,7 @@ Codex stores the bearer header in `~/.codex/config.toml`, matching Codex's
 HTTP MCP config shape. Re-run the installer to refresh the token:
 
 ```bash
-python3 packs/powerset/primitives/mcp_install/mcp_install.py install --host codex
+./install-powerset-mcp.sh --host codex
 ```
 
 ## Verify your install

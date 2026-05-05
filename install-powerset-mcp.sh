@@ -12,7 +12,8 @@ usage() {
 usage: ./install-powerset-mcp.sh [--host all|codex|claude]
 
 Installs the powerset-search MCP and writes a fresh bearer token into the host
-MCP config. Re-run this script to refresh the token after it expires.
+MCP config. If Powerset credentials are missing or expired, this script starts
+the Auth0 login flow first. Re-run it to refresh the token after it expires.
 EOF
 }
 

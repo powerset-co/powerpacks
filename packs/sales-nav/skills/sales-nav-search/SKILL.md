@@ -53,22 +53,18 @@ server.
 
 ## Prereqs
 
-Run these once (or use `$powerset-login`'s `doctor fix --interactive` which
-does both in one shot):
+Run this once. It starts Auth0 login if credentials are missing or expired,
+then installs the MCP into the chosen host:
 
 ```bash
-# 1. Auth (once per machine, refreshed automatically)
-python powerpacks/packs/powerset/primitives/auth/auth.py login
-
-# 2. Install the MCP into your host (Claude Code or Codex or both)
-python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+./install-powerset-mcp.sh --host all
 ```
 
 If on Codex, rerun MCP install when the Auth0 token needs to be refreshed.
 The installer writes a fresh `Authorization` header into `~/.codex/config.toml`:
 
 ```bash
-python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host codex
+./install-powerset-mcp.sh --host codex
 ```
 
 ## conversation_id playbook
