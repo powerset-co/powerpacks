@@ -1,0 +1,70 @@
+{
+  "task": "sales_nav_search",
+  "version": 1,
+  "description": "Run a Sales Navigator search through the powerset-search MCP, with server-side artifact persistence and paginated retrieval.",
+  "default_constraints": {
+    "requires_powerset_auth": true,
+    "requires_powerset_mcp": true,
+    "set_id_required": true,
+    "persist_artifact_default": true,
+    "page_size_max": 25
+  },
+  "preflight": [
+    {
+      "id": "ensure_powerset_login",
+      "kind": "skill",
+      "skill": "powerset-login",
+      "if_missing": ["powerpacks_powerset_token"]
+    },
+    {
+      "id": "ensure_mcp_installed",
+      "kind": "primitive",
+      "pack": "powerset",
+      "primitive": "mcp_install",
+      "command": "install",
+      "args": {"host": "all"}
+    },
+    {
+      "id": "ensure_mcp_healthy",
+      "kind": "primitive",
+      "pack": "powerset",
+      "primitive": "doctor",
+      "command": "run",
+      "checks": ["mcp_powerset_search"]
+    }
+  ],
+  "steps": [
+    {
+      "id": "resolve_filters",
+      "kind": "mcp_tool",
+      "tool": "sales_nav_resolve",
+      "optional": true,
+      "when": "user provides company names or human-readable titles instead of LinkedIn IDs"
+    },
+    {
+      "id": "run_search",
+      "kind": "mcp_tool",
+      "tool": "sales_nav_search",
+      "defaults": {
+        "persist_artifact": true,
+        "count": 25
+      },
+      "loop": {
+        "while": "result.has_more",
+        "next_arg": "start_offset",
+        "next_arg_from": "result.next_start_offset"
+      }
+    },
+    {
+      "id": "retrieve_artifact",
+      "kind": "mcp_tool",
+      "tool": "get_artifact",
+      "optional": true,
+      "when": "user wants to page back through a previously persisted result set"
+    }
+  ],
+  "outputs": {
+    "primary": "leads",
+    "persistent": "artifact_id"
+  }
+}
