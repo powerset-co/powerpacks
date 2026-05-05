@@ -1,0 +1,69 @@
+[
+  {
+    "id": "own-contacts-most-messaged-fields",
+    "query": "Show me my contacts ordered by most messages and include emails, Twitter, and LinkedIn.",
+    "must_include": [
+      "list_contacts",
+      "total_messages",
+      "desc",
+      "emails",
+      "x_twitter_handle",
+      "confirmed_linkedin_url"
+    ],
+    "must_not_include": [
+      "list_set_contacts",
+      "search(",
+      "sales_nav_search"
+    ],
+    "expected_tools": ["list_contacts"],
+    "notes": "Own contacts, field projection. Twitter is output field, not search syntax."
+  },
+  {
+    "id": "set-contacts-powerset-most-messaged",
+    "query": "Show me the most messaged contacts in my Powerset set.",
+    "must_include": [
+      "list_sets",
+      "exact",
+      "non-personal",
+      "most members",
+      "list_set_contacts",
+      "total_messages"
+    ],
+    "must_not_include": [
+      "resolve_set_operators",
+      "search-network",
+      "query_results"
+    ],
+    "expected_tools": ["list_sets", "list_set_contacts"],
+    "notes": "Set-name routing and tiebreaker must be explicit."
+  },
+  {
+    "id": "email-domain-filter",
+    "query": "Search my contacts for people with powerset.co emails.",
+    "must_include": [
+      "list_contacts",
+      "email:@powerset.co"
+    ],
+    "must_not_include": [
+      "semantic",
+      "list_company_people"
+    ],
+    "expected_tools": ["list_contacts"],
+    "notes": "Uses the app's email: prefix search."
+  },
+  {
+    "id": "twitter-is-field-not-filter",
+    "query": "Show my contacts' Twitter handles.",
+    "must_include": [
+      "list_contacts",
+      "x_twitter_handle"
+    ],
+    "must_not_include": [
+      "twitter:",
+      "search=\"twitter",
+      "list_set_contacts"
+    ],
+    "expected_tools": ["list_contacts"],
+    "notes": "No Twitter search prefix exists; it is only an output field."
+  }
+]
