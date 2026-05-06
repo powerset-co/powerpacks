@@ -58,6 +58,7 @@ agent-facing orchestration layer; it does not duplicate those contracts.
 | Primitive | Purpose |
 | --- | --- |
 | `sales_nav_artifacts` | Initialize a local run, ingest MCP page responses into `leads.jsonl` / `mutuals.jsonl`, merge member URL resolutions, export CSVs, and answer lookup queries against the files. |
+| `score_sales_nav_leads` | Fan-out LLM scoring over a run's `leads.jsonl` + mutual context, writing matching leads to `scores/<criteria>/matches.csv`. |
 
 ## Defaults
 

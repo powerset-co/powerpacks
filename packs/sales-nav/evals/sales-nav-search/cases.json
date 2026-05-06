@@ -66,6 +66,21 @@
     "notes": "If the MCP is missing, the skill must route the user through $powerset login first. It must NOT pretend to call sales_nav_search."
   },
   {
+    "id": "qualitative-refinement-existing-run",
+    "query": "For the Brookfield Sales Nav run we just loaded, show me people with real estate exposure.",
+    "must_include": [
+      "score_sales_nav_leads",
+      "leads.jsonl",
+      "real estate exposure",
+      "matches.csv"
+    ],
+    "must_not_include": [
+      "sales_nav_search",
+      "new artifact_id"
+    ],
+    "notes": "Qualitative refinement over an existing Sales Nav run should score local leads, not run a fresh upstream Sales Nav search."
+  },
+  {
     "id": "resolve-mutuals-to-urls",
     "query": "Lead 12345 has mutual_member_ids [67890, 11111, 22222] from a previous search. Show me their LinkedIn URLs.",
     "must_include": [

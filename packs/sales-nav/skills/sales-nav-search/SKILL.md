@@ -165,8 +165,8 @@ python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py exp
   --state .powerpacks/sales-nav/runs/<run>/state.json
 ```
 
-For follow-up questions over the same Sales Nav run (for example "show me people
-with real estate exposure"), do not run a new Sales Nav search unless the user is
+For deterministic follow-up questions over the same Sales Nav run (for example
+"show me Brookfield VPs"), do not run a new Sales Nav search unless the user is
 changing the upstream search filters. Use local lookup first; it searches names,
 titles, companies, headlines, summaries, experiences, and education in
 `leads.jsonl` and joins mutuals:
@@ -175,6 +175,20 @@ titles, companies, headlines, summaries, experiences, and education in
 python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py lookup \
   --state .powerpacks/sales-nav/runs/<run>/state.json --query "<name/company/title>"
 ```
+
+For qualitative/refinement questions (for example "show me people with real
+estate exposure"), run the scoring primitive instead of grepping manually:
+
+```bash
+python packs/sales-nav/primitives/score_sales_nav_leads/score_sales_nav_leads.py \
+  --state .powerpacks/sales-nav/runs/<run>/state.json \
+  --criteria "real estate exposure" \
+  --threshold 0.7
+```
+
+It fans out over `leads.jsonl`, includes joined mutual context, writes only
+matching leads to `scores/<criteria>/matches.jsonl`, and writes the user-facing
+`matches.csv`. Non-matches are not written unless `--dump-debug` is passed.
 
 ## Workflow
 

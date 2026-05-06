@@ -1,7 +1,7 @@
 {
   "task": "sales_nav_search",
   "version": 1,
-  "description": "Run a Sales Navigator search through the powerset-search MCP, with server-side artifact persistence, local file handoffs, and paginated retrieval."
+  "description": "Run a Sales Navigator search through the powerset-search MCP, with server-side artifact persistence, local file handoffs, and paginated retrieval.",
   "default_constraints": {
     "requires_powerset_auth": true,
     "requires_powerset_mcp": true,
@@ -75,7 +75,23 @@
       "kind": "mcp_tool",
       "tool": "get_artifact",
       "optional": true,
-      "when": "user wants to page back through a previously persisted result set"
+      "defaults": {"include_content": true},
+      "when": "user wants to page back through a previously persisted result set or after search/enrichment to ingest full lead content"
+    },
+    {
+      "id": "enrich_visible_profiles",
+      "kind": "mcp_tool",
+      "tool": "enrich_extended_profiles",
+      "optional": true,
+      "when": "visible Sales Nav leads should be enriched with full profile data"
+    },
+    {
+      "id": "score_local_leads",
+      "kind": "primitive",
+      "pack": "sales-nav",
+      "primitive": "score_sales_nav_leads",
+      "optional": true,
+      "when": "user asks a qualitative/refinement question over the current Sales Nav run"
     }
   ],
   "outputs": {

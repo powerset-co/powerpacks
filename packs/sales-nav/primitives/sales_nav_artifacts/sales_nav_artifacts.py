@@ -257,6 +257,7 @@ def normalize_lead(
     if not mutual_ids:
         mutual_ids = list_ints([m.get("member_id") for m in lead.get("mutuals") or [] if isinstance(m, dict)])
     row = dict(existing or {})
+    row.pop("source_account_id", None)
     row.update({
         "conversation_id": state.get("conversation_id") or page_meta.get("conversation_id"),
         "set_id": state.get("set_id"),
@@ -349,6 +350,7 @@ def upsert_by_key(rows: list[dict[str, Any]], incoming: list[dict[str, Any]], ke
         key = tuple(str(row.get(k) or "") for k in key_fields)
         if key in by_key:
             existing = by_key[key]
+            existing.pop("source_account_id", None)
             for field, value in row.items():
                 if field == "first_seen_at":
                     continue
@@ -364,6 +366,7 @@ def upsert_by_key(rows: list[dict[str, Any]], incoming: list[dict[str, Any]], ke
             existing["last_seen_at"] = row.get("last_seen_at") or now_iso()
             by_key[key] = existing
         else:
+            row.pop("source_account_id", None)
             by_key[key] = row
             order.append(key)
     return [by_key[key] for key in order]
@@ -417,6 +420,8 @@ def cmd_ingest_page(args: argparse.Namespace) -> None:
         raise SystemExit("sales nav response requires reconnect")
 
     existing_leads = read_jsonl(paths["leads_jsonl"])
+    for row in existing_leads:
+        row.pop("source_account_id", None)
     by_member = {str(row.get("member_id")): row for row in existing_leads if row.get("member_id")}
     normalized_leads: list[dict[str, Any]] = []
     normalized_mutuals: list[dict[str, Any]] = []
@@ -430,6 +435,8 @@ def cmd_ingest_page(args: argparse.Namespace) -> None:
 
     all_leads = upsert_by_key(existing_leads, normalized_leads, ["member_id"])
     existing_mutuals = read_jsonl(paths["mutuals_jsonl"])
+    for row in existing_mutuals:
+        row.pop("source_account_id", None)
     all_mutuals = upsert_by_key(existing_mutuals, normalized_mutuals, ["lead_member_id", "mutual_member_id"])
     write_jsonl(paths["leads_jsonl"], all_leads)
     write_jsonl(paths["mutuals_jsonl"], all_mutuals)
@@ -504,6 +511,8 @@ def cmd_export(args: argparse.Namespace) -> None:
     paths = state_paths(state)
     leads = read_jsonl(paths["leads_jsonl"])
     mutuals = read_jsonl(paths["mutuals_jsonl"])
+    for row in leads + mutuals:
+        row.pop("source_account_id", None)
     leads_csv = paths.get("final_leads_csv") or paths.get("leads_csv")
     mutuals_csv = paths.get("final_mutuals_csv") or paths.get("mutuals_csv")
     if not leads_csv or not mutuals_csv:
