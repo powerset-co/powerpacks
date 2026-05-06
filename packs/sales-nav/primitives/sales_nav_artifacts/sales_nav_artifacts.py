@@ -3,8 +3,9 @@
 
 This primitive intentionally does not call the MCP itself. Agents save each MCP
 page response to a small JSON file, then pass that file path here. The primitive
-normalizes and appends/upserts local JSONL/CSV handoff files so later steps only
-need paths, not large lead payloads in chat context.
+normalizes and appends/upserts local JSONL handoff files so later steps only
+need paths, not large lead payloads in chat context. CSVs are written only as
+final user-facing exports.
 """
 
 from __future__ import annotations
@@ -136,8 +137,8 @@ def init_state(args: argparse.Namespace) -> dict[str, Any]:
         "leads_jsonl": str(run_dir / "leads.jsonl"),
         "mutuals_jsonl": str(run_dir / "mutuals.jsonl"),
         "member_urls_json": str(run_dir / "member_urls.json"),
-        "leads_csv": str(run_dir / "leads.csv"),
-        "mutuals_csv": str(run_dir / "mutuals.csv"),
+        "final_leads_csv": str(run_dir / "exports" / "leads.csv"),
+        "final_mutuals_csv": str(run_dir / "exports" / "mutuals.csv"),
         "manifest": str(run_dir / MANIFEST_NAME),
     }
     state = {
@@ -485,13 +486,17 @@ def cmd_export(args: argparse.Namespace) -> None:
     paths = state_paths(state)
     leads = read_jsonl(paths["leads_jsonl"])
     mutuals = read_jsonl(paths["mutuals_jsonl"])
-    write_csv(paths["leads_csv"], leads, LEAD_FIELDS)
-    write_csv(paths["mutuals_csv"], mutuals, MUTUAL_FIELDS)
+    leads_csv = paths.get("final_leads_csv") or paths.get("leads_csv")
+    mutuals_csv = paths.get("final_mutuals_csv") or paths.get("mutuals_csv")
+    if not leads_csv or not mutuals_csv:
+        raise SystemExit("state is missing final CSV paths")
+    write_csv(leads_csv, leads, LEAD_FIELDS)
+    write_csv(mutuals_csv, mutuals, MUTUAL_FIELDS)
     write_manifest(state_path, state)
     print(json.dumps({
         "state": str(state_path),
-        "leads_csv": str(paths["leads_csv"]),
-        "mutuals_csv": str(paths["mutuals_csv"]),
+        "leads_csv": str(leads_csv),
+        "mutuals_csv": str(mutuals_csv),
         "lead_count": len(leads),
         "mutual_edge_count": len(mutuals),
     }, indent=2, sort_keys=True))

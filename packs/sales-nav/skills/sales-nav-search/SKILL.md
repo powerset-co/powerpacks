@@ -96,16 +96,18 @@ Use `packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py` as
 the durable local store for each skill invocation. It normalizes MCP page output
 into these files:
 
-- `leads.jsonl` / `leads.csv` — one row per lead with `member_id`,
+- `leads.jsonl` — internal handoff, one row per lead with `member_id`,
   `profile_id`, `source_account_id`, `source_account_ids`, `operators`,
   `mutual_member_ids`, `linkedin_url`, title/company/location, artifact/source
   metadata, and seen counts.
-- `mutuals.jsonl` / `mutuals.csv` — one row per lead↔mutual edge with
+- `mutuals.jsonl` — internal handoff, one row per lead↔mutual edge with
   `lead_member_id`, `mutual_member_id`, mutual LinkedIn URL if resolved,
   operator/source metadata, and artifact/source metadata.
 - `member_urls.json` — `member_id -> LinkedIn URL` results from
   `sales_nav_resolve_member_ids`.
 - `manifest.json` / `state.json` — paths, counts, artifact ids, pages.
+- `exports/leads.csv` and `exports/mutuals.csv` — final user-facing CSVs written
+  only when you run `export`.
 
 Initialize once per search:
 

@@ -9,10 +9,11 @@ payloads.
 
 Default files under the run directory:
 
-- `leads.jsonl` / `leads.csv` — one row per lead/member
-- `mutuals.jsonl` / `mutuals.csv` — lead ↔ mutual edges with operator/source metadata
-- `member_urls.json` — member_id → LinkedIn URL resolutions
+- `leads.jsonl` — internal handoff, one row per lead/member
+- `mutuals.jsonl` — internal handoff, lead ↔ mutual edges with operator/source metadata
+- `member_urls.json` — internal handoff, member_id → LinkedIn URL resolutions
 - `manifest.json` — paths/counts/artifact ids
+- `exports/leads.csv` and `exports/mutuals.csv` — final user-facing CSVs written only by `export`
 
 Typical workflow:
 

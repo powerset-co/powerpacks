@@ -145,6 +145,8 @@ class SalesNavArtifactsTests(unittest.TestCase):
             exported = self.run_json(["export", "--state", str(state_path)])
             leads_csv = Path(exported["leads_csv"])
             mutuals_csv = Path(exported["mutuals_csv"])
+            self.assertEqual(leads_csv.parent.name, "exports")
+            self.assertEqual(mutuals_csv.parent.name, "exports")
             self.assertTrue(leads_csv.exists())
             self.assertTrue(mutuals_csv.exists())
             with leads_csv.open(newline="") as handle:
