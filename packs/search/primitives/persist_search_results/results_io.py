@@ -64,6 +64,11 @@ def hydrated_profiles(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def frontier_ids(state: dict[str, Any]) -> list[str]:
+    llm_rerank = step_output(state, "llm_rerank_candidates")
+    ids = llm_rerank.get("ranked_candidate_ids") or []
+    if ids:
+        return list(dict.fromkeys(ids))
+
     llm_filter = step_output(state, "llm_filter_candidates")
     ids = llm_filter.get("passed_candidate_ids") or []
     if ids:

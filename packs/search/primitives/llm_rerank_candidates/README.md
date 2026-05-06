@@ -1,10 +1,11 @@
 # llm_rerank_candidates
 
-Async fan-out LLM rerank over a JSONL of candidates. Stdlib only.
+Async fan-out LLM rerank over a JSONL of candidates or a Powerpacks task-state. Stdlib only.
 
 Same shape as the production `SEARCH_V2_RERANK_MAX_CONCURRENT=400` path
 in network-search-api, but Powerpacks-local. Useful for:
 
+- default LLM reranking inside a `search-network` task after hydration/filtering
 - standalone reranking outside a `search-network` task
 - load testing your `OPENAI_API_KEY` rate limit
 - quickly verifying a query + traits produce sensible verdicts on a
@@ -12,15 +13,19 @@ in network-search-api, but Powerpacks-local. Useful for:
 - driving message-pack contact reviews, deal scoring, or any other
   per-item LLM-judgment workload
 
-Does **not** require `set_id` or any task state. Reads JSONL in, writes
-JSONL out.
+Does **not** require `set_id`. It can either read JSONL (`--in`) or read a
+Powerpacks task-state (`--state`) after `hydrate_people` has run.
 
 ## Inputs
 
 - `--in PATH | -` — JSONL of candidates. Each line is a JSON object.
   Object shape is freeform; if it has an `id` / `person_id` /
   `member_id` / `candidate_id` field, that becomes the result id.
-- `--query STRING` — the search query (prompt context)
+- `--state PATH` — Powerpacks task state. Reads `hydrate_people.output.profiles`,
+  uses `llm_filter_candidates.output.passed_candidate_ids` when present, and
+  writes rerank JSONL/CSV artifacts under the run's artifact directory.
+- `--query STRING` — the search query (prompt context; defaults to `state.query`
+  in `--state` mode)
 - `--traits TRAIT` — expected traits (repeatable; pass once per trait)
 - `--concurrency N` — `asyncio.Semaphore` size (default 50; env
   `LLM_RERANK_CONCURRENCY`)
@@ -37,6 +42,12 @@ JSONL out.
   stderr so you can inspect them before spending money.
 - `--include-prompt` — echo the per-item user prompt back into each
   output row (useful for debugging eval drift)
+- `--current-and-matched-only` — in `--state` mode, only pass current and
+  search-matched positions to the LLM. This is on by default and mirrors the
+  app-side token-saving/currentness optimization.
+- `--include-all-positions` — disable that pruning when the query explicitly
+  asks about past/all-time experience.
+- `--write-state` — in `--state` mode, append a `llm_rerank_candidates` step.
 
 ## Outputs
 
@@ -48,6 +59,8 @@ JSONL, one line per input. Order matches input order.
   "score": 0.85,
   "verdict": "include",
   "reason": "AI engineer at OpenAI; matches both traits.",
+  "confidence": 0.88,
+  "trait_scores": {"ai or software engineer": 0.92, "at openai": 1.0},
   "model": "gpt-4o-mini",
   "elapsed_ms": 412,
   "error": null,
@@ -75,7 +88,45 @@ echo '{"id":"p1","name":"Ada Lovelace","headline":"AI engineer at OpenAI"}' \
       --dry-run
 ```
 
-### Real OpenAI run
+### Search-network state run
+
+```bash
+python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py \
+  --state .powerpacks/runs/search-network-<id>.json \
+  --concurrency 200 \
+  --write-state
+```
+
+Writes:
+
+- `artifacts/<task>/llm_rerank_candidates/query_results_v2.jsonl`
+- `artifacts/<task>/llm_rerank_candidates/query_results_v2.csv`
+- `artifacts/<task>/llm_rerank_candidates/raw_rerank_results.jsonl`
+- `artifacts/<task>/llm_rerank_candidates/system_prompt.txt`
+
+The primary JSONL/CSV artifacts use the exact `query_results_v2` row shape from
+`network-search-api`:
+
+```jsonc
+{
+  "conversation_id": "...",
+  "query": "...",
+  "person_id": "...",
+  "result_index": 0,
+  "matched_position_indexes": [],
+  "final_score": 0.87,
+  "trait_scores": {
+    "trait": {"score": 0.87, "reason": "...", "confidence": 0.9}
+  },
+  "overall_reasoning": "...",
+  "pre_rerank_score": 0.42,
+  "tags": null,
+  "vertical_sources": null,
+  "created_at": "..."
+}
+```
+
+### Real OpenAI JSONL run
 
 ```bash
 cat candidates.jsonl \
@@ -107,14 +158,17 @@ python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py \
   the file-descriptor limit (`ulimit -n`) and your OpenAI tier rate
   limits.
 
+## Prompt
+
+See `PROMPT.md` and the `SYSTEM_PROMPT` constant in `llm_rerank_candidates.py`.
+The prompt copies the production app's key rerank rules: calibrated scores,
+evidence-based reasoning, trait-level scores, recency awareness, and hard gates
+for explicit exclusions.
+
 ## What this primitive does NOT do
 
-- It does not write to a `task_state` file. If you need that, wrap this
-  primitive in a step that reads the JSONL it produces and records the
-  result into task state via `task_state record-step`.
-- It does not enforce a particular result schema beyond
-  `{score, verdict, reason}`. The system prompt steers the model toward
-  that shape, but downstream consumers should still validate.
-- It does not de-duplicate candidates or reorder by score. Output order
-  matches input order. If you want a sorted "top-K" you sort
-  downstream.
+- It does not de-duplicate candidates before scoring. In `--state` mode it uses
+  the candidate IDs already recorded by retrieval/filtering.
+- It does not hide all-time history unless you let the default
+  `--current-and-matched-only` pruning run. Use `--include-all-positions` for
+  explicit past/all-time queries.

@@ -182,7 +182,7 @@ def tag(name: str, value: Any, indent: str = "  ") -> str | None:
     return f"{indent}<{name}>{escape(str(value))}</{name}>"
 
 
-def profile_to_xml(profile: dict[str, Any]) -> str:
+def profile_to_xml(profile: dict[str, Any], *, current_and_matched_only: bool = False) -> str:
     person_id = profile.get("person_id") or profile.get("id") or ""
     parts = [f"<person id='{escape(str(person_id))}'>"]
     for key in ["name", "headline", "location", "summary", "inferred_age", "years_of_experience"]:
@@ -203,7 +203,16 @@ def profile_to_xml(profile: dict[str, Any]) -> str:
         ]
 
     matched = set(profile.get("matched_position_indexes") or [])
-    for idx, pos in enumerate(positions[:20]):
+    if current_and_matched_only:
+        selected_positions = [
+            (idx, pos) for idx, pos in enumerate(positions)
+            if isinstance(pos, dict) and (pos.get("is_current") or idx in matched)
+        ]
+        if not selected_positions and positions:
+            selected_positions = [(0, positions[0])]
+    else:
+        selected_positions = list(enumerate(positions[:20]))
+    for idx, pos in selected_positions:
         if not isinstance(pos, dict):
             continue
         status = "current" if pos.get("is_current") else "past"
@@ -366,6 +375,9 @@ def cmd_filter(args: argparse.Namespace) -> None:
     query = state.get("query") or ""
     traits = args.traits or trait_lines(state)
 
+    out_dir = artifact_dir(state_path, state) / "llm_filter_candidates"
+    prompt_dir = out_dir / "prompts"
+
     if args.dry_run:
         print(json.dumps({
             "state": str(state_path),
@@ -375,18 +387,31 @@ def cmd_filter(args: argparse.Namespace) -> None:
             "batch_size": args.batch_size,
             "model": args.model,
             "threshold": args.threshold,
+            "current_and_matched_only": args.current_and_matched_only,
             "would_write_state": args.write_state,
         }, indent=2, sort_keys=True))
         return
 
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    (prompt_dir / "system_prompt.txt").write_text(RESULT_FILTER_BATCH_SYSTEM_PROMPT)
+    prompt_rows: list[dict[str, Any]] = []
+
     scores: dict[str, dict[str, Any]] = {}
-    for batch in batch_ids:
-        candidates_profiles = "\n\n".join(profile_to_xml(profiles[pid]) for pid in batch)
+    for batch_idx, batch in enumerate(batch_ids):
+        candidates_profiles = "\n\n".join(
+            profile_to_xml(profiles[pid], current_and_matched_only=args.current_and_matched_only)
+            for pid in batch
+        )
         human_prompt = RESULT_FILTER_BATCH_HUMAN_PROMPT.format(
             query=query,
             traits_list=traits,
             candidates_profiles=candidates_profiles,
         )
+        prompt_rows.append({
+            "batch_index": batch_idx,
+            "candidate_ids": batch,
+            "prompt": human_prompt,
+        })
         try:
             parsed = call_openai(args.model, RESULT_FILTER_BATCH_SYSTEM_PROMPT, human_prompt)
         except Exception:
@@ -421,16 +446,18 @@ def cmd_filter(args: argparse.Namespace) -> None:
     score_rows = [scores[pid] for pid in filter_ids if pid in scores]
     filtered_rows = [scores[pid] for pid in filtered if pid in scores]
 
-    out_dir = artifact_dir(state_path, state) / "llm_filter_candidates"
     all_scores_path = out_dir / "scores.jsonl"
     filtered_path = out_dir / "filtered.jsonl"
+    prompts_path = prompt_dir / "batch_prompts.jsonl"
     write_jsonl(all_scores_path, score_rows)
     write_jsonl(filtered_path, filtered_rows)
+    write_jsonl(prompts_path, prompt_rows)
 
     output = {
         "model": args.model,
         "threshold": args.threshold,
         "batch_size": args.batch_size,
+        "current_and_matched_only": args.current_and_matched_only,
         "candidate_count": len(ids),
         "hydrated_count": len(profiles),
         "scored_count": len(filter_ids),
@@ -443,6 +470,8 @@ def cmd_filter(args: argparse.Namespace) -> None:
         "artifacts": {
             "scores_jsonl": str(all_scores_path),
             "filtered_jsonl": str(filtered_path),
+            "system_prompt": str(prompt_dir / "system_prompt.txt"),
+            "batch_prompts_jsonl": str(prompts_path),
         },
     }
 
@@ -463,6 +492,7 @@ def main() -> None:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-partial-hydration", action="store_true")
+    parser.add_argument("--current-and-matched-only", action="store_true", help="Only include current and search-matched positions in LLM prompt")
     parser.add_argument("--on-error", choices=["pass_all", "fail"], default="pass_all")
     args = parser.parse_args()
     cmd_filter(args)

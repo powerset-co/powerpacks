@@ -34,6 +34,7 @@
       "count_candidates",
       "hydrate_people",
       "persist_search_results",
+      "query_results_v2",
       "metro_areas",
       "is_current",
       "top_k"

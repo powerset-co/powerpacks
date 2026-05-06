@@ -20,6 +20,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -293,6 +294,95 @@ class FanOutVerdictShapeTests(unittest.TestCase):
                 self.assertIn("model", r)
                 self.assertIn("elapsed_ms", r)
                 self.assertIsNone(r["error"])
+
+
+class StateModeQueryResultsV2Tests(unittest.TestCase):
+    def test_state_mode_writes_query_results_v2_schema_artifacts(self) -> None:
+        state = {
+            "task_id": "search-network-test",
+            "conversation_id": "conv-test",
+            "query": "ai engineer at openai",
+            "steps": [
+                {
+                    "id": "hydrate_people",
+                    "output": {
+                        "profiles": [
+                            {
+                                "person_id": "p1",
+                                "name": "Ada",
+                                "headline": "AI Engineer at OpenAI",
+                                "base_score": 0.42,
+                                "matched_position_indexes": [0],
+                                "vertical_sources": ["role"],
+                                "positions": [
+                                    {
+                                        "position_title": "AI Engineer",
+                                        "company_name": "OpenAI",
+                                        "is_current": True,
+                                    },
+                                    {
+                                        "position_title": "Intern",
+                                        "company_name": "OtherCo",
+                                        "is_current": False,
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as td, _MockServer(latency_sec=0) as mock:
+            state_path = Path(td) / "state.json"
+            state_path.write_text(json.dumps(state))
+            cmd = [
+                sys.executable,
+                str(RERANK_PY),
+                "--state",
+                str(state_path),
+                "--api-base",
+                mock.url,
+                "--api-key",
+                "fake",
+                "--traits",
+                "ai engineer",
+                "--write-state",
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT), timeout=30)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            output = json.loads(proc.stdout)
+            artifacts = output["artifacts"]
+            self.assertIn("query_results_v2_jsonl", artifacts)
+            row = json.loads(Path(artifacts["query_results_v2_jsonl"]).read_text().splitlines()[0])
+            self.assertEqual(
+                set(row),
+                {
+                    "conversation_id",
+                    "query",
+                    "person_id",
+                    "result_index",
+                    "matched_position_indexes",
+                    "final_score",
+                    "trait_scores",
+                    "overall_reasoning",
+                    "pre_rerank_score",
+                    "tags",
+                    "vertical_sources",
+                    "created_at",
+                },
+            )
+            self.assertEqual(row["conversation_id"], "conv-test")
+            self.assertEqual(row["query"], "ai engineer at openai")
+            self.assertEqual(row["person_id"], "p1")
+            self.assertEqual(row["result_index"], 0)
+            self.assertEqual(row["matched_position_indexes"], [0])
+            self.assertEqual(row["pre_rerank_score"], 0.42)
+            self.assertEqual(row["vertical_sources"], ["role"])
+            self.assertIn("ai engineer", row["trait_scores"])
+            self.assertIn("score", row["trait_scores"]["ai engineer"])
+            self.assertIn("reason", row["trait_scores"]["ai engineer"])
+            updated = json.loads(state_path.read_text())
+            self.assertEqual(updated["steps"][-1]["id"], "llm_rerank_candidates")
 
 
 class FanOutRetryTests(unittest.TestCase):

@@ -36,6 +36,13 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
 def append_event(state_path: Path, event: dict[str, Any]) -> None:
     event_path = state_path.with_suffix(state_path.suffix + ".events.jsonl")
     event_path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,6 +92,39 @@ def base_person_id(value: str) -> str:
     if len(parts) == 6 and parts[5].isdigit():
         return "-".join(parts[:5])
     return str(value)
+
+
+def artifact_dir(state_path: Path, state: dict[str, Any]) -> Path:
+    existing = state.get("artifacts") or {}
+    if existing.get("artifact_dir"):
+        return Path(str(existing["artifact_dir"]))
+    return state_path.parent / "artifacts" / str(state.get("task_id") or state_path.stem)
+
+
+def current_profile_view(profile: dict[str, Any]) -> dict[str, Any]:
+    """Compact/current-only view for inspecting what LLM filter/rerank should see."""
+    positions = profile.get("positions") or []
+    matched = set(profile.get("matched_position_indexes") or [])
+    selected = []
+    for idx, pos in enumerate(positions):
+        if not isinstance(pos, dict):
+            continue
+        if pos.get("is_current") or idx in matched:
+            selected.append(pos)
+    if not selected and positions:
+        selected = [positions[0]]
+    return {
+        "person_id": profile.get("person_id"),
+        "name": profile.get("name"),
+        "headline": profile.get("headline"),
+        "location": profile.get("location"),
+        "linkedin_url": profile.get("linkedin_url"),
+        "positions": selected,
+        "education": (profile.get("education") or [])[:3],
+        "tech_skills": profile.get("tech_skills"),
+        "total_interactions": profile.get("total_interactions"),
+        "matched_position_indexes": profile.get("matched_position_indexes") or [],
+    }
 
 
 def record_step(state_path: Path, state: dict[str, Any], output: dict[str, Any], elapsed_ms: int) -> None:
@@ -140,11 +180,27 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
     order = {pid: idx for idx, pid in enumerate(requested)}
     profiles.sort(key=lambda profile: order.get(str(profile.get("person_id")), len(order)))
 
+    artifacts: dict[str, Any] = {}
+    if state_path:
+        out_dir = artifact_dir(state_path, state) / "hydrate_people"
+        profiles_json = out_dir / "profiles.json"
+        profiles_jsonl = out_dir / "profiles.jsonl"
+        current_jsonl = out_dir / "profiles.current_or_matched.jsonl"
+        write_json(profiles_json, {"profiles": profiles})
+        write_jsonl(profiles_jsonl, profiles)
+        write_jsonl(current_jsonl, [current_profile_view(profile) for profile in profiles])
+        artifacts = {
+            "profiles_json": str(profiles_json),
+            "profiles_jsonl": str(profiles_jsonl),
+            "current_or_matched_jsonl": str(current_jsonl),
+        }
+
     output = {
         "requested": len(requested),
         "hydrated": len(profiles),
         "profile_ids": [profile.get("person_id") for profile in profiles if profile.get("person_id")],
         "profiles": profiles,
+        "artifacts": artifacts,
         "source": {
             "type": "postgres_contract",
             "backend": "postgres_supabase",
