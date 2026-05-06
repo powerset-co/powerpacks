@@ -318,10 +318,21 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
                 },
             ],
         }
+        compact_profile = dict(profile)
+        compact_profile["headline"] = "Engineer at OtherCo"
+        compact_profile["positions"] = [
+            {
+                "position_title": "Engineer",
+                "company_name": "OtherCo",
+                "is_current": True,
+            }
+        ]
         with tempfile.TemporaryDirectory() as td, _MockServer(latency_sec=0) as mock:
-            profiles_path = Path(td) / "hydrate_people" / "llm_profiles.jsonl"
+            profiles_path = Path(td) / "hydrate_people" / "profiles.jsonl"
+            llm_profiles_path = Path(td) / "hydrate_people" / "llm_profiles.jsonl"
             profiles_path.parent.mkdir(parents=True)
             profiles_path.write_text(json.dumps(profile) + "\n")
+            llm_profiles_path.write_text(json.dumps(compact_profile) + "\n")
             state = {
                 "task_id": "search-network-test",
                 "conversation_id": "conv-test",
@@ -332,7 +343,7 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
                         "output": {
                             "profile_ids": ["p1"],
                             "profiles_path": str(profiles_path),
-                            "llm_profiles_path": str(profiles_path),
+                            "llm_profiles_path": str(llm_profiles_path),
                         },
                     }
                 ],
@@ -383,6 +394,7 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
             self.assertEqual(row["query"], "ai engineer at openai")
             self.assertEqual(row["person_id"], "p1")
             self.assertEqual(row["result_index"], "0")
+            self.assertEqual(float(row["final_score"]), 0.9)
             self.assertEqual(json.loads(row["matched_position_indexes"]), [0])
             self.assertEqual(float(row["pre_rerank_score"]), 0.42)
             self.assertEqual(json.loads(row["vertical_sources"]), ["role"])

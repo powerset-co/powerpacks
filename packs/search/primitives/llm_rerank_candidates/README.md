@@ -21,8 +21,8 @@ Powerpacks task-state (`--state`) after `hydrate_people` has run.
 - `--in PATH | -` — JSONL of candidates. Each line is a JSON object.
   Object shape is freeform; if it has an `id` / `person_id` /
   `member_id` / `candidate_id` field, that becomes the result id.
-- `--state PATH` — Powerpacks task state. Reads hydrated profiles from
-  `hydrate_people.output.llm_profiles_path` / `profiles_path`, uses
+- `--state PATH` — Powerpacks task state. Reads full hydrated profiles from
+  `hydrate_people.output.profiles_path`, uses
   `llm_filter_candidates.output.passed_candidate_ids` when present, and writes
   `query_results.csv` under the run's artifact directory.
 - `--query STRING` — the search query (prompt context; defaults to `state.query`
@@ -43,11 +43,9 @@ Powerpacks task-state (`--state`) after `hydrate_people` has run.
   stderr so you can inspect them before spending money.
 - `--include-prompt` — echo the per-item user prompt back into each
   output row (useful for debugging eval drift)
-- `--current-and-matched-only` — in `--state` mode, only pass current and
-  search-matched positions to the LLM. This is on by default and mirrors the
-  app-side token-saving/currentness optimization.
-- `--include-all-positions` — disable that pruning when the query explicitly
-  asks about past/all-time experience.
+- `--current-and-matched-only` / `--include-all-positions` — deprecated no-ops
+  in `--state` mode. Rerank always reads the full hydrated profile because it is
+  the final ordering/scoring pass.
 - `--write-state` — in `--state` mode, append a `llm_rerank_candidates` step.
 
 ## Outputs
@@ -164,6 +162,5 @@ The prompt lives in the primitive (`SYSTEM_PROMPT` in `llm_rerank_candidates.py`
 
 - It does not de-duplicate candidates before scoring. In `--state` mode it uses
   the candidate IDs already recorded by retrieval/filtering.
-- It does not hide all-time history unless you let the default
-  `--current-and-matched-only` pruning run. Use `--include-all-positions` for
-  explicit past/all-time queries.
+- It does not use the compact filter handoff in `--state` mode; rerank always
+  reads the full hydrated profile file.

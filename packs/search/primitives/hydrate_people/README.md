@@ -32,8 +32,8 @@ python powerpacks/primitives/hydrate_people/hydrate_people.py \
 
 Outputs in task state:
 
-- `profiles_path` — full hydrated profile JSONL for downstream primitives
-- `llm_profiles_path` — compact LLM handoff JSONL
+- `profiles_path` — full hydrated profile JSONL for downstream primitives and rerank
+- `llm_profiles_path` — compact LLM-filter handoff JSONL for current-role queries
 - `profile_ids`, `requested`, `hydrated`
 
 Pass `--dump-profiles` only when you want an additional debug `profiles.json`.

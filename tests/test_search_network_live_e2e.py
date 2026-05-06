@@ -185,12 +185,14 @@ class SearchNetworkLiveE2ETests(unittest.TestCase):
                 str(LLM_FILTER_PY),
                 "--state",
                 str(state_path),
-                "--current-and-matched-only",
+                "--profile-scope",
+                "auto",
                 "--write-state",
                 "--batch-size",
                 "5",
             ], env=env, timeout=600)
             self.assertEqual(filtered["candidate_count"], hydrated["hydrated"])
+            self.assertEqual(filtered["profile_scope"], "current")
             self.assertEqual(filtered["artifacts"], {})
             self.assertGreater(filtered["passed_count"], 0)
 
@@ -204,6 +206,7 @@ class SearchNetworkLiveE2ETests(unittest.TestCase):
                 "--write-state",
             ], env=env, timeout=600)
             self.assertEqual(set(reranked["artifacts"]), {"query_results_csv"})
+            self.assertEqual(reranked["profile_scope"], "full")
             self.assertEqual(reranked["ranked_count"], filtered["passed_count"])
 
             csv_path = Path(reranked["artifacts"]["query_results_csv"])

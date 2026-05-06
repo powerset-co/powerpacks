@@ -30,9 +30,7 @@ Key copied/scoped app-side rules:
 - explicit exclusions are hard gates and should score 0.0
 - output JSON only
 
-In `--state` mode the primitive defaults to passing only current positions and
-search-matched positions to the LLM (`--current-and-matched-only`, on by
-default). This mirrors the app's `PersonContext.to_xml(current_and_matched_only=True)`
-optimization: shrink tokens and avoid confusing the model with irrelevant old
-positions. Use `--include-all-positions` only when the query is explicitly
-about past/all-time experience.
+In `--state` mode the primitive passes full hydrated profiles to the LLM.
+The earlier conservative LLM filter may use compact current-role profiles for
+current-scoped queries, but rerank is the final ordering pass and needs all
+profile evidence.

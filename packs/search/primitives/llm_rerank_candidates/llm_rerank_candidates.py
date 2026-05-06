@@ -483,17 +483,18 @@ def compact_llm_profile(profile: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def load_items_from_state(state_path: Path, *, current_and_matched_only: bool, max_candidates: Optional[int] = None) -> tuple[dict[str, Any], list[RerankItem]]:
+def load_items_from_state(state_path: Path, *, max_candidates: Optional[int] = None) -> tuple[dict[str, Any], list[RerankItem]]:
     state = read_json(state_path)
     ids = state_frontier_ids(state)
-    profiles = state_hydrated_profiles(state, llm_handoff=current_and_matched_only)
+    # Rerank needs the full hydrated profile. LLM filtering may use the compact
+    # handoff, but reranking should see all profile evidence for final ordering.
+    profiles = state_hydrated_profiles(state, llm_handoff=False)
     items: list[RerankItem] = []
     for pid in ids:
         profile = profiles.get(pid)
         if not profile:
             continue
-        payload = compact_llm_profile(profile) if current_and_matched_only else profile
-        items.append(RerankItem(position=len(items), payload=payload))
+        items.append(RerankItem(position=len(items), payload=profile))
         if max_candidates and len(items) >= max_candidates:
             break
     return state, items
@@ -621,7 +622,7 @@ def main() -> int:
         description="Async fan-out LLM rerank over a JSONL of candidates."
     )
     parser.add_argument("--in", dest="in_path", help="JSONL path or '-' for stdin")
-    parser.add_argument("--state", help="Powerpacks task-state path; reads hydrate_people profiles and writes rerank artifacts")
+    parser.add_argument("--state", help="Powerpacks task-state path; reads full hydrate_people profiles_path and writes rerank artifacts")
     parser.add_argument("--out", dest="out_path", default="-", help="JSONL path or '-' for stdout")
     parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
     parser.add_argument("--traits", action="append", default=[], help="Expected trait (repeatable)")
@@ -633,8 +634,8 @@ def main() -> int:
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--include-prompt", action="store_true")
-    parser.add_argument("--current-and-matched-only", action="store_true", default=True, help="In --state mode, only pass current/search-matched positions to the LLM (default true)")
-    parser.add_argument("--include-all-positions", action="store_true", help="Disable current/search-matched pruning in --state mode")
+    parser.add_argument("--current-and-matched-only", action="store_true", help="Deprecated no-op in --state mode; rerank always reads full profiles_path")
+    parser.add_argument("--include-all-positions", action="store_true", help="Deprecated no-op in --state mode; rerank always reads full profiles_path")
     parser.add_argument("--max-candidates", type=int)
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
@@ -650,7 +651,6 @@ def main() -> int:
         if state_path:
             state, items = load_items_from_state(
                 state_path,
-                current_and_matched_only=not args.include_all_positions,
                 max_candidates=args.max_candidates,
             )
             if not args.query:
@@ -678,7 +678,7 @@ def main() -> int:
             prompt = build_user_prompt(args.query, args.traits, item)
             sys.stderr.write(f"--- {item.id} ---\n{prompt}\n\n")
         sys.stderr.write(
-            f"rerank: dry-run items={len(items)} concurrency={args.concurrency} current_and_matched_only={not args.include_all_positions}\n"
+            f"rerank: dry-run items={len(items)} concurrency={args.concurrency} profile_scope=full\n"
         )
         return 0
 
@@ -729,7 +729,7 @@ def main() -> int:
             "concurrency": args.concurrency,
             "ranked_count": len(results),
             "ranked_candidate_ids": ordered_ids,
-            "current_and_matched_only": not args.include_all_positions,
+            "profile_scope": "full",
             "artifacts": artifacts,
         }
         if args.write_state:

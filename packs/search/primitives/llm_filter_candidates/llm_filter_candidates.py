@@ -171,8 +171,27 @@ def batches(items: list[str], batch_size: int) -> list[list[str]]:
     return [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
 
 
-def trait_lines(state: dict[str, Any]) -> str:
+def role_filters_from_state(state: dict[str, Any]) -> dict[str, Any]:
+    expand_request = step_output(state, "expand_search_request")
+    if isinstance(expand_request.get("role_search_filters"), dict):
+        return expand_request["role_search_filters"]
     expand = step_output(state, "expand")
+    return expand if isinstance(expand, dict) else {}
+
+
+def use_compact_profiles(args: argparse.Namespace, state: dict[str, Any]) -> bool:
+    if args.profile_scope == "current":
+        return True
+    if args.profile_scope == "all":
+        return False
+    if args.current_and_matched_only:
+        return True
+    role_filters = role_filters_from_state(state)
+    return role_filters.get("is_current") is True
+
+
+def trait_lines(state: dict[str, Any]) -> str:
+    expand = role_filters_from_state(state)
     lines: list[str] = []
     role_query = expand.get("role_semantic_query")
     if role_query:
@@ -381,7 +400,8 @@ def cmd_filter(args: argparse.Namespace) -> None:
     state_path = Path(args.state)
     state = read_json(state_path)
     ids = frontier_ids(state)
-    profiles = hydrated_profiles(state, llm_handoff=args.current_and_matched_only)
+    compact_profiles = use_compact_profiles(args, state)
+    profiles = hydrated_profiles(state, llm_handoff=compact_profiles)
     missing = [pid for pid in ids if pid not in profiles]
     if missing and not args.allow_partial_hydration:
         raise SystemExit(
@@ -408,7 +428,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
             "batch_size": args.batch_size,
             "model": args.model,
             "threshold": args.threshold,
-            "current_and_matched_only": args.current_and_matched_only,
+            "profile_scope": "current" if compact_profiles else "all",
             "would_write_state": args.write_state,
         }, indent=2, sort_keys=True))
         return
@@ -418,7 +438,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
     scores: dict[str, dict[str, Any]] = {}
     for batch_idx, batch in enumerate(batch_ids):
         candidates_profiles = "\n\n".join(
-            profile_to_xml(profiles[pid], current_and_matched_only=args.current_and_matched_only)
+            profile_to_xml(profiles[pid], current_and_matched_only=compact_profiles)
             for pid in batch
         )
         human_prompt = RESULT_FILTER_BATCH_HUMAN_PROMPT.format(
@@ -483,7 +503,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
         "model": args.model,
         "threshold": args.threshold,
         "batch_size": args.batch_size,
-        "current_and_matched_only": args.current_and_matched_only,
+        "profile_scope": "current" if compact_profiles else "all",
         "candidate_count": len(ids),
         "hydrated_count": len(profiles),
         "scored_count": len(filter_ids),
@@ -513,7 +533,8 @@ def main() -> None:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-partial-hydration", action="store_true")
-    parser.add_argument("--current-and-matched-only", action="store_true", help="Only include current and search-matched positions in LLM prompt")
+    parser.add_argument("--profile-scope", choices=["auto", "current", "all"], default="auto", help="Profile handoff for filtering: auto uses compact current-role profiles only when role filters are current-scoped")
+    parser.add_argument("--current-and-matched-only", action="store_true", help="Backward-compatible alias for --profile-scope current")
     parser.add_argument("--dump-debug", action="store_true", help="Write filter scores/prompts artifacts for debugging")
     parser.add_argument("--on-error", choices=["pass_all", "fail"], default="pass_all")
     args = parser.parse_args()

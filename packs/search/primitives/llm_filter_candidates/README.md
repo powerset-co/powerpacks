@@ -35,6 +35,14 @@ Inputs:
 - `hydrate_people.output.profiles_path` / `llm_profiles_path` covering the candidate frontier
 - `OPENAI_API_KEY`
 
+Profile handoff:
+
+- `--profile-scope auto` is the default.
+- Auto uses compact `llm_profiles_path` only when role filters are current-role
+  scoped (`is_current: true`).
+- Auto uses full `profiles_path` for all-time/past-role queries.
+- Override with `--profile-scope current` or `--profile-scope all`.
+
 Outputs:
 
 - `llm_filter_candidates` step in task state with passed/filtered IDs and counts

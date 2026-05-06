@@ -163,16 +163,16 @@ search.
     Do not dump full hydrated profiles unless the user explicitly asks to debug
     hydration; then pass `--dump-profiles`.
 13. Run conservative LLM filtering by default:
-    `llm_filter_candidates --state "$STATE" --current-and-matched-only --write-state`.
-    Do not dump filter scores/prompts unless debugging; then pass `--dump-debug`.
-    Use `--allow-partial-hydration` only when the user explicitly accepts partial
-    review.
+    `llm_filter_candidates --state "$STATE" --profile-scope auto --write-state`.
+    Auto uses compact/current-role profiles only when role filters are
+    current-scoped (`is_current: true`); all-time/past-role queries use the full
+    hydrated profile. Do not dump filter scores/prompts unless debugging; then
+    pass `--dump-debug`. Use `--allow-partial-hydration` only when the user
+    explicitly accepts partial review.
 14. Run async LLM reranking by default:
     `llm_rerank_candidates --state "$STATE" --concurrency 200 --write-state`.
-    Keep the default prompt pruning (current positions plus search-matched
-    positions only) unless the query explicitly asks about past/all-time
-    experience, in which case pass `--include-all-positions`. The primary output
-    is `llm_rerank_candidates/query_results.csv`; columns must match the app
+    Rerank is the final ordering pass and reads the full hydrated profile from
+    `profiles_path`. The primary output is `llm_rerank_candidates/query_results.csv`; columns must match the app
     query-results schema: `conversation_id`, `query`, `person_id`,
     `result_index`, `matched_position_indexes`, `final_score`, `trait_scores`,
     `overall_reasoning`, `pre_rerank_score`, `tags`, `vertical_sources`,
