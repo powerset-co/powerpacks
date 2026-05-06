@@ -181,18 +181,18 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
     profiles.sort(key=lambda profile: order.get(str(profile.get("person_id")), len(order)))
 
     artifacts: dict[str, Any] = {}
-    if state_path:
+    if state_path and args.dump_profiles:
         out_dir = artifact_dir(state_path, state) / "hydrate_people"
         profiles_json = out_dir / "profiles.json"
         profiles_jsonl = out_dir / "profiles.jsonl"
-        current_jsonl = out_dir / "profiles.current_or_matched.jsonl"
+        compact_jsonl = out_dir / "profiles.compact.jsonl"
         write_json(profiles_json, {"profiles": profiles})
         write_jsonl(profiles_jsonl, profiles)
-        write_jsonl(current_jsonl, [current_profile_view(profile) for profile in profiles])
+        write_jsonl(compact_jsonl, [current_profile_view(profile) for profile in profiles])
         artifacts = {
             "profiles_json": str(profiles_json),
             "profiles_jsonl": str(profiles_jsonl),
-            "current_or_matched_jsonl": str(current_jsonl),
+            "compact_profiles_jsonl": str(compact_jsonl),
         }
 
     output = {
@@ -220,6 +220,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--dump-profiles", action="store_true", help="Write full hydration inspection artifacts for debugging")
     args = parser.parse_args()
     cmd_hydrate(args)
 

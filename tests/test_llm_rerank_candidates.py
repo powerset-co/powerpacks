@@ -297,7 +297,7 @@ class FanOutVerdictShapeTests(unittest.TestCase):
 
 
 class StateModeQueryResultsV2Tests(unittest.TestCase):
-    def test_state_mode_writes_query_results_v2_schema_artifacts(self) -> None:
+    def test_state_mode_writes_query_results_csv_schema_artifact(self) -> None:
         state = {
             "task_id": "search-network-test",
             "conversation_id": "conv-test",
@@ -352,8 +352,12 @@ class StateModeQueryResultsV2Tests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             output = json.loads(proc.stdout)
             artifacts = output["artifacts"]
-            self.assertIn("query_results_v2_jsonl", artifacts)
-            row = json.loads(Path(artifacts["query_results_v2_jsonl"]).read_text().splitlines()[0])
+            self.assertEqual(set(artifacts), {"query_results_csv"})
+            with Path(artifacts["query_results_csv"]).open(newline="") as handle:
+                import csv
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
             self.assertEqual(
                 set(row),
                 {
@@ -374,13 +378,14 @@ class StateModeQueryResultsV2Tests(unittest.TestCase):
             self.assertEqual(row["conversation_id"], "conv-test")
             self.assertEqual(row["query"], "ai engineer at openai")
             self.assertEqual(row["person_id"], "p1")
-            self.assertEqual(row["result_index"], 0)
-            self.assertEqual(row["matched_position_indexes"], [0])
-            self.assertEqual(row["pre_rerank_score"], 0.42)
-            self.assertEqual(row["vertical_sources"], ["role"])
-            self.assertIn("ai engineer", row["trait_scores"])
-            self.assertIn("score", row["trait_scores"]["ai engineer"])
-            self.assertIn("reason", row["trait_scores"]["ai engineer"])
+            self.assertEqual(row["result_index"], "0")
+            self.assertEqual(json.loads(row["matched_position_indexes"]), [0])
+            self.assertEqual(float(row["pre_rerank_score"]), 0.42)
+            self.assertEqual(json.loads(row["vertical_sources"]), ["role"])
+            trait_scores = json.loads(row["trait_scores"])
+            self.assertIn("ai engineer", trait_scores)
+            self.assertIn("score", trait_scores["ai engineer"])
+            self.assertIn("reason", trait_scores["ai engineer"])
             updated = json.loads(state_path.read_text())
             self.assertEqual(updated["steps"][-1]["id"], "llm_rerank_candidates")
 

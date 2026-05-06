@@ -462,7 +462,7 @@ def artifact_dir(state_path: Path, state: dict[str, Any]) -> Path:
     return state_path.parent / "artifacts" / str(state.get("task_id") or state_path.stem)
 
 
-def current_or_matched_profile(profile: dict[str, Any]) -> dict[str, Any]:
+def compact_llm_profile(profile: dict[str, Any]) -> dict[str, Any]:
     positions = profile.get("positions") or []
     matched = set(profile.get("matched_position_indexes") or [])
     selected = []
@@ -485,7 +485,7 @@ def load_items_from_state(state_path: Path, *, current_and_matched_only: bool, m
         profile = profiles.get(pid)
         if not profile:
             continue
-        payload = current_or_matched_profile(profile) if current_and_matched_only else profile
+        payload = compact_llm_profile(profile) if current_and_matched_only else profile
         items.append(RerankItem(position=len(items), payload=payload))
         if max_candidates and len(items) >= max_candidates:
             break
@@ -535,7 +535,7 @@ QUERY_RESULTS_V2_FIELDS = [
 ]
 
 
-def build_query_results_v2_rows(
+def build_query_result_rows(
     results: list[RerankResult],
     *,
     state: dict[str, Any],
@@ -570,14 +570,7 @@ def build_query_results_v2_rows(
     return rows
 
 
-def write_query_results_v2_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, sort_keys=True) + "\n")
-
-
-def write_query_results_v2_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+def write_query_results_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=QUERY_RESULTS_V2_FIELDS)
@@ -637,6 +630,7 @@ def main() -> int:
     parser.add_argument("--include-all-positions", action="store_true", help="Disable current/search-matched pruning in --state mode")
     parser.add_argument("--max-candidates", type=int)
     parser.add_argument("--write-state", action="store_true")
+    parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
     args = parser.parse_args()
 
     if not args.in_path and not args.state:
@@ -705,29 +699,24 @@ def main() -> int:
     artifacts: dict[str, Any] = {}
     if state_path and state is not None:
         out_dir = artifact_dir(state_path, state) / "llm_rerank_candidates"
-        jsonl_path = out_dir / "query_results_v2.jsonl"
-        csv_path = out_dir / "query_results_v2.csv"
+        csv_path = out_dir / "query_results.csv"
         raw_jsonl_path = out_dir / "raw_rerank_results.jsonl"
-        prompt_path = out_dir / "system_prompt.txt"
-        prompt_path.parent.mkdir(parents=True, exist_ok=True)
-        prompt_path.write_text(SYSTEM_PROMPT)
         created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        query_results_v2_rows = build_query_results_v2_rows(
+        query_result_rows = build_query_result_rows(
             results,
             state=state,
             query=args.query,
             created_at=created_at,
         )
-        write_query_results_v2_jsonl(jsonl_path, query_results_v2_rows)
-        write_query_results_v2_csv(csv_path, query_results_v2_rows)
-        write_results(results, str(raw_jsonl_path))
-        ordered_ids = [row["person_id"] for row in query_results_v2_rows]
+        write_query_results_csv(csv_path, query_result_rows)
+        if args.dump_debug:
+            write_results(results, str(raw_jsonl_path))
+        ordered_ids = [row["person_id"] for row in query_result_rows]
         artifacts = {
-            "query_results_v2_jsonl": str(jsonl_path),
-            "query_results_v2_csv": str(csv_path),
-            "raw_rerank_results_jsonl": str(raw_jsonl_path),
-            "system_prompt": str(prompt_path),
+            "query_results_csv": str(csv_path),
         }
+        if args.dump_debug:
+            artifacts["raw_rerank_results_jsonl"] = str(raw_jsonl_path)
         output = {
             "model": args.model,
             "concurrency": args.concurrency,

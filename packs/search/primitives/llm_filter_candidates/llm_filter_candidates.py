@@ -376,7 +376,6 @@ def cmd_filter(args: argparse.Namespace) -> None:
     traits = args.traits or trait_lines(state)
 
     out_dir = artifact_dir(state_path, state) / "llm_filter_candidates"
-    prompt_dir = out_dir / "prompts"
 
     if args.dry_run:
         print(json.dumps({
@@ -392,8 +391,6 @@ def cmd_filter(args: argparse.Namespace) -> None:
         }, indent=2, sort_keys=True))
         return
 
-    prompt_dir.mkdir(parents=True, exist_ok=True)
-    (prompt_dir / "system_prompt.txt").write_text(RESULT_FILTER_BATCH_SYSTEM_PROMPT)
     prompt_rows: list[dict[str, Any]] = []
 
     scores: dict[str, dict[str, Any]] = {}
@@ -446,12 +443,19 @@ def cmd_filter(args: argparse.Namespace) -> None:
     score_rows = [scores[pid] for pid in filter_ids if pid in scores]
     filtered_rows = [scores[pid] for pid in filtered if pid in scores]
 
-    all_scores_path = out_dir / "scores.jsonl"
-    filtered_path = out_dir / "filtered.jsonl"
-    prompts_path = prompt_dir / "batch_prompts.jsonl"
-    write_jsonl(all_scores_path, score_rows)
-    write_jsonl(filtered_path, filtered_rows)
-    write_jsonl(prompts_path, prompt_rows)
+    artifacts: dict[str, Any] = {}
+    if args.dump_debug:
+        all_scores_path = out_dir / "scores.jsonl"
+        filtered_path = out_dir / "filtered.jsonl"
+        prompts_path = out_dir / "batch_prompts.jsonl"
+        write_jsonl(all_scores_path, score_rows)
+        write_jsonl(filtered_path, filtered_rows)
+        write_jsonl(prompts_path, prompt_rows)
+        artifacts = {
+            "scores_jsonl": str(all_scores_path),
+            "filtered_jsonl": str(filtered_path),
+            "batch_prompts_jsonl": str(prompts_path),
+        }
 
     output = {
         "model": args.model,
@@ -467,12 +471,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
         "passed_candidate_ids": passed,
         "filtered_candidate_ids": filtered,
         "filtered_results": {pid: scores[pid] for pid in filtered if pid in scores},
-        "artifacts": {
-            "scores_jsonl": str(all_scores_path),
-            "filtered_jsonl": str(filtered_path),
-            "system_prompt": str(prompt_dir / "system_prompt.txt"),
-            "batch_prompts_jsonl": str(prompts_path),
-        },
+        "artifacts": artifacts,
     }
 
     elapsed_ms = int((time.time() - started) * 1000)
@@ -493,6 +492,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-partial-hydration", action="store_true")
     parser.add_argument("--current-and-matched-only", action="store_true", help="Only include current and search-matched positions in LLM prompt")
+    parser.add_argument("--dump-debug", action="store_true", help="Write filter scores/prompts artifacts for debugging")
     parser.add_argument("--on-error", choices=["pass_all", "fail"], default="pass_all")
     args = parser.parse_args()
     cmd_filter(args)

@@ -99,13 +99,9 @@ python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py \
 
 Writes:
 
-- `artifacts/<task>/llm_rerank_candidates/query_results_v2.jsonl`
-- `artifacts/<task>/llm_rerank_candidates/query_results_v2.csv`
-- `artifacts/<task>/llm_rerank_candidates/raw_rerank_results.jsonl`
-- `artifacts/<task>/llm_rerank_candidates/system_prompt.txt`
+- `artifacts/<task>/llm_rerank_candidates/query_results.csv`
 
-The primary JSONL/CSV artifacts use the exact `query_results_v2` row shape from
-`network-search-api`:
+The CSV uses the app query-results row schema from `network-search-api`:
 
 ```jsonc
 {
@@ -160,10 +156,8 @@ python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py \
 
 ## Prompt
 
-See `PROMPT.md` and the `SYSTEM_PROMPT` constant in `llm_rerank_candidates.py`.
-The prompt copies the production app's key rerank rules: calibrated scores,
-evidence-based reasoning, trait-level scores, recency awareness, and hard gates
-for explicit exclusions.
+The prompt lives in the primitive (`SYSTEM_PROMPT` in `llm_rerank_candidates.py`).
+`PROMPT.md` explains its provenance and relationship to the production app.
 
 ## What this primitive does NOT do
 

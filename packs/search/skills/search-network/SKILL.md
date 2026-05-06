@@ -69,12 +69,9 @@ Useful handoff artifacts:
   consumed as `role_search_filters.operator_ids`
 - candidate frontier: recorded by retrieval steps and exported as JSONL
 - hydrated output: persisted CSV/JSONL/manifest from `persist_search_results`
-- LLM filter output: `artifacts/<task>/llm_filter_candidates/scores.jsonl`,
-  `filtered.jsonl`, and prompt artifacts
-- rerank output: `artifacts/<task>/llm_rerank_candidates/query_results_v2.csv`
-  and `query_results_v2.jsonl`; these use the exact `query_results_v2` schema
-  from `network-search-api` (`person_id`, `result_index`,
-  `matched_position_indexes`, `final_score`, `trait_scores`,
+- rerank output: `artifacts/<task>/llm_rerank_candidates/query_results.csv`;
+  the CSV columns match the app query-results schema (`person_id`,
+  `result_index`, `matched_position_indexes`, `final_score`, `trait_scores`,
   `overall_reasoning`, plus metadata fields)
 
 If a future workflow chains more skills, keep the same pattern: each task
@@ -161,24 +158,23 @@ search.
 10. Assess the frontier with `assess_frontier`.
 11. Decide the next action with `plan_candidate_review`.
 12. Hydrate the full candidate frontier with `hydrate_people --write-state`.
-    The primitive writes inspection artifacts by default, including the full
-    hydrated profile dump and a compact current/search-matched view:
-    `hydrate_people/profiles.jsonl` and
-    `hydrate_people/profiles.current_or_matched.jsonl`.
+    Do not dump full hydrated profiles unless the user explicitly asks to debug
+    hydration; then pass `--dump-profiles`.
 13. Run conservative LLM filtering by default:
     `llm_filter_candidates --state "$STATE" --current-and-matched-only --write-state`.
-    This writes filter scores, filtered-out rows, and prompt artifacts. Use
-    `--allow-partial-hydration` only when the user explicitly accepts partial
+    Do not dump filter scores/prompts unless debugging; then pass `--dump-debug`.
+    Use `--allow-partial-hydration` only when the user explicitly accepts partial
     review.
 14. Run async LLM reranking by default:
     `llm_rerank_candidates --state "$STATE" --concurrency 200 --write-state`.
-    Keep the default current/search-matched-only prompt pruning unless the query
-    explicitly asks about past/all-time experience, in which case pass
-    `--include-all-positions`. The rerank JSONL/CSV must use the exact
-    `query_results_v2` row schema from `network-search-api`: `conversation_id`,
-    `query`, `person_id`, `result_index`, `matched_position_indexes`,
-    `final_score`, `trait_scores`, `overall_reasoning`, `pre_rerank_score`,
-    `tags`, `vertical_sources`, `created_at`.
+    Keep the default prompt pruning (current positions plus search-matched
+    positions only) unless the query explicitly asks about past/all-time
+    experience, in which case pass `--include-all-positions`. The primary output
+    is `llm_rerank_candidates/query_results.csv`; columns must match the app
+    query-results schema: `conversation_id`, `query`, `person_id`,
+    `result_index`, `matched_position_indexes`, `final_score`, `trait_scores`,
+    `overall_reasoning`, `pre_rerank_score`, `tags`, `vertical_sources`,
+    `created_at`.
 15. Persist CSV/JSONL artifacts with `persist_search_results`; it should use
     `llm_rerank_candidates.output.ranked_candidate_ids` when present so the
     exported results are in final reranked order.
