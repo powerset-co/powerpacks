@@ -86,6 +86,27 @@ implies that pack.
 
 ---
 
+## Natural skill routing
+
+When the user asks for an outcome that matches a Powerpacks skill, proactively
+load and follow that skill's `SKILL.md` even if the user did not type a slash
+command. Treat skills as the natural harness for this repo, not just explicit
+commands.
+
+Common routes:
+
+- people/network/company-directory queries → `packs/search/skills/search-network/SKILL.md`
+- company set resolution / company IDs → `packs/search/skills/search-company/SKILL.md`
+- my contacts / set contacts → `packs/contacts/skills/search-contacts/SKILL.md`
+- Sales Navigator leads → `packs/sales-nav/skills/sales-nav-search/SKILL.md`
+- Powerset login / MCP install / credentials → `packs/powerset/skills/powerset-login/SKILL.md`
+- iMessage / WhatsApp / contact imports → the matching skill under `packs/messages/skills/`
+
+Do not ask the user to pick a skill when the route is obvious. Do ask a brief
+clarifying question when the request could mean multiple surfaces, e.g. "people
+at OpenAI" (company directory) vs "AI engineers at OpenAI" (semantic/role
+search), or "contacts at OpenAI" (contacts field filter).
+
 ## Skill behavior overrides
 
 These are nudges that override defaults baked into individual `SKILL.md`
@@ -97,12 +118,17 @@ Default behavior in `packs/search/skills/search-network/SKILL.md` is a 16-step
 strategy loop with mandatory approval gate. That is correct for messy/broad
 queries. For narrow, unambiguous queries, **skip the loop**:
 
-- A query is narrow when it has a single named company, a single named
-  person, ≤ 3 hard filters, or otherwise has obvious structure.
-- For narrow queries, run only: `task_state init` → `resolve_companies` (or
-  `resolve_education` / `resolve_investors` if relevant) → `execute_role_search`
-  → `hydrate_people` → `persist_search_results`. Five primitives, no
-  approval gate, no slicing, no count, no LLM filter, no agentic rerank.
+- If the query is only "people who work at <company>" / "employees of
+  <company>" with no role/title/seniority/domain constraint, use the
+  company-directory fast path: call MCP `list_company_people`, page results,
+  and do not run semantic people search or local retrieval primitives.
+- A query is otherwise narrow when it has a single named company, a single named
+  person, ≤ 3 hard filters, or obvious structure.
+- For narrow non-directory queries, run only: `task_state init` →
+  `resolve_companies` (or `resolve_education` / `resolve_investors` if relevant)
+  → `execute_role_search` → `hydrate_people` → `persist_search_results`. Five
+  primitives, no approval gate, no slicing, no count, no LLM filter, no agentic
+  rerank.
 - Do not invoke `plan_adjacency_search`, `decide_search_strategy`,
   `count_candidates`, `assess_frontier`, `plan_candidate_review`, or
   `llm_filter_candidates` for narrow queries. They are all no-ops on

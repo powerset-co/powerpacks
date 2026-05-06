@@ -10,6 +10,7 @@ Run the full Powerpacks search loop from one user request such as:
 - `/search-network who are software engineers in sf`
 - `/search-network senior engineers at series a fintech companies`
 - `/search-network stanford engineers with 3-5 yoe in new york`
+- `/search-network people who work at OpenAI`
 
 ## Intent
 
@@ -76,30 +77,45 @@ each boundary has a written artifact.
 
 ## Strategy Loop
 
-### Fast Path: Current People At One Company
+### Fast Path: Company Directory Lookup
 
-For simple requests like `$search-network people who work at Betr`,
-`show me people at OpenAI`, or `current employees of Stripe`, use this
-fast path unless the user asks for reranking, slicing, broad role/domain
-matching, or approval-first planning:
+For basic company-only requests like `$search-network people who work at Betr`,
+`show me people at OpenAI`, `who works at Stripe?`, or `current employees of
+Databricks`, do **not** run semantic people search. If the request has a
+specified company and no specified role/title/seniority/domain/person filters,
+route directly to the existing app company-directory API through MCP:
 
-1. Treat the currentness as `is_current: true` on the company position row.
-2. Create task state and record a minimal `expand_search_request` payload
-   directly; do not call LLM query extraction for this shape.
-3. Resolve set scoping with `resolve_set_operators`.
-4. Resolve the exact company name with `resolve_companies`. If set-scoped
-   company resolution returns zero, retry exact company-name resolution without
-   set/operator filters so the canonical company ID can still be used for a
-   scoped people search.
-5. Run `count_candidates`, then `execute_role_search`, then `hydrate_people`.
-6. If the scoped count is zero, stop and report that the selected set has no
-   current matches. Do not silently switch to another set. You may mention the
-   active set ID/name and ask whether to try a broader set.
-7. Skip approval prompts, slicing, LLM filtering, rerank preparation, and
-   result export unless the user explicitly asks for them.
+```text
+list_company_people(company_name="OpenAI", page=0, page_size=50, company_limit=5)
+```
 
-This fast path should usually complete with one set resolution, one exact
-company resolution, one count, one retrieval, and one hydration.
+This is a deterministic company → people directory lookup backed by the app's
+`POST /v2/companies/search` with `include_people=true`. It is not role search,
+not reranking, and not semantic retrieval.
+
+Rules for this fast path:
+
+1. Use `list_company_people` by `company_name` for the first call unless the user
+   provided an exact company id, in which case pass `company_id`.
+2. If multiple plausible companies are returned, ask the user to choose. Prefer
+   an exact case-insensitive company-name match when obvious.
+3. Page with `page` / `page_size`; do not auto-page through the whole company
+   unless the user asks.
+4. If the user explicitly asks to scope the company directory to a set, resolve
+   the set with `list_sets` using the same tiebreaker as `search-contacts`
+   (exact name → non-personal → most members → personal → ask), then pass
+   `set_id` to `list_company_people`.
+5. Skip task state, `extract-search-query`, `search-company`, `resolve_companies`,
+   `count_candidates`, `execute_role_search`, `hydrate_people`, approval prompts,
+   slicing, LLM filtering, rerank preparation, and result export.
+6. If the user adds a role/title/seniority/domain constraint — e.g. "AI engineers
+   at OpenAI", "VPs at Stripe", "founders at fintech startups" — this is no
+   longer the company-directory fast path. Continue with the normal
+   `search-network` workflow below.
+
+This replaces the standalone `company-directory` skill; `search-network` is the
+canonical entrypoint for both company-directory lookups and semantic/role people
+search.
 
 1. Create task state from `powerpacks/tasks/search-network.task.json`.
    Use `task_state.py init --query "<query>"` so the default run file is

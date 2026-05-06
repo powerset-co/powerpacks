@@ -1,5 +1,30 @@
 [
   {
+    "id": "company-directory-openai",
+    "query": "people who work at OpenAI",
+    "must_include": [
+      "list_company_people",
+      "company_name",
+      "OpenAI",
+      "page",
+      "page_size",
+      "deterministic",
+      "company-directory"
+    ],
+    "must_not_include": [
+      "resolve_companies",
+      "count_candidates",
+      "execute_role_search",
+      "hydrate_people",
+      "semantic people search",
+      "rerank"
+    ],
+    "expected_tools": [
+      "list_company_people"
+    ],
+    "notes": "Company-only query with no role/title/seniority/domain constraints should route to the MCP company-directory fast path, not semantic people search."
+  },
+  {
     "id": "software-engineers-sf",
     "query": "who are software engineers in sf",
     "must_include": [

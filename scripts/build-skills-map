@@ -150,7 +150,7 @@ def infer_references(body: str, primitives: dict[str, dict[str, Any]]) -> tuple[
     )
     # If a tool is explicitly negative guidance, leave it out of the dependency
     # list; the skill detail still links the SKILL.md for full nuance.
-    mcp = [t for t in mcp if not _negative_mention(lower, t)]
+    mcp = [t for t in mcp if t not in refs and not _negative_mention(lower, t)]
     return sorted(set(refs)), mcp
 
 
