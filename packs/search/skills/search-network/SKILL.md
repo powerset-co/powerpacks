@@ -76,6 +76,31 @@ each boundary has a written artifact.
 
 ## Strategy Loop
 
+### Fast Path: Current People At One Company
+
+For simple requests like `$search-network people who work at Betr`,
+`show me people at OpenAI`, or `current employees of Stripe`, use this
+fast path unless the user asks for reranking, slicing, broad role/domain
+matching, or approval-first planning:
+
+1. Treat the currentness as `is_current: true` on the company position row.
+2. Create task state and record a minimal `expand_search_request` payload
+   directly; do not call LLM query extraction for this shape.
+3. Resolve set scoping with `resolve_set_operators`.
+4. Resolve the exact company name with `resolve_companies`. If set-scoped
+   company resolution returns zero, retry exact company-name resolution without
+   set/operator filters so the canonical company ID can still be used for a
+   scoped people search.
+5. Run `count_candidates`, then `execute_role_search`, then `hydrate_people`.
+6. If the scoped count is zero, stop and report that the selected set has no
+   current matches. Do not silently switch to another set. You may mention the
+   active set ID/name and ask whether to try a broader set.
+7. Skip approval prompts, slicing, LLM filtering, rerank preparation, and
+   result export unless the user explicitly asks for them.
+
+This fast path should usually complete with one set resolution, one exact
+company resolution, one count, one retrieval, and one hydration.
+
 1. Create task state from `powerpacks/tasks/search-network.task.json`.
    Use `task_state.py init --query "<query>"` so the default run file is
    unique under `.powerpacks/runs/`.
