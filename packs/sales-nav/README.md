@@ -1,9 +1,9 @@
 # Sales Nav Pack
 
-`packs/sales-nav` is a thin pack that exposes a Sales Navigator search
-workflow on top of the `powerset-search` MCP server. It owns no local
-primitives — every action happens by the MCP host (Claude Code, Codex,
-nanoclaw) calling tools registered through `packs/powerset`.
+`packs/sales-nav` exposes a Sales Navigator search workflow on top of the
+`powerset-search` MCP server. MCP tools perform the upstream Sales Nav calls;
+local primitives normalize page responses into file-backed handoffs so agents
+can pass paths instead of large lead/mutual payloads.
 
 ## Why a separate pack
 
@@ -27,29 +27,37 @@ This pack **depends on `packs/powerset`** for:
 - `doctor` — verifies the MCP is reachable and the token is fresh.
 
 If those are not in place, the skill routes the user through
-`$powerset-login` first.
+`$powerset login` first.
 
 ## Skill Surface
 
 - `sales-nav-search` — Run a Sales Navigator search through the MCP.
   Resolves company / title filters, runs a paginated lead search with
-  server-side artifact persistence on by default, and offers paginated
-  retrieval via `get_artifact`. See
+  server-side artifact persistence on by default, stores local `leads.jsonl` /
+  `mutuals.jsonl` handoff files, and offers paginated retrieval via
+  `get_artifact`. See
   [`skills/sales-nav-search/SKILL.md`](skills/sales-nav-search/SKILL.md).
 
 ## MCP Tools Used
 
-The skill orchestrates three tools served by the remote MCP:
+The skill orchestrates these tools served by the remote MCP:
 
 | Tool | Purpose |
 | --- | --- |
 | `sales_nav_resolve` | Translate human company / title strings to LinkedIn IDs. |
 | `sales_nav_search` | Paginated lead search; persists an artifact when `persist_artifact=true`. |
 | `get_artifact` | Page back through a persisted result set without re-running the search. |
+| `sales_nav_resolve_member_ids` | Resolve lead/mutual member IDs to LinkedIn URLs from cache/free layers by default. |
 
 Tool descriptions, input schemas, and return shapes are owned by the
 MCP server (`network-search-api/mcp_server/server.py`). The skill is the
 agent-facing orchestration layer; it does not duplicate those contracts.
+
+## Local primitives
+
+| Primitive | Purpose |
+| --- | --- |
+| `sales_nav_artifacts` | Initialize a local run, ingest MCP page responses into `leads.jsonl` / `mutuals.jsonl`, merge member URL resolutions, export CSVs, and answer lookup queries against the files. |
 
 ## Defaults
 

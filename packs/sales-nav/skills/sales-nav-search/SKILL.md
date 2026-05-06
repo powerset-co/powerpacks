@@ -11,7 +11,7 @@ or any other Sales Navigator search request scoped to the user's set.
 
 The skill is in its own pack (`packs/sales-nav`) but **depends on
 `packs/powerset`** for Auth0 login and MCP install. If those aren't ready,
-route the user to `$powerset-login` first.
+route the user to `$powerset login` first.
 
 It calls three MCP tools served by the remote `powerset-search` MCP at
 `https://search-api-7wk4uhe77q-uw.a.run.app/mcp`:
@@ -30,7 +30,7 @@ server.
 ## Hard rules
 
 - This skill **requires** the `powerset-search` MCP. If it is not
-  registered, route the user through `$powerset-login` →
+  registered, route the user through `$powerset login` →
   `mcp_install install --host all`.
 - Every Sales Nav call is **scoped to a `set_id`**. The MCP server enforces
   the set context. Pass the one the user specifies. If the user does not
@@ -47,7 +47,12 @@ server.
   below — without one, persistence is silently skipped server-side and you
   only get the inline `leads` list back.
 - Lead profiles can include LinkedIn URLs and contact metadata. Treat them
-  as sensitive — present in chat, do not dump to disk unless the user asks.
+  as sensitive: keep them in local `.powerpacks/` handoff files and present only
+  compact summaries in chat unless the user asks for details.
+- Do not pass accumulated lead/mutual payloads through chat or command args.
+  Save each MCP page response to a small JSON file, then run
+  `sales_nav_artifacts ingest-page --response <path>` so later steps pass only
+  paths/state.
 - Do not auto-page beyond what the user requested. `sales_nav_search`
   returns `has_more` and `next_start_offset`; surface them, don't loop.
 
@@ -85,6 +90,72 @@ get one:
 Always pass the same `conversation_id` to subsequent `sales_nav_search`
 calls and the matching `get_artifact` call.
 
+## Local file handoff
+
+Use `packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py` as
+the durable local store for each skill invocation. It normalizes MCP page output
+into these files:
+
+- `leads.jsonl` / `leads.csv` — one row per lead with `member_id`,
+  `profile_id`, `source_account_id`, `source_account_ids`, `operators`,
+  `mutual_member_ids`, `linkedin_url`, title/company/location, artifact/source
+  metadata, and seen counts.
+- `mutuals.jsonl` / `mutuals.csv` — one row per lead↔mutual edge with
+  `lead_member_id`, `mutual_member_id`, mutual LinkedIn URL if resolved,
+  operator/source metadata, and artifact/source metadata.
+- `member_urls.json` — `member_id -> LinkedIn URL` results from
+  `sales_nav_resolve_member_ids`.
+- `manifest.json` / `state.json` — paths, counts, artifact ids, pages.
+
+Initialize once per search:
+
+```bash
+python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py init \
+  --query "<user query>" \
+  --set-id "<set_id>" \
+  --conversation-id "<conversation_id>"
+```
+
+After each MCP `sales_nav_search` or `get_artifact` call, save the one-page MCP
+response to a local JSON file, then ingest it:
+
+```bash
+python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-page \
+  --state .powerpacks/sales-nav/runs/<run>/state.json \
+  --response .powerpacks/sales-nav/runs/<run>/pages/page-000.json
+```
+
+When the user asks for mutual LinkedIn URLs, first get pending IDs from the
+local file store:
+
+```bash
+python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py pending-mutual-ids \
+  --state .powerpacks/sales-nav/runs/<run>/state.json --limit 100
+```
+
+Pass those IDs to MCP `sales_nav_resolve_member_ids`, save the MCP response,
+then merge it:
+
+```bash
+python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-member-urls \
+  --state .powerpacks/sales-nav/runs/<run>/state.json \
+  --response .powerpacks/sales-nav/runs/<run>/member_urls.response.json
+```
+
+For final files:
+
+```bash
+python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py export \
+  --state .powerpacks/sales-nav/runs/<run>/state.json
+```
+
+For follow-up questions, do not read the full JSONL/CSV into chat. Use lookup:
+
+```bash
+python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py lookup \
+  --state .powerpacks/sales-nav/runs/<run>/state.json --query "<name/company/title>"
+```
+
 ## Workflow
 
 ### Step 0 — Confirm prereqs
@@ -94,7 +165,7 @@ python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py status --
 ```
 
 If `installed: false` for the host the user is on, route to
-`$powerset-login` first.
+`$powerset login` first.
 
 ### Step 0b — Resolve set scope
 
@@ -128,6 +199,8 @@ If the user already gave you a `company_id` or `function_id`, skip this
 and go straight to step 2.
 
 ### Step 2 — Run the search (always with persistence)
+
+Initialize the local file store before the MCP call if you have not already.
 
 ```text
 Tool: sales_nav_search
@@ -177,9 +250,11 @@ Response shape (with persistence):
 `reconnect_required: true` means the user's Unipile/LinkedIn session
 needs upstream re-auth; tell the user and stop. Do not retry.
 
-**Save the `artifact_id`** in your skill's working memory — every
-follow-up retrieval (next page, mutual lookup, re-display) goes through
-`get_artifact` against that id.
+Save the one-page MCP response to a page JSON file and run
+`sales_nav_artifacts ingest-page` on it. The primitive records `artifact_id`,
+lead rows, mutual edges, and source/operator metadata in local handoff files.
+Every follow-up retrieval (next page, mutual lookup, re-display) should use the
+local state path plus `get_artifact` / `sales_nav_resolve_member_ids` as needed.
 
 ### Step 3 — Present the first page
 
@@ -194,7 +269,8 @@ follow-up retrieval (next page, mutual lookup, re-display) goes through
 ### Step 4 — Paginate via get_artifact
 
 Subsequent pages of the same result set should go through
-`get_artifact`, not a fresh `sales_nav_search`:
+`get_artifact`, not a fresh `sales_nav_search`. Save each page response and
+append it to the same local files with `sales_nav_artifacts ingest-page`:
 
 ```text
 Tool: get_artifact
@@ -207,7 +283,8 @@ Args: {
 ```
 
 This avoids re-running an expensive Sales Nav fetch and keeps the
-filters/result-set stable across pages.
+filters/result-set stable across pages. The local primitive dedupes by
+`member_id` and appends new lead↔mutual edges to `mutuals.jsonl`.
 
 ### Step 5 — Refining filters
 

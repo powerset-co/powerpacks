@@ -1,7 +1,7 @@
 {
   "task": "sales_nav_search",
   "version": 1,
-  "description": "Run a Sales Navigator search through the powerset-search MCP, with server-side artifact persistence and paginated retrieval.",
+  "description": "Run a Sales Navigator search through the powerset-search MCP, with server-side artifact persistence, local file handoffs, and paginated retrieval."
   "default_constraints": {
     "requires_powerset_auth": true,
     "requires_powerset_mcp": true,
@@ -13,7 +13,7 @@
     {
       "id": "ensure_powerset_login",
       "kind": "skill",
-      "skill": "powerset-login",
+      "skill": "powerset",
       "if_missing": ["powerpacks_powerset_token"]
     },
     {
@@ -42,6 +42,13 @@
       "when": "user provides company names or human-readable titles instead of LinkedIn IDs"
     },
     {
+      "id": "init_local_artifacts",
+      "kind": "primitive",
+      "pack": "sales-nav",
+      "primitive": "sales_nav_artifacts",
+      "command": "init"
+    },
+    {
       "id": "run_search",
       "kind": "mcp_tool",
       "tool": "sales_nav_search",
@@ -56,6 +63,14 @@
       }
     },
     {
+      "id": "ingest_page",
+      "kind": "primitive",
+      "pack": "sales-nav",
+      "primitive": "sales_nav_artifacts",
+      "command": "ingest-page",
+      "after": ["run_search", "retrieve_artifact"]
+    },
+    {
       "id": "retrieve_artifact",
       "kind": "mcp_tool",
       "tool": "get_artifact",
@@ -64,7 +79,9 @@
     }
   ],
   "outputs": {
-    "primary": "leads",
-    "persistent": "artifact_id"
+    "primary": "leads.csv",
+    "secondary": "mutuals.csv",
+    "persistent": "artifact_id",
+    "local_state": ".powerpacks/sales-nav/runs/<run>/state.json"
   }
 }

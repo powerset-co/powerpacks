@@ -7,7 +7,9 @@
       "sales_nav_search",
       "set_id",
       "persist_artifact",
-      "conversation_id"
+      "conversation_id",
+      "sales_nav_artifacts",
+      "ingest-page"
     ],
     "must_not_include": [
       "sales_nav_search without persist_artifact",
@@ -55,13 +57,13 @@
     "id": "missing-mcp",
     "query": "Find VPs at Stripe. (Note: my powerset-search MCP is not installed yet.)",
     "must_include": [
-      "powerset-login",
+      "$powerset login",
       "mcp_install"
     ],
     "must_not_include": [
       "sales_nav_search"
     ],
-    "notes": "If the MCP is missing, the skill must route the user through powerset-login first. It must NOT pretend to call sales_nav_search."
+    "notes": "If the MCP is missing, the skill must route the user through $powerset login first. It must NOT pretend to call sales_nav_search."
   },
   {
     "id": "resolve-mutuals-to-urls",
@@ -69,7 +71,9 @@
     "must_include": [
       "sales_nav_resolve_member_ids",
       "67890",
-      "linkedin"
+      "linkedin",
+      "pending-mutual-ids",
+      "ingest-member-urls"
     ],
     "must_not_include": [
       "enrich_extended_profiles",
