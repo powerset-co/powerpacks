@@ -86,27 +86,6 @@
       "command": "match"
     },
     {
-      "id": "review_contacts_web",
-      "kind": "primitive",
-      "primitive": "review_contacts_web",
-      "command": "serve",
-      "description": "Open a local browser editor for skip/match cleanup."
-    },
-    {
-      "id": "estimate_llm_review",
-      "kind": "primitive",
-      "primitive": "llm_review_contacts",
-      "command": "estimate",
-      "optional": true
-    },
-    {
-      "id": "llm_review",
-      "kind": "primitive",
-      "primitive": "llm_review_contacts",
-      "command": "review",
-      "requires_explicit_user_request": true
-    },
-    {
       "id": "prepare_research_queue",
       "kind": "primitive",
       "primitive": "prepare_research_queue",
@@ -140,6 +119,28 @@
       "primitive": "review_research_web",
       "command": "serve",
       "optional": true
+    },
+    {
+      "id": "review_contacts_web_fallback",
+      "kind": "primitive",
+      "primitive": "review_contacts_web",
+      "command": "serve",
+      "optional": true,
+      "description": "Fallback raw contacts yes/no reviewer when Parallel is skipped, unavailable, or queue is empty."
+    },
+    {
+      "id": "estimate_llm_review",
+      "kind": "primitive",
+      "primitive": "llm_review_contacts",
+      "command": "estimate",
+      "optional": true
+    },
+    {
+      "id": "llm_review",
+      "kind": "primitive",
+      "primitive": "llm_review_contacts",
+      "command": "review",
+      "requires_explicit_user_request": true
     }
   ]
 }

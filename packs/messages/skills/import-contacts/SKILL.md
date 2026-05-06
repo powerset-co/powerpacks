@@ -47,9 +47,9 @@ Keep a visible task list and update it as work proceeds:
 6. Merge contacts
 7. Sync Powerset candidates
 8. Match local contacts
-9. Review unresolved contacts
-10. Build enrichment queue
-11. Estimate/run deep research when explicitly approved
+9. Build enrichment queue
+10. Estimate/run deep research when explicitly approved
+11. Review profile cards / enrichment decisions
 
 Use `.powerpacks/messages/import-run.json` as the run ledger when practical.
 Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
@@ -92,20 +92,7 @@ python packs/messages/primitives/match_local_candidates/match_local_candidates.p
   --candidates .powerpacks/messages/powerset_contacts.csv
 ```
 
-6. For review, prefer the local web editor:
-
-```bash
-python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
-  --contacts .powerpacks/messages/contacts.csv \
-  --open
-```
-
-Use the web reviewer for yes/no enrichment decisions. A card click autosaves
-`skip=false` for yes or `skip=true` for no. Do not ask the user to edit names,
-match details, or free-text fields in the normal import flow. Use LLM review
-only after showing the estimate and getting explicit approval.
-
-7. Build the enrichment queue:
+6. Build the enrichment queue:
 
 ```bash
 python packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
@@ -118,7 +105,9 @@ This queue uses the same name-quality and prune rules ported from
 only named, searchable, unresolved contacts with enough signal become paid
 research candidates.
 
-8. If the user explicitly asks to continue into deep research, estimate first:
+7. Estimate/run Parallel deep research before review.
+
+Always estimate first:
 
 ```bash
 python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
@@ -135,7 +124,7 @@ PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/dee
   --output-dir .powerpacks/messages/research
 ```
 
-Then build and open the profile-card review:
+8. Build and open the profile-card review:
 
 ```bash
 python packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
@@ -148,6 +137,23 @@ python packs/messages/primitives/review_research_web/review_research_web.py serv
   --research-dir .powerpacks/messages/research \
   --open
 ```
+
+This is the default review surface after Parallel runs. It shows the profile
+data from `01_research_parallel.json` and autosaves yes/no decisions to the
+`exclude` column in `research_review.csv`.
+
+If Parallel is skipped, unavailable, or the queue is empty, fall back to the raw
+contacts yes/no reviewer:
+
+```bash
+python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
+  --contacts .powerpacks/messages/contacts.csv \
+  --open
+```
+
+Use the web reviewer for yes/no enrichment decisions only. Do not ask the user
+to edit names, match details, or free-text fields in the normal import flow.
+Use LLM review only after showing the estimate and getting explicit approval.
 
 If `PARALLEL_API_KEY` is unavailable and the user still wants review help,
 fall back to parallel sub-agent review over small queue shards. Each sub-agent
