@@ -1,8 +1,9 @@
 # prepare_research_queue
 
 Filter + reshape the unified `contacts.csv` into the input CSV that
+Powerpacks `deep_research_contacts` and the legacy
 `aleph-mvp/data_pipeline_v2/pipelines/synthetic/research_parallel.py`
-consumes. Stdlib-only.
+consume. Stdlib-only.
 
 This primitive does **not** call the deep-research pipeline. It only
 produces the CSV that pipeline reads.
@@ -12,8 +13,14 @@ produces the CSV that pipeline reads.
 A row makes it into the research queue when:
 
 - `name` is non-empty
-- `skip != "yes"` (LLM review didn't ENRICH-deny it)
-- `matched_person_id` is empty (no existing Powerset linkage)
+- the normalized name passes the old `looks_like_real_name` rule:
+  at least two name tokens, tokens of at least two characters, and at least
+  five alpha characters total
+- `message_count >= 3` unless `--min-message-count` overrides it
+- `skip != "yes"` (LLM/manual review did not reject it)
+- no existing Powerset linkage: no `matched_person_id`, no
+  `matched_linkedin_url`, and `match_status != matched`
+- `match_status` is blank, `unmatched`, or `suggested`
 
 ## Priority tiers
 
@@ -45,10 +52,13 @@ python packs/messages/primitives/prepare_research_queue/prepare_research_queue.p
   --tiers P1 P2a P2b \
   --limit 50
 
-# Then hand off to aleph-mvp:
-cd ../aleph-mvp
-uv run python -m data_pipeline_v2.pipelines.synthetic.research_parallel \
-  --input ../powerpacks/.powerpacks/messages/research_queue.p1p2.csv \
+# Then run the native Parallel primitive:
+python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
+  --input .powerpacks/messages/research_queue.p1p2.csv \
+  --processor core2x
+
+PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
+  --input .powerpacks/messages/research_queue.p1p2.csv \
   --processor core2x
 ```
 

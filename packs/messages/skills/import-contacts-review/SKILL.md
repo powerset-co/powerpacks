@@ -24,7 +24,7 @@ approval.
 
 ## Architecture
 
-Four small primitives:
+Seven small primitives:
 
 1. `auth` (in `packs/powerset/primitives/auth/`) — Auth0 PKCE login → JWT cached at
    `~/.powerpacks/credentials.json`
@@ -34,6 +34,12 @@ Four small primitives:
    matcher updates `match_*` columns in the contacts CSV
 4. `llm_review_contacts` — OpenRouter batched ENRICH/SKIP review of
    unmatched/suggested rows, updates the `skip` column
+5. `review_contacts_web` — local browser editor with `Matched`, `Suggested`,
+   `Unmatched`, `Low signal`, and `Skipped` tabs
+6. `prepare_research_queue` — applies the old `network-search-api`
+   phone-contact prune rules and writes the Parallel input CSV
+7. `deep_research_contacts` / `build_research_review_csv` — native Parallel
+   deep research plus review CSV assembly
 
 ## Workflow
 
@@ -124,6 +130,11 @@ python packs/messages/primitives/prepare_research_queue/prepare_research_queue.p
 The manifest reports a per-tier breakdown and a Parallel.ai cost estimate at
 every processor tier (`core2x` / `pro` / `ultra8x`).
 
+Do not treat the raw matcher's `unmatched` count as the paid-research count.
+The research queue only includes named, searchable, unresolved contacts and
+defaults to the old `looks_like_real_name` plus `message_count >= 3` prune
+rules from `../network-search-api/data_pipeline_v2/pipelines/synthetic/prepare_phone_contacts.py`.
+
 ### 8. Run deep research (Parallel.ai)
 
 After explicit user approval and budget confirmation:
@@ -144,6 +155,13 @@ PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/dee
 Results land at `.powerpacks/messages/research/<handle>/01_research_parallel.json`
 in the same shape `aleph-mvp` produces, so any downstream consumer of that
 schema (assemble_profile, network review, etc.) keeps working.
+
+If Parallel is unavailable because `PARALLEL_API_KEY` is not set, and the user
+explicitly approves a fallback, split the queue into small shards and spawn
+parallel sub-agents to do public-profile review. Each shard result must include
+the contact handle, candidate LinkedIn/profile URL, confidence, and reason.
+This fallback should be used for validation or tiny batches only; Parallel is
+the primitive for production-scale work.
 
 For long batches the `submit` and `poll` subcommands can be split so the
 shell isn't tied up:
@@ -205,4 +223,4 @@ uv run contact-exporter research-review --upload \
 - It does not upload contacts to Powerset. Upload remains in
   `powerset_contacts_harness` (contact-exporter compatibility) until a native
   upload primitive is added.
-- It does not run deep research. That is a separate, heavier pipeline.
+- It does not run deep research or LLM scoring without explicit cost approval.

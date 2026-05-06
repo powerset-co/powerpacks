@@ -12,6 +12,11 @@ per-handle JSON artifacts in the same shape `research_parallel.py` produces,
 so any downstream code that already consumes `01_research_parallel.json`
 keeps working.
 
+This is the native Powerpacks primitive for the old `network-search-api`
+synthetic deep-research path. The queue builder applies the same
+`looks_like_real_name` rule and default min-message prune before this primitive
+spends Parallel credits.
+
 ## Privacy contract
 
 The primitive only sends the explicit input shape:

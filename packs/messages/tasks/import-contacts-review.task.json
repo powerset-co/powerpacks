@@ -6,7 +6,9 @@
     "no_message_content": true,
     "no_phone_numbers_in_llm": true,
     "workflow_consent_can_cover_login_sync_and_match": true,
-    "llm_review_requires_explicit_user_request": true
+    "llm_review_requires_explicit_user_request": true,
+    "deep_research_requires_cost_approval": true,
+    "parallel_fallback_requires_explicit_user_request": true
   },
   "steps": [
     {

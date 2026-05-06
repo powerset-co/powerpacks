@@ -49,12 +49,14 @@ Cross-channel:
   channels of `contact-exporter` (review/match-local/upload). Not used by the
   WhatsApp skill.
 - `review_contacts_web`: local browser editor for skip/match cleanup on the
-  merged contacts CSV
+  merged contacts CSV, with tabs for matched, suggested, actionable unmatched,
+  low-signal, and skipped rows
 
 ## Skills
 
 - `import-contacts`: one-command guided iMessage + WhatsApp import, merge,
-  candidate sync, local matching, web review, and queue prep
+  candidate sync, local matching, web review, queue prep, and optional
+  Parallel deep research after cost approval
 - `import-imessage`: local-only iMessage extraction and normalization
 - `import-whatsapp`: WhatsApp extraction via the three WAHA primitives above
 - `import-contacts-review`: Powerset login + candidate sync + local matching +

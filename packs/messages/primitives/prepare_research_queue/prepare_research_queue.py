@@ -91,6 +91,9 @@ PRIORITY_RANK = {"P1": 0, "P2a": 1, "P2b": 2, "P3": 3, "P4": 4}
 MIN_NAME_TOKENS = 2
 MIN_TOKEN_LEN = 2
 MIN_TOTAL_ALPHA = 5
+MIN_MESSAGE_COUNT = 3
+NAME_CLEAN_RE = re.compile(r"[^A-Za-zÀ-ÿ'’\-\s]")
+MULTISPACE_RE = re.compile(r"\s+")
 
 
 def now() -> datetime:
@@ -110,8 +113,13 @@ def write_json(path: Path, value: Any) -> None:
 # Field helpers
 # ---------------------------------------------------------------------------
 
+def normalize_name(name: str) -> str:
+    cleaned = NAME_CLEAN_RE.sub(" ", name or "")
+    return MULTISPACE_RE.sub(" ", cleaned).strip()
+
+
 def split_name(full: str) -> tuple[str, str]:
-    cleaned = re.sub(r"\s+", " ", (full or "").strip())
+    cleaned = normalize_name(full)
     if not cleaned:
         return "", ""
     parts = cleaned.split(" ", 1)
@@ -146,6 +154,10 @@ def parse_int(value: str) -> int:
         return int(float(text))
     except ValueError:
         return 0
+
+
+def parse_bool(value: str) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def days_since(iso: str) -> int | None:
@@ -190,7 +202,7 @@ def priority_tier(row: dict[str, str], today: datetime) -> str:
 def is_eligible(row: dict[str, str], include_skipped: bool, include_matched: bool) -> bool:
     if not (row.get("name") or "").strip():
         return False
-    if not include_skipped and (row.get("skip") or "").strip().lower() in {"yes", "true", "1"}:
+    if not include_skipped and parse_bool(row.get("skip", "")):
         return False
     if not include_matched and (row.get("matched_person_id") or "").strip():
         return False
@@ -203,7 +215,7 @@ def has_searchable_name(name: str) -> bool:
     Mirrors aleph-mvp's `looks_like_real_name` so the same filter applies
     whether the deep-research stage runs natively here or via aleph-mvp.
     """
-    cleaned = re.sub(r"\s+", " ", (name or "").strip())
+    cleaned = normalize_name(name)
     if not cleaned:
         return False
     tokens = [t for t in cleaned.split(" ") if len(t) >= MIN_TOKEN_LEN]
@@ -214,7 +226,7 @@ def has_searchable_name(name: str) -> bool:
 
 
 def transform_row(row: dict[str, str], today: datetime) -> dict[str, str]:
-    name = (row.get("name") or "").strip()
+    name = normalize_name(row.get("name") or "")
     first, last = split_name(name)
     phone = (row.get("phone") or "").strip()
     tier = priority_tier(row, today)
@@ -290,6 +302,10 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "filtered_unsearchable_name": 0,
         "filtered_skipped": 0,
         "filtered_already_matched": 0,
+        "filtered_suggested": 0,
+        "filtered_unsupported_status": 0,
+        "filtered_low_messages": 0,
+        "filtered_low_signal_group_chat": 0,
     }
     by_tier: dict[str, int] = {tier: 0 for tier in PRIORITY_RANK}
 
@@ -297,20 +313,38 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         reader = csv.DictReader(handle)
         for row in reader:
             counts["input_rows"] += 1
-            name = (row.get("name") or "").strip()
+            name = normalize_name(row.get("name") or "")
             if not name:
                 counts["filtered_no_name"] += 1
                 continue
             if not args.allow_single_token and not has_searchable_name(name):
                 counts["filtered_unsearchable_name"] += 1
                 continue
-            skip_flag = (row.get("skip") or "").strip().lower() in {"yes", "true", "1"}
-            matched_flag = bool((row.get("matched_person_id") or "").strip())
+            skip_flag = parse_bool(row.get("skip", ""))
+            status = (row.get("match_status") or "").strip().lower()
+            matched_flag = (
+                bool((row.get("matched_person_id") or "").strip())
+                or bool((row.get("matched_linkedin_url") or "").strip())
+                or status == "matched"
+            )
             if not args.include_skipped and skip_flag:
                 counts["filtered_skipped"] += 1
                 continue
             if not args.include_matched and matched_flag:
                 counts["filtered_already_matched"] += 1
+                continue
+            if status == "suggested" and not args.include_suggested:
+                counts["filtered_suggested"] += 1
+                continue
+            if status not in {"", "unmatched", "suggested", "matched"}:
+                counts["filtered_unsupported_status"] += 1
+                continue
+            message_count = parse_int(row.get("message_count", ""))
+            if message_count < args.min_message_count:
+                counts["filtered_low_messages"] += 1
+                continue
+            if args.exclude_group_only_unknowns and parse_bool(row.get("is_in_group_chats", "")) and message_count < 10:
+                counts["filtered_low_signal_group_chat"] += 1
                 continue
             transformed = transform_row(row, today)
             tier = transformed["priority_reason"]
@@ -354,6 +388,9 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "tiers_filter": args.tiers or [],
         "include_matched": bool(args.include_matched),
         "include_skipped": bool(args.include_skipped),
+        "include_suggested": bool(args.include_suggested),
+        "min_message_count": int(args.min_message_count),
+        "exclude_group_only_unknowns": bool(args.exclude_group_only_unknowns),
         "counts": counts,
         "by_tier_total": by_tier,
         "rows_written": len(eligible),
@@ -380,6 +417,12 @@ def main() -> None:
                         help="Also include rows already matched to a Powerset person")
     prepare.add_argument("--include-skipped", action="store_true",
                         help="Also include rows the LLM review marked skip=yes")
+    prepare.add_argument("--include-suggested", action=argparse.BooleanOptionalAction, default=True,
+                        help="Include suggested matches in the research queue. Defaults to true.")
+    prepare.add_argument("--min-message-count", type=int, default=MIN_MESSAGE_COUNT,
+                        help="Minimum message count for unresolved contacts. Defaults to 3, matching the aleph-mvp prune rules.")
+    prepare.add_argument("--exclude-group-only-unknowns", action="store_true",
+                        help="Drop group-chat-only low-signal contacts with fewer than 10 messages.")
     prepare.add_argument("--allow-single-token", action="store_true",
                         help="Skip the searchable-name filter (allow single-token / very short names). "
                              "Off by default because such names rarely yield a deep-research hit and just burn API spend.")

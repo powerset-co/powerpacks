@@ -500,7 +500,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
                         "message_count": "300",
                         "last_message": "2025-01-01T00:00:00+00:00",
                     },
-                    # P4: nothing special
+                    # Filtered: below the default aleph-mvp min-message prune rule.
                     {
                         "phone": "+14155550303",
                         "name": "Carol Lopez",
@@ -547,16 +547,17 @@ class PrepareResearchQueueTests(unittest.TestCase):
             )
             manifest = json.loads(result.stdout)
             self.assertEqual(manifest["counts"]["input_rows"], 7)
-            self.assertEqual(manifest["counts"]["eligible_rows"], 3)
+            self.assertEqual(manifest["counts"]["eligible_rows"], 2)
             self.assertEqual(manifest["counts"]["filtered_no_name"], 1)
             self.assertEqual(manifest["counts"]["filtered_unsearchable_name"], 1)
             self.assertEqual(manifest["counts"]["filtered_skipped"], 1)
             self.assertEqual(manifest["counts"]["filtered_already_matched"], 1)
+            self.assertEqual(manifest["counts"]["filtered_low_messages"], 1)
 
             with output.open(newline="") as h:
                 rows = list(csv.DictReader(h))
-            self.assertEqual(len(rows), 3)
-            # Sorted by (tier, -message_count): Jane (P1), Bob (P2b), Carol (P4)
+            self.assertEqual(len(rows), 2)
+            # Sorted by (tier, -message_count): Jane (P1), Bob (P2b)
             self.assertEqual(rows[0]["display_name"], "Jane Doe")
             self.assertEqual(rows[0]["priority_reason"], "P1")
             self.assertEqual(rows[0]["first_name"], "Jane")
@@ -570,8 +571,6 @@ class PrepareResearchQueueTests(unittest.TestCase):
 
             self.assertEqual(rows[1]["display_name"], "Bob Smith")
             self.assertEqual(rows[1]["priority_reason"], "P2b")
-            self.assertEqual(rows[2]["display_name"], "Carol Lopez")
-            self.assertEqual(rows[2]["priority_reason"], "P4")
 
     def test_tier_filter_and_limit(self) -> None:
         with tempfile.TemporaryDirectory() as td:

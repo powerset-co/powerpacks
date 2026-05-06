@@ -49,6 +49,7 @@ Keep a visible task list and update it as work proceeds:
 8. Match local contacts
 9. Review unresolved contacts
 10. Build enrichment queue
+11. Estimate/run deep research when explicitly approved
 
 Use `.powerpacks/messages/import-run.json` as the run ledger when practical.
 Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
@@ -110,6 +111,33 @@ python packs/messages/primitives/prepare_research_queue/prepare_research_queue.p
   --output .powerpacks/messages/research_queue.csv
 ```
 
+This queue uses the same name-quality and prune rules ported from
+`../network-search-api/data_pipeline_v2/pipelines/synthetic/prepare_phone_contacts.py`:
+only named, searchable, unresolved contacts with enough signal become paid
+research candidates.
+
+8. If the user explicitly asks to continue into deep research, estimate first:
+
+```bash
+python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
+  --input .powerpacks/messages/research_queue.csv \
+  --processor core2x
+```
+
+After the user approves the displayed Parallel.ai spend:
+
+```bash
+PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
+  --input .powerpacks/messages/research_queue.csv \
+  --processor core2x \
+  --output-dir .powerpacks/messages/research
+```
+
+If `PARALLEL_API_KEY` is unavailable and the user still wants review help,
+fall back to parallel sub-agent review over small queue shards. Each sub-agent
+should return only public LinkedIn/profile candidates plus a confidence and
+reason; never send message bodies.
+
 ## Resume Rules
 
 - If iMessage already produced `imessage.contacts.csv`, do not re-extract
@@ -130,3 +158,4 @@ End with a compact summary:
 - matched / suggested / unmatched counts
 - review URL or artifact path
 - research queue path and tier counts
+- deep research estimate/path when run

@@ -111,6 +111,28 @@
       "kind": "primitive",
       "primitive": "prepare_research_queue",
       "command": "prepare"
+    },
+    {
+      "id": "estimate_research_cost",
+      "kind": "primitive",
+      "primitive": "deep_research_contacts",
+      "command": "estimate",
+      "optional": true
+    },
+    {
+      "id": "deep_research",
+      "kind": "primitive",
+      "primitive": "deep_research_contacts",
+      "command": "run",
+      "requires_explicit_user_request": true,
+      "user_action": "Approve Parallel.ai spend after seeing the cost estimate."
+    },
+    {
+      "id": "build_review_csv",
+      "kind": "primitive",
+      "primitive": "build_research_review_csv",
+      "command": "build",
+      "optional": true
     }
   ]
 }
