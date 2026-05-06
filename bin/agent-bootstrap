@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""Project-local boot memory for Powerpacks agents.
+
+Stdlib-only. Intended to be run by Codex/Claude/pi at the start of a session
+because AGENTS.md tells them to do so.
+
+What it does:
+- scan project .env* files and record key presence only (never values)
+- load existing .powerpacks/memory/set_ids.json if present
+- if authenticated, refresh set IDs from the app's /v2/sets endpoint
+- write project-local memory under .powerpacks/memory/
+
+This is intentionally host-agnostic. It does not depend on Codex/Claude global
+memory; the repo-local .powerpacks/memory files are the shared memory.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MEMORY_DIR = ROOT / ".powerpacks" / "memory"
+ENV_MEMORY_PATH = MEMORY_DIR / "env_summary.json"
+SETS_MEMORY_PATH = MEMORY_DIR / "set_ids.json"
+BOOT_MEMORY_PATH = MEMORY_DIR / "agent_bootstrap.json"
+AUTH_PY = ROOT / "packs" / "powerset" / "primitives" / "auth" / "auth.py"
+DEFAULT_API_BASE = "https://search-api-7wk4uhe77q-uw.a.run.app"
+SKIP_DIRS = {".git", ".venv", "venv", "node_modules", ".powerpacks", "__pycache__"}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def rel(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def safe_json_load(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def iter_env_files() -> list[Path]:
+    out: list[Path] = []
+    for path in ROOT.rglob(".env*"):
+        if not path.is_file():
+            continue
+        parts = set(path.parts)
+        if parts & SKIP_DIRS:
+            continue
+        out.append(path)
+    return sorted(out, key=lambda p: rel(p))
+
+
+def parse_env_file(path: Path) -> dict[str, Any]:
+    keys: list[str] = []
+    nonempty: list[str] = []
+    defaults: dict[str, str] = {}
+    errors: list[str] = []
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except Exception as exc:
+        return {"path": rel(path), "keys": [], "nonempty_keys": [], "errors": [str(exc)]}
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().removeprefix("export ").strip()
+        value = value.strip().strip('"').strip("'")
+        if not key:
+            continue
+        keys.append(key)
+        if value:
+            nonempty.append(key)
+        if key in {"POWERPACKS_DEFAULT_SET_ID", "POWERSET_DEFAULT_SET_ID"} and value:
+            defaults[key] = value
+
+    return {
+        "path": rel(path),
+        "keys": sorted(set(keys)),
+        "nonempty_keys": sorted(set(nonempty)),
+        "default_set_ids": defaults,
+        "errors": errors,
+    }
+
+
+def scan_env() -> dict[str, Any]:
+    files = [parse_env_file(p) for p in iter_env_files()]
+    all_keys = sorted({k for f in files for k in f.get("keys", [])})
+    nonempty_keys = sorted({k for f in files for k in f.get("nonempty_keys", [])})
+    default_set_ids: dict[str, str] = {}
+    for f in files:
+        default_set_ids.update(f.get("default_set_ids", {}))
+    payload = {
+        "generated_at": now_iso(),
+        "root": str(ROOT),
+        "files": files,
+        "all_keys": all_keys,
+        "nonempty_keys": nonempty_keys,
+        "default_set_ids": default_set_ids,
+        "secret_values_stored": False,
+    }
+    write_json(ENV_MEMORY_PATH, payload)
+    return payload
+
+
+def load_dotenv_values() -> dict[str, str]:
+    """Tiny .env reader for this script's own config (last file wins)."""
+    values: dict[str, str] = {}
+    for path in iter_env_files():
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except Exception:
+            continue
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip().removeprefix("export ").strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                values[key] = value
+    # Real environment wins over .env files.
+    values.update(os.environ)
+    return values
+
+
+def api_base_from_env(values: dict[str, str]) -> str:
+    for key in ("POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL"):
+        if values.get(key):
+            return values[key].rstrip("/")
+    mcp_url = values.get("POWERPACKS_MCP_URL")
+    if mcp_url:
+        parsed = urllib.parse.urlparse(mcp_url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    return DEFAULT_API_BASE
+
+
+def get_token(timeout: int = 30) -> tuple[str | None, str | None]:
+    if not AUTH_PY.exists():
+        return None, f"auth primitive not found: {rel(AUTH_PY)}"
+    proc = subprocess.run(
+        [sys.executable, str(AUTH_PY), "token", "--bearer-only"],
+        cwd=str(ROOT),
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+    )
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "auth token failed").strip().splitlines()[-1:]
+        return None, msg[0] if msg else "auth token failed"
+    token = proc.stdout.strip()
+    if not token:
+        return None, "auth token command returned empty output"
+    return token, None
+
+
+def fetch_sets(api_base: str, token: str, timeout: int = 60) -> list[dict[str, Any]]:
+    req = urllib.request.Request(
+        api_base.rstrip("/") + "/v2/sets",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    if not isinstance(payload, list):
+        raise RuntimeError("/v2/sets returned non-list payload")
+    sets: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        sets.append(
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "description": item.get("description"),
+                "member_count": item.get("member_count"),
+                "person_count": item.get("person_count"),
+                "sales_nav_account_count": item.get("sales_nav_account_count"),
+                "role": item.get("role"),
+                "is_personal": item.get("is_personal"),
+                "created_at": item.get("created_at"),
+            }
+        )
+    return sets
+
+
+def choose_default_set(sets: list[dict[str, Any]], env_summary: dict[str, Any]) -> dict[str, Any] | None:
+    env_ids = set((env_summary.get("default_set_ids") or {}).values())
+    for s in sets:
+        if s.get("id") in env_ids:
+            return {**s, "why": "from .env default set id"}
+    non_personal = [s for s in sets if not s.get("is_personal")]
+    if non_personal:
+        return {**max(non_personal, key=lambda s: int(s.get("member_count") or 0)), "why": "largest non-personal set"}
+    if sets:
+        return {**max(sets, key=lambda s: int(s.get("person_count") or 0)), "why": "largest visible set"}
+    return None
+
+
+def refresh_sets(env_summary: dict[str, Any], *, no_network: bool) -> dict[str, Any]:
+    existing = safe_json_load(SETS_MEMORY_PATH)
+    values = load_dotenv_values()
+    api_base = api_base_from_env(values)
+    payload: dict[str, Any] = {
+        "generated_at": now_iso(),
+        "api_base": api_base,
+        "sets": (existing or {}).get("sets", []) if isinstance(existing, dict) else [],
+        "default_set": (existing or {}).get("default_set") if isinstance(existing, dict) else None,
+        "refreshed": False,
+        "error": None,
+    }
+
+    if no_network:
+        payload["error"] = "network refresh skipped (--no-network)"
+        write_json(SETS_MEMORY_PATH, payload)
+        return payload
+
+    token, token_error = get_token()
+    if token_error:
+        payload["error"] = token_error
+        write_json(SETS_MEMORY_PATH, payload)
+        return payload
+
+    try:
+        sets = fetch_sets(api_base, token)
+        payload.update(
+            {
+                "sets": sets,
+                "count": len(sets),
+                "default_set": choose_default_set(sets, env_summary),
+                "refreshed": True,
+                "error": None,
+            }
+        )
+    except urllib.error.HTTPError as exc:
+        payload["error"] = f"GET /v2/sets HTTP {exc.code}: {exc.reason}"
+    except Exception as exc:  # noqa: BLE001
+        payload["error"] = f"GET /v2/sets failed: {exc}"
+    write_json(SETS_MEMORY_PATH, payload)
+    return payload
+
+
+def summarize(env_summary: dict[str, Any], sets_summary: dict[str, Any]) -> dict[str, Any]:
+    default_set = sets_summary.get("default_set") or {}
+    out = {
+        "generated_at": now_iso(),
+        "env_files": [f.get("path") for f in env_summary.get("files", [])],
+        "env_key_count": len(env_summary.get("all_keys", [])),
+        "env_nonempty_key_count": len(env_summary.get("nonempty_keys", [])),
+        "sets_refreshed": bool(sets_summary.get("refreshed")),
+        "set_count": len(sets_summary.get("sets") or []),
+        "default_set_id": default_set.get("id"),
+        "default_set_name": default_set.get("name"),
+        "sets_error": sets_summary.get("error"),
+        "memory_files": {
+            "env_summary": rel(ENV_MEMORY_PATH),
+            "set_ids": rel(SETS_MEMORY_PATH),
+            "bootstrap": rel(BOOT_MEMORY_PATH),
+        },
+    }
+    write_json(BOOT_MEMORY_PATH, out)
+    return out
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Prefill project-local Powerpacks agent memory.")
+    parser.add_argument("--json", action="store_true", help="Print JSON summary only")
+    parser.add_argument("--no-network", action="store_true", help="Do not refresh /v2/sets")
+    args = parser.parse_args()
+
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    env_summary = scan_env()
+    sets_summary = refresh_sets(env_summary, no_network=args.no_network)
+    summary = summarize(env_summary, sets_summary)
+
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+    else:
+        print("agent-bootstrap: memory refreshed")
+        print(f"  env files: {len(summary['env_files'])} ({', '.join(summary['env_files']) or 'none'})")
+        print(f"  env keys:  {summary['env_nonempty_key_count']} nonempty / {summary['env_key_count']} total")
+        if summary.get("sets_refreshed"):
+            print(f"  sets:      {summary['set_count']} refreshed from {sets_summary.get('api_base')}")
+        else:
+            print(f"  sets:      not refreshed ({summary.get('sets_error')})")
+        if summary.get("default_set_id"):
+            print(f"  default:   {summary['default_set_name']} ({summary['default_set_id']})")
+        print(f"  memory:    {rel(MEMORY_DIR)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
