@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Convenience wrapper so agents/users don't have to type
+# packs/powerset/primitives/doctor/doctor.py.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec python3 "$ROOT/packs/powerset/primitives/doctor/doctor.py" "$@"

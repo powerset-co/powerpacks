@@ -40,7 +40,7 @@ chat.
 ### 1. Health check
 
 ```bash
-python3 packs/powerset/primitives/doctor/doctor.py run
+bin/doctor run
 ```
 
 The doctor emits a JSON report with one entry per check (`status` is one of
@@ -52,9 +52,9 @@ If the user explicitly asks for a fix and the doctor reported a fixable
 issue (each check carries a `fix_command`), only then run:
 
 ```bash
-python3 packs/powerset/primitives/doctor/doctor.py fix
+bin/doctor fix
 # or for browser-based logins:
-python3 packs/powerset/primitives/doctor/doctor.py fix --interactive
+bin/doctor fix --interactive
 ```
 
 Never run `fix` unprompted. Browser logins, gcloud auth, OS-level installs
