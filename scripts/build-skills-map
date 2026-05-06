@@ -170,6 +170,7 @@ def collect_skills(primitives: dict[str, dict[str, Any]]) -> list[dict[str, Any]
                 "path": rel(path),
                 "description": fm.get("description") or "",
                 "heading": first_heading(body) or (fm.get("name") or skill_dir),
+                "markdown": text,
                 "primitive_refs": prim_refs,
                 "mcp_refs": mcp_refs,
                 "primitive_count": len(prim_refs),
@@ -228,12 +229,12 @@ def html_page(data: dict[str, Any]) -> str:
     .toolbar {{ display: grid; grid-template-columns: minmax(180px, 1fr) 180px 180px; gap: 12px; padding: 18px clamp(18px, 4vw, 56px) 10px; position: sticky; top: 0; z-index: 5; backdrop-filter: blur(18px); background: linear-gradient(to bottom, rgba(7,10,18,.88), rgba(7,10,18,.62)); border-bottom: 1px solid rgba(255,255,255,.08); }}
     input, select {{ width: 100%; border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,.08); color: var(--text); padding: 12px 14px; outline: none; }}
     input:focus, select:focus {{ border-color: var(--accent); box-shadow: 0 0 0 3px rgba(116,240,199,.18); }}
-    main {{ display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 20px; padding: 16px clamp(18px, 4vw, 56px) 56px; }}
+    main {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(420px, 38vw); gap: 20px; padding: 16px clamp(18px, 4vw, 56px) 56px; }}
     .stats {{ display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }}
     .stat {{ border: 1px solid var(--border); border-radius: 999px; padding: 8px 12px; color: var(--muted); background: rgba(255,255,255,.06); }}
     .stat strong {{ color: var(--text); }}
     .section {{ margin: 0 0 28px; }}
-    .section h2 {{ display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .14em; }}
+    .section h2 {{ margin: 0 0 12px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .14em; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }}
     .card {{ border: 1px solid var(--border); background: linear-gradient(180deg, var(--panel-2), var(--panel)); border-radius: 22px; padding: 18px; box-shadow: var(--shadow); cursor: pointer; min-height: 188px; transition: transform .15s ease, border-color .15s ease, background .15s ease; }}
     .card:hover, .card.active {{ transform: translateY(-2px); border-color: rgba(116,240,199,.72); background: rgba(116,240,199,.10); }}
@@ -251,6 +252,7 @@ def html_page(data: dict[str, Any]) -> str:
     .row {{ border: 1px solid rgba(255,255,255,.11); border-radius: 14px; padding: 10px 12px; background: rgba(255,255,255,.06); }}
     .row strong {{ display:block; color: var(--text); }}
     .row small {{ color: var(--muted); word-break: break-all; }}
+    .markdown {{ max-height: 520px; overflow: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid rgba(255,255,255,.11); border-radius: 16px; padding: 14px; background: rgba(0,0,0,.26); color: #dbeafe; font: 12px/1.48 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }}
     .empty {{ color: var(--muted); border: 1px dashed var(--border); border-radius: 18px; padding: 18px; }}
     a {{ color: var(--accent-2); text-decoration: none; }}
     code {{ color: var(--accent); }}
@@ -336,7 +338,7 @@ def html_page(data: dict[str, Any]) -> str:
       if (!list.length) {{ sections.innerHTML = '<div class="empty">No skills match the current filters.</div>'; renderDetail(null); return; }}
       const grouped = new Map();
       for (const s of list) {{ if (!grouped.has(s.pack)) grouped.set(s.pack, []); grouped.get(s.pack).push(s); }}
-      sections.innerHTML = [...grouped.entries()].map(([p, skills]) => `<div class="section"><h2><span>${{esc(p)}}</span><span>${{skills.length}} skills</span></h2><div class="grid">${{skills.map(card).join('')}}</div></div>`).join('');
+      sections.innerHTML = [...grouped.entries()].map(([p, skills]) => `<div class="section"><h2>${{esc(p)}} - ${{skills.length}} skills</h2><div class="grid">${{skills.map(card).join('')}}</div></div>`).join('');
       if (!list.some(s => s.name === selected)) selected = list[0].name;
       renderDetail(data.skills.find(s => s.name === selected));
     }}
@@ -357,7 +359,9 @@ def html_page(data: dict[str, Any]) -> str:
         <div class="label">Primitives used</div>
         <div class="list">${{primitiveRows}}</div>
         <div class="label">MCP / tool refs</div>
-        <div class="list">${{mcpRows}}</div>`;
+        <div class="list">${{mcpRows}}</div>
+        <div class="label">Skill markdown</div>
+        <pre class="markdown">${{esc(s.markdown || '')}}</pre>`;
     }}
 
     sections.addEventListener('click', e => {{
