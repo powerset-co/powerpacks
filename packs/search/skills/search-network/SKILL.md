@@ -81,6 +81,32 @@ consumes a path or task-state step and produces a path or task-state step.
 Example: `search-company` -> `search-network` -> `fix-people` is valid only if
 each boundary has a written artifact.
 
+## Fast path runner
+
+For the normal semantic/role search path, prefer the resumable orchestrator once
+`extract-search-query` has produced an `expand_search_request` payload:
+
+```bash
+python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
+  --query "<user query>" \
+  --payload-json .powerpacks/search/<run>/expand_search_request.json
+```
+
+It runs the mechanical primitive sequence, records a ledger next to the task
+state, and exits at the LLM filter/rerank approval gate. Feed confirmation back
+with:
+
+```bash
+python packs/search/primitives/search_network_pipeline/search_network_pipeline.py approve llm \
+  --ledger <ledger> --approval-id <approval_id> --confirm
+python packs/search/primitives/search_network_pipeline/search_network_pipeline.py continue \
+  --ledger <ledger>
+```
+
+Use `--search-only` when the user chooses to skip LLM spend. If query extraction
+or currentness semantics are still ambiguous, resolve those before invoking the
+orchestrator.
+
 ## Strategy Loop
 
 ### Fast Path: Company Directory Lookup

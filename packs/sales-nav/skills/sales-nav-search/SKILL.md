@@ -96,6 +96,26 @@ get one:
 Always pass the same `conversation_id` to subsequent `sales_nav_search`
 calls and the matching `get_artifact` call.
 
+## Fast path runner
+
+Prefer the resumable Sales Nav orchestrator for normal runs:
+
+```bash
+python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py run \
+  --query "<user query>" \
+  --set-id "<set_id>" \
+  --search-args-json .powerpacks/sales-nav/<run>/search_args.json
+```
+
+Because MCP tools are host-provided, the runner does not call them directly. It
+exits with `status: blocked_mcp_call`, the exact `mcp_tool` and `mcp_args`, the
+path where the agent should save the MCP response, and a `continue_command`.
+After the agent saves the response, run the continue command. Local ingest,
+export, scoring approvals, and the ledger are handled by the runner.
+
+For follow-up qualitative scoring, pass `--criteria`; the runner blocks for
+`approve llm --confirm` before calling `score_sales_nav_leads`.
+
 ## Local file handoff
 
 Use `packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py` as
