@@ -47,9 +47,33 @@ estimate, even for small batches. Phrase the gate clearly: "I'm going to run
 Parallel deep research on X people with processor Y. Estimated cost: $Z. Please
 confirm before I submit."
 
+## Fast path: resumable orchestrator
+
+Prefer the orchestrator for normal runs. It is a mechanical task runner around
+the primitives below and writes `.powerpacks/messages/import-run.json`.
+
+```bash
+python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
+```
+
+It exits intentionally at approval gates and prints the exact question plus the
+`approve ... --confirm && continue` command. Feed confirmations back with the
+approval subcommand only after the user approves:
+
+```bash
+python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve parallel \
+  --approval-id <approval_id> --confirm
+python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py continue
+```
+
+Use the same pattern for `approve upload`. GCS research-cache sync is
+optimistic: if `gcloud storage rsync` fails, the orchestrator records a warning
+and continues with the local `.powerpacks/messages/research` cache.
+
 ## Checklist
 
-Keep a visible task list and update it as work proceeds:
+When running manually instead of through the orchestrator, keep a visible task
+list and update it as work proceeds:
 
 1. Check iMessage access
 2. Import iMessage
@@ -71,7 +95,9 @@ Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
 
 ## Workflow
 
-1. Read `packs/messages/tasks/import-contacts.task.json`.
+1. Read `packs/messages/tasks/import-contacts.task.json`. For the default path,
+   run `import_contacts_pipeline.py run` and follow its approval blocks instead
+   of manually dispatching every primitive.
 2. Run iMessage:
    - `extract_imessage_contacts.py check`
    - if readable, run `extract` to `.powerpacks/messages/imessage.contacts.*`

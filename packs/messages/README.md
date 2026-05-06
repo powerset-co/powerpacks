@@ -30,6 +30,9 @@ WhatsApp (all stdlib-only, all gated on explicit user consent):
 
 Cross-channel:
 
+- `import_contacts_pipeline`: resumable orchestrator that runs the mechanical
+  import/match/review/research/upload sequence, tracks
+  `.powerpacks/messages/import-run.json`, and exits at approval gates
 - `messages_harness`: run message primitives tolerantly and emit repair notes
 - `normalize_message_contacts`: convert pack CSV output into a canonical JSONL
   artifact and summary manifest
