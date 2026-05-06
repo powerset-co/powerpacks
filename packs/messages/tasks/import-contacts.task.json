@@ -121,6 +121,22 @@
       "optional": true
     },
     {
+      "id": "summarize_research_upload",
+      "kind": "primitive",
+      "primitive": "upload_research_review",
+      "command": "summarize",
+      "optional": true,
+      "description": "Preview the reviewed artifact counts before any upload."
+    },
+    {
+      "id": "upload_research_review",
+      "kind": "primitive",
+      "primitive": "upload_research_review",
+      "command": "upload",
+      "requires_explicit_user_request": true,
+      "user_action": "Approve uploading the reviewed yes/no enrichment artifact to Powerset."
+    },
+    {
       "id": "review_contacts_web_fallback",
       "kind": "primitive",
       "primitive": "review_contacts_web",

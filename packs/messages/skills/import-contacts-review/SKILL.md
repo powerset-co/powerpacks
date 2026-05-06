@@ -24,7 +24,7 @@ approval.
 
 ## Architecture
 
-Seven small primitives:
+Eight small primitive groups:
 
 1. `auth` (in `packs/powerset/primitives/auth/`) — Auth0 PKCE login → JWT cached at
    `~/.powerpacks/credentials.json`
@@ -41,6 +41,8 @@ Seven small primitives:
 7. `deep_research_contacts` / `build_research_review_csv` /
    `review_research_web` — native Parallel deep research, profile-card review,
    and review CSV assembly
+8. `upload_research_review` — upload the reviewed CSV to
+   `/v2/messages-research/artifacts` after explicit user approval
 
 ## Workflow
 
@@ -230,17 +232,24 @@ This ports the `contact-exporter` research-review TUI behavior:
 - every click writes the CSV `exclude` column (`exclude=no` include,
   `exclude=yes` exclude), so refresh/quit does not lose progress
 
-And, after the user reviews and is ready, upload the artifact back to
-Powerset:
+And, after the user reviews and explicitly approves upload, upload the artifact
+back to Powerset:
 
 ```bash
-uv run contact-exporter research-review --upload \
-  ../powerpacks/.powerpacks/messages/research_review.csv
+python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
+  --csv .powerpacks/messages/research_review.csv
+
+python packs/messages/primitives/upload_research_review/upload_research_review.py upload \
+  --csv .powerpacks/messages/research_review.csv \
+  --confirm-upload
 ```
+
+The uploader uses the cached `$powerset-login` credentials and converts the web
+reviewer's `exclude` decisions into upload buckets before posting. The server
+artifact stores yes/maybe/no splits; the yes split is the include/enrich set.
 
 ## What this skill does NOT do
 
-- It does not upload contacts to Powerset. Upload remains in
-  `powerset_contacts_harness` (contact-exporter compatibility) until a native
-  upload primitive is added.
+- It does not upload contacts or reviewed research artifacts without explicit
+  user approval.
 - It does not run deep research or LLM scoring without explicit cost approval.

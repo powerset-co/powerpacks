@@ -39,7 +39,12 @@ python packs/messages/primitives/review_research_web/review_research_web.py serv
   --open
 
 # 4. Upload back to Powerset after review:
-uv run contact-exporter research-review --upload ../powerpacks/.powerpacks/messages/research_review.csv
+python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
+  --csv .powerpacks/messages/research_review.csv
+
+python packs/messages/primitives/upload_research_review/upload_research_review.py upload \
+  --csv .powerpacks/messages/research_review.csv \
+  --confirm-upload
 ```
 
 ## Heuristic bucket rules

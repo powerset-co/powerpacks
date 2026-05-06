@@ -5,7 +5,9 @@ import os
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -13,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NORMALIZE = ROOT / "packs/messages/primitives/normalize_message_contacts/normalize_message_contacts.py"
 HARNESS = ROOT / "packs/messages/primitives/powerset_contacts_harness/powerset_contacts_harness.py"
 IMESSAGE = ROOT / "packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py"
+UPLOAD_REVIEW = ROOT / "packs/messages/primitives/upload_research_review/upload_research_review.py"
 
 
 class MessagesPackTests(unittest.TestCase):
@@ -254,6 +257,154 @@ class MessagesPackTests(unittest.TestCase):
             self.assertEqual(rows[0]["message_count"], 2)
             self.assertTrue(rows[0]["is_in_group_chats"])
             self.assertEqual(rows[0]["group_names"], ["Founders"])
+
+    def test_upload_research_review_summary_applies_explicit_include_exclude(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = Path(td) / "research_review.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["bucket", "handle", "top_title_company_pairs", "exclude"],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "bucket": "review",
+                        "handle": "phone-1",
+                        "top_title_company_pairs": "Founder @ Acme",
+                        "exclude": "no",
+                    }
+                )
+                writer.writerow(
+                    {
+                        "bucket": "confident",
+                        "handle": "phone-2",
+                        "top_title_company_pairs": "CEO @ Example",
+                        "exclude": "yes",
+                    }
+                )
+                writer.writerow(
+                    {
+                        "bucket": "medium",
+                        "handle": "phone-3",
+                        "top_title_company_pairs": "Engineer @ Widget",
+                        "exclude": "",
+                    }
+                )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(UPLOAD_REVIEW),
+                    "summarize",
+                    "--csv",
+                    str(csv_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["yes_count"], 1)
+            self.assertEqual(payload["maybe_count"], 1)
+            self.assertEqual(payload["no_count"], 1)
+            self.assertEqual(payload["explicit_include_count"], 1)
+            self.assertEqual(payload["explicit_exclude_count"], 1)
+            self.assertEqual(payload["bucket_default_count"], 1)
+
+    def test_upload_research_review_posts_multipart_csv(self) -> None:
+        observed: dict[str, object] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                observed["path"] = self.path
+                observed["authorization"] = self.headers.get("Authorization")
+                observed["content_type"] = self.headers.get("Content-Type")
+                observed["body"] = self.rfile.read(length)
+                body = json.dumps(
+                    {
+                        "artifact_id": "artifact-1",
+                        "status": "ready",
+                        "created_at": "2026-05-05T00:00:00+00:00",
+                        "total_count": 2,
+                        "yes_count": 1,
+                        "maybe_count": 0,
+                        "no_count": 1,
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, fmt: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = Path(td) / "research_review.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["bucket", "handle", "top_title_company_pairs", "exclude"],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "bucket": "review",
+                        "handle": "phone-1",
+                        "top_title_company_pairs": "Founder @ Acme",
+                        "exclude": "no",
+                    }
+                )
+                writer.writerow(
+                    {
+                        "bucket": "confident",
+                        "handle": "phone-2",
+                        "top_title_company_pairs": "CEO @ Example",
+                        "exclude": "yes",
+                    }
+                )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(UPLOAD_REVIEW),
+                    "upload",
+                    "--csv",
+                    str(csv_path),
+                    "--api-url",
+                    f"http://127.0.0.1:{server.server_port}",
+                    "--token",
+                    "test-token",
+                    "--confirm-upload",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["response"]["artifact_id"], "artifact-1")
+        self.assertEqual(payload["prepared_summary"]["yes_count"], 1)
+        self.assertEqual(payload["prepared_summary"]["no_count"], 1)
+        self.assertEqual(observed["path"], "/v2/messages-research/artifacts")
+        self.assertEqual(observed["authorization"], "Bearer test-token")
+        self.assertIn("multipart/form-data", str(observed["content_type"]))
+        body_text = bytes(observed["body"]).decode("utf-8", errors="replace")
+        self.assertIn("source_bucket", body_text)
+        self.assertIn("upload_decision", body_text)
+        self.assertIn("yes,phone-1", body_text)
+        self.assertIn("no,phone-2", body_text)
 
     def test_extract_imessage_privacy_settings_print_only(self) -> None:
         result = subprocess.run(

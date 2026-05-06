@@ -50,6 +50,7 @@ Keep a visible task list and update it as work proceeds:
 9. Build enrichment queue
 10. Estimate/run deep research when explicitly approved
 11. Review profile cards / enrichment decisions
+12. Upload reviewed artifact when explicitly approved
 
 Use `.powerpacks/messages/import-run.json` as the run ledger when practical.
 Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
@@ -142,6 +143,26 @@ This is the default review surface after Parallel runs. It shows the profile
 data from `01_research_parallel.json` and autosaves yes/no decisions to the
 `exclude` column in `research_review.csv`.
 
+After review, summarize the upload artifact and ask before uploading:
+
+```bash
+python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
+  --csv .powerpacks/messages/research_review.csv
+```
+
+Only after the user explicitly approves the upload:
+
+```bash
+python packs/messages/primitives/upload_research_review/upload_research_review.py upload \
+  --csv .powerpacks/messages/research_review.csv \
+  --confirm-upload
+```
+
+This posts to `/v2/messages-research/artifacts`. The server stores a reviewed
+artifact with yes/maybe/no splits; the yes split is the include/enrich set. The
+primitive translates the web UI's `exclude` decisions into upload buckets so
+explicit yes/no enrich choices are reflected in that split.
+
 If Parallel is skipped, unavailable, or the queue is empty, fall back to the raw
 contacts yes/no reviewer:
 
@@ -181,3 +202,4 @@ End with a compact summary:
 - review URL or artifact path
 - research queue path and tier counts
 - deep research estimate/path when run
+- uploaded artifact ID when upload is approved

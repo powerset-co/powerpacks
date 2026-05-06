@@ -47,6 +47,9 @@ Cross-channel:
   on upload
 - `review_research_web`: local browser port of the research-review TUI with
   yes/maybe/no tabs, profile cards, and autosaved yes/no enrichment decisions
+- `upload_research_review`: upload the reviewed research CSV to
+  `/v2/messages-research/artifacts` after explicit approval, translating the
+  UI's `exclude` decisions into server upload buckets
 - `powerset_contacts_harness`: optional compatibility shim for non-WhatsApp
   channels of `contact-exporter` (review/match-local/upload). Not used by the
   WhatsApp skill.
@@ -68,7 +71,7 @@ Cross-channel:
 
 Extraction is local and consentful. The harness can prepare and record
 commands, but an agent should not run iMessage, WhatsApp, Docker install, QR
-auth, extraction, or upload actions unless the user has explicitly asked for
-that action in the current task.
+auth, extraction, paid research, or upload actions unless the user has
+explicitly asked for that action in the current task.
 
 Generated artifacts live under `.powerpacks/messages/` by default.
