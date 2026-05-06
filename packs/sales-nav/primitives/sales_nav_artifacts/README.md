@@ -9,7 +9,7 @@ payloads.
 
 Default files under the run directory:
 
-- `leads.jsonl` — internal handoff, one row per lead/member
+- `leads.jsonl` — internal handoff, one row per lead/member, including enriched profile fields (`summary`, `experiences`, `education`, `enriched`) when available
 - `mutuals.jsonl` — internal handoff, lead ↔ mutual edges with operator/source metadata
 - `member_urls.json` — internal handoff, member_id → LinkedIn URL resolutions
 - `manifest.json` — paths/counts/artifact ids

@@ -30,16 +30,19 @@ LEAD_FIELDS = [
     "name",
     "title",
     "headline",
+    "summary",
     "company",
     "location",
     "linkedin_url",
     "profile_picture_url",
-    "source_account_id",
     "source_account_ids",
     "mutual_count",
     "total_mutual_count",
     "mutual_member_ids",
     "operators",
+    "enriched",
+    "experiences",
+    "education",
     "result_index",
     "page_offset",
     "first_seen_at",
@@ -58,7 +61,6 @@ MUTUAL_FIELDS = [
     "mutual_name",
     "mutual_person_id",
     "mutual_linkedin_url",
-    "source_account_id",
     "source_account_ids",
     "operators",
     "first_seen_at",
@@ -162,8 +164,22 @@ def init_state(args: argparse.Namespace) -> dict[str, Any]:
     return {"state": str(state_path), **state}
 
 
-def response_leads(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def response_leads(payload: dict[str, Any], *, prefer_content: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return (leads, page_meta) from sales_nav_search or get_artifact output."""
+    content_leads = (((payload.get("content") or {}).get("extended_results") or {}).get("leads") or [])
+    if prefer_content and isinstance(content_leads, list) and content_leads:
+        meta = {
+            "source": "get_artifact_content",
+            "artifact_id": payload.get("id"),
+            "conversation_id": payload.get("conversation_id"),
+            "offset": 0,
+            "returned": len(content_leads),
+            "total": len(content_leads),
+            "has_more": False,
+            "next_offset": None,
+        }
+        return [lead for lead in content_leads if isinstance(lead, dict)], meta
+
     if isinstance(payload.get("page"), dict):
         page = payload["page"]
         leads = page.get("results") or []
@@ -250,16 +266,19 @@ def normalize_lead(
         "name": lead.get("name") or row.get("name"),
         "title": lead.get("title") or row.get("title"),
         "headline": lead.get("headline") or row.get("headline"),
+        "summary": lead.get("summary") or row.get("summary"),
         "company": lead.get("company") or row.get("company"),
         "location": lead.get("location") or row.get("location"),
         "linkedin_url": lead.get("linkedin_url") or row.get("linkedin_url"),
         "profile_picture_url": lead.get("profile_picture_url") or lead.get("profile_pic_url") or row.get("profile_picture_url"),
-        "source_account_id": (source_ids or row.get("source_account_ids") or [None])[0],
         "source_account_ids": list(dict.fromkeys((row.get("source_account_ids") or []) + source_ids)),
         "mutual_count": max(int(row.get("mutual_count") or 0), int(lead.get("mutual_count") or 0), len(mutual_ids)),
         "total_mutual_count": max(int(row.get("total_mutual_count") or 0), int(lead.get("total_mutual_count") or 0), len(mutual_ids)),
         "mutual_member_ids": list(dict.fromkeys((row.get("mutual_member_ids") or []) + mutual_ids)),
         "operators": merge_operator_lists(row.get("operators") or [], lead.get("operators") or []),
+        "enriched": bool(lead.get("enriched") or row.get("enriched") or lead.get("experiences") or lead.get("education")),
+        "experiences": lead.get("experiences") or row.get("experiences") or [],
+        "education": lead.get("education") or row.get("education") or [],
         "result_index": row.get("result_index", page_meta.get("offset", 0) + index),
         "page_offset": page_meta.get("offset", 0),
         "first_seen_at": row.get("first_seen_at") or now,
@@ -314,7 +333,6 @@ def mutual_rows_for_lead(
             "mutual_name": mutual.get("name") or mutual.get("first_name"),
             "mutual_person_id": mutual.get("person_id"),
             "mutual_linkedin_url": mutual.get("linkedin_url"),
-            "source_account_id": (source_ids or [None])[0],
             "source_account_ids": source_ids,
             "operators": operators,
             "first_seen_at": now,
@@ -388,7 +406,7 @@ def cmd_ingest_page(args: argparse.Namespace) -> None:
     payload = read_json(Path(args.response))
     if not isinstance(payload, dict):
         raise SystemExit("response must be a JSON object")
-    leads, page_meta = response_leads(payload)
+    leads, page_meta = response_leads(payload, prefer_content=args.prefer_content)
     if args.artifact_id:
         page_meta["artifact_id"] = args.artifact_id
     if args.offset is not None:
@@ -578,6 +596,7 @@ def main() -> None:
     ingest.add_argument("--response", required=True)
     ingest.add_argument("--artifact-id")
     ingest.add_argument("--offset", type=int)
+    ingest.add_argument("--prefer-content", action="store_true", help="When get_artifact include_content=true is saved, ingest content.extended_results.leads instead of the compact page")
     ingest.set_defaults(func=cmd_ingest_page)
 
     urls = sub.add_parser("ingest-member-urls")

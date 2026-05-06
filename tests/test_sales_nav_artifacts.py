@@ -52,6 +52,7 @@ class SalesNavArtifactsTests(unittest.TestCase):
                         "name": "Ada Lovelace",
                         "title": "VP Engineering",
                         "headline": "VP Engineering at Stripe",
+                        "summary": "Builds financial infrastructure teams.",
                         "company": "Stripe",
                         "location": "San Francisco",
                         "linkedin_url": "https://www.linkedin.com/in/ada",
@@ -142,6 +143,37 @@ class SalesNavArtifactsTests(unittest.TestCase):
             url_out = self.run_json(["ingest-member-urls", "--state", str(state_path), "--response", str(urls_path)])
             self.assertEqual(url_out["resolved_count"], 2)
 
+            enriched_artifact = {
+                "id": "artifact-1",
+                "conversation_id": "conv-123",
+                "content": {
+                    "extended_results": {
+                        "leads": [
+                            {
+                                "member_id": 101,
+                                "name": "Ada Lovelace",
+                                "title": "VP Engineering",
+                                "company": "Stripe",
+                                "headline": "VP Engineering, Payments Platform",
+                                "summary": "Led real estate finance and payments platform engineering.",
+                                "enriched": True,
+                                "experiences": [
+                                    {"company_name": "Stripe", "title": "VP Engineering", "start_year": 2021, "end_year": None, "is_current": True},
+                                    {"company_name": "Brookfield", "title": "Engineering Advisor", "start_year": 2018, "end_year": 2020, "is_current": False},
+                                ],
+                                "education": [
+                                    {"school": "MIT", "degree": "BS", "field_of_study": "Computer Science", "end_year": 2010}
+                                ],
+                            }
+                        ]
+                    }
+                },
+            }
+            enriched_path = td_path / "enriched.json"
+            enriched_path.write_text(json.dumps(enriched_artifact))
+            ingest_enriched = self.run_json(["ingest-page", "--state", str(state_path), "--response", str(enriched_path), "--prefer-content"])
+            self.assertEqual(ingest_enriched["lead_count"], 3)
+
             exported = self.run_json(["export", "--state", str(state_path)])
             leads_csv = Path(exported["leads_csv"])
             mutuals_csv = Path(exported["mutuals_csv"])
@@ -156,7 +188,12 @@ class SalesNavArtifactsTests(unittest.TestCase):
             self.assertEqual(len(lead_rows), 3)
             self.assertEqual(len(mutual_rows), 4)
             ada = next(row for row in lead_rows if row["member_id"] == "101")
-            self.assertEqual(ada["source_account_id"], "acct-a")
+            self.assertNotIn("source_account_id", ada)
+            self.assertEqual(json.loads(ada["source_account_ids"]), ["acct-a"])
+            self.assertEqual(ada["enriched"], "True")
+            self.assertIn("real estate finance", ada["summary"])
+            self.assertIn("Brookfield", ada["experiences"])
+            self.assertIn("MIT", ada["education"])
             self.assertIn("203", ada["mutual_member_ids"])
             mallory = next(row for row in mutual_rows if row["mutual_member_id"] == "201")
             self.assertEqual(mallory["mutual_linkedin_url"], "https://www.linkedin.com/in/mallory")

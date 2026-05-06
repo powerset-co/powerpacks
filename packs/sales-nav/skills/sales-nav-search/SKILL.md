@@ -97,8 +97,9 @@ the durable local store for each skill invocation. It normalizes MCP page output
 into these files:
 
 - `leads.jsonl` — internal handoff, one row per lead with `member_id`,
-  `profile_id`, `source_account_id`, `source_account_ids`, `operators`,
-  `mutual_member_ids`, `linkedin_url`, title/company/location, artifact/source
+  `profile_id`, `source_account_ids`, `operators`, `mutual_member_ids`,
+  `linkedin_url`, title/company/location, enriched profile fields (`summary`,
+  `experiences`, `education`, `enriched`) when available, artifact/source
   metadata, and seen counts.
 - `mutuals.jsonl` — internal handoff, one row per lead↔mutual edge with
   `lead_member_id`, `mutual_member_id`, mutual LinkedIn URL if resolved,
