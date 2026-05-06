@@ -32,7 +32,10 @@ It does not read or send message content. Inputs are already filtered by
 ## Usage
 
 ```bash
-# 1. Cost estimate, no network.
+# 0. Download existing operator-scoped research cache first (no Parallel spend).
+python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
+
+# 1. Cost estimate, no Parallel network/spend; skips already-downloaded handles.
 python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
   --input .powerpacks/messages/research_queue.p1p2.csv \
   --processor core2x
@@ -62,8 +65,11 @@ python ... deep_research_contacts.py poll --output-dir .powerpacks/messages/rese
 ## Idempotency
 
 Rows where `<output-dir>/<handle>/01_research_parallel.json` already exists
-are skipped on `submit` / `run`. That makes it safe to re-run after partial
-failures or to incrementally add new candidates.
+are skipped on `estimate` / `submit` / `run`. Run
+`sync_messages_research_cache download` first to hydrate this directory from the
+server-side operator cache and avoid paying Parallel again for prior work. That
+makes it safe to re-run after partial failures or to incrementally add new
+candidates.
 
 ## Artifacts
 

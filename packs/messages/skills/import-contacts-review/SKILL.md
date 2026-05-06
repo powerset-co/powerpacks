@@ -14,13 +14,19 @@ The pack is privacy-first:
 - never send phone numbers, emails, or message bodies to LLM providers
 - LLM review only sends `name`, `source`, `message_count`, recency,
   `is_in_group_chats`, and `group_names`
-- every step that touches the network or an LLM is gated on explicit user
+- upload never happens until the final reviewed artifact step, after explicit
+  user approval
+- cheap Sonnet/OpenRouter LLM review may proceed after an estimate under `$1.00`
+  under the initial workflow consent; otherwise LLM review needs explicit cost
   approval
+- Parallel.ai deep research always needs explicit spend approval after showing
+  the count and cost estimate
 
 When invoked by the top-level `import-contacts` workflow, the user's initial
 workflow consent covers Powerset login, candidate sync, and local matching.
-LLM review, deep research, and upload still require separate cost/action
-approval.
+Parallel deep research and upload still require separate cost/action approval.
+OpenRouter Sonnet LLM review can skip a second approval only when its estimate
+is under `$1.00`; still show the estimate first.
 
 ## Architecture
 
@@ -38,10 +44,13 @@ Eight small primitive groups:
    `Matched`, `Suggested`, `Unmatched`, `Low signal`, and `Skipped` tabs
 6. `prepare_research_queue` — applies the old `network-search-api`
    phone-contact prune rules and writes the Parallel input CSV
-7. `deep_research_contacts` / `build_research_review_csv` /
+7. `sync_messages_research_cache` — download operator-scoped existing research
+   profiles from the processing GCS bucket into `.powerpacks/messages/research`
+   so paid Parallel research skips prior work
+8. `deep_research_contacts` / `build_research_review_csv` /
    `review_research_web` — native Parallel deep research, profile-card review,
    and review CSV assembly
-8. `upload_research_review` — upload the reviewed CSV to
+9. `upload_research_review` — upload the reviewed CSV to
    `/v2/messages-research/artifacts` after explicit user approval
 
 ## Workflow
@@ -100,13 +109,17 @@ python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py esti
 
 Show the user the candidate count and `estimated_usd` before spending money.
 
-### 6. Run the LLM review (after explicit user request)
+### 6. Run the LLM review (cheap Sonnet estimates can proceed)
 
 ```bash
 python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py review \
   --input .powerpacks/messages/contacts.csv \
   --model anthropic/claude-sonnet-4-6
 ```
+
+If the estimate is `< $1.00` and the model is `anthropic/claude-sonnet-4-6`,
+report the estimate and proceed under the initial workflow consent. Otherwise,
+stop for explicit LLM cost approval first.
 
 `OPENROUTER_API_KEY` must be in the environment, or pass `--api-key`. The
 primitive only reviews unmatched/suggested rows by default; pass `--all` to
@@ -140,17 +153,31 @@ rules from `../network-search-api/data_pipeline_v2/pipelines/synthetic/prepare_p
 It also ports the old `phone_prune_config` last-name token blocklist:
 `hinge`, `raya`, `tinder`, and `bumble`.
 
-### 8. Run deep research (Parallel.ai)
+### 8. Sync prior deep research, then run Parallel.ai with explicit approval
 
-After explicit user approval and budget confirmation:
+First sync existing operator-scoped research from the processing GCS bucket.
+This avoids spending Parallel credits for handles that already have
+`01_research_parallel.json` under the same operator:
 
 ```bash
-# Estimate the cost without making API calls first.
+python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py status
+python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
+```
+
+Then estimate the cost without making Parallel API calls:
+
+```bash
 python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
   --input .powerpacks/messages/research_queue.p1p2.csv \
-  --processor core2x
+  --processor core2x \
+  --output-dir .powerpacks/messages/research
+```
 
-# Submit + poll + write per-handle JSON artifacts.
+Stop and ask: "I'm going to run Parallel deep research on X people with
+processor core2x. Estimated cost: $Y. Please confirm before I submit." Only
+after explicit user approval:
+
+```bash
 PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
   --input .powerpacks/messages/research_queue.p1p2.csv \
   --processor core2x \
@@ -244,7 +271,7 @@ python packs/messages/primitives/upload_research_review/upload_research_review.p
   --confirm-upload
 ```
 
-The uploader uses the cached `$powerset-login` credentials and converts the web
+The uploader uses the cached `$powerset login` credentials and converts the web
 reviewer's `exclude` decisions into upload buckets before posting. The server
 artifact stores yes/maybe/no splits; the yes split is the include/enrich set.
 
@@ -252,4 +279,6 @@ artifact stores yes/maybe/no splits; the yes split is the include/enrich set.
 
 - It does not upload contacts or reviewed research artifacts without explicit
   user approval.
-- It does not run deep research or LLM scoring without explicit cost approval.
+- It does not run Parallel deep research without explicit cost approval.
+- It only runs OpenRouter/Sonnet LLM review without a second approval when the
+  estimate is under `$1.00`; otherwise LLM review also requires explicit cost approval.

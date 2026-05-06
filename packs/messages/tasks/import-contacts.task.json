@@ -6,7 +6,8 @@
     "no_message_content": true,
     "local_metadata_consent_can_cover_extraction": true,
     "network_candidate_sync_allowed_after_initial_consent": true,
-    "llm_review_requires_cost_approval": true,
+    "llm_review_requires_cost_approval_over_usd": 1.0,
+    "llm_review_under_threshold_allowed_model": "anthropic/claude-sonnet-4-6",
     "deep_research_requires_cost_approval": true,
     "upload_requires_explicit_user_request": true
   },
@@ -92,6 +93,14 @@
       "command": "prepare"
     },
     {
+      "id": "sync_messages_research_cache",
+      "kind": "primitive",
+      "primitive": "sync_messages_research_cache",
+      "command": "download",
+      "optional": true,
+      "description": "Download operator-scoped prior deep research from GCS into .powerpacks/messages/research before estimating paid Parallel work."
+    },
+    {
       "id": "estimate_research_cost",
       "kind": "primitive",
       "primitive": "deep_research_contacts",
@@ -104,7 +113,7 @@
       "primitive": "deep_research_contacts",
       "command": "run",
       "requires_explicit_user_request": true,
-      "user_action": "Approve Parallel.ai spend after seeing the cost estimate."
+      "user_action": "Approve Parallel.ai spend after seeing the count and cost estimate. This approval is always required."
     },
     {
       "id": "build_review_csv",
@@ -156,7 +165,7 @@
       "kind": "primitive",
       "primitive": "llm_review_contacts",
       "command": "review",
-      "requires_explicit_user_request": true
+      "requires_explicit_user_request": "only when estimate >= $1.00 or model is not anthropic/claude-sonnet-4-6"
     }
   ]
 }

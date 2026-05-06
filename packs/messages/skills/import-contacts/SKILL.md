@@ -32,8 +32,20 @@ only for real human actions:
 - Parallel.ai/deep-research cost approval
 - upload approval
 
-Never upload contacts or run paid LLM/research steps without a separate,
-explicit approval after showing the estimate.
+Never upload contacts. The only upload step is the final reviewed research
+artifact upload, and it requires a separate explicit approval after showing the
+summary counts.
+
+For cheap OpenRouter LLM review/bucketing, always estimate first. If the model
+is `anthropic/claude-sonnet-4-6` and the estimate is under `$1.00`, the initial
+workflow consent is enough; report the estimate and proceed. If the estimate is
+`>= $1.00`, or a different/unknown model is used, stop for explicit LLM cost
+approval.
+
+For Parallel.ai deep research, always stop for explicit spend approval after the
+estimate, even for small batches. Phrase the gate clearly: "I'm going to run
+Parallel deep research on X people with processor Y. Estimated cost: $Z. Please
+confirm before I submit."
 
 ## Checklist
 
@@ -48,9 +60,10 @@ Keep a visible task list and update it as work proceeds:
 7. Sync Powerset candidates
 8. Match local contacts
 9. Build enrichment queue
-10. Estimate/run deep research when explicitly approved
-11. Review profile cards / enrichment decisions
-12. Upload reviewed artifact when explicitly approved
+10. Sync existing deep-research cache from GCS into `.powerpacks/messages/research`
+11. Estimate/run deep research when explicitly approved
+12. Review profile cards / enrichment decisions
+13. Upload reviewed artifact when explicitly approved
 
 Use `.powerpacks/messages/import-run.json` as the run ledger when practical.
 Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
@@ -106,17 +119,29 @@ This queue uses the same name-quality and prune rules ported from
 only named, searchable, unresolved contacts with enough signal become paid
 research candidates.
 
-7. Estimate/run Parallel deep research before review.
+7. Sync already-researched profiles before estimating Parallel spend.
 
-Always estimate first:
+This uses the cached Powerset token to resolve the current operator and `gcloud
+storage rsync` to download the operator-scoped processing cache into the local
+Powerpacks research dir. For Arthur this should resolve to operator
+`e33a648a-ae5f-432e-83ce-b90d75546ada` / `thearthurchen@gmail.com`.
+
+```bash
+python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py status
+python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
+```
+
+Then estimate Parallel deep research. The estimate skips rows that already have
+`.powerpacks/messages/research/<handle>/01_research_parallel.json`:
 
 ```bash
 python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
   --input .powerpacks/messages/research_queue.csv \
-  --processor core2x
+  --processor core2x \
+  --output-dir .powerpacks/messages/research
 ```
 
-After the user approves the displayed Parallel.ai spend:
+Stop here and ask for explicit Parallel spend approval. After the user confirms:
 
 ```bash
 PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
@@ -143,7 +168,8 @@ This is the default review surface after Parallel runs. It shows the profile
 data from `01_research_parallel.json` and autosaves yes/no decisions to the
 `exclude` column in `research_review.csv`.
 
-After review, summarize the upload artifact and ask before uploading:
+After review, summarize the upload artifact and ask before uploading. Make clear
+that nothing has been uploaded yet:
 
 ```bash
 python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
@@ -174,7 +200,9 @@ python packs/messages/primitives/review_contacts_web/review_contacts_web.py serv
 
 Use the web reviewer for yes/no enrichment decisions only. Do not ask the user
 to edit names, match details, or free-text fields in the normal import flow.
-Use LLM review only after showing the estimate and getting explicit approval.
+Use LLM review only after showing the estimate; Sonnet/OpenRouter estimates
+under `$1.00` may proceed without another approval, while anything else requires
+explicit LLM cost approval.
 
 If `PARALLEL_API_KEY` is unavailable and the user still wants review help,
 fall back to parallel sub-agent review over small queue shards. Each sub-agent

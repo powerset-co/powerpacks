@@ -37,6 +37,9 @@ Cross-channel:
   `contacts.csv` (e.g. iMessage + WhatsApp → unified)
 - `prepare_research_queue`: filter + reshape `contacts.csv` into the
   deep-research input CSV (with priority tiers and per-processor cost estimates)
+- `sync_messages_research_cache`: download operator-scoped prior deep research
+  from the processing GCS bucket into `.powerpacks/messages/research` before
+  spending new Parallel credits
 - `deep_research_contacts`: run Parallel.ai deep research over the queue and
   write per-handle `01_research_parallel.json` artifacts; native HTTP port of
   aleph-mvp's `research_parallel.py` so Powerpacks does not depend on the
@@ -71,7 +74,9 @@ Cross-channel:
 
 Extraction is local and consentful. The harness can prepare and record
 commands, but an agent should not run iMessage, WhatsApp, Docker install, QR
-auth, extraction, paid research, or upload actions unless the user has
-explicitly asked for that action in the current task.
+auth, extraction, Parallel paid research, or upload actions unless the user has
+explicitly asked for that action in the current task. OpenRouter Sonnet review
+under `$1.00` may proceed after showing the estimate; all Parallel research and
+all uploads require explicit approval.
 
 Generated artifacts live under `.powerpacks/messages/` by default.
