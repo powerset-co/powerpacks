@@ -28,12 +28,12 @@ The agent should:
   executing retrieval
 - execute retrieval through TurboPuffer
 - review the candidate frontier after each step
-- hydrate the full candidate frontier through Postgres and dump hydrated
-  inspection artifacts before any LLM review
-- run conservative LLM filtering by default after hydration
+- hydrate the full candidate frontier through Postgres into local JSONL handoff
+  files; do not pass large profile blobs through chat or command arguments
+- run conservative LLM filtering by default after hydration using the handoff path
 - run the async `llm_rerank_candidates` primitive by default after filtering,
-  producing reasoning, confidence, and trait-score CSV/JSONL artifacts
-- persist CSV/JSONL result artifacts in reranked order for refinement and interoperability
+  producing `query_results.csv` with reasoning, confidence, and trait scores
+- persist result artifacts in reranked order for refinement and interoperability
 
 ## Skill Composition
 
@@ -68,7 +68,9 @@ Useful handoff artifacts:
 - set resolution: recorded at `steps[].id = "resolve_set_operators"` and
   consumed as `role_search_filters.operator_ids`
 - candidate frontier: recorded by retrieval steps and exported as JSONL
-- hydrated output: persisted CSV/JSONL/manifest from `persist_search_results`
+- hydrated handoff: `hydrate_people` records `profiles_path` and
+  `llm_profiles_path` in task state; agents should pass the state/path, not read
+  the profile file unless the user asks for details
 - rerank output: `artifacts/<task>/llm_rerank_candidates/query_results.csv`;
   the CSV columns match the app query-results schema (`person_id`,
   `result_index`, `matched_position_indexes`, `final_score`, `trait_scores`,

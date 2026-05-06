@@ -96,7 +96,10 @@ def step_output(state: dict[str, Any], step_id: str) -> dict[str, Any]:
 
 def hydrated_profiles(state: dict[str, Any]) -> list[dict[str, Any]]:
     output = step_output(state, "hydrate_people")
-    profiles = output.get("profiles") or []
+    if output.get("profiles_path"):
+        profiles = read_jsonl(Path(str(output["profiles_path"])))
+    else:
+        profiles = output.get("profiles") or []
     if not isinstance(profiles, list):
         raise RuntimeError("hydrate_people output profiles must be a list")
     return [profile for profile in profiles if isinstance(profile, dict) and profile.get("person_id")]

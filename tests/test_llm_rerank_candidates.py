@@ -296,43 +296,47 @@ class FanOutVerdictShapeTests(unittest.TestCase):
                 self.assertIsNone(r["error"])
 
 
-class StateModeQueryResultsV2Tests(unittest.TestCase):
+class StateModeQueryResultsCsvTests(unittest.TestCase):
     def test_state_mode_writes_query_results_csv_schema_artifact(self) -> None:
-        state = {
-            "task_id": "search-network-test",
-            "conversation_id": "conv-test",
-            "query": "ai engineer at openai",
-            "steps": [
+        profile = {
+            "person_id": "p1",
+            "name": "Ada",
+            "headline": "AI Engineer at OpenAI",
+            "base_score": 0.42,
+            "matched_position_indexes": [0],
+            "vertical_sources": ["role"],
+            "positions": [
                 {
-                    "id": "hydrate_people",
-                    "output": {
-                        "profiles": [
-                            {
-                                "person_id": "p1",
-                                "name": "Ada",
-                                "headline": "AI Engineer at OpenAI",
-                                "base_score": 0.42,
-                                "matched_position_indexes": [0],
-                                "vertical_sources": ["role"],
-                                "positions": [
-                                    {
-                                        "position_title": "AI Engineer",
-                                        "company_name": "OpenAI",
-                                        "is_current": True,
-                                    },
-                                    {
-                                        "position_title": "Intern",
-                                        "company_name": "OtherCo",
-                                        "is_current": False,
-                                    },
-                                ],
-                            }
-                        ]
-                    },
-                }
+                    "position_title": "AI Engineer",
+                    "company_name": "OpenAI",
+                    "is_current": True,
+                },
+                {
+                    "position_title": "Intern",
+                    "company_name": "OtherCo",
+                    "is_current": False,
+                },
             ],
         }
         with tempfile.TemporaryDirectory() as td, _MockServer(latency_sec=0) as mock:
+            profiles_path = Path(td) / "hydrate_people" / "llm_profiles.jsonl"
+            profiles_path.parent.mkdir(parents=True)
+            profiles_path.write_text(json.dumps(profile) + "\n")
+            state = {
+                "task_id": "search-network-test",
+                "conversation_id": "conv-test",
+                "query": "ai engineer at openai",
+                "steps": [
+                    {
+                        "id": "hydrate_people",
+                        "output": {
+                            "profile_ids": ["p1"],
+                            "profiles_path": str(profiles_path),
+                            "llm_profiles_path": str(profiles_path),
+                        },
+                    }
+                ],
+            }
             state_path = Path(td) / "state.json"
             state_path.write_text(json.dumps(state))
             cmd = [

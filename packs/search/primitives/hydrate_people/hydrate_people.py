@@ -101,8 +101,8 @@ def artifact_dir(state_path: Path, state: dict[str, Any]) -> Path:
     return state_path.parent / "artifacts" / str(state.get("task_id") or state_path.stem)
 
 
-def current_profile_view(profile: dict[str, Any]) -> dict[str, Any]:
-    """Compact/current-only view for inspecting what LLM filter/rerank should see."""
+def llm_profile_view(profile: dict[str, Any]) -> dict[str, Any]:
+    """Compact view for LLM filter/rerank handoff."""
     positions = profile.get("positions") or []
     matched = set(profile.get("matched_position_indexes") or [])
     selected = []
@@ -124,6 +124,10 @@ def current_profile_view(profile: dict[str, Any]) -> dict[str, Any]:
         "tech_skills": profile.get("tech_skills"),
         "total_interactions": profile.get("total_interactions"),
         "matched_position_indexes": profile.get("matched_position_indexes") or [],
+        "base_score": profile.get("base_score"),
+        "score": profile.get("score"),
+        "tags": profile.get("tags"),
+        "vertical_sources": profile.get("vertical_sources"),
     }
 
 
@@ -180,26 +184,24 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
     order = {pid: idx for idx, pid in enumerate(requested)}
     profiles.sort(key=lambda profile: order.get(str(profile.get("person_id")), len(order)))
 
+    out_dir = artifact_dir(state_path, state) / "hydrate_people"
+    profiles_jsonl = out_dir / "profiles.jsonl"
+    llm_profiles_jsonl = out_dir / "llm_profiles.jsonl"
+    write_jsonl(profiles_jsonl, profiles)
+    write_jsonl(llm_profiles_jsonl, [llm_profile_view(profile) for profile in profiles])
+
     artifacts: dict[str, Any] = {}
-    if state_path and args.dump_profiles:
-        out_dir = artifact_dir(state_path, state) / "hydrate_people"
+    if args.dump_profiles:
         profiles_json = out_dir / "profiles.json"
-        profiles_jsonl = out_dir / "profiles.jsonl"
-        compact_jsonl = out_dir / "profiles.compact.jsonl"
         write_json(profiles_json, {"profiles": profiles})
-        write_jsonl(profiles_jsonl, profiles)
-        write_jsonl(compact_jsonl, [current_profile_view(profile) for profile in profiles])
-        artifacts = {
-            "profiles_json": str(profiles_json),
-            "profiles_jsonl": str(profiles_jsonl),
-            "compact_profiles_jsonl": str(compact_jsonl),
-        }
+        artifacts = {"profiles_json": str(profiles_json)}
 
     output = {
         "requested": len(requested),
         "hydrated": len(profiles),
         "profile_ids": [profile.get("person_id") for profile in profiles if profile.get("person_id")],
-        "profiles": profiles,
+        "profiles_path": str(profiles_jsonl),
+        "llm_profiles_path": str(llm_profiles_jsonl),
         "artifacts": artifacts,
         "source": {
             "type": "postgres_contract",

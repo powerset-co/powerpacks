@@ -32,11 +32,11 @@ python powerpacks/primitives/llm_filter_candidates/llm_filter_candidates.py \
 Inputs:
 
 - task state with `merge_candidate_frontier` or `direct_execute`
-- `hydrate_people.output.profiles` covering the candidate frontier
+- `hydrate_people.output.profiles_path` / `llm_profiles_path` covering the candidate frontier
 - `OPENAI_API_KEY`
 
 Outputs:
 
-- `llm_filter_candidates` step in task state
-- JSONL artifact with all scores
-- JSONL artifact with filtered-out candidates
+- `llm_filter_candidates` step in task state with passed/filtered IDs and counts
+- no artifacts by default
+- pass `--dump-debug` to write local score/filter/prompt JSONL files

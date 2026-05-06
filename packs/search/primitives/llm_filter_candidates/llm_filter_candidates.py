@@ -89,6 +89,22 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open() as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"{path}:{line_number}: invalid JSONL") from exc
+            if not isinstance(row, dict):
+                raise RuntimeError(f"{path}:{line_number}: expected object")
+            rows.append(row)
+    return rows
+
+
 def append_event(state_path: Path, event: dict[str, Any]) -> None:
     event_path = state_path.with_suffix(state_path.suffix + ".events.jsonl")
     event_path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,14 +131,20 @@ def frontier_ids(state: dict[str, Any]) -> list[str]:
         return list(dict.fromkeys(str(pid) for pid in ids if pid))
 
     hydrate = step_output(state, "hydrate_people")
+    ids = hydrate.get("profile_ids") or []
+    if ids:
+        return list(dict.fromkeys(str(pid) for pid in ids if pid))
     return list(dict.fromkeys(str(p["person_id"]) for p in hydrate.get("profiles", []) or [] if p.get("person_id")))
 
 
-def hydrated_profiles(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def hydrated_profiles(state: dict[str, Any], *, llm_handoff: bool) -> dict[str, dict[str, Any]]:
     hydrate = step_output(state, "hydrate_people")
+    path_key = "llm_profiles_path" if llm_handoff else "profiles_path"
+    profiles_path = hydrate.get(path_key) or hydrate.get("profiles_path")
+    rows = read_jsonl(Path(str(profiles_path))) if profiles_path else hydrate.get("profiles", []) or []
     profiles: dict[str, dict[str, Any]] = {}
     validation_errors: list[str] = []
-    for profile in hydrate.get("profiles", []) or []:
+    for profile in rows:
         if not isinstance(profile, dict):
             validation_errors.append("hydrated profile must be an object")
             continue
@@ -359,7 +381,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
     state_path = Path(args.state)
     state = read_json(state_path)
     ids = frontier_ids(state)
-    profiles = hydrated_profiles(state)
+    profiles = hydrated_profiles(state, llm_handoff=args.current_and_matched_only)
     missing = [pid for pid in ids if pid not in profiles]
     if missing and not args.allow_partial_hydration:
         raise SystemExit(

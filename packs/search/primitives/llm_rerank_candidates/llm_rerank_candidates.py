@@ -424,13 +424,20 @@ def state_frontier_ids(state: dict[str, Any]) -> list[str]:
         if ids:
             return list(dict.fromkeys(str(pid) for pid in ids if pid))
     hydrate = step_output(state, "hydrate_people")
+    ids = hydrate.get("profile_ids") or []
+    if ids:
+        return list(dict.fromkeys(str(pid) for pid in ids if pid))
     return list(dict.fromkeys(str(p["person_id"]) for p in hydrate.get("profiles", []) or [] if p.get("person_id")))
 
 
-def state_hydrated_profiles(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def state_hydrated_profiles(state: dict[str, Any], *, llm_handoff: bool) -> dict[str, dict[str, Any]]:
     hydrate = step_output(state, "hydrate_people")
+    path_key = "llm_profiles_path" if llm_handoff else "profiles_path"
+    profiles_path = hydrate.get(path_key) or hydrate.get("profiles_path")
+    rows = load_items(str(profiles_path)) if profiles_path else [RerankItem(position=i, payload=profile) for i, profile in enumerate(hydrate.get("profiles", []) or [])]
     out: dict[str, dict[str, Any]] = {}
-    for profile in hydrate.get("profiles", []) or []:
+    for item in rows:
+        profile = item.payload
         if isinstance(profile, dict) and profile.get("person_id"):
             out[str(profile["person_id"])] = profile
     return out
@@ -479,7 +486,7 @@ def compact_llm_profile(profile: dict[str, Any]) -> dict[str, Any]:
 def load_items_from_state(state_path: Path, *, current_and_matched_only: bool, max_candidates: Optional[int] = None) -> tuple[dict[str, Any], list[RerankItem]]:
     state = read_json(state_path)
     ids = state_frontier_ids(state)
-    profiles = state_hydrated_profiles(state)
+    profiles = state_hydrated_profiles(state, llm_handoff=current_and_matched_only)
     items: list[RerankItem] = []
     for pid in ids:
         profile = profiles.get(pid)

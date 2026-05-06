@@ -3,6 +3,11 @@
 Hydrate person IDs returned by TurboPuffer into richer profile objects suitable
 for final answer formatting and follow-up filtering.
 
+By default, verbose hydrated profiles are written to local JSONL handoff files
+and the task state stores only file paths/counts/IDs. Downstream primitives read
+those paths directly so the agent does not shuttle large profile blobs through
+chat or command arguments.
+
 Powerpacks hydrates directly from the checked-in Postgres/Supabase contract.
 It reads canonical `persons.hydrated_context` and normalizes that into the
 Powerpacks profile shape. It does not import `aleph-mvp` and does not use
@@ -24,6 +29,14 @@ python powerpacks/primitives/hydrate_people/hydrate_people.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --dry-run
 ```
+
+Outputs in task state:
+
+- `profiles_path` — full hydrated profile JSONL for downstream primitives
+- `llm_profiles_path` — compact LLM handoff JSONL
+- `profile_ids`, `requested`, `hydrated`
+
+Pass `--dump-profiles` only when you want an additional debug `profiles.json`.
 
 Credentials can come from `DATABASE_URL`, `SUPABASE_DATABASE_URL`,
 `SUPABASE_DB_URL`, or `POSTGRES_*` environment variables. The script uses
