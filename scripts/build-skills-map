@@ -356,12 +356,11 @@ def html_page(data: dict[str, Any]) -> str:
         <p>${{esc(s.description)}}</p>
         <div class="label">Skill file</div>
         <div class="row"><strong>${{esc(s.name)}}</strong><small>${{esc(s.path)}}</small></div>
+        <pre class="markdown">${{esc(s.markdown || '')}}</pre>
         <div class="label">Primitives used</div>
         <div class="list">${{primitiveRows}}</div>
         <div class="label">MCP / tool refs</div>
-        <div class="list">${{mcpRows}}</div>
-        <div class="label">Skill markdown</div>
-        <pre class="markdown">${{esc(s.markdown || '')}}</pre>`;
+        <div class="list">${{mcpRows}}</div>`;
     }}
 
     sections.addEventListener('click', e => {{
