@@ -4,6 +4,7 @@
   "description": "Import WhatsApp contacts via a user-controlled local WAHA Docker container. No contact-exporter dependency.",
   "default_constraints": {
     "no_message_content": true,
+    "workflow_consent_can_cover_extraction": true,
     "docker_install_requires_explicit_user_request": true,
     "extraction_requires_explicit_user_request": true
   },

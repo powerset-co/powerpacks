@@ -17,6 +17,10 @@ The pack is privacy-first:
   local Contacts/AddressBook phone/name metadata to fill the `name` column
 - keep message contact normalization as explicit steps the run can replay
 
+When invoked by the top-level `import-contacts` workflow, the user's initial
+workflow consent covers iMessage metadata extraction. Do not ask a second
+approval question unless permissions are missing or the user asked for upload.
+
 ## Prereqs
 
 - macOS (this skill is macOS-only)
@@ -52,7 +56,8 @@ or, for local Contacts / AddressBook name matching:
    with `open-privacy-settings`; opening System Settings itself is OK, but do
    not rerun extraction until the user has granted access and explicitly asks.
 3. After explicit user approval that mentions both Messages and Contacts /
-   AddressBook metadata, run:
+   AddressBook metadata, or when `import-contacts` has already collected that
+   workflow consent, run:
    `python packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py extract --output-csv .powerpacks/messages/imessage.contacts.csv --output-jsonl .powerpacks/messages/imessage.contacts.jsonl`
 4. Normalize the exported rows to the canonical schema:
    `python packs/messages/primitives/normalize_message_contacts/normalize_message_contacts.py normalize --input .powerpacks/messages/imessage.contacts.csv --out-jsonl .powerpacks/messages/imessage.contacts.normalized.jsonl`

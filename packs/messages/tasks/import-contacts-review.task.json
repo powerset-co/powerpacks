@@ -5,7 +5,7 @@
   "default_constraints": {
     "no_message_content": true,
     "no_phone_numbers_in_llm": true,
-    "browser_login_requires_explicit_user_request": true,
+    "workflow_consent_can_cover_login_sync_and_match": true,
     "llm_review_requires_explicit_user_request": true
   },
   "steps": [
@@ -48,6 +48,13 @@
       "command": "review",
       "requires_explicit_user_request": true,
       "user_action": "Approve OpenRouter spend after seeing the cost estimate."
+    },
+    {
+      "id": "review_contacts_web",
+      "kind": "primitive",
+      "primitive": "review_contacts_web",
+      "command": "serve",
+      "description": "Open a local browser editor for manual skip/match cleanup."
     },
     {
       "id": "prepare_research_queue",

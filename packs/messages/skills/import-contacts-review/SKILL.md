@@ -17,6 +17,11 @@ The pack is privacy-first:
 - every step that touches the network or an LLM is gated on explicit user
   approval
 
+When invoked by the top-level `import-contacts` workflow, the user's initial
+workflow consent covers Powerset login, candidate sync, and local matching.
+LLM review, deep research, and upload still require separate cost/action
+approval.
+
 ## Architecture
 
 Four small primitives:
@@ -149,7 +154,20 @@ python ... deep_research_contacts.py status --output-dir .powerpacks/messages/re
 python ... deep_research_contacts.py poll --output-dir .powerpacks/messages/research
 ```
 
-### 9. Build a research-review CSV for the existing TUI
+### 9. Review contacts locally
+
+Prefer the local web editor for manual cleanup:
+
+```bash
+python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
+  --contacts .powerpacks/messages/contacts.csv \
+  --open
+```
+
+Use the TUI compatibility path only when the user specifically wants the
+existing `contact-exporter` review flow.
+
+### 10. Build a research-review CSV for the existing TUI
 
 Fold the per-handle research artifacts into one flat CSV in the shape
 `contact-exporter`'s research-review TUI expects:

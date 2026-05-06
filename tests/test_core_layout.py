@@ -24,6 +24,7 @@ class CoreLayoutTests(unittest.TestCase):
         messages_pack = sorted(
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
         )
+        self.assertIn("import-contacts", messages_pack)
         self.assertIn("import-imessage", messages_pack)
         self.assertIn("import-whatsapp", messages_pack)
         self.assertIn("import-contacts-review", messages_pack)
@@ -99,6 +100,13 @@ class CoreLayoutTests(unittest.TestCase):
             with self.subTest(root=root):
                 for path in root.rglob("*.json"):
                     json.loads(path.read_text())
+
+    def test_import_contacts_documents_guided_flow(self) -> None:
+        text = (ROOT / "packs/messages/skills/import-contacts/SKILL.md").read_text()
+        self.assertIn("Ask once at the beginning", text)
+        self.assertIn("Check iMessage access", text)
+        self.assertIn("Link WhatsApp", text)
+        self.assertIn("review_contacts_web", text)
 
     def test_search_network_offers_rerank_approval_mode(self) -> None:
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()

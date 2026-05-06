@@ -1,0 +1,116 @@
+{
+  "task": "import_contacts",
+  "version": 1,
+  "description": "One-command guided import of iMessage and WhatsApp contact metadata, followed by Powerset candidate sync, local matching, and review queue preparation.",
+  "default_constraints": {
+    "no_message_content": true,
+    "local_metadata_consent_can_cover_extraction": true,
+    "network_candidate_sync_allowed_after_initial_consent": true,
+    "llm_review_requires_cost_approval": true,
+    "deep_research_requires_cost_approval": true,
+    "upload_requires_explicit_user_request": true
+  },
+  "state_path": ".powerpacks/messages/import-run.json",
+  "steps": [
+    {
+      "id": "check_imessage",
+      "kind": "primitive",
+      "primitive": "extract_imessage_contacts",
+      "command": "check"
+    },
+    {
+      "id": "extract_imessage",
+      "kind": "primitive",
+      "primitive": "extract_imessage_contacts",
+      "command": "extract",
+      "requires_initial_workflow_consent": true,
+      "blocked_by": "macOS Full Disk Access or Contacts permission"
+    },
+    {
+      "id": "normalize_imessage",
+      "kind": "primitive",
+      "primitive": "normalize_message_contacts",
+      "command": "normalize"
+    },
+    {
+      "id": "check_docker_and_waha",
+      "kind": "primitive",
+      "primitive": "waha_runtime",
+      "command": "check"
+    },
+    {
+      "id": "start_waha_container",
+      "kind": "primitive",
+      "primitive": "waha_runtime",
+      "command": "up",
+      "requires_initial_workflow_consent": true,
+      "docker_install_requires_explicit_user_request": true
+    },
+    {
+      "id": "authenticate_whatsapp",
+      "kind": "primitive",
+      "primitive": "waha_session",
+      "command": "start",
+      "args": {"open": true, "wait": true},
+      "user_action": "Scan the QR with WhatsApp > Settings > Linked Devices when needed."
+    },
+    {
+      "id": "extract_whatsapp",
+      "kind": "primitive",
+      "primitive": "extract_whatsapp_contacts",
+      "command": "extract",
+      "requires_initial_workflow_consent": true
+    },
+    {
+      "id": "normalize_whatsapp",
+      "kind": "primitive",
+      "primitive": "normalize_message_contacts",
+      "command": "normalize"
+    },
+    {
+      "id": "merge_contacts",
+      "kind": "primitive",
+      "primitive": "merge_message_contacts",
+      "command": "merge"
+    },
+    {
+      "id": "sync_powerset_candidates",
+      "kind": "primitive",
+      "primitive": "sync_powerset_candidates",
+      "command": "sync"
+    },
+    {
+      "id": "match_local_contacts",
+      "kind": "primitive",
+      "primitive": "match_local_candidates",
+      "command": "match"
+    },
+    {
+      "id": "review_contacts_web",
+      "kind": "primitive",
+      "primitive": "review_contacts_web",
+      "command": "serve",
+      "description": "Open a local browser editor for skip/match cleanup."
+    },
+    {
+      "id": "estimate_llm_review",
+      "kind": "primitive",
+      "primitive": "llm_review_contacts",
+      "command": "estimate",
+      "optional": true
+    },
+    {
+      "id": "llm_review",
+      "kind": "primitive",
+      "primitive": "llm_review_contacts",
+      "command": "review",
+      "requires_explicit_user_request": true
+    },
+    {
+      "id": "prepare_research_queue",
+      "kind": "primitive",
+      "primitive": "prepare_research_queue",
+      "command": "prepare"
+    }
+  ]
+}

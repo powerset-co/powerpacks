@@ -37,9 +37,10 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`import-imessage`](packs/messages/skills/import-imessage/SKILL.md) | manual | Read local macOS Messages SQLite, extract phone+name+volume metadata only. No bodies. |
-| [`import-whatsapp`](packs/messages/skills/import-whatsapp/SKILL.md) | manual | Run a local [WAHA](https://github.com/devlikeapro/waha) Docker container, scan a QR with your phone, extract WhatsApp contact metadata. No bodies. |
-| [`import-contacts-review`](packs/messages/skills/import-contacts-review/SKILL.md) | manual | After import: log in to Powerset, sync your operator catalog, run local name matching, LLM-review the unmatched contacts (ENRICH/SKIP). |
+| [`import-contacts`](packs/messages/skills/import-contacts/SKILL.md) | `$import-contacts` | One-command guided harness for iMessage + WhatsApp import, merge, Powerset candidate sync, local matching, browser review, and queue prep. No bodies. |
+| [`import-imessage`](packs/messages/skills/import-imessage/SKILL.md) | `$import-imessage` | Advanced subflow: read local macOS Messages SQLite, extract phone+name+volume metadata only. No bodies. |
+| [`import-whatsapp`](packs/messages/skills/import-whatsapp/SKILL.md) | `$import-whatsapp` | Advanced subflow: run a local [WAHA](https://github.com/devlikeapro/waha) Docker container, scan a QR with your phone, extract WhatsApp contact metadata. No bodies. |
+| [`import-contacts-review`](packs/messages/skills/import-contacts-review/SKILL.md) | `$import-contacts-review` | Advanced subflow after import: sync your operator catalog, run local name matching, LLM-review unmatched contacts (ENRICH/SKIP). |
 
 ## Goal
 
@@ -86,8 +87,8 @@ powerpacks/
 │   │   │                   harnesses/, workflows/
 │   │   └── evals/          recall, company-search, founder parity
 │   └── messages/           iMessage + WhatsApp + Powerset enrichment
-│       ├── skills/         import-imessage, import-whatsapp,
-│       │                   import-contacts-review
+│       ├── skills/         import-contacts, import-imessage,
+│       │                   import-whatsapp, import-contacts-review
 │       ├── primitives/     iMessage / WAHA / matching / LLM-review /
 │       │                   deep-research primitives
 │       ├── schemas/        message-contact, messages-run-manifest
@@ -136,7 +137,8 @@ codex mcp get powerset-search
 $search-network senior infra eng at fintech
 $search-company stripe-like fintech infra companies
 $powerset-login                   # provisions .env from GCP Secret Manager
-# or trigger the messages pack manually:
+$import-contacts                  # guided iMessage + WhatsApp import harness
+# advanced/debug subflows:
 #   $import-imessage
 #   $import-whatsapp
 #   $import-contacts-review
@@ -149,6 +151,7 @@ $powerset-login                   # provisions .env from GCP Secret Manager
 | Any skill | Python 3.9+ (`python3 --version`), git |
 | `search-network` / `search-company` | `.env` with `TURBOPUFFER_API_KEY`, `DATABASE_URL`, `OPENAI_API_KEY` (use `$powerset-login` to populate) |
 | `powerset-login` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
+| `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, `OPENROUTER_API_KEY` only if you approve LLM review |
 | `import-imessage` | macOS, **Full Disk Access** for your terminal (`System Settings > Privacy & Security > Full Disk Access`) so Python can read `~/Library/Messages/chat.db` |
 | `import-whatsapp` | Docker (`brew install --cask docker` or `brew install colima docker`), the WhatsApp app on your phone for QR scan |
 | `import-contacts-review` | Auth0 login via browser (popped automatically), `OPENROUTER_API_KEY` for the LLM-review step |
@@ -258,7 +261,7 @@ Then, **inside the agent host**, sanity-check each skill family:
 | `powerset-login` | Type `$powerset-login` — the agent should run `gcloud auth list`, show the secret plan, ask for approval, and finish with `mcp_install`. |
 | `search-network` | `$search-network senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
-| `import-imessage` | "import my iMessage contacts" — the agent should detect Full Disk Access status before reading. |
+| `import-contacts` | `$import-contacts` — should show a task checklist, ask once for local metadata import consent, then run until permissions/QR/cost approval are needed. |
 
 If the agent host doesn't see a skill at all: re-run `./install.sh <host>`
 and restart the host (skills are loaded once at startup).

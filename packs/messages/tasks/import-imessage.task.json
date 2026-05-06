@@ -5,6 +5,7 @@
   "default_constraints": {
     "no_message_content": true,
     "local_extraction_only": true,
+    "workflow_consent_can_cover_extraction": true,
     "upload_requires_explicit_user_request": true,
     "prefer_bare_imessage_primitive": true
   },

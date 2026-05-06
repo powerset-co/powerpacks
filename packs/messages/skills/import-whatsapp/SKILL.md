@@ -16,6 +16,11 @@ The pack is privacy-first:
 - every Docker / WAHA / extraction action is gated on explicit user approval
 - the WAHA container is yours to start and stop; nothing runs on a remote service
 
+When invoked by the top-level `import-contacts` workflow, the user's initial
+workflow consent covers starting/reusing WAHA and extracting WhatsApp contact
+metadata. Still stop for Docker installation, starting a stopped Docker daemon,
+and the QR scan.
+
 ## Prereqs
 
 - Python 3.9+ (stdlib only)
@@ -68,7 +73,8 @@ Inspect the JSON manifest:
 
 ### 2. Start the WAHA container
 
-After explicit user approval:
+After explicit user approval, or when `import-contacts` has already collected
+workflow consent:
 
 ```bash
 python packs/messages/primitives/waha_runtime/waha_runtime.py up
@@ -105,7 +111,8 @@ python packs/messages/primitives/waha_session/waha_session.py wait
 
 ### 4. Extract contacts
 
-After explicit user approval:
+After explicit user approval, or when `import-contacts` has already collected
+workflow consent:
 
 ```bash
 python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py extract \

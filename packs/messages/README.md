@@ -48,9 +48,13 @@ Cross-channel:
 - `powerset_contacts_harness`: optional compatibility shim for non-WhatsApp
   channels of `contact-exporter` (review/match-local/upload). Not used by the
   WhatsApp skill.
+- `review_contacts_web`: local browser editor for skip/match cleanup on the
+  merged contacts CSV
 
 ## Skills
 
+- `import-contacts`: one-command guided iMessage + WhatsApp import, merge,
+  candidate sync, local matching, web review, and queue prep
 - `import-imessage`: local-only iMessage extraction and normalization
 - `import-whatsapp`: WhatsApp extraction via the three WAHA primitives above
 - `import-contacts-review`: Powerset login + candidate sync + local matching +
