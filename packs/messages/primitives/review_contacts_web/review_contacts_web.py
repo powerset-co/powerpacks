@@ -36,17 +36,6 @@ DEFAULT_COLUMNS = [
     "review_note",
 ]
 
-EDITABLE_COLUMNS = [
-    "name",
-    "skip",
-    "match_status",
-    "matched_person_id",
-    "matched_name",
-    "matched_linkedin_url",
-    "match_reason",
-    "review_note",
-]
-
 MIN_NAME_TOKENS = 2
 MIN_TOKEN_LEN = 2
 MIN_TOTAL_ALPHA = 5
@@ -145,6 +134,7 @@ def matches_filter(row: dict[str, str], params: dict[str, list[str]]) -> bool:
 def summarize(rows: list[dict[str, str]]) -> dict[str, int]:
     summary = {
         "total": len(rows),
+        "selected": 0,
         "matched": 0,
         "suggested": 0,
         "unmatched": 0,
@@ -154,6 +144,8 @@ def summarize(rows: list[dict[str, str]]) -> dict[str, int]:
         "no_name": 0,
     }
     for row in rows:
+        if not truthy(row.get("skip", "")):
+            summary["selected"] += 1
         name = (row.get("name") or "").strip()
         if name:
             summary["named"] += 1
@@ -173,15 +165,6 @@ def page_html(path: Path, fieldnames: list[str], rows: list[dict[str, str]], par
     status = (params.get("status") or [""])[0]
     source = (params.get("source") or [""])[0]
     skip = (params.get("skip") or [""])[0]
-    next_params = {
-        key: values[0]
-        for key, values in params.items()
-        if key != "saved" and values and values[0]
-    }
-    next_url = "/"
-    if next_params:
-        next_url += "?" + urllib.parse.urlencode(next_params)
-
     def tab_href(tab: str) -> str:
         tab_params = {
             key: values[0]
@@ -226,31 +209,38 @@ def page_html(path: Path, fieldnames: list[str], rows: list[dict[str, str]], par
         "button{font:inherit;border:1px solid var(--ink);background:var(--ink);color:white;border-radius:6px;padding:7px 12px;cursor:pointer}",
         "button:hover{background:#2a3642}",
         ".clear{display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;padding:0 6px}",
-        ".tablewrap{overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}",
-        "table{border-collapse:separate;border-spacing:0;width:100%;min-width:1080px}",
-        "th,td{border-bottom:1px solid #e7ebf0;padding:10px 12px;vertical-align:top;text-align:left;font-size:13px}",
-        "th{position:sticky;top:0;background:#f0f3f6;z-index:1;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#4a5562}",
-        "tbody tr:hover{background:#fbfcfd}",
-        "tbody tr:last-child td{border-bottom:0}",
-        ".contact strong,.match strong{font-size:14px}",
+        ".cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}",
+        ".card{appearance:none;text-align:left;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;cursor:pointer;min-height:208px;box-shadow:0 1px 2px rgba(15,23,42,.04);transition:border-color .12s,box-shadow .12s,opacity .12s}",
+        ".card:hover{border-color:#aeb8c5;box-shadow:0 3px 10px rgba(15,23,42,.08);background:var(--panel)}",
+        ".card.selected{border-color:#65b8ac;background:#f2fbf9}",
+        ".card.excluded{opacity:.66}",
+        ".card.saving{outline:2px solid #f6c76b}",
+        ".card-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}",
+        ".name{font-size:16px;font-weight:700;line-height:1.25}",
+        ".decision{font-size:12px;font-weight:700;border-radius:999px;padding:4px 8px;background:#f1f5f9;color:#334155;white-space:nowrap}",
+        ".selected .decision{background:#ccefe8;color:#0f5f59}",
+        ".excluded .decision{background:#eceff3;color:#5b6876}",
+        ".line{font-size:13px;color:var(--muted);line-height:1.38;margin:3px 0;overflow-wrap:anywhere}",
+        ".line strong{color:#334155;font-weight:600}",
+        ".match{border-top:1px solid #e5e9ef;margin-top:10px;padding-top:10px}",
+        ".match a{color:#0f5f59;text-decoration:none}",
+        ".match a:hover{text-decoration:underline}",
         ".badge{display:inline-block;border-radius:999px;padding:2px 7px;background:var(--soft);font-size:12px;color:#334155;margin-top:6px}",
         ".badge.good{background:#d9f3ee;color:#0f5f59}",
         ".badge.warn{background:#fff1d6;color:#7a4b00}",
-        ".rowform{display:grid;grid-template-columns:1.2fr 120px 74px 1.2fr;gap:8px;min-width:610px}",
-        ".rowform label{font-size:12px;color:var(--muted)}",
-        ".rowform input,.rowform select,.rowform textarea{width:100%;margin-top:3px}",
-        ".note{grid-column:span 2}",
-        ".save{align-self:end;height:34px}",
+        ".toast{position:fixed;right:16px;bottom:16px;background:#17202a;color:white;border-radius:8px;padding:9px 12px;font-size:13px;opacity:0;transform:translateY(8px);transition:opacity .15s,transform .15s;pointer-events:none}",
+        ".toast.show{opacity:1;transform:translateY(0)}",
         ".saved{background:#e5f8f4;border:1px solid #8bd3c7;color:#0f5f59;border-radius:8px;padding:10px 12px;margin-bottom:12px}",
         ".muted{color:var(--muted)}",
         ".empty{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:24px;color:var(--muted)}",
-        "@media(max-width:900px){.wrap{padding:20px 14px}header{display:block}.stats{grid-template-columns:repeat(2,minmax(0,1fr));min-width:0;margin-top:14px}.filters input[name=q]{min-width:180px}.tab{padding:8px 9px}.rowform{grid-template-columns:1fr 1fr;min-width:520px}.note{grid-column:span 2}}",
+        "@media(max-width:900px){.wrap{padding:20px 14px}header{display:block}.stats{grid-template-columns:repeat(2,minmax(0,1fr));min-width:0;margin-top:14px}.filters input[name=q]{min-width:180px}.tab{padding:8px 9px}.cards{grid-template-columns:1fr}}",
         "</style></head><body>",
         "<div class='wrap'>",
         "<header><div>",
         "<h1>Powerpacks Contact Review</h1>",
-        f"<div class='meta'>{esc(path)} &middot; showing {len(visible)} of {len(rows)}. Unmatched means named, searchable, unresolved contacts only.</div>",
+        f"<div class='meta'>{esc(path)} &middot; showing {len(visible)} of {len(rows)}. Click a card to toggle yes/no for enrichment; every change autosaves.</div>",
         "</div><div class='stats'>",
+        f"<div class='stat'><span>yes to enrich</span><strong data-count='selected'>{summary['selected']}</strong></div>",
         f"<div class='stat'><span>matched</span><strong>{summary['matched']}</strong></div>",
         f"<div class='stat'><span>suggested</span><strong>{summary['suggested']}</strong></div>",
         f"<div class='stat'><span>unmatched</span><strong>{summary['unmatched']}</strong></div>",
@@ -293,47 +283,46 @@ def page_html(path: Path, fieldnames: list[str], rows: list[dict[str, str]], par
         parts.append("<div class='empty'>No contacts match this view.</div>")
         parts.append("</div></body></html>")
         return "".join(parts).encode("utf-8")
-    parts.extend([
-        "<div class='tablewrap'><table><thead><tr><th>Contact</th><th>Signal</th><th>Match</th><th>Edit</th></tr></thead><tbody>",
-    ])
+    parts.append("<section class='cards'>")
     for idx, row in visible[:500]:
-        skip_checked = "checked" if truthy(row.get("skip", "")) else ""
+        selected = not truthy(row.get("skip", ""))
         bucket = row_bucket(row)
         badge_class = "good" if bucket == "matched" else "warn" if bucket in {"suggested", "unmatched"} else ""
         link = row.get("matched_linkedin_url", "")
-        link_html = f"<a href='{esc(link)}'>{esc(link)}</a>" if link else "<span class='muted'>no LinkedIn URL</span>"
+        link_html = f"<a href='{esc(link)}' target='_blank' rel='noreferrer'>{esc(link)}</a>" if link else "<span class='muted'>no LinkedIn URL</span>"
+        decision = "YES" if selected else "NO"
+        card_class = "card selected" if selected else "card excluded"
         parts.extend([
-            "<tr>",
-            f"<td class='contact'><strong>{esc(row.get('name') or '(no name)')}</strong><br><span class='muted'>{esc(row.get('phone'))}</span><br>{esc(row.get('source'))}<br><span class='badge {badge_class}'>{esc(bucket.replace('_', ' '))}</span></td>",
-            f"<td>messages: {esc(row.get('message_count'))}<br>last: {esc(row.get('last_message'))}<br>groups: {esc(row.get('group_names'))}</td>",
-            f"<td class='match'>{esc(row.get('match_status') or 'unmatched')}<br><strong>{esc(row.get('matched_name'))}</strong><br>{link_html}<br><span class='muted'>{esc(row.get('match_reason'))}</span></td>",
-            "<td>",
-            "<form class='rowform' method='post' action='/update'>",
-            f"<input type='hidden' name='row' value='{idx}'>",
-            f"<input type='hidden' name='next' value='{esc(next_url)}'>",
-            f"<label>Name<br><input name='name' value='{esc(row.get('name'))}'></label>",
-            f"<label>Status<br><select name='match_status'>",
+            f"<article class='{card_class}' role='button' tabindex='0' data-row='{idx}' data-selected='{str(selected).lower()}'>",
+            "<div class='card-head'>",
+            f"<div><div class='name'>{esc(row.get('name') or '(no name)')}</div><span class='badge {badge_class}'>{esc(bucket.replace('_', ' '))}</span></div>",
+            f"<div class='decision'>{decision}</div>",
+            "</div>",
+            f"<div class='line'><strong>phone</strong> {esc(row.get('phone'))}</div>",
+            f"<div class='line'><strong>source</strong> {esc(row.get('source') or 'unknown')} &middot; <strong>messages</strong> {esc(row.get('message_count') or '0')}</div>",
+            f"<div class='line'><strong>last</strong> {esc(row.get('last_message') or 'unknown')}</div>",
+            f"<div class='line'><strong>groups</strong> {esc(row.get('group_names') or 'none')}</div>",
+            "<div class='match'>",
+            f"<div class='line'><strong>match</strong> {esc(row.get('match_status') or 'unmatched')} {esc(row.get('matched_name') or '')}</div>",
+            f"<div class='line'>{link_html}</div>",
+            f"<div class='line'>{esc(row.get('match_reason') or '')}</div>",
+            "</div>",
+            "</article>",
         ])
-        current_status = row.get("match_status", "")
-        for option in ["", "matched", "suggested", "unmatched"]:
-            selected = " selected" if current_status == option else ""
-            label = option or "(blank)"
-            parts.append(f"<option value='{option}'{selected}>{label}</option>")
-        parts.extend([
-            "</select></label>",
-            f"<label>Skip<br><input type='checkbox' name='skip' value='true' {skip_checked}></label>",
-            f"<label>Matched name<br><input name='matched_name' value='{esc(row.get('matched_name'))}'></label>",
-            f"<label>Person ID<br><input name='matched_person_id' value='{esc(row.get('matched_person_id'))}'></label>",
-            f"<label>LinkedIn<br><input name='matched_linkedin_url' value='{esc(row.get('matched_linkedin_url'))}'></label>",
-            f"<label class='note'>Reason<br><textarea name='match_reason' rows='2'>{esc(row.get('match_reason'))}</textarea></label>",
-            f"<label class='note'>Review note<br><textarea name='review_note' rows='2'>{esc(row.get('review_note'))}</textarea></label>",
-            "<button class='save' type='submit'>Save</button>",
-            "</form></td></tr>",
-        ])
-    parts.append("</tbody></table></div>")
+    parts.append("</section>")
     if len(visible) > 500:
         parts.append("<p class='muted'>Showing first 500 filtered rows. Narrow the filter to edit more.</p>")
-    parts.append("</div></body></html>")
+    parts.extend([
+        "<div id='toast' class='toast'>Saved</div>",
+        "<script>",
+        "const toast=document.getElementById('toast');let toastTimer=null;",
+        "function showToast(text){toast.textContent=text;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1100)}",
+        "function setCard(card,selected){card.dataset.selected=String(selected);card.classList.toggle('selected',selected);card.classList.toggle('excluded',!selected);card.querySelector('.decision').textContent=selected?'YES':'NO'}",
+        "async function toggle(card){const was=card.dataset.selected==='true';const next=!was;card.classList.add('saving');try{const body=new URLSearchParams({row:card.dataset.row,selected:String(next)});const res=await fetch('/toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());setCard(card,next);showToast(next?'Saved: yes':'Saved: no');const c=document.querySelector('[data-count=selected]');if(c){c.textContent=String(Number(c.textContent||0)+(next?1:-1))}}catch(e){showToast('Save failed');}finally{card.classList.remove('saving')}}",
+        "document.querySelectorAll('.card').forEach(card=>{card.addEventListener('click',e=>{if(e.target.closest('a'))return;toggle(card)});card.addEventListener('keydown',e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();toggle(card)}})});",
+        "</script>",
+        "</div></body></html>",
+    ])
     return "".join(parts).encode("utf-8")
 
 
@@ -365,7 +354,7 @@ def make_handler(contacts_path: Path):
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path != "/update":
+            if parsed.path != "/toggle":
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             length = int(self.headers.get("Content-Length", "0"))
@@ -381,21 +370,15 @@ def make_handler(contacts_path: Path):
                 self.send_bytes(b"row out of range", "text/plain", status=400)
                 return
             row = rows[row_idx]
-            for column in EDITABLE_COLUMNS:
-                if column == "skip":
-                    row[column] = "true" if (form.get("skip") or [""])[0] == "true" else "false"
-                elif column in form:
-                    row[column] = (form.get(column) or [""])[0]
-                if column not in fieldnames:
-                    fieldnames.append(column)
+            selected = (form.get("selected") or [""])[0].strip().lower()
+            if selected not in {"true", "false"}:
+                self.send_bytes(b"selected must be true or false", "text/plain", status=400)
+                return
+            if "skip" not in fieldnames:
+                fieldnames.append("skip")
+            row["skip"] = "false" if selected == "true" else "true"
             atomic_write_contacts(contacts_path, fieldnames, rows)
-            next_url = (form.get("next") or ["/"])[0]
-            if not next_url.startswith("/"):
-                next_url = "/"
-            separator = "&" if "?" in next_url else "?"
-            self.send_response(303)
-            self.send_header("Location", f"{next_url}{separator}saved=1")
-            self.end_headers()
+            self.send_bytes(json.dumps({"ok": True, "row": row_idx, "selected": selected == "true"}).encode(), "application/json")
 
         def log_message(self, fmt: str, *args: Any) -> None:
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)

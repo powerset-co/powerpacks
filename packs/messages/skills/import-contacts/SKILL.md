@@ -100,8 +100,10 @@ python packs/messages/primitives/review_contacts_web/review_contacts_web.py serv
   --open
 ```
 
-Use the web editor for manual skip/match cleanup. Use LLM review only after
-showing the estimate and getting explicit approval.
+Use the web reviewer for yes/no enrichment decisions. A card click autosaves
+`skip=false` for yes or `skip=true` for no. Do not ask the user to edit names,
+match details, or free-text fields in the normal import flow. Use LLM review
+only after showing the estimate and getting explicit approval.
 
 7. Build the enrichment queue:
 
@@ -131,6 +133,20 @@ PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/dee
   --input .powerpacks/messages/research_queue.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
+```
+
+Then build and open the profile-card review:
+
+```bash
+python packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
+  --research-dir .powerpacks/messages/research \
+  --queue-csv .powerpacks/messages/research_queue.csv \
+  --output-csv .powerpacks/messages/research_review.csv
+
+python packs/messages/primitives/review_research_web/review_research_web.py serve \
+  --csv .powerpacks/messages/research_review.csv \
+  --research-dir .powerpacks/messages/research \
+  --open
 ```
 
 If `PARALLEL_API_KEY` is unavailable and the user still wants review help,

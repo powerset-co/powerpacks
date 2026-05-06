@@ -45,11 +45,13 @@ Cross-channel:
   a single CSV in the shape `contact-exporter`'s research-review TUI consumes
   (`bucket / yes-maybe-no` view) and `/v2/messages-research/artifacts` accepts
   on upload
+- `review_research_web`: local browser port of the research-review TUI with
+  yes/maybe/no tabs, profile cards, and autosaved yes/no enrichment decisions
 - `powerset_contacts_harness`: optional compatibility shim for non-WhatsApp
   channels of `contact-exporter` (review/match-local/upload). Not used by the
   WhatsApp skill.
-- `review_contacts_web`: local browser editor for skip/match cleanup on the
-  merged contacts CSV, with tabs for matched, suggested, actionable unmatched,
+- `review_contacts_web`: local browser yes/no enrichment reviewer on the merged
+  contacts CSV, with tabs for matched, suggested, actionable unmatched,
   low-signal, and skipped rows
 
 ## Skills

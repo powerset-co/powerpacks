@@ -107,6 +107,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("Check iMessage access", text)
         self.assertIn("Link WhatsApp", text)
         self.assertIn("review_contacts_web", text)
+        self.assertIn("review_research_web", text)
 
     def test_search_network_offers_rerank_approval_mode(self) -> None:
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()

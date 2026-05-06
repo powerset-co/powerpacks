@@ -1,6 +1,6 @@
 # review_contacts_web
 
-Local-only CSV review editor for `.powerpacks/messages/contacts.csv`.
+Local-only yes/no enrichment reviewer for `.powerpacks/messages/contacts.csv`.
 
 ```bash
 python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
@@ -9,8 +9,9 @@ python packs/messages/primitives/review_contacts_web/review_contacts_web.py serv
 ```
 
 The server binds to `127.0.0.1`, edits the CSV in place, and never uploads
-data. It is intended to replace spreadsheet/TUI cleanup for skip and match
-fields.
+data. Click a contact card to toggle whether that row should be enriched. Each
+click immediately writes the CSV `skip` column, so refresh/quit does not lose
+progress.
 
 The UI has tabs for:
 
@@ -21,3 +22,8 @@ The UI has tabs for:
 - `Low signal`: no-name or weak-name rows that should not become paid research
   work by default
 - `Skipped`: rows marked out of scope
+
+Decision encoding:
+
+- selected / `YES` writes `skip=false`
+- unselected / `NO` writes `skip=true`

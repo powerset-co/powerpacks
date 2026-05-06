@@ -133,6 +133,13 @@
       "primitive": "build_research_review_csv",
       "command": "build",
       "optional": true
+    },
+    {
+      "id": "review_research_web",
+      "kind": "primitive",
+      "primitive": "review_research_web",
+      "command": "serve",
+      "optional": true
     }
   ]
 }

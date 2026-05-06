@@ -34,12 +34,13 @@ Seven small primitives:
    matcher updates `match_*` columns in the contacts CSV
 4. `llm_review_contacts` — OpenRouter batched ENRICH/SKIP review of
    unmatched/suggested rows, updates the `skip` column
-5. `review_contacts_web` — local browser editor with `Matched`, `Suggested`,
-   `Unmatched`, `Low signal`, and `Skipped` tabs
+5. `review_contacts_web` — local browser yes/no enrichment reviewer with
+   `Matched`, `Suggested`, `Unmatched`, `Low signal`, and `Skipped` tabs
 6. `prepare_research_queue` — applies the old `network-search-api`
    phone-contact prune rules and writes the Parallel input CSV
-7. `deep_research_contacts` / `build_research_review_csv` — native Parallel
-   deep research plus review CSV assembly
+7. `deep_research_contacts` / `build_research_review_csv` /
+   `review_research_web` — native Parallel deep research, profile-card review,
+   and review CSV assembly
 
 ## Workflow
 
@@ -174,7 +175,7 @@ python ... deep_research_contacts.py poll --output-dir .powerpacks/messages/rese
 
 ### 9. Review contacts locally
 
-Prefer the local web editor for manual cleanup:
+Prefer the local web reviewer for yes/no enrichment decisions:
 
 ```bash
 python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
@@ -182,8 +183,9 @@ python packs/messages/primitives/review_contacts_web/review_contacts_web.py serv
   --open
 ```
 
-Use the TUI compatibility path only when the user specifically wants the
-existing `contact-exporter` review flow.
+Clicking a card toggles `YES` / `NO` and immediately autosaves `skip=false` /
+`skip=true` in the contacts CSV. Do not ask the user to edit names, match
+fields, or free-text details in this flow.
 
 ### 10. Build a research-review CSV for the existing TUI
 
@@ -203,12 +205,24 @@ OPENROUTER_API_KEY=... python ... build_research_review_csv.py build \
   --output-csv .powerpacks/messages/research_review.csv
 ```
 
-Then open the existing TUI for yes / maybe / no review:
+Then open the native web reviewer for yes / maybe / no buckets and profile
+cards:
 
 ```bash
-cd ../powerset-contacts
-uv run contact-exporter review --file ../powerpacks/.powerpacks/messages/research_review.csv
+python packs/messages/primitives/review_research_web/review_research_web.py serve \
+  --csv .powerpacks/messages/research_review.csv \
+  --research-dir .powerpacks/messages/research \
+  --open
 ```
+
+This ports the `contact-exporter` research-review TUI behavior:
+
+- bucket tabs: yes / maybe / no
+- a card displays phone signal, title/company, education, location, reason,
+  identity risk, signals, and profile links
+- clicking toggles enrich yes/no
+- every click writes the CSV `exclude` column (`exclude=no` include,
+  `exclude=yes` exclude), so refresh/quit does not lose progress
 
 And, after the user reviews and is ready, upload the artifact back to
 Powerset:

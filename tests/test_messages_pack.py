@@ -1,4 +1,5 @@
 import csv
+import importlib.util
 import json
 import os
 import sqlite3
@@ -1147,3 +1148,57 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             empty = by_handle["phone-4444444444"]
             self.assertEqual(empty["bucket"], "review")
             self.assertEqual(empty["identity_risk"], "no_real_name")
+
+
+class ReviewResearchWebTests(unittest.TestCase):
+    WEB = ROOT / "packs/messages/primitives/review_research_web/review_research_web.py"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        spec = importlib.util.spec_from_file_location("review_research_web", cls.WEB)
+        assert spec and spec.loader
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_decision_semantics_match_contact_exporter_upload(self) -> None:
+        rows = [
+            {"bucket": "confident", "exclude": ""},
+            {"bucket": "medium", "exclude": ""},
+            {"bucket": "review", "exclude": ""},
+            {"bucket": "medium", "exclude": "no"},
+            {"bucket": "confident", "exclude": "yes"},
+        ]
+        selected = [self.mod.is_selected(row) for row in rows]
+        self.assertEqual(selected, [True, False, False, True, False])
+        summary = self.mod.summarize(rows)
+        self.assertEqual(summary["selected"], 2)
+        self.assertEqual(summary["excluded"], 3)
+        self.assertEqual(summary["yes"], 2)
+        self.assertEqual(summary["maybe"], 2)
+        self.assertEqual(summary["no"], 1)
+
+    def test_profile_fields_are_loaded_from_research_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            handle = "phone-123"
+            d = tmp / handle
+            d.mkdir(parents=True)
+            (d / "01_research_parallel.json").write_text(
+                json.dumps(
+                    {
+                        "person": {"full_name": "Jane Doe"},
+                        "social": {"linkedin_url": "https://linkedin.test/jane", "github_url": ""},
+                        "location": {"city": "New York", "country": "United States"},
+                        "positions": [{"title": "Founder", "company_name": "Acme"}],
+                        "education": [{"school_name": "MIT"}],
+                        "summary": {"text": "Founder profile"},
+                        "metadata": {"research_notes": "public evidence"},
+                    }
+                )
+            )
+            view = self.mod.row_view({"handle": handle, "full_name": "Input Name"}, tmp)
+            self.assertEqual(view["name"], "Jane Doe")
+            self.assertEqual(view["location"], "New York, United States")
+            self.assertEqual(view["title_pairs"], "Founder @ Acme")
+            self.assertEqual(view["schools"], "MIT")
+            self.assertEqual(view["linkedin_url"], "https://linkedin.test/jane")

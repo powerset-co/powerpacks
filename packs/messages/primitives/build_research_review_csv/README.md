@@ -14,8 +14,8 @@ top_titles, top_companies, top_title_company_pairs, schools,
 short_reason, identity_risk, signals
 ```
 
-Buckets are `confident | medium | review`. The TUI auto-routes when it sees
-the column set above and maps the buckets to its `yes / maybe / no` tabs.
+Buckets are `confident | medium | review`. `review_research_web` and the
+legacy TUI both map those buckets to `yes / maybe / no` tabs.
 
 ## Usage
 
@@ -32,9 +32,11 @@ python ... build_research_review_csv.py build \
   --bucket-mode llm \
   --model anthropic/claude-sonnet-4-6
 
-# 3. Hand off to the existing TUI:
-cd ../powerset-contacts
-uv run contact-exporter review --file ../powerpacks/.powerpacks/messages/research_review.csv
+# 3. Review in the native web UI:
+python packs/messages/primitives/review_research_web/review_research_web.py serve \
+  --csv .powerpacks/messages/research_review.csv \
+  --research-dir .powerpacks/messages/research \
+  --open
 
 # 4. Upload back to Powerset after review:
 uv run contact-exporter research-review --upload ../powerpacks/.powerpacks/messages/research_review.csv
