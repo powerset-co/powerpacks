@@ -537,6 +537,20 @@ class PrepareResearchQueueTests(unittest.TestCase):
                         "message_count": "50",
                         "last_message": "2026-03-01T00:00:00+00:00",
                     },
+                    # Filtered: blocked last-name token from old phone_prune_config.
+                    {
+                        "phone": "+14155550808",
+                        "name": "Alice Hinge",
+                        "source": "imessage",
+                        "message_count": "100",
+                    },
+                    # Filtered: name is just the phone number.
+                    {
+                        "phone": "+14155550909",
+                        "name": "5550909",
+                        "source": "imessage",
+                        "message_count": "100",
+                    },
                 ],
             )
             result = subprocess.run(
@@ -547,10 +561,12 @@ class PrepareResearchQueueTests(unittest.TestCase):
                 check=True,
             )
             manifest = json.loads(result.stdout)
-            self.assertEqual(manifest["counts"]["input_rows"], 7)
+            self.assertEqual(manifest["counts"]["input_rows"], 9)
             self.assertEqual(manifest["counts"]["eligible_rows"], 2)
             self.assertEqual(manifest["counts"]["filtered_no_name"], 1)
             self.assertEqual(manifest["counts"]["filtered_unsearchable_name"], 1)
+            self.assertEqual(manifest["counts"]["filtered_blocked_name_token"], 1)
+            self.assertEqual(manifest["counts"]["filtered_name_is_phone"], 1)
             self.assertEqual(manifest["counts"]["filtered_skipped"], 1)
             self.assertEqual(manifest["counts"]["filtered_already_matched"], 1)
             self.assertEqual(manifest["counts"]["filtered_low_messages"], 1)
@@ -1148,6 +1164,37 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             empty = by_handle["phone-4444444444"]
             self.assertEqual(empty["bucket"], "review")
             self.assertEqual(empty["identity_risk"], "no_real_name")
+
+
+class ReviewContactsWebTests(unittest.TestCase):
+    WEB = ROOT / "packs/messages/primitives/review_contacts_web/review_contacts_web.py"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        spec = importlib.util.spec_from_file_location("review_contacts_web", cls.WEB)
+        assert spec and spec.loader
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_default_selection_drops_bad_names_but_keeps_matches(self) -> None:
+        rows = [
+            {"name": "", "phone": "+14155550101", "skip": ""},
+            {"name": "Alice Hinge", "phone": "+14155550202", "skip": ""},
+            {"name": "5550303", "phone": "+14155550303", "skip": ""},
+            {"name": "Tanner", "phone": "+14155550404", "skip": ""},
+            {"name": "Jane Doe", "phone": "+14155550505", "skip": ""},
+            {"name": "", "phone": "+14155550606", "skip": "", "matched_person_id": "p1", "match_status": "matched"},
+            {"name": "Bob Smith", "phone": "+14155550707", "skip": "true"},
+            {"name": "Charlie Raya", "phone": "+14155550808", "skip": "", "enrich_decision": "yes"},
+        ]
+        selected = [self.mod.contact_selected(row) for row in rows]
+        self.assertEqual(selected, [False, False, False, False, True, True, False, True])
+        self.assertEqual(self.mod.drop_reason(rows[0]), "no name")
+        self.assertEqual(self.mod.drop_reason(rows[1]), "blocked name token")
+        self.assertEqual(self.mod.drop_reason(rows[2]), "name is phone")
+        self.assertEqual(self.mod.drop_reason(rows[3]), "bad name")
+        summary = self.mod.summarize(rows)
+        self.assertEqual(summary["selected"], 3)
 
 
 class ReviewResearchWebTests(unittest.TestCase):

@@ -34,11 +34,15 @@ DEFAULT_COLUMNS = [
     "match_method",
     "match_reason",
     "review_note",
+    "enrich_decision",
 ]
 
 MIN_NAME_TOKENS = 2
 MIN_TOKEN_LEN = 2
 MIN_TOTAL_ALPHA = 5
+NAME_CLEAN_RE = re.compile(r"[^A-Za-zÀ-ÿ'’\-\s]")
+MULTISPACE_RE = re.compile(r"\s+")
+BLOCKED_LAST_NAME_TOKENS = {"hinge", "raya", "tinder", "bumble"}
 VALID_TABS = {"all", "matched", "suggested", "unmatched", "low_signal", "skipped"}
 
 
@@ -72,12 +76,33 @@ def truthy(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def falsy(value: str) -> bool:
+    return value.strip().lower() in {"0", "false", "no", "n", "off"}
+
+
 def esc(value: Any) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
+def normalize_name(name: str) -> str:
+    cleaned = NAME_CLEAN_RE.sub(" ", name or "")
+    return MULTISPACE_RE.sub(" ", cleaned).strip()
+
+
+def normalize_last_name_tokens(name: str) -> set[str]:
+    cleaned = normalize_name(name).lower()
+    parts = cleaned.split()
+    if len(parts) < 2:
+        return set()
+    return {token for token in parts[1:] if token}
+
+
+def normalize_phoneish(value: str) -> str:
+    return "".join(ch for ch in value or "" if ch.isdigit())
+
+
 def has_searchable_name(name: str) -> bool:
-    cleaned = re.sub(r"\s+", " ", (name or "").strip())
+    cleaned = normalize_name(name)
     if not cleaned:
         return False
     tokens = [token for token in cleaned.split(" ") if len(token) >= MIN_TOKEN_LEN]
@@ -91,15 +116,44 @@ def has_match(row: dict[str, str]) -> bool:
     return status == "matched" or bool((row.get("matched_person_id") or "").strip())
 
 
-def row_bucket(row: dict[str, str]) -> str:
+def drop_reason(row: dict[str, str]) -> str:
+    raw_name = row.get("name") or ""
+    phone_digits = normalize_phoneish(row.get("phone", ""))
+    raw_name_digits = normalize_phoneish(raw_name)
+    if phone_digits and raw_name_digits and phone_digits.endswith(raw_name_digits):
+        return "name is phone"
+    name = normalize_name(raw_name)
+    if not name:
+        return "no name"
+    if normalize_last_name_tokens(name) & BLOCKED_LAST_NAME_TOKENS:
+        return "blocked name token"
+    if not has_searchable_name(name):
+        return "bad name"
+    return ""
+
+
+def contact_selected(row: dict[str, str]) -> bool:
+    decision = (row.get("enrich_decision") or "").strip().lower()
+    if decision in {"yes", "enrich", "include", "true", "1"}:
+        return True
+    if decision in {"no", "skip", "exclude", "false", "0"}:
+        return False
     if truthy(row.get("skip", "")):
+        return False
+    if has_match(row):
+        return True
+    return not drop_reason(row)
+
+
+def row_bucket(row: dict[str, str]) -> str:
+    if truthy(row.get("skip", "")) or (row.get("enrich_decision") or "").strip().lower() in {"no", "skip", "exclude", "false", "0"}:
         return "skipped"
     status = (row.get("match_status") or "").strip().lower()
     if has_match(row):
         return "matched"
     if status == "suggested":
         return "suggested"
-    if not has_searchable_name(row.get("name", "")):
+    if drop_reason(row):
         return "low_signal"
     return "unmatched"
 
@@ -144,7 +198,7 @@ def summarize(rows: list[dict[str, str]]) -> dict[str, int]:
         "no_name": 0,
     }
     for row in rows:
-        if not truthy(row.get("skip", "")):
+        if contact_selected(row):
             summary["selected"] += 1
         name = (row.get("name") or "").strip()
         if name:
@@ -285,8 +339,9 @@ def page_html(path: Path, fieldnames: list[str], rows: list[dict[str, str]], par
         return "".join(parts).encode("utf-8")
     parts.append("<section class='cards'>")
     for idx, row in visible[:500]:
-        selected = not truthy(row.get("skip", ""))
+        selected = contact_selected(row)
         bucket = row_bucket(row)
+        reason = drop_reason(row)
         badge_class = "good" if bucket == "matched" else "warn" if bucket in {"suggested", "unmatched"} else ""
         link = row.get("matched_linkedin_url", "")
         link_html = f"<a href='{esc(link)}' target='_blank' rel='noreferrer'>{esc(link)}</a>" if link else "<span class='muted'>no LinkedIn URL</span>"
@@ -302,6 +357,7 @@ def page_html(path: Path, fieldnames: list[str], rows: list[dict[str, str]], par
             f"<div class='line'><strong>source</strong> {esc(row.get('source') or 'unknown')} &middot; <strong>messages</strong> {esc(row.get('message_count') or '0')}</div>",
             f"<div class='line'><strong>last</strong> {esc(row.get('last_message') or 'unknown')}</div>",
             f"<div class='line'><strong>groups</strong> {esc(row.get('group_names') or 'none')}</div>",
+            f"<div class='line'><strong>drop rule</strong> {esc(reason or 'none')}</div>",
             "<div class='match'>",
             f"<div class='line'><strong>match</strong> {esc(row.get('match_status') or 'unmatched')} {esc(row.get('matched_name') or '')}</div>",
             f"<div class='line'>{link_html}</div>",
@@ -376,7 +432,10 @@ def make_handler(contacts_path: Path):
                 return
             if "skip" not in fieldnames:
                 fieldnames.append("skip")
+            if "enrich_decision" not in fieldnames:
+                fieldnames.append("enrich_decision")
             row["skip"] = "false" if selected == "true" else "true"
+            row["enrich_decision"] = "yes" if selected == "true" else "no"
             atomic_write_contacts(contacts_path, fieldnames, rows)
             self.send_bytes(json.dumps({"ok": True, "row": row_idx, "selected": selected == "true"}).encode(), "application/json")
 

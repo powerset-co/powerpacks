@@ -23,6 +23,11 @@ The UI has tabs for:
   work by default
 - `Skipped`: rows marked out of scope
 
+Default `YES` selection uses the same local drop rules as the research queue:
+no-name rows, phone-number names, weak single-token names, and names whose
+last-name tokens contain `hinge`, `raya`, `tinder`, or `bumble` default to
+`NO` unless explicitly toggled.
+
 Decision encoding:
 
 - selected / `YES` writes `skip=false`

@@ -11,8 +11,10 @@ produces the CSV that pipeline reads.
 
 Filter (default):
   - name is non-empty
-  - name has at least 2 tokens, each at least 3 characters (i.e. plausibly
+  - name has at least 2 tokens, each at least 2 characters (i.e. plausibly
     searchable on LinkedIn) — override with `--allow-single-token`
+  - last-name tokens do not contain dating-app labels from the legacy
+    phone_prune_config (`hinge`, `raya`, `tinder`, `bumble`)
   - skip != "yes" (i.e. LLM said ENRICH, or no LLM review yet)
   - matched_person_id is empty (no Powerset linkage)
 
@@ -94,6 +96,7 @@ MIN_TOTAL_ALPHA = 5
 MIN_MESSAGE_COUNT = 3
 NAME_CLEAN_RE = re.compile(r"[^A-Za-zÀ-ÿ'’\-\s]")
 MULTISPACE_RE = re.compile(r"\s+")
+BLOCKED_LAST_NAME_TOKENS = {"hinge", "raya", "tinder", "bumble"}
 
 
 def now() -> datetime:
@@ -126,6 +129,18 @@ def split_name(full: str) -> tuple[str, str]:
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], parts[1]
+
+
+def normalize_last_name_tokens(name: str) -> set[str]:
+    cleaned = normalize_name(name).lower()
+    parts = cleaned.split()
+    if len(parts) < 2:
+        return set()
+    return {token for token in parts[1:] if token}
+
+
+def normalize_phoneish(value: str) -> str:
+    return "".join(ch for ch in value or "" if ch.isdigit())
 
 
 def phone_last4(phone: str) -> str:
@@ -225,6 +240,21 @@ def has_searchable_name(name: str) -> bool:
     return alpha >= MIN_TOTAL_ALPHA
 
 
+def bad_name_reason(name: str, phone: str = "") -> str:
+    phone_digits = normalize_phoneish(phone)
+    raw_name_digits = normalize_phoneish(name)
+    if phone_digits and raw_name_digits and phone_digits.endswith(raw_name_digits):
+        return "name_is_phone"
+    cleaned = normalize_name(name)
+    if not cleaned:
+        return "no_name"
+    if normalize_last_name_tokens(cleaned) & BLOCKED_LAST_NAME_TOKENS:
+        return "blocked_name_token"
+    if not has_searchable_name(cleaned):
+        return "bad_name"
+    return ""
+
+
 def transform_row(row: dict[str, str], today: datetime) -> dict[str, str]:
     name = normalize_name(row.get("name") or "")
     first, last = split_name(name)
@@ -300,6 +330,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "eligible_rows": 0,
         "filtered_no_name": 0,
         "filtered_unsearchable_name": 0,
+        "filtered_blocked_name_token": 0,
+        "filtered_name_is_phone": 0,
         "filtered_skipped": 0,
         "filtered_already_matched": 0,
         "filtered_suggested": 0,
@@ -313,11 +345,19 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         reader = csv.DictReader(handle)
         for row in reader:
             counts["input_rows"] += 1
-            name = normalize_name(row.get("name") or "")
-            if not name:
+            raw_name = row.get("name") or ""
+            name = normalize_name(raw_name)
+            reason = bad_name_reason(raw_name, row.get("phone", ""))
+            if reason == "no_name":
                 counts["filtered_no_name"] += 1
                 continue
-            if not args.allow_single_token and not has_searchable_name(name):
+            if reason == "blocked_name_token":
+                counts["filtered_blocked_name_token"] += 1
+                continue
+            if reason == "name_is_phone":
+                counts["filtered_name_is_phone"] += 1
+                continue
+            if not args.allow_single_token and reason == "bad_name":
                 counts["filtered_unsearchable_name"] += 1
                 continue
             skip_flag = parse_bool(row.get("skip", ""))

@@ -135,6 +135,8 @@ Do not treat the raw matcher's `unmatched` count as the paid-research count.
 The research queue only includes named, searchable, unresolved contacts and
 defaults to the old `looks_like_real_name` plus `message_count >= 3` prune
 rules from `../network-search-api/data_pipeline_v2/pipelines/synthetic/prepare_phone_contacts.py`.
+It also ports the old `phone_prune_config` last-name token blocklist:
+`hinge`, `raya`, `tinder`, and `bumble`.
 
 ### 8. Run deep research (Parallel.ai)
 
@@ -186,6 +188,10 @@ python packs/messages/primitives/review_contacts_web/review_contacts_web.py serv
 Clicking a card toggles `YES` / `NO` and immediately autosaves `skip=false` /
 `skip=true` in the contacts CSV. Do not ask the user to edit names, match
 fields, or free-text details in this flow.
+
+Default `YES` excludes no-name rows, phone-number names, weak names, and the
+ported dating-app name-token blocklist. Already matched rows still default to
+`YES` unless the user explicitly skips them.
 
 ### 10. Build a research-review CSV for the existing TUI
 

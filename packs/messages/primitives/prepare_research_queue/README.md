@@ -16,6 +16,9 @@ A row makes it into the research queue when:
 - the normalized name passes the old `looks_like_real_name` rule:
   at least two name tokens, tokens of at least two characters, and at least
   five alpha characters total
+- the last-name tokens do not contain the old `phone_prune_config` dating-app
+  labels: `hinge`, `raya`, `tinder`, or `bumble`
+- the name is not just the phone number
 - `message_count >= 3` unless `--min-message-count` overrides it
 - `skip != "yes"` (LLM/manual review did not reject it)
 - no existing Powerset linkage: no `matched_person_id`, no
