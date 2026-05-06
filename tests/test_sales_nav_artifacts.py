@@ -202,6 +202,9 @@ class SalesNavArtifactsTests(unittest.TestCase):
             self.assertEqual(lookup["count"], 1)
             self.assertEqual(lookup["results"][0]["member_id"], "101")
             self.assertEqual(len(lookup["results"][0]["mutuals"]), 3)
+            profile_lookup = self.run_json(["lookup", "--state", str(state_path), "--query", "real estate"])
+            self.assertEqual(profile_lookup["count"], 1)
+            self.assertEqual(profile_lookup["results"][0]["member_id"], "101")
 
             state = json.loads(state_path.read_text())
             self.assertEqual(state["counts"], {"leads": 3, "member_urls": 2, "mutual_edges": 4})

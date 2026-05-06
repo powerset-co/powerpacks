@@ -53,6 +53,12 @@ server.
   Save each MCP page response to a small JSON file, then run
   `sales_nav_artifacts ingest-page --response <path>` so later steps pass only
   paths/state.
+- For clear, unambiguous searches, do not ask approval/clarifying questions.
+  Resolve filters, search, ingest full artifact content, enrich the visible leads,
+  ingest enriched full artifact content, export CSVs, and present a compact
+  summary. Ask only when a filter is genuinely ambiguous (for example multiple
+  plausible "Cisco" companies) or when the user asks to page/enrich far beyond
+  the visible result set.
 - Do not auto-page beyond what the user requested. `sales_nav_search`
   returns `has_more` and `next_start_offset`; surface them, don't loop.
 
@@ -119,13 +125,16 @@ python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ini
   --conversation-id "<conversation_id>"
 ```
 
-After each MCP `sales_nav_search` or `get_artifact` call, save the one-page MCP
-response to a local JSON file, then ingest it:
+Do not ingest compact MCP preview rows when full artifact content is available.
+After each MCP `sales_nav_search`, save the response for audit, then immediately
+call `get_artifact(include_content=true)` for the returned `artifact_id`, save
+that full artifact response, and ingest with `--prefer-content`:
 
 ```bash
 python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-page \
   --state .powerpacks/sales-nav/runs/<run>/state.json \
-  --response .powerpacks/sales-nav/runs/<run>/pages/page-000.json
+  --response .powerpacks/sales-nav/runs/<run>/pages/artifact-full-000.json \
+  --prefer-content
 ```
 
 When the user asks for mutual LinkedIn URLs, first get pending IDs from the
@@ -145,6 +154,10 @@ python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ing
   --response .powerpacks/sales-nav/runs/<run>/member_urls.response.json
 ```
 
+After `enrich_extended_profiles`, call `get_artifact(include_content=true)` again
+and ingest with `--prefer-content` so `leads.jsonl` contains the full enriched
+profile fields (`summary`, `experiences`, `education`).
+
 For final files:
 
 ```bash
@@ -152,7 +165,11 @@ python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py exp
   --state .powerpacks/sales-nav/runs/<run>/state.json
 ```
 
-For follow-up questions, do not read the full JSONL/CSV into chat. Use lookup:
+For follow-up questions over the same Sales Nav run (for example "show me people
+with real estate exposure"), do not run a new Sales Nav search unless the user is
+changing the upstream search filters. Use local lookup first; it searches names,
+titles, companies, headlines, summaries, experiences, and education in
+`leads.jsonl` and joins mutuals:
 
 ```bash
 python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py lookup \
@@ -187,7 +204,10 @@ Sales Nav MCP is still scoped by `set_id`.
 
 If the user gave you free-text companies or titles, call
 `sales_nav_resolve` first to convert them into stable IDs / canonical
-strings:
+strings. If there is a single obvious recommended company/title match, proceed
+without asking. Ask the user only when multiple plausible matches are genuinely
+ambiguous (for example many unrelated "Cisco" entities and no exact/obvious
+match):
 
 ```text
 Tool: sales_nav_resolve
@@ -200,6 +220,22 @@ Args: {
 
 If the user already gave you a `company_id` or `function_id`, skip this
 and go straight to step 2.
+
+Mode defaults:
+
+- "who works at Brookfield" / "who's in my extended network at Cisco" → company
+  search. Resolve company, search it, ingest full artifact content, enrich the
+  visible page, export.
+- "who works at Brookfield in the finance department" → same company search plus
+  finance intent. Use reliable Sales Nav filters if known (`function_ids`), and
+  also pass targeted `keywords`/`title` when helpful. If the first query is too
+  sparse, retry once or twice by relaxing the weakest text filter while keeping
+  the company/set fixed.
+- "show me people with real estate exposure" after a Sales Nav run → local
+  refinement over the existing `leads.jsonl` first. Use `lookup` because it
+  searches enriched summaries, experiences, and education. Run a new Sales Nav
+  search only if the user is changing upstream search filters or the local run
+  has not been enriched yet.
 
 ### Step 2 — Run the search (always with persistence)
 
@@ -253,9 +289,27 @@ Response shape (with persistence):
 `reconnect_required: true` means the user's Unipile/LinkedIn session
 needs upstream re-auth; tell the user and stop. Do not retry.
 
-Save the one-page MCP response to a page JSON file and run
-`sales_nav_artifacts ingest-page` on it. The primitive records `artifact_id`,
-lead rows, mutual edges, and source/operator metadata in local handoff files.
+Save the MCP response for audit, but ingest the full artifact content: call
+`get_artifact` with `include_content: true`, save that response, then run
+`sales_nav_artifacts ingest-page --prefer-content` on it. The primitive records
+`artifact_id`, lead rows, mutual edges, and source/operator metadata in local
+handoff files.
+
+Then enrich the visible leads by default:
+
+```text
+Tool: enrich_extended_profiles
+Args: {
+  "conversation_id": "<same conversation_id>",
+  "member_ids": [<member_ids from this visible page>],
+  "set_id": "<same set_id>"
+}
+```
+
+After enrichment, call `get_artifact(include_content=true)` again and ingest
+with `--prefer-content`. This is what puts full profile data (`summary`,
+`experiences`, `education`) into `leads.jsonl`.
+
 Every follow-up retrieval (next page, mutual lookup, re-display) should use the
 local state path plus `get_artifact` / `sales_nav_resolve_member_ids` as needed.
 
@@ -281,20 +335,27 @@ Args: {
   "artifact_id":     "<from step 2>",
   "offset":          25,
   "limit":           25,
-  "include_content": false   // true to also return full filters_used etc.
+  "include_content": true    // prefer full accumulated lead shape for local files
 }
 ```
 
 This avoids re-running an expensive Sales Nav fetch and keeps the
-filters/result-set stable across pages. The local primitive dedupes by
-`member_id` and appends new lead↔mutual edges to `mutuals.jsonl`.
+filters/result-set stable across pages. For each retrieved page, prefer
+`include_content=true` + `ingest-page --prefer-content` so local files keep the
+full accumulated lead shape. The local primitive dedupes by `member_id` and
+appends new lead↔mutual edges to `mutuals.jsonl`.
 
 ### Step 5 — Refining filters
 
-Refining filters is a **new search**, not pagination. Re-call
+Refining upstream Sales Nav filters is a **new search**, not pagination. Re-call
 `sales_nav_search` with the new args, the same `conversation_id`, and
 `persist_artifact: true`. You'll get back a new `artifact_id`. Tell the
 user the artifact id changed.
+
+Refining over already-loaded people is **not** a new Sales Nav search. For
+questions like "which of these have real estate exposure", "who is in NYC", or
+"show the Brookfield VPs with mutuals", call `sales_nav_artifacts lookup` (or a
+future local query primitive) against the existing state first.
 
 | User says | What changes |
 | --- | --- |

@@ -546,7 +546,16 @@ def cmd_lookup(args: argparse.Namespace) -> None:
     member_ids = set(str(x) for x in args.member_id or [])
     matched = []
     for lead in leads:
-        haystack = " ".join(str(lead.get(k) or "") for k in ["member_id", "name", "title", "headline", "company", "location"]).lower()
+        profile_blob = json.dumps({
+            "summary": lead.get("summary"),
+            "experiences": lead.get("experiences") or [],
+            "education": lead.get("education") or [],
+        }, sort_keys=True)
+        haystack = " ".join(
+            str(lead.get(k) or "")
+            for k in ["member_id", "name", "title", "headline", "company", "location"]
+        )
+        haystack = f"{haystack} {profile_blob}".lower()
         if member_ids and str(lead.get("member_id")) not in member_ids:
             continue
         if q and q not in haystack:
