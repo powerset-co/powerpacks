@@ -42,7 +42,7 @@ The live mode creates task state, resolves investors when needed, runs
 The rollup report is:
 
 ```text
-evals/company_search.md
+packs/search/evals/company_search.md
 ```
 
 ## Primitive Recall
@@ -56,12 +56,12 @@ scripts/test-search-network primitive-recall --bucket company
 scripts/test-search-network primitive-recall --case-glob stanford --max-cases 2
 ```
 
-This uses deterministic decomposition in `evals/run_recall_parity.py`, then
+This uses deterministic decomposition in `packs/search/evals/run_recall_parity.py`, then
 runs resolver, prefilter, count, retrieval, hydration, and export primitives.
 It writes the report to:
 
 ```text
-evals/recall_parity.md
+packs/search/evals/recall_parity.md
 ```
 
 ## Headless Codex Extraction
@@ -112,8 +112,8 @@ state, and primitive logs under:
 - `*.extracted.json`: query decomposition produced by Codex.
 - `*.raw.log`: Codex command/stdout/stderr.
 - task state JSON: planned steps versus actual `steps[]`.
-- `evals/recall_parity.md`: pass/fail rollup.
-- `evals/company_search.md`: company lookup pass/fail rollup.
+- `packs/search/evals/recall_parity.md`: pass/fail rollup.
+- `packs/search/evals/company_search.md`: company lookup pass/fail rollup.
 
 ## Test Gate
 

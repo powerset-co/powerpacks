@@ -1,8 +1,8 @@
 # Company Search Harness
 
-Last run: `2026-05-02T03:23:42Z`
+Last run: `2026-05-07T22:06:09Z`
 Mode: `dry_run`
-Cases: `/Users/arthur/workspace/powerpacks/evals/company-search/cases.json`
+Cases: `/Users/arthur/workspace/powerpacks/packs/search/evals/company-search/cases.json`
 
 | Case | Status | Planned Steps | Strategy | Resolved | Notes |
 |---|---|---|---|---:|---|

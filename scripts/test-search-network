@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SEARCH_EVALS="$ROOT/packs/search/evals"
 
 usage() {
   cat <<'EOF'
@@ -46,7 +47,7 @@ run_agent_harness() {
   local mode="$1"
   shift
   local args=(
-    uv run python "$ROOT/evals/run_agent_extraction_harness.py"
+    uv run python "$SEARCH_EVALS/run_agent_extraction_harness.py"
     --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}"
     --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/aleph-mvp}/tests/recall}"
     --env-file "${ENV_FILE:-.env}"
@@ -65,7 +66,7 @@ run_company_harness() {
   local mode="$1"
   shift
   local args=(
-    uv run python "$ROOT/evals/run_company_search_harness.py"
+    uv run python "$SEARCH_EVALS/run_company_search_harness.py"
     --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}"
     --env-file "${ENV_FILE:-.env}"
   )
@@ -96,7 +97,7 @@ case "$command" in
     run_company_harness live "$@"
     ;;
   primitive-recall)
-    uv run python "$ROOT/evals/run_recall_parity.py" \
+    uv run python "$SEARCH_EVALS/run_recall_parity.py" \
       --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}" \
       --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/aleph-mvp}/tests/recall}" \
       --env-file "${ENV_FILE:-.env}" \
