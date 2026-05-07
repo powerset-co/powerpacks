@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Powerpacks self-setup health check.
 
-Runs every prereq check the `powerset-login` skill needs, in one pass, and
+Runs every prereq check the `$powerset login` flow needs, in one pass, and
 returns a structured JSON report. Each check has a stable `id`, a `status`
 of `ok | warn | missing | fail`, a human-readable `message`, and (when
 applicable) a `fix_command` the agent can show the user before running.
@@ -34,6 +34,7 @@ DEFAULT_CREDS = Path(os.environ.get(
     str(Path.home() / ".powerpacks" / "credentials.json"),
 ))
 DEFAULT_PROJECT = os.environ.get("POWERPACKS_GCP_PROJECT", "powerset-search")
+REPO_ROOT = SELF_DIR.parents[3]
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +71,7 @@ def check(
 ) -> dict[str, Any]:
     """Build a check record.
 
-    `fix_kind` is the most important field for the powerset-login skill:
+    `fix_kind` is the most important field for the `$powerset login` flow:
 
     - `none`              — nothing to do (status `ok` or `warn` you can ignore)
     - `auto`              — safe to run without prompting (no network, no
@@ -99,17 +100,71 @@ def check(
 # Individual checks
 # ---------------------------------------------------------------------------
 
+def _python_version(python: str) -> str:
+    code, out, err = run([python, "--version"], timeout=10)
+    if code != 0:
+        return ""
+    raw = (out or err).strip()
+    return raw.replace("Python ", "", 1).strip()
+
+
+def _is_pinned_python(version: str) -> bool:
+    try:
+        parts = tuple(int(p) for p in version.split(".")[:2])
+    except (ValueError, TypeError):
+        return False
+    return parts >= (3, 12) and parts < (3, 13)
+
+
 def check_python() -> dict[str, Any]:
-    version = sys.version.split()[0]
-    parts = tuple(int(p) for p in version.split(".")[:2])
-    if parts >= (3, 9):
-        return check("python", "ok", f"python {version}", version=version)
+    current_version = sys.version.split()[0]
+    current_executable = sys.executable
+    venv_python = REPO_ROOT / ".venv" / "bin" / "python"
+
+    if venv_python.exists():
+        venv_version = _python_version(str(venv_python))
+        if _is_pinned_python(venv_version):
+            return check(
+                "python", "ok",
+                f".venv python {venv_version}",
+                version=venv_version,
+                executable=str(venv_python),
+                current_version=current_version,
+                current_executable=current_executable,
+            )
+        return check(
+            "python", "fail",
+            f".venv python {venv_version or 'unknown'} is not the pinned Powerpacks runtime; need Python 3.12",
+            version=venv_version,
+            executable=str(venv_python),
+            current_version=current_version,
+            current_executable=current_executable,
+            fix_kind="shell_install",
+            fix_command="bin/setup-python",
+        )
+
+    if _is_pinned_python(current_version):
+        return check("python", "ok", f"python {current_version}", version=current_version, executable=current_executable)
     return check(
         "python", "fail",
-        f"python {version} is too old; need >= 3.9",
-        version=version,
+        f"python {current_version} is not the pinned Powerpacks runtime; need Python 3.12",
+        version=current_version,
+        executable=current_executable,
         fix_kind="shell_install",
-        fix_command="brew install python3 && which python3",
+        fix_command="bin/setup-python",
+    )
+
+
+def check_uv_installed() -> dict[str, Any]:
+    path = shutil.which("uv")
+    if path:
+        return check("uv_installed", "ok", "uv is on PATH", path=path)
+    fix_command = "brew install uv" if sys.platform == "darwin" and shutil.which("brew") else "curl -LsSf https://astral.sh/uv/install.sh | sh"
+    return check(
+        "uv_installed", "missing",
+        "uv is not installed; needed to install and run Powerpacks Python dependencies",
+        fix_kind="shell_install",
+        fix_command=fix_command,
     )
 
 
@@ -281,6 +336,16 @@ def check_user_secrets(profile: str, project: str) -> dict[str, Any]:
             fix_kind="human_action",
             fix_command="ping #powerpacks on Slack with your @powerset.co email",
         )
+    if status == "gcloud_auth_error":
+        return check(
+            "user_secrets", "missing",
+            "gcloud credentials need reauthentication before Secret Manager can be probed",
+            email=payload.get("email"),
+            auth_error=payload.get("auth_error"),
+            fix_kind="interactive",
+            fix_command="gcloud auth login",
+            fix_args=["gcloud", "auth", "login"],
+        )
     if status == "gcloud_missing":
         return check(
             "user_secrets", "missing",
@@ -371,26 +436,34 @@ def check_env_file(env_file: Path, profile: str) -> dict[str, Any]:
 def collect_checks(args: argparse.Namespace) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     checks.append(check_python())
+    checks.append(check_uv_installed())
     checks.append(check_gcloud_installed())
 
     gcloud_ok = checks[-1]["status"] == "ok"
     if gcloud_ok:
         checks.append(check_gcloud_account())
-        if not args.skip_adc:
+        if args.check_adc:
             checks.append(check_gcloud_adc())
 
     checks.append(check_auth0_login())
     if checks[-1]["status"] == "ok":
         checks.append(check_auth0_role())
 
-    if gcloud_ok:
-        active = next(
-            (c for c in checks if c["id"] == "gcloud_account" and c["status"] == "ok"), None
-        )
-        if active:
-            checks.append(check_user_secrets(args.profile, args.gcp_project))
+    env_check = check_env_file(args.env_file, args.profile)
+    checks.append(env_check)
 
-    checks.append(check_env_file(args.env_file, args.profile))
+    # Secret Manager access is only required when the local env is incomplete
+    # (or when explicitly debugging refresh/provisioning). If .env is already
+    # usable, an expired gcloud token should not make normal Powerpacks health
+    # look broken.
+    if args.check_user_secrets or env_check["status"] != "ok":
+        if gcloud_ok:
+            active = next(
+                (c for c in checks if c["id"] == "gcloud_account" and c["status"] == "ok"), None
+            )
+            if active:
+                checks.append(check_user_secrets(args.profile, args.gcp_project))
+
     if not args.skip_mcp:
         checks.append(check_mcp_powerset_search())
     return checks
@@ -518,10 +591,13 @@ def main() -> None:
         p.add_argument("--profile", default="search-core")
         p.add_argument("--env-file", type=Path, default=Path(".env"))
         p.add_argument("--gcp-project", default=DEFAULT_PROJECT)
-        p.add_argument("--skip-adc", action="store_true",
-                       help="Skip the application-default credentials check")
+        p.add_argument("--check-adc", action="store_true",
+                       help="Also check application-default credentials (optional; not needed for normal Powerpacks workflows)")
+        p.add_argument("--skip-adc", action="store_true", help=argparse.SUPPRESS)
         p.add_argument("--skip-mcp", action="store_true",
                        help="Skip the powerset-search MCP install check")
+        p.add_argument("--check-user-secrets", action="store_true",
+                       help="Probe per-user Secret Manager access even when .env already has the requested profile keys")
 
     runp = sub.add_parser("run", help="Read-only: run every prereq check and emit a structured report")
     common(runp)
