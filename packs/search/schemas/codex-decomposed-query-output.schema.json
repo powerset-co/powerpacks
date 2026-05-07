@@ -120,6 +120,15 @@
         "is_current": {
           "type": "boolean"
         },
+        "is_current_role": {
+          "type": "boolean"
+        },
+        "is_current_company": {
+          "type": "boolean"
+        },
+        "searcher_operator_id": {
+          "type": "string"
+        },
         "set_id": {
           "type": "string"
         },
@@ -285,6 +294,18 @@
         "age_max": {
           "type": "integer"
         },
+        "x_followers_min": { "type": "integer" },
+        "x_followers_max": { "type": "integer" },
+        "li_followers_min": { "type": "integer" },
+        "li_followers_max": { "type": "integer" },
+        "li_connections_min": { "type": "integer" },
+        "li_connections_max": { "type": "integer" },
+        "ig_followers_min": { "type": "integer" },
+        "ig_followers_max": { "type": "integer" },
+        "operator_interaction_min": { "type": "integer" },
+        "operator_interaction_max": { "type": "integer" },
+        "set_interaction_min": { "type": "integer" },
+        "set_interaction_max": { "type": "integer" },
         "tech_skills": {
           "type": "array",
           "items": {

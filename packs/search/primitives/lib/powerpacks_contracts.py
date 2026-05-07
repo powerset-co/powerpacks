@@ -59,7 +59,7 @@ POSTGRES_TABLES = {
         ],
     },
     "person_source_summary": {
-        "required_columns": ["person_id", "total_interactions"],
+        "required_columns": ["person_id", "operator_id", "total_interactions"],
         "optional": True,
     },
     "sets": {

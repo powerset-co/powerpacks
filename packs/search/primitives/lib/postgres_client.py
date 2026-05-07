@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import sys
 import base64
 from pathlib import Path
 from typing import Any
@@ -47,19 +45,10 @@ def ensure_psycopg2() -> Any:
 
         return psycopg2
     except ModuleNotFoundError as exc:
-        if os.getenv("POWERPACKS_PSYCOPG_UV_REEXEC") == "1":
-            raise RuntimeError("psycopg2 is required. Install psycopg2-binary or run through uv.") from exc
-        uv = shutil.which("uv")
-        if not uv:
-            raise RuntimeError("psycopg2 is required. Install psycopg2-binary or install uv for auto re-exec.") from exc
-        env = os.environ.copy()
-        env["POWERPACKS_PSYCOPG_UV_REEXEC"] = "1"
-        os.execvpe(
-            uv,
-            [uv, "run", "--with", "psycopg2-binary", "python", str(Path(sys.argv[0]).resolve()), *sys.argv[1:]],
-            env,
-        )
-        raise AssertionError("unreachable")
+        raise RuntimeError(
+            "Missing required search package: psycopg2. "
+            "Run `bin/setup-python` from the Powerpacks repo, or rerun the Powerpacks install script."
+        ) from exc
 
 
 def json_value(value: Any) -> Any:
@@ -290,6 +279,114 @@ def fetch_interaction_counts(person_ids: list[str], env_file: Path | None = None
                 return {str(row[0]): int(row[1] or 0) for row in cur.fetchall()}
     except Exception:
         return {}
+
+
+def _threshold_conditions(prefix: str, min_value: Any, max_value: Any, column: str = "total_interactions") -> tuple[list[str], dict[str, Any]]:
+    conditions: list[str] = []
+    params: dict[str, Any] = {}
+    if min_value is not None:
+        conditions.append(f"{column} >= %({prefix}_min)s")
+        params[f"{prefix}_min"] = int(min_value)
+    if max_value is not None:
+        conditions.append(f"{column} <= %({prefix}_max)s")
+        params[f"{prefix}_max"] = int(max_value)
+    return conditions, params
+
+
+def fetch_social_filter_person_ids(payload: dict[str, Any], env_file: Path | None = None) -> list[str]:
+    """Return base person IDs matching social follower/connection thresholds."""
+    social_fields = [
+        ("x_followers_min", "x_twitter_followers", ">="),
+        ("x_followers_max", "x_twitter_followers", "<="),
+        ("li_followers_min", "linkedin_followers", ">="),
+        ("li_followers_max", "linkedin_followers", "<="),
+        ("li_connections_min", "linkedin_connections", ">="),
+        ("li_connections_max", "linkedin_connections", "<="),
+        ("ig_followers_min", "ig_followers", ">="),
+        ("ig_followers_max", "ig_followers", "<="),
+    ]
+    active = [(key, column, op) for key, column, op in social_fields if payload.get(key) is not None]
+    if not active:
+        return []
+    load_env_file(env_file)
+    assert_columns_in_contract("persons", ["id"] + list(dict.fromkeys(column for _, column, _ in active)))
+    psycopg2 = ensure_psycopg2()
+    conditions = []
+    params: dict[str, Any] = {}
+    for key, column, op in active:
+        conditions.append(f"{column} {op} %({key})s")
+        params[key] = payload[key]
+    query = f"SELECT id::text FROM persons WHERE {' AND '.join(conditions)} ORDER BY id"
+    with psycopg2.connect(database_url()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            return [str(row[0]) for row in cur.fetchall()]
+
+
+def fetch_interaction_filter_person_ids(payload: dict[str, Any], env_file: Path | None = None) -> list[str]:
+    """Return base person IDs matching operator/set interaction thresholds.
+
+    Operator scope uses payload.searcher_operator_id when present, otherwise the
+    single resolved operator_id from the active set. Set scope aggregates across
+    payload.operator_ids when present, or all operators otherwise.
+    """
+    has_operator = payload.get("operator_interaction_min") is not None or payload.get("operator_interaction_max") is not None
+    has_set = payload.get("set_interaction_min") is not None or payload.get("set_interaction_max") is not None
+    if not has_operator and not has_set:
+        return []
+
+    load_env_file(env_file)
+    assert_columns_in_contract("person_source_summary", ["person_id", "operator_id", "total_interactions"])
+    psycopg2 = ensure_psycopg2()
+    operator_ids = [str(v) for v in payload.get("operator_ids") or payload.get("allowed_operator_ids") or [] if v]
+    searcher_operator_id = str(payload.get("searcher_operator_id") or "").strip()
+    if not searcher_operator_id and len(operator_ids) == 1:
+        searcher_operator_id = operator_ids[0]
+
+    def query_operator(cur) -> set[str]:
+        if not searcher_operator_id:
+            return set()
+        conditions = ["operator_id = %(operator_id)s"]
+        params: dict[str, Any] = {"operator_id": searcher_operator_id}
+        more, more_params = _threshold_conditions("op", payload.get("operator_interaction_min"), payload.get("operator_interaction_max"))
+        conditions.extend(more)
+        params.update(more_params)
+        cur.execute(f"SELECT person_id::text FROM person_source_summary WHERE {' AND '.join(conditions)}", params)
+        return {str(row[0]) for row in cur.fetchall()}
+
+    def query_set(cur) -> set[str]:
+        conditions = []
+        params: dict[str, Any] = {}
+        if operator_ids:
+            conditions.append("operator_id = ANY(%(operator_ids)s)")
+            params["operator_ids"] = operator_ids
+        having, having_params = _threshold_conditions("set", payload.get("set_interaction_min"), payload.get("set_interaction_max"), "SUM(total_interactions)")
+        params.update(having_params)
+        where_sql = "WHERE " + " AND ".join(conditions) if conditions else ""
+        having_sql = "HAVING " + " AND ".join(having) if having else ""
+        cur.execute(f"""
+            SELECT person_id::text
+            FROM person_source_summary
+            {where_sql}
+            GROUP BY person_id
+            {having_sql}
+        """, params)
+        return {str(row[0]) for row in cur.fetchall()}
+
+    with psycopg2.connect(database_url()) as conn:
+        with conn.cursor() as cur:
+            operator_matches = query_operator(cur) if has_operator else None
+            set_matches = query_set(cur) if has_set else None
+
+    if has_operator and has_set:
+        if operator_matches is None:
+            operator_matches = set()
+        if set_matches is None:
+            set_matches = set()
+        return sorted(operator_matches & set_matches)
+    if has_operator:
+        return sorted(operator_matches or set())
+    return sorted(set_matches or set())
 
 
 def resolve_person_investors(names: list[str], env_file: Path | None = None, *, limit_per_name: int = 5) -> list[dict[str, Any]]:

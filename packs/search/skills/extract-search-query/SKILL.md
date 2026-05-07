@@ -80,20 +80,20 @@ company/date/location/education filters.
   that it started after that date.
 - Treat broad graduation ranges as education filters, not position-tenure
   filters.
-- Treat query words like "current" or "currently" as `is_current: true`.
-  Otherwise leave currentness unset unless the user clearly asks for past-only.
+- Prefer explicit split currentness fields:
+  - `is_current_role`: currentness for role/title matching positions
+  - `is_current_company`: currentness for company membership filters
+  - `is_current`: legacy matched-position fallback only when the user clearly
+    means the same position must satisfy both role/company currentness
+- Treat query words like "current" or "currently" as current only for the
+  mentioned dimension. Example: "current engineers at OpenAI" usually sets both
+  `is_current_role: true` and `is_current_company: true`; "people currently at
+  OpenAI who used to be PMs" sets `is_current_company: true` and leaves role
+  currentness false/past if encoded separately.
 - For role or company queries, include a `notes` entry that makes currentness
-  semantics explicit: current-only, all-time, or past-only. If the user's
-  wording does not make currentness clear, do not choose silently; leave a note
-  for the orchestrator to ask before retrieval. If `is_current` is set, say
-  whether it is intended to mean current at the requested company, current in
-  the requested role, or both on the same matched position row.
-- Remember that `role_search_filters.is_current` applies to a matched position
-  row. When company and role constraints are both present in one payload,
-  `is_current: true` means the same position row must satisfy currentness and
-  those company/role constraints. If the user's wording requires split
-  semantics, such as current at a company but any past role, leave a note for
-  the orchestrator to ask or plan separate filters/prefilters.
+  semantics explicit: current-only, all-time, or past-only for each dimension.
+  If the user's wording does not make currentness clear, do not choose silently;
+  leave a note for the orchestrator to ask before retrieval.
 - For recall-style tests, do not add seniority unless the query or test
   explicitly requires it.
 

@@ -20,6 +20,7 @@ def load_module(name: str, path: Path):
 
 turbopuffer_client = load_module("turbopuffer_client", LIB / "turbopuffer_client.py")
 resolve_companies = load_module("resolve_companies", ROOT / "packs/search/primitives/resolve_companies" / "resolve_companies.py")
+apply_prefilters = load_module("apply_prefilters", ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py")
 hydrate_people = load_module("hydrate_people", ROOT / "packs/search/primitives/hydrate_people" / "hydrate_people.py")
 results_io = load_module("results_io", ROOT / "packs/search/primitives/persist_search_results" / "results_io.py")
 
@@ -66,11 +67,29 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
                 "semantic_query": "Builds software systems in production with hands-on coding responsibilities.",
                 "role_tracks": ["engineering"],
                 "base_candidate_ids": ["p1", "p2"],
+                "li_followers_min": 1000,
             }
         )
 
         self.assertEqual(filters[0], "And")
         self.assertIn(("base_id", "In", ["p1", "p2"]), filters[1])
+        self.assertNotIn(("linkedin_followers", "Gte", 1000), filters[1])
+
+    def test_currentness_prefers_split_role_and_filter_only_company(self) -> None:
+        role_filters = turbopuffer_client.filters_from_role_payload({
+            "semantic_query": "Builds software systems in production with hands-on coding responsibilities across backend, frontend, platform, infrastructure, or application engineering teams.",
+            "is_current_role": True,
+            "is_current_company": False,
+        })
+        self.assertEqual(role_filters, ("is_current", "Eq", True))
+
+        company_filters = turbopuffer_client.filters_from_role_payload({
+            "company_ids": ["urn:harmonic:company:meta"],
+            "is_current_company": True,
+        })
+        self.assertEqual(company_filters[0], "And")
+        self.assertIn(("company_id", "In", ["urn:harmonic:company:meta"]), company_filters[1])
+        self.assertIn(("is_current", "Eq", True), company_filters[1])
 
     def test_summarize_filter_truncates_large_id_lists(self) -> None:
         filters = ("base_id", "In", [f"p{i}" for i in range(25)])
@@ -158,6 +177,23 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         rows = results_io.result_rows(state)
         self.assertEqual([row["person_id"] for row in rows], ["p2", "p1"])
         self.assertEqual([row["name"] for row in rows], ["Two", "One"])
+
+    def test_social_and_interaction_prefilters_are_postgres_backed(self) -> None:
+        original_social = apply_prefilters.fetch_social_filter_person_ids
+        original_interaction = apply_prefilters.fetch_interaction_filter_person_ids
+        try:
+            apply_prefilters.fetch_social_filter_person_ids = lambda payload, env_file=None: ["p1", "p2"]
+            apply_prefilters.fetch_interaction_filter_person_ids = lambda payload, env_file=None: ["p2", "p3"]
+            social = apply_prefilters.social_base_ids({"li_followers_min": 1000}, env_file=None, max_ids=10)
+            interaction = apply_prefilters.interaction_base_ids({"set_interaction_min": 5}, env_file=None, max_ids=10)
+        finally:
+            apply_prefilters.fetch_social_filter_person_ids = original_social
+            apply_prefilters.fetch_interaction_filter_person_ids = original_interaction
+
+        self.assertEqual(social[0], ["p1", "p2"])
+        self.assertEqual(social[1]["stage"], "social")
+        self.assertEqual(interaction[0], ["p2", "p3"])
+        self.assertEqual(interaction[1]["stage"], "interaction")
 
     def test_filter_only_payload_uses_filter_only_rows(self) -> None:
         original = turbopuffer_client.filter_only_rows

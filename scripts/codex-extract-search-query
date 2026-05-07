@@ -65,7 +65,11 @@ filter_keys = {
     "education_ids", "education_names", "school_names", "cities", "states",
     "countries", "metro_areas", "macro_regions", "position_after_date",
     "position_before_date", "seniority_bands", "role_ids", "role_tracks",
+    "is_current", "is_current_role", "is_current_company",
     "investor_names", "investors", "tech_skills", "base_candidate_ids",
+    "x_followers_min", "x_followers_max", "li_followers_min", "li_followers_max",
+    "li_connections_min", "li_connections_max", "ig_followers_min", "ig_followers_max",
+    "operator_interaction_min", "operator_interaction_max", "set_interaction_min", "set_interaction_max",
 }
 has_filter = any(payload.get(k) not in (None, [], "") for k in filter_keys)
 if (not isinstance(semantic_query, str) or len(semantic_query) < 80) and not has_filter:

@@ -26,6 +26,7 @@ from turbopuffer_client import (  # noqa: E402
     namespace_name,
     role_payload_from_state,
 )
+from postgres_client import fetch_interaction_filter_person_ids, fetch_social_filter_person_ids  # noqa: E402
 
 
 def now_iso() -> str:
@@ -132,6 +133,27 @@ async def tech_skill_base_ids(payload: dict[str, Any], *, page_size: int, max_id
     return ids, {"stage": "tech_skills", "input_count": len(skills), "matched": len(ids)}
 
 
+def social_base_ids(payload: dict[str, Any], *, env_file: Path | None, max_ids: int) -> tuple[list[str], dict[str, Any]] | None:
+    keys = [
+        "x_followers_min", "x_followers_max", "li_followers_min", "li_followers_max",
+        "li_connections_min", "li_connections_max", "ig_followers_min", "ig_followers_max",
+    ]
+    active = {key: payload.get(key) for key in keys if payload.get(key) is not None}
+    if not active:
+        return None
+    ids = fetch_social_filter_person_ids(payload, env_file=env_file)
+    return ids[:max_ids], {"stage": "social", "filters": active, "matched": len(ids)}
+
+
+def interaction_base_ids(payload: dict[str, Any], *, env_file: Path | None, max_ids: int) -> tuple[list[str], dict[str, Any]] | None:
+    keys = ["operator_interaction_min", "operator_interaction_max", "set_interaction_min", "set_interaction_max"]
+    active = {key: payload.get(key) for key in keys if payload.get(key) is not None}
+    if not active:
+        return None
+    ids = fetch_interaction_filter_person_ids(payload, env_file=env_file)
+    return ids[:max_ids], {"stage": "interaction", "filters": active, "matched": len(ids)}
+
+
 async def company_base_ids(
     payload: dict[str, Any],
     *,
@@ -148,6 +170,9 @@ async def company_base_ids(
         async with semaphore:
             people_payload = dict(payload)
             people_payload["company_ids"] = chunk
+            if payload.get("is_current_company") is not None:
+                people_payload["is_current"] = bool(payload.get("is_current_company"))
+                people_payload.pop("is_current_role", None)
             filters = filters_from_role_payload(people_payload)
             if filters is None:
                 return []
@@ -159,7 +184,7 @@ async def company_base_ids(
     rows = [row for batch in chunk_rows for row in batch]
     ids = extract_base_ids(rows)
     return ids[:max_ids], {
-        "stage": "large_company_intersection",
+        "stage": "company_current" if payload.get("is_current_company") is not None else "large_company_intersection",
         "input_count": len(company_ids),
         "matched": len(ids),
         "company_id_batches": len(chunked),
@@ -171,8 +196,8 @@ async def company_base_ids(
 def should_run_company_prefilter(payload: dict[str, Any], threshold: int) -> bool:
     company_ids = payload.get("company_ids") or []
     stages = ((payload.get("prefilters") or {}).get("stages") or [])
-    explicit = any(stage.get("stage") == "large_company_intersection" for stage in stages if isinstance(stage, dict))
-    return explicit or len(company_ids) >= threshold
+    explicit = any(stage.get("stage") in {"large_company_intersection", "company_current"} for stage in stages if isinstance(stage, dict))
+    return explicit or bool(company_ids and payload.get("is_current_company") is not None) or len(company_ids) >= threshold
 
 
 async def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -183,9 +208,12 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     base_ids: list[str] | None = None
     stage_outputs: list[dict[str, Any]] = []
+    env_file = Path(args.env_file) if args.env_file else None
     for maybe_result in [
         await education_base_ids(payload, page_size=args.page_size, max_ids=args.max_ids),
         await tech_skill_base_ids(payload, page_size=args.page_size, max_ids=args.max_ids),
+        social_base_ids(payload, env_file=env_file, max_ids=args.max_ids),
+        interaction_base_ids(payload, env_file=env_file, max_ids=args.max_ids),
         await company_base_ids(
             payload,
             page_size=args.page_size,

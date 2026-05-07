@@ -239,8 +239,13 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
         filters.append(comparison("seniority_band", "In", payload["seniority_bands"]))
     if payload.get("company_ids"):
         filters.append(comparison("company_id", "In", payload["company_ids"]))
-    if payload.get("is_current") is not None:
-        filters.append(comparison("is_current", "Eq", bool(payload["is_current"])))
+    current_value = payload.get("is_current_role")
+    if current_value is None:
+        current_value = payload.get("is_current")
+    if current_value is None and is_filter_only_payload(payload):
+        current_value = payload.get("is_current_company")
+    if current_value is not None:
+        filters.append(comparison("is_current", "Eq", bool(current_value)))
     if payload.get("years_experience_min") is not None:
         filters.append(comparison("total_years_experience", "Gte", payload["years_experience_min"]))
     if payload.get("years_experience_max") is not None:
@@ -268,18 +273,19 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
     if payload.get("age_max") is not None:
         # age_max means born on/after this year.
         filters.append(comparison("inferred_birth_year", "Gte", _birth_year_for_age(int(payload["age_max"]))))
-    for payload_key, field, op in [
-        ("x_followers_min", "x_twitter_followers", "Gte"),
-        ("x_followers_max", "x_twitter_followers", "Lte"),
-        ("li_followers_min", "linkedin_followers", "Gte"),
-        ("li_followers_max", "linkedin_followers", "Lte"),
-        ("li_connections_min", "linkedin_connections", "Gte"),
-        ("li_connections_max", "linkedin_connections", "Lte"),
-        ("ig_followers_min", "ig_followers", "Gte"),
-        ("ig_followers_max", "ig_followers", "Lte"),
-    ]:
-        if payload.get(payload_key) is not None:
-            filters.append(comparison(field, op, payload[payload_key]))
+    if not payload.get("base_candidate_ids"):
+        for payload_key, field, op in [
+            ("x_followers_min", "x_twitter_followers", "Gte"),
+            ("x_followers_max", "x_twitter_followers", "Lte"),
+            ("li_followers_min", "linkedin_followers", "Gte"),
+            ("li_followers_max", "linkedin_followers", "Lte"),
+            ("li_connections_min", "linkedin_connections", "Gte"),
+            ("li_connections_max", "linkedin_connections", "Lte"),
+            ("ig_followers_min", "ig_followers", "Gte"),
+            ("ig_followers_max", "ig_followers", "Lte"),
+        ]:
+            if payload.get(payload_key) is not None:
+                filters.append(comparison(field, op, payload[payload_key]))
 
     if not filters:
         return None

@@ -266,17 +266,14 @@ Before showing the approval prompt, perform this payload quality gate:
 - produce a short decision trace after each stage
 - keep role, location, seniority, education, yoe, age, and company constraints
   explicit
-- make currentness explicit for every role or company query. Record whether the
-  search is current-only, all-time, or past-only. If the user's wording does not
-  make that clear, ask before retrieval; do not proceed with implicit
-  currentness. If `is_current` is set, explain whether it is intended to mean
-  current at the requested company, current in the requested role, or both.
-- remember that `role_search_filters.is_current` is a position-row filter. When
-  company and role constraints are in the same role payload, `is_current: true`
-  means the matched position row must be current and satisfy those company/role
-  constraints together. If the user wants split semantics, such as current at a
-  company but any past role, or current role plus past company, ask or plan
-  separate filters/prefilters instead of silently conflating them.
+- make currentness explicit for every role or company query. Prefer
+  `is_current_role` and `is_current_company`; use legacy `is_current` only when
+  the same matched position row should satisfy all currentness constraints. If
+  the user's wording does not make currentness clear, ask before retrieval; do
+  not proceed with implicit currentness.
+- remember that `role_search_filters.is_current` is a position-row filter.
+  Split semantics such as current company plus past role should use
+  `is_current_company` / `is_current_role` instead of silently conflating them.
 - use `education_names` for school names that are not already canonical IDs,
   then run `resolve_education` before `apply_prefilters`
 - do not use broad `role_function` values such as `engineering` as a hard proxy

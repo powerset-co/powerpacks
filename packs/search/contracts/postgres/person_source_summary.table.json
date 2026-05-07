@@ -9,6 +9,7 @@
   ],
   "columns": [
     {"name": "person_id", "type": "uuid", "required": true},
+    {"name": "operator_id", "type": "text", "required": true},
     {"name": "total_interactions", "type": "integer", "required": true}
   ]
 }
