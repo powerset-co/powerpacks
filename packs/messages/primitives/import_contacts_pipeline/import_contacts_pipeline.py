@@ -18,6 +18,7 @@ Stdlib-only.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -33,6 +34,8 @@ from typing import Any
 
 DEFAULT_LEDGER = Path(".powerpacks/messages/import-run.json")
 DEFAULT_CONTACTS = Path(".powerpacks/messages/contacts.csv")
+DEFAULT_IMESSAGE_CONTACTS = Path(".powerpacks/messages/imessage.contacts.csv")
+DEFAULT_WHATSAPP_CONTACTS = Path(".powerpacks/messages/whatsapp.contacts.csv")
 DEFAULT_CANDIDATES = Path(".powerpacks/messages/powerset_contacts.csv")
 DEFAULT_RESEARCH_QUEUE = Path(".powerpacks/messages/research_queue.csv")
 DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
@@ -42,6 +45,23 @@ DEFAULT_PROCESSOR = "core2x"
 ALLOWED_PARALLEL_PROCESSORS = ("core", "core2x", "pro")
 DEFAULT_LLM_AUTO_APPROVE_USD = 10.0
 DEFAULT_REVIEW_PORT = 8766
+CONTACT_CSV_HEADERS = [
+    "phone",
+    "name",
+    "source",
+    "is_in_group_chats",
+    "group_names",
+    "message_count",
+    "last_message",
+    "skip",
+    "match_status",
+    "matched_person_id",
+    "matched_name",
+    "matched_linkedin_url",
+    "match_confidence",
+    "match_method",
+    "match_reason",
+]
 
 
 class PipelineBlocked(Exception):
@@ -274,21 +294,70 @@ def read_manifest(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def write_empty_contacts_csv(path: Path) -> dict[str, Any]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        csv.DictWriter(handle, fieldnames=CONTACT_CSV_HEADERS).writeheader()
+    manifest_path = path.with_suffix(path.suffix + ".manifest.json")
+    manifest = {
+        "primitive": "import_contacts_pipeline",
+        "command": "ensure_contacts",
+        "created_at": now_iso(),
+        "output": str(path),
+        "manifest_path": str(manifest_path),
+        "counts": {
+            "rows_written": 0,
+            "unique_phones": 0,
+            "cross_channel_phones": 0,
+            "by_source": {},
+        },
+        "status": "ok",
+        "reason": "no_channel_contact_exports_found",
+    }
+    write_json(manifest_path, manifest)
+    return manifest
+
+
 def ensure_contacts(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
     contacts = Path(args.contacts)
     if contacts.exists():
         ledger.setdefault("artifacts", {})["contacts_csv"] = str(contacts)
         mark_step(ledger_path, ledger, "ensure_contacts", "completed", summary={"contacts": str(contacts)})
         return
-    block = {
-        "primitive": "import_contacts_pipeline",
-        "status": "blocked_user_action",
-        "message": f"contacts CSV not found: {contacts}. Run import-imessage/import-whatsapp first, then continue.",
-        "ledger": str(ledger_path),
-    }
-    ledger["current_block"] = block
-    mark_step(ledger_path, ledger, "ensure_contacts", "blocked_user_action", summary=block)
-    raise PipelineBlocked(block, code=21)
+
+    source_paths = [path for path in (DEFAULT_IMESSAGE_CONTACTS, DEFAULT_WHATSAPP_CONTACTS) if path.exists()]
+    if source_paths:
+        cmd = [
+            sys.executable,
+            primitive_path("packs/messages/primitives/merge_message_contacts/merge_message_contacts.py"),
+            "merge",
+        ]
+        for source_path in source_paths:
+            cmd.extend(["--input", str(source_path)])
+        cmd.extend(["--output", str(contacts)])
+        mark_step(ledger_path, ledger, "ensure_contacts", "running", command=cmd)
+        result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
+        payload = require_ok(result, "ensure_contacts")
+        ledger.setdefault("artifacts", {})["contacts_csv"] = str(contacts)
+        mark_step(
+            ledger_path,
+            ledger,
+            "ensure_contacts",
+            "completed",
+            summary={"contacts": str(contacts), "source": "merged_channel_exports", "merge": payload},
+            command=cmd,
+        )
+        return
+
+    payload = write_empty_contacts_csv(contacts)
+    ledger.setdefault("artifacts", {})["contacts_csv"] = str(contacts)
+    mark_step(
+        ledger_path,
+        ledger,
+        "ensure_contacts",
+        "completed",
+        summary={"contacts": str(contacts), "source": "empty_bootstrap", **payload},
+    )
 
 
 def sync_candidates(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
@@ -560,9 +629,7 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
         return
     summary = summarize_upload(args, ledger_path, ledger)
     payload = {
-        "yes_count": int(summary.get("yes_count") or 0),
-        "maybe_count": int(summary.get("maybe_count") or 0),
-        "no_count": int(summary.get("no_count") or 0),
+        "upload_count": int(summary.get("yes_count") or 0),
     }
     aid = approval_id("upload", payload)
     if not is_approved(ledger, aid):
@@ -575,7 +642,7 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
             payload=payload,
             message=(
                 "Upload reviewed messages research artifact to Powerset? "
-                f"yes={payload['yes_count']}, maybe={payload['maybe_count']}, no={payload['no_count']}."
+                f"uploading {payload['upload_count']}."
             ),
         )
 

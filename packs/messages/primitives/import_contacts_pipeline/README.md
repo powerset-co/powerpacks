@@ -41,11 +41,12 @@ Gates:
 - Parallel.ai deep research always blocks on `approve parallel` when there is
   paid work to submit; the user-facing block shows cost only.
 - Upload always blocks on `approve upload`; the user-facing block shows only
-  yes/maybe/no counts.
+  the number of yes/upload rows.
 
 ## Steps
 
-1. Ensure `.powerpacks/messages/contacts.csv` exists.
+1. Ensure `.powerpacks/messages/contacts.csv` exists by reusing the unified CSV,
+   merging existing channel exports, or creating an empty canonical CSV.
 2. Sync Powerset candidates.
 3. Match local contacts.
 4. Estimate/run LLM review if no completed review manifest exists.

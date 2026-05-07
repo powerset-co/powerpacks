@@ -49,7 +49,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
     def test_llm_auto_approve_default_is_ten_dollars(self):
         self.assertEqual(mod.DEFAULT_LLM_AUTO_APPROVE_USD, 10.0)
 
-    def test_upload_block_message_only_shows_yes_maybe_no(self):
+    def test_upload_block_message_only_shows_upload_count(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"
             ledger = mod.load_ledger(ledger_path)
@@ -70,18 +70,75 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 with self.assertRaises(mod.PipelineBlocked) as cm:
                     mod.upload_review(args, ledger_path, ledger)
             block = cm.exception.payload
-            self.assertIn("yes=10, maybe=11, no=1", block["message"])
-            self.assertNotIn("Rows", block["message"])
-            self.assertEqual(set(block["payload"]), {"yes_count", "maybe_count", "no_count"})
+            self.assertIn("uploading 10", block["message"])
+            self.assertNotIn("maybe", block["message"])
+            self.assertNotIn("no=", block["message"])
+            self.assertEqual(set(block["payload"]), {"upload_count"})
 
-    def test_missing_contacts_blocks_user_action(self):
+    def test_missing_contacts_bootstraps_empty_csv(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"
             ledger = mod.load_ledger(ledger_path)
-            args = SimpleNamespace(contacts=Path(tmp) / "missing.csv")
-            with self.assertRaises(mod.PipelineBlocked) as cm:
+            contacts = Path(tmp) / "missing.csv"
+            args = SimpleNamespace(contacts=contacts)
+            with mock.patch.object(mod, "DEFAULT_IMESSAGE_CONTACTS", Path(tmp) / "missing-imessage.csv"):
+                with mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", Path(tmp) / "missing-whatsapp.csv"):
+                    mod.ensure_contacts(args, ledger_path, ledger)
+            saved = mod.read_json(ledger_path)
+            self.assertTrue(contacts.exists())
+            self.assertEqual(contacts.read_text(encoding="utf-8").splitlines()[0].split(","), mod.CONTACT_CSV_HEADERS)
+            self.assertEqual(saved["steps"]["ensure_contacts"]["status"], "completed")
+            self.assertEqual(saved["steps"]["ensure_contacts"]["summary"]["source"], "empty_bootstrap")
+
+    def test_missing_contacts_merges_existing_channel_exports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            contacts = Path(tmp) / "contacts.csv"
+            imessage = Path(tmp) / "imessage.contacts.csv"
+            whatsapp = Path(tmp) / "whatsapp.contacts.csv"
+            imessage.write_text("phone,name\n+15550000001,Ada\n", encoding="utf-8")
+            whatsapp.write_text("phone,name\n+15550000002,Grace\n", encoding="utf-8")
+            args = SimpleNamespace(contacts=contacts, timeout=30, env_file=".env")
+            merge_payload = {"primitive": "merge_message_contacts", "counts": {"rows_written": 2}}
+            with mock.patch.object(mod, "DEFAULT_IMESSAGE_CONTACTS", imessage):
+                with mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", whatsapp):
+                    with mock.patch.object(mod, "run_command", return_value={"returncode": 0, "json": merge_payload}) as run_command:
+                        mod.ensure_contacts(args, ledger_path, ledger)
+            saved = mod.read_json(ledger_path)
+            cmd = run_command.call_args.args[0]
+            self.assertEqual(cmd.count("--input"), 2)
+            self.assertIn(str(imessage), cmd)
+            self.assertIn(str(whatsapp), cmd)
+            self.assertEqual(saved["steps"]["ensure_contacts"]["status"], "completed")
+            self.assertEqual(saved["steps"]["ensure_contacts"]["summary"]["source"], "merged_channel_exports")
+            self.assertEqual(saved["artifacts"]["contacts_csv"], str(contacts))
+
+    def test_missing_contacts_merge_failure_fails_pipeline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            contacts = Path(tmp) / "contacts.csv"
+            imessage = Path(tmp) / "imessage.contacts.csv"
+            imessage.write_text("phone,name\n+15550000001,Ada\n", encoding="utf-8")
+            args = SimpleNamespace(contacts=contacts, timeout=30, env_file=".env")
+            with mock.patch.object(mod, "DEFAULT_IMESSAGE_CONTACTS", imessage):
+                with mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", Path(tmp) / "missing-whatsapp.csv"):
+                    with mock.patch.object(mod, "run_command", return_value={"returncode": 1, "stderr": "merge failed", "stdout": ""}):
+                        with self.assertRaises(mod.PipelineFailed):
+                            mod.ensure_contacts(args, ledger_path, ledger)
+
+    def test_existing_contacts_completes_without_bootstrap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            contacts = Path(tmp) / "contacts.csv"
+            contacts.write_text(",".join(mod.CONTACT_CSV_HEADERS) + "\n", encoding="utf-8")
+            args = SimpleNamespace(contacts=contacts)
+            with mock.patch.object(mod, "run_command") as run_command:
                 mod.ensure_contacts(args, ledger_path, ledger)
-            self.assertEqual(cm.exception.payload["status"], "blocked_user_action")
+            run_command.assert_not_called()
+            self.assertEqual(mod.read_json(ledger_path)["steps"]["ensure_contacts"]["status"], "completed")
 
 
 if __name__ == "__main__":
