@@ -33,7 +33,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
                 "cities": ["San Francisco"],
                 "states": ["California"],
                 "role_tracks": ["engineering"],
-                "is_current": True,
+                "is_current_role": True,
                 "years_experience_min": 3,
             }
         )
@@ -75,7 +75,13 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIn(("base_id", "In", ["p1", "p2"]), filters[1])
         self.assertNotIn(("linkedin_followers", "Gte", 1000), filters[1])
 
-    def test_currentness_prefers_split_role_and_filter_only_company(self) -> None:
+    def test_currentness_uses_split_fields_only(self) -> None:
+        legacy_filters = turbopuffer_client.filters_from_role_payload({
+            "semantic_query": "Builds software systems in production with hands-on coding responsibilities across backend, frontend, platform, infrastructure, or application engineering teams.",
+            "is_current": True,
+        })
+        self.assertIsNone(legacy_filters)
+
         role_filters = turbopuffer_client.filters_from_role_payload({
             "semantic_query": "Builds software systems in production with hands-on coding responsibilities across backend, frontend, platform, infrastructure, or application engineering teams.",
             "is_current_role": True,

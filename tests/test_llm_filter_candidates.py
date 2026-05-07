@@ -38,7 +38,7 @@ class LlmFilterProfileHandoffTests(unittest.TestCase):
                 "steps": [
                     {
                         "id": "expand_search_request",
-                        "output": {"role_search_filters": {"is_current": True}},
+                        "output": {"role_search_filters": {"is_current_role": True}},
                     },
                     {
                         "id": "execute_role_search",
@@ -73,7 +73,7 @@ class LlmFilterProfileHandoffTests(unittest.TestCase):
                 "steps": [
                     {
                         "id": "expand_search_request",
-                        "output": {"role_search_filters": {"is_current": False}},
+                        "output": {"role_search_filters": {"is_current_role": False}},
                     },
                     {
                         "id": "execute_role_search",

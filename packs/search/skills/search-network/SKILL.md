@@ -191,8 +191,8 @@ search.
 13. Run conservative LLM filtering by default:
     `llm_filter_candidates --state "$STATE" --profile-scope auto --write-state`.
     Auto uses compact/current-role profiles only when role filters are
-    current-scoped (`is_current: true`); all-time/past-role queries use the full
-    hydrated profile. Do not dump filter scores/prompts unless debugging; then
+    current-scoped (`is_current_role: true`); all-time/past-role queries use the
+    full hydrated profile. Do not dump filter scores/prompts unless debugging; then
     pass `--dump-debug`. Use `--allow-partial-hydration` only when the user
     explicitly accepts partial review.
 14. Run async LLM reranking by default:
@@ -221,9 +221,9 @@ the user operational status:
 - the hard filters and prefilters you plan to use
 - the set scope: explicit `set_id`, env/default set, or personal-set fallback,
   plus whether `operator_ids` have already been resolved
-- the currentness semantics: whether `is_current` is unset, current at the
-  requested company, current in the requested role, or current for both role
-  and company on the same matched position row
+- the currentness semantics: whether `is_current_role` and/or
+  `is_current_company` are set, and whether the query is current-only,
+  all-time, or past-only for each dimension
 - whether any runtime dependency or credential is missing
 - the proposed next step
 - the approval choices: `run full pipeline` (default: retrieve → hydrate → LLM
@@ -266,13 +266,11 @@ Before showing the approval prompt, perform this payload quality gate:
 - produce a short decision trace after each stage
 - keep role, location, seniority, education, yoe, age, and company constraints
   explicit
-- make currentness explicit for every role or company query. Prefer
-  `is_current_role` and `is_current_company`; use legacy `is_current` only when
-  the same matched position row should satisfy all currentness constraints. If
-  the user's wording does not make currentness clear, ask before retrieval; do
-  not proceed with implicit currentness.
-- remember that `role_search_filters.is_current` is a position-row filter.
-  Split semantics such as current company plus past role should use
+- make currentness explicit for every role or company query. Use only
+  `is_current_role` and `is_current_company` in `role_search_filters`; do not
+  emit legacy `is_current`. If the user's wording does not make currentness
+  clear, ask before retrieval; do not proceed with implicit currentness.
+- split semantics such as current company plus past role should use
   `is_current_company` / `is_current_role` instead of silently conflating them.
 - use `education_names` for school names that are not already canonical IDs,
   then run `resolve_education` before `apply_prefilters`

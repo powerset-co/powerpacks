@@ -171,8 +171,7 @@ async def company_base_ids(
             people_payload = dict(payload)
             people_payload["company_ids"] = chunk
             if payload.get("is_current_company") is not None:
-                people_payload["is_current"] = bool(payload.get("is_current_company"))
-                people_payload.pop("is_current_role", None)
+                people_payload["is_current_role"] = bool(payload.get("is_current_company"))
             filters = filters_from_role_payload(people_payload)
             if filters is None:
                 return []

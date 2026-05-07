@@ -117,9 +117,6 @@
             "type": "string"
           }
         },
-        "is_current": {
-          "type": "boolean"
-        },
         "is_current_role": {
           "type": "boolean"
         },

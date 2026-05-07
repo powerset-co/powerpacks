@@ -226,10 +226,6 @@
       "items": { "type": "string" },
       "description": "Internal execution field produced by apply_prefilters. Do not invent manually during query decomposition."
     },
-    "is_current": {
-      "type": "boolean",
-      "description": "Legacy matched-position currentness filter. Prefer is_current_role / is_current_company when semantics are split."
-    },
     "is_current_role": {
       "type": "boolean",
       "description": "Currentness for the role/title-matching position. True means current role only; false means past role only."

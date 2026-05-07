@@ -239,11 +239,11 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
         filters.append(comparison("seniority_band", "In", payload["seniority_bands"]))
     if payload.get("company_ids"):
         filters.append(comparison("company_id", "In", payload["company_ids"]))
-    current_value = payload.get("is_current_role")
-    if current_value is None:
-        current_value = payload.get("is_current")
-    if current_value is None and is_filter_only_payload(payload):
+    current_value = None
+    if is_filter_only_payload(payload) and payload.get("is_current_company") is not None:
         current_value = payload.get("is_current_company")
+    elif payload.get("is_current_role") is not None:
+        current_value = payload.get("is_current_role")
     if current_value is not None:
         filters.append(comparison("is_current", "Eq", bool(current_value)))
     if payload.get("years_experience_min") is not None:

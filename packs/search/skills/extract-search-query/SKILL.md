@@ -80,11 +80,10 @@ company/date/location/education filters.
   that it started after that date.
 - Treat broad graduation ranges as education filters, not position-tenure
   filters.
-- Prefer explicit split currentness fields:
+- Use explicit split currentness fields only:
   - `is_current_role`: currentness for role/title matching positions
   - `is_current_company`: currentness for company membership filters
-  - `is_current`: legacy matched-position fallback only when the user clearly
-    means the same position must satisfy both role/company currentness
+- Do not emit legacy `is_current` in `role_search_filters`.
 - Treat query words like "current" or "currently" as current only for the
   mentioned dimension. Example: "current engineers at OpenAI" usually sets both
   `is_current_role: true` and `is_current_company: true`; "people currently at

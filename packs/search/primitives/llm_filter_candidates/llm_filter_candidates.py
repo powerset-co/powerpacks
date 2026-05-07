@@ -187,7 +187,7 @@ def use_compact_profiles(args: argparse.Namespace, state: dict[str, Any]) -> boo
     if args.current_and_matched_only:
         return True
     role_filters = role_filters_from_state(state)
-    return role_filters.get("is_current") is True
+    return role_filters.get("is_current_role") is True
 
 
 def trait_lines(state: dict[str, Any]) -> str:
