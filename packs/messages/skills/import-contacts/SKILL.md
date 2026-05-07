@@ -53,7 +53,7 @@ Prefer the orchestrator for normal runs. It is a mechanical task runner around
 the primitives below and writes `.powerpacks/messages/import-run.json`.
 
 ```bash
-python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
+uv run --project powerpacks python powerpacks/packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
 ```
 
 It exits intentionally at approval gates and prints the exact question plus the
@@ -61,9 +61,9 @@ It exits intentionally at approval gates and prints the exact question plus the
 approval subcommand only after the user approves:
 
 ```bash
-python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve parallel \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve parallel \
   --approval-id <approval_id> --confirm
-python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py continue
+uv run --project powerpacks python powerpacks/packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py continue
 ```
 
 Use the same pattern for `approve upload`. GCS research-cache sync is
@@ -113,7 +113,7 @@ Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
 4. Merge whichever sources exist:
 
 ```bash
-python packs/messages/primitives/merge_message_contacts/merge_message_contacts.py merge \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/merge_message_contacts/merge_message_contacts.py merge \
   --input .powerpacks/messages/imessage.contacts.csv \
   --input .powerpacks/messages/whatsapp.contacts.csv \
   --output .powerpacks/messages/contacts.csv
@@ -124,10 +124,10 @@ Only include input files that exist.
 5. Sync and match:
 
 ```bash
-python packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py sync \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py sync \
   --output .powerpacks/messages/powerset_contacts.csv
 
-python packs/messages/primitives/match_local_candidates/match_local_candidates.py match \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/match_local_candidates/match_local_candidates.py match \
   --contacts .powerpacks/messages/contacts.csv \
   --candidates .powerpacks/messages/powerset_contacts.csv
 ```
@@ -135,7 +135,7 @@ python packs/messages/primitives/match_local_candidates/match_local_candidates.p
 6. Build the enrichment queue:
 
 ```bash
-python packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
   --input .powerpacks/messages/contacts.csv \
   --output .powerpacks/messages/research_queue.csv
 ```
@@ -153,15 +153,15 @@ Powerpacks research dir. For Arthur this should resolve to operator
 `e33a648a-ae5f-432e-83ce-b90d75546ada` / `thearthurchen@gmail.com`.
 
 ```bash
-python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py status
-python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
+uv run --project powerpacks python powerpacks/packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py status
+uv run --project powerpacks python powerpacks/packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
 ```
 
 Then estimate Parallel deep research. The estimate skips rows that already have
 `.powerpacks/messages/research/<handle>/01_research_parallel.json`:
 
 ```bash
-python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
   --input .powerpacks/messages/research_queue.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
@@ -170,7 +170,7 @@ python packs/messages/primitives/deep_research_contacts/deep_research_contacts.p
 Stop here and ask for explicit Parallel spend approval. After the user confirms:
 
 ```bash
-PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
+PARALLEL_API_KEY=... uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
   --input .powerpacks/messages/research_queue.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
@@ -179,12 +179,12 @@ PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/dee
 8. Build and open the profile-card review:
 
 ```bash
-python packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
   --research-dir .powerpacks/messages/research \
   --queue-csv .powerpacks/messages/research_queue.csv \
   --output-csv .powerpacks/messages/research_review.csv
 
-python packs/messages/primitives/review_research_web/review_research_web.py serve \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/review_research_web/review_research_web.py serve \
   --csv .powerpacks/messages/research_review.csv \
   --research-dir .powerpacks/messages/research \
   --open
@@ -198,14 +198,14 @@ After review, summarize the upload artifact and ask before uploading. Make clear
 that nothing has been uploaded yet:
 
 ```bash
-python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
   --csv .powerpacks/messages/research_review.csv
 ```
 
 Only after the user explicitly approves the upload:
 
 ```bash
-python packs/messages/primitives/upload_research_review/upload_research_review.py upload \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py upload \
   --csv .powerpacks/messages/research_review.csv \
   --confirm-upload
 ```
@@ -215,11 +215,25 @@ artifact with yes/maybe/no splits; the yes split is the include/enrich set. The
 primitive translates the web UI's `exclude` decisions into upload buckets so
 explicit yes/no enrich choices are reflected in that split.
 
+Then sync the reviewed rows plus joined deep-research profiles to the contact
+datalake endpoint so usable phone/name/message/LinkedIn/profile data reaches
+server-side contact tables instead of living only in the review artifact:
+
+```bash
+python packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py sync \
+  --csv .powerpacks/messages/research_review.csv \
+  --research-dir .powerpacks/messages/research \
+  --confirm-sync
+```
+
+This posts to `/v2/contact-datalake/import` and is covered by the same explicit
+final upload/sync approval.
+
 If Parallel is skipped, unavailable, or the queue is empty, fall back to the raw
 contacts yes/no reviewer:
 
 ```bash
-python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
   --contacts .powerpacks/messages/contacts.csv \
   --open
 ```

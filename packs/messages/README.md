@@ -56,6 +56,9 @@ Cross-channel:
 - `upload_research_review`: upload the reviewed research CSV to
   `/v2/messages-research/artifacts` after explicit approval, translating the
   UI's `exclude` decisions into server upload buckets
+- `sync_contact_datalake`: post reviewed rows plus joined deep-research profiles
+  to `/v2/contact-datalake/import` so usable phone/name/message/LinkedIn/profile
+  data reaches server-side contact tables
 - `powerset_contacts_harness`: optional compatibility shim for non-WhatsApp
   channels of `contact-exporter` (review/match-local/upload). Not used by the
   WhatsApp skill.
