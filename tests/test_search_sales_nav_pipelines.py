@@ -24,6 +24,28 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         self.assertEqual(search.parse_jsons('{"a":1}\n{"b":2}')[-1]["b"], 2)
 
 class SalesNavPipelineTests(unittest.TestCase):
+    def test_sales_block_tool_call_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lp = Path(tmp) / "pipeline.json"
+            ledger = sales.load(lp)
+            rc = sales.block_tool_call(
+                lp,
+                ledger,
+                "sales_nav_search",
+                {"set_id": "set_123"},
+                str(Path(tmp) / "response.json"),
+                "python continue",
+                "Call tool",
+            )
+            saved = sales.read_json(lp)
+        self.assertEqual(rc, 30)
+        block = saved["current_block"]
+        self.assertEqual(block["status"], "blocked_tool_call")
+        self.assertEqual(block["tool_server"], "powerset-search")
+        self.assertEqual(block["tool_name"], "sales_nav_search")
+        self.assertEqual(block["tool_args"]["set_id"], "set_123")
+        self.assertIn("save_response_to", block)
+
     def test_sales_ledger_path_uses_state_when_present(self):
         args = SimpleNamespace(ledger=None, state="/tmp/run/state.json", run_id=None, query=None)
         self.assertEqual(str(sales.ledger_path(args)), "/tmp/run/state.json.pipeline.json")

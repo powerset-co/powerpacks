@@ -107,10 +107,12 @@ python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py run \
   --search-args-json .powerpacks/sales-nav/<run>/search_args.json
 ```
 
-The runner calls the remote `powerset-search` MCP HTTP endpoint directly with
-the cached Powerset bearer token, saves raw responses under `pages/`, ingests
-full artifact content when available, exports CSVs, and tracks a ledger. Manual
-`--response` ingestion is still available for debugging/backfill.
+The runner owns local state and exits with `status: blocked_tool_call` whenever
+the harness should call a `powerset-search` MCP tool. The block includes the
+`tool_name`, `tool_args`, `save_response_to`, and `continue_command`. The
+harness/agent should call the MCP tool natively, write the JSON response to the
+specified path, then run the continue command. Local ingest, export, scoring
+approvals, and the ledger are handled by the runner.
 
 For follow-up qualitative scoring, pass `--criteria`; the runner blocks for
 `approve llm --confirm` before calling `score_sales_nav_leads`.

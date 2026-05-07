@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Resumable Sales Nav local orchestrator.
+"""Resumable Sales Nav local/tool-call handoff orchestrator.
 
-The runner calls the remote powerset-search MCP streamable HTTP endpoint
-itself with the cached Powerset bearer token, then ingests responses into local
-JSONL/CSV handoff files. A manual --response path remains for debugging/backfill.
+The script owns local run state and exits with explicit `blocked_tool_call`
+instructions for the harness/agent. The harness calls the named MCP tool through
+its native tool layer, saves the JSON response to `save_response_to`, then reruns
+the provided continue command.
 """
 from __future__ import annotations
 import argparse, hashlib, json, os, shlex, subprocess, sys, time, uuid
-import urllib.error, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 ROOT=Path(__file__).resolve().parents[4]
 DEFAULT_BASE=Path(".powerpacks/sales-nav/runs")
-DEFAULT_MCP_URL="https://search-api-7wk4uhe77q-uw.a.run.app/mcp/"
 
 def now(): return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
 def emit(x): print(json.dumps(x,indent=2,sort_keys=True))
@@ -22,48 +21,6 @@ def read_json(p:Path,default=None):
     try: return json.loads(p.read_text())
     except Exception: return default
 def write_json(p:Path,x): p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps(x,indent=2,sort_keys=True)+"\n")
-def auth_token():
-    cmd=[sys.executable,str(ROOT/"packs/powerset/primitives/auth/auth.py"),"token","--bearer-only"]
-    res=run(cmd)
-    if res["returncode"]!=0 or not (res.get("stdout") or "").strip():
-        raise RuntimeError("could not get Powerset token; run $powerset login")
-    return res["stdout"].strip()
-def _mcp_parse_response(raw:bytes):
-    text=raw.decode("utf-8",errors="replace")
-    payloads=[]
-    if "data:" in text:
-        for line in text.splitlines():
-            if line.startswith("data:"):
-                data=line[5:].strip()
-                if data and data != "[DONE]":
-                    try: payloads.append(json.loads(data))
-                    except json.JSONDecodeError: pass
-    else:
-        try: payloads.append(json.loads(text))
-        except json.JSONDecodeError: pass
-    if not payloads: raise RuntimeError(f"MCP returned non-JSON response: {text[:300]}")
-    return payloads[-1]
-def mcp_request(url, token, method, params=None, req_id=None):
-    body=json.dumps({"jsonrpc":"2.0","id":req_id or str(uuid.uuid4()),"method":method,"params":params or {}}).encode()
-    req=urllib.request.Request(url, data=body, method="POST", headers={"Accept":"application/json, text/event-stream","Content-Type":"application/json","Authorization":"Bearer "+token})
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            payload=_mcp_parse_response(r.read())
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"MCP {method} failed HTTP {e.code}: {e.read().decode('utf-8',errors='replace')[:500]}") from e
-    if payload.get("error"):
-        raise RuntimeError(f"MCP {method} error: {payload['error']}")
-    return payload.get("result")
-def mcp_call(url, token, tool, arguments):
-    result=mcp_request(url, token, "tools/call", {"name":tool,"arguments":arguments})
-    content=(result or {}).get("content") or []
-    if content and isinstance(content[0],dict):
-        if content[0].get("type")=="text":
-            txt=content[0].get("text") or ""
-            try: return json.loads(txt)
-            except json.JSONDecodeError: return {"text":txt}
-        if "json" in content[0]: return content[0]["json"]
-    return result
 def parse_jsons(s:str):
     out=[]; dec=json.JSONDecoder(); i=0
     while i<len(s):
@@ -97,6 +54,19 @@ def done(l,step): return l.get("steps",{}).get(step,{}).get("status")=="complete
 def mark(lp,l,step,status,**kw):
     r=l.setdefault("steps",{}).setdefault(step,{"id":step}); r.update(status=status,**kw); r["updated_at"]=now(); save(lp,l)
 def approved(l,aid): return bool(l.get("approvals",{}).get(aid,{}).get("confirmed"))
+def block_tool_call(lp,l,tool,args_payload,save_to,next_cmd,msg):
+    b={
+        "primitive":"sales_nav_pipeline",
+        "status":"blocked_tool_call",
+        "message":msg,
+        "tool_server":"powerset-search",
+        "tool_name":tool,
+        "tool_args":args_payload,
+        "save_response_to":save_to,
+        "continue_command":next_cmd,
+        "ledger":str(lp),
+    }
+    l["current_block"]=b; save(lp,l); emit(b); return 30
 def block_approval(lp,l,kind,payload,msg,next_cmd):
     aid=approval_id(kind,payload); b={"primitive":"sales_nav_pipeline","status":"blocked_approval","approval_type":kind,"approval_id":aid,"message":msg,"payload":payload,"continue_command":next_cmd,"ledger":str(lp)}
     l["current_block"]=b; mark(lp,l,kind,"blocked_approval",summary=b); emit(b); return 20
@@ -117,41 +87,27 @@ def ensure_init(args,lp,l):
 def cmd_run(args):
     try:
         lp=ledger_path(args); l=load(lp); l["current_block"]=None; save(lp,l); st=ensure_init(args,lp,l); run_dir=st.parent; pages=run_dir/"pages"; pages.mkdir(parents=True,exist_ok=True)
-        # Ingest a supplied response for debugging/backfill, otherwise call MCP HTTP directly.
+        # Ingest a supplied tool response, if present.
         if args.response:
-            step="ingest_enriched_page" if args.enriched else "ingest_page"
+            step="ingest_enriched_page" if args.enriched else ("ingest_full_artifact" if args.prefer_content else "ingest_page")
             if not done(l,step) or args.force:
                 cmd=[sys.executable,str(ROOT/"packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py"),"ingest-page","--state",str(st),"--response",str(args.response)]
                 if args.prefer_content: cmd.append("--prefer-content")
                 res=require(run(cmd),step); mark(lp,l,step,"completed",summary=res,command=" ".join(map(shlex.quote,cmd)))
         elif not done(l,"ingest_page"):
-            token=auth_token(); mcp_request(args.mcp_url, token, "initialize", {"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"powerpacks-sales-nav-pipeline","version":"1"}}, "init")
             search_args=read_json(Path(args.search_args_json),{}) if args.search_args_json else {}
             payload={"set_id":args.set_id,"conversation_id":l.get("artifacts",{}).get("conversation_id"),"persist_artifact":True,"count":args.count,**search_args}
-            search_resp=mcp_call(args.mcp_url, token, "sales_nav_search", payload)
-            search_path=pages/"sales-nav-search.response.json"; write_json(search_path, search_resp)
-            artifact_id=search_resp.get("artifact_id") or ((search_resp.get("artifact") or {}).get("artifact_id"))
-            ingest_path=search_path; prefer=False
-            if artifact_id:
-                artifact_resp=mcp_call(args.mcp_url, token, "get_artifact", {"artifact_id":artifact_id,"offset":0,"limit":args.count,"include_content":True})
-                ingest_path=pages/"artifact-full-000.json"; write_json(ingest_path, artifact_resp); prefer=True
-            cmd=[sys.executable,str(ROOT/"packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py"),"ingest-page","--state",str(st),"--response",str(ingest_path)]
-            if prefer: cmd.append("--prefer-content")
-            res=require(run(cmd),"ingest_page"); mark(lp,l,"ingest_page","completed",summary={"search_response":str(search_path),"ingested_response":str(ingest_path),"artifact_id":artifact_id,"ingest":res},command=" ".join(map(shlex.quote,cmd)))
+            save_to=str(pages/"sales-nav-search.response.json")
+            return block_tool_call(lp,l,"sales_nav_search",payload,save_to,f"python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py continue --ledger {shlex.quote(str(lp))} --response {shlex.quote(save_to)}", "Call the Sales Nav search tool, save the JSON response, then continue.")
+        state_json=read_json(st,{}) or {}
+        artifact_ids=state_json.get("artifact_ids") or []
+        if artifact_ids and not done(l,"ingest_full_artifact"):
+            save_to=str(pages/"artifact-full-000.json")
+            payload={"artifact_id":artifact_ids[-1],"offset":0,"limit":args.count,"include_content":True}
+            return block_tool_call(lp,l,"get_artifact",payload,save_to,f"python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py continue --ledger {shlex.quote(str(lp))} --response {shlex.quote(save_to)} --prefer-content", "Call get_artifact(include_content=true), save the full JSON response, then continue.")
         if args.require_enriched and not done(l,"ingest_enriched_page"):
-            token=auth_token(); mcp_request(args.mcp_url, token, "initialize", {"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"powerpacks-sales-nav-pipeline","version":"1"}}, "init")
-            state_json=read_json(st,{}) or {}; artifact_ids=state_json.get("artifact_ids") or []
-            leads=[json.loads(line) for line in Path(state_json["files"]["leads_jsonl"]).read_text().splitlines() if line.strip()]
-            member_ids=[x.get("member_id") for x in leads if x.get("member_id")][:args.enrich_limit]
-            enrich_resp=mcp_call(args.mcp_url, token, "enrich_extended_profiles", {"conversation_id":l.get("artifacts",{}).get("conversation_id"),"member_ids":member_ids,"set_id":args.set_id})
-            write_json(pages/"enrich-extended-profiles.response.json", enrich_resp)
-            if artifact_ids:
-                artifact_resp=mcp_call(args.mcp_url, token, "get_artifact", {"artifact_id":artifact_ids[-1],"offset":0,"limit":args.count,"include_content":True})
-                ingest_path=pages/"artifact-full-after-enrich.json"; write_json(ingest_path, artifact_resp)
-                cmd=[sys.executable,str(ROOT/"packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py"),"ingest-page","--state",str(st),"--response",str(ingest_path),"--prefer-content"]
-                res=require(run(cmd),"ingest_enriched_page"); mark(lp,l,"ingest_enriched_page","completed",summary={"enrich":enrich_resp,"ingest":res},command=" ".join(map(shlex.quote,cmd)))
-            else:
-                mark(lp,l,"ingest_enriched_page","completed",summary={"enrich":enrich_resp,"note":"no artifact_id available for get_artifact"})
+            save_to=str(pages/"artifact-full-after-enrich.json")
+            return block_tool_call(lp,l,"get_artifact",{"artifact_id":artifact_ids[-1] if artifact_ids else "<artifact_id>","offset":0,"limit":args.count,"include_content":True},save_to,f"python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py continue --ledger {shlex.quote(str(lp))} --response {shlex.quote(save_to)} --prefer-content --enriched", "After enriching visible leads with enrich_extended_profiles, call get_artifact(include_content=true), save the full JSON response, and continue.")
         if not done(l,"export") or args.force:
             cmd=[sys.executable,str(ROOT/"packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py"),"export","--state",str(st)]
             res=require(run(cmd),"export"); mark(lp,l,"export","completed",summary=res,command=" ".join(map(shlex.quote,cmd)))
@@ -175,7 +131,7 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"sales_nav_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_common(p):
-    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--set-id"); p.add_argument("--conversation-id"); p.add_argument("--run-id"); p.add_argument("--search-args-json"); p.add_argument("--response",type=Path); p.add_argument("--prefer-content",action="store_true"); p.add_argument("--enriched",action="store_true"); p.add_argument("--require-enriched",action="store_true"); p.add_argument("--enrich-limit",type=int,default=25); p.add_argument("--mcp-url",default=DEFAULT_MCP_URL); p.add_argument("--count",type=int,default=25); p.add_argument("--criteria"); p.add_argument("--threshold",type=float,default=0.7); p.add_argument("--confirm-llm",action="store_true"); p.add_argument("--force",action="store_true"); p.add_argument("--timeout",type=int,default=3600)
+    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--set-id"); p.add_argument("--conversation-id"); p.add_argument("--run-id"); p.add_argument("--search-args-json"); p.add_argument("--response",type=Path); p.add_argument("--prefer-content",action="store_true"); p.add_argument("--enriched",action="store_true"); p.add_argument("--require-enriched",action="store_true"); p.add_argument("--count",type=int,default=25); p.add_argument("--criteria"); p.add_argument("--threshold",type=float,default=0.7); p.add_argument("--confirm-llm",action="store_true"); p.add_argument("--force",action="store_true"); p.add_argument("--timeout",type=int,default=3600)
 def main():
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
     r=sub.add_parser("run"); add_common(r); r.set_defaults(func=cmd_run)
