@@ -201,6 +201,50 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(interaction[0], ["p2", "p3"])
         self.assertEqual(interaction[1]["stage"], "interaction")
 
+    def test_large_base_candidate_ids_are_batched_for_hybrid_search(self) -> None:
+        original_batch_size = turbopuffer_client.BASE_ID_BATCH_SIZE
+        original_batch_min = turbopuffer_client.BASE_ID_BATCH_MIN
+        original_embedding = turbopuffer_client.embedding
+        original_single = turbopuffer_client._hybrid_role_rows_single
+        seen_filters = []
+
+        async def fake_embedding(text):
+            return [0.1]
+
+        async def fake_single(payload, filters, *, top_k, include_attributes, query_embedding=None):
+            seen_filters.append(filters)
+            batch = []
+            for clause in filters[1]:
+                if clause[0] == "base_id":
+                    batch = clause[2]
+            return [{"id": f"{batch[0]}-0", "base_id": batch[0], "score": 1.0}]
+
+        turbopuffer_client.BASE_ID_BATCH_SIZE = 2
+        turbopuffer_client.BASE_ID_BATCH_MIN = 3
+        turbopuffer_client.embedding = fake_embedding
+        turbopuffer_client._hybrid_role_rows_single = fake_single
+        try:
+            rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
+                {
+                    "semantic_query": "Builds software systems in production with hands-on coding responsibilities across backend, frontend, platform, infrastructure, or application engineering teams.",
+                    "base_candidate_ids": ["p1", "p2", "p3", "p4", "p5"],
+                    "role_tracks": ["engineering"],
+                },
+                ("And", [("base_id", "In", ["p1", "p2", "p3", "p4", "p5"]), ("role_track", "In", ["engineering"])]),
+                top_k=10,
+                include_attributes=["base_id"],
+            ))
+        finally:
+            turbopuffer_client.BASE_ID_BATCH_SIZE = original_batch_size
+            turbopuffer_client.BASE_ID_BATCH_MIN = original_batch_min
+            turbopuffer_client.embedding = original_embedding
+            turbopuffer_client._hybrid_role_rows_single = original_single
+
+        self.assertEqual(len(seen_filters), 3)
+        self.assertTrue(all(len([c for c in f[1] if c[0] == "base_id"][0][2]) <= 2 for f in seen_filters))
+        self.assertEqual(rows[0]["base_id_batch_count"], 3)
+        self.assertTrue(all(row["retrieval_batched_base_ids"] for row in rows))
+
     def test_filter_only_payload_uses_filter_only_rows(self) -> None:
         original = turbopuffer_client.filter_only_rows
 

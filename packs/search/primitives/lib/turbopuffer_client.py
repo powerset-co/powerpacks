@@ -24,6 +24,9 @@ K_RRF = 60
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 ARRAY_FILTER_FIELDS = {"metro_areas", "allowed_operator_ids", "role_ids"}
 LOCATION_FIELDS = ["city", "state", "country", "macro_region", "metro_areas"]
+BASE_ID_BATCH_SIZE = int(os.getenv("POWERPACKS_SEARCH_BASE_ID_BATCH_SIZE", "500"))
+BASE_ID_BATCH_MIN = int(os.getenv("POWERPACKS_SEARCH_BASE_ID_BATCH_MIN", "501"))
+BASE_ID_BATCH_CONCURRENCY = int(os.getenv("POWERPACKS_SEARCH_BASE_ID_BATCH_CONCURRENCY", "8"))
 
 
 def load_env_file(path: Path | None) -> None:
@@ -443,6 +446,62 @@ def reciprocal_rank_fusion(result_lists: list[list[Any]], weights: list[float]) 
     return sorted(scores.items(), key=lambda item: item[1], reverse=True)
 
 
+def chunks(values: list[Any], size: int) -> list[list[Any]]:
+    return [values[index:index + size] for index in range(0, len(values), max(1, size))]
+
+
+def should_batch_base_ids(payload: dict[str, Any]) -> bool:
+    ids = payload.get("base_candidate_ids") or []
+    return len(ids) >= BASE_ID_BATCH_MIN
+
+
+def strip_base_candidate_filter(expr: Any) -> Any:
+    """Remove base_id filters from a TurboPuffer filter tuple.
+
+    Batched retrieval injects a per-batch base_id filter. This removes the large
+    original base_id clause so each query only carries one small batch filter.
+    """
+    if expr is None:
+        return None
+    if isinstance(expr, tuple):
+        expr = list(expr)
+    if not isinstance(expr, list) or not expr:
+        return expr
+    if expr[0] in {"And", "Or"}:
+        clauses = [strip_base_candidate_filter(clause) for clause in (expr[1] or [])]
+        clauses = [clause for clause in clauses if clause is not None]
+        if not clauses:
+            return None
+        return clauses[0] if len(clauses) == 1 else (expr[0], clauses)
+    if len(expr) >= 3 and expr[0] == "base_id":
+        return None
+    return tuple(expr)
+
+
+def and_filters(*clauses: Any) -> tuple | None:
+    kept = [clause for clause in clauses if clause is not None]
+    if not kept:
+        return None
+    return kept[0] if len(kept) == 1 else ("And", kept)
+
+
+def merge_ranked_rows(row_batches: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for batch_index, rows in enumerate(row_batches):
+        for rank, row in enumerate(rows, start=1):
+            doc_id = str(row.get("position_id") or row.get("id") or "")
+            if not doc_id:
+                continue
+            existing = by_id.get(doc_id)
+            score = float(row.get("score") or 0.0)
+            if existing is None or score > float(existing.get("score") or 0.0):
+                merged = dict(row)
+                merged["batch_index"] = batch_index
+                merged["batch_rank"] = rank
+                by_id[doc_id] = merged
+    return sorted(by_id.values(), key=lambda row: float(row.get("score") or 0.0), reverse=True)
+
+
 def is_filter_only_payload(payload: dict[str, Any]) -> bool:
     semantic_query = str(payload.get("semantic_query") or "").strip()
     return len(semantic_query) < 80
@@ -467,18 +526,17 @@ async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_a
     return out
 
 
-async def hybrid_role_rows(
+async def _hybrid_role_rows_single(
     payload: dict[str, Any],
     filters: tuple | None,
     *,
     top_k: int,
     include_attributes: list[str],
+    query_embedding: list[float] | None = None,
 ) -> list[dict[str, Any]]:
     semantic_query = str(payload.get("semantic_query") or "").strip()
-    if is_filter_only_payload(payload):
-        return await _filter_only_role_rows(filters, top_k=top_k, include_attributes=include_attributes)
     bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
-    query_embedding = await embedding(semantic_query)
+    query_embedding = query_embedding or await embedding(semantic_query)
     per_field = bm25_queries_per_field(bm25_queries)
 
     queries: list[dict[str, Any]] = []
@@ -526,6 +584,67 @@ async def hybrid_role_rows(
         row["position_id"] = doc_id
         rows.append(row)
     return rows
+
+
+async def _batched_base_id_rows(
+    payload: dict[str, Any],
+    filters: tuple | None,
+    *,
+    top_k: int,
+    include_attributes: list[str],
+) -> list[dict[str, Any]]:
+    """Run retrieval in base_id batches, following network-search-api V3 parity.
+
+    Reference: `RoleSearchVerticalV3` in `../network-search-api` batches large
+    base_candidate_ids into 500-ID chunks so TurboPuffer kNN/BM25 does not carry
+    one huge `base_id In [...]` filter. Company-id batching happens earlier in
+    `apply_prefilters.company_base_ids`, mirroring `CompanyPeoplePreFilterStage`.
+    """
+    base_ids = [str(value) for value in payload.get("base_candidate_ids") or [] if value]
+    batch_values = chunks(base_ids, BASE_ID_BATCH_SIZE)
+    base_filter = strip_base_candidate_filter(filters)
+    filter_only = is_filter_only_payload(payload)
+    query_embedding = None if filter_only else await embedding(str(payload.get("semantic_query") or "").strip())
+    semaphore = asyncio.Semaphore(max(1, BASE_ID_BATCH_CONCURRENCY))
+
+    async def run_batch(batch_index: int, batch: list[str]) -> list[dict[str, Any]]:
+        async with semaphore:
+            batch_filters = and_filters(base_filter, comparison("base_id", "In", batch))
+            if filter_only:
+                rows = await _filter_only_role_rows(batch_filters, top_k=top_k, include_attributes=include_attributes)
+            else:
+                rows = await _hybrid_role_rows_single(
+                    payload,
+                    batch_filters,
+                    top_k=top_k,
+                    include_attributes=include_attributes,
+                    query_embedding=query_embedding,
+                )
+            for row in rows:
+                row["base_id_batch_index"] = batch_index
+            return rows
+
+    row_batches = await asyncio.gather(*(run_batch(index, batch) for index, batch in enumerate(batch_values)))
+    rows = merge_ranked_rows(row_batches)
+    for row in rows:
+        row["retrieval_batched_base_ids"] = True
+        row["base_id_batch_size"] = BASE_ID_BATCH_SIZE
+        row["base_id_batch_count"] = len(batch_values)
+    return rows
+
+
+async def hybrid_role_rows(
+    payload: dict[str, Any],
+    filters: tuple | None,
+    *,
+    top_k: int,
+    include_attributes: list[str],
+) -> list[dict[str, Any]]:
+    if should_batch_base_ids(payload):
+        return await _batched_base_id_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
+    if is_filter_only_payload(payload):
+        return await _filter_only_role_rows(filters, top_k=top_k, include_attributes=include_attributes)
+    return await _hybrid_role_rows_single(payload, filters, top_k=top_k, include_attributes=include_attributes)
 
 
 def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:

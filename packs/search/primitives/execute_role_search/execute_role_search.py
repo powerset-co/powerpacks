@@ -103,6 +103,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         rows = await hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
         candidates = dedupe_people(rows, limit=args.limit)
     retrieval_mode = "filter_only" if is_filter_only_payload(payload) else "hybrid"
+    batched_base_ids = any(row.get("retrieval_batched_base_ids") for row in rows)
 
     retrieval_artifact = None
     if state_path and (args.write_state or getattr(args, "write_artifact", False)):
@@ -116,6 +117,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "applied_filter": summarize_filter(filters),
             "candidate_count": len(candidates),
             "retrieval_mode": retrieval_mode,
+            "batched_base_ids": batched_base_ids,
+            "base_id_batch_count": rows[0].get("base_id_batch_count") if rows else 0,
+            "base_id_batch_size": rows[0].get("base_id_batch_size") if rows else None,
             "prefilter_short_circuit": bool(prefilters.get("ran_prefilters") and not prefilters.get("base_candidate_ids")),
             "candidates": candidates,
         })
@@ -127,6 +131,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "top_k": args.top_k,
         "applied_filter": summarize_filter(filters),
         "retrieval_mode": retrieval_mode,
+        "batched_base_ids": batched_base_ids,
+        "base_id_batch_count": rows[0].get("base_id_batch_count") if rows else 0,
+        "base_id_batch_size": rows[0].get("base_id_batch_size") if rows else None,
         "prefilter_short_circuit": bool(prefilters.get("ran_prefilters") and not prefilters.get("base_candidate_ids")),
         "returned_people": len(candidates),
         "candidate_ids": [candidate["person_id"] for candidate in candidates],
