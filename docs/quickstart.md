@@ -108,7 +108,7 @@ Or pass `--api-key` explicitly when running the LLM review.
 For Codex, start with the agent-native path:
 
 ```bash
-codex exec "Clone or update https://github.com/powerset-co/powerpacks into ~/workspace/powerpacks, then run the Codex install step from that repo."
+codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install step from its instructions."
 ```
 
 For other hosts, or if you want to run the installer manually, pick the adapter
