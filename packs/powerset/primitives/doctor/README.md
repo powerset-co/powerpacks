@@ -22,8 +22,8 @@ python packs/powerset/primitives/doctor/doctor.py run --check-adc
 python packs/powerset/primitives/doctor/doctor.py run --check-user-secrets
 ```
 
-`search-core` is the default profile and requires TurboPuffer, Postgres,
-OpenAI, and `PARALLEL_API_KEY`.
+`search-core` is the default profile and checks the standard Powerpacks runtime
+secrets.
 
 ## Checks (in order)
 

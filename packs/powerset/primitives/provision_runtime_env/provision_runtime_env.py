@@ -39,9 +39,10 @@ PROFILES = {
         "TURBOPUFFER_API_KEY",
         "DATABASE_URL",
         "OPENAI_API_KEY",
-        # Deep-research workflows are now part of the default Powerpacks setup;
-        # keep this in the default env pull so `$powerset login` / `$powerset env pull`
-        # works for messages research without a second profile-specific sync.
+        # Messages workflows are now part of the default Powerpacks setup;
+        # keep these in the default env pull so `$powerset login` / `$powerset env pull`
+        # works for LLM review + Parallel research without a second sync.
+        "OPENROUTER_API_KEY",
         "PARALLEL_API_KEY",
     ],
     "messages": [
@@ -183,16 +184,32 @@ def redact_keys(values: dict[str, str]) -> list[dict[str, Any]]:
     ]
 
 
-def fetch_from_gcp(keys: list[str], mapping: dict[str, str], project: str | None) -> dict[str, str]:
+def fetch_from_gcp(
+    keys: list[str],
+    mapping: dict[str, str],
+    project: str | None,
+    *,
+    best_effort: bool = False,
+) -> tuple[dict[str, str], dict[str, str]]:
     secrets: dict[str, str] = {}
+    errors: dict[str, str] = {}
     for key in keys:
         command = ["gcloud", "secrets", "versions", "access", "latest", "--secret", mapping[key]]
         if project:
             command.extend(["--project", project])
-        value = run_text(command)
+        proc = subprocess.run(command, text=True, capture_output=True)
+        if proc.returncode != 0:
+            message = (proc.stderr or proc.stdout or "command failed").strip()
+            if not best_effort:
+                raise RuntimeError(message)
+            errors[key] = message[:300]
+            continue
+        value = proc.stdout.strip()
         if value:
             secrets[key] = value
-    return secrets
+        elif best_effort:
+            errors[key] = "secret value was empty"
+    return secrets, errors
 
 
 # ---------------------------------------------------------------------------
@@ -447,10 +464,14 @@ def cmd_pull(args: argparse.Namespace) -> int:
         scope = {"mode": "shared"}
 
     try:
-        secrets = fetch_from_gcp(keys, mapping, args.gcp_project)
+        secrets, fetch_errors = fetch_from_gcp(
+            keys,
+            mapping,
+            args.gcp_project,
+            best_effort=args.best_effort,
+        )
     except RuntimeError as exc:
         # Could be IAM (denied on every secret), missing project, network, etc.
-        # Treat as not_privileged when best-effort.
         emit({
             "primitive": "provision_runtime_env",
             "command": "pull",
@@ -487,6 +508,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
         "written": result["written"],
         "skipped_existing": result["skipped_existing"],
         "missing": missing,
+        "fetch_errors": fetch_errors,
         "secrets": redact_keys(secrets),
     }
     if status == "not_privileged":

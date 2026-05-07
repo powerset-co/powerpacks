@@ -52,6 +52,20 @@ PROVISION_PLAN: list[dict[str, Any]] = [
         "source": {"kind": "secret", "name": "openai-api-key"},
     },
     {
+        "env_key": "OPENROUTER_API_KEY",
+        "secret_suffix": "openrouter-api-key",
+        "capability": "openrouter",
+        "profile": "search-core",
+        "source": {"kind": "secret", "name": "openrouter-api-key"},
+    },
+    {
+        "env_key": "PARALLEL_API_KEY",
+        "secret_suffix": "parallel-api-key",
+        "capability": "parallel",
+        "profile": "search-core",
+        "source": {"kind": "secret", "name": "parallel-api-key"},
+    },
+    {
         "env_key": "DATABASE_URL",
         "secret_suffix": "database-url",
         "capability": "database",

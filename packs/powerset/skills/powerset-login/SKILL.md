@@ -178,7 +178,7 @@ Re-run `doctor run` and report a one-line summary:
 
 | Profile | Includes | When to pick |
 | --- | --- | --- |
-| `search-core` | TurboPuffer + Postgres + OpenAI + Parallel | default setup for search plus messages deep research |
+| `search-core` | Standard Powerpacks runtime secrets | default setup for search plus messages review/research |
 | `messages` | OpenRouter + Parallel | `import-contacts-review` LLM/research extras |
 | `sales-nav` | RapidAPI LinkedIn | LinkedIn enrichment |
 | `twitter` | RapidAPI Twitter | Twitter pipelines |

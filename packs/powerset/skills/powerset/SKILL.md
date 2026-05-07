@@ -20,7 +20,7 @@ selection.
 | `$powerset sets`, `$powerset sets list` | List sets via the Powerset Search MCP. |
 | `$powerset sets use <id|name>` | Resolve a set via MCP and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
 | `$powerset mcp install` | Register/refresh the `powerset-search` MCP for local hosts. |
-| `$powerset env pull [--profile <profile>]` | Pull allowlisted runtime keys into `.env` after confirming intent. Default `search-core` also includes `PARALLEL_API_KEY`. |
+| `$powerset env pull [--profile <profile>]` | Pull allowlisted runtime keys into `.env` after confirming intent. Default `search-core` is the standard setup. |
 
 Aliases remain valid for backcompat: `$powerset-login` means `$powerset login`;
 `$powerset-set` means `$powerset sets` / `$powerset sets use`.
@@ -138,9 +138,8 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_inst
 ## `$powerset env pull`
 
 Default profile is `search-core` unless the user specifies another profile.
-`search-core` pulls TurboPuffer, Postgres, OpenAI, and `PARALLEL_API_KEY` so
-messages deep-research works after the normal setup. Confirm before writing
-`.env`, then run:
+It pulls the standard Powerpacks runtime secrets into `.env` on a best-effort
+basis. Confirm before writing `.env`, then run:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \

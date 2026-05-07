@@ -36,14 +36,15 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertIn("TURBOPUFFER_API_KEY", payload["missing"])
             self.assertIn("DATABASE_URL", payload["missing"])
             self.assertIn("OPENAI_API_KEY", payload["missing"])
+            self.assertIn("OPENROUTER_API_KEY", payload["missing"])
             self.assertIn("PARALLEL_API_KEY", payload["missing"])
 
     def test_check_redacts_existing_values(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             env_file = Path(td) / ".env"
             # search-core requires TURBOPUFFER_API_KEY, DATABASE_URL,
-            # OPENAI_API_KEY, and PARALLEL_API_KEY. Leave OPENAI_API_KEY and
-            # PARALLEL_API_KEY missing so the check exercises the missing-key path.
+            # OPENAI_API_KEY, OPENROUTER_API_KEY, and PARALLEL_API_KEY. Leave
+            # the latter three missing so the check exercises the missing-key path.
             env_file.write_text("TURBOPUFFER_API_KEY=tp\nDATABASE_URL=postgres://db\n")
             proc = subprocess.run(
                 [
@@ -59,6 +60,7 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 1)
             self.assertEqual(payload["status"], "missing")
             self.assertIn("OPENAI_API_KEY", payload["missing"])
+            self.assertIn("OPENROUTER_API_KEY", payload["missing"])
             self.assertIn("PARALLEL_API_KEY", payload["missing"])
             self.assertNotIn("postgres://db", proc.stdout)
             self.assertTrue(all("redacted" in item for item in payload["secrets"]))
@@ -110,6 +112,7 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertEqual(payload["scope"], {"mode": "per_user", "email": "alice@powerset.co", "slug": "alice"})
             self.assertIn("TURBOPUFFER_API_KEY=value-for-powerpacks-users-alice-turbopuffer-api-key", text)
             self.assertIn("DATABASE_URL=value-for-powerpacks-users-alice-database-url", text)
+            self.assertIn("OPENROUTER_API_KEY=value-for-powerpacks-users-alice-openrouter-api-key", text)
             self.assertIn("PARALLEL_API_KEY=value-for-powerpacks-users-alice-parallel-api-key", text)
             self.assertNotIn("value-for-powerpacks", proc.stdout)
             self.assertTrue(all(item["redacted"] == "***" for item in payload["secrets"]))
@@ -150,7 +153,50 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertEqual(payload["scope"], {"mode": "shared"})
             self.assertIn("TURBOPUFFER_API_KEY=value-for-powerpacks-turbopuffer-api-key", text)
             self.assertIn("DATABASE_URL=value-for-powerpacks-database-url", text)
+            self.assertIn("OPENROUTER_API_KEY=value-for-powerpacks-openrouter-api-key", text)
             self.assertIn("PARALLEL_API_KEY=value-for-powerpacks-parallel-api-key", text)
+
+    def test_best_effort_pull_writes_available_keys_when_one_secret_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            env_file = tmp / ".env"
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            fake_gcloud = bin_dir / "gcloud"
+            fake_gcloud.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "if sys.argv[1:4] == ['auth', 'list', '--filter=status:ACTIVE']:\n"
+                "    print('alice@powerset.co')\n"
+                "    raise SystemExit(0)\n"
+                "secret = sys.argv[sys.argv.index('--secret') + 1]\n"
+                "if 'openrouter-api-key' in secret:\n"
+                "    print('NOT_FOUND: missing', file=sys.stderr); raise SystemExit(5)\n"
+                "print('value-for-' + secret)\n"
+            )
+            fake_gcloud.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+
+            proc = subprocess.run(
+                [
+                    sys.executable, str(PROVISION),
+                    "pull",
+                    "--profile", "search-core",
+                    "--env-file", str(env_file),
+                    "--confirm",
+                    "--best-effort",
+                ],
+                cwd=ROOT, env=env, text=True, capture_output=True, check=True,
+            )
+            payload = json.loads(proc.stdout)
+            text = env_file.read_text()
+            self.assertEqual(payload["status"], "partial")
+            self.assertIn("OPENROUTER_API_KEY", payload["missing"])
+            self.assertIn("OPENROUTER_API_KEY", payload["fetch_errors"])
+            self.assertIn("TURBOPUFFER_API_KEY=value-for-powerpacks-users-alice-turbopuffer-api-key", text)
+            self.assertIn("PARALLEL_API_KEY=value-for-powerpacks-users-alice-parallel-api-key", text)
+            self.assertNotIn("OPENROUTER_API_KEY=", text)
 
     def test_pull_rejects_non_powerset_email(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -250,9 +296,10 @@ class ProbeCommandTests(unittest.TestCase):
             self.assertEqual(payload["slug"], "arthur")
             self.assertIn("TURBOPUFFER_API_KEY", payload["accessible"])
             self.assertIn("DATABASE_URL", payload["denied"])
-            # OPENAI_API_KEY and PARALLEL_API_KEY are part of search-core but
-            # neither accessible nor explicitly denied → not_provisioned.
+            # OPENAI_API_KEY, OPENROUTER_API_KEY, and PARALLEL_API_KEY are part
+            # of search-core but neither accessible nor explicitly denied → not_provisioned.
             self.assertIn("OPENAI_API_KEY", payload["not_provisioned"])
+            self.assertIn("OPENROUTER_API_KEY", payload["not_provisioned"])
             self.assertIn("PARALLEL_API_KEY", payload["not_provisioned"])
             # Per-user names follow the powerpacks-users-<slug>-<base> rule.
             ids = {r["secret_id"] for r in payload["results"]}

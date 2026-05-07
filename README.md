@@ -170,13 +170,31 @@ $import-contacts                  # guided iMessage + WhatsApp import harness
 | You want to use… | Install on the host running Codex / Claude Code / Pi |
 | --- | --- |
 | Any skill | `uv`, git. Powerpacks uses uv-managed Python 3.12 from `.python-version`. |
-| `search-network` / `search-company` | `.env` with `TURBOPUFFER_API_KEY`, `DATABASE_URL`, `OPENAI_API_KEY` (use `$powerset login` to populate; it also pulls `PARALLEL_API_KEY`) |
+| `search-network` / `search-company` | `.env` populated with Powerpacks runtime secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `powerset login` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
-| `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, `OPENROUTER_API_KEY` only if you approve LLM review |
+| `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, plus optional review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `import-imessage` | macOS, **Full Disk Access** for your terminal (`System Settings > Privacy & Security > Full Disk Access`) so Python can read `~/Library/Messages/chat.db` |
 | `import-whatsapp` | Docker (`brew install --cask docker` or `brew install colima docker`), the WhatsApp app on your phone for QR scan |
-| `import-contacts-review` | Auth0 login via browser (popped automatically), `OPENROUTER_API_KEY` for the LLM-review step |
+| `import-contacts-review` | Auth0 login via browser (popped automatically), plus review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `sales-nav-search` | `$powerset login` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
+
+### Secrets / env vars
+
+`$powerset login` and `$powerset env pull` populate `.env` from GCP Secret
+Manager for internal Powerset users. The default `search-core` profile is the
+normal one-shot setup and pulls what is available on a best-effort basis.
+
+| Key | Used by |
+| --- | --- |
+| `TURBOPUFFER_API_KEY` | Search retrieval |
+| `DATABASE_URL` | Search hydration, prefilters, metadata |
+| `OPENAI_API_KEY` | Query extraction, LLM filtering/reranking |
+| `OPENROUTER_API_KEY` | Messages contact review |
+| `PARALLEL_API_KEY` | Messages deep research |
+| `POWERPACKS_DEFAULT_SET_ID` | Local default Powerset set selection |
+
+Additional profiles can pull specialized keys such as RapidAPI LinkedIn/Twitter
+or Supabase admin credentials when a workflow needs them.
 
 ## Install
 
@@ -332,7 +350,7 @@ uv run --project . python packs/powerset/primitives/provision_runtime_env/provis
   --profile search-core \
   --env-file .env \
   --confirm
-# search-core writes TurboPuffer, Postgres, OpenAI, and PARALLEL_API_KEY
+# search-core writes the standard keys listed in Secrets / env vars
 ```
 
 The provisioning primitive redacts secret values in output and only writes

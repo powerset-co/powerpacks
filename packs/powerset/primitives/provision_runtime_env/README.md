@@ -11,8 +11,8 @@ python primitives/provision_runtime_env/provision_runtime_env.py check --profile
 python primitives/provision_runtime_env/provision_runtime_env.py pull --profile search-core --env-file .env --confirm
 ```
 
-`search-core` is the default setup profile and writes TurboPuffer, Postgres,
-OpenAI, and `PARALLEL_API_KEY` so deep-research primitives work after the normal
+`search-core` is the default setup profile and writes the standard Powerpacks
+runtime secrets so search and messages workflows work after the normal
 `$powerset login` / `$powerset env pull` flow.
 
 Pulls require an active `@powerset.co` gcloud account. Authorization is enforced
