@@ -19,10 +19,7 @@ don't need.
 ### Common (every skill)
 
 ```bash
-# Python 3.10 or newer
-python3 --version
-
-# uv + git
+# uv + git. Powerpacks uses uv-managed Python 3.12 from .python-version.
 uv --version
 git --version
 ```
@@ -31,7 +28,7 @@ macOS users on a fresh box:
 
 ```bash
 xcode-select --install
-brew install python uv git
+brew install uv git
 ```
 
 The adapter install also runs `bin/setup-python`; if `uv` is missing and
