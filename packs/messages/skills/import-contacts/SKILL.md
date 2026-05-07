@@ -56,6 +56,28 @@ the concise block message (cost or action), collect the user's answer, then run
 the printed `approve ... --confirm && continue` command or `continue` as
 appropriate.
 
+### Quiet execution
+
+Keep the main chat quiet during long local stages. When the harness supports
+sub-agents, dispatch the noisy execution to a worker sub-agent after initial
+workflow consent. The main agent should handle consent and approval gates, wait
+for the worker's stage result, and show only compact summaries such as:
+
+- `iMessage: 448 rows, 0 errors`
+- `WhatsApp: session WORKING, 339 rows, 43 chats counted`
+- `Merged: 720 unique contacts`
+- `Matched: 87 matched, 11 suggested, 622 unmatched`
+
+The worker may run the verbose terminal commands, poll sidecar progress files,
+and inspect JSON manifests. Its final response must be one summary block per
+stage with artifact paths and counts. Do not stream full primitive JSON,
+terminal transcripts, QR/WAHA status payloads, or progress JSONL into the main
+chat unless a user action is required or a failure needs diagnosis.
+
+If sub-agents are unavailable, keep status messages to one line per stage and
+summarize command outputs from manifests instead of narrating intermediate
+polling.
+
 ```bash
 uv run --project powerpacks python powerpacks/packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
 ```
