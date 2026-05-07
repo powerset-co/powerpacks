@@ -216,8 +216,10 @@ primitive translates the web UI's `exclude` decisions into upload buckets so
 explicit yes/no enrich choices are reflected in that split.
 
 Then sync the reviewed rows plus joined deep-research profiles to the contact
-datalake endpoint so usable phone/name/message/LinkedIn/profile data reaches
-server-side contact tables instead of living only in the review artifact:
+datalake endpoint. This is datalake-only for now: it preserves
+phone/name/message/LinkedIn/profile payloads for downstream processing, but does
+not directly materialize into contact/search tables until the server-side
+processing stage does that work:
 
 ```bash
 python packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py sync \
