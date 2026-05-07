@@ -1,11 +1,11 @@
 # sales_nav_pipeline
 
-Resumable orchestrator for Sales Nav local files plus MCP handoffs.
+Resumable orchestrator for Sales Nav local files.
 
-The script cannot invoke host MCP tools directly. It initializes/continues the
-local run, emits `blocked_mcp_call` JSON telling the agent which MCP tool to call
-and where to save the response, then continues after the response path is passed
-back.
+The runner calls the remote `powerset-search` MCP streamable HTTP endpoint
+directly with the cached `$powerset login` bearer token. It saves raw responses
+under the run's `pages/` directory, ingests them into `leads.jsonl` /
+`mutuals.jsonl`, exports CSVs, and tracks progress in `pipeline.json`.
 
 ```bash
 python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py run \
@@ -14,16 +14,16 @@ python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py run \
   --search-args-json .powerpacks/sales-nav/search-args.json
 ```
 
-Typical block:
+`--search-args-json` is the JSON object passed to `sales_nav_search` in addition
+to `set_id`, `conversation_id`, `persist_artifact: true`, and `count`.
 
-```json
-{
-  "status": "blocked_mcp_call",
-  "mcp_tool": "sales_nav_search",
-  "mcp_args": {"persist_artifact": true, "count": 25},
-  "save_response_to": ".powerpacks/.../sales-nav-search.response.json",
-  "continue_command": "python ... continue --response <path> --prefer-content"
-}
+Use `--require-enriched` to call `enrich_extended_profiles` for visible leads and
+then re-ingest full artifact content.
+
+Manual response ingestion remains available for debugging/backfill:
+
+```bash
+python ... continue --ledger <ledger> --response saved-mcp-response.json --prefer-content
 ```
 
 Qualitative scoring is approval-gated:
