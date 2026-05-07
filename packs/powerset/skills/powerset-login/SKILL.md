@@ -178,8 +178,8 @@ Re-run `doctor run` and report a one-line summary:
 
 | Profile | Includes | When to pick |
 | --- | --- | --- |
-| `search-core` | TurboPuffer + Postgres + OpenAI | `/search-network`, `/search-company` |
-| `messages` | OpenRouter + Parallel | `import-contacts-review` LLM/research |
+| `search-core` | TurboPuffer + Postgres + OpenAI + Parallel | default setup for search plus messages deep research |
+| `messages` | OpenRouter + Parallel | `import-contacts-review` LLM/research extras |
 | `sales-nav` | RapidAPI LinkedIn | LinkedIn enrichment |
 | `twitter` | RapidAPI Twitter | Twitter pipelines |
 | `supabase-admin` | Supabase URL + service role | admin only |

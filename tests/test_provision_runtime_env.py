@@ -36,13 +36,14 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertIn("TURBOPUFFER_API_KEY", payload["missing"])
             self.assertIn("DATABASE_URL", payload["missing"])
             self.assertIn("OPENAI_API_KEY", payload["missing"])
+            self.assertIn("PARALLEL_API_KEY", payload["missing"])
 
     def test_check_redacts_existing_values(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             env_file = Path(td) / ".env"
             # search-core requires TURBOPUFFER_API_KEY, DATABASE_URL,
-            # OPENAI_API_KEY. Leave OPENAI_API_KEY missing so the check
-            # exercises the missing-key path.
+            # OPENAI_API_KEY, and PARALLEL_API_KEY. Leave OPENAI_API_KEY and
+            # PARALLEL_API_KEY missing so the check exercises the missing-key path.
             env_file.write_text("TURBOPUFFER_API_KEY=tp\nDATABASE_URL=postgres://db\n")
             proc = subprocess.run(
                 [
@@ -58,6 +59,7 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 1)
             self.assertEqual(payload["status"], "missing")
             self.assertIn("OPENAI_API_KEY", payload["missing"])
+            self.assertIn("PARALLEL_API_KEY", payload["missing"])
             self.assertNotIn("postgres://db", proc.stdout)
             self.assertTrue(all("redacted" in item for item in payload["secrets"]))
 
@@ -108,6 +110,7 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertEqual(payload["scope"], {"mode": "per_user", "email": "alice@powerset.co", "slug": "alice"})
             self.assertIn("TURBOPUFFER_API_KEY=value-for-powerpacks-users-alice-turbopuffer-api-key", text)
             self.assertIn("DATABASE_URL=value-for-powerpacks-users-alice-database-url", text)
+            self.assertIn("PARALLEL_API_KEY=value-for-powerpacks-users-alice-parallel-api-key", text)
             self.assertNotIn("value-for-powerpacks", proc.stdout)
             self.assertTrue(all(item["redacted"] == "***" for item in payload["secrets"]))
 
@@ -147,6 +150,7 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertEqual(payload["scope"], {"mode": "shared"})
             self.assertIn("TURBOPUFFER_API_KEY=value-for-powerpacks-turbopuffer-api-key", text)
             self.assertIn("DATABASE_URL=value-for-powerpacks-database-url", text)
+            self.assertIn("PARALLEL_API_KEY=value-for-powerpacks-parallel-api-key", text)
 
     def test_pull_rejects_non_powerset_email(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -246,9 +250,10 @@ class ProbeCommandTests(unittest.TestCase):
             self.assertEqual(payload["slug"], "arthur")
             self.assertIn("TURBOPUFFER_API_KEY", payload["accessible"])
             self.assertIn("DATABASE_URL", payload["denied"])
-            # OPENAI_API_KEY is part of search-core but neither accessible
-            # nor explicitly denied → not_provisioned.
+            # OPENAI_API_KEY and PARALLEL_API_KEY are part of search-core but
+            # neither accessible nor explicitly denied → not_provisioned.
             self.assertIn("OPENAI_API_KEY", payload["not_provisioned"])
+            self.assertIn("PARALLEL_API_KEY", payload["not_provisioned"])
             # Per-user names follow the powerpacks-users-<slug>-<base> rule.
             ids = {r["secret_id"] for r in payload["results"]}
             self.assertIn("powerpacks-users-arthur-turbopuffer-api-key", ids)

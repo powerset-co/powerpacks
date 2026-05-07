@@ -39,6 +39,10 @@ PROFILES = {
         "TURBOPUFFER_API_KEY",
         "DATABASE_URL",
         "OPENAI_API_KEY",
+        # Deep-research workflows are now part of the default Powerpacks setup;
+        # keep this in the default env pull so `$powerset login` / `$powerset env pull`
+        # works for messages research without a second profile-specific sync.
+        "PARALLEL_API_KEY",
     ],
     "messages": [
         "OPENROUTER_API_KEY",

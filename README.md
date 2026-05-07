@@ -170,7 +170,7 @@ $import-contacts                  # guided iMessage + WhatsApp import harness
 | You want to use… | Install on the host running Codex / Claude Code / Pi |
 | --- | --- |
 | Any skill | `uv`, git. Powerpacks uses uv-managed Python 3.12 from `.python-version`. |
-| `search-network` / `search-company` | `.env` with `TURBOPUFFER_API_KEY`, `DATABASE_URL`, `OPENAI_API_KEY` (use `$powerset login` to populate) |
+| `search-network` / `search-company` | `.env` with `TURBOPUFFER_API_KEY`, `DATABASE_URL`, `OPENAI_API_KEY` (use `$powerset login` to populate; it also pulls `PARALLEL_API_KEY`) |
 | `powerset login` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
 | `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, `OPENROUTER_API_KEY` only if you approve LLM review |
 | `import-imessage` | macOS, **Full Disk Access** for your terminal (`System Settings > Privacy & Security > Full Disk Access`) so Python can read `~/Library/Messages/chat.db` |
@@ -332,6 +332,7 @@ uv run --project . python packs/powerset/primitives/provision_runtime_env/provis
   --profile search-core \
   --env-file .env \
   --confirm
+# search-core writes TurboPuffer, Postgres, OpenAI, and PARALLEL_API_KEY
 ```
 
 The provisioning primitive redacts secret values in output and only writes
