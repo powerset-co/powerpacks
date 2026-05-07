@@ -1,6 +1,9 @@
 import asyncio
+import gzip
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -170,6 +173,15 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         ]
         self.assertEqual(len(turbopuffer_client.dedupe_people(rows, limit=0)), 3)
         self.assertEqual(len(turbopuffer_client.dedupe_people(rows, limit=2)), 2)
+
+    def test_compressed_hydration_jsonl_round_trips_for_results(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "profiles.jsonl.gz"
+            rows = [{"person_id": "p1", "name": "A"}, {"person_id": "p2", "name": "B"}]
+            hydrate_people.write_jsonl(path, rows)
+            with gzip.open(path, "rt") as handle:
+                self.assertEqual(json.loads(handle.readline())["person_id"], "p1")
+            self.assertEqual(results_io.read_jsonl(path), rows)
 
     def test_result_rows_use_execute_role_search_order(self) -> None:
         state = {

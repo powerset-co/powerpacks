@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import sys
@@ -38,7 +39,8 @@ def write_json(path: Path, value: Any) -> None:
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as handle:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "wt") as handle:
         for row in rows:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
 
@@ -185,7 +187,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
     profiles.sort(key=lambda profile: order.get(str(profile.get("person_id")), len(order)))
 
     out_dir = artifact_dir(state_path, state) / "hydrate_people"
-    profiles_jsonl = out_dir / "profiles.jsonl"
+    profiles_jsonl = out_dir / ("profiles.jsonl" if args.no_compress_profiles else "profiles.jsonl.gz")
     llm_profiles_jsonl = out_dir / "llm_profiles.jsonl"
     write_jsonl(profiles_jsonl, profiles)
     write_jsonl(llm_profiles_jsonl, [llm_profile_view(profile) for profile in profiles])
@@ -202,6 +204,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         "profile_ids": [profile.get("person_id") for profile in profiles if profile.get("person_id")],
         "profiles_path": str(profiles_jsonl),
         "llm_profiles_path": str(llm_profiles_jsonl),
+        "profiles_compressed": not args.no_compress_profiles,
         "artifacts": artifacts,
         "source": {
             "type": "postgres_contract",
@@ -223,6 +226,7 @@ def main() -> None:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--dump-profiles", action="store_true", help="Write full hydration inspection artifacts for debugging")
+    parser.add_argument("--no-compress-profiles", action="store_true", help="Write raw profiles.jsonl instead of the default profiles.jsonl.gz")
     args = parser.parse_args()
     cmd_hydrate(args)
 

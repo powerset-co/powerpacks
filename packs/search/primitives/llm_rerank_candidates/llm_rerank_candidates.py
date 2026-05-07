@@ -51,6 +51,7 @@ import argparse
 import asyncio
 import concurrent.futures
 import csv
+import gzip
 import json
 import os
 import re
@@ -504,7 +505,12 @@ def load_items(path: str) -> list[RerankItem]:
     if path == "-":
         data = sys.stdin.read()
     else:
-        data = Path(path).read_text()
+        path_obj = Path(path)
+        if path_obj.suffix == ".gz":
+            with gzip.open(path_obj, "rt") as handle:
+                data = handle.read()
+        else:
+            data = path_obj.read_text()
     items: list[RerankItem] = []
     for i, line in enumerate(data.splitlines()):
         line = line.strip()

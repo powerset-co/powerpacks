@@ -32,11 +32,14 @@ python powerpacks/primitives/hydrate_people/hydrate_people.py \
 
 Outputs in task state:
 
-- `profiles_path` — full hydrated profile JSONL for downstream primitives and rerank
+- `profiles_path` — full hydrated profile JSONL, gzip-compressed by default as
+  `profiles.jsonl.gz`, for downstream primitives and rerank
 - `llm_profiles_path` — compact LLM-filter handoff JSONL for current-role queries
-- `profile_ids`, `requested`, `hydrated`
+- `profiles_compressed`, `profile_ids`, `requested`, `hydrated`
 
-Pass `--dump-profiles` only when you want an additional debug `profiles.json`.
+Pass `--no-compress-profiles` only when you need a plaintext raw
+`profiles.jsonl`. Pass `--dump-profiles` only when you want an additional debug
+`profiles.json`.
 
 Credentials can come from `DATABASE_URL`, `SUPABASE_DATABASE_URL`,
 `SUPABASE_DB_URL`, or `POSTGRES_*` environment variables. The script uses

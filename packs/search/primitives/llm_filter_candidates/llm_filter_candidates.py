@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import sys
@@ -91,7 +92,8 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    with path.open() as handle:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
