@@ -20,6 +20,8 @@ from turbopuffer_client import (  # noqa: E402
     dedupe_people,
     filters_from_role_payload,
     hybrid_role_rows,
+    is_filter_only_payload,
+    latest_step_output,
     load_env_file,
     namespace_name,
     role_payload_from_state,
@@ -93,8 +95,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     state = read_json(state_path) if state_path else {}
     payload = json.loads(args.payload_json) if args.payload_json else role_payload_from_state(state)
     filters = filters_from_role_payload(payload)
-    rows = await hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
-    candidates = dedupe_people(rows, limit=args.limit)
+    prefilters = latest_step_output(state, "apply_prefilters") if state else {}
+    if prefilters.get("ran_prefilters") and not prefilters.get("base_candidate_ids"):
+        rows = []
+        candidates = []
+    else:
+        rows = await hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
+        candidates = dedupe_people(rows, limit=args.limit)
+    retrieval_mode = "filter_only" if is_filter_only_payload(payload) else "hybrid"
 
     retrieval_artifact = None
     if state_path and (args.write_state or getattr(args, "write_artifact", False)):
@@ -107,6 +115,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "bm25_queries": payload.get("bm25_queries") or [],
             "applied_filter": summarize_filter(filters),
             "candidate_count": len(candidates),
+            "retrieval_mode": retrieval_mode,
+            "prefilter_short_circuit": bool(prefilters.get("ran_prefilters") and not prefilters.get("base_candidate_ids")),
             "candidates": candidates,
         })
         retrieval_artifact = str(path)
@@ -116,6 +126,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "limit": args.limit,
         "top_k": args.top_k,
         "applied_filter": summarize_filter(filters),
+        "retrieval_mode": retrieval_mode,
+        "prefilter_short_circuit": bool(prefilters.get("ran_prefilters") and not prefilters.get("base_candidate_ids")),
         "returned_people": len(candidates),
         "candidate_ids": [candidate["person_id"] for candidate in candidates],
         "candidates": candidates,

@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,11 @@ class SearchNetworkPipelineTests(unittest.TestCase):
 
     def test_parse_multiple_jsons(self):
         self.assertEqual(search.parse_jsons('{"a":1}\n{"b":2}')[-1]["b"], 2)
+
+    def test_orchestrator_runs_prefilters_before_role_search(self):
+        src = inspect.getsource(search.run_pipeline)
+        self.assertIn('"apply_prefilters"', src)
+        self.assertLess(src.index('"apply_prefilters"'), src.index('"execute_role_search"'))
 
 class SalesNavPipelineTests(unittest.TestCase):
     def test_sales_block_tool_call_contract(self):

@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import sys
 import unittest
@@ -157,6 +158,28 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         rows = results_io.result_rows(state)
         self.assertEqual([row["person_id"] for row in rows], ["p2", "p1"])
         self.assertEqual([row["name"] for row in rows], ["Two", "One"])
+
+    def test_filter_only_payload_uses_filter_only_rows(self) -> None:
+        original = turbopuffer_client.filter_only_rows
+
+        async def fake_filter_only_rows(filters, include_attributes, *, page_size=10000, max_results=0):
+            self.assertEqual(filters, ("company_id", "In", ["urn:harmonic:company:meta"]))
+            return [{"id": "base-uuid-0", "base_id": "base-uuid", "position_title": "Engineer"}]
+
+        turbopuffer_client.filter_only_rows = fake_filter_only_rows
+        try:
+            rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
+                {"company_ids": ["urn:harmonic:company:meta"]},
+                ("company_id", "In", ["urn:harmonic:company:meta"]),
+                top_k=10,
+                include_attributes=["base_id", "position_title"],
+            ))
+        finally:
+            turbopuffer_client.filter_only_rows = original
+
+        self.assertEqual(rows[0]["retrieval_mode"], "filter_only")
+        self.assertEqual(rows[0]["person_id"], "base-uuid")
+        self.assertEqual(rows[0]["position_id"], "base-uuid-0")
 
     def test_scripts_do_not_import_aleph_mvp(self) -> None:
         for path in [

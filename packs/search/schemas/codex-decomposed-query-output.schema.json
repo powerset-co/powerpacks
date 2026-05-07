@@ -39,9 +39,6 @@
     "role_search_filters": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "semantic_query"
-      ],
       "properties": {
         "semantic_query": {
           "type": "string",

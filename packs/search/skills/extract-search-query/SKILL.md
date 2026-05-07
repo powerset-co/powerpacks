@@ -52,7 +52,10 @@ The exact fields must validate against:
 - `powerpacks/schemas/decomposed-query.schema.json`
 - `powerpacks/schemas/role-search-filters.schema.json`
 
-Omit null or empty fields in the final payload unless they clarify intent.
+Omit null or empty fields in the final payload unless they clarify intent. For
+filter-only searches where the user gives hard filters but no role/profile text
+(e.g. "people who worked at Meta after 2020"), omit `semantic_query` and rely on
+company/date/location/education filters.
 
 ## Rules
 
@@ -96,7 +99,8 @@ Omit null or empty fields in the final payload unless they clarify intent.
 
 ## Semantic Query Standard
 
-`semantic_query` must be dense retrieval prose, not a bare title.
+`semantic_query` must be dense retrieval prose, not a bare title. Omit it only
+for filter-only hard-filter searches with no role/profile semantics.
 
 Good:
 

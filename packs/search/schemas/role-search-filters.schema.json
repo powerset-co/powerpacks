@@ -4,12 +4,11 @@
   "title": "RoleSearchFilters",
   "type": "object",
   "additionalProperties": false,
-  "required": ["semantic_query"],
   "properties": {
     "semantic_query": {
       "type": "string",
       "minLength": 80,
-      "description": "Dense semantic retrieval text describing what the person does and the experience they should have. Use 2-3 natural-language sentences, not just a title or keyword phrase."
+      "description": "Dense semantic retrieval text describing what the person does and the experience they should have. Use 2-3 natural-language sentences, not just a title or keyword phrase. Omit only for filter-only searches with hard filters such as company/date/location/education."
     },
     "bm25_queries": {
       "type": "array",

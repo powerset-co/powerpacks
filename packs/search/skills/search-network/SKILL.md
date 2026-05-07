@@ -241,14 +241,18 @@ filtering, reranking, and persistence unless a primitive fails or the user chose
 
 Before showing the approval prompt, perform this payload quality gate:
 
-- `role_search_filters.semantic_query` must be dense semantic retrieval prose,
-  not a title or keyword phrase.
+- If the query has role/profile/domain intent, `role_search_filters.semantic_query`
+  must be dense semantic retrieval prose, not a title or keyword phrase.
 - It must be at least 80 characters and should usually be 2-3 concise
   sentences when there is role or domain intent.
 - It must describe responsibilities, skills, scope, domain work, or profile
   evidence.
 - It must not be identical to, or merely a singular/plural variant of, any
   `bm25_queries` entry.
+- For pure hard-filter queries with no role/profile/domain intent (for example,
+  "people who worked at Meta after 2020"), `semantic_query` may be omitted; the
+  pipeline will use filter-only TurboPuffer retrieval after resolving companies
+  and applying prefilters.
 - If this gate fails, do not ask for approval. Regenerate the decomposition
   first and explain that the first payload was invalid.
 
@@ -287,9 +291,10 @@ Before showing the approval prompt, perform this payload quality gate:
   they are likely responsible for, and the experience/profile that would make
   them relevant. Put terse title aliases in `bm25_queries`, not
   `semantic_query`.
-- never run retrieval with a short semantic query such as `"software engineer"`,
+- never run hybrid retrieval with a short semantic query such as `"software engineer"`,
   `"senior engineer"`, `"product manager"`, `"founder"`, or any other title
-  phrase. Those belong only in `bm25_queries`.
+  phrase. Those belong only in `bm25_queries`. For pure hard-filter searches,
+  omit `semantic_query` instead of inventing a generic short query.
 - use only documented filter fields, operators, and enum values
 - consult `powerpacks/contracts/` before using Postgres columns or TurboPuffer
   attributes; do not discover live schema during normal search execution

@@ -60,7 +60,15 @@ payload = value.get("role_search_filters")
 if not isinstance(payload, dict):
     raise SystemExit("missing role_search_filters object")
 semantic_query = payload.get("semantic_query")
-if not isinstance(semantic_query, str) or len(semantic_query) < 80:
-    raise SystemExit("semantic_query must be prose with at least 80 characters")
+filter_keys = {
+    "hard_filters", "company_ids", "company_names", "company_semantic_queries",
+    "education_ids", "education_names", "school_names", "cities", "states",
+    "countries", "metro_areas", "macro_regions", "position_after_date",
+    "position_before_date", "seniority_bands", "role_ids", "role_tracks",
+    "investor_names", "investors", "tech_skills", "base_candidate_ids",
+}
+has_filter = any(payload.get(k) not in (None, [], "") for k in filter_keys)
+if (not isinstance(semantic_query, str) or len(semantic_query) < 80) and not has_filter:
+    raise SystemExit("semantic_query must be prose with at least 80 characters unless this is a filter-only search")
 print(json.dumps(value, indent=2, sort_keys=True))
 PY

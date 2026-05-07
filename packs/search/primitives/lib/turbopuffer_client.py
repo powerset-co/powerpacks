@@ -437,6 +437,30 @@ def reciprocal_rank_fusion(result_lists: list[list[Any]], weights: list[float]) 
     return sorted(scores.items(), key=lambda item: item[1], reverse=True)
 
 
+def is_filter_only_payload(payload: dict[str, Any]) -> bool:
+    semantic_query = str(payload.get("semantic_query") or "").strip()
+    return len(semantic_query) < 80
+
+
+async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
+    if filters is None:
+        raise ValueError("filter-only search requires at least one TurboPuffer filter")
+    rows = await filter_only_rows(filters, include_attributes, max_results=top_k)
+    out: list[dict[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        doc_id = str(row.get("id") or "")
+        if not doc_id:
+            continue
+        row = dict(row)
+        row["score"] = 1.0
+        row["person_id"] = row.get("base_id") or base_person_id(doc_id)
+        row["position_id"] = doc_id
+        row["retrieval_mode"] = "filter_only"
+        row["filter_rank"] = index
+        out.append(row)
+    return out
+
+
 async def hybrid_role_rows(
     payload: dict[str, Any],
     filters: tuple | None,
@@ -445,8 +469,8 @@ async def hybrid_role_rows(
     include_attributes: list[str],
 ) -> list[dict[str, Any]]:
     semantic_query = str(payload.get("semantic_query") or "").strip()
-    if len(semantic_query) < 80:
-        raise ValueError("semantic_query must be dense retrieval prose of at least 80 characters")
+    if is_filter_only_payload(payload):
+        return await _filter_only_role_rows(filters, top_k=top_k, include_attributes=include_attributes)
     bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
     query_embedding = await embedding(semantic_query)
     per_field = bm25_queries_per_field(bm25_queries)
