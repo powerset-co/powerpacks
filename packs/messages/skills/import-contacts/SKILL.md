@@ -60,23 +60,33 @@ appropriate.
 
 Keep the main chat quiet during long local stages. When the harness supports
 sub-agents, dispatch the noisy execution to a worker sub-agent after initial
-workflow consent. The main agent should handle consent and approval gates, wait
-for the worker's stage result, and show only compact summaries such as:
+workflow consent. The worker should collect per-stage stats for debugging and
+for the ledger, but the main agent should not show them by default.
 
-- `iMessage: 448 rows, 0 errors`
-- `WhatsApp: session WORKING, 339 rows, 43 chats counted`
-- `Merged: 720 unique contacts`
-- `Matched: 87 matched, 11 suggested, 622 unmatched`
+The main chat should show only:
+
+- required user actions, such as QR scan or OS permission steps
+- spend prompts, with cost only
+- upload prompts, with upload count only
+- final upload result, exactly `Uploaded X contacts`
+
+After local import/match/queue prep succeeds, use decision-oriented wording such
+as `Imported contacts. Estimated LLM review cost: $X. Continue?` or, for
+Parallel, `Estimated Parallel cost: $Y. Approve?`. Do not include source row
+counts, matched/unmatched counts, chat counts, candidate counts, or artifact
+paths in the main chat unless the user asks for details or a failure requires
+diagnosis.
 
 The worker may run the verbose terminal commands, poll sidecar progress files,
 and inspect JSON manifests. Its final response must be one summary block per
-stage with artifact paths and counts. Do not stream full primitive JSON,
-terminal transcripts, QR/WAHA status payloads, or progress JSONL into the main
-chat unless a user action is required or a failure needs diagnosis.
+stage with artifact paths and counts for the main agent to use internally. Do
+not stream full primitive JSON, terminal transcripts, QR/WAHA status payloads,
+or progress JSONL into the main chat unless a user action is required or a
+failure needs diagnosis.
 
-If sub-agents are unavailable, keep status messages to one line per stage and
-summarize command outputs from manifests instead of narrating intermediate
-polling.
+If sub-agents are unavailable, keep status messages decision-oriented and avoid
+per-stage stats. Summarize command outputs from manifests internally instead of
+narrating intermediate polling.
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
