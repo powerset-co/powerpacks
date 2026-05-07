@@ -120,9 +120,10 @@ If the OpenRouter estimate is `< $10.00`, report only the cost and proceed under
 the initial workflow consent. Otherwise, stop for explicit LLM cost approval
 first.
 
-`OPENROUTER_API_KEY` must be in the environment, or pass `--api-key`. The
-primitive only reviews unmatched/suggested rows by default; pass `--all` to
-include matched rows too.
+Secrets should come from the repo `.env` first. The primitive auto-loads
+`OPENROUTER_API_KEY` from `.env` (or an existing environment variable); use
+`--api-key` only for one-off debugging. It only reviews unmatched/suggested rows
+by default; pass `--all` to include matched rows too.
 
 The contacts CSV is updated in place — only the `skip` column changes. A
 verdict JSONL artifact is written next to the CSV for auditability.
@@ -130,25 +131,18 @@ verdict JSONL artifact is written next to the CSV for auditability.
 ### 7. Build the deep-research queue
 
 ```bash
-# Whole ENRICH queue.
 uv run --project powerpacks python powerpacks/packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
   --input .powerpacks/messages/contacts.csv \
   --output .powerpacks/messages/research_queue.csv
-
-# High-signal slice only (cross-channel + active relationships).
-uv run --project powerpacks python powerpacks/packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
-  --input .powerpacks/messages/contacts.csv \
-  --output .powerpacks/messages/research_queue.p1p2.csv \
-  --tiers P1 P2a P2b
 ```
 
-The manifest reports a per-tier breakdown and a Parallel.ai cost estimate for
-the allowed processor tiers: `core`, `core2x`, and `pro`.
+The manifest reports eligible/filtered counts and a Parallel.ai cost estimate
+for the allowed processor tiers: `core`, `core2x`, and `pro`.
 
 Do not treat the raw matcher's `unmatched` count as the paid-research count.
-The research queue only includes named, searchable, unresolved contacts and
-defaults to the old `looks_like_real_name` plus `message_count >= 3` prune
-rules from `../network-search-api/data_pipeline_v2/pipelines/synthetic/prepare_phone_contacts.py`.
+The research queue includes named, searchable, unresolved contacts with no
+minimum message-count requirement by default. It keeps the old
+`looks_like_real_name` rule from `../network-search-api/data_pipeline_v2/pipelines/synthetic/prepare_phone_contacts.py`.
 It also ports the old `phone_prune_config` last-name token blocklist:
 `hinge`, `raya`, `tinder`, and `bumble`.
 
@@ -167,7 +161,7 @@ Then estimate the cost without making Parallel API calls:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
-  --input .powerpacks/messages/research_queue.p1p2.csv \
+  --input .powerpacks/messages/research_queue.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
 ```
@@ -176,8 +170,8 @@ Stop and ask only with the cost: "Estimated Parallel cost: $Y. Approve?" Only
 after explicit user approval:
 
 ```bash
-PARALLEL_API_KEY=... uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
-  --input .powerpacks/messages/research_queue.p1p2.csv \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
+  --input .powerpacks/messages/research_queue.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
 ```
@@ -186,12 +180,9 @@ Results land at `.powerpacks/messages/research/<handle>/01_research_parallel.jso
 in the same shape `aleph-mvp` produces, so any downstream consumer of that
 schema (assemble_profile, network review, etc.) keeps working.
 
-If Parallel is unavailable because `PARALLEL_API_KEY` is not set, and the user
-explicitly approves a fallback, split the queue into small shards and spawn
-parallel sub-agents to do public-profile review. Each shard result must include
-the contact handle, candidate LinkedIn/profile URL, confidence, and reason.
-This fallback should be used for validation or tiny batches only; Parallel is
-the primitive for production-scale work.
+If Parallel is unavailable for the initial full queue, stop and surface the
+blocker; Parallel is the primitive for production-scale work. The automatic
+Codex/web-search fallback applies only later to small feedback/retarget rows.
 
 For long batches the `submit` and `poll` subcommands can be split so the
 shell isn't tied up:
@@ -233,7 +224,7 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/build_re
   --output-csv .powerpacks/messages/research_review.csv
 
 # Or LLM-scored bucketing (mirrors aleph-mvp's review_phone_research SYSTEM_PROMPT):
-OPENROUTER_API_KEY=... python ... build_research_review_csv.py build \
+python ... build_research_review_csv.py build \
   --bucket-mode llm --model anthropic/claude-sonnet-4-6 \
   --output-csv .powerpacks/messages/research_review.csv
 ```
@@ -250,15 +241,63 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/review_r
 
 This ports the `contact-exporter` research-review TUI behavior:
 
-- bucket tabs: yes / maybe / no
+- upload-decision tabs: yes / maybe / no
 - a card displays phone signal, title/company, education, location, reason,
   identity risk, signals, and profile links
 - clicking toggles enrich yes/no
-- every click writes the CSV `exclude` column (`exclude=no` include,
-  `exclude=yes` exclude), so refresh/quit does not lose progress
+- the `feedback` field lets the user add a LinkedIn URL, company, title,
+  location, or other identity clue for a targeted second pass
+- every click/feedback save writes the CSV (`exclude=no` include,
+  `exclude=yes` exclude, `retarget_hint` feedback), so refresh/quit does not
+  lose progress
 
-And, after the user reviews and explicitly approves upload, upload the artifact
-back to Powerset:
+After the user says review is done, check for feedback before upload:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/messages/primitives/prepare_retarget_queue/prepare_retarget_queue.py prepare \
+  --review-csv .powerpacks/messages/research_review.csv \
+  --base-queue .powerpacks/messages/research_queue.csv \
+  --output .powerpacks/messages/retarget_queue.csv \
+  --retarget-output-dir .powerpacks/messages/research_retarget
+```
+
+If `rows_written > 0`, tell the user: "I found saved feedback. Before upload,
+I'll run one targeted Parallel pass for those feedback rows." Then estimate the
+spend and ask for approval using cost only:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
+  --input .powerpacks/messages/retarget_queue.csv \
+  --output-dir .powerpacks/messages/research_retarget \
+  --processor core2x
+```
+
+Only after explicit Parallel approval, run the retarget pass and mark completed:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
+  --input .powerpacks/messages/retarget_queue.csv \
+  --output-dir .powerpacks/messages/research_retarget \
+  --processor core2x
+
+uv run --project powerpacks python powerpacks/packs/messages/primitives/prepare_retarget_queue/prepare_retarget_queue.py mark-completed \
+  --retarget-output-dir .powerpacks/messages/research_retarget
+```
+
+Retarget tracking is idempotent: it skips `(original_handle, feedback_hash)`
+pairs already queued/completed. If the user edits the feedback text, it becomes
+a new attempt.
+
+If Parallel fails, is unavailable, or returns no plausible person for a feedback
+row, automatically run a small Codex/web-search fallback for only those feedback
+rows. Use Codex/network search only as an escape hatch, save structured
+per-handle artifacts under a separate retarget output dir, and do not upload
+until the user reviews the result. The user already provided feedback for these
+rows, so do not ask another permission question for this fallback; just surface a
+brief status line.
+
+And, after feedback/retarget handling and explicit upload approval, upload the
+artifact back to Powerset:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
@@ -271,7 +310,7 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_r
 
 The uploader uses the cached `$powerset login` credentials and converts the web
 reviewer's `exclude` decisions into upload buckets before posting. The server
-artifact stores yes/maybe/no splits; the yes split is the include/enrich set.
+artifact stores yes/maybe/no splits; approvals should mention only the yes/upload count.
 
 ## What this skill does NOT do
 
@@ -279,4 +318,4 @@ artifact stores yes/maybe/no splits; the yes split is the include/enrich set.
   user approval.
 - It does not run Parallel deep research without explicit cost approval.
 - It only runs OpenRouter/Sonnet LLM review without a second approval when the
-  estimate is under `$1.00`; otherwise LLM review also requires explicit cost approval.
+  estimate is under `$10.00`; otherwise LLM review also requires explicit cost approval.

@@ -39,7 +39,9 @@ Cross-channel:
 - `merge_message_contacts`: dedupe and union N per-channel CSVs into a single
   `contacts.csv` (e.g. iMessage + WhatsApp → unified)
 - `prepare_research_queue`: filter + reshape `contacts.csv` into the
-  deep-research input CSV (with priority tiers and per-processor cost estimates)
+  deep-research input CSV (with per-processor cost estimates)
+- `prepare_retarget_queue`: build a targeted re-research queue from review
+  feedback hints, skipping hints already attempted for the same person
 - `sync_messages_research_cache`: download operator-scoped prior deep research
   from the processing GCS bucket into `.powerpacks/messages/research` before
   spending new Parallel credits

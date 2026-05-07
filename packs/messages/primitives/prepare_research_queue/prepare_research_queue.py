@@ -17,13 +17,7 @@ Filter (default):
     phone_prune_config (`hinge`, `raya`, `tinder`, `bumble`)
   - skip != "yes" (i.e. LLM said ENRICH, or no LLM review yet)
   - matched_person_id is empty (no Powerset linkage)
-
-Priority tiers (`priority_reason` column):
-  - P1: cross-channel (imessage,whatsapp) AND (>=100 msgs OR last <=365d)
-  - P2a: cross-channel (any volume/recency)
-  - P2b: single channel, >=100 msgs lifetime
-  - P3:  single channel, recent (<=365d) and >=10 msgs
-  - P4:  everything else
+  - no minimum message count by default
 """
 
 from __future__ import annotations
@@ -32,7 +26,6 @@ import argparse
 import csv
 import json
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -79,10 +72,8 @@ RESEARCH_COLUMNS = [
     "match_confidence",
     "match_method",
     "match_reason",
-    "priority_reason",
+    "retarget_hint",
 ]
-
-PRIORITY_RANK = {"P1": 0, "P2a": 1, "P2b": 2, "P3": 3, "P4": 4}
 
 # Single-token names (no last name) and short tokens are essentially
 # un-LinkedIn-searchable from a phone+area-code prior alone, so we filter
@@ -93,14 +84,10 @@ PRIORITY_RANK = {"P1": 0, "P2a": 1, "P2b": 2, "P3": 3, "P4": 4}
 MIN_NAME_TOKENS = 2
 MIN_TOKEN_LEN = 2
 MIN_TOTAL_ALPHA = 5
-MIN_MESSAGE_COUNT = 3
+MIN_MESSAGE_COUNT = 0
 NAME_CLEAN_RE = re.compile(r"[^A-Za-zÀ-ÿ'’\-\s]")
 MULTISPACE_RE = re.compile(r"\s+")
 BLOCKED_LAST_NAME_TOKENS = {"hinge", "raya", "tinder", "bumble"}
-
-
-def now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def emit(value: Any) -> None:
@@ -175,39 +162,12 @@ def parse_bool(value: str) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def days_since(iso: str) -> int | None:
-    if not iso:
-        return None
-    try:
-        dt = datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return (now() - dt).days
-
-
 def stable_handle(phone: str, name: str) -> str:
     digits = re.sub(r"\D", "", phone or "")
     if digits:
         return f"phone-{digits[-10:]}"
     slug = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
     return slug or "unknown"
-
-
-def priority_tier(row: dict[str, str], today: datetime) -> str:
-    cross = row.get("source", "") == "imessage,whatsapp"
-    msgs = parse_int(row.get("message_count"))
-    days = days_since(row.get("last_message", ""))
-    recent = days is not None and days <= 365
-
-    if cross and (msgs >= 100 or recent):
-        return "P1"
-    if cross:
-        return "P2a"
-    if msgs >= 100:
-        return "P2b"
-    if recent and msgs >= 10:
-        return "P3"
-    return "P4"
 
 
 # ---------------------------------------------------------------------------
@@ -255,11 +215,10 @@ def bad_name_reason(name: str, phone: str = "") -> str:
     return ""
 
 
-def transform_row(row: dict[str, str], today: datetime) -> dict[str, str]:
+def transform_row(row: dict[str, str]) -> dict[str, str]:
     name = normalize_name(row.get("name") or "")
     first, last = split_name(name)
     phone = (row.get("phone") or "").strip()
-    tier = priority_tier(row, today)
     return {
         "handle": stable_handle(phone, name),
         "display_name": name,
@@ -301,7 +260,7 @@ def transform_row(row: dict[str, str], today: datetime) -> dict[str, str]:
         "match_confidence": row.get("match_confidence", "") or "",
         "match_method": row.get("match_method", "") or "",
         "match_reason": row.get("match_reason", "") or "",
-        "priority_reason": tier,
+        "retarget_hint": row.get("retarget_hint", "") or "",
     }
 
 
@@ -323,7 +282,6 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         })
         return 1
 
-    today = now()
     eligible: list[dict[str, str]] = []
     counts = {
         "input_rows": 0,
@@ -339,8 +297,6 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "filtered_low_messages": 0,
         "filtered_low_signal_group_chat": 0,
     }
-    by_tier: dict[str, int] = {tier: 0 for tier in PRIORITY_RANK}
-
     with input_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
@@ -386,20 +342,14 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             if args.exclude_group_only_unknowns and parse_bool(row.get("is_in_group_chats", "")) and message_count < 10:
                 counts["filtered_low_signal_group_chat"] += 1
                 continue
-            transformed = transform_row(row, today)
-            tier = transformed["priority_reason"]
-            by_tier[tier] = by_tier.get(tier, 0) + 1
-            if args.tiers and tier not in args.tiers:
-                continue
+            transformed = transform_row(row)
             eligible.append(transformed)
             counts["eligible_rows"] += 1
 
-    # Sort by priority tier then descending message volume so the pipeline runs
-    # the highest-signal contacts first and `--limit` slices off P1/P2 work first.
-    def sort_key(r: dict[str, str]) -> tuple[int, int]:
-        msgs = -parse_int(r.get("total_messages"))
-        rank = PRIORITY_RANK.get(r["priority_reason"], 99)
-        return (rank, msgs)
+    # Deterministic ordering only. Message count is useful as a stable signal,
+    # but it no longer gates inclusion or creates priority buckets.
+    def sort_key(r: dict[str, str]) -> tuple[int, str, str]:
+        return (-parse_int(r.get("total_messages")), r.get("display_name", "").lower(), r.get("handle", ""))
 
     eligible.sort(key=sort_key)
 
@@ -425,14 +375,12 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "input": str(input_path),
         "output": str(output_path),
         "manifest_path": str(manifest_path),
-        "tiers_filter": args.tiers or [],
         "include_matched": bool(args.include_matched),
         "include_skipped": bool(args.include_skipped),
         "include_suggested": bool(args.include_suggested),
         "min_message_count": int(args.min_message_count),
         "exclude_group_only_unknowns": bool(args.exclude_group_only_unknowns),
         "counts": counts,
-        "by_tier_total": by_tier,
         "rows_written": len(eligible),
         "parallel_cost_estimate_usd": estimate,
     }
@@ -450,9 +398,7 @@ def main() -> None:
     prepare.add_argument("--input", "-i", required=True, help="Path to the unified contacts.csv")
     prepare.add_argument("--output", "-o", required=True, help="Path to write the research-input CSV")
     prepare.add_argument("--manifest", help="Path to write the run manifest JSON")
-    prepare.add_argument("--tiers", nargs="+", choices=list(PRIORITY_RANK),
-                        help="Only include rows in these priority tiers")
-    prepare.add_argument("--limit", type=int, help="Cap the number of rows (after sort)")
+    prepare.add_argument("--limit", type=int, help="Cap the number of rows (after deterministic sort)")
     prepare.add_argument("--include-matched", action="store_true",
                         help="Also include rows already matched to a Powerset person")
     prepare.add_argument("--include-skipped", action="store_true",
@@ -460,7 +406,7 @@ def main() -> None:
     prepare.add_argument("--include-suggested", action=argparse.BooleanOptionalAction, default=True,
                         help="Include suggested matches in the research queue. Defaults to true.")
     prepare.add_argument("--min-message-count", type=int, default=MIN_MESSAGE_COUNT,
-                        help="Minimum message count for unresolved contacts. Defaults to 3, matching the aleph-mvp prune rules.")
+                        help="Minimum message count for unresolved contacts. Defaults to 0 so every eligible/searchable contact can be researched.")
     prepare.add_argument("--exclude-group-only-unknowns", action="store_true",
                         help="Drop group-chat-only low-signal contacts with fewer than 10 messages.")
     prepare.add_argument("--allow-single-token", action="store_true",

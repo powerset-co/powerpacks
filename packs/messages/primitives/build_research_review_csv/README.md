@@ -27,7 +27,8 @@ python packs/messages/primitives/build_research_review_csv/build_research_review
   --output-csv .powerpacks/messages/research_review.csv
 
 # 2. LLM-scored bucketing (uses the same SYSTEM_PROMPT aleph-mvp
-#    review_phone_research.py uses, via OpenRouter).
+#    review_phone_research.py uses, via OpenRouter). Auto-loads
+#    OPENROUTER_API_KEY from the repo .env.
 python ... build_research_review_csv.py build \
   --bucket-mode llm \
   --model anthropic/claude-sonnet-4-6

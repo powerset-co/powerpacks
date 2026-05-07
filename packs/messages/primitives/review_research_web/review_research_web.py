@@ -34,10 +34,17 @@ DEFAULT_COLUMNS = [
     "short_reason",
     "identity_risk",
     "signals",
+    "retarget_hint",
+    "retarget_status",
+    "retarget_handle",
+    "retarget_researched_at",
+    "retarget_linkedin_url",
+    "retarget_name_confidence",
+    "retarget_notes",
     "exclude",
 ]
 
-VALID_TABS = {"all", "yes", "maybe", "no"}
+VALID_TABS = {"yes", "maybe", "no"}
 
 
 def esc(value: Any) -> str:
@@ -61,13 +68,18 @@ def bucket_label(bucket: str) -> str:
     return "no"
 
 
-def is_selected(row: dict[str, str]) -> bool:
+def upload_bucket(row: dict[str, str]) -> str:
+    """Effective upload bucket after explicit review decisions."""
     exclude = (row.get("exclude") or "").strip().lower()
     if truthy(exclude):
-        return False
+        return "no"
     if falsy(exclude):
-        return True
-    return bucket_label(row.get("bucket", "")) == "yes"
+        return "yes"
+    return bucket_label(row.get("bucket", ""))
+
+
+def is_selected(row: dict[str, str]) -> bool:
+    return upload_bucket(row) == "yes"
 
 
 def read_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
@@ -146,12 +158,30 @@ def row_view(row: dict[str, str], research_dir: Path | None) -> dict[str, str]:
     location = profile.get("location") or {}
     summary = profile.get("summary") or {}
     metadata = profile.get("metadata") or {}
-    name = (person.get("full_name") or row.get("full_name") or "").strip() or "Unknown"
-    city = (location.get("city") or row.get("location_city") or "").strip()
-    country = (location.get("country") or row.get("location_country") or "").strip()
-    title_pairs = positions_from_profile(profile) or row.get("top_title_company_pairs", "")
-    schools = schools_from_profile(profile) or row.get("schools", "")
-    linkedin = social_url(profile, "linkedin_url") or row.get("linkedin_url", "")
+    is_retargeted = bool((row.get("retarget_status") or "").strip())
+
+    if is_retargeted:
+        # Retarget results are merged back into the review CSV, while the
+        # original handle still points at the first-pass profile artifact.
+        # Prefer CSV fields so the card reflects the latest re-research pass.
+        name = (row.get("full_name") or person.get("full_name") or "").strip() or "Unknown"
+        city = (row.get("location_city") or location.get("city") or "").strip()
+        country = (row.get("location_country") or location.get("country") or "").strip()
+        title_pairs = row.get("top_title_company_pairs", "") or positions_from_profile(profile)
+        schools = row.get("schools", "") or schools_from_profile(profile)
+        linkedin = row.get("retarget_linkedin_url", "") or row.get("linkedin_url", "") or social_url(profile, "linkedin_url")
+        notes = row.get("retarget_notes", "") or metadata.get("research_notes") or row.get("research_notes", "")
+        summary_text = row.get("summary", "") or summary.get("text") or notes
+    else:
+        name = (person.get("full_name") or row.get("full_name") or "").strip() or "Unknown"
+        city = (location.get("city") or row.get("location_city") or "").strip()
+        country = (location.get("country") or row.get("location_country") or "").strip()
+        title_pairs = positions_from_profile(profile) or row.get("top_title_company_pairs", "")
+        schools = schools_from_profile(profile) or row.get("schools", "")
+        linkedin = social_url(profile, "linkedin_url") or row.get("linkedin_url", "")
+        notes = metadata.get("research_notes") or row.get("research_notes", "")
+        summary_text = summary.get("text") or row.get("summary", "")
+
     github = social_url(profile, "github_url") or row.get("github_url", "")
     return {
         "name": name,
@@ -160,17 +190,17 @@ def row_view(row: dict[str, str], research_dir: Path | None) -> dict[str, str]:
         "schools": schools,
         "linkedin_url": linkedin,
         "github_url": github,
-        "summary": (summary.get("text") or row.get("summary") or "").strip(),
-        "research_notes": (metadata.get("research_notes") or row.get("research_notes") or "").strip(),
+        "summary": (summary_text or "").strip(),
+        "research_notes": (notes or "").strip(),
     }
 
 
 def matches_filter(row: dict[str, str], params: dict[str, list[str]], research_dir: Path | None) -> bool:
-    tab = (params.get("tab") or ["all"])[0].strip().lower()
+    tab = (params.get("tab") or ["yes"])[0].strip().lower()
     q = (params.get("q") or [""])[0].strip().lower()
     if tab not in VALID_TABS:
-        tab = "all"
-    if tab != "all" and bucket_label(row.get("bucket", "")) != tab:
+        tab = "yes"
+    if upload_bucket(row) != tab:
         return False
     if q:
         view = row_view(row, research_dir)
@@ -180,6 +210,7 @@ def matches_filter(row: dict[str, str], params: dict[str, list[str]], research_d
             row.get("group_names", ""),
             row.get("signals", ""),
             row.get("short_reason", ""),
+            row.get("retarget_hint", ""),
             view["name"],
             view["title_pairs"],
             view["schools"],
@@ -191,13 +222,9 @@ def matches_filter(row: dict[str, str], params: dict[str, list[str]], research_d
 
 
 def summarize(rows: list[dict[str, str]]) -> dict[str, int]:
-    out = {"total": len(rows), "yes": 0, "maybe": 0, "no": 0, "selected": 0, "excluded": 0}
+    out = {"yes": 0, "maybe": 0, "no": 0}
     for row in rows:
-        out[bucket_label(row.get("bucket", ""))] += 1
-        if is_selected(row):
-            out["selected"] += 1
-        else:
-            out["excluded"] += 1
+        out[upload_bucket(row)] += 1
     return out
 
 
@@ -215,9 +242,8 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             for key, values in params.items()
             if key not in {"tab"} and values and values[0]
         }
-        if tab != "all":
-            next_params["tab"] = tab
-        return "/?" + urllib.parse.urlencode(next_params) if next_params else "/"
+        next_params["tab"] = tab
+        return "/?" + urllib.parse.urlencode(next_params) if next_params else "/?tab=yes"
 
     def tab_link(tab: str, label: str, count: int) -> str:
         klass = "tab active" if active_tab == tab else "tab"
@@ -228,8 +254,8 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         "<meta name='viewport' content='width=device-width, initial-scale=1'>",
         "<title>Powerpacks Research Review</title>",
         "<style>",
-        ":root{color-scheme:light;--bg:#f5f6f8;--panel:#fff;--line:#d8dee6;--text:#17202a;--muted:#5f6c7a;--soft:#eef2f6;--ink:#17202a}",
-        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}",
+        ":root{color-scheme:light;--bg:#f5f6f8;--panel:#fff;--line:#d8dee6;--text:#17202a;--muted:#5f6c7a;--soft:#eef2f6;--ink:#17202a;--font:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}",
+        "*{box-sizing:border-box}body,button,input,textarea{font-family:var(--font)}body{margin:0;background:var(--bg);color:var(--text)}",
         ".wrap{max-width:1480px;margin:0 auto;padding:28px 24px 42px}",
         "header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:18px}",
         "h1{font-size:24px;line-height:1.15;margin:0 0 7px}",
@@ -240,29 +266,26 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         ".filters{display:flex;gap:8px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:14px}.filters input{font:inherit;border:1px solid #b8c1cc;border-radius:6px;padding:7px 8px;min-width:280px;flex:1}.filters button{font:inherit;border:1px solid var(--ink);background:var(--ink);color:#fff;border-radius:6px;padding:7px 12px}.filters a{display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;padding:0 6px}",
         ".cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}",
         ".card{background:var(--panel);border:1px solid var(--line);border-radius:8px;min-height:292px;padding:14px;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,.04);transition:border-color .12s,box-shadow .12s,opacity .12s}.card:hover{border-color:#aeb8c5;box-shadow:0 3px 10px rgba(15,23,42,.08)}.card.selected{border-color:#63b7aa;background:#f1fbf8}.card.excluded{opacity:.64}.card.saving{outline:2px solid #f6c76b}",
-        ".head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.name{font-weight:800;font-size:17px;line-height:1.2}.decision{font-size:12px;font-weight:800;border-radius:999px;padding:4px 8px;background:#eceff3;color:#5b6876;white-space:nowrap}.selected .decision{background:#ccefe8;color:#0f5f59}",
-        ".bucket{display:inline-block;border-radius:999px;padding:2px 7px;background:#eef2f6;color:#334155;font-size:12px;margin-top:6px}.bucket.yes{background:#d9f3ee;color:#0f5f59}.bucket.maybe{background:#fff1d6;color:#7a4b00}",
+        ".head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.name-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.name{font-weight:800;font-size:17px;line-height:1.2}.li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#0a66c2;color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{filter:brightness(.92);text-decoration:none}.retarget-badge{display:inline-block;height:18px;line-height:18px;border-radius:999px;padding:0 7px;background:#e9ddff;color:#5b21b6;font-size:11px;font-weight:800;white-space:nowrap}.decision{display:inline-block;height:20px;line-height:20px;font-size:12px;font-weight:800;border-radius:999px;padding:0 8px;background:#eceff3;color:#5b6876;white-space:nowrap}.selected .decision{background:#ccefe8;color:#0f5f59}",
+        ".bucket{display:inline-block;height:20px;line-height:20px;border-radius:999px;padding:0 8px;background:#eef2f6;color:#334155;font-size:12px;margin-top:6px;white-space:nowrap;vertical-align:baseline}.bucket.yes{background:#d9f3ee;color:#0f5f59}.bucket.maybe{background:#fff1d6;color:#7a4b00}",
         ".line{font-size:13px;color:var(--muted);line-height:1.38;margin:5px 0;overflow-wrap:anywhere}.line strong{color:#334155;font-weight:650}.profile{border-top:1px solid #e5e9ef;margin-top:10px;padding-top:10px}.profile a{color:#0f5f59;text-decoration:none}.profile a:hover{text-decoration:underline}",
+        ".hint{margin-top:10px}.hint label{display:block;color:#334155;font-size:12px;font-weight:700;margin-bottom:5px}.hint textarea{width:100%;min-height:54px;resize:vertical;border:1px solid #c6ced8;border-radius:7px;background:#fff;color:var(--text);font-size:13px;line-height:1.35;padding:7px 8px}.hint textarea:focus{outline:2px solid #9dd8cf;border-color:#63b7aa}.hint-actions{display:flex;align-items:center;gap:8px;margin-top:5px}.hint button{border:1px solid #9aa8b7;background:#fff;color:#334155;border-radius:6px;font-size:12px;line-height:1;font-weight:700;padding:6px 9px;cursor:pointer}.hint button:hover{border-color:#63b7aa;color:#0f5f59}.hint .hint-status{display:inline-block;min-height:16px;color:var(--muted);font-size:11px}",
         ".empty{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:24px;color:var(--muted)}.toast{position:fixed;right:16px;bottom:16px;background:#17202a;color:#fff;border-radius:8px;padding:9px 12px;font-size:13px;opacity:0;transform:translateY(8px);transition:opacity .15s,transform .15s;pointer-events:none}.toast.show{opacity:1;transform:translateY(0)}",
         "@media(max-width:900px){.wrap{padding:20px 14px}header{display:block}.stats{grid-template-columns:repeat(2,minmax(0,1fr));min-width:0;margin-top:14px}.cards{grid-template-columns:1fr}.filters input{min-width:180px}}",
         "</style></head><body><div class='wrap'>",
         "<header><div><h1>Powerpacks Research Review</h1>",
-        f"<div class='meta'>{esc(csv_path)} &middot; showing {len(visible)} of {len(rows)}. Click a card to toggle enrich yes/no; every change autosaves.</div></div>",
+        f"<div class='meta'>{esc(csv_path)} &middot; showing {len(visible)} upload-{esc(active_tab)} rows. Click a card to toggle upload yes/no; every change autosaves.</div></div>",
         "<div class='stats'>",
-        f"<div class='stat'><span>yes to enrich</span><strong data-count='selected'>{summary['selected']}</strong></div>",
-        f"<div class='stat'><span>excluded</span><strong data-count='excluded'>{summary['excluded']}</strong></div>",
-        f"<div class='stat'><span>total</span><strong>{summary['total']}</strong></div>",
-        f"<div class='stat'><span>yes bucket</span><strong>{summary['yes']}</strong></div>",
-        f"<div class='stat'><span>maybe bucket</span><strong>{summary['maybe']}</strong></div>",
-        f"<div class='stat'><span>no bucket</span><strong>{summary['no']}</strong></div>",
+        f"<div class='stat'><span>yes</span><strong data-count='yes'>{summary['yes']}</strong></div>",
+        f"<div class='stat'><span>maybe</span><strong data-count='maybe'>{summary['maybe']}</strong></div>",
+        f"<div class='stat'><span>no</span><strong data-count='no'>{summary['no']}</strong></div>",
         "</div></header><nav class='tabs'>",
         tab_link("yes", "Yes", summary["yes"]),
         tab_link("maybe", "Maybe", summary["maybe"]),
         tab_link("no", "No", summary["no"]),
-        tab_link("all", "All", summary["total"]),
         "</nav>",
         "<form class='filters' method='get' action='/'>",
-        f"<input type='hidden' name='tab' value='{esc(active_tab if active_tab != 'all' else '')}'>",
+        f"<input type='hidden' name='tab' value='{esc(active_tab)}'>",
         f"<input name='q' placeholder='Search name, company, school, signal, LinkedIn' value='{esc(q)}'>",
         "<button type='submit'>Filter</button><a href='/'>clear</a></form>",
     ]
@@ -272,7 +295,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         parts.append("<section class='cards'>")
         for idx, row in visible[:500]:
             selected = is_selected(row)
-            label = bucket_label(row.get("bucket", ""))
+            label = upload_bucket(row)
             view = row_view(row, research_dir)
             location = view["location"] or "unknown"
             groups = " | ".join(split_pipe(row.get("group_names", ""), limit=5)) or "none"
@@ -282,16 +305,13 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             decision = "YES" if selected else "NO"
             card_class = "card selected" if selected else "card excluded"
             bucket_class = f"bucket {label}" if label in {"yes", "maybe"} else "bucket"
-            links = []
-            if linkedin:
-                links.append(f"<a href='{esc(linkedin)}' target='_blank' rel='noreferrer'>LinkedIn</a>")
-            if github:
-                links.append(f"<a href='{esc(github)}' target='_blank' rel='noreferrer'>GitHub</a>")
-            link_html = " &middot; ".join(links) or "<span>no profile links</span>"
+            linkedin_icon = f"<a class='li-icon' href='{esc(linkedin)}' target='_blank' rel='noreferrer' title='LinkedIn' aria-label='Open LinkedIn profile'>in</a>" if linkedin else ""
+            retarget_badge = "<span class='retarget-badge'>Re-researched</span>" if (row.get("retarget_status") or "").strip() else ""
+            hint = row.get("retarget_hint", "")
             parts.extend([
-                f"<article class='{card_class}' role='button' tabindex='0' data-row='{idx}' data-selected='{str(selected).lower()}'>",
+                f"<article class='{card_class}' role='button' tabindex='0' data-row='{idx}' data-selected='{str(selected).lower()}' data-decision='{esc(label)}'>",
                 "<div class='head'>",
-                f"<div><div class='name'>{esc(view['name'])}</div><span class='{bucket_class}'>{esc(label)}</span></div>",
+                f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{retarget_badge}</div><span class='{bucket_class}'>{esc(label)}</span></div>",
                 f"<div class='decision'>{decision}</div></div>",
                 f"<div class='line'><strong>phone</strong> {esc(row.get('phone_e164') or 'unknown')} &middot; <strong>msgs</strong> {esc(row.get('total_messages') or '0')}</div>",
                 f"<div class='line'><strong>source</strong> {esc(row.get('message_source') or 'unknown')}</div>",
@@ -303,7 +323,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
                 f"<div class='line'><strong>reason</strong> {esc(row.get('short_reason') or 'none')}</div>",
                 f"<div class='line'><strong>identity</strong> {esc(row.get('identity_risk') or 'none')}</div>",
                 f"<div class='line'><strong>signals</strong> {esc(signals)}</div>",
-                f"<div class='line'>{link_html}</div>",
+                f"<div class='hint'><label for='hint-{idx}'>feedback</label><textarea id='hint-{idx}' data-row='{idx}' placeholder='LinkedIn URL, company, title, location, or any clue'>{esc(hint)}</textarea><div class='hint-actions'><button type='button' data-save-hint='{idx}'>Save feedback</button><span class='hint-status'></span></div></div>",
                 "</div></article>",
             ])
         parts.append("</section>")
@@ -314,9 +334,12 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         "<script>",
         "const toast=document.getElementById('toast');let toastTimer=null;",
         "function showToast(text){toast.textContent=text;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1100)}",
-        "function setCard(card,selected){card.dataset.selected=String(selected);card.classList.toggle('selected',selected);card.classList.toggle('excluded',!selected);card.querySelector('.decision').textContent=selected?'YES':'NO'}",
-        "async function toggle(card){const was=card.dataset.selected==='true';const next=!was;card.classList.add('saving');try{const body=new URLSearchParams({row:card.dataset.row,selected:String(next)});const res=await fetch('/toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());setCard(card,next);showToast(next?'Saved: yes':'Saved: no');const yes=document.querySelector('[data-count=selected]');const no=document.querySelector('[data-count=excluded]');if(yes&&no){yes.textContent=String(Number(yes.textContent||0)+(next?1:-1));no.textContent=String(Number(no.textContent||0)+(next?-1:1))}}catch(e){showToast('Save failed');}finally{card.classList.remove('saving')}}",
-        "document.querySelectorAll('.card').forEach(card=>{card.addEventListener('click',e=>{if(e.target.closest('a'))return;toggle(card)});card.addEventListener('keydown',e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();toggle(card)}})});",
+        "function bump(label,delta){const el=document.querySelector('[data-count='+label+']');if(el)el.textContent=String(Math.max(0,Number(el.textContent||0)+delta))}",
+        "function setCard(card,selected){const decision=selected?'yes':'no';card.dataset.selected=String(selected);card.classList.toggle('selected',selected);card.classList.toggle('excluded',!selected);card.querySelector('.decision').textContent=selected?'YES':'NO';card.dataset.decision=decision;const badge=card.querySelector('.bucket');if(badge){badge.textContent=decision;badge.className='bucket '+(decision==='yes'?'yes':'')}}",
+        "async function toggle(card){const was=card.dataset.selected==='true';const oldDecision=card.dataset.decision||'no';const next=!was;const nextDecision=next?'yes':'no';card.classList.add('saving');try{const body=new URLSearchParams({row:card.dataset.row,selected:String(next)});const res=await fetch('/toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());setCard(card,next);if(oldDecision!==nextDecision){bump(oldDecision,-1);bump(nextDecision,1)}showToast(next?'Saved: upload yes':'Saved: upload no')}catch(e){showToast('Save failed');}finally{card.classList.remove('saving')}}",
+        "async function saveHint(el){const status=el.parentElement.querySelector('.hint-status');if(status)status.textContent='saving…';try{const body=new URLSearchParams({row:el.dataset.row,hint:el.value});const res=await fetch('/hint',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());if(status)status.textContent='saved';showToast('Saved hint')}catch(e){if(status)status.textContent='save failed';showToast('Hint save failed')}}",
+        "document.querySelectorAll('.card').forEach(card=>{card.addEventListener('click',e=>{if(e.target.closest('a,textarea,input,button,label'))return;toggle(card)});card.addEventListener('keydown',e=>{if(e.target.closest('textarea,input,button'))return;if(e.key===' '||e.key==='Enter'){e.preventDefault();toggle(card)}})});",
+        "document.querySelectorAll('.hint textarea').forEach(el=>{let t=null;el.addEventListener('click',e=>e.stopPropagation());el.addEventListener('keydown',e=>{e.stopPropagation();if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();saveHint(el)}});el.addEventListener('input',()=>{const status=el.parentElement.querySelector('.hint-status');if(status)status.textContent='unsaved';clearTimeout(t);t=setTimeout(()=>saveHint(el),1200)});el.addEventListener('blur',()=>{clearTimeout(t);saveHint(el)})});document.querySelectorAll('[data-save-hint]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();const box=btn.closest('.hint').querySelector('textarea');if(box)saveHint(box)})});"
         "</script></div></body></html>",
     ])
     return "".join(parts).encode("utf-8")
@@ -348,7 +371,7 @@ def make_handler(csv_path: Path, research_dir: Path | None):
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path != "/toggle":
+            if parsed.path not in {"/toggle", "/hint"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             length = int(self.headers.get("Content-Length", "0"))
@@ -358,13 +381,21 @@ def make_handler(csv_path: Path, research_dir: Path | None):
             except ValueError:
                 self.send_bytes(b"bad row", "text/plain", status=400)
                 return
-            selected = (form.get("selected") or [""])[0].strip().lower()
-            if selected not in {"true", "false"}:
-                self.send_bytes(b"selected must be true or false", "text/plain", status=400)
-                return
             fieldnames, rows = read_rows(csv_path)
             if row_idx < 0 or row_idx >= len(rows):
                 self.send_bytes(b"row out of range", "text/plain", status=400)
+                return
+            if parsed.path == "/hint":
+                if "retarget_hint" not in fieldnames:
+                    fieldnames.append("retarget_hint")
+                hint = (form.get("hint") or [""])[0].strip()
+                rows[row_idx]["retarget_hint"] = hint
+                atomic_write(csv_path, fieldnames, rows)
+                self.send_bytes(json.dumps({"ok": True, "row": row_idx}).encode(), "application/json")
+                return
+            selected = (form.get("selected") or [""])[0].strip().lower()
+            if selected not in {"true", "false"}:
+                self.send_bytes(b"selected must be true or false", "text/plain", status=400)
                 return
             if "exclude" not in fieldnames:
                 fieldnames.append("exclude")

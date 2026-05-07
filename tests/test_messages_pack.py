@@ -629,7 +629,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
             for r in rows:
                 w.writerow({k: r.get(k, "") for k in self.HEADERS})
 
-    def test_filters_and_tiers_research_queue(self) -> None:
+    def test_filters_research_queue(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             contacts = tmp / "contacts.csv"
@@ -637,7 +637,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
             self._write(
                 contacts,
                 [
-                    # P1: cross-channel + high volume
+                    # Included: cross-channel + high volume
                     {
                         "phone": "+14155550101",
                         "name": "Jane Doe",
@@ -645,7 +645,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
                         "message_count": "1500",
                         "last_message": "2026-04-01T00:00:00+00:00",
                     },
-                    # P2b: single channel, high volume
+                    # Included: single channel, high volume
                     {
                         "phone": "+14155550202",
                         "name": "Bob Smith",
@@ -653,7 +653,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
                         "message_count": "300",
                         "last_message": "2025-01-01T00:00:00+00:00",
                     },
-                    # Filtered: below the default aleph-mvp min-message prune rule.
+                    # Included despite low message count: default is to research every eligible contact.
                     {
                         "phone": "+14155550303",
                         "name": "Carol Lopez",
@@ -714,21 +714,20 @@ class PrepareResearchQueueTests(unittest.TestCase):
             )
             manifest = json.loads(result.stdout)
             self.assertEqual(manifest["counts"]["input_rows"], 9)
-            self.assertEqual(manifest["counts"]["eligible_rows"], 2)
+            self.assertEqual(manifest["counts"]["eligible_rows"], 3)
             self.assertEqual(manifest["counts"]["filtered_no_name"], 1)
             self.assertEqual(manifest["counts"]["filtered_unsearchable_name"], 1)
             self.assertEqual(manifest["counts"]["filtered_blocked_name_token"], 1)
             self.assertEqual(manifest["counts"]["filtered_name_is_phone"], 1)
             self.assertEqual(manifest["counts"]["filtered_skipped"], 1)
             self.assertEqual(manifest["counts"]["filtered_already_matched"], 1)
-            self.assertEqual(manifest["counts"]["filtered_low_messages"], 1)
+            self.assertEqual(manifest["counts"]["filtered_low_messages"], 0)
 
             with output.open(newline="") as h:
                 rows = list(csv.DictReader(h))
-            self.assertEqual(len(rows), 2)
-            # Sorted by (tier, -message_count): Jane (P1), Bob (P2b)
+            self.assertEqual(len(rows), 3)
+            # Sorted by message count desc, then name.
             self.assertEqual(rows[0]["display_name"], "Jane Doe")
-            self.assertEqual(rows[0]["priority_reason"], "P1")
             self.assertEqual(rows[0]["first_name"], "Jane")
             self.assertEqual(rows[0]["last_name"], "Doe")
             self.assertEqual(rows[0]["phone_e164"], "+14155550101")
@@ -739,9 +738,9 @@ class PrepareResearchQueueTests(unittest.TestCase):
             self.assertEqual(rows[0]["handle"], "phone-4155550101")
 
             self.assertEqual(rows[1]["display_name"], "Bob Smith")
-            self.assertEqual(rows[1]["priority_reason"], "P2b")
+            self.assertEqual(rows[2]["display_name"], "Carol Lopez")
 
-    def test_tier_filter_and_limit(self) -> None:
+    def test_limit_after_sort(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             contacts = tmp / "contacts.csv"
@@ -753,7 +752,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
                 rows.append(
                     {
                         "phone": f"+1415555{i:04d}",
-                        "name": f"{first_pool[i % 5]} P1{i:02d} {last_pool[i % 5]}",
+                        "name": f"{first_pool[i % 5]} High {last_pool[i % 5]}",
                         "source": "imessage,whatsapp",
                         "message_count": "200",
                         "last_message": "2026-04-01T00:00:00+00:00",
@@ -763,7 +762,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
                 rows.append(
                     {
                         "phone": f"+1415556{i:04d}",
-                        "name": f"{first_pool[i]} {last_pool[i]} P4{i:02d}",
+                        "name": f"{first_pool[i]} {last_pool[i]} Low",
                         "source": "imessage",
                         "message_count": "1",
                         "last_message": "2020-01-01T00:00:00+00:00",
@@ -779,8 +778,6 @@ class PrepareResearchQueueTests(unittest.TestCase):
                     str(contacts),
                     "-o",
                     str(output),
-                    "--tiers",
-                    "P1",
                     "--limit",
                     "10",
                 ],
@@ -794,7 +791,93 @@ class PrepareResearchQueueTests(unittest.TestCase):
             with output.open(newline="") as h:
                 queue = list(csv.DictReader(h))
             self.assertEqual(len(queue), 10)
-            self.assertTrue(all(r["priority_reason"] == "P1" for r in queue))
+            self.assertTrue(all(r["total_messages"] == "200" for r in queue))
+
+
+class PrepareRetargetQueueTests(unittest.TestCase):
+    PREPARE = ROOT / "packs/messages/primitives/prepare_retarget_queue/prepare_retarget_queue.py"
+
+    def test_only_new_feedback_hashes_are_queued(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            review_csv = tmp / "research_review.csv"
+            base_queue = tmp / "research_queue.csv"
+            output = tmp / "retarget_queue.csv"
+            ledger = tmp / "retarget_attempts.json"
+            out_dir = tmp / "research_retarget"
+
+            with review_csv.open("w", newline="") as h:
+                w = csv.DictWriter(h, fieldnames=["handle", "full_name", "phone_e164", "total_messages", "retarget_hint"])
+                w.writeheader()
+                w.writerow({"handle": "phone-1", "full_name": "Jane Doe", "phone_e164": "+14155550101", "total_messages": "5", "retarget_hint": "LinkedIn: https://linkedin.test/jane"})
+                w.writerow({"handle": "phone-2", "full_name": "Bob Smith", "phone_e164": "+14155550202", "total_messages": "0", "retarget_hint": ""})
+
+            with base_queue.open("w", newline="") as h:
+                fields = ["handle", "display_name", "first_name", "last_name", "phone_e164", "total_messages", "source_channel", "retarget_hint"]
+                w = csv.DictWriter(h, fieldnames=fields)
+                w.writeheader()
+                w.writerow({"handle": "phone-1", "display_name": "Jane Doe", "first_name": "Jane", "last_name": "Doe", "phone_e164": "+14155550101", "total_messages": "5", "source_channel": "phone"})
+
+            cmd = [
+                "python3", str(self.PREPARE), "prepare",
+                "--review-csv", str(review_csv),
+                "--base-queue", str(base_queue),
+                "--output", str(output),
+                "--ledger", str(ledger),
+                "--retarget-output-dir", str(out_dir),
+            ]
+            first = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=True)
+            first_manifest = json.loads(first.stdout)
+            self.assertEqual(first_manifest["rows_written"], 1)
+            self.assertEqual(first_manifest["counts"]["with_feedback"], 1)
+            with output.open(newline="") as h:
+                rows = list(csv.DictReader(h))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["retarget_source_handle"], "phone-1")
+            self.assertIn("__retarget_", rows[0]["handle"])
+            self.assertEqual(rows[0]["retarget_hint"], "LinkedIn: https://linkedin.test/jane")
+
+            second = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=True)
+            second_manifest = json.loads(second.stdout)
+            self.assertEqual(second_manifest["rows_written"], 0)
+            self.assertEqual(second_manifest["counts"]["skipped_already_attempted"], 1)
+
+            # Changing feedback text creates a new hash/attempt.
+            with review_csv.open("w", newline="") as h:
+                w = csv.DictWriter(h, fieldnames=["handle", "full_name", "phone_e164", "total_messages", "retarget_hint"])
+                w.writeheader()
+                w.writerow({"handle": "phone-1", "full_name": "Jane Doe", "phone_e164": "+14155550101", "total_messages": "5", "retarget_hint": "Jane Doe at Acme"})
+            third = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=True)
+            third_manifest = json.loads(third.stdout)
+            self.assertEqual(third_manifest["rows_written"], 1)
+
+            with output.open(newline="") as h:
+                rerun_rows = list(csv.DictReader(h))
+            retarget_handle = rerun_rows[0]["handle"]
+            profile_dir = out_dir / retarget_handle
+            profile_dir.mkdir(parents=True)
+            (profile_dir / "01_research_parallel.json").write_text(json.dumps({
+                "person": {"full_name": "Jane Acme", "confidence": 0.93},
+                "social": {"linkedin_url": "https://linkedin.test/jane-acme"},
+                "location": {"city": "San Francisco", "country": "United States"},
+                "positions": [{"title": "Founder", "company_name": "Acme"}],
+                "education": [{"school_name": "MIT"}],
+                "summary": {"text": "Retargeted profile."},
+                "metadata": {"research_notes": "Matched user feedback."},
+            }), encoding="utf-8")
+            marked = subprocess.run([
+                "python3", str(self.PREPARE), "mark-completed",
+                "--ledger", str(ledger),
+                "--retarget-output-dir", str(out_dir),
+                "--review-csv", str(review_csv),
+            ], cwd=ROOT, capture_output=True, text=True, check=True)
+            marked_manifest = json.loads(marked.stdout)
+            self.assertEqual(marked_manifest["review_rows_merged"], 1)
+            with review_csv.open(newline="") as h:
+                reviewed = list(csv.DictReader(h))
+            self.assertEqual(reviewed[0]["retarget_status"], "re_researched")
+            self.assertEqual(reviewed[0]["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
+            self.assertEqual(reviewed[0]["top_title_company_pairs"], "Founder @ Acme")
 
 
 class DeepResearchContactsTests(unittest.TestCase):
@@ -1010,7 +1093,6 @@ class DeepResearchContactsTests(unittest.TestCase):
                     "match_confidence",
                     "match_method",
                     "match_reason",
-                    "priority_reason",
                 ]
                 with queue_csv.open("w", newline="") as h:
                     w = csv.DictWriter(h, fieldnames=rq_headers)
@@ -1033,7 +1115,6 @@ class DeepResearchContactsTests(unittest.TestCase):
                                 "total_messages": "120",
                                 "is_in_group_chats": "true",
                                 "group_names": "Founders",
-                                "priority_reason": "P1",
                             }
                         )
 
@@ -1239,7 +1320,6 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 "match_confidence",
                 "match_method",
                 "match_reason",
-                "priority_reason",
             ]
             with queue.open("w", newline="") as h:
                 w = csv.DictWriter(h, fieldnames=rq_headers)
@@ -1260,7 +1340,6 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                             "source_channel": "phone",
                             "message_source": "imessage,whatsapp",
                             "total_messages": "100",
-                            "priority_reason": "P1",
                         }
                     )
 
@@ -1370,11 +1449,9 @@ class ReviewResearchWebTests(unittest.TestCase):
         selected = [self.mod.is_selected(row) for row in rows]
         self.assertEqual(selected, [True, False, False, True, False])
         summary = self.mod.summarize(rows)
-        self.assertEqual(summary["selected"], 2)
-        self.assertEqual(summary["excluded"], 3)
         self.assertEqual(summary["yes"], 2)
-        self.assertEqual(summary["maybe"], 2)
-        self.assertEqual(summary["no"], 1)
+        self.assertEqual(summary["maybe"], 1)
+        self.assertEqual(summary["no"], 2)
 
     def test_profile_fields_are_loaded_from_research_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:

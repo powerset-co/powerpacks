@@ -38,6 +38,29 @@ from pathlib import Path
 from typing import Any
 
 
+def load_dotenv(path: Path) -> None:
+    """Load simple KEY=VALUE lines into os.environ without overriding env."""
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ[key] = value
+
+
+load_dotenv(Path(__file__).resolve().parents[4] / ".env")
+
+
 CSV_FIELDS = [
     "bucket",
     "handle",
@@ -56,6 +79,7 @@ CSV_FIELDS = [
     "short_reason",
     "identity_risk",
     "signals",
+    "retarget_hint",
 ]
 
 DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
@@ -196,6 +220,7 @@ def flatten_row(
         "short_reason": bucket_payload.get("short_reason", "") or "",
         "identity_risk": bucket_payload.get("identity_risk", "") or "",
         "signals": " | ".join(bucket_payload.get("signals") or []),
+        "retarget_hint": queue_row.get("retarget_hint", "") or "",
     }
 
 
@@ -368,7 +393,7 @@ def llm_bucket(
             "total_messages": queue_row.get("total_messages", "0"),
             "message_source": queue_row.get("message_source", ""),
             "group_names": queue_row.get("group_names", ""),
-            "priority_reason": queue_row.get("priority_reason", ""),
+            "retarget_hint": queue_row.get("retarget_hint", ""),
         },
         "research": {
             "real_name": person.get("full_name", ""),
@@ -457,7 +482,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         api_key = args.api_key or os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
             emit({"primitive": "build_research_review_csv", "command": "build", "status": "failed",
-                  "error": "OPENROUTER_API_KEY not set (use --api-key or env)"})
+                  "error": "OPENROUTER_API_KEY not set (pass --api-key or add it to the repo .env)"})
             return 1
 
     rows: list[dict[str, str]] = []
@@ -609,7 +634,7 @@ def main() -> None:
     build.add_argument("--bucket-mode", choices=["heuristic", "llm"], default="heuristic")
     build.add_argument("--model", default=DEFAULT_SCORE_MODEL,
                        help="Model used when --bucket-mode llm (OpenRouter slug)")
-    build.add_argument("--api-key", help="OpenRouter API key (or set OPENROUTER_API_KEY)")
+    build.add_argument("--api-key", help="OpenRouter API key (defaults to OPENROUTER_API_KEY from env or repo .env)")
     build.add_argument("--refresh-cache", action="store_true",
                        help="Ignore cached LLM scores in 02_review_cache.json and re-score")
     build.add_argument("--allow-missing-queue", action="store_true",

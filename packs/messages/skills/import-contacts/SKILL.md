@@ -180,7 +180,7 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_res
 Stop here and ask for explicit Parallel spend approval. After the user confirms:
 
 ```bash
-PARALLEL_API_KEY=... uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
   --input .powerpacks/messages/research_queue.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
@@ -205,10 +205,16 @@ data from `01_research_parallel.json` and autosaves yes/no decisions to the
 `exclude` column in `research_review.csv`.
 
 After opening the review UI, tell the user: "When you're done reviewing, say
-'done with review, upload'. I'll summarize yes/maybe/no and ask for explicit
-upload/datalake approval before syncing anything." After review, summarize only
-the yes/maybe/no counts and ask before uploading. Make clear that nothing has
-been uploaded yet:
+'done with review, upload'. I'll check feedback first, then ask for explicit
+approval before syncing anything." After review, first run
+`prepare_retarget_queue prepare` to detect saved feedback hints. If it writes
+rows, tell the user that you'll run one targeted Parallel pass for the feedback
+rows before upload, estimate the cost, and ask for Parallel approval using cost
+only. If Parallel fails, is unavailable, or returns no plausible person for a
+feedback row, automatically run a small Codex web-search fallback for just those
+feedback rows and save separate retarget artifacts. After feedback/retarget
+handling, ask for upload approval using only the number of yes rows that will be
+uploaded. Make clear that nothing has been uploaded yet:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
@@ -228,11 +234,7 @@ artifact with yes/maybe/no splits; the yes split is the include/enrich set. The
 primitive translates the web UI's `exclude` decisions into upload buckets so
 explicit yes/no enrich choices are reflected in that split.
 
-Then sync the reviewed rows plus joined deep-research profiles to the contact
-datalake endpoint. This is datalake-only for now: it preserves
-phone/name/message/LinkedIn/profile payloads for downstream processing, but does
-not directly materialize into contact/search tables until the server-side
-processing stage does that work:
+Then upload the reviewed rows plus joined deep-research profiles to Powerset:
 
 ```bash
 python packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py sync \
@@ -242,7 +244,8 @@ python packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py 
 ```
 
 This posts to `/v2/contact-datalake/import` and is covered by the same explicit
-final upload/sync approval.
+final upload/sync approval. Report the result to the user as only:
+`Uploaded X contacts`.
 
 If Parallel is skipped, unavailable, or the queue is empty, fall back to the raw
 contacts yes/no reviewer:

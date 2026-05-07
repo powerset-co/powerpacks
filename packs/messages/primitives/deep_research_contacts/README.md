@@ -14,8 +14,7 @@ keeps working.
 
 This is the native Powerpacks primitive for the old `network-search-api`
 synthetic deep-research path. The queue builder applies the same
-`looks_like_real_name` rule and default min-message prune before this primitive
-spends Parallel credits.
+`looks_like_real_name` rule before this primitive spends Parallel credits.
 
 ## Privacy contract
 
@@ -37,12 +36,13 @@ python packs/messages/primitives/sync_messages_research_cache/sync_messages_rese
 
 # 1. Cost estimate, no Parallel network/spend; skips already-downloaded handles.
 python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
-  --input .powerpacks/messages/research_queue.p1p2.csv \
+  --input .powerpacks/messages/research_queue.csv \
   --processor core2x
 
-# 2. Run the whole pipeline (submit + poll) — needs PARALLEL_API_KEY.
+# 2. Run the whole pipeline (submit + poll).
+#    The primitive auto-loads PARALLEL_API_KEY from the repo .env.
 python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
-  --input .powerpacks/messages/research_queue.p1p2.csv \
+  --input .powerpacks/messages/research_queue.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
 

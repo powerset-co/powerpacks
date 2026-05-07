@@ -165,7 +165,7 @@
       "kind": "primitive",
       "primitive": "llm_review_contacts",
       "command": "review",
-      "requires_explicit_user_request": "only when estimate >= $1.00 or model is not anthropic/claude-sonnet-4-6"
+      "requires_explicit_user_request": "only when estimate >= $10.00 or model is not anthropic/claude-sonnet-4-6"
     }
   ]
 }

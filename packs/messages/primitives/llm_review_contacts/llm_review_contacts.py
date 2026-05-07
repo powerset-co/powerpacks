@@ -28,6 +28,29 @@ from pathlib import Path
 from typing import Any
 
 
+def load_dotenv(path: Path) -> None:
+    """Load simple KEY=VALUE lines into os.environ without overriding env."""
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ[key] = value
+
+
+load_dotenv(Path(__file__).resolve().parents[4] / ".env")
+
+
 CSV_HEADERS = [
     "phone",
     "name",
@@ -364,7 +387,7 @@ def cmd_review(args: argparse.Namespace) -> int:
             "primitive": "llm_review_contacts",
             "command": "review",
             "status": "failed",
-            "error": "OPENROUTER_API_KEY not provided (use --api-key or env var)",
+            "error": "OPENROUTER_API_KEY not provided (pass --api-key or add it to the repo .env)",
         })
         return 1
 
@@ -490,7 +513,7 @@ def main() -> None:
 
     review = sub.add_parser("review", help="Run the LLM review and update the CSV in place")
     common(review)
-    review.add_argument("--api-key", help="OpenRouter API key (or set OPENROUTER_API_KEY)")
+    review.add_argument("--api-key", help="OpenRouter API key (defaults to OPENROUTER_API_KEY from env or repo .env)")
     review.add_argument("--dry-run", action="store_true",
                         help="Estimate cost only; do not call the API")
     review.add_argument("--timeout", type=int, default=120)

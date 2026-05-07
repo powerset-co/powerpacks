@@ -28,7 +28,7 @@ is written next to the CSV for auditability.
 python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py estimate \
   --input .powerpacks/messages/contacts.csv
 
-# 2. Run the review. Reads OPENROUTER_API_KEY env var or --api-key.
+# 2. Run the review. Auto-loads OPENROUTER_API_KEY from the repo .env.
 python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py review \
   --input .powerpacks/messages/contacts.csv \
   --model anthropic/claude-sonnet-4-6

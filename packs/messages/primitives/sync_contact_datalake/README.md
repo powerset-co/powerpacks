@@ -4,8 +4,8 @@ Build and sync reviewed messages research rows to the server-side contact
 datalake endpoint (`POST /v2/contact-datalake/import`).
 
 This is separate from `upload_research_review`: artifact upload stores the
-review ZIP; contact datalake sync stages contact/linkedin/profile rows for
-future downstream ingestion/materialization.
+review ZIP; contact datalake sync stages contact/linkedin/profile rows for the
+backend to process later.
 
 ```bash
 python packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py build \
@@ -32,6 +32,6 @@ The payload includes:
 - draft `synthetic_profile` in Aleph `04_final_profile.json` shape
 - `processing_status: staged`
 
-The draft `synthetic_profile` is intentionally not materialized directly. The
-server-side processing stage can resolve company URNs, run Harmonic for LinkedIn
-URLs, and transform it into the final Harmonic-compatible synthetic shape.
+The draft `synthetic_profile` is intentionally staged as input for backend
+processing. The backend can resolve companies, run enrichment for LinkedIn URLs,
+and transform it into the final production-ready profile shape.

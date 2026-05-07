@@ -16,6 +16,7 @@ from typing import Any
 DEFAULT_API_URL="https://search-api-7wk4uhe77q-uw.a.run.app"
 DEFAULT_CSV=Path(".powerpacks/messages/research_review.csv")
 DEFAULT_RESEARCH_DIR=Path(".powerpacks/messages/research")
+DEFAULT_RETARGET_RESEARCH_DIR=Path(".powerpacks/messages/research_retarget")
 UUID_NAMESPACE=uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 def emit(x): print(json.dumps(x,indent=2,sort_keys=True))
@@ -39,6 +40,14 @@ def decision(row):
 def profile_for(handle, research_dir):
     p=research_dir/handle/"01_research_parallel.json"
     return read_json(p,{}) if p.exists() else {}
+def profile_for_row(row, research_dir, retarget_research_dir):
+    retarget_handle=(row.get("retarget_handle") or "").strip()
+    if retarget_handle:
+        prof=profile_for(retarget_handle, retarget_research_dir)
+        if prof:
+            return prof
+    handle=(row.get("handle") or "").strip()
+    return profile_for(handle,research_dir) if handle else {}
 def normalize_phone(raw):
     s=str(raw or "").strip()
     if not s: return ""
@@ -160,18 +169,19 @@ def synthetic_profile_from_research(profile, row):
             "draft":True,
         },
     }
-def row_to_record(row, research_dir):
+def row_to_record(row, research_dir, retarget_research_dir):
     handle=(row.get("handle") or "").strip()
-    prof=profile_for(handle,research_dir) if handle else {}
+    prof=profile_for_row(row,research_dir,retarget_research_dir)
     person=(prof.get("person") or {}) if isinstance(prof,dict) else {}
     social=(prof.get("social") or {}) if isinstance(prof,dict) else {}
     synthetic=synthetic_profile_from_research(prof,row)
-    linkedin=canonical_linkedin_url(linkedin_from_profile(prof))
+    linkedin=canonical_linkedin_url(row.get("retarget_linkedin_url") or linkedin_from_profile(prof))
     phone=row.get("phone_e164") or social.get("primary_phone")
     full_name=row.get("full_name") or row.get("name") or person.get("full_name")
     return {
         "source_key": phone_source_key(phone, handle),
         "handle": handle or None,
+        "retarget_handle": (row.get("retarget_handle") or None),
         "phone_e164": normalize_phone(phone),
         "phone": normalize_phone(phone),
         "full_name": full_name,
@@ -187,12 +197,12 @@ def row_to_record(row, research_dir):
         "processing_status": "staged",
         "raw_record": row,
     }
-def load_records(csv_path, research_dir, only_include=False):
+def load_records(csv_path, research_dir, only_include=False, retarget_research_dir=DEFAULT_RETARGET_RESEARCH_DIR):
     with csv_path.open(newline='',encoding='utf-8-sig') as f:
         rows=list(csv.DictReader(f))
     records=[]
     for row in rows:
-        rec=row_to_record(row,research_dir)
+        rec=row_to_record(row,research_dir,retarget_research_dir)
         if only_include and rec["upload_decision"]=="exclude": continue
         records.append(rec)
     return records
@@ -204,8 +214,18 @@ def post_json(api_url, token, payload, timeout=120):
             return r.status,json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"HTTP {e.code}: {e.read().decode(errors='replace')[:500]}") from e
+def summarize_sync_response(body):
+    """Return user-facing sync summary without backend table/materialization details."""
+    inserted=int(body.get("datalake_inserted") or 0) if isinstance(body,dict) else 0
+    updated=int(body.get("datalake_updated") or 0) if isinstance(body,dict) else 0
+    uploaded = inserted + updated
+    return {
+        "uploaded_contacts": uploaded,
+        "message": f"Uploaded {uploaded} contacts",
+        "errors": int(body.get("errors") or 0) if isinstance(body,dict) else 0,
+    }
 def cmd_build(args):
-    recs=load_records(Path(args.csv),Path(args.research_dir),args.only_include)
+    recs=load_records(Path(args.csv),Path(args.research_dir),args.only_include,Path(args.retarget_research_dir))
     linked=sum(1 for r in recs if r.get("linkedin_url"))
     named=sum(1 for r in recs if r.get("full_name") or r.get("name"))
     phoned=sum(1 for r in recs if r.get("phone_e164") or r.get("phone"))
@@ -218,14 +238,14 @@ def cmd_build(args):
 def cmd_sync(args):
     if not args.confirm_sync:
         emit({"primitive":"sync_contact_datalake","command":"sync","status":"blocked","error":"pass --confirm-sync after explicit approval"}); return 2
-    recs=load_records(Path(args.csv),Path(args.research_dir),args.only_include)
+    recs=load_records(Path(args.csv),Path(args.research_dir),args.only_include,Path(args.retarget_research_dir))
     status,body=post_json(args.api_url, args.token or auth_token(), {"records":recs,"source":"messages_research_review","dry_run":False}, timeout=args.timeout)
-    emit({"primitive":"sync_contact_datalake","command":"sync","status":"ok","status_code":status,"response":body})
+    emit({"primitive":"sync_contact_datalake","command":"sync","status":"ok","status_code":status,**summarize_sync_response(body)})
     return 0
 def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest='cmd',required=True)
     for name in ['build','sync']:
-        s=sub.add_parser(name); s.add_argument('--csv',default=str(DEFAULT_CSV)); s.add_argument('--research-dir',default=str(DEFAULT_RESEARCH_DIR)); s.add_argument('--only-include',action='store_true'); s.set_defaults(func=cmd_build if name=='build' else cmd_sync)
+        s=sub.add_parser(name); s.add_argument('--csv',default=str(DEFAULT_CSV)); s.add_argument('--research-dir',default=str(DEFAULT_RESEARCH_DIR)); s.add_argument('--retarget-research-dir',default=str(DEFAULT_RETARGET_RESEARCH_DIR)); s.add_argument('--only-include',action='store_true'); s.set_defaults(func=cmd_build if name=='build' else cmd_sync)
         if name=='build': s.add_argument('--output'); s.add_argument('--dry-run',action='store_true')
         else: s.add_argument('--api-url',default=os.getenv('POWERPACKS_API_URL') or os.getenv('POWERSET_API_URL') or DEFAULT_API_URL); s.add_argument('--token'); s.add_argument('--timeout',type=int,default=120); s.add_argument('--confirm-sync',action='store_true')
     a=p.parse_args(); raise SystemExit(a.func(a))

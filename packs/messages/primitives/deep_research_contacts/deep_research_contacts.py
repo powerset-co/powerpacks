@@ -43,6 +43,29 @@ from pathlib import Path
 from typing import Any
 
 
+def load_dotenv(path: Path) -> None:
+    """Load simple KEY=VALUE lines into os.environ without overriding env."""
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ[key] = value
+
+
+load_dotenv(Path(__file__).resolve().parents[4] / ".env")
+
+
 DEFAULT_BASE_URL = os.environ.get("POWERPACKS_PARALLEL_BASE_URL", "https://api.parallel.ai")
 DEFAULT_BETA_HEADER = os.environ.get(
     "POWERPACKS_PARALLEL_BETA", "search-extract-2025-10-10"
@@ -90,6 +113,12 @@ When the source is a phone contact:
 - Use the phone mostly as a geography / network-context prior:
   country code, area code, and app context can help determine whether a candidate is directionally plausible,
   even when the exact phone number is not publicly attributable
+- If `known_info` includes `User retarget hint`, treat that hint as the strongest clue from the user:
+  - If it contains a LinkedIn URL, research that exact LinkedIn/person first and enrich that profile
+  - If it names a company, title, school, location, or alternate spelling, search the person's name together with those terms
+  - Prefer a candidate that matches the user hint over a generic phone/name match
+  - If the hint conflicts with other signals, explain the conflict in research_notes and name_evidence
+  - Do not ignore the hint unless it is impossible to reconcile with any plausible public profile
 - Consider alternate spellings and transliterations of the person's name
 - If several candidates are plausible, prefer the strongest professionally relevant candidate
   in startup, investor, operator, technical, academic, or other high-agency career paths
@@ -183,7 +212,7 @@ def now_iso() -> str:
 
 
 def emit(value: Any) -> None:
-    print(json.dumps(value, indent=2, sort_keys=True))
+    print(json.dumps(value, indent=2, sort_keys=True), flush=True)
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -305,6 +334,8 @@ def build_known_info(row: dict[str, str]) -> str:
         parts.append(f"Followed by: {row['whale_names']}")
     if (row.get("moe_top_reasoning") or "").strip():
         parts.append(f"Profile assessment: {row['moe_top_reasoning'][:200]}")
+    if (row.get("retarget_hint") or "").strip():
+        parts.append(f"User retarget hint: {row['retarget_hint']}")
     if (row.get("total_messages") or "").strip():
         parts.append(f"Message count: {row['total_messages']}")
     if (row.get("phone_e164") or "").strip():
@@ -319,8 +350,6 @@ def build_known_info(row: dict[str, str]) -> str:
         parts.append(f"In group chats: {row['is_in_group_chats']}")
     if (row.get("group_names") or "").strip():
         parts.append(f"Group names: {row['group_names']}")
-    if (row.get("priority_reason") or "").strip():
-        parts.append(f"Priority tier: {row['priority_reason']}")
     return "\n".join(parts)
 
 
@@ -593,7 +622,7 @@ def _resolve_api_key(cli_value: str | None) -> str:
     env = os.environ.get("PARALLEL_API_KEY")
     if env:
         return env
-    raise SystemExit("PARALLEL_API_KEY not set (use --api-key or env)")
+    raise SystemExit("PARALLEL_API_KEY not set (pass --api-key or add it to the repo .env)")
 
 
 def _persisted_state_path(output_dir: Path) -> Path:
@@ -732,6 +761,9 @@ def _wait_for_group(client: ParallelClient, group_id: str, *, poll_interval: int
         payload = client.get_group(group_id)
         last = payload
         status = payload.get("status") or {}
+        counts = status.get("task_run_status_counts") or {}
+        if counts:
+            print(f"[deep_research_contacts] poll status {counts}", file=sys.stderr, flush=True)
         if status.get("is_active") is False:
             return payload
         time.sleep(poll_interval)
@@ -859,7 +891,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--api-key", help="Parallel.ai API key (or set PARALLEL_API_KEY)")
+    parser.add_argument("--api-key", help="Parallel.ai API key (defaults to PARALLEL_API_KEY from env or repo .env)")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--beta-header", default=DEFAULT_BETA_HEADER)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), type=Path)

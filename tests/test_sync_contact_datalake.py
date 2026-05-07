@@ -13,6 +13,25 @@ spec.loader.exec_module(sync_contact_datalake)
 
 
 class SyncContactDatalakeTests(unittest.TestCase):
+    def test_sync_response_summary_hides_backend_table_details(self):
+        summary = sync_contact_datalake.summarize_sync_response({
+            "received": 22,
+            "datalake_inserted": 20,
+            "datalake_updated": 2,
+            "operator_contacts_inserted": 99,
+            "linkedin_candidates_inserted": 88,
+            "materialized": False,
+            "skipped": 1,
+            "errors": 0,
+        })
+        self.assertEqual(summary, {
+            "uploaded_contacts": 22,
+            "message": "Uploaded 22 contacts",
+            "errors": 0,
+        })
+        self.assertNotIn("materialized", summary)
+        self.assertNotIn("operator_contacts_inserted", summary)
+
     def test_records_include_aleph_synthetic_profile_shape(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
