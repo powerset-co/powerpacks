@@ -105,10 +105,17 @@ Or pass `--api-key` explicitly when running the LLM review.
 
 ## 2. Install
 
-Pick the adapter for your agent host:
+For Codex, start with the agent-native path:
 
 ```bash
-git clone https://github.com/<org>/powerpacks.git
+codex exec "Clone or update https://github.com/powerset-co/powerpacks into ~/workspace/powerpacks, then run the Codex install step from that repo."
+```
+
+For other hosts, or if you want to run the installer manually, pick the adapter
+from a local checkout:
+
+```bash
+git clone https://github.com/powerset-co/powerpacks.git
 cd powerpacks
 
 ./install.sh codex                       # → ~/.codex/skills/

@@ -10,7 +10,13 @@ only the install adapter differs.
 
 ## Install
 
-Run the adapter install for your harness:
+For Codex, let Codex fetch/update the repo and run the installer:
+
+```bash
+codex exec "Clone or update https://github.com/powerset-co/powerpacks into ~/workspace/powerpacks, then run the Codex install step from that repo."
+```
+
+For direct/manual installs, run the adapter install for your harness:
 
 ```bash
 ./install.sh codex
@@ -125,29 +131,30 @@ Use this path for a new Codex, Claude Code, or Pi setup. A fuller walkthrough is
 [`docs/quickstart.md`](docs/quickstart.md).
 
 ```bash
-# 1. Clone the repo.
+# 1. Let Codex clone/update the repo and run its install adapter.
+codex exec "Clone or update https://github.com/powerset-co/powerpacks into ~/workspace/powerpacks, then run the Codex install step from that repo."
+
+# Or install manually from a local checkout.
 git clone git@github.com:powerset-co/powerpacks.git
 cd powerpacks
-
-# 2. Install the Powerpacks skills into your agent host.
 ./install.sh codex
 # or: ./install.sh claude-code
 # or: ./install.sh pi
 
-# 3. Install/auth the Powerset MCP for MCP-backed skills.
+# 2. Install/auth the Powerset MCP for MCP-backed skills.
 # This starts Auth0 login if needed and writes the bearer token into host config.
 ./install-powerset-mcp.sh --host codex
 # or: ./install-powerset-mcp.sh --host claude
 
-# 4. Verify MCP config.
+# 3. Verify MCP config.
 codex mcp get powerset-search
 # Expected for Codex:
 #   bearer_token_env_var: -
 #   http_headers: Authorization=*****
 
-# 5. Restart the agent host so it reloads skills and MCP config.
+# 4. Restart the agent host so it reloads skills and MCP config.
 
-# 6. Inside the agent, run what you need:
+# 5. Inside the agent, run what you need:
 $search-network senior infra eng at fintech
 $search-company stripe-like fintech infra companies
 $powerset login                   # provisions .env from GCP Secret Manager
@@ -180,6 +187,9 @@ to uninstall first; each adapter wipes and re-copies the skill directories).
 ### Codex
 
 ```bash
+codex exec "Clone or update https://github.com/powerset-co/powerpacks into ~/workspace/powerpacks, then run the Codex install step from that repo."
+
+# Manual equivalent from a local checkout:
 ./install.sh codex                          # default: ~/.codex/skills/
 ./install.sh codex /custom/skills/dir       # explicit target
 ```
