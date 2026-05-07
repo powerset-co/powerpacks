@@ -1,0 +1,58 @@
+import csv
+import importlib.util
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+
+MODULE = Path(__file__).resolve().parents[1] / "packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py"
+spec = importlib.util.spec_from_file_location("sync_contact_datalake", MODULE)
+sync_contact_datalake = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sync_contact_datalake)
+
+
+class SyncContactDatalakeTests(unittest.TestCase):
+    def test_records_include_aleph_synthetic_profile_shape(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            csv_path = root / "research_review.csv"
+            research_dir = root / "research"
+            handle = "phone-test"
+            (research_dir / handle).mkdir(parents=True)
+            profile = {
+                "research_id": "r1",
+                "person": {"full_name": "Jane Doe", "first_name": "Jane", "last_name": "Doe"},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/Jane-Doe/", "primary_phone": "+15551234567"},
+                "headline": {"text": "Founder"},
+                "summary": {"text": "Builds things."},
+                "location": {"city": "San Francisco", "state": "CA", "country": "United States", "raw": "SF"},
+                "positions": [{"title": "Founder", "company_name": "Acme", "start_date": "2024", "is_current": True, "confidence": 0.9}],
+                "education": [{"school_name": "Stanford", "degree": "BS", "confidence": 0.8}],
+                "metadata": {"estimated_completeness": 0.8, "total_sources_consulted": 3, "research_date": "2026-05-06"},
+            }
+            (research_dir / handle / "01_research_parallel.json").write_text(json.dumps(profile))
+            with csv_path.open("w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=["handle", "phone_e164", "full_name", "total_messages", "bucket"])
+                writer.writeheader()
+                writer.writerow({"handle": handle, "phone_e164": "+15551234567", "full_name": "Jane Doe", "total_messages": "5", "bucket": "yes"})
+
+            records = sync_contact_datalake.load_records(csv_path, research_dir)
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["linkedin_url"], "https://www.linkedin.com/in/jane-doe")
+        self.assertEqual(record["public_identifier"], "jane-doe")
+        self.assertEqual(record["processing_status"], "staged")
+        self.assertEqual(record["research_profile"]["research_id"], "r1")
+        synthetic = record["synthetic_profile"]
+        self.assertEqual(synthetic["public_identifier"], "jane-doe")
+        self.assertEqual(synthetic["linkedin_url"], "https://www.linkedin.com/in/jane-doe")
+        self.assertEqual(synthetic["enrichment_provider"], "synthetic")
+        self.assertEqual(synthetic["work_experiences"][0]["company_name"], "Acme")
+        self.assertIn("person_id", synthetic)
+        self.assertTrue(synthetic["synthetic_metadata"]["draft"])
+
+
+if __name__ == "__main__":
+    unittest.main()

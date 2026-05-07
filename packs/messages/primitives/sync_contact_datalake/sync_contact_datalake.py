@@ -9,13 +9,14 @@ Stdlib-only. Does not upload unless `sync --confirm-sync` is passed.
 """
 from __future__ import annotations
 
-import argparse, csv, json, os, subprocess, sys, urllib.error, urllib.request
+import argparse, csv, hashlib, json, os, re, subprocess, sys, urllib.error, urllib.request, uuid
 from pathlib import Path
 from typing import Any
 
 DEFAULT_API_URL="https://search-api-7wk4uhe77q-uw.a.run.app"
 DEFAULT_CSV=Path(".powerpacks/messages/research_review.csv")
 DEFAULT_RESEARCH_DIR=Path(".powerpacks/messages/research")
+UUID_NAMESPACE=uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 def emit(x): print(json.dumps(x,indent=2,sort_keys=True))
 def read_json(p:Path,default=None):
@@ -40,11 +41,121 @@ def profile_for(handle, research_dir):
     return read_json(p,{}) if p.exists() else {}
 def linkedin_from_profile(profile):
     return (((profile or {}).get("social") or {}).get("linkedin_url") or "").strip()
+def public_identifier_from_url(linkedin_url):
+    m=re.search(r"linkedin\.com/in/([^/?#]+)", linkedin_url or "", re.I)
+    return m.group(1).lower().rstrip("/") if m else ""
+def canonical_linkedin_url(linkedin_url):
+    pub=public_identifier_from_url(linkedin_url)
+    return f"https://www.linkedin.com/in/{pub}" if pub else ""
+def normalize_twitter(raw):
+    s=str(raw or "").strip().lstrip("@").strip().lower()
+    return s if re.match(r"^[a-z0-9_]{1,15}$",s) else ""
+def compute_public_identifier(social, person):
+    pub=public_identifier_from_url(social.get("linkedin_url") or "")
+    if pub: return pub
+    tw=normalize_twitter(social.get("twitter_handle"))
+    if tw: return f"synth-x-{tw}"
+    email=(social.get("primary_email") or "").strip().lower()
+    if email: return "synth-"+hashlib.md5(email.encode()).hexdigest()[:8]
+    phone=(social.get("primary_phone") or "").strip()
+    if phone: return "synth-phone-"+hashlib.md5(phone.encode()).hexdigest()[:8]
+    name=(person.get("full_name") or "unknown").strip().lower()
+    return "synth-"+hashlib.md5(name.encode()).hexdigest()[:8]
+def generate_person_id(public_identifier):
+    return str(uuid.uuid5(UUID_NAMESPACE, f"linkedin:{public_identifier.lower()}"))
+def norm_text(v):
+    if v is None: return None
+    if isinstance(v,list):
+        parts=[str(x).replace("\x00","").strip() for x in v if x is not None and str(x).strip()]
+        return "\n".join(parts) or None
+    s=str(v).replace("\x00","").strip()
+    return s or None
+def to_harmonic_date(raw):
+    if not raw: return None
+    parts=str(raw).split("-")
+    try:
+        y=int(parts[0]); m=int(parts[1]) if len(parts)>1 else 1; d=int(parts[2]) if len(parts)>2 else 1
+        return f"{y:04d}-{m:02d}-{d:02d}T00:00:00Z"
+    except (ValueError,TypeError): return None
+
+def synthetic_profile_from_research(profile, row):
+    """Build an Aleph-compatible 04_final_profile-style draft.
+
+    Company URNs are intentionally blank here; the downstream synthetic pipeline
+    can resolve companies/Harmonic and replace this draft before materializing.
+    """
+    if not isinstance(profile,dict) or not profile: return None
+    person=profile.get("person") or {}; social=profile.get("social") or {}; loc=profile.get("location") or {}
+    pub=compute_public_identifier(social, person); person_id=generate_person_id(pub)
+    work=[]
+    for pos in profile.get("positions") or []:
+        if float(pos.get("confidence") or 0) < 0.7: continue
+        end_raw=pos.get("end_date")
+        if str(end_raw or "").lower().strip() in {"present","current","now"}: end_raw=None
+        start=to_harmonic_date(pos.get("start_date")); end=to_harmonic_date(end_raw)
+        work.append({
+            "contact":{"emails":[],"phone_numbers":[],"exec_emails":[],"primary_email":None,"primary_email_person_id":None},
+            "title":pos.get("title") or "",
+            "department":"",
+            "description":norm_text(pos.get("description")),
+            "start_date":start,
+            "end_date":end,
+            "is_current_position":bool(pos.get("is_current")) or bool(start and not end),
+            "location":None,
+            "role_type":"",
+            "company":"",
+            "company_name":pos.get("company_name") or "",
+        })
+    edu=[]
+    for e in profile.get("education") or []:
+        if float(e.get("confidence") or 0) < 0.5 or not e.get("school_name"): continue
+        edu.append({
+            "school":{"name":e.get("school_name") or "","linkedin_url":None,"logo_url":None,"entity_urn":None},
+            "degree":e.get("degree") or None,
+            "field":e.get("field_of_study") or None,
+            "grade":None,
+            "start_date":f"{e['start_year']}-01-01T00:00:00Z" if e.get("start_year") else None,
+            "end_date":f"{e['end_year']}-12-31T00:00:00Z" if e.get("end_year") else None,
+        })
+    current=next((w for w in work if w.get("is_current_position")), work[0] if work else {})
+    return {
+        "person_id":person_id,
+        "public_identifier":pub,
+        "enrichment_provider":"synthetic",
+        "provider_entity_urn":f"synthetic:{pub}",
+        "full_name":person.get("full_name") or "",
+        "first_name":person.get("first_name") or "",
+        "last_name":person.get("last_name") or "",
+        "headline":(profile.get("headline") or {}).get("text") or "",
+        "summary":(profile.get("summary") or {}).get("text"),
+        "city":loc.get("city"),"state":loc.get("state"),"country":loc.get("country"),"location_raw":loc.get("raw"),
+        "x_twitter_handle":normalize_twitter(social.get("twitter_handle")),
+        "linkedin_url":canonical_linkedin_url(social.get("linkedin_url") or ""),
+        "public_profile_url":canonical_linkedin_url(social.get("linkedin_url") or ""),
+        "work_experiences":work,
+        "education":edu,
+        "current_title":current.get("title") or None,
+        "current_company_urn":"",
+        "synthetic_metadata":{
+            "research_id":profile.get("research_id"),
+            "confidence":(profile.get("metadata") or {}).get("estimated_completeness",0),
+            "sources_count":(profile.get("metadata") or {}).get("total_sources_consulted",0),
+            "gaps":(profile.get("metadata") or {}).get("gaps",[]),
+            "research_date":(profile.get("metadata") or {}).get("research_date"),
+            "primary_email":social.get("primary_email"),
+            "primary_phone":social.get("primary_phone") or row.get("phone_e164"),
+            "source_channel":"phone",
+            "version":1,
+            "draft":True,
+        },
+    }
 def row_to_record(row, research_dir):
     handle=(row.get("handle") or "").strip()
     prof=profile_for(handle,research_dir) if handle else {}
     person=(prof.get("person") or {}) if isinstance(prof,dict) else {}
     social=(prof.get("social") or {}) if isinstance(prof,dict) else {}
+    synthetic=synthetic_profile_from_research(prof,row)
+    linkedin=canonical_linkedin_url(linkedin_from_profile(prof))
     return {
         "source_key": handle or None,
         "handle": handle or None,
@@ -54,8 +165,11 @@ def row_to_record(row, research_dir):
         "message_count": int(float(row.get("total_messages") or 0)),
         "bucket": row.get("bucket") or "",
         "upload_decision": decision(row),
-        "linkedin_url": linkedin_from_profile(prof),
+        "linkedin_url": linkedin,
+        "public_identifier": (synthetic or {}).get("public_identifier"),
         "research_profile": prof or None,
+        "synthetic_profile": synthetic,
+        "processing_status": "staged",
         "raw_record": row,
     }
 def load_records(csv_path, research_dir, only_include=False):
@@ -78,10 +192,11 @@ def post_json(api_url, token, payload, timeout=120):
 def cmd_build(args):
     recs=load_records(Path(args.csv),Path(args.research_dir),args.only_include)
     linked=sum(1 for r in recs if r.get("linkedin_url"))
+    synthetic=sum(1 for r in recs if r.get("synthetic_profile"))
     payload={"records":recs,"source":"messages_research_review","dry_run":bool(args.dry_run)}
     if args.output:
         Path(args.output).parent.mkdir(parents=True,exist_ok=True); Path(args.output).write_text(json.dumps(payload,indent=2,sort_keys=True)+"\n")
-    emit({"primitive":"sync_contact_datalake","command":"build","csv":args.csv,"research_dir":args.research_dir,"records":len(recs),"with_linkedin_url":linked,"output":args.output})
+    emit({"primitive":"sync_contact_datalake","command":"build","csv":args.csv,"research_dir":args.research_dir,"records":len(recs),"with_linkedin_url":linked,"with_synthetic_profile":synthetic,"output":args.output})
     return 0
 def cmd_sync(args):
     if not args.confirm_sync:
