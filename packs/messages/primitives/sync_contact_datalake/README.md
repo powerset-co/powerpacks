@@ -22,7 +22,9 @@ python packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py 
 The payload includes:
 
 - operator context from API auth/request body
-- phone/name/message metadata from the review CSV
+- phone/name/message metadata from the review CSV (`phone_e164`/`phone` and
+  `full_name`/`name` are both sent explicitly for WhatsApp/iMessage rows)
+- stable `source_key` derived from the normalized phone number
 - optional canonical `linkedin_url`
 - `public_identifier` using Aleph's synthetic rules (`linkedin slug`, then
   `synth-x-*`, `synth-phone-*`, etc.)

@@ -39,6 +39,17 @@ def decision(row):
 def profile_for(handle, research_dir):
     p=research_dir/handle/"01_research_parallel.json"
     return read_json(p,{}) if p.exists() else {}
+def normalize_phone(raw):
+    s=str(raw or "").strip()
+    if not s: return ""
+    if s.startswith("+"):
+        digits="".join(ch for ch in s[1:] if ch.isdigit())
+        return "+"+digits if digits else ""
+    digits="".join(ch for ch in s if ch.isdigit())
+    return "+"+digits if digits else ""
+def phone_source_key(phone, fallback):
+    normalized=normalize_phone(phone)
+    return "phone-"+hashlib.sha1(normalized.encode()).hexdigest()[:12] if normalized else (fallback or None)
 def linkedin_from_profile(profile):
     return (((profile or {}).get("social") or {}).get("linkedin_url") or "").strip()
 def public_identifier_from_url(linkedin_url):
@@ -156,11 +167,15 @@ def row_to_record(row, research_dir):
     social=(prof.get("social") or {}) if isinstance(prof,dict) else {}
     synthetic=synthetic_profile_from_research(prof,row)
     linkedin=canonical_linkedin_url(linkedin_from_profile(prof))
+    phone=row.get("phone_e164") or social.get("primary_phone")
+    full_name=row.get("full_name") or row.get("name") or person.get("full_name")
     return {
-        "source_key": handle or None,
+        "source_key": phone_source_key(phone, handle),
         "handle": handle or None,
-        "phone_e164": row.get("phone_e164") or social.get("primary_phone"),
-        "full_name": row.get("full_name") or person.get("full_name"),
+        "phone_e164": normalize_phone(phone),
+        "phone": normalize_phone(phone),
+        "full_name": full_name,
+        "name": full_name,
         "source_channel": row.get("message_source") or "messages_research",
         "message_count": int(float(row.get("total_messages") or 0)),
         "bucket": row.get("bucket") or "",
@@ -192,11 +207,13 @@ def post_json(api_url, token, payload, timeout=120):
 def cmd_build(args):
     recs=load_records(Path(args.csv),Path(args.research_dir),args.only_include)
     linked=sum(1 for r in recs if r.get("linkedin_url"))
+    named=sum(1 for r in recs if r.get("full_name") or r.get("name"))
+    phoned=sum(1 for r in recs if r.get("phone_e164") or r.get("phone"))
     synthetic=sum(1 for r in recs if r.get("synthetic_profile"))
     payload={"records":recs,"source":"messages_research_review","dry_run":bool(args.dry_run)}
     if args.output:
         Path(args.output).parent.mkdir(parents=True,exist_ok=True); Path(args.output).write_text(json.dumps(payload,indent=2,sort_keys=True)+"\n")
-    emit({"primitive":"sync_contact_datalake","command":"build","csv":args.csv,"research_dir":args.research_dir,"records":len(recs),"with_linkedin_url":linked,"with_synthetic_profile":synthetic,"output":args.output})
+    emit({"primitive":"sync_contact_datalake","command":"build","csv":args.csv,"research_dir":args.research_dir,"records":len(recs),"with_name":named,"with_phone":phoned,"with_linkedin_url":linked,"with_synthetic_profile":synthetic,"output":args.output})
     return 0
 def cmd_sync(args):
     if not args.confirm_sync:

@@ -41,6 +41,10 @@ class SyncContactDatalakeTests(unittest.TestCase):
 
         self.assertEqual(len(records), 1)
         record = records[0]
+        self.assertEqual(record["phone_e164"], "+15551234567")
+        self.assertEqual(record["phone"], "+15551234567")
+        self.assertEqual(record["full_name"], "Jane Doe")
+        self.assertEqual(record["name"], "Jane Doe")
         self.assertEqual(record["linkedin_url"], "https://www.linkedin.com/in/jane-doe")
         self.assertEqual(record["public_identifier"], "jane-doe")
         self.assertEqual(record["processing_status"], "staged")
