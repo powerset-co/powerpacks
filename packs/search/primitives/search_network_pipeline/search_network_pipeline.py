@@ -174,7 +174,7 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_run(p):
-    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=80); p.add_argument("--top-k",type=int,default=500); p.add_argument("--search-only",action="store_true"); p.add_argument("--confirm-llm",action="store_true"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--rerank-concurrency",type=int,default=200); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
+    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true"); p.add_argument("--confirm-llm",action="store_true"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--rerank-concurrency",type=int,default=200); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
 
 def main():
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)

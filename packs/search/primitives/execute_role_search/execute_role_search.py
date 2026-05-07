@@ -149,7 +149,7 @@ def main() -> None:
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--write-artifact", action="store_true")
-    parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument("--limit", type=int, default=0, help="Max unique people to keep after retrieval; 0 means keep full retrieved frontier")
     parser.add_argument("--top-k", type=int, default=1000)
     args = parser.parse_args()
 

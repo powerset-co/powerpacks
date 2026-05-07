@@ -46,11 +46,18 @@ Command:
 python powerpacks/primitives/execute_role_search/execute_role_search.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
-  --limit 200 \
+  --limit 0 \
+  --top-k 10000 \
   --write-state
 ```
 
 The primitive reads `expand_search_request.output.role_search_filters`, validates
 field/operator usage against the checked-in TurboPuffer contract, embeds the
-dense `semantic_query`, runs BM25 + vector retrieval, dedupes to base person
-IDs, writes a retrieval artifact, and records `candidate_ids` in task state.
+dense `semantic_query` for hybrid searches, runs BM25 + vector retrieval or
+filter-only retrieval, dedupes to base person IDs, writes a retrieval artifact,
+and records `candidate_ids` in task state.
+
+`--top-k` controls TurboPuffer retrieval depth per channel/batch. `--limit`
+controls the number of unique people kept after retrieval; `--limit 0` means no
+post-retrieval cap, which is the local Powerpacks default so the full frontier is
+available in artifacts for paging/inspection.

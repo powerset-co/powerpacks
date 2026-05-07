@@ -17,8 +17,10 @@ The runner executes:
 1. `task_state init` + record `expand_search_request` when needed
 2. `resolve_set_operators`
 3. relevant ID resolvers (`resolve_companies`, `resolve_education`, `resolve_investors`)
-4. `execute_role_search`
-5. `hydrate_people`
+4. `apply_prefilters`
+5. `execute_role_search` (defaults: `--limit 0 --top-k 10000`; `limit=0`
+   means keep the full retrieved frontier locally)
+6. `hydrate_people`
 6. optional LLM filter/rerank after explicit `approve llm`
 7. `persist_search_results`
 
@@ -30,3 +32,8 @@ python ... continue --ledger <ledger>
 ```
 
 Use `--search-only` to skip LLM spend and go straight to persistence.
+
+Powerpacks local search is not constrained by a web response size. The default
+retrieves and hydrates the full available frontier from the local run, writes it
+to artifacts, and leaves paging/inspection to local result viewers or follow-up
+queries.

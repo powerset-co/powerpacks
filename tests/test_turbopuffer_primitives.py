@@ -162,6 +162,15 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(hydrate_people.frontier_ids(state), ["p1", "p2"])
         self.assertEqual(results_io.frontier_ids(state), ["p1", "p2"])
 
+    def test_dedupe_people_limit_zero_keeps_full_frontier(self) -> None:
+        rows = [
+            {"id": "p1-0", "base_id": "p1", "score": 1.0},
+            {"id": "p2-0", "base_id": "p2", "score": 0.9},
+            {"id": "p3-0", "base_id": "p3", "score": 0.8},
+        ]
+        self.assertEqual(len(turbopuffer_client.dedupe_people(rows, limit=0)), 3)
+        self.assertEqual(len(turbopuffer_client.dedupe_people(rows, limit=2)), 2)
+
     def test_result_rows_use_execute_role_search_order(self) -> None:
         state = {
             "task_id": "task",

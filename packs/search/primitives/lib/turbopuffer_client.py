@@ -648,6 +648,12 @@ async def hybrid_role_rows(
 
 
 def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    """Collapse position rows to unique people.
+
+    limit <= 0 means keep the full retrieved frontier. This is the Powerpacks
+    default so agents can save/query local artifacts instead of truncating data
+    for chat display.
+    """
     seen: set[str] = set()
     candidates: list[dict[str, Any]] = []
     for row in rows:
@@ -667,6 +673,6 @@ def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, A
             "company_id": row.get("company_id"),
             "is_current": row.get("is_current"),
         })
-        if len(candidates) >= limit:
+        if limit and limit > 0 and len(candidates) >= limit:
             break
     return candidates
