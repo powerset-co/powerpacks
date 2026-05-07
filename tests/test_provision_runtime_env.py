@@ -184,7 +184,7 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
 
             payload = json.loads(proc.stdout)
             # Non-powerset.co users now get a structured `not_privileged`
-            # response instead of a hard error, so the powerset-login skill
+            # response instead of a hard error, so the $powerset login flow
             # can surface a friendly contact-us message.
             self.assertEqual(proc.returncode, 1)
             self.assertEqual(payload["status"], "not_privileged")
@@ -367,13 +367,12 @@ class DoctorTests(unittest.TestCase):
     def test_doctor_emits_structured_report_with_required_check_ids(self) -> None:
         # Run the real doctor on this machine. We don't assert specific
         # statuses (those vary by user/box); we assert the report shape so
-        # the powerset-login skill can rely on it.
+        # the $powerset login flow can rely on it.
         proc = subprocess.run(
             [sys.executable, str(self.DOCTOR), "run",
              "--profile", "search-core",
              "--env-file", "/tmp/__doctor_test_no_env__",
-             "--gcp-project", "powerset-search",
-             "--skip-adc"],
+             "--gcp-project", "powerset-search"],
             cwd=ROOT, capture_output=True, text=True,
         )
         self.assertIn(proc.returncode, (0, 1), proc.stderr)
@@ -382,6 +381,8 @@ class DoctorTests(unittest.TestCase):
         self.assertIn(payload["overall"], ("ok", "warn", "needs_setup"))
         ids = {c["id"] for c in payload["checks"]}
         # `python`, `gcloud_installed`, `auth0_login`, `env_file` are always run.
+        # ADC is opt-in because normal Powerpacks workflows do not need it.
+        self.assertNotIn("gcloud_adc", ids)
         self.assertIn("python", ids)
         self.assertIn("gcloud_installed", ids)
         self.assertIn("auth0_login", ids)

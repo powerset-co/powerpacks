@@ -7,9 +7,14 @@ SKILLS_DIR="${1:-$CODEX_HOME/skills}"
 
 mkdir -p "$SKILLS_DIR"
 rm -rf "$SKILLS_DIR/import-messages"
+"$REPO_ROOT/bin/setup-python"
 
 copy_powerpacks_bundle() {
   local dest="$1"
+  cp "$REPO_ROOT/pyproject.toml" "$dest/powerpacks/pyproject.toml"
+  if [[ -f "$REPO_ROOT/uv.lock" ]]; then
+    cp "$REPO_ROOT/uv.lock" "$dest/powerpacks/uv.lock"
+  fi
   # Cross-pack docs + host-install templates (no top-level primitives/skills/
   # schemas anymore — every domain lives in packs/).
   cp -R "$REPO_ROOT/docs" "$dest/powerpacks/docs"
@@ -49,6 +54,8 @@ EOF
 install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKILL.md"
 install_skill extract-search-query "$REPO_ROOT/packs/search/skills/extract-search-query/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
+install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
+install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill import-contacts "$REPO_ROOT/packs/messages/skills/import-contacts/SKILL.md"
@@ -57,5 +64,11 @@ install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/
 install_skill import-contacts-review "$REPO_ROOT/packs/messages/skills/import-contacts-review/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company powerset-login powerset-set sales-nav-search import-contacts import-imessage import-whatsapp import-contacts-review"
+if uv run --project "$REPO_ROOT" python "$REPO_ROOT/bin/agent-bootstrap"; then
+  echo "generated local Codex profile in $REPO_ROOT/.codex/AGENTS.md from $REPO_ROOT/PROFILE.md"
+else
+  echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
+fi
+
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search import-contacts import-imessage import-whatsapp import-contacts-review"
 echo "restart Codex to pick up the skill list"

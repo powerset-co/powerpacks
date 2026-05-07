@@ -101,7 +101,7 @@ calls and the matching `get_artifact` call.
 Prefer the resumable Sales Nav orchestrator for normal runs:
 
 ```bash
-python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py run \
+uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py run \
   --query "<user query>" \
   --set-id "<set_id>" \
   --search-args-json .powerpacks/sales-nav/<run>/search_args.json
@@ -140,7 +140,7 @@ into these files:
 Initialize once per search:
 
 ```bash
-python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py init \
+uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py init \
   --query "<user query>" \
   --set-id "<set_id>" \
   --conversation-id "<conversation_id>"
@@ -152,7 +152,7 @@ call `get_artifact(include_content=true)` for the returned `artifact_id`, save
 that full artifact response, and ingest with `--prefer-content`:
 
 ```bash
-python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-page \
+uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-page \
   --state .powerpacks/sales-nav/runs/<run>/state.json \
   --response .powerpacks/sales-nav/runs/<run>/pages/artifact-full-000.json \
   --prefer-content
@@ -162,7 +162,7 @@ When the user asks for mutual LinkedIn URLs, first get pending IDs from the
 local file store:
 
 ```bash
-python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py pending-mutual-ids \
+uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py pending-mutual-ids \
   --state .powerpacks/sales-nav/runs/<run>/state.json --limit 100
 ```
 
@@ -170,7 +170,7 @@ Pass those IDs to MCP `sales_nav_resolve_member_ids`, save the MCP response,
 then merge it:
 
 ```bash
-python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-member-urls \
+uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-member-urls \
   --state .powerpacks/sales-nav/runs/<run>/state.json \
   --response .powerpacks/sales-nav/runs/<run>/member_urls.response.json
 ```
@@ -182,7 +182,7 @@ profile fields (`summary`, `experiences`, `education`).
 For final files:
 
 ```bash
-python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py export \
+uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py export \
   --state .powerpacks/sales-nav/runs/<run>/state.json
 ```
 
@@ -193,7 +193,7 @@ titles, companies, headlines, summaries, experiences, and education in
 `leads.jsonl` and joins mutuals:
 
 ```bash
-python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py lookup \
+uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py lookup \
   --state .powerpacks/sales-nav/runs/<run>/state.json --query "<name/company/title>"
 ```
 
@@ -201,7 +201,7 @@ For qualitative/refinement questions (for example "show me people with real
 estate exposure"), run the scoring primitive instead of grepping manually:
 
 ```bash
-python packs/sales-nav/primitives/score_sales_nav_leads/score_sales_nav_leads.py \
+uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/score_sales_nav_leads/score_sales_nav_leads.py \
   --state .powerpacks/sales-nav/runs/<run>/state.json \
   --criteria "real estate exposure" \
   --threshold 0.7
@@ -216,7 +216,7 @@ matching leads to `scores/<criteria>/matches.jsonl`, and writes the user-facing
 ### Step 0 — Confirm prereqs
 
 ```bash
-python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py status --host all
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py status --host all
 ```
 
 If `installed: false` for the host the user is on, route to
@@ -227,7 +227,7 @@ If `installed: false` for the host the user is on, route to
 If the user provided a `set_id`, use it. Otherwise run:
 
 ```bash
-python powerpacks/packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
+uv run --project powerpacks python powerpacks/packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
   --env-file .env
 ```
 

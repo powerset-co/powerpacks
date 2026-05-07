@@ -57,7 +57,7 @@ to the user before doing anything.
 ### 1. Check Docker availability
 
 ```bash
-python packs/messages/primitives/waha_runtime/waha_runtime.py check
+uv run --project powerpacks python powerpacks/packs/messages/primitives/waha_runtime/waha_runtime.py check
 ```
 
 Inspect the JSON manifest:
@@ -77,7 +77,7 @@ After explicit user approval, or when `import-contacts` has already collected
 workflow consent:
 
 ```bash
-python packs/messages/primitives/waha_runtime/waha_runtime.py up
+uv run --project powerpacks python powerpacks/packs/messages/primitives/waha_runtime/waha_runtime.py up
 ```
 
 Reuse-on-rerun is the default. To force a clean container, pass `--recreate`.
@@ -87,7 +87,7 @@ the user should be told about up front.
 ### 3. Authenticate the session via QR code
 
 ```bash
-python packs/messages/primitives/waha_session/waha_session.py start --open --wait
+uv run --project powerpacks python powerpacks/packs/messages/primitives/waha_session/waha_session.py start --open --wait
 ```
 
 This:
@@ -106,7 +106,7 @@ If `start --wait` times out, run `wait` again to keep polling without
 recreating the session:
 
 ```bash
-python packs/messages/primitives/waha_session/waha_session.py wait
+uv run --project powerpacks python powerpacks/packs/messages/primitives/waha_session/waha_session.py wait
 ```
 
 ### 4. Extract contacts
@@ -115,7 +115,7 @@ After explicit user approval, or when `import-contacts` has already collected
 workflow consent:
 
 ```bash
-python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py extract \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py extract \
   --output-csv .powerpacks/messages/whatsapp.contacts.csv \
   --output-jsonl .powerpacks/messages/whatsapp.contacts.jsonl
 ```
@@ -127,7 +127,7 @@ fast, less complete run.
 ### 5. Normalize into the canonical schema
 
 ```bash
-python packs/messages/primitives/normalize_message_contacts/normalize_message_contacts.py normalize \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/normalize_message_contacts/normalize_message_contacts.py normalize \
   --input .powerpacks/messages/whatsapp.contacts.csv \
   --out-jsonl .powerpacks/messages/whatsapp.contacts.normalized.jsonl
 ```
@@ -135,7 +135,7 @@ python packs/messages/primitives/normalize_message_contacts/normalize_message_co
 ### 5b. Merge with iMessage (if iMessage was already imported)
 
 ```bash
-python packs/messages/primitives/merge_message_contacts/merge_message_contacts.py merge \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/merge_message_contacts/merge_message_contacts.py merge \
   --input .powerpacks/messages/imessage.contacts.csv \
   --input .powerpacks/messages/whatsapp.contacts.csv \
   --output .powerpacks/messages/contacts.csv
@@ -148,7 +148,7 @@ This dedupes by phone, unions sources/groups, and keeps the higher
 ### 6. Tear down (optional)
 
 ```bash
-python packs/messages/primitives/waha_runtime/waha_runtime.py down
+uv run --project powerpacks python powerpacks/packs/messages/primitives/waha_runtime/waha_runtime.py down
 ```
 
 Add `--purge-session` if the user wants to wipe the persisted WhatsApp

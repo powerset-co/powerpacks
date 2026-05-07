@@ -48,7 +48,9 @@ DEFAULT_BETA_HEADER = os.environ.get(
     "POWERPACKS_PARALLEL_BETA", "search-extract-2025-10-10"
 )
 DEFAULT_PROCESSOR = os.environ.get("POWERPACKS_PARALLEL_PROCESSOR", "core2x")
-PROCESSOR_PRICING_USD = {"core2x": 0.05, "pro": 0.10, "ultra8x": 2.40}
+# Cost guardrail: Powerpacks contact research may use core/core2x/pro only.
+ALLOWED_PROCESSORS = {"core", "core2x", "pro"}
+PROCESSOR_PRICING_USD = {"core": 0.025, "core2x": 0.05, "pro": 0.10}
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/messages/research")
 DEFAULT_BATCH_SIZE = 50
@@ -575,6 +577,16 @@ def filter_already_done(rows: list[dict[str, str]], output_dir: Path) -> tuple[l
 # Subcommands
 # ---------------------------------------------------------------------------
 
+def _validate_processor(processor: str) -> str:
+    if processor not in ALLOWED_PROCESSORS:
+        allowed = ", ".join(sorted(ALLOWED_PROCESSORS))
+        raise SystemExit(
+            f"processor '{processor}' is blocked for Powerpacks contact research; "
+            f"allowed processor: {allowed}"
+        )
+    return processor
+
+
 def _resolve_api_key(cli_value: str | None) -> str:
     if cli_value:
         return cli_value
@@ -589,12 +601,13 @@ def _persisted_state_path(output_dir: Path) -> Path:
 
 
 def cmd_estimate(args: argparse.Namespace) -> int:
+    processor = _validate_processor(args.processor)
     rows = load_queue(Path(args.input))
     output_dir = Path(args.output_dir)
     todo, skipped_done = filter_already_done(rows, output_dir)
     if args.limit is not None:
         todo = todo[: args.limit]
-    cost_per = PROCESSOR_PRICING_USD.get(args.processor, 0.10)
+    cost_per = PROCESSOR_PRICING_USD[processor]
     emit({
         "primitive": "deep_research_contacts",
         "command": "estimate",
@@ -603,7 +616,7 @@ def cmd_estimate(args: argparse.Namespace) -> int:
         "queue_rows": len(rows),
         "skipped_already_done": skipped_done,
         "would_submit": len(todo),
-        "processor": args.processor,
+        "processor": processor,
         "estimated_usd": round(len(todo) * cost_per, 4),
     })
     return 0
@@ -638,6 +651,7 @@ def _load_group_id(output_dir: Path) -> str | None:
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
+    processor = _validate_processor(args.processor)
     api_key = _resolve_api_key(args.api_key)
     rows = load_queue(Path(args.input))
     output_dir = Path(args.output_dir)
@@ -670,8 +684,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
         {
             "task_spec": spec,
             "input": build_input(row, row["handle"]),
-            "metadata": {"handle": row["handle"], "processor": args.processor},
-            "processor": args.processor,
+            "metadata": {"handle": row["handle"], "processor": processor},
+            "processor": processor,
         }
         for row in todo
     ]
@@ -685,7 +699,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
 
     state = {
         "taskgroup_id": group_id,
-        "processor": args.processor,
+        "processor": processor,
         "submitted_at": now_iso(),
         "input_csv": str(args.input),
         "rows_submitted": len(todo),
@@ -696,13 +710,13 @@ def cmd_submit(args: argparse.Namespace) -> int:
     }
     write_json(_persisted_state_path(output_dir), state)
 
-    cost_per = PROCESSOR_PRICING_USD.get(args.processor, 0.10)
+    cost_per = PROCESSOR_PRICING_USD[processor]
     emit({
         "primitive": "deep_research_contacts",
         "command": "submit",
         "status": "submitted",
         "taskgroup_id": group_id,
-        "processor": args.processor,
+        "processor": processor,
         "submitted": len(all_run_ids),
         "skipped_already_done": skipped_done,
         "estimated_usd": round(len(all_run_ids) * cost_per, 4),
@@ -854,7 +868,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 def add_submit_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", required=True, help="research_queue.csv (from prepare_research_queue)")
     parser.add_argument("--processor", default=DEFAULT_PROCESSOR,
-                        choices=list(PROCESSOR_PRICING_USD))
+                        choices=sorted(ALLOWED_PROCESSORS))
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--limit", type=int, help="Cap rows submitted (after dedup)")
 
@@ -874,7 +888,7 @@ def main() -> None:
     estimate = sub.add_parser("estimate", help="Cost estimate without API calls")
     estimate.add_argument("--input", required=True)
     estimate.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), type=Path)
-    estimate.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=list(PROCESSOR_PRICING_USD))
+    estimate.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=sorted(ALLOWED_PROCESSORS))
     estimate.add_argument("--limit", type=int)
     estimate.set_defaults(func=cmd_estimate)
 

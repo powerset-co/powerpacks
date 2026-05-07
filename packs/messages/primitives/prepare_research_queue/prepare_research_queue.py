@@ -414,9 +414,9 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         writer.writerows(eligible)
 
     estimate = {
+        "core_usd": round(len(eligible) * 0.025, 2),
         "core2x_usd": round(len(eligible) * 0.05, 2),
         "pro_usd": round(len(eligible) * 0.10, 2),
-        "ultra8x_usd": round(len(eligible) * 2.40, 2),
     }
     manifest = {
         "primitive": "prepare_research_queue",

@@ -17,9 +17,14 @@ case "$TARGET" in
     shift
     exec "$ROOT/adapters/claude-code/install.sh" "$@"
     ;;
+  pi)
+    shift
+    exec "$ROOT/adapters/pi/install.sh" "$@"
+    ;;
   "")
     echo "usage: ./install.sh codex [skills-dir]" >&2
     echo "       ./install.sh claude-code [skills-dir]" >&2
+    echo "       ./install.sh pi [skills-dir]" >&2
     echo "       ./install.sh nanoclaw /path/to/nanoclaw" >&2
     exit 1
     ;;
@@ -27,6 +32,7 @@ case "$TARGET" in
     echo "error: unknown adapter '$TARGET'" >&2
     echo "usage: ./install.sh codex [skills-dir]" >&2
     echo "       ./install.sh claude-code [skills-dir]" >&2
+    echo "       ./install.sh pi [skills-dir]" >&2
     echo "       ./install.sh nanoclaw /path/to/nanoclaw" >&2
     exit 1
     ;;

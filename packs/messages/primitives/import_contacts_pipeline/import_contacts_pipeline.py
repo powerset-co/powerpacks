@@ -39,6 +39,7 @@ DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
 DEFAULT_REVIEW_CSV = Path(".powerpacks/messages/research_review.csv")
 DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 DEFAULT_PROCESSOR = "core2x"
+ALLOWED_PARALLEL_PROCESSORS = ("core", "core2x", "pro")
 DEFAULT_LLM_AUTO_APPROVE_USD = 1.0
 DEFAULT_REVIEW_PORT = 8766
 
@@ -621,6 +622,11 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     ledger_path = Path(args.ledger)
     ledger = load_ledger(ledger_path)
     hydrate_args_from_ledger(args, ledger)
+    if args.processor not in ALLOWED_PARALLEL_PROCESSORS:
+        raise PipelineFailed(
+            f"processor '{args.processor}' is blocked for Powerpacks contact research; "
+            f"allowed processors: {', '.join(ALLOWED_PARALLEL_PROCESSORS)}"
+        )
     ledger["current_block"] = None
     ledger["config"] = {
         "contacts": str(args.contacts),
@@ -646,7 +652,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         payload = {
             "primitive": "import_contacts_pipeline",
             "status": "blocked_user_action",
-            "message": f"Review the web UI at {review_url(args)}. Re-run without --stop-before-upload when ready to summarize/upload.",
+            "message": f"Review the web UI at {review_url(args)}. When you're done, tell the agent: 'done with review, upload'. The agent will summarize counts and ask for explicit upload/datalake approval before syncing anything.",
             "review_url": review_url(args),
             "ledger": str(ledger_path),
         }
@@ -743,7 +749,7 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--research-dir", type=Path, default=DEFAULT_RESEARCH_DIR)
     parser.add_argument("--review-csv", type=Path, default=DEFAULT_REVIEW_CSV)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--processor", default=DEFAULT_PROCESSOR)
+    parser.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=ALLOWED_PARALLEL_PROCESSORS)
     parser.add_argument("--llm-auto-approve-usd", type=float, default=DEFAULT_LLM_AUTO_APPROVE_USD)
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--timeout", type=int, default=300)

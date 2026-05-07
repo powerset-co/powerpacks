@@ -139,7 +139,7 @@ def auth_token_from_powerpacks() -> str:
     if result.returncode != 0:
         detail = (result.stdout or result.stderr or "").strip()
         raise UploadError(
-            "could not get a Powerset access token; run `$powerset-login` first"
+            "could not get a Powerset access token; run `$powerset login` first"
             + (f": {detail}" if detail else "")
         )
     token = result.stdout.strip()

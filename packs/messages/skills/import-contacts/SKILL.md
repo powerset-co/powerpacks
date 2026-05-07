@@ -194,8 +194,11 @@ This is the default review surface after Parallel runs. It shows the profile
 data from `01_research_parallel.json` and autosaves yes/no decisions to the
 `exclude` column in `research_review.csv`.
 
-After review, summarize the upload artifact and ask before uploading. Make clear
-that nothing has been uploaded yet:
+After opening the review UI, tell the user: "When you're done reviewing, say
+'done with review, upload'. I'll summarize counts and ask for explicit
+upload/datalake approval before syncing anything." After review, summarize the
+upload artifact and ask before uploading. Make clear that nothing has been
+uploaded yet:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py summarize \

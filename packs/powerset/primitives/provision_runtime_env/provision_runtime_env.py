@@ -248,7 +248,14 @@ def _gcloud_describe_secret(name: str, project: str | None) -> dict[str, Any]:
     proc = subprocess.run(command, text=True, capture_output=True)
     if proc.returncode == 0:
         return {"exists": True, "accessible": True, "error": None}
-    err = (proc.stderr or proc.stdout or "").strip().lower()
+    raw_err = (proc.stderr or proc.stdout or "").strip()
+    err = raw_err.lower()
+    if (
+        "problem refreshing your current auth tokens" in err
+        or "reauthentication failed" in err
+        or "gcloud auth login" in err
+    ):
+        return {"exists": False, "accessible": False, "error": "gcloud_auth_error", "detail": raw_err[:200]}
     if "permission_denied" in err or "permission denied" in err or "forbidden" in err:
         return {"exists": True, "accessible": False, "error": "permission_denied"}
     if "not_found" in err or "not found" in err or "does not exist" in err:
@@ -312,6 +319,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
     accessible_ids: list[str] = []
     denied_ids: list[str] = []
     missing_ids: list[str] = []
+    auth_error_ids: list[str] = []
     for key in keys:
         secret_id = per_user_secret_id(base_map[key], email)
         probe = _gcloud_describe_secret(secret_id, args.gcp_project)
@@ -320,13 +328,17 @@ def cmd_probe(args: argparse.Namespace) -> int:
             accessible_ids.append(key)
         elif probe.get("error") == "not_found":
             missing_ids.append(key)
+        elif probe.get("error") == "gcloud_auth_error":
+            auth_error_ids.append(key)
         else:
             denied_ids.append(key)
 
-    if accessible_ids and not denied_ids and not missing_ids:
+    if accessible_ids and not denied_ids and not missing_ids and not auth_error_ids:
         status = "ok"
     elif accessible_ids:
         status = "partial"
+    elif auth_error_ids and not denied_ids and not missing_ids:
+        status = "gcloud_auth_error"
     elif missing_ids and not denied_ids:
         status = "not_provisioned"
     else:
@@ -344,8 +356,11 @@ def cmd_probe(args: argparse.Namespace) -> int:
         "accessible": accessible_ids,
         "denied": denied_ids,
         "not_provisioned": missing_ids,
+        "auth_error": auth_error_ids,
     }
-    if status != "ok":
+    if status == "gcloud_auth_error":
+        payload["message"] = "gcloud is signed in but its credentials need reauthentication; run `gcloud auth login` and retry."
+    elif status != "ok":
         payload["message"] = _CONTACT_MESSAGE
     emit(payload)
     return 0
@@ -536,7 +551,7 @@ def main() -> None:
         action="store_true",
         help=(
             "Exit 0 even when gcloud is missing or the user is not privileged."
-            " Used by the powerset-login skill so unprivileged users still get"
+            " Used by the $powerset login flow so unprivileged users still get"
             " their Auth0 JWT and a clear contact-us message."
         ),
     )

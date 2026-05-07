@@ -3,4 +3,7 @@
 # packs/powerset/primitives/doctor/doctor.py.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --project "$ROOT" python "$ROOT/packs/powerset/primitives/doctor/doctor.py" "$@"
+fi
 exec python3 "$ROOT/packs/powerset/primitives/doctor/doctor.py" "$@"

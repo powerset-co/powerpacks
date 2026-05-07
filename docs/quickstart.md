@@ -7,7 +7,7 @@ This walkthrough assumes:
 
 - macOS or Linux laptop
 - you can install software with Homebrew (macOS) or apt (Linux)
-- you have a Powerset account (for `$powerset-login`)
+- you have a Powerset account (for `$powerset login`)
 
 If you only want a subset of skills, you can skip the prereq sections you
 don't need.
@@ -19,10 +19,11 @@ don't need.
 ### Common (every skill)
 
 ```bash
-# Python 3.9 or newer
+# Python 3.10 or newer
 python3 --version
 
-# git
+# uv + git
+uv --version
 git --version
 ```
 
@@ -30,16 +31,19 @@ macOS users on a fresh box:
 
 ```bash
 xcode-select --install
-brew install python git
+brew install python uv git
 ```
+
+The adapter install also runs `bin/setup-python`; if `uv` is missing and
+Homebrew is available, setup installs `uv` automatically.
 
 ### `search-network` / `search-company`
 
 These hit Powerset infrastructure, so you need a working `.env`. Run
-`$powerset-login` (below) to populate it, or copy `packs/powerset/templates/env.example` to
+`$powerset login` (below) to populate it, or copy `packs/powerset/templates/env.example` to
 `.env` and fill it in manually.
 
-### `powerset-login` (recommended setup path)
+### `$powerset login` (recommended setup path)
 
 Powerset employees only. Pulls allowlisted secrets from GCP Secret Manager
 into a local `.env`.
@@ -49,7 +53,6 @@ brew install --cask google-cloud-sdk    # macOS
 # or: curl https://sdk.cloud.google.com | bash
 
 gcloud auth login                       # use your @powerset.co account
-gcloud auth application-default login   # for ADC-based clients
 gcloud config set project powerset-prod
 ```
 
@@ -113,14 +116,16 @@ cd powerpacks
 
 ./install.sh codex                       # → ~/.codex/skills/
 ./install.sh claude-code                 # → ~/.claude/skills/
+./install.sh pi                          # → ~/.pi/agent/skills/
 ./install.sh nanoclaw /path/to/nanoclaw
 ```
 
-Each adapter copies all 7 skills as `<skill>/SKILL.md` plus a sibling
+Each adapter copies the Powerpacks skills as `<skill>/SKILL.md` plus a sibling
 `<skill>/powerpacks/` bundle that holds the primitives, schemas, contracts,
 tasks, and packs the skill resolves at runtime.
 
-**Restart your agent host** after install so it reloads the skill list.
+**Restart your agent host** after install so it reloads the skill list. In Pi,
+you can also run `/reload`.
 
 ---
 
@@ -143,22 +148,18 @@ scripts/smoke-messages.sh
 
 ## 4. First run, per skill
 
-### `$powerset-login` — bootstrap your `.env`
+### `$powerset login` — bootstrap your `.env`
 
-Inside Codex / Claude Code:
+Inside Codex / Claude Code / Pi:
 
 ```text
-$powerset-login
+$powerset login
 ```
 
-It runs:
-
-1. `gcloud auth list` — verifies your account
-2. `provision_runtime_env plan` — shows which keys are about to be written
-   (no values printed)
-3. on your explicit "go" → `provision_runtime_env pull` — fetches secrets and
-   writes `.env` (mode `0600`)
-4. `provision_runtime_env check` — confirms all required keys are set
+It runs the Powerset doctor, starts Auth0 login if needed, pulls allowlisted
+secrets into `.env` (no values printed), and installs/refreshes the
+`powerset-search` MCP. It does not check gcloud application-default credentials;
+ADC is not needed for normal Powerpacks workflows.
 
 Pick a profile based on what you'll use:
 
@@ -239,7 +240,7 @@ The pack is privacy-first:
 | `provision_runtime_env pull` rejects your account | Switch active accounts: `gcloud config set account you@powerset.co`. |
 | `auth login` browser callback never returns | Make sure nothing else is listening on `127.0.0.1:9876`. |
 | `llm_review_contacts review` says "OPENROUTER_API_KEY not provided" | `export OPENROUTER_API_KEY=sk-or-...` or pass `--api-key`. |
-| Codex / Claude Code doesn't see the new skills | Restart the host. Skills are read once at startup. |
+| Codex / Claude Code / Pi doesn't see the new skills | Restart the host. In Pi, `/reload` also reloads skills. |
 
 For deeper diagnostics, every primitive writes a JSON manifest with counts,
 diagnostics, and timings. Look under `.powerpacks/runs/` and

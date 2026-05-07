@@ -19,11 +19,11 @@ It only manages local set scope:
 ## Workflow
 
 1. Ensure Powerset login exists. If credentials are missing, route the user to
-   `$powerset-login`.
+   `$powerset login`.
 2. Confirm the Powerset Search MCP is installed when needed:
 
 ```bash
-python packs/powerset/primitives/mcp_install/mcp_install.py status --host all
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py status --host all
 ```
 
 3. List sets by calling the Powerset Search MCP `list_sets` tool directly.

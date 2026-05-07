@@ -518,7 +518,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
     Refreshes the token if needed, then decodes it locally to surface email,
     roles, and a coarse `authorization` (admin / user / unauthorized) so
-    `powerset-login` can decide what to do next.
+    `$powerset login` can decide what to do next.
     """
     try:
         creds = _credentials_with_fresh_token(

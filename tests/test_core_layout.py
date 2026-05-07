@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,7 @@ class CoreLayoutTests(unittest.TestCase):
         powerset_pack = sorted(
             path.name for path in (ROOT / "packs/powerset/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(powerset_pack, ["powerset-login", "powerset-set"])
+        self.assertEqual(powerset_pack, ["powerset", "powerset-login", "powerset-set"])
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
@@ -41,6 +42,29 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("company_semantic_queries", text)
         self.assertIn("investor_names", text)
         self.assertIn("company_sector_strategy", text)
+
+    def test_pi_adapter_installs_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            skills_dir = Path(td) / "skills"
+            proc = subprocess.run(
+                [str(ROOT / "install.sh"), "pi", str(skills_dir)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "POWERPACKS_SKIP_UV_SYNC": "1"},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "search-network" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())
+            self.assertTrue((skills_dir / "search-network" / "powerpacks" / "pyproject.toml").exists())
+            self.assertIn(
+                "turbopuffer",
+                (skills_dir / "search-network" / "powerpacks" / "pyproject.toml").read_text(),
+            )
+            self.assertFalse(
+                (skills_dir / "powerset" / "powerpacks" / "packs" / "powerset" / "skills" / "powerset" / "SKILL.md").exists()
+            )
 
     def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()

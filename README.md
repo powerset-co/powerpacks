@@ -2,11 +2,23 @@
 
 `powerpacks` is a portable bundle of skills + deterministic primitives +
 check-in data contracts that turn a coding-agent host (Codex, Claude Code,
-NanoClaw) into a recruiting-search and contact-import workstation backed by
+Pi, NanoClaw) into a recruiting-search and contact-import workstation backed by
 Powerset.
 
 The core package is host-agnostic. The same skills run unchanged across hosts;
 only the install adapter differs.
+
+## Install
+
+Run the adapter install for your harness:
+
+```bash
+./install.sh codex
+```
+
+The install flow runs `bin/setup-python`, which installs `uv` on macOS when
+Homebrew is available, then installs Python project dependencies from
+`pyproject.toml` / `uv.lock`.
 
 ## Skills
 
@@ -25,13 +37,13 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`powerset-login`](packs/powerset/skills/powerset-login/SKILL.md) | `$powerset-login` | Single Powerset login flow: Auth0 PKCE for your user JWT, then best-effort `.env` provisioning from GCP Secret Manager. Privileged users get TurboPuffer / Postgres / OpenAI / OpenRouter / Parallel / RapidAPI keys; everyone else still ends up with a usable Auth0 token. Also installs the `powerset-search` MCP into Claude Code / Codex. |
+| [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: login, setup status, Auth0 identity, MCP install, env provisioning, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
 
 ### Sales Nav
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`sales-nav-search`](packs/sales-nav/skills/sales-nav-search/SKILL.md) | `$sales-nav-search` | Run a Sales Navigator search through the `powerset-search` MCP. Resolves company / title filters, runs a paginated lead search with server-side artifact persistence on by default, paginates via `get_artifact`. Depends on `$powerset-login` having run first. |
+| [`sales-nav-search`](packs/sales-nav/skills/sales-nav-search/SKILL.md) | `$sales-nav-search` | Run a Sales Navigator search through the `powerset-search` MCP. Resolves company / title filters, runs a paginated lead search with server-side artifact persistence on by default, paginates via `get_artifact`. Depends on `$powerset login` having run first. |
 
 ### Messages pack
 
@@ -47,7 +59,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
 - give the agent operational entrypoints: `$search-network <query>`,
-  `$search-company <query>`, `$powerset-login`, and the messages-pack import
+  `$search-company <query>`, `$powerset login`, and the messages-pack import
   skills
 - decompose broad recruiting queries into bounded retrieval plans
 - persist task state and CSV/JSONL artifacts so users can refine prior runs
@@ -64,7 +76,8 @@ powerpacks/
 ├── packs/
 │   ├── powerset/           identity + runtime env + MCP install
 │   │   │                   (depended on by every other pack)
-│   │   ├── skills/         powerset-login (one unified login flow)
+│   │   ├── skills/         powerset (unified commands), powerset-login,
+│   │   │                   powerset-set (backcompat aliases)
 │   │   ├── primitives/     auth/ (Auth0 PKCE),
 │   │   │                   provision_runtime_env/ (best-effort GCP pull),
 │   │   │                   provision_user_secrets/ (admin: per-user GCP),
@@ -94,7 +107,7 @@ powerpacks/
 │       ├── schemas/        message-contact, messages-run-manifest
 │       ├── tasks/          import-*.task.json
 │       └── docs/           harness.md
-├── adapters/               codex/, claude-code/, nanoclaw/ installers
+├── adapters/               codex/, claude-code/, pi/, nanoclaw/ installers
 ├── docs/                   cross-pack docs (quickstart.md, testing.md)
 ├── scripts/                test-powerpacks, lint-powerpacks, smoke-messages.sh
 ├── tests/                  cross-pack test suite
@@ -104,11 +117,11 @@ powerpacks/
 
 The `powerset` pack is the foundation — every other pack depends on its
 `auth` and `task_state` primitives. Anyone using Powerpacks runs
-`$powerset-login` first.
+`$powerset login` first.
 
 ## Quickstart for a fresh account
 
-Use this path for a new Codex or Claude Code setup. A fuller walkthrough is in
+Use this path for a new Codex, Claude Code, or Pi setup. A fuller walkthrough is in
 [`docs/quickstart.md`](docs/quickstart.md).
 
 ```bash
@@ -119,6 +132,7 @@ cd powerpacks
 # 2. Install the Powerpacks skills into your agent host.
 ./install.sh codex
 # or: ./install.sh claude-code
+# or: ./install.sh pi
 
 # 3. Install/auth the Powerset MCP for MCP-backed skills.
 # This starts Auth0 login if needed and writes the bearer token into host config.
@@ -136,7 +150,7 @@ codex mcp get powerset-search
 # 6. Inside the agent, run what you need:
 $search-network senior infra eng at fintech
 $search-company stripe-like fintech infra companies
-$powerset-login                   # provisions .env from GCP Secret Manager
+$powerset login                   # provisions .env from GCP Secret Manager
 $import-contacts                  # guided iMessage + WhatsApp import harness
 # advanced/debug subflows:
 #   $import-imessage
@@ -146,21 +160,21 @@ $import-contacts                  # guided iMessage + WhatsApp import harness
 
 ### Prereqs by skill family
 
-| You want to use… | Install on the host running Codex / Claude Code |
+| You want to use… | Install on the host running Codex / Claude Code / Pi |
 | --- | --- |
-| Any skill | Python 3.9+ (`python3 --version`), git |
-| `search-network` / `search-company` | `.env` with `TURBOPUFFER_API_KEY`, `DATABASE_URL`, `OPENAI_API_KEY` (use `$powerset-login` to populate) |
-| `powerset-login` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
+| Any skill | Python 3.10+ (`python3 --version`), `uv`, git |
+| `search-network` / `search-company` | `.env` with `TURBOPUFFER_API_KEY`, `DATABASE_URL`, `OPENAI_API_KEY` (use `$powerset login` to populate) |
+| `powerset login` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
 | `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, `OPENROUTER_API_KEY` only if you approve LLM review |
 | `import-imessage` | macOS, **Full Disk Access** for your terminal (`System Settings > Privacy & Security > Full Disk Access`) so Python can read `~/Library/Messages/chat.db` |
 | `import-whatsapp` | Docker (`brew install --cask docker` or `brew install colima docker`), the WhatsApp app on your phone for QR scan |
 | `import-contacts-review` | Auth0 login via browser (popped automatically), `OPENROUTER_API_KEY` for the LLM-review step |
-| `sales-nav-search` | `$powerset-login` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
+| `sales-nav-search` | `$powerset login` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
 
 ## Install
 
-The top-level `install.sh` dispatches to a per-host adapter. **All three
-adapters are idempotent — re-run them any time skills change** (you do not need
+The top-level `install.sh` dispatches to a per-host adapter. **All adapters
+are idempotent — re-run them any time skills change** (you do not need
 to uninstall first; each adapter wipes and re-copies the skill directories).
 
 ### Codex
@@ -177,6 +191,20 @@ to uninstall first; each adapter wipes and re-copies the skill directories).
 ./install.sh claude-code ./.claude/skills   # project-level install
 ```
 
+### Pi
+
+```bash
+./install.sh pi                             # default: ~/.pi/agent/skills/
+./install.sh pi ./.pi/skills                # project-level install
+```
+
+Pi discovers skills from `~/.pi/agent/skills/`, `.pi/skills/`, `.agents/skills/`,
+and configured package/settings paths. Installed skills are available as
+`/skill:<name>` commands (for example `/skill:powerset whoami`) and can also be
+loaded naturally when you type prompts like `$powerset whoami`. Pi does not ship
+first-party MCP support, so the Pi adapter installs skills only; MCP-backed
+Powerpacks flows still need a Pi MCP extension or a host with MCP support.
+
 ### NanoClaw
 
 ```bash
@@ -189,6 +217,7 @@ adapter installs also work:
 ```bash
 ./adapters/codex/install.sh                    [skills-dir]
 ./adapters/claude-code/install.sh               [skills-dir]
+./adapters/pi/install.sh                         [skills-dir]
 ./adapters/nanoclaw/install.sh /path/to/nanoclaw
 ```
 
@@ -202,14 +231,14 @@ threaded CLI channel, and keeps NanoClaw-specific TUI/runtime code under
 ```bash
 cd ~/workspace/powerpacks
 git pull
-./install.sh codex          # or claude-code, or nanoclaw <path>
-# then restart Codex / Claude Code so it re-reads the skill list
+./install.sh codex          # or claude-code, pi, or nanoclaw <path>
+# then restart the agent host, or run /reload in Pi, so it re-reads the skill list
 ```
 
 This is the only command needed for skill / primitive changes. The `mcp_install`
 registrations are written to host config files (`~/.codex/config.toml`,
 `~/.claude.json`) and only need re-running when the MCP URL or token format
-changes — `$powerset-login` covers that path.
+changes — `$powerset login` covers that path.
 
 ### MCP install (powerset-search)
 
@@ -223,7 +252,7 @@ and writes the bearer token into host config:
 # verify
 claude mcp list                  # for Claude Code
 codex mcp list 2>/dev/null \
-  || python3 packs/powerset/primitives/mcp_install/mcp_install.py status --host codex
+  || uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py status --host codex
 ```
 
 Claude Code bakes the bearer token into `~/.claude.json` at install time.
@@ -241,7 +270,7 @@ Quick checks that each layer works — run from the repo root after
 
 ```bash
 # 1. Skill files actually copied to the host
-ls ~/.codex/skills/                # or ~/.claude/skills/
+ls ~/.codex/skills/                # or ~/.claude/skills/, ~/.pi/agent/skills/
 
 # 2. Powerpacks unit tests
 python3 -m unittest discover -s tests
@@ -249,16 +278,16 @@ python3 -m unittest discover -s tests
 # 3. Messages-pack end-to-end smoke (synthetic data, no network/spend)
 scripts/smoke-messages.sh
 
-# 4. MCP reachability (after $powerset-login)
+# 4. MCP reachability (after $powerset login)
 claude mcp list                    # "powerset-search ... ✓ Connected"
-python3 packs/powerset/primitives/doctor/doctor.py run
+uv run --project . python packs/powerset/primitives/doctor/doctor.py run
 ```
 
 Then, **inside the agent host**, sanity-check each skill family:
 
 | Skill | Test prompt |
 | --- | --- |
-| `powerset-login` | Type `$powerset-login` — the agent should run `gcloud auth list`, show the secret plan, ask for approval, and finish with `mcp_install`. |
+| `powerset login` | Type `$powerset login` — the agent should run the doctor, handle missing setup, provision env, and finish with `mcp_install`. |
 | `search-network` | `$search-network senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
 | `import-contacts` | `$import-contacts` — should show a task checklist, ask once for local metadata import consent, then run until permissions/QR/cost approval are needed. |
@@ -274,9 +303,9 @@ Powerpacks treats Postgres and TurboPuffer schema as checked-in contracts, not
 something the agent should rediscover on each run:
 
 ```bash
-python powerpacks/packs/search/primitives/contracts/contracts.py list
-python powerpacks/packs/search/primitives/contracts/contracts.py check-postgres --env-file .env
-python powerpacks/packs/search/primitives/contracts/contracts.py dump-postgres --env-file .env --out .powerpacks/schema-dumps/postgres-live.json
+uv run --project . python packs/search/primitives/contracts/contracts.py list
+uv run --project . python packs/search/primitives/contracts/contracts.py check-postgres --env-file .env
+uv run --project . python packs/search/primitives/contracts/contracts.py dump-postgres --env-file .env --out .powerpacks/schema-dumps/postgres-live.json
 ```
 
 `dump-postgres` writes a diagnostic artifact. It does not mutate the checked-in
@@ -289,7 +318,7 @@ without pasting raw secrets into chat:
 
 ```bash
 gcloud auth login
-python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
+uv run --project . python packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
   --profile search-core \
   --env-file .env \
   --confirm

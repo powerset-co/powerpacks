@@ -63,13 +63,13 @@ user to run `import-imessage` or `import-whatsapp` first.
 ### 2. Log in to Powerset (if needed)
 
 ```bash
-python packs/powerset/primitives/auth/auth.py whoami
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/auth/auth.py whoami
 ```
 
 If `status: anonymous`, ask the user for permission to open a browser, then:
 
 ```bash
-python packs/powerset/primitives/auth/auth.py login
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/auth/auth.py login
 ```
 
 This opens the user's browser to Auth0, runs a localhost callback on
@@ -79,7 +79,7 @@ This opens the user's browser to Auth0, runs a localhost callback on
 ### 3. Sync the candidate catalog
 
 ```bash
-python packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py sync \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py sync \
   --output .powerpacks/messages/powerset_contacts.csv
 ```
 
@@ -90,7 +90,7 @@ matcher can still run.
 ### 4. Apply local matching
 
 ```bash
-python packs/messages/primitives/match_local_candidates/match_local_candidates.py match \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/match_local_candidates/match_local_candidates.py match \
   --contacts .powerpacks/messages/contacts.csv \
   --candidates .powerpacks/messages/powerset_contacts.csv
 ```
@@ -102,7 +102,7 @@ manifest's `stats` dict to the user before continuing.
 ### 5. Estimate LLM review cost (optional but recommended)
 
 ```bash
-python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py estimate \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/llm_review_contacts/llm_review_contacts.py estimate \
   --input .powerpacks/messages/contacts.csv \
   --model anthropic/claude-sonnet-4-6
 ```
@@ -112,7 +112,7 @@ Show the user the candidate count and `estimated_usd` before spending money.
 ### 6. Run the LLM review (cheap Sonnet estimates can proceed)
 
 ```bash
-python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py review \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/llm_review_contacts/llm_review_contacts.py review \
   --input .powerpacks/messages/contacts.csv \
   --model anthropic/claude-sonnet-4-6
 ```
@@ -132,19 +132,19 @@ verdict JSONL artifact is written next to the CSV for auditability.
 
 ```bash
 # Whole ENRICH queue.
-python packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
   --input .powerpacks/messages/contacts.csv \
   --output .powerpacks/messages/research_queue.csv
 
 # High-signal slice only (cross-channel + active relationships).
-python packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
   --input .powerpacks/messages/contacts.csv \
   --output .powerpacks/messages/research_queue.p1p2.csv \
   --tiers P1 P2a P2b
 ```
 
-The manifest reports a per-tier breakdown and a Parallel.ai cost estimate at
-every processor tier (`core2x` / `pro` / `ultra8x`).
+The manifest reports a per-tier breakdown and a Parallel.ai cost estimate for
+the allowed processor tiers: `core`, `core2x`, and `pro`.
 
 Do not treat the raw matcher's `unmatched` count as the paid-research count.
 The research queue only includes named, searchable, unresolved contacts and
@@ -160,14 +160,14 @@ This avoids spending Parallel credits for handles that already have
 `01_research_parallel.json` under the same operator:
 
 ```bash
-python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py status
-python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
+uv run --project powerpacks python powerpacks/packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py status
+uv run --project powerpacks python powerpacks/packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
 ```
 
 Then estimate the cost without making Parallel API calls:
 
 ```bash
-python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
   --input .powerpacks/messages/research_queue.p1p2.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
@@ -178,7 +178,7 @@ processor core2x. Estimated cost: $Y. Please confirm before I submit." Only
 after explicit user approval:
 
 ```bash
-PARALLEL_API_KEY=... python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
+PARALLEL_API_KEY=... uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
   --input .powerpacks/messages/research_queue.p1p2.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
@@ -209,7 +209,7 @@ python ... deep_research_contacts.py poll --output-dir .powerpacks/messages/rese
 Prefer the local web reviewer for yes/no enrichment decisions:
 
 ```bash
-python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
   --contacts .powerpacks/messages/contacts.csv \
   --open
 ```
@@ -229,7 +229,7 @@ Fold the per-handle research artifacts into one flat CSV in the shape
 
 ```bash
 # Heuristic bucketing (free):
-python packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
   --research-dir .powerpacks/messages/research \
   --queue-csv .powerpacks/messages/research_queue.csv \
   --output-csv .powerpacks/messages/research_review.csv
@@ -244,7 +244,7 @@ Then open the native web reviewer for yes / maybe / no buckets and profile
 cards:
 
 ```bash
-python packs/messages/primitives/review_research_web/review_research_web.py serve \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/review_research_web/review_research_web.py serve \
   --csv .powerpacks/messages/research_review.csv \
   --research-dir .powerpacks/messages/research \
   --open
@@ -263,10 +263,10 @@ And, after the user reviews and explicitly approves upload, upload the artifact
 back to Powerset:
 
 ```bash
-python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
   --csv .powerpacks/messages/research_review.csv
 
-python packs/messages/primitives/upload_research_review/upload_research_review.py upload \
+uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py upload \
   --csv .powerpacks/messages/research_review.csv \
   --confirm-upload
 ```

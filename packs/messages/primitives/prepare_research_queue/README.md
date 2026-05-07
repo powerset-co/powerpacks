@@ -81,4 +81,5 @@ priority_reason
 ```
 
 The manifest JSON next to the CSV reports `by_tier_total`, eligible/filtered
-counts, and a Parallel.ai cost estimate at each processor tier.
+counts, and Parallel.ai cost estimates for the allowed processor tiers: `core`,
+`core2x`, and `pro`.

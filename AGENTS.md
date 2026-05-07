@@ -8,45 +8,58 @@ re-run `bin/sync-agent-files.sh` from the repo root.
 
 ---
 
-## Bootup sequence
+## Local context
 
-When you start a session in this repo, **run these steps before doing real
-work**:
+`PROFILE.md` is the tracked source template for clone/user-specific agent
+context. Install/bootstrap renders it into harness-specific local files, such as
+`.codex/AGENTS.md` for Codex, and appends non-secret context such as the
+authenticated Powerset email and default set ID.
 
-### 0. Prefill project-local memory
+If `.codex/AGENTS.md` exists, use it for simple self-introspection questions.
+Do not run network refreshes, doctor checks, MCP calls, or skill workflows just
+to answer those questions.
+
+Run `bin/agent-bootstrap` only when local context is missing/stale, after
+install, or when the user asks to refresh it. It writes `.codex/AGENTS.md` and
+`.powerpacks/memory/*.json`; these are local generated state and should not be
+committed.
+
+Do not paste secret env values into chat.
+
+## Python setup
+
+Search primitives depend on the repo Python project (`pyproject.toml`) for
+TurboPuffer, OpenAI, Snowball stemmer, and Postgres packages. Install/setup
+scripts run:
 
 ```bash
-bin/agent-bootstrap
+bin/setup-python
 ```
 
-This is read-only except for writing `.powerpacks/memory/*.json` (ignored by
-git). It scans all project `.env*` files and records key presence only — never
-secret values — then checks existing project memory for set IDs and, if the
-Powerset login is valid, refreshes visible sets from `/v2/sets`.
+On first real work in this repo, if `.venv/` is missing or Python dependencies
+are not ready, run `bin/setup-python` before running primitives. On macOS it may
+install missing `uv` through Homebrew automatically. If Python, Homebrew,
+Command Line Tools, or another OS-level prerequisite is missing, run the exact
+command printed by setup/doctor and continue unless the command needs a password
+or visible human action.
 
-Use these memory files during the session instead of rediscovering the same
-facts repeatedly:
+If a primitive reports missing Python packages, treat that as a setup problem:
+run `bin/setup-python` or rerun the harness install script. Do not add runtime
+package installation to primitives.
 
-- `.powerpacks/memory/env_summary.json` — env files, keys present/nonempty,
-  default set IDs from `.env`
-- `.powerpacks/memory/set_ids.json` — visible Powerset sets with IDs, names,
-  roles, member counts, personal/non-personal flag, and selected default set
-- `.powerpacks/memory/agent_bootstrap.json` — short boot summary
-
-If `sets_refreshed` is false, read `sets_error`; usually the user just needs to
-run `powerset-login` or refresh credentials. Do not paste secret env values into
-chat.
-
-### 1. Health check
+## Health check
 
 ```bash
 bin/doctor run
 ```
 
+Run the doctor before tasks that need repo credentials, local data access,
+network/search primitives, uploads, or environment assumptions. Do not run it
+for simple self-introspection questions answered from `.codex/AGENTS.md`.
+
 The doctor emits a JSON report with one entry per check (`status` is one of
-`ok | warn | missing | fail`). Read it. If anything is `missing` or `fail`,
-surface it to the user *before* attempting the task they asked for. For
-`warn`, mention briefly and proceed.
+`ok | warn | missing | fail`). If anything is `missing` or `fail`, surface it to
+the user before attempting the task. For `warn`, mention briefly and proceed.
 
 If the user explicitly asks for a fix and the doctor reported a fixable
 issue (each check carries a `fix_command`), only then run:
@@ -57,27 +70,47 @@ bin/doctor fix
 bin/doctor fix --interactive
 ```
 
-Never run `fix` unprompted. Browser logins, gcloud auth, OS-level installs
-are user-consent operations.
+Never run `fix` unprompted. Browser logins, gcloud auth, Full Disk Access,
+Docker/WAHA QR setup, and spend-bearing operations are user-consent operations.
+Python dependency setup via `bin/setup-python` is part of normal onboarding.
 
-### 2. Workspace state
+For Powerset users, proactively distinguish expired/reauth-needed credentials
+from IAM/secret provisioning failures. If any `gcloud` command fails with auth
+expiration / reauthentication text (for example `problem refreshing your current
+auth tokens`, `Reauthentication failed`, or `cannot prompt during
+non-interactive execution`), the fix is:
+
+```bash
+gcloud auth login --no-launch-browser
+```
+
+Run it from this shell after user consent, relay the verification URL/code
+prompt, and ask the user to paste the code. If `.env` already has the requested
+profile keys, expired gcloud Secret Manager access is not a blocker and should
+not be surfaced unless the user asks to refresh/provision secrets. If `.env` is
+missing keys and the doctor reports `user_secrets` with `fix_kind: interactive`,
+tell the user their selected `@powerset.co` account is fine but gcloud's cached
+token expired. Do not route this to Slack and do not run ADC setup;
+application-default credentials are not needed for normal Powerpacks workflows.
+
+## Workspace state
 
 If `.powerpacks/` exists in the working directory, list its contents (or
 `tree -L 2 .powerpacks/` if available) so the user can see what artifacts
 are already present from prior runs. Don't rebuild artifacts that already
 exist unless explicitly asked.
 
-### 3. Pack-specific readiness (only if relevant to the request)
+## Pack-specific readiness
 
 - **Messages pack** (iMessage / WhatsApp imports, contact review):
   - `chat.db` access: requires Full Disk Access on macOS (the doctor checks
     this; if not granted, *stop* and ask the user to enable it in System
     Settings before retrying)
   - WAHA container: only needs to be up if the user is doing WhatsApp work.
-    Run `python3 packs/messages/primitives/waha_runtime/waha_runtime.py status`
+    Run `uv run --project . python packs/messages/primitives/waha_runtime/waha_runtime.py status`
     on demand, not on every bootup.
   - Powerset login: required for `sync_powerset_candidates`, `upload`. Check
-    via `python3 packs/powerset/primitives/auth/auth.py whoami`.
+    via `uv run --project . python packs/powerset/primitives/auth/auth.py whoami`.
 - **Search pack** (search-network, search-company): requires `.env` with
   TurboPuffer + Postgres credentials. The doctor covers this.
 
@@ -99,7 +132,7 @@ Common routes:
 - company set resolution / company IDs → `packs/search/skills/search-company/SKILL.md`
 - my contacts / set contacts → `packs/contacts/skills/search-contacts/SKILL.md`
 - Sales Navigator leads → `packs/sales-nav/skills/sales-nav-search/SKILL.md`
-- Powerset login / MCP install / credentials → `packs/powerset/skills/powerset-login/SKILL.md`
+- Powerset login / MCP install / credentials → `packs/powerset/skills/powerset/SKILL.md`
 - iMessage / WhatsApp / contact imports → the matching skill under `packs/messages/skills/`
 
 Do not ask the user to pick a skill when the route is obvious. Do ask a brief
@@ -148,11 +181,16 @@ queries. For narrow, unambiguous queries, **skip the loop**:
 
 ### deep_research_contacts (Parallel.ai)
 
+- Parallel contact research may only use these processors: `core`, `core2x`, and `pro`.
 - `submit` and `poll` can be split if the user is okay with backgrounding.
   For a small batch (< 30 contacts) just `run`. For larger queues,
   recommend `submit` + come back later for `poll`.
 - Idempotency: re-runs skip handles that already have
   `01_research_parallel.json`. Safe to re-run.
+- If prior-cache sync / `gcloud storage rsync` fails because gcloud auth expired,
+  stop before any paid Parallel submit/run. Reauthenticate with
+  `gcloud auth login --no-launch-browser`, rerun the sync, then estimate. Never
+  proceed to paid research just because the cache sync could not authenticate.
 
 ---
 
@@ -166,7 +204,7 @@ queries. For narrow, unambiguous queries, **skip the loop**:
   submits, uploads, Docker pulls, browser-based logins, OS installs).
 - **Stdlib-only is a hard constraint** for new primitives in this repo. No
   `requests` / `pydantic` / `httpx` / SDK dependencies.
-- **Test additions** go in `tests/` and run via `python3 -m unittest discover -s tests`.
+- **Test additions** go in `tests/` and run via `uv run --project . python -m unittest discover -s tests`.
   Run the full suite after non-trivial edits.
 - **Privacy contract**: no message bodies are ever read or sent. Only
   contact metadata (phone, name, source, group flags, message counts,
@@ -190,9 +228,11 @@ powerpacks/
 │   ├── search/                 # search-network, search-company
 │   └── powerset/               # cross-pack tooling (doctor, auth, ...)
 ├── skills/                     # core skills (search-network, search-company)
-├── tests/                      # unittest, run with python3 -m unittest discover
+├── tests/                      # unittest, run with uv run --project . python -m unittest discover
 ├── adapters/codex/install.sh   # installs skills into ~/.codex/skills
 ├── bin/                        # smoke tests, agent-bootstrap, sync-agent-files.sh, etc.
+├── PROFILE.md                  # source template for generated local profiles
+├── .codex/AGENTS.md            # ignored Codex profile rendered from PROFILE.md
 ├── .powerpacks/memory/         # ignored project-local agent memory
 └── AGENTS.md                   # this file
 ```

@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
-# Install Powerpacks skills into a Claude Code skills directory.
+# Install Powerpacks skills into Pi's skill directory.
 #
-# By default installs to user-level skills at `~/.claude/skills/`. Pass an
-# explicit target directory to install project-level instead, e.g.
-# `./install.sh /path/to/repo/.claude/skills`.
-#
-# Each skill is installed as `<dest>/<skill-name>/SKILL.md` plus a bundled
-# `powerpacks/` directory next to it that holds primitives, schemas, contracts,
-# tasks, evals, and packs the skill's commands resolve relative to.
+# Pi discovers skills from ~/.pi/agent/skills/ by default. Each skill is
+# installed as <dest>/<skill-name>/SKILL.md plus a bundled powerpacks/
+# directory next to it, matching the Codex / Claude Code adapter layout.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DEFAULT_SKILLS_DIR="$HOME/.claude/skills"
-SKILLS_DIR="${1:-$DEFAULT_SKILLS_DIR}"
+PI_HOME="${PI_HOME:-$HOME/.pi/agent}"
+SKILLS_DIR="${1:-$PI_HOME/skills}"
 
 mkdir -p "$SKILLS_DIR"
 rm -rf "$SKILLS_DIR/import-messages"
@@ -46,17 +42,20 @@ install_skill() {
   cp -R "$source_skill" "$dest/SKILL.md"
   copy_powerpacks_bundle "$dest"
 
-  cat > "$dest/powerpacks/README.claude-code-install.md" <<EOF
-# Claude Code Powerpacks Bundle
+  cat > "$dest/powerpacks/README.pi-install.md" <<EOF
+# Pi Powerpacks Bundle
 
 This directory is copied by:
 
 \`\`\`bash
-$REPO_ROOT/adapters/claude-code/install.sh
+$REPO_ROOT/adapters/pi/install.sh
 \`\`\`
 
 The installed \`$skill_name\` skill resolves \`powerpacks/...\` references
 relative to this skill directory.
+
+Pi loads skills from \`~/.pi/agent/skills\` at startup and exposes them as
+\`/skill:<name>\` commands. Restart Pi or run \`/reload\` after reinstalling.
 EOF
 }
 
@@ -73,8 +72,7 @@ install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/
 install_skill import-contacts-review "$REPO_ROOT/packs/messages/skills/import-contacts-review/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
-echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search"
-echo "  import-contacts import-imessage import-whatsapp import-contacts-review"
-echo
-echo "restart Claude Code to pick up the skill list"
+printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
+printf '  search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search\n'
+printf '  import-contacts import-imessage import-whatsapp import-contacts-review\n'
+printf '\nrestart Pi or run /reload to pick up the skill list\n'

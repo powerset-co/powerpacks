@@ -6,3 +6,4 @@ __pycache__/
 install-manifest.json
 *.log
 .powerpacks/
+.codex/AGENTS.md

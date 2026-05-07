@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_VERSION="${POWERPACKS_PYTHON_VERSION:-3.12}"
+
+os_name="$(uname -s)"
+AUTO_INSTALL="${POWERPACKS_AUTO_INSTALL:-1}"
+
+print_install_hint() {
+  local tool="$1"
+  case "$tool:$os_name" in
+    uv:Darwin)
+      if command -v brew >/dev/null 2>&1; then
+        echo "Install uv, then rerun setup:" >&2
+        echo "  brew install uv" >&2
+      else
+        echo "Install uv, then rerun setup:" >&2
+        echo "  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+      fi
+      ;;
+    uv:Linux)
+      echo "Install uv, then rerun setup:" >&2
+      echo "  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+      ;;
+    *)
+      echo "Install $tool, then rerun setup." >&2
+      ;;
+  esac
+}
+
+if [[ "${POWERPACKS_SKIP_UV_SYNC:-}" == "1" ]]; then
+  echo "setup-python: skipped uv sync (POWERPACKS_SKIP_UV_SYNC=1)"
+  exit 0
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  if [[ "$AUTO_INSTALL" == "1" && "$os_name" == "Darwin" && -x "$(command -v brew || true)" ]]; then
+    echo "setup-python: uv not found; installing with Homebrew"
+    brew install uv
+  elif [[ "$AUTO_INSTALL" == "1" && "$os_name" != "Darwin" ]]; then
+    echo "setup-python: uv not found; installing with the official uv installer"
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+  else
+    echo "error: uv is required for Powerpacks Python dependencies." >&2
+    print_install_hint uv
+    exit 1
+  fi
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "error: uv installation finished but uv is still not on PATH." >&2
+  print_install_hint uv
+  exit 1
+fi
+
+uv python install "$PYTHON_VERSION"
+
+if [[ -f "$ROOT/uv.lock" ]]; then
+  uv sync --project "$ROOT" --python "$PYTHON_VERSION" --frozen
+else
+  uv sync --project "$ROOT" --python "$PYTHON_VERSION"
+fi
+
+echo "setup-python: Python $PYTHON_VERSION dependencies ready ($ROOT)"

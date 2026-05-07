@@ -5,10 +5,10 @@ description: One-command Powerset login flow. Uses the doctor as a read-only che
 
 # Powerset Login
 
-Use this skill when the user asks for `$powerset-login`, secret provisioning,
-runtime setup, API key bootstrap, or "log me in to Powerset". Also the right
-skill when an unrelated Powerpacks command failed because of a missing key
-or expired session.
+Use this skill when the user asks for `$powerset login`, `$powerset-login`,
+secret provisioning, runtime setup, API key bootstrap, or "log me in to
+Powerset". Also the right skill when an unrelated Powerpacks command failed
+because of a missing key or expired session.
 
 **This skill is built to be fast and quiet.** The user said "log me in" — do
 that. Don't ask permission for every step. Use the doctor's `fix_kind`
@@ -42,16 +42,15 @@ Prefer `python3` if `python` is not on PATH.
 Run one read-only check:
 
 ```bash
-python3 packs/powerset/primitives/doctor/doctor.py run \
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env \
   --gcp-project powerset-search
 ```
 
 If `overall == "ok"`, tell the user "Already set up as `<email>`" and stop.
-If `overall == "warn"` and the only warning is `gcloud_adc`, tell the user
-they are set up for normal Powerpacks search workflows and mention ADC is only
-needed for SDK clients.
+The doctor does not check gcloud application-default credentials by default;
+ADC is not needed for normal Powerpacks workflows.
 
 ## How to handle the doctor's report
 
@@ -90,7 +89,7 @@ requires it.
 If `auth0_login` is missing or expired, run:
 
 ```bash
-python3 packs/powerset/primitives/auth/auth.py login
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/auth/auth.py login
 ```
 
 If `gcloud_account` is missing, run:
@@ -111,16 +110,16 @@ user to log in as a Powerset account or run:
 gcloud config set account you@powerset.co
 ```
 
-If `gcloud_adc` is the only warning, do not block. Only run
-`gcloud auth application-default login --no-launch-browser` when the requested
-workflow needs SDK application-default credentials.
+Do not check or configure gcloud application-default credentials during the
+normal login flow. Only run `gcloud auth application-default login
+--no-launch-browser` if the user explicitly asks for SDK/client ADC debugging.
 
 ### Step 3 — Pull secrets and register MCP directly
 
 If `env_file` is missing keys and `user_secrets` is accessible, run:
 
 ```bash
-python3 packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
   --profile search-core \
   --env-file .env \
   --confirm \
@@ -130,7 +129,7 @@ python3 packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py
 If `mcp_powerset_search` is missing but a host CLI exists, run:
 
 ```bash
-python3 packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 If `mcp_powerset_search` says no MCP host CLI is on PATH, that is an install
@@ -148,7 +147,7 @@ the user is using, or tell the user which host CLI is missing.
   locally but don't have GCP per-user secrets yet. Ping #powerpacks on
   Slack with your @powerset.co email — a maintainer will run
   `provision_user_secrets apply --users <you>` and you can re-run
-  `$powerset-login`."
+  `$powerset login`."
 
 These are not blockers for unrelated workflows unless that workflow needs the
 missing shared infra key.
@@ -159,8 +158,7 @@ Re-run `doctor run` and report a one-line summary:
 
 - `overall: ok` → "Logged in as `<email>`. `.env` populated from per-user
   secrets (`<N>` keys)."
-- `overall: warn` → same, but mention the optional `gcloud_adc` warn if
-  present.
+- `overall: warn` → same, but mention the remaining warning.
 - `overall: needs_setup` → list the still-blocked items and what the user
   needs to do.
 
@@ -196,11 +194,11 @@ If a user shows up in `#powerpacks` with `user_secrets: not_provisioned`, a
 maintainer (anyone with `roles/owner` on `powerset-search`) runs:
 
 ```bash
-python powerpacks/packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py plan \
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py plan \
   --users newperson@powerset.co \
   --project powerset-search --with-diff
 
-python powerpacks/packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py apply \
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py apply \
   --users newperson@powerset.co \
   --project powerset-search --confirm
 ```

@@ -86,9 +86,9 @@ candidates.
 
 | Processor | $ / task |
 | --- | --- |
+| `core` | $0.025 |
 | `core2x` | $0.05 |
 | `pro` | $0.10 |
-| `ultra8x` | $2.40 |
 
 `estimate` reports the cost for the current queue at the chosen processor.
 
