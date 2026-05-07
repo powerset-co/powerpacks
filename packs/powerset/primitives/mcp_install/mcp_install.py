@@ -24,12 +24,14 @@ Stdlib-only.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -194,7 +196,11 @@ def codex_status(name: str) -> dict[str, Any]:
             "installed": False, "host": "codex",
             "error": (err or out or "not registered").strip()[:200],
         }
-    return {"installed": True, "host": "codex", "details": out.strip()[:400]}
+    state: dict[str, Any] = {"installed": True, "host": "codex", "details": out.strip()[:400]}
+    token_state = codex_bearer_token_state(name)
+    if token_state:
+        state.update(token_state)
+    return state
 
 
 def toml_string(value: str) -> str:
@@ -203,6 +209,62 @@ def toml_string(value: str) -> str:
 
 def codex_config_path() -> Path:
     return DEFAULT_CODEX_HOME / "config.toml"
+
+
+def jwt_payload(token: str) -> dict[str, Any] | None:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(payload.encode("ascii"))
+        decoded = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def codex_bearer_token_state(name: str) -> dict[str, Any] | None:
+    config_path = codex_config_path()
+    if not config_path.exists():
+        return {"auth_status": "missing_config"}
+    text = config_path.read_text()
+    header_name = f"mcp_servers.{name}.http_headers"
+    in_header = False
+    auth_value: str | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        match = re.match(r"^\[([^\]]+)\]\s*$", line)
+        if match:
+            in_header = match.group(1) == header_name
+            continue
+        if in_header and line.startswith("Authorization"):
+            _, _, value = line.partition("=")
+            value = value.strip()
+            try:
+                auth_value = json.loads(value)
+            except json.JSONDecodeError:
+                auth_value = value.strip("\"'")
+            break
+    if not auth_value:
+        return {"auth_status": "missing_authorization_header"}
+    if not auth_value.startswith("Bearer "):
+        return {"auth_status": "non_bearer_authorization_header"}
+    token = auth_value.removeprefix("Bearer ").strip()
+    payload = jwt_payload(token)
+    if not payload:
+        return {"auth_status": "unparseable_bearer_token"}
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return {"auth_status": "bearer_token_without_exp"}
+    seconds_remaining = int(exp - time.time())
+    return {
+        "auth_status": "expired" if seconds_remaining <= 0 else "valid",
+        "token_expired": seconds_remaining <= 0,
+        "token_seconds_remaining": max(0, seconds_remaining),
+        "token_expires_at": datetime.fromtimestamp(exp, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
 
 
 def remove_toml_sections(text: str, section_names: set[str]) -> str:

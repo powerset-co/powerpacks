@@ -13,7 +13,7 @@ only the install adapter differs.
 For Codex, let Codex fetch/update the repo and run the installer:
 
 ```bash
-codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install step from its instructions."
+codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install and Powerset login/MCP setup steps from its instructions."
 ```
 
 For direct/manual installs, run the adapter install for your harness:
@@ -132,7 +132,7 @@ Use this path for a new Codex, Claude Code, or Pi setup. A fuller walkthrough is
 
 ```bash
 # 1. Let Codex clone/update the repo and run its install adapter.
-codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install step from its instructions."
+codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install and Powerset login/MCP setup steps from its instructions."
 
 # Or install manually from a local checkout.
 git clone git@github.com:powerset-co/powerpacks.git
@@ -187,7 +187,7 @@ to uninstall first; each adapter wipes and re-copies the skill directories).
 ### Codex
 
 ```bash
-codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install step from its instructions."
+codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install and Powerset login/MCP setup steps from its instructions."
 
 # Manual equivalent from a local checkout:
 ./install.sh codex                          # default: ~/.codex/skills/

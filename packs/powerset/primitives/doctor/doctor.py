@@ -375,6 +375,17 @@ def check_mcp_powerset_search() -> dict[str, Any]:
     hosts = payload.get("hosts") or []
     installed_in = [h.get("host") for h in hosts if h.get("installed")]
     available_hosts = [h.get("host") for h in hosts if not h.get("error", "").startswith("claude CLI not") and not h.get("error", "").startswith("codex CLI not")]
+    stale_auth_hosts = [
+        h for h in hosts
+        if h.get("installed")
+        and h.get("auth_status") in {
+            "expired",
+            "missing_authorization_header",
+            "non_bearer_authorization_header",
+            "unparseable_bearer_token",
+            "bearer_token_without_exp",
+        }
+    ]
     if not available_hosts:
         return check(
             "mcp_powerset_search", "warn",
@@ -384,6 +395,18 @@ def check_mcp_powerset_search() -> dict[str, Any]:
                 "claude": "https://docs.claude.com/en/docs/claude-code/setup",
                 "codex": "https://docs.openai.com/codex/cli",
             },
+        )
+    if stale_auth_hosts:
+        stale_names = ",".join(str(h.get("host")) for h in stale_auth_hosts)
+        stale_status = ",".join(str(h.get("auth_status")) for h in stale_auth_hosts)
+        return check(
+            "mcp_powerset_search", "missing",
+            f"powerset-search MCP registered but auth needs refresh in {stale_names} ({stale_status})",
+            fix_kind="auto",
+            fix_command=f"python {MCP_INSTALL} install --host all",
+            fix_args=[sys.executable, str(MCP_INSTALL), "install", "--host", "all"],
+            installed_in=installed_in,
+            stale_auth_hosts=stale_names,
         )
     if installed_in:
         return check(
