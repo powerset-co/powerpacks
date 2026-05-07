@@ -20,7 +20,7 @@ selection.
 | `$powerset sets`, `$powerset sets list` | List sets via the Powerset Search MCP. |
 | `$powerset sets use <id|name>` | Resolve a set via MCP and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
 | `$powerset mcp install` | Register/refresh the `powerset-search` MCP for local hosts. |
-| `$powerset env pull [--profile <profile>]` | Pull allowlisted runtime keys into `.env` after confirming intent. Default `search-core` is the standard setup. |
+| `$powerset env pull [--profile <profile>]` | Pull allowlisted runtime keys into `.env`. The explicit command is consent to write `.env`. Default `search-core` is the standard setup. |
 
 Aliases remain valid for backcompat: `$powerset-login` means `$powerset login`;
 `$powerset-set` means `$powerset sets` / `$powerset sets use`.
@@ -94,8 +94,9 @@ login blocker and should not be surfaced.
 If the doctor reports `user_secrets` with `fix_kind: interactive` or a message
 like `gcloud credentials need reauthentication`, this is not a Slack/IAM issue:
 the selected `@powerset.co` account is fine, but gcloud's cached token expired.
-When the user asks to proceed, run `gcloud auth login --no-launch-browser`,
-relay the verification URL/code prompt, and ask them to paste the code.
+For explicit `$powerset login` or `$powerset env pull` requests, immediately run
+`gcloud auth login --no-launch-browser`, relay the verification URL/code prompt,
+and ask them to paste the code. Do not stop for a separate yes/no confirmation.
 
 Re-run doctor at the end and give a one-line summary. If `user_secrets` is still
 a human-action blocker, tell the user to ping `#powerpacks` with their
@@ -139,7 +140,8 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_inst
 
 Default profile is `search-core` unless the user specifies another profile.
 It pulls the standard Powerpacks runtime secrets into `.env` on a best-effort
-basis. Confirm before writing `.env`, then run:
+basis. The explicit `$powerset env pull` request is consent to write `.env`;
+do not ask for separate confirmation. Run:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
@@ -148,6 +150,15 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/provisio
   --confirm \
   --best-effort
 ```
+
+If this reports expired gcloud credentials or the doctor reports
+`user_secrets` with `fix_kind: interactive`, immediately run:
+
+```bash
+gcloud auth login --no-launch-browser
+```
+
+Relay the URL/code prompt tersely, then rerun the env pull command.
 
 ## `$powerset sets list` / `$powerset sets use <id|name>`
 
