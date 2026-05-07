@@ -21,6 +21,12 @@ workflow consent covers starting/reusing WAHA and extracting WhatsApp contact
 metadata. Still stop for Docker installation, starting a stopped Docker daemon,
 and the QR scan.
 
+Set expectations up front: exhaustive WhatsApp sync can take a long time — up
+to an hour for large histories — because message counts are paginated per chat.
+That is expected. Do not skip message counts in normal runs. Let the primitive
+run to completion and monitor its heartbeat/progress JSONL or stderr progress
+events.
+
 ## Prereqs
 
 - Python 3.9+ (stdlib only)
@@ -87,7 +93,8 @@ the user should be told about up front.
 ### 3. Authenticate the session via QR code
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/waha_session/waha_session.py start --open --wait
+uv run --project powerpacks python powerpacks/packs/messages/primitives/waha_session/waha_session.py start --open --wait \
+  --wait-timeout 600 --health-timeout 600
 ```
 
 This:
@@ -103,10 +110,11 @@ persist under `~/.powerpacks/waha-sessions/`), no scan is needed and the
 command returns immediately with `state.status == "WORKING"`.
 
 If `start --wait` times out, run `wait` again to keep polling without
-recreating the session:
+recreating the session. Do this rather than skipping WhatsApp:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/waha_session/waha_session.py wait
+uv run --project powerpacks python powerpacks/packs/messages/primitives/waha_session/waha_session.py wait \
+  --wait-timeout 600
 ```
 
 ### 4. Extract contacts
@@ -120,9 +128,12 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/extract_
   --output-jsonl .powerpacks/messages/whatsapp.contacts.jsonl
 ```
 
-The primitive writes a manifest with diagnostics next to the CSV. Per-chat
-message-count pagination is on by default; pass `--skip-message-counts` for a
-fast, less complete run.
+The primitive writes a manifest with diagnostics next to the CSV and progress
+heartbeats to stderr plus a `.progress.jsonl` file next to the manifest.
+Per-chat message-count pagination is on by default and should remain enabled for
+normal imports. It may take up to an hour; keep it running. Use
+`--skip-message-counts` only as an explicit debug/last-resort fallback after the
+user agrees to a less complete import.
 
 ### 5. Normalize into the canonical schema
 

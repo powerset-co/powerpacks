@@ -26,7 +26,7 @@ exits with JSON like:
   "status": "blocked_approval",
   "approval_type": "parallel",
   "approval_id": "parallel_abc123",
-  "message": "Run Parallel deep research on 1 people with processor core2x? Estimated cost: $0.0500.",
+  "message": "Estimated Parallel cost: $0.0500. Approve?",
   "continue_command": "python ... approve parallel --approval-id parallel_abc123 --confirm && python ... continue"
 }
 ```
@@ -36,11 +36,12 @@ The agent asks the user that message. If the user approves, the agent runs the
 
 Gates:
 
-- OpenRouter Sonnet LLM review auto-runs only when the estimate is under `$1.00`.
+- OpenRouter LLM review auto-runs when the estimate is under `$10.00`.
   Otherwise it blocks on `approve llm`.
-- Parallel.ai deep research always blocks on `approve parallel` when
-  `would_submit > 0`.
-- Upload always blocks on `approve upload`.
+- Parallel.ai deep research always blocks on `approve parallel` when there is
+  paid work to submit; the user-facing block shows cost only.
+- Upload always blocks on `approve upload`; the user-facing block shows only
+  yes/maybe/no counts.
 
 ## Steps
 

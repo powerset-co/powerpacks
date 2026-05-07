@@ -36,21 +36,25 @@ Never upload contacts. The only upload step is the final reviewed research
 artifact upload, and it requires a separate explicit approval after showing the
 summary counts.
 
-For cheap OpenRouter LLM review/bucketing, always estimate first. If the model
-is `anthropic/claude-sonnet-4-6` and the estimate is under `$1.00`, the initial
-workflow consent is enough; report the estimate and proceed. If the estimate is
-`>= $1.00`, or a different/unknown model is used, stop for explicit LLM cost
-approval.
+For OpenRouter LLM review/bucketing, always estimate first. If the estimate is
+under `$10.00`, the initial workflow consent is enough; report only the cost and
+proceed. If the estimate is `>= $10.00`, stop for explicit LLM cost approval.
 
 For Parallel.ai deep research, always stop for explicit spend approval after the
-estimate, even for small batches. Phrase the gate clearly: "I'm going to run
-Parallel deep research on X people with processor Y. Estimated cost: $Z. Please
-confirm before I submit."
+estimate, even for small batches. Show only the cost, e.g. "Estimated Parallel
+cost: $Z. Approve?"
 
 ## Fast path: resumable orchestrator
 
 Prefer the orchestrator for normal runs. It is a mechanical task runner around
 the primitives below and writes `.powerpacks/messages/import-run.json`.
+
+Do **not** create a separate chat-visible plan for normal runs. After the user
+gives the initial workflow consent, keep invoking the orchestrator until it
+finishes or emits a concrete approval/user-action block. When blocked, show only
+the concise block message (cost or action), collect the user's answer, then run
+the printed `approve ... --confirm && continue` command or `continue` as
+appropriate.
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
@@ -103,12 +107,18 @@ Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
    - if readable, run `extract` to `.powerpacks/messages/imessage.contacts.*`
    - normalize to `.powerpacks/messages/imessage.contacts.normalized.jsonl`
 3. Run WhatsApp:
+   - Tell the user: "I'll start a local WAHA Docker container. No message bodies
+     are read. When the QR opens, use WhatsApp > Settings > Linked Devices >
+     Link a Device. The exhaustive sync can take up to an hour; that's OK."
    - `waha_runtime.py check`
    - if Docker is installed but stopped, ask before starting Docker/Colima
    - `waha_runtime.py up`
    - `waha_session.py start --open --wait`
-   - if QR is needed, show the user the QR path and wait
-   - `extract_whatsapp_contacts.py extract`
+   - if QR is needed, show the user the QR path and wait; on timeout, run
+     `waha_session.py wait` again instead of skipping WhatsApp
+   - `extract_whatsapp_contacts.py extract` and keep message counts enabled.
+     Do not add `--skip-message-counts` in normal runs. The primitive emits
+     progress/heartbeat JSONL while it counts messages; let it run to completion.
    - normalize to `.powerpacks/messages/whatsapp.contacts.normalized.jsonl`
 4. Merge whichever sources exist:
 
@@ -195,10 +205,10 @@ data from `01_research_parallel.json` and autosaves yes/no decisions to the
 `exclude` column in `research_review.csv`.
 
 After opening the review UI, tell the user: "When you're done reviewing, say
-'done with review, upload'. I'll summarize counts and ask for explicit
-upload/datalake approval before syncing anything." After review, summarize the
-upload artifact and ask before uploading. Make clear that nothing has been
-uploaded yet:
+'done with review, upload'. I'll summarize yes/maybe/no and ask for explicit
+upload/datalake approval before syncing anything." After review, summarize only
+the yes/maybe/no counts and ask before uploading. Make clear that nothing has
+been uploaded yet:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
@@ -245,8 +255,8 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/review_c
 
 Use the web reviewer for yes/no enrichment decisions only. Do not ask the user
 to edit names, match details, or free-text fields in the normal import flow.
-Use LLM review only after showing the estimate; Sonnet/OpenRouter estimates
-under `$1.00` may proceed without another approval, while anything else requires
+Use LLM review only after showing the estimate; OpenRouter estimates under
+`$10.00` may proceed without another approval, while anything else requires
 explicit LLM cost approval.
 
 If `PARALLEL_API_KEY` is unavailable and the user still wants review help,

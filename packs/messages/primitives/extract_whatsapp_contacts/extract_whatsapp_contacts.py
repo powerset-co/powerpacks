@@ -26,15 +26,16 @@ import csv
 import json
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 
@@ -65,6 +66,7 @@ MIN_PHONE_DIGITS = 7
 MAX_PHONE_DIGITS = 15
 MESSAGE_PAGE_SIZE = 500
 MIN_REQUEST_INTERVAL = 0.5
+DEFAULT_HEARTBEAT_INTERVAL = int(os.environ.get("POWERPACKS_WHATSAPP_HEARTBEAT_INTERVAL", "30"))
 
 
 @dataclass
@@ -93,6 +95,16 @@ def write_json(path: Path, value: Any) -> None:
 
 def emit(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
+
+
+def emit_progress(value: dict[str, Any], progress_path: Path | None = None) -> None:
+    payload = {"primitive": "extract_whatsapp_contacts", "event": "progress", "timestamp": now_iso(), **value}
+    line = json.dumps(payload, sort_keys=True)
+    print(line, file=sys.stderr, flush=True)
+    if progress_path:
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        with progress_path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -316,9 +328,12 @@ def extract_contacts(
     *,
     fetch_message_counts: bool = True,
     workers: int = 4,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    heartbeat_interval: int = DEFAULT_HEARTBEAT_INTERVAL,
 ) -> tuple[dict[str, Contact], dict[str, Any]]:
     """Pull contacts and chat metadata from the WAHA API."""
 
+    started = time.time()
     diagnostics: dict[str, Any] = {
         "raw_contacts": 0,
         "raw_chats": 0,
@@ -327,8 +342,19 @@ def extract_contacts(
         "lid_resolved": 0,
         "group_member_phones": 0,
         "fetched_message_counts_for": 0,
+        "message_count_completed": 0,
+        "message_count_total": 0,
         "errors": [],
     }
+
+    def progress(stage: str, **extra: Any) -> None:
+        if not progress_callback:
+            return
+        progress_callback({
+            "stage": stage,
+            "elapsed_seconds": round(time.time() - started, 1),
+            **extra,
+        })
 
     # 1. Pull all chats.
     status, chats_payload = _waha_get(base_url, api_key, f"/api/{session}/chats", retries=3)
@@ -453,18 +479,47 @@ def extract_contacts(
 
     if fetch_message_counts and needs_fetch:
         diagnostics["fetched_message_counts_for"] = len(needs_fetch)
+        diagnostics["message_count_total"] = len(needs_fetch)
+        progress("message_counts_start", total=len(needs_fetch), workers=max(1, workers))
         with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
             fut_map = {
                 pool.submit(_get_chat_message_count, base_url, api_key, session, jid): jid
                 for jid in needs_fetch
             }
-            for fut in as_completed(fut_map):
-                jid = fut_map[fut]
-                try:
-                    counts_by_jid[jid] = fut.result()
-                except Exception as exc:
-                    diagnostics["errors"].append({"step": "message_count", "jid": jid, "error": str(exc)})
-                    counts_by_jid[jid] = 0
+            pending = set(fut_map)
+            completed_count = 0
+            last_emit = 0.0
+            while pending:
+                done, pending = wait(
+                    pending,
+                    timeout=max(1, heartbeat_interval),
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    progress(
+                        "message_counts_heartbeat",
+                        completed=completed_count,
+                        total=len(needs_fetch),
+                        remaining=len(pending),
+                    )
+                    continue
+                for fut in done:
+                    jid = fut_map[fut]
+                    try:
+                        counts_by_jid[jid] = fut.result()
+                    except Exception as exc:
+                        diagnostics["errors"].append({"step": "message_count", "jid": jid, "error": str(exc)})
+                        counts_by_jid[jid] = 0
+                    completed_count += 1
+                    diagnostics["message_count_completed"] = completed_count
+                if time.time() - last_emit >= max(1, heartbeat_interval) or completed_count == len(needs_fetch):
+                    progress(
+                        "message_counts_progress",
+                        completed=completed_count,
+                        total=len(needs_fetch),
+                        remaining=len(pending),
+                    )
+                    last_emit = time.time()
 
     # 7. Collapse direct-chat stats by phone.
     direct_stats: dict[str, dict[str, Any]] = {}
@@ -657,12 +712,15 @@ def cmd_extract(args: argparse.Namespace) -> int:
         return 2
 
     try:
+        progress_path = Path(args.progress_jsonl) if args.progress_jsonl else manifest_path.with_suffix(manifest_path.suffix + ".progress.jsonl")
         contacts, diagnostics = extract_contacts(
             args.base_url,
             args.api_key,
             args.session,
             fetch_message_counts=not args.skip_message_counts,
             workers=args.workers,
+            progress_callback=lambda payload: emit_progress(payload, progress_path),
+            heartbeat_interval=args.heartbeat_interval,
         )
     except Exception as exc:
         write_csv(output_csv, {})
@@ -696,6 +754,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             "csv": str(output_csv),
             "jsonl": str(output_jsonl) if output_jsonl else None,
             "manifest": str(manifest_path),
+            "progress_jsonl": str(progress_path),
         },
         "counts": {
             "csv_rows": csv_rows,
@@ -732,8 +791,11 @@ def main() -> None:
     extract.add_argument("--manifest", help="Manifest output path")
     extract.add_argument("--run-id", help="Stable id used in default file names")
     extract.add_argument("--workers", type=int, default=4, help="Parallel workers for message-count fetches")
+    extract.add_argument("--heartbeat-interval", type=int, default=DEFAULT_HEARTBEAT_INTERVAL,
+                         help="Seconds between progress heartbeats while exhaustive message-count sync is running")
+    extract.add_argument("--progress-jsonl", help="Progress/heartbeat JSONL path; defaults next to the manifest")
     extract.add_argument("--skip-message-counts", action="store_true",
-                         help="Skip per-chat message-count fetches (faster, less complete)")
+                         help="Skip per-chat message-count fetches (faster, less complete; not recommended for normal imports)")
     extract.set_defaults(func=cmd_extract)
 
     args = parser.parse_args()

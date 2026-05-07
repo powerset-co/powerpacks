@@ -397,7 +397,7 @@ def main() -> None:
 
     health = sub.add_parser("health", help="Wait for WAHA HTTP to become healthy")
     add_common_args(health)
-    health.add_argument("--timeout", type=int, default=180)
+    health.add_argument("--timeout", type=int, default=600)
     health.set_defaults(func=cmd_health)
 
     status = sub.add_parser("status", help="Show current session status")
@@ -410,15 +410,15 @@ def main() -> None:
     start.add_argument("--force", action="store_true", help="Stop and recreate session even if it exists")
     start.add_argument("--open", action="store_true", help="Open the saved QR PNG in the system viewer")
     start.add_argument("--wait", action="store_true", help="After starting, poll until WORKING")
-    start.add_argument("--wait-timeout", type=int, default=180)
+    start.add_argument("--wait-timeout", type=int, default=600)
     start.add_argument("--poll-interval", type=float, default=3.0)
-    start.add_argument("--health-timeout", type=int, default=180)
+    start.add_argument("--health-timeout", type=int, default=600)
     start.set_defaults(func=cmd_start)
 
     wait = sub.add_parser("wait", help="Poll session status until WORKING (or timeout)")
     add_common_args(wait)
     wait.add_argument("--qr-dir", type=Path, default=DEFAULT_QR_DIR)
-    wait.add_argument("--wait-timeout", type=int, default=180)
+    wait.add_argument("--wait-timeout", type=int, default=600)
     wait.add_argument("--poll-interval", type=float, default=3.0)
     wait.set_defaults(func=cmd_wait)
 

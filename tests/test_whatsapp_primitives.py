@@ -123,6 +123,10 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                     "messagesCount": 42,
                 },
                 {
+                    "id": {"_serialized": "14155550202@c.us"},
+                    "timestamp": 1735689700,
+                },
+                {
                     "id": {"_serialized": "987654321@g.us"},
                     "name": "Founders",
                     "groupMetadata": {
@@ -134,7 +138,9 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                     },
                 },
             ],
-            "messages_by_chat": {},
+            "messages_by_chat": {
+                "14155550202%40c.us": [{"id": i} for i in range(3)],
+            },
         }
         port = _free_port()
         server = ThreadingHTTPServer(("127.0.0.1", port), FakeWAHAHandler)
@@ -156,7 +162,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                         "--output-jsonl", str(jsonl_path),
                         "--manifest", str(manifest_path),
                         "--run-id", "test-run",
-                        "--skip-message-counts",
+                        "--heartbeat-interval", "1",
                     ],
                     cwd=ROOT, capture_output=True, text=True, timeout=60,
                 )
@@ -164,6 +170,10 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 manifest = json.loads(result.stdout)
                 self.assertEqual(manifest["status"], "completed")
                 self.assertGreaterEqual(manifest["counts"]["contacts"], 2)
+                self.assertEqual(manifest["diagnostics"]["message_count_total"], 1)
+                progress_path = Path(manifest["artifacts"]["progress_jsonl"])
+                self.assertTrue(progress_path.exists())
+                self.assertIn("message_counts", result.stderr)
 
                 with csv_path.open(encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))
@@ -178,6 +188,9 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 self.assertEqual(jane["is_in_group_chats"], "true")
                 self.assertEqual(jane["group_names"], "Founders")
                 self.assertEqual(jane["message_count"], "42")
+
+                bob = next(row for row in rows if row["phone"] == "+14155550202")
+                self.assertEqual(bob["message_count"], "3")
 
                 # JSONL records carry the same shape used by normalize_message_contacts.
                 jsonl_rows = [json.loads(line) for line in jsonl_path.read_text().splitlines()]

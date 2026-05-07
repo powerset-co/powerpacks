@@ -309,9 +309,10 @@ class MessagesPackTests(unittest.TestCase):
             self.assertEqual(payload["yes_count"], 1)
             self.assertEqual(payload["maybe_count"], 1)
             self.assertEqual(payload["no_count"], 1)
-            self.assertEqual(payload["explicit_include_count"], 1)
-            self.assertEqual(payload["explicit_exclude_count"], 1)
-            self.assertEqual(payload["bucket_default_count"], 1)
+            self.assertNotIn("explicit_include_count", payload)
+            self.assertNotIn("explicit_exclude_count", payload)
+            self.assertNotIn("bucket_default_count", payload)
+            self.assertNotIn("row_count", payload)
 
     def test_upload_research_review_posts_multipart_csv(self) -> None:
         observed: dict[str, object] = {}

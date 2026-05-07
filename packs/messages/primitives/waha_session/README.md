@@ -13,17 +13,17 @@ dependency is involved. That image is the source of truth users scan.
 
 ```bash
 # Wait for the WAHA HTTP server to come up.
-python packs/messages/primitives/waha_session/waha_session.py health
+python packs/messages/primitives/waha_session/waha_session.py health --timeout 600
 
 # Show current session state (exits 0 only if status == WORKING).
 python packs/messages/primitives/waha_session/waha_session.py status
 
 # Create or reuse the session, emit qr.png + qr.txt under .powerpacks/messages/whatsapp,
 # open the PNG in the system image viewer, and poll until the user finishes the scan.
-python packs/messages/primitives/waha_session/waha_session.py start --open --wait
+python packs/messages/primitives/waha_session/waha_session.py start --open --wait --wait-timeout 600 --health-timeout 600
 
 # Re-poll an in-progress scan without recreating the session.
-python packs/messages/primitives/waha_session/waha_session.py wait
+python packs/messages/primitives/waha_session/waha_session.py wait --wait-timeout 600
 
 # Stop and delete the session (does not stop the container).
 python packs/messages/primitives/waha_session/waha_session.py stop
@@ -38,7 +38,8 @@ python packs/messages/primitives/waha_session/waha_session.py stop
 - `qr.txt` — the raw QR payload as text, for fallback rendering or debugging.
 
 Both are refreshed every 15 seconds while waiting, in case WhatsApp rotates
-the QR.
+the QR. The default wait/health timeout is 600 seconds so users have time to
+open WhatsApp and scan the QR.
 
 ## Environment overrides
 

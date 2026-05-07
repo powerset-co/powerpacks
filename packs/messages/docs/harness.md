@@ -35,7 +35,10 @@ Every primitive should:
 5. Optional WhatsApp extraction follows the same pattern: `waha_runtime check`
    → `waha_runtime up` (after consent) → `waha_session start --open --wait`
    (after consent + QR scan) → `extract_whatsapp_contacts extract` (after
-   consent) → `normalize_message_contacts normalize`.
+   consent) → `normalize_message_contacts normalize`. WhatsApp extraction is
+   exhaustive by default: do not pass `--skip-message-counts` in normal runs,
+   allow up to an hour for large histories, and monitor the primitive's stderr
+   heartbeat or `.progress.jsonl` artifact instead of assuming it is hung.
 
 ## Skill Boundary
 

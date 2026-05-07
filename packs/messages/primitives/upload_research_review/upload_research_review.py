@@ -211,7 +211,14 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     except UploadError as exc:
         emit({"primitive": "upload_research_review", "command": "summarize", "status": "failed", "error": str(exc)})
         return 1
-    emit({"primitive": "upload_research_review", "command": "summarize", "status": "ok", **summary})
+    emit({
+        "primitive": "upload_research_review",
+        "command": "summarize",
+        "status": "ok",
+        "yes_count": summary["yes_count"],
+        "maybe_count": summary["maybe_count"],
+        "no_count": summary["no_count"],
+    })
     return 0
 
 

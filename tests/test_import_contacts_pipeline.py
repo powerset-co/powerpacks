@@ -1,6 +1,7 @@
 import importlib.util
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,6 +45,34 @@ class ImportContactsPipelineTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIsNone(saved["current_block"])
         self.assertTrue(saved["approvals"][approval_id]["confirmed"])
+
+    def test_llm_auto_approve_default_is_ten_dollars(self):
+        self.assertEqual(mod.DEFAULT_LLM_AUTO_APPROVE_USD, 10.0)
+
+    def test_upload_block_message_only_shows_yes_maybe_no(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                review_csv=Path(tmp) / "review.csv",
+                timeout=30,
+                rerun_upload=False,
+            )
+            with mock.patch.object(mod, "summarize_upload", return_value={
+                "row_count": 99,
+                "yes_count": 10,
+                "maybe_count": 11,
+                "no_count": 1,
+                "explicit_include_count": 10,
+                "explicit_exclude_count": 1,
+            }):
+                with self.assertRaises(mod.PipelineBlocked) as cm:
+                    mod.upload_review(args, ledger_path, ledger)
+            block = cm.exception.payload
+            self.assertIn("yes=10, maybe=11, no=1", block["message"])
+            self.assertNotIn("Rows", block["message"])
+            self.assertEqual(set(block["payload"]), {"yes_count", "maybe_count", "no_count"})
 
     def test_missing_contacts_blocks_user_action(self):
         with tempfile.TemporaryDirectory() as tmp:

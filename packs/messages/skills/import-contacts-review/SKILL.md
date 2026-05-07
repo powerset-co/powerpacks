@@ -16,17 +16,16 @@ The pack is privacy-first:
   `is_in_group_chats`, and `group_names`
 - upload never happens until the final reviewed artifact step, after explicit
   user approval
-- cheap Sonnet/OpenRouter LLM review may proceed after an estimate under `$1.00`
-  under the initial workflow consent; otherwise LLM review needs explicit cost
-  approval
+- OpenRouter LLM review may proceed after an estimate under `$10.00` under the
+  initial workflow consent; otherwise LLM review needs explicit cost approval
 - Parallel.ai deep research always needs explicit spend approval after showing
   the count and cost estimate
 
 When invoked by the top-level `import-contacts` workflow, the user's initial
 workflow consent covers Powerset login, candidate sync, and local matching.
 Parallel deep research and upload still require separate cost/action approval.
-OpenRouter Sonnet LLM review can skip a second approval only when its estimate
-is under `$1.00`; still show the estimate first.
+OpenRouter LLM review can skip a second approval when its estimate is under
+`$10.00`; still show the cost first.
 
 ## Architecture
 
@@ -109,7 +108,7 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/llm_revi
 
 Show the user the candidate count and `estimated_usd` before spending money.
 
-### 6. Run the LLM review (cheap Sonnet estimates can proceed)
+### 6. Run the LLM review (OpenRouter estimates under $10 can proceed)
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/messages/primitives/llm_review_contacts/llm_review_contacts.py review \
@@ -117,9 +116,9 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/llm_revi
   --model anthropic/claude-sonnet-4-6
 ```
 
-If the estimate is `< $1.00` and the model is `anthropic/claude-sonnet-4-6`,
-report the estimate and proceed under the initial workflow consent. Otherwise,
-stop for explicit LLM cost approval first.
+If the OpenRouter estimate is `< $10.00`, report only the cost and proceed under
+the initial workflow consent. Otherwise, stop for explicit LLM cost approval
+first.
 
 `OPENROUTER_API_KEY` must be in the environment, or pass `--api-key`. The
 primitive only reviews unmatched/suggested rows by default; pass `--all` to
@@ -173,8 +172,7 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_res
   --output-dir .powerpacks/messages/research
 ```
 
-Stop and ask: "I'm going to run Parallel deep research on X people with
-processor core2x. Estimated cost: $Y. Please confirm before I submit." Only
+Stop and ask only with the cost: "Estimated Parallel cost: $Y. Approve?" Only
 after explicit user approval:
 
 ```bash

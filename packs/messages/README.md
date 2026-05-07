@@ -81,8 +81,8 @@ Cross-channel:
 Extraction is local and consentful. The harness can prepare and record
 commands, but an agent should not run iMessage, WhatsApp, Docker install, QR
 auth, extraction, Parallel paid research, or upload actions unless the user has
-explicitly asked for that action in the current task. OpenRouter Sonnet review
-under `$1.00` may proceed after showing the estimate; all Parallel research and
-all uploads require explicit approval.
+explicitly asked for that action in the current task. OpenRouter review under
+`$10.00` may proceed after showing the cost; all Parallel research and all
+uploads require explicit approval.
 
 Generated artifacts live under `.powerpacks/messages/` by default.

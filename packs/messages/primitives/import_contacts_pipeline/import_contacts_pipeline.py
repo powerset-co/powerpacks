@@ -40,7 +40,7 @@ DEFAULT_REVIEW_CSV = Path(".powerpacks/messages/research_review.csv")
 DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 DEFAULT_PROCESSOR = "core2x"
 ALLOWED_PARALLEL_PROCESSORS = ("core", "core2x", "pro")
-DEFAULT_LLM_AUTO_APPROVE_USD = 1.0
+DEFAULT_LLM_AUTO_APPROVE_USD = 10.0
 DEFAULT_REVIEW_PORT = 8766
 
 
@@ -353,8 +353,8 @@ def llm_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, An
         mark_step(ledger_path, ledger, "llm_review", "skipped", summary={"reason": "no_candidates"})
         return
 
-    auto_ok = args.model == DEFAULT_MODEL and estimated_usd < float(args.llm_auto_approve_usd)
-    payload = {"candidates": candidates, "estimated_usd": estimated_usd, "model": args.model}
+    auto_ok = estimated_usd < float(args.llm_auto_approve_usd)
+    payload = {"estimated_usd": estimated_usd}
     aid = approval_id("llm", payload)
     if not auto_ok and not is_approved(ledger, aid):
         block_for_approval(
@@ -364,7 +364,7 @@ def llm_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, An
             step_id="llm_review",
             kind="llm",
             payload=payload,
-            message=f"Run LLM review on {candidates} contacts with {args.model}? Estimated cost: ${estimated_usd:.4f}.",
+            message=f"Estimated OpenRouter cost: ${estimated_usd:.4f}. Approve?",
         )
 
     review_cmd = [
@@ -378,7 +378,7 @@ def llm_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, An
     review_result = run_command(review_cmd, timeout=max(args.timeout, 600), env=pipeline_env(args))
     review_payload = require_ok(review_result, "llm_review")
     if auto_ok:
-        review_payload["auto_approved_reason"] = f"{DEFAULT_MODEL}_under_{args.llm_auto_approve_usd}_usd"
+        review_payload["auto_approved_reason"] = f"openrouter_under_{args.llm_auto_approve_usd}_usd"
     mark_step(ledger_path, ledger, "llm_review", "completed", summary=review_payload, command=review_cmd)
 
 
@@ -451,7 +451,7 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
         mark_step(ledger_path, ledger, "deep_research", "completed", summary={"status": "no_work", **estimate_payload})
         return
 
-    payload = {"would_submit": would_submit, "estimated_usd": estimated_usd, "processor": args.processor, "input": str(args.research_queue)}
+    payload = {"estimated_usd": estimated_usd}
     aid = approval_id("parallel", payload)
     if not is_approved(ledger, aid):
         block_for_approval(
@@ -461,7 +461,7 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
             step_id="deep_research",
             kind="parallel",
             payload=payload,
-            message=f"Run Parallel deep research on {would_submit} people with processor {args.processor}? Estimated cost: ${estimated_usd:.4f}.",
+            message=f"Estimated Parallel cost: ${estimated_usd:.4f}. Approve?",
         )
 
     run_cmd = [
@@ -560,11 +560,9 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
         return
     summary = summarize_upload(args, ledger_path, ledger)
     payload = {
-        "row_count": int(summary.get("row_count") or 0),
         "yes_count": int(summary.get("yes_count") or 0),
         "maybe_count": int(summary.get("maybe_count") or 0),
         "no_count": int(summary.get("no_count") or 0),
-        "csv": str(args.review_csv),
     }
     aid = approval_id("upload", payload)
     if not is_approved(ledger, aid):
@@ -577,7 +575,7 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
             payload=payload,
             message=(
                 "Upload reviewed messages research artifact to Powerset? "
-                f"Rows: {payload['row_count']} (yes={payload['yes_count']}, maybe={payload['maybe_count']}, no={payload['no_count']})."
+                f"yes={payload['yes_count']}, maybe={payload['maybe_count']}, no={payload['no_count']}."
             ),
         )
 

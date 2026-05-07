@@ -24,15 +24,23 @@ not handle QR auth. Use:
 # Verify the session is authenticated.
 python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py check
 
-# Pull contacts. Writes CSV (and optional JSONL) plus a manifest with diagnostics.
+# Pull contacts exhaustively. Writes CSV/JSONL, manifest, and progress JSONL.
+# Large histories can take up to an hour; keep message counts enabled.
 python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py extract \
   --output-csv .powerpacks/messages/whatsapp.contacts.csv \
   --output-jsonl .powerpacks/messages/whatsapp.contacts.jsonl
 
-# Skip the slow per-chat message-count pagination.
+# Debug/last-resort only: skip per-chat message-count pagination.
 python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py extract \
   --skip-message-counts
 ```
+
+## Progress / heartbeat
+
+While counting messages, the primitive emits JSON progress events to stderr and
+writes the same events to `<manifest>.progress.jsonl` (or `--progress-jsonl`).
+Harnesses should monitor those heartbeats and allow long exhaustive syncs to run
+rather than killing the process or retrying with `--skip-message-counts`.
 
 ## Failure mode
 
