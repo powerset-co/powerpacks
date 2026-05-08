@@ -66,16 +66,16 @@ for the ledger, but the main agent should not show them by default.
 The main chat should show only:
 
 - required user actions, such as QR scan or OS permission steps
-- spend prompts, with cost only
+- spend prompts that require approval, with cost only
 - upload prompts, with upload count only
 - final upload result, exactly `Uploaded X contacts`
 
 After local import/match/queue prep succeeds, use decision-oriented wording such
-as `Imported contacts. Estimated LLM review cost: $X. Continue?` or, for
-Parallel, `Estimated Parallel cost: $Y. Approve?`. Do not include source row
-counts, matched/unmatched counts, chat counts, candidate counts, or artifact
-paths in the main chat unless the user asks for details or a failure requires
-diagnosis.
+as `Imported contacts. LLM review estimated $X; continuing.` when the
+OpenRouter estimate is under `$10.00`, or `Estimated Parallel cost: $Y.
+Approve?` for Parallel. Do not include source row counts, matched/unmatched
+counts, chat counts, candidate counts, or artifact paths in the main chat unless
+the user asks for details or a failure requires diagnosis.
 
 The worker may run the verbose terminal commands, poll sidecar progress files,
 and inspect JSON manifests. Its final response must be one summary block per
@@ -89,7 +89,7 @@ per-stage stats. Summarize command outputs from manifests internally instead of
 narrating intermediate polling.
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
 ```
 
 It exits intentionally at approval gates and prints the exact question plus the
@@ -97,9 +97,9 @@ It exits intentionally at approval gates and prints the exact question plus the
 approval subcommand only after the user approves:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve parallel \
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve parallel \
   --approval-id <approval_id> --confirm
-uv run --project powerpacks python powerpacks/packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py continue
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py continue
 ```
 
 Use the same pattern for `approve upload`. GCS research-cache sync is
@@ -155,7 +155,7 @@ Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
 4. Merge whichever sources exist:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/merge_message_contacts/merge_message_contacts.py merge \
+uv run --project . python packs/messages/primitives/merge_message_contacts/merge_message_contacts.py merge \
   --input .powerpacks/messages/imessage.contacts.csv \
   --input .powerpacks/messages/whatsapp.contacts.csv \
   --output .powerpacks/messages/contacts.csv
@@ -166,10 +166,10 @@ Only include input files that exist.
 5. Sync and match:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py sync \
+uv run --project . python packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py sync \
   --output .powerpacks/messages/powerset_contacts.csv
 
-uv run --project powerpacks python powerpacks/packs/messages/primitives/match_local_candidates/match_local_candidates.py match \
+uv run --project . python packs/messages/primitives/match_local_candidates/match_local_candidates.py match \
   --contacts .powerpacks/messages/contacts.csv \
   --candidates .powerpacks/messages/powerset_contacts.csv
 ```
@@ -177,7 +177,7 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/match_lo
 6. Build the enrichment queue:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
+uv run --project . python packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
   --input .powerpacks/messages/contacts.csv \
   --output .powerpacks/messages/research_queue.csv
 ```
@@ -195,15 +195,15 @@ Powerpacks research dir. For Arthur this should resolve to operator
 `e33a648a-ae5f-432e-83ce-b90d75546ada` / `thearthurchen@gmail.com`.
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py status
-uv run --project powerpacks python powerpacks/packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
+uv run --project . python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py status
+uv run --project . python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
 ```
 
 Then estimate Parallel deep research. The estimate skips rows that already have
 `.powerpacks/messages/research/<handle>/01_research_parallel.json`:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
+uv run --project . python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
   --input .powerpacks/messages/research_queue.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
@@ -212,7 +212,7 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_res
 Stop here and ask for explicit Parallel spend approval. After the user confirms:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
+uv run --project . python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
   --input .powerpacks/messages/research_queue.csv \
   --processor core2x \
   --output-dir .powerpacks/messages/research
@@ -221,12 +221,12 @@ uv run --project powerpacks python powerpacks/packs/messages/primitives/deep_res
 8. Build and open the profile-card review:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
+uv run --project . python packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
   --research-dir .powerpacks/messages/research \
   --queue-csv .powerpacks/messages/research_queue.csv \
   --output-csv .powerpacks/messages/research_review.csv
 
-uv run --project powerpacks python powerpacks/packs/messages/primitives/review_research_web/review_research_web.py serve \
+uv run --project . python packs/messages/primitives/review_research_web/review_research_web.py serve \
   --csv .powerpacks/messages/research_review.csv \
   --research-dir .powerpacks/messages/research \
   --open
@@ -249,14 +249,14 @@ handling, ask for upload approval using only the number of yes rows that will be
 uploaded. Make clear that nothing has been uploaded yet:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
+uv run --project . python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
   --csv .powerpacks/messages/research_review.csv
 ```
 
 Only after the user explicitly approves the upload:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/upload_research_review/upload_research_review.py upload \
+uv run --project . python packs/messages/primitives/upload_research_review/upload_research_review.py upload \
   --csv .powerpacks/messages/research_review.csv \
   --confirm-upload
 ```
@@ -269,7 +269,7 @@ explicit yes/no enrich choices are reflected in that split.
 Then upload the reviewed rows plus joined deep-research profiles to Powerset:
 
 ```bash
-python packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py sync \
+uv run --project . python packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py sync \
   --csv .powerpacks/messages/research_review.csv \
   --research-dir .powerpacks/messages/research \
   --confirm-sync
@@ -283,7 +283,7 @@ If Parallel is skipped, unavailable, or the queue is empty, fall back to the raw
 contacts yes/no reviewer:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
+uv run --project . python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
   --contacts .powerpacks/messages/contacts.csv \
   --open
 ```
@@ -312,12 +312,9 @@ reason; never send message bodies.
 
 ## Output
 
-End with a compact summary:
+End with only the next action or final result:
 
-- source row counts
-- merged unique contacts
-- matched / suggested / unmatched counts
-- review URL or artifact path
-- research queue path and tier counts
-- deep research estimate/path when run
-- uploaded artifact ID when upload is approved
+- if blocked on spend: `Estimated <provider> cost: $X. Approve?`
+- if review is ready: `Review opened. When done, say: done with review, upload`
+- if upload is approved and complete: `Uploaded X contacts`
+- include detailed stats only if the user explicitly asks or a failure needs diagnosis

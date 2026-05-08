@@ -17,9 +17,11 @@ Privacy contract:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -42,7 +44,7 @@ def load_dotenv(path: Path) -> None:
             continue
         key, value = text.split("=", 1)
         key = key.strip()
-        if not key or key in os.environ:
+        if key != "OPENROUTER_API_KEY" or key in os.environ:
             continue
         value = value.strip().strip('"').strip("'")
         os.environ[key] = value
@@ -72,7 +74,9 @@ CSV_HEADERS = [
 
 OPENROUTER_BASE = os.environ.get("POWERPACKS_OPENROUTER_BASE", "https://openrouter.ai/api/v1")
 DEFAULT_MODEL = os.environ.get("POWERPACKS_LLM_REVIEW_MODEL", "anthropic/claude-sonnet-4-6")
-BATCH_SIZE = 40
+DEFAULT_BATCH_SIZE = int(os.environ.get("POWERPACKS_LLM_REVIEW_BATCH_SIZE") or "20")
+DEFAULT_MAX_WORKERS = int(os.environ.get("POWERPACKS_LLM_REVIEW_MAX_WORKERS") or "4")
+DEFAULT_MAX_RETRIES = int(os.environ.get("POWERPACKS_LLM_REVIEW_MAX_RETRIES") or "2")
 DEFAULT_REVIEW_STATUSES = {"unmatched", "suggested", ""}
 
 
@@ -258,7 +262,11 @@ def call_openrouter(
             raw = exc.read().decode("utf-8", errors="replace")
         except Exception:
             pass
-        return [], 0, 0, f"HTTP {exc.code}: {raw[:300]}"
+        retry_after = exc.headers.get("retry-after") if exc.headers else None
+        prefix = f"HTTP {exc.code}"
+        if retry_after:
+            prefix += f" retry_after={retry_after}"
+        return [], 0, 0, f"{prefix}: {raw[:300]}"
     except urllib.error.URLError as exc:
         return [], 0, 0, f"network: {exc.reason}"
 
@@ -304,17 +312,59 @@ def call_openrouter(
     return [], prompt_tokens, completion_tokens, "no results array"
 
 
+def _retry_after_seconds(error: str | None, attempt: int) -> float:
+    if error:
+        match = re.search(r"retry_after=([0-9.]+)", error)
+        if match:
+            try:
+                return max(0.0, float(match.group(1)))
+            except ValueError:
+                pass
+    return min(30.0, float(2 ** attempt))
+
+
+def call_openrouter_with_retries(
+    api_key: str,
+    contacts_json: str,
+    model: str,
+    *,
+    timeout: int,
+    max_retries: int,
+) -> tuple[list[dict[str, Any]], int, int, str | None]:
+    total_in = 0
+    total_out = 0
+    last_error: str | None = None
+    for attempt in range(max_retries + 1):
+        results, in_tok, out_tok, err = call_openrouter(
+            api_key,
+            contacts_json,
+            model,
+            timeout=timeout,
+        )
+        total_in += in_tok
+        total_out += out_tok
+        last_error = err
+        if not err:
+            return results, total_in, total_out, None
+        retryable = err.startswith("HTTP 429") or err.startswith("HTTP 529") or "rate" in err.lower()
+        if not retryable or attempt >= max_retries:
+            return results, total_in, total_out, err
+        time.sleep(_retry_after_seconds(err, attempt))
+    return [], total_in, total_out, last_error
+
+
 # ---------------------------------------------------------------------------
 # Cost estimate
 # ---------------------------------------------------------------------------
 
-def estimate_cost(contacts: list[dict[str, str]], model: str) -> dict[str, Any]:
+def estimate_cost(contacts: list[dict[str, str]], model: str, *, batch_size: int = DEFAULT_BATCH_SIZE) -> dict[str, Any]:
     pricing = MODEL_PRICING.get(model, {"input": 2.0, "output": 8.0})
     total_in = 0
     total_out = 0
     batches = 0
-    for i in range(0, len(contacts), BATCH_SIZE):
-        batch = contacts[i:i + BATCH_SIZE]
+    batch_size = max(1, batch_size)
+    for i in range(0, len(contacts), batch_size):
+        batch = contacts[i:i + batch_size]
         batches += 1
         payload = build_batch_payload(batch)
         prompt = REVIEW_PROMPT.format(contacts_json=json.dumps(payload, indent=2))
@@ -369,7 +419,7 @@ def cmd_estimate(args: argparse.Namespace) -> int:
         include_matched=args.all,
         include_skipped=args.include_skipped,
     )
-    estimate = estimate_cost(contacts, args.model)
+    estimate = estimate_cost(contacts, args.model, batch_size=args.batch_size)
     emit({
         "primitive": "llm_review_contacts",
         "command": "estimate",
@@ -397,7 +447,9 @@ def cmd_review(args: argparse.Namespace) -> int:
         include_skipped=args.include_skipped,
     )
 
-    estimate = estimate_cost(contacts, args.model)
+    batch_size = max(1, int(args.batch_size))
+    max_workers = max(1, int(args.max_workers))
+    estimate = estimate_cost(contacts, args.model, batch_size=batch_size)
     base_manifest = {
         "primitive": "llm_review_contacts",
         "command": "review",
@@ -405,6 +457,8 @@ def cmd_review(args: argparse.Namespace) -> int:
         "model": args.model,
         "input": str(args.input),
         "candidate_count": len(contacts),
+        "batch_size": batch_size,
+        "max_workers": max_workers,
         "include_matched": bool(args.all),
         "include_skipped": bool(args.include_skipped),
         "estimate": estimate,
@@ -433,23 +487,50 @@ def cmd_review(args: argparse.Namespace) -> int:
     errors: list[dict[str, Any]] = []
     started = time.time()
 
+    batches = [
+        (batch_index, contacts[i:i + batch_size])
+        for batch_index, i in enumerate(range(0, len(contacts), batch_size))
+    ]
+
+    def run_batch(batch_item: tuple[int, list[dict[str, str]]]) -> dict[str, Any]:
+        batch_index, batch = batch_item
+        payload = build_batch_payload(batch)
+        results, in_tok, out_tok, err = call_openrouter_with_retries(
+            api_key,
+            json.dumps(payload, indent=2),
+            args.model,
+            timeout=args.timeout,
+            max_retries=args.max_retries,
+        )
+        return {
+            "batch_index": batch_index,
+            "batch": batch,
+            "results": results,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "error": err,
+        }
+
+    completed_batches: list[dict[str, Any]] = []
+    if max_workers == 1 or len(batches) <= 1:
+        completed_batches = [run_batch(batch) for batch in batches]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(run_batch, batch) for batch in batches]
+            for future in concurrent.futures.as_completed(futures):
+                completed_batches.append(future.result())
+
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with results_path.open("w", encoding="utf-8") as handle:
-        for i in range(0, len(contacts), BATCH_SIZE):
-            batch = contacts[i:i + BATCH_SIZE]
-            payload = build_batch_payload(batch)
-            results, in_tok, out_tok, err = call_openrouter(
-                api_key,
-                json.dumps(payload, indent=2),
-                args.model,
-                timeout=args.timeout,
-            )
-            total_in += in_tok
-            total_out += out_tok
+        for completed in sorted(completed_batches, key=lambda item: int(item["batch_index"])):
+            batch = completed["batch"]
+            total_in += int(completed["input_tokens"])
+            total_out += int(completed["output_tokens"])
+            err = completed.get("error")
             if err:
-                errors.append({"batch_index": i // BATCH_SIZE, "error": err})
+                errors.append({"batch_index": completed["batch_index"], "error": err})
                 continue
-            for result in results:
+            for result in completed["results"]:
                 idx = result.get("idx")
                 if not isinstance(idx, int) or not (0 <= idx < len(batch)):
                     continue
@@ -501,6 +582,8 @@ def main() -> None:
     common = lambda p: (
         p.add_argument("--input", "-f", required=True, help="Path to the contacts CSV"),
         p.add_argument("--model", default=DEFAULT_MODEL),
+        p.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
+                       help="Contacts per OpenRouter request"),
         p.add_argument("--all", action="store_true",
                        help="Review all named contacts (default: only unmatched/suggested)"),
         p.add_argument("--include-skipped", action="store_true",
@@ -517,6 +600,10 @@ def main() -> None:
     review.add_argument("--dry-run", action="store_true",
                         help="Estimate cost only; do not call the API")
     review.add_argument("--timeout", type=int, default=120)
+    review.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS,
+                        help="Concurrent OpenRouter requests")
+    review.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES,
+                        help="Retries per batch for transient/rate-limit errors")
     review.add_argument("--results", help="Path to write the per-contact verdicts JSONL")
     review.add_argument("--manifest", help="Path to write the run manifest JSON")
     review.set_defaults(func=cmd_review)

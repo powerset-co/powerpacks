@@ -9,11 +9,11 @@ at approval gates, and can be resumed with `continue`.
 ## Commands
 
 ```bash
-python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
-python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py continue
-python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py status
-python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve parallel --approval-id <id> --confirm
-python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve upload --approval-id <id> --confirm
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py continue
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py status
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve parallel --approval-id <id> --confirm
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve upload --approval-id <id> --confirm
 ```
 
 ## Approval behavior
@@ -27,7 +27,7 @@ exits with JSON like:
   "approval_type": "parallel",
   "approval_id": "parallel_abc123",
   "message": "Estimated Parallel cost: $0.0500. Approve?",
-  "continue_command": "python ... approve parallel --approval-id parallel_abc123 --confirm && python ... continue"
+  "continue_command": "uv run --project . python ... approve parallel --approval-id parallel_abc123 --confirm && uv run --project . python ... continue"
 }
 ```
 
@@ -65,6 +65,8 @@ Gates:
 --stop-before-upload     # stop after opening review UI
 --no-open-review         # build CSV but do not start the web UI
 --rerun-llm              # ignore existing llm_review manifest
+--llm-batch-size 20      # contacts per OpenRouter request
+--llm-max-workers 4      # concurrent OpenRouter requests
 --rerun-parallel         # rerun deep_research step; underlying primitive still skips existing handles
 --rerun-upload           # allow another upload attempt even if ledger says completed
 --force-sync-cache       # retry GCS cache sync

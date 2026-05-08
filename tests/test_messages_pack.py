@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -878,6 +879,69 @@ class PrepareRetargetQueueTests(unittest.TestCase):
             self.assertEqual(reviewed[0]["retarget_status"], "re_researched")
             self.assertEqual(reviewed[0]["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
             self.assertEqual(reviewed[0]["top_title_company_pairs"], "Founder @ Acme")
+
+
+class LlmReviewContactsTests(unittest.TestCase):
+    LLM = ROOT / "packs/messages/primitives/llm_review_contacts/llm_review_contacts.py"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        spec = importlib.util.spec_from_file_location("llm_review_contacts", cls.LLM)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)  # type: ignore[union-attr]
+
+    def test_estimate_respects_batch_size(self) -> None:
+        contacts = [{"name": f"Person {i}", "message_count": "1"} for i in range(45)]
+        estimate = self.mod.estimate_cost(contacts, "anthropic/claude-sonnet-4-6", batch_size=20)
+        self.assertEqual(estimate["batches"], 3)
+
+    def test_review_uses_parallel_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            contacts = tmp / "contacts.csv"
+            fields = ["phone", "name", "source", "is_in_group_chats", "group_names", "message_count", "last_message", "skip", "match_status", "matched_person_id"]
+            with contacts.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                for idx in range(5):
+                    writer.writerow({
+                        "phone": f"+1555000000{idx}",
+                        "name": f"Person {idx}",
+                        "source": "imessage",
+                        "message_count": "1",
+                    })
+            args = type("Args", (), {
+                "api_key": "test-key",
+                "dry_run": False,
+                "input": str(contacts),
+                "all": False,
+                "include_skipped": False,
+                "model": "anthropic/claude-sonnet-4-6",
+                "batch_size": 2,
+                "max_workers": 2,
+                "max_retries": 0,
+                "timeout": 1,
+                "results": str(tmp / "results.jsonl"),
+                "manifest": str(tmp / "manifest.json"),
+            })()
+
+            def fake_call(_api_key, contacts_json, _model, *, timeout, max_retries):
+                batch = json.loads(contacts_json)
+                return (
+                    [{"idx": item["idx"], "verdict": "ENRICH", "reason": "full name"} for item in batch],
+                    10,
+                    5,
+                    None,
+                )
+
+            with mock.patch.object(self.mod, "call_openrouter_with_retries", side_effect=fake_call) as call:
+                rc = self.mod.cmd_review(args)
+            self.assertEqual(rc, 0)
+            self.assertEqual(call.call_count, 3)
+            manifest = json.loads((tmp / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["batch_size"], 2)
+            self.assertEqual(manifest["max_workers"], 2)
+            self.assertEqual(manifest["counts"]["verdicts"], 5)
 
 
 class DeepResearchContactsTests(unittest.TestCase):

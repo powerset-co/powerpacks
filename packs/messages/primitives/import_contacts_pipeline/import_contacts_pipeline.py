@@ -9,8 +9,8 @@ upload.
 It does not infer approval from stdin. Agents should ask the user, then feed the
 confirmation back with:
 
-    python ... import_contacts_pipeline.py approve parallel --approval-id <id> --confirm
-    python ... import_contacts_pipeline.py continue
+    uv run --project . python ... import_contacts_pipeline.py approve parallel --approval-id <id> --confirm
+    uv run --project . python ... import_contacts_pipeline.py continue
 
 Stdlib-only.
 """
@@ -230,9 +230,9 @@ def is_approved(ledger: dict[str, Any], approval_id_value: str) -> bool:
 
 def approval_command(args: argparse.Namespace, kind: str, approval_id_value: str) -> str:
     return (
-        f"python {rel(Path(__file__).resolve())} approve {kind} "
+        f"uv run --project . python {rel(Path(__file__).resolve())} approve {kind} "
         f"--ledger {shlex.quote(str(args.ledger))} --approval-id {approval_id_value} --confirm && "
-        f"python {rel(Path(__file__).resolve())} continue --ledger {shlex.quote(str(args.ledger))}"
+        f"uv run --project . python {rel(Path(__file__).resolve())} continue --ledger {shlex.quote(str(args.ledger))}"
     )
 
 
@@ -410,6 +410,7 @@ def llm_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, An
         "estimate",
         "--input", str(args.contacts),
         "--model", args.model,
+        "--batch-size", str(args.llm_batch_size),
     ]
     mark_step(ledger_path, ledger, "llm_estimate", "running", command=estimate_cmd)
     estimate_result = run_command(estimate_cmd, timeout=args.timeout, env=pipeline_env(args))
@@ -442,6 +443,8 @@ def llm_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, An
         "review",
         "--input", str(args.contacts),
         "--model", args.model,
+        "--batch-size", str(args.llm_batch_size),
+        "--max-workers", str(args.llm_max_workers),
     ]
     mark_step(ledger_path, ledger, "llm_review", "running", command=review_cmd)
     review_result = run_command(review_cmd, timeout=max(args.timeout, 600), env=pipeline_env(args))
@@ -816,6 +819,10 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=ALLOWED_PARALLEL_PROCESSORS)
     parser.add_argument("--llm-auto-approve-usd", type=float, default=DEFAULT_LLM_AUTO_APPROVE_USD)
+    parser.add_argument("--llm-batch-size", type=int, default=20,
+                        help="Contacts per OpenRouter LLM review request")
+    parser.add_argument("--llm-max-workers", type=int, default=4,
+                        help="Concurrent OpenRouter LLM review requests")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--parallel-timeout", type=int, default=7600)

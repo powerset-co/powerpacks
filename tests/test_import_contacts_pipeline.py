@@ -49,6 +49,54 @@ class ImportContactsPipelineTests(unittest.TestCase):
     def test_llm_auto_approve_default_is_ten_dollars(self):
         self.assertEqual(mod.DEFAULT_LLM_AUTO_APPROVE_USD, 10.0)
 
+    def test_approval_command_uses_uv_run(self):
+        args = SimpleNamespace(ledger=Path(".powerpacks/messages/import-run.json"))
+        command = mod.approval_command(args, "parallel", "parallel_abc123")
+        self.assertIn("uv run --project . python", command)
+        self.assertNotIn("&& python ", command)
+
+    def test_under_ten_dollar_llm_estimate_runs_without_approval_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            contacts = Path(tmp) / "contacts.csv"
+            ledger = mod.load_ledger(ledger_path)
+            args = SimpleNamespace(
+                contacts=contacts,
+                model="anthropic/claude-sonnet-4-6",
+                timeout=30,
+                env_file=".env",
+                llm_auto_approve_usd=10.0,
+                llm_batch_size=20,
+                llm_max_workers=4,
+                rerun_llm=False,
+            )
+            estimate = {
+                "primitive": "llm_review_contacts",
+                "command": "estimate",
+                "candidates": 1,
+                "estimate": {"estimated_usd": 0.25},
+            }
+            review = {
+                "primitive": "llm_review_contacts",
+                "command": "review",
+                "status": "completed",
+                "counts": {"verdicts": 1},
+            }
+            with mock.patch.object(mod, "run_command", side_effect=[
+                {"returncode": 0, "json": estimate},
+                {"returncode": 0, "json": review},
+            ]) as run_command:
+                mod.llm_review(args, ledger_path, ledger)
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["steps"]["llm_review"]["status"], "completed")
+            self.assertIn("auto_approved_reason", saved["steps"]["llm_review"]["summary"])
+            self.assertEqual(run_command.call_count, 2)
+            review_cmd = run_command.call_args_list[1].args[0]
+            self.assertIn("--batch-size", review_cmd)
+            self.assertIn("20", review_cmd)
+            self.assertIn("--max-workers", review_cmd)
+            self.assertIn("4", review_cmd)
+
     def test_upload_block_message_only_shows_upload_count(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"

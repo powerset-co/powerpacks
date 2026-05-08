@@ -25,22 +25,32 @@ is written next to the CSV for auditability.
 
 ```bash
 # 1. Estimate cost without calling the API.
-python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py estimate \
+uv run --project . python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py estimate \
   --input .powerpacks/messages/contacts.csv
 
 # 2. Run the review. Auto-loads OPENROUTER_API_KEY from the repo .env.
-python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py review \
+uv run --project . python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py review \
   --input .powerpacks/messages/contacts.csv \
   --model anthropic/claude-sonnet-4-6
 
+# Tune request shape/concurrency. Defaults are 20 contacts/request, 4 workers.
+uv run --project . python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py review \
+  --input .powerpacks/messages/contacts.csv \
+  --batch-size 20 \
+  --max-workers 4
+
 # Use a cheaper model.
-python ... llm_review_contacts.py review \
+uv run --project . python ... llm_review_contacts.py review \
   --input .powerpacks/messages/contacts.csv \
   --model openai/gpt-4.1-mini
 
 # Review every named contact (including already-matched).
-python ... llm_review_contacts.py review --input ... --all
+uv run --project . python ... llm_review_contacts.py review --input ... --all
 ```
+
+Rate-limit behavior: each batch retries transient/rate-limit errors with
+`retry-after` when OpenRouter/provider responses include it. Reduce
+`--max-workers` if the provider starts returning repeated 429s.
 
 ## Default match-status filter
 
