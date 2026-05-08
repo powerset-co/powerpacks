@@ -18,9 +18,9 @@ The primitive sends only:
 - `message_count`
 - recency (`today`, `12 days ago`, …) — derived from `last_message`
 - `is_in_group_chats`
-- `group_names`
 
-It does **not** send phone numbers, message text, or any other identifier.
+It does **not** send phone numbers, group names, message text, or any other
+identifier.
 
 The only field updated in the CSV is `skip`. `SKIP` writes `skip=yes`; `ENRICH`
 clears stale skip values. A JSONL of per-contact verdicts is written next to

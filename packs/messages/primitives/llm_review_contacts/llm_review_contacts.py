@@ -8,8 +8,9 @@ Subcommands:
 
 Privacy contract:
 
-- Only `name`, `source`, `message_count`, last-contact recency, group flags,
-  and group names are sent. No phone numbers, no message content.
+- Only `name`, `source`, `message_count`, last-contact recency, and whether
+  the row appears in group chats are sent. No phone numbers, group names, or
+  message content.
 - The `skip` column is the only field updated in the contacts CSV.
 - A reviews JSONL artifact is written so verdicts can be audited.
 """
@@ -119,8 +120,7 @@ include dating-app/source notes, location shorthand, event/context tags, or \
 relationship labels. If the remaining name is still a clear normal full name, \
 ENRICH; if it is just a first name plus a personal note, SKIP.
 - **Group chat only**: If someone ONLY appears in group chats with low \
-individual message count, they're less valuable. Named groups can still add \
-useful context.
+individual message count, they're less valuable.
 
 Be optimistic — these are real phone contacts, not random leads. Normal human \
 full names should be ENRICH, even with zero message count. When in doubt about \
@@ -227,7 +227,6 @@ def build_batch_payload(batch: list[dict[str, str]]) -> list[dict[str, Any]]:
             "message_count": msg_count,
             "last_contacted": format_recency(c.get("last_message", "")),
             "in_group_chats": c.get("is_in_group_chats", "false"),
-            "group_names": c.get("group_names", ""),
         })
     return payload
 
