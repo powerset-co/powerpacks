@@ -49,6 +49,9 @@ CSV_HEADERS = [
     "match_method",
     "match_reason",
 ]
+REQUIRED_INPUT_HEADERS = {"phone", "name"}
+SCHEMA_DOC = "packs/messages/schemas/contacts-csv.md"
+SCHEMA_JSON = "packs/messages/schemas/contacts-csv.schema.json"
 
 
 @dataclass
@@ -114,6 +117,24 @@ def load_candidates(path: Path) -> list[Candidate]:
                 emails=emails,
             ))
     return out
+
+
+def schema_error(path: Path, fieldnames: list[str] | None) -> str:
+    fields = ",".join(fieldnames or []) or "<none>"
+    header = ",".join(CSV_HEADERS)
+    return (
+        f"CSV schema mismatch for {path}. Please convert this file into the Powerpacks messages contacts CSV schema before retrying. "
+        f"Required input columns: phone,name. Canonical header: {header}. "
+        f"Detected columns: {fields}. Schema docs: {SCHEMA_DOC}. JSON schema: {SCHEMA_JSON}. "
+        "Common legacy mappings: phone_e164/phone_number -> phone; display_name/full_name -> name; "
+        "total_messages -> message_count; message_source/source_channel -> source."
+    )
+
+
+def validate_input_headers(path: Path, fieldnames: list[str] | None) -> None:
+    names = {str(value or "").strip() for value in (fieldnames or [])}
+    if not REQUIRED_INPUT_HEADERS.issubset(names):
+        raise SystemExit(schema_error(path, fieldnames))
 
 
 def _set_unmatched(row: dict[str, str], reason: str) -> None:
@@ -303,10 +324,11 @@ def read_contacts(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         raise SystemExit(f"contacts file not found: {path}")
     rows: list[dict[str, str]] = []
-    with path.open(newline="", encoding="utf-8") as handle:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
             return []
+        validate_input_headers(path, reader.fieldnames)
         for row in reader:
             normalized = {key: (row.get(key) or "") for key in CSV_HEADERS}
             rows.append(normalized)

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Powerpacks messages contacts CSV row",
+  "type": "object",
+  "required": ["phone", "name"],
+  "properties": {
+    "phone": {"type": "string", "description": "Phone number, preferably E.164."},
+    "name": {"type": "string", "description": "Contact full/display name."},
+    "source": {"type": "string", "description": "imessage, whatsapp, phone, or comma-separated sources."},
+    "is_in_group_chats": {"type": "string", "description": "true/false style boolean."},
+    "group_names": {"type": "string", "description": "Group names joined with ' | '."},
+    "message_count": {"type": "string", "description": "Non-negative integer if known."},
+    "last_message": {"type": "string", "description": "ISO-8601 timestamp if known."},
+    "skip": {"type": "string", "description": "yes/true to exclude from research."},
+    "match_status": {"type": "string", "description": "blank, unmatched, suggested, or matched."},
+    "matched_person_id": {"type": "string"},
+    "matched_name": {"type": "string"},
+    "matched_linkedin_url": {"type": "string"},
+    "match_confidence": {"type": "string"},
+    "match_method": {"type": "string"},
+    "match_reason": {"type": "string"}
+  },
+  "additionalProperties": true,
+  "x-csv-header": [
+    "phone",
+    "name",
+    "source",
+    "is_in_group_chats",
+    "group_names",
+    "message_count",
+    "last_message",
+    "skip",
+    "match_status",
+    "matched_person_id",
+    "matched_name",
+    "matched_linkedin_url",
+    "match_confidence",
+    "match_method",
+    "match_reason"
+  ],
+  "x-common-legacy-mappings": {
+    "phone_e164": "phone",
+    "phone_number": "phone",
+    "primary_phone": "phone",
+    "display_name": "name",
+    "full_name": "name",
+    "real_name": "name",
+    "total_messages": "message_count",
+    "message_source": "source",
+    "source_channel": "source"
+  }
+}

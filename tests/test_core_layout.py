@@ -25,10 +25,7 @@ class CoreLayoutTests(unittest.TestCase):
         messages_pack = sorted(
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
         )
-        self.assertIn("import-contacts", messages_pack)
-        self.assertIn("import-imessage", messages_pack)
-        self.assertIn("import-whatsapp", messages_pack)
-        self.assertIn("import-contacts-review", messages_pack)
+        self.assertEqual(messages_pack, ["import-contacts"])
 
     def test_no_legacy_add_skill_references_in_core_skill(self) -> None:
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
@@ -69,20 +66,19 @@ class CoreLayoutTests(unittest.TestCase):
     def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
         self.assertIn("@powerset.co", text)
-        # `doctor run` is the diagnosis entrypoint; the agent executes fixes
-        # step-by-step instead of nesting them inside `doctor fix`.
+        # The setup checker is still the diagnosis entrypoint, but the skill's
+        # user-facing contract should stay quiet.
         self.assertIn("packs/powerset/primitives/doctor/doctor.py run", text)
-        # Skill must explicitly steer agents AWAY from `doctor.py fix`
-        # (which hides interactive work inside a subprocess).
-        self.assertIn("do **not** run", text)
-        self.assertIn("doctor.py fix", text)
+        self.assertIn("Updating your credentials...", text)
+        self.assertIn("Credentials updated. Please restart Codex", text)
+        self.assertIn("do not\nrun nested fix commands", text)
         # Per-user secret naming.
         self.assertIn("powerpacks-users-", text)
         # gcloud login is part of the interactive happy path.
         self.assertIn("gcloud auth login", text)
         # Maintainer onboarding command must be discoverable.
         self.assertIn("provision_user_secrets", text)
-        # The aggressive UX classification must be documented.
+        # The setup classification must be documented.
         self.assertIn("fix_kind", text)
 
     def test_search_surface_documents_company_entrypoint(self) -> None:
@@ -133,11 +129,11 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("review_contacts_web", text)
         self.assertIn("review_research_web", text)
 
-    def test_search_network_offers_rerank_approval_mode(self) -> None:
+    def test_search_network_uses_single_execute_preview_gate(self) -> None:
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
-        self.assertIn("search only", text)
-        self.assertIn("rerank", text)
-        self.assertIn("--execution-mode rerank", text)
+        self.assertIn("execute`, `modify`, or `search only`", text)
+        self.assertIn("--execute-approved", text)
+        self.assertIn("without a second approval gate", text)
 
     def test_task_state_tracks_planned_steps_separately_from_execution_log(self) -> None:
         task_state = ROOT / "packs/search/primitives/task_state/task_state.py"

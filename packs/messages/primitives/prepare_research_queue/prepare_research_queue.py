@@ -88,6 +88,10 @@ MIN_MESSAGE_COUNT = 0
 NAME_CLEAN_RE = re.compile(r"[^A-Za-zÀ-ÿ'’\-\s]")
 MULTISPACE_RE = re.compile(r"\s+")
 BLOCKED_LAST_NAME_TOKENS = {"hinge", "raya", "tinder", "bumble"}
+REQUIRED_INPUT_HEADERS = {"phone", "name"}
+SCHEMA_DOC = "packs/messages/schemas/contacts-csv.md"
+SCHEMA_JSON = "packs/messages/schemas/contacts-csv.schema.json"
+CANONICAL_HEADER = "phone,name,source,is_in_group_chats,group_names,message_count,last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason"
 
 
 def emit(value: Any) -> None:
@@ -97,6 +101,24 @@ def emit(value: Any) -> None:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def schema_error(path: Path, fieldnames: list[str] | None) -> str:
+    fields = ",".join(fieldnames or []) or "<none>"
+    return (
+        f"CSV schema mismatch for {path}. Please convert this file into the Powerpacks messages contacts CSV schema before retrying. "
+        f"Required input columns: phone,name. Canonical header: {CANONICAL_HEADER}. "
+        f"Detected columns: {fields}. Schema docs: {SCHEMA_DOC}. JSON schema: {SCHEMA_JSON}. "
+        "Common legacy mappings: phone_e164/phone_number -> phone; display_name/full_name -> name; "
+        "total_messages -> message_count; message_source/source_channel -> source."
+    )
+
+
+def validate_input_headers(path: Path, fieldnames: list[str] | None) -> str | None:
+    names = {str(value or "").strip() for value in (fieldnames or [])}
+    if not REQUIRED_INPUT_HEADERS.issubset(names):
+        return schema_error(path, fieldnames)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -297,8 +319,19 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "filtered_low_messages": 0,
         "filtered_low_signal_group_chat": 0,
     }
-    with input_path.open(newline="", encoding="utf-8") as handle:
+    with input_path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
+        schema_problem = validate_input_headers(input_path, reader.fieldnames)
+        if schema_problem:
+            emit({
+                "primitive": "prepare_research_queue",
+                "command": "prepare",
+                "status": "failed",
+                "error": schema_problem,
+                "schema_docs": SCHEMA_DOC,
+                "schema_json": SCHEMA_JSON,
+            })
+            return 2
         for row in reader:
             counts["input_rows"] += 1
             raw_name = row.get("name") or ""

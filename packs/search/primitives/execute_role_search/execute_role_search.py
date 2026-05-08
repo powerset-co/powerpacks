@@ -19,12 +19,15 @@ sys.path.insert(0, str(LIB_DIR))
 from turbopuffer_client import (  # noqa: E402
     dedupe_people,
     filters_from_role_payload,
+    has_role_constraint,
     hybrid_role_rows,
     is_filter_only_payload,
     latest_step_output,
     load_env_file,
+    merge_company_union_candidates,
     namespace_name,
     role_payload_from_state,
+    search_mode_for_payload,
     summarize_filter,
 )
 
@@ -96,14 +99,21 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     payload = json.loads(args.payload_json) if args.payload_json else role_payload_from_state(state)
     filters = filters_from_role_payload(payload)
     prefilters = latest_step_output(state, "apply_prefilters") if state else {}
-    if prefilters.get("ran_prefilters") and not prefilters.get("base_candidate_ids"):
+    search_mode = search_mode_for_payload(payload)
+    if search_mode == "COMPANY_UNION" and not has_role_constraint(payload):
+        rows = []
+        candidates = []
+    elif prefilters.get("role_prefilter_ran") and not prefilters.get("base_candidate_ids"):
         rows = []
         candidates = []
     else:
         rows = await hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
         candidates = dedupe_people(rows, limit=args.limit)
+    company_union_candidates = prefilters.get("company_union_candidates") or prefilters.get("company_union_candidate_ids") or []
+    candidates = merge_company_union_candidates(candidates, company_union_candidates, limit=args.limit)
     retrieval_mode = "filter_only" if is_filter_only_payload(payload) else "hybrid"
     batched_base_ids = any(row.get("retrieval_batched_base_ids") for row in rows)
+    union_added = sum(1 for candidate in candidates if "company_filter" in (candidate.get("vertical_sources") or []))
 
     retrieval_artifact = None
     if state_path and (args.write_state or getattr(args, "write_artifact", False)):
@@ -117,10 +127,13 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "applied_filter": summarize_filter(filters),
             "candidate_count": len(candidates),
             "retrieval_mode": retrieval_mode,
+            "search_mode": search_mode,
             "batched_base_ids": batched_base_ids,
             "base_id_batch_count": rows[0].get("base_id_batch_count") if rows else 0,
             "base_id_batch_size": rows[0].get("base_id_batch_size") if rows else None,
-            "prefilter_short_circuit": bool(prefilters.get("ran_prefilters") and not prefilters.get("base_candidate_ids")),
+            "prefilter_short_circuit": bool(prefilters.get("role_prefilter_ran") and not prefilters.get("base_candidate_ids")),
+            "company_union_candidate_count": prefilters.get("company_union_candidate_count") or len(company_union_candidates),
+            "company_union_added": union_added,
             "candidates": candidates,
         })
         retrieval_artifact = str(path)
@@ -130,11 +143,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "limit": args.limit,
         "top_k": args.top_k,
         "applied_filter": summarize_filter(filters),
+        "search_mode": search_mode,
         "retrieval_mode": retrieval_mode,
         "batched_base_ids": batched_base_ids,
         "base_id_batch_count": rows[0].get("base_id_batch_count") if rows else 0,
         "base_id_batch_size": rows[0].get("base_id_batch_size") if rows else None,
-        "prefilter_short_circuit": bool(prefilters.get("ran_prefilters") and not prefilters.get("base_candidate_ids")),
+        "prefilter_short_circuit": bool(prefilters.get("role_prefilter_ran") and not prefilters.get("base_candidate_ids")),
+        "company_union_candidate_count": prefilters.get("company_union_candidate_count") or len(company_union_candidates),
+        "company_union_added": union_added,
         "returned_people": len(candidates),
         "candidate_ids": [candidate["person_id"] for candidate in candidates],
         "candidates": candidates,

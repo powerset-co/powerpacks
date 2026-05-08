@@ -11,7 +11,10 @@ PI_HOME="${PI_HOME:-$HOME/.pi/agent}"
 SKILLS_DIR="${1:-$PI_HOME/skills}"
 
 mkdir -p "$SKILLS_DIR"
-rm -rf "$SKILLS_DIR/import-messages"
+rm -rf "$SKILLS_DIR/import-messages" \
+  "$SKILLS_DIR/import-imessage" \
+  "$SKILLS_DIR/import-whatsapp" \
+  "$SKILLS_DIR/import-contacts-review"
 "$REPO_ROOT/bin/setup-python"
 
 copy_powerpacks_bundle() {
@@ -67,12 +70,9 @@ install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill import-contacts "$REPO_ROOT/packs/messages/skills/import-contacts/SKILL.md"
-install_skill import-imessage "$REPO_ROOT/packs/messages/skills/import-imessage/SKILL.md"
-install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
-install_skill import-contacts-review "$REPO_ROOT/packs/messages/skills/import-contacts-review/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
 printf '  search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search\n'
-printf '  import-contacts import-imessage import-whatsapp import-contacts-review\n'
+printf '  import-contacts\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

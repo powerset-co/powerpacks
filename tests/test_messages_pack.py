@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -601,6 +602,25 @@ class MergeMessageContactsTests(unittest.TestCase):
 
             # CSV is sorted by (message_count desc, last_message desc, phone).
             self.assertEqual(rows[0]["phone"], "+14155550101")  # 200
+
+    def test_merge_rejects_legacy_queue_schema_with_conversion_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            legacy = tmp / "legacy.csv"
+            out = tmp / "contacts.csv"
+            legacy.write_text("handle,display_name,phone_e164,total_messages\nphone-1,Ada Lovelace,+15550000001,5\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(self.MERGE), "merge", "--input", str(legacy), "--output", str(out)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            combined = result.stdout + result.stderr
+            self.assertIn("Please convert this file", combined)
+            self.assertIn("packs/messages/schemas/contacts-csv.md", combined)
+            self.assertIn("display_name/full_name -> name", combined)
 
 
 class PrepareResearchQueueTests(unittest.TestCase):
@@ -1261,6 +1281,8 @@ class DeepResearchContactsTests(unittest.TestCase):
                 est_payload = json.loads(est.stdout)
                 self.assertEqual(est_payload["skipped_already_done"], 2)
                 self.assertEqual(est_payload["would_submit"], 0)
+                self.assertEqual(est_payload["estimated_latency"]["per_task"], "60s-10min")
+                self.assertEqual(est_payload["estimated_latency"]["rough_wall_clock"], "no paid Parallel work")
         finally:
             server.shutdown()
             server.server_close()

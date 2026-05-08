@@ -1,6 +1,6 @@
 # Recall Parity
 
-Last run: `2026-05-07T22:07:13Z`
+Last run: `2026-05-08T06:07:10Z`
 
 Scope: aleph recall YAMLs executed through Powerpacks primitives with deterministic decomposition.
 
@@ -17,16 +17,20 @@ Execution notes:
 
 | Bucket | Pass | Fail | Ignored | Cases |
 |---|---:|---:|---:|---:|
-| education | 0 | 4 | 0 | 4 |
-| mixed | 1 | 3 | 0 | 4 |
+| date_range | 0 | 1 | 0 | 1 |
+| founders | 0 | 11 | 0 | 11 |
 
 | Case | Bucket | Status | Count | Returned | Hydrated | Expected Hits | Recall | Ignored v4 | Artifact | Notes |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|---|
-| education_field_psych_stanford.yaml | education | fail | 333 | 0 | 0 | 0/7 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-education_field_psych_stanford/recall-education_field_psych_stanford.csv` | missed 7+ expected ids |
-| education_stanford_and_cal.yaml | education | fail | 2 | 2 | 2 | 0/5 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-education_stanford_and_cal/recall-education_stanford_and_cal.csv` | missed 5+ expected ids |
-| education_stanford_grads_2014_2018.yaml | education | fail | 6 | 6 | 6 | 0/8 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-education_stanford_grads_2014_2018/recall-education_stanford_grads_2014_2018.csv` | missed 8+ expected ids |
-| education_stanford_recent_grads.yaml | education | fail | 2 | 2 | 2 | 0/6 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-education_stanford_recent_grads/recall-education_stanford_recent_grads.csv` | missed 6+ expected ids |
-| mixed_banking_data_scientists_yoe.yaml | mixed | fail | 33 | 33 | 33 | 0/2 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-mixed_banking_data_scientists_yoe/recall-mixed_banking_data_scientists_yoe.csv` | missed 2+ expected ids |
-| mixed_blockchain_engineers_nyc.yaml | mixed | fail | 8 | 0 | 0 | 0/15 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-mixed_blockchain_engineers_nyc/recall-mixed_blockchain_engineers_nyc.csv` | missed 15+ expected ids |
-| mixed_data_scientists_banks_usa_yoe_skills.yaml | mixed | pass | 35 | 35 | 35 | 0/0 |  | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-mixed_data_scientists_banks_usa_yoe_skills/recall-mixed_data_scientists_banks_usa_yoe_skills.csv` |  |
-| mixed_stanford_engineers_sf.yaml | mixed | fail | 4 | 4 | 4 | 0/3 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-mixed_stanford_engineers_sf/recall-mixed_stanford_engineers_sf.csv` | missed 3+ expected ids |
+| date_range_founders_since_2018.yaml | date_range | fail | 24 | 24 | 24 | 0/8 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-date_range_founders_since_2018/recall-date_range_founders_since_2018.csv` | missed 8+ expected ids |
+| founders_ai_ml_data_large_pool.yaml | founders | fail | 73 | 73 | 73 | 0/7 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_ai_ml_data_large_pool/recall-founders_ai_ml_data_large_pool.csv` | missed 7+ expected ids |
+| founders_argentina.yaml | founders | fail | 0 | 0 | 0 | 0/1 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_argentina/recall-founders_argentina.csv` | missed 1+ expected ids |
+| founders_backed_by_amplify.yaml | founders | fail | 0 | 0 | 0 | 0/13 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_backed_by_amplify/recall-founders_backed_by_amplify.csv` | missed 13+ expected ids |
+| founders_backed_by_elad_gil.yaml | founders | fail | 0 | 0 | 0 | 0/0 |  | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_backed_by_elad_gil/recall-founders_backed_by_elad_gil.csv` |  |
+| founders_backed_by_naval_ravikant.yaml | founders | fail | 0 | 0 | 0 | 0/0 |  | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_backed_by_naval_ravikant/recall-founders_backed_by_naval_ravikant.csv` |  |
+| founders_backed_by_peter_thiel.yaml | founders | fail | 0 | 0 | 0 | 0/0 |  | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_backed_by_peter_thiel/recall-founders_backed_by_peter_thiel.csv` |  |
+| founders_backed_by_sam_altman.yaml | founders | fail | 1 | 1 | 1 | 0/0 |  | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_backed_by_sam_altman/recall-founders_backed_by_sam_altman.csv` |  |
+| founders_backed_by_sequoia.yaml | founders | fail | 4 | 4 | 4 | 2/22 | 9% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_backed_by_sequoia/recall-founders_backed_by_sequoia.csv` | missed 20+ expected ids |
+| founders_database_companies.yaml | founders | fail | 73 | 73 | 73 | 0/2 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_database_companies/recall-founders_database_companies.csv` | missed 2+ expected ids |
+| founders_devtools_infra.yaml | founders | fail | 73 | 73 | 73 | 0/30 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_devtools_infra/recall-founders_devtools_infra.csv` | missed 20+ expected ids |
+| founders_fintech_california.yaml | founders | fail | 2 | 2 | 2 | 0/43 | 0% | 0 | `/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/recall-parity/artifacts/recall-founders_fintech_california/recall-founders_fintech_california.csv` | missed 20+ expected ids |

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +55,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             {
                 "semantic_query": "Builds software systems in production with hands-on coding responsibilities.",
                 "company_ids": ["urn:harmonic:company:box"],
+                "role_ids": ["founder"],
                 "position_after_date": "2019",
                 "position_before_date": "2022",
             }
@@ -94,11 +96,85 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
 
         company_filters = turbopuffer_client.filters_from_role_payload({
             "company_ids": ["urn:harmonic:company:meta"],
+            "role_ids": ["founder"],
             "is_current_company": True,
         })
         self.assertEqual(company_filters[0], "And")
         self.assertIn(("company_id", "In", ["urn:harmonic:company:meta"]), company_filters[1])
         self.assertIn(("is_current", "Eq", True), company_filters[1])
+
+    def test_founder_shortcut_adds_role_id_and_preserves_intersection(self) -> None:
+        state = {
+            "query": "founders at fintech startups",
+            "steps": [{
+                "id": "expand_search_request",
+                "output": {"role_search_filters": {"company_ids": ["c1"], "bm25_queries": ["founders"]}},
+            }],
+        }
+
+        payload = turbopuffer_client.role_payload_from_state(state)
+        filters = turbopuffer_client.filters_from_role_payload(payload)
+
+        self.assertEqual(payload["role_ids"], ["founder"])
+        self.assertNotIn("seniority_bands", payload)
+        self.assertEqual(payload["search_mode"], "COMPANY_INTERSECTION")
+        self.assertIn(("role_ids", "ContainsAny", ["founder"]), filters[1])
+        self.assertIn(("company_id", "In", ["c1"]), filters[1])
+
+    def test_founders_fund_investor_query_does_not_trigger_founder_shortcut(self) -> None:
+        payload = turbopuffer_client.apply_role_shortcuts({"investor_names": ["Founders Fund"]}, "people backed by Founders Fund")
+
+        self.assertNotIn("role_ids", payload)
+
+    def test_csuite_shortcut_adds_canonical_role_id(self) -> None:
+        payload = turbopuffer_client.apply_role_shortcuts({"company_ids": ["c1"]}, "CTOs at AI companies")
+        filters = turbopuffer_client.filters_from_role_payload(payload)
+
+        self.assertIn("chief_technology_officer", payload["role_ids"])
+        self.assertEqual(payload["seniority_bands"], ["c_suite"])
+        self.assertIn(("role_ids", "ContainsAny", ["chief_technology_officer"]), filters[1])
+
+    def test_search_mode_matches_company_domain_parity(self) -> None:
+        self.assertEqual(turbopuffer_client.search_mode_for_payload({"role_tracks": ["engineering"]}), "SEARCH_ONLY")
+        self.assertEqual(
+            turbopuffer_client.search_mode_for_payload({
+                "role_ids": ["founder"],
+                "company_ids": ["urn:harmonic:company:fintech"],
+                "has_domain_intent": True,
+            }),
+            "COMPANY_INTERSECTION",
+        )
+        self.assertEqual(
+            turbopuffer_client.search_mode_for_payload({
+                "role_tracks": ["engineering"],
+                "company_semantic_queries": ["fintech companies"],
+                "sector_types": ["financial_services"],
+            }),
+            "COMPANY_UNION",
+        )
+        self.assertEqual(
+            turbopuffer_client.search_mode_for_payload({"company_ids": ["urn:harmonic:company:meta"]}),
+            "COMPANY_UNION",
+        )
+        self.assertEqual(
+            turbopuffer_client.search_mode_for_payload({
+                "role_tracks": ["engineering"],
+                "company_ids": ["urn:harmonic:company:meta"],
+            }),
+            "COMPANY_INTERSECTION",
+        )
+
+    def test_company_union_does_not_filter_role_search_by_company(self) -> None:
+        payload = {
+            "role_tracks": ["engineering"],
+            "company_ids": ["urn:harmonic:company:fintech"],
+            "company_semantic_queries": ["fintech companies"],
+            "sector_types": ["financial_services"],
+        }
+
+        filters = turbopuffer_client.filters_from_role_payload(payload)
+
+        self.assertEqual(filters, ("role_track", "In", ["engineering"]))
 
     def test_summarize_filter_truncates_large_id_lists(self) -> None:
         filters = ("base_id", "In", [f"p{i}" for i in range(25)])
@@ -276,7 +352,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         turbopuffer_client.filter_only_rows = fake_filter_only_rows
         try:
             rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
-                {"company_ids": ["urn:harmonic:company:meta"]},
+                {"company_ids": ["urn:harmonic:company:meta"], "search_mode": "COMPANY_INTERSECTION"},
                 ("company_id", "In", ["urn:harmonic:company:meta"]),
                 top_k=10,
                 include_attributes=["base_id", "position_title"],
@@ -287,6 +363,194 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(rows[0]["retrieval_mode"], "filter_only")
         self.assertEqual(rows[0]["person_id"], "base-uuid")
         self.assertEqual(rows[0]["position_id"], "base-uuid-0")
+
+    def test_company_union_candidates_append_after_role_candidates(self) -> None:
+        candidates = [
+            {"person_id": "p1", "score": 1.0, "vertical_sources": ["hybrid"]},
+        ]
+        union = [
+            {"person_id": "p1", "position_id": "p1-0"},
+            {"person_id": "p2", "position_id": "p2-0", "position_title": "Engineer", "company_id": "c1"},
+        ]
+
+        merged = turbopuffer_client.merge_company_union_candidates(candidates, union, limit=0)
+
+        self.assertEqual([row["person_id"] for row in merged], ["p1", "p2"])
+        self.assertEqual(merged[0]["vertical_sources"], ["hybrid", "company_filter"])
+        self.assertEqual(merged[0]["matched_position_ids"], ["p1-0"])
+        self.assertEqual(merged[1]["position_id"], "p2-0")
+        self.assertEqual(merged[1]["vertical_sources"], ["company_filter"])
+
+    def test_company_union_prefilter_records_union_without_role_base_ids(self) -> None:
+        original = apply_prefilters.bm25_adjacency_rows
+
+        async def fake_bm25_adjacency_rows(queries, filters, *, top_k, include_attributes):
+            self.assertIn("CTO", queries)
+            self.assertIn(("company_id", "In", ["c1"]), filters[1])
+            self.assertIn(("seniority_band", "NotIn", ["entry", "trainee"]), filters[1])
+            return [{"id": "p1-0", "base_id": "p1", "company_id": "c1", "position_title": "Engineering Manager", "score": 0.5}]
+
+        apply_prefilters.bm25_adjacency_rows = fake_bm25_adjacency_rows
+        try:
+            out = asyncio.run(apply_prefilters.run(SimpleNamespace(
+                state=None,
+                payload_json=json.dumps({
+                    "company_ids": ["c1"],
+                    "company_semantic_queries": ["fintech companies"],
+                    "sector_types": ["financial_services"],
+                    "role_tracks": ["engineering"],
+                }),
+                env_file=None,
+                page_size=10000,
+                max_ids=100,
+                company_prefilter_threshold=3000,
+                company_id_batch_size=500,
+                company_id_batch_concurrency=1,
+            )))
+        finally:
+            apply_prefilters.bm25_adjacency_rows = original
+
+        self.assertEqual(out["search_mode"], "COMPANY_UNION")
+        self.assertFalse(out["role_prefilter_ran"])
+        self.assertEqual(out["base_candidate_ids"], [])
+        self.assertEqual(out["company_union_candidate_ids"], ["p1"])
+        self.assertEqual(out["company_union_candidates"][0]["position_id"], "p1-0")
+        self.assertEqual(out["company_union_candidates"][0]["vertical_sources"], ["company_filter"])
+        self.assertEqual(out["stages"][-1]["adjacency_method"], "bm25")
+
+    def test_company_union_role_id_adjacency_uses_adjacent_filters(self) -> None:
+        original = apply_prefilters.filter_only_rows_for_namespace
+
+        async def fake_filter_only_rows_for_namespace(logical_name, filters, include_attributes, *, page_size=10000, max_results=0):
+            self.assertEqual(logical_name, "people")
+            self.assertIn(("company_id", "In", ["c1"]), filters[1])
+            self.assertIn(("role_ids", "ContainsAny", ["engineering_manager"]), filters[1])
+            self.assertIn(("role_track", "In", ["engineering"]), filters[1])
+            self.assertIn(("seniority_band", "NotIn", ["entry", "trainee"]), filters[1])
+            return [{"id": "p2-1", "base_id": "p2", "company_id": "c1", "position_title": "Engineering Manager"}]
+
+        apply_prefilters.filter_only_rows_for_namespace = fake_filter_only_rows_for_namespace
+        try:
+            out = asyncio.run(apply_prefilters.run(SimpleNamespace(
+                state=None,
+                payload_json=json.dumps({
+                    "company_ids": ["c1"],
+                    "company_semantic_queries": ["fintech companies"],
+                    "sector_types": ["financial_services"],
+                    "role_tracks": ["engineering"],
+                    "adjacent_role_ids": ["engineering_manager"],
+                    "adjacent_departments": ["engineering"],
+                }),
+                env_file=None,
+                page_size=10000,
+                max_ids=100,
+                company_prefilter_threshold=3000,
+                company_id_batch_size=500,
+                company_id_batch_concurrency=1,
+            )))
+        finally:
+            apply_prefilters.filter_only_rows_for_namespace = original
+
+        self.assertEqual(out["company_union_candidate_ids"], ["p2"])
+        self.assertEqual(out["stages"][-1]["adjacency_method"], "role_id")
+
+    def test_company_union_derives_static_adjacent_role_ids_when_role_ids_present(self) -> None:
+        original_rows = apply_prefilters.filter_only_rows_for_namespace
+        original_effective = apply_prefilters.effective_adjacent_role_ids
+        apply_prefilters.effective_adjacent_role_ids = lambda payload: ["engineering_manager", "technical_lead"]
+
+        async def fake_filter_only_rows_for_namespace(logical_name, filters, include_attributes, *, page_size=10000, max_results=0):
+            self.assertIn(("role_ids", "ContainsAny", ["engineering_manager", "technical_lead"]), filters[1])
+            return [{"id": "p3-0", "base_id": "p3", "company_id": "c1", "position_title": "Technical Lead"}]
+
+        apply_prefilters.filter_only_rows_for_namespace = fake_filter_only_rows_for_namespace
+        try:
+            out = asyncio.run(apply_prefilters.run(SimpleNamespace(
+                state=None,
+                payload_json=json.dumps({
+                    "company_ids": ["c1"],
+                    "company_semantic_queries": ["developer tools companies"],
+                    "sector_types": ["developer_tools"],
+                    "role_ids": ["software_engineer"],
+                }),
+                env_file=None,
+                page_size=10000,
+                max_ids=100,
+                company_prefilter_threshold=3000,
+                company_id_batch_size=500,
+                company_id_batch_concurrency=1,
+            )))
+        finally:
+            apply_prefilters.filter_only_rows_for_namespace = original_rows
+            apply_prefilters.effective_adjacent_role_ids = original_effective
+
+        self.assertEqual(out["company_union_candidate_ids"], ["p3"])
+        self.assertEqual(out["stages"][-1]["adjacency_method"], "role_id")
+
+    def test_company_adjacency_filters_non_operational_titles(self) -> None:
+        self.assertTrue(turbopuffer_client.is_non_operational_title("Board Member"))
+        self.assertTrue(turbopuffer_client.is_non_operational_title("Investor and Advisor"))
+        self.assertFalse(turbopuffer_client.is_non_operational_title("Board Member and CTO"))
+        self.assertFalse(turbopuffer_client.is_non_operational_title("Engineering Manager"))
+
+    def test_broad_company_semantic_union_batches_company_ids(self) -> None:
+        original = apply_prefilters.bm25_adjacency_rows
+        seen_batch_sizes = []
+
+        async def fake_bm25_adjacency_rows(queries, filters, *, top_k, include_attributes):
+            for clause in filters[1]:
+                if clause[0] == "company_id":
+                    seen_batch_sizes.append(len(clause[2]))
+                    return [{"id": f"p{len(seen_batch_sizes)}-0", "base_id": f"p{len(seen_batch_sizes)}", "position_title": "CTO"}]
+            self.fail("company_id filter missing")
+
+        apply_prefilters.bm25_adjacency_rows = fake_bm25_adjacency_rows
+        try:
+            out = asyncio.run(apply_prefilters.run(SimpleNamespace(
+                state=None,
+                payload_json=json.dumps({
+                    "company_ids": [f"c{i}" for i in range(1201)],
+                    "company_semantic_queries": ["fintech infrastructure companies"],
+                    "sector_types": ["financial_services"],
+                    "role_tracks": ["engineering"],
+                }),
+                env_file=None,
+                page_size=10000,
+                max_ids=10000,
+                company_prefilter_threshold=3000,
+                company_id_batch_size=500,
+                company_id_batch_concurrency=1,
+            )))
+        finally:
+            apply_prefilters.bm25_adjacency_rows = original
+
+        self.assertEqual(seen_batch_sizes, [500, 500, 201])
+        self.assertEqual(out["stages"][-1]["company_id_batches"], 3)
+        self.assertEqual(out["company_union_candidate_ids"], ["p1", "p2", "p3"])
+
+    def test_hydration_applies_retrieval_vertical_sources_and_matches(self) -> None:
+        state = {
+            "steps": [{
+                "id": "execute_role_search",
+                "output": {"candidates": [{
+                    "person_id": "p1",
+                    "position_id": "pos-1",
+                    "score": 0.42,
+                    "vertical_sources": ["hybrid", "company_filter"],
+                }]},
+            }]
+        }
+        meta = hydrate_people.candidate_metadata(state)
+        profile = {
+            "person_id": "p1",
+            "positions": [{"id": "pos-0", "title": "Advisor"}, {"id": "pos-1", "title": "CTO"}],
+            "vertical_sources": [],
+            "matched_position_indexes": [],
+        }
+        enriched = hydrate_people.apply_candidate_metadata(profile, meta["p1"])
+        self.assertEqual(enriched["base_score"], 0.42)
+        self.assertEqual(enriched["matched_position_indexes"], [1])
+        self.assertEqual(enriched["vertical_sources"], ["hybrid", "company_filter"])
 
     def test_scripts_do_not_import_aleph_mvp(self) -> None:
         for path in [

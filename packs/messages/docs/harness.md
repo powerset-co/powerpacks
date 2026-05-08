@@ -42,11 +42,10 @@ Every primitive should:
 
 ## Skill Boundary
 
-Use dedicated user-facing skills:
+Use one user-facing skill:
 
-- `import-imessage`: local-only iMessage extraction and normalization
-- `import-whatsapp`: WhatsApp extraction via `waha_runtime` +
-  `waha_session` + `extract_whatsapp_contacts` against a local WAHA container
+- `import-contacts`: guided iMessage + WhatsApp import, merge, review, and
+  upload-gated sync. Use primitives directly for narrow debugging.
 
 Reasoning-only steps stay in the skill/task docs. Executable steps are the
 primitive scripts. This keeps the pack portable across Codex, NanoClaw, Claude

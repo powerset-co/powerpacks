@@ -29,6 +29,37 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         self.assertIn('"apply_prefilters"', src)
         self.assertLess(src.index('"apply_prefilters"'), src.index('"execute_role_search"'))
 
+    def test_search_block_contract_persists_current_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lp = Path(tmp) / "pipeline.json"
+            ledger = search.load_ledger(lp)
+            payload = {"state": "state.json", "model": "x", "mode": "filter_rerank"}
+            with self.assertRaises(search.Blocked):
+                search.block(lp, ledger, SimpleNamespace(), "llm", "llm_filter_rerank", payload, "Run LLM?")
+            saved = search.read_json(lp)
+
+        block = saved["current_block"]
+        self.assertEqual(block["status"], "blocked_approval")
+        self.assertEqual(block["approval_type"], "llm")
+        self.assertIn("approval_id", block)
+        self.assertEqual(block["ledger"], str(lp))
+        self.assertIn("continue_command", block)
+
+    def test_search_status_reports_current_block_and_step_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lp = Path(tmp) / "pipeline.json"
+            search.write_json(lp, {
+                "current_block": {"status": "blocked_approval", "approval_id": "llm_abc"},
+                "steps": {
+                    "init_state": {"status": "completed"},
+                    "llm_filter_rerank": {"status": "blocked_approval"},
+                },
+            })
+            args = SimpleNamespace(ledger=str(lp), state=None)
+            rc = search.cmd_status(args)
+
+        self.assertEqual(rc, 0)
+
 class SalesNavPipelineTests(unittest.TestCase):
     def test_sales_block_tool_call_contract(self):
         with tempfile.TemporaryDirectory() as tmp:

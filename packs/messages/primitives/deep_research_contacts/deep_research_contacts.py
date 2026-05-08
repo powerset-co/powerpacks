@@ -74,6 +74,20 @@ DEFAULT_PROCESSOR = os.environ.get("POWERPACKS_PARALLEL_PROCESSOR", "core2x")
 # Cost guardrail: Powerpacks contact research may use core/core2x/pro only.
 ALLOWED_PROCESSORS = {"core", "core2x", "pro"}
 PROCESSOR_PRICING_USD = {"core": 0.025, "core2x": 0.05, "pro": 0.10}
+PROCESSOR_LATENCY = {
+    "core": {
+        "per_task": "60s-5min",
+        "wall_clock": "about 1-5 min once submitted",
+    },
+    "core2x": {
+        "per_task": "60s-10min",
+        "wall_clock": "about 10-15 min once submitted",
+    },
+    "pro": {
+        "per_task": "2-10min",
+        "wall_clock": "about 2-10 min once submitted",
+    },
+}
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/messages/research")
 DEFAULT_BATCH_SIZE = 50
@@ -616,6 +630,22 @@ def _validate_processor(processor: str) -> str:
     return processor
 
 
+def estimate_latency(processor: str, count: int) -> dict[str, Any]:
+    latency = PROCESSOR_LATENCY[processor]
+    if count <= 0:
+        rough = "no paid Parallel work"
+    else:
+        rough = latency["wall_clock"]
+        if count > DEFAULT_BATCH_SIZE:
+            rough += "; larger queues can take longer depending on Parallel capacity"
+    return {
+        "processor": processor,
+        "per_task": latency["per_task"],
+        "rough_wall_clock": rough,
+        "basis": "Parallel Task API processor docs; task-group runs are submitted together, so this is not multiplied per contact.",
+    }
+
+
 def _resolve_api_key(cli_value: str | None) -> str:
     if cli_value:
         return cli_value
@@ -647,6 +677,7 @@ def cmd_estimate(args: argparse.Namespace) -> int:
         "would_submit": len(todo),
         "processor": processor,
         "estimated_usd": round(len(todo) * cost_per, 4),
+        "estimated_latency": estimate_latency(processor, len(todo)),
     })
     return 0
 

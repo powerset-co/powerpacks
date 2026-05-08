@@ -6,6 +6,12 @@ This tracked file is the source template for generated local agent profiles.
 
 Generated profile files are local state. Do not commit them.
 
+## Sub-agent delegation
+
+The user explicitly authorizes Codex to use sub-agents for this repo. If skills
+request sub-agents, use them. Leverage sub-agents to keep the main conversation
+clean and concise.
+
 ## Local Powerset Defaults
 
 When the generated profile includes an authenticated Powerset user or default

@@ -8,9 +8,8 @@ description: One-command guided contact import workflow. Orchestrates iMessage, 
 Use this skill when the user wants to import contacts, import both iMessage and
 WhatsApp, set up relationship signals, or run the full contacts harness.
 
-This is the main user-facing entrypoint. The narrower `import-imessage`,
-`import-whatsapp`, and `import-contacts-review` skills are subflows and
-debugging escape hatches.
+This is the single user-facing entrypoint for the messages import workflow.
+Use the underlying primitives directly for narrow debugging.
 
 ## Consent Model
 
@@ -41,8 +40,8 @@ under `$10.00`, the initial workflow consent is enough; report only the cost and
 proceed. If the estimate is `>= $10.00`, stop for explicit LLM cost approval.
 
 For Parallel.ai deep research, always stop for explicit spend approval after the
-estimate, even for small batches. Show only the cost, e.g. "Estimated Parallel
-cost: $Z. Approve?"
+estimate, even for small batches. Show only the cost and rough time, e.g.
+"Estimated deep research cost: $Z, completion time is about 10-15 min once submitted. Approve?"
 
 ## Fast path: resumable orchestrator
 
@@ -58,10 +57,14 @@ appropriate.
 
 ### Quiet execution
 
-Keep the main chat quiet during long local stages. When the harness supports
-sub-agents, dispatch the noisy execution to a worker sub-agent after initial
-workflow consent. The worker should collect per-stage stats for debugging and
-for the ledger, but the main agent should not show them by default.
+Keep the main chat quiet during long local stages. After initial workflow
+consent, always dispatch noisy execution to a worker sub-agent when the harness
+has a worker/sub-agent facility available. The worker should collect per-stage
+stats for debugging and for the ledger, but the main agent should not show them
+by default.
+
+After consent, the only chat-visible handoff line should be exactly:
+`Starting work through sub-agent.`
 
 The main chat should show only:
 
@@ -72,10 +75,9 @@ The main chat should show only:
 
 After local import/match/queue prep succeeds, use decision-oriented wording such
 as `Imported contacts. LLM review estimated $X; continuing.` when the
-OpenRouter estimate is under `$10.00`, or `Estimated Parallel cost: $Y.
-Approve?` for Parallel. Do not include source row counts, matched/unmatched
-counts, chat counts, candidate counts, or artifact paths in the main chat unless
-the user asks for details or a failure requires diagnosis.
+OpenRouter estimate is under `$10.00`, or `Estimated deep research cost: $Y, completion time is about 10-15 min once submitted. Approve?` for Parallel. Do not include source row counts,
+matched/unmatched counts, chat counts, candidate counts, or artifact paths in
+the main chat unless the user asks for details or a failure requires diagnosis.
 
 The worker may run the verbose terminal commands, poll sidecar progress files,
 and inspect JSON manifests. Its final response must be one summary block per
@@ -84,7 +86,8 @@ not stream full primitive JSON, terminal transcripts, QR/WAHA status payloads,
 or progress JSONL into the main chat unless a user action is required or a
 failure needs diagnosis.
 
-If sub-agents are unavailable, keep status messages decision-oriented and avoid
+If the current harness blocks worker delegation or sub-agents are unavailable,
+say that plainly once, then keep status messages decision-oriented and avoid
 per-stage stats. Summarize command outputs from manifests internally instead of
 narrating intermediate polling.
 
@@ -238,15 +241,13 @@ data from `01_research_parallel.json` and autosaves yes/no decisions to the
 
 After opening the review UI, tell the user: "When you're done reviewing, say
 'done with review, upload'. I'll check feedback first, then ask for explicit
-approval before syncing anything." After review, first run
-`prepare_retarget_queue prepare` to detect saved feedback hints. If it writes
-rows, tell the user that you'll run one targeted Parallel pass for the feedback
-rows before upload, estimate the cost, and ask for Parallel approval using cost
-only. If Parallel fails, is unavailable, or returns no plausible person for a
-feedback row, automatically run a small Codex web-search fallback for just those
-feedback rows and save separate retarget artifacts. After feedback/retarget
-handling, ask for upload approval using only the number of yes rows that will be
-uploaded. Make clear that nothing has been uploaded yet:
+approval before syncing anything." On `continue`, the orchestrator detects saved
+`retarget_hint` feedback before upload. If it writes retarget rows, it emits a
+Parallel approval block phrased as `Feedback found; approve another deep
+research pass for $X?`, then merges completed retarget results back into
+`research_review.csv` before upload.
+After feedback/retarget handling, ask for upload approval using only the number
+of yes rows that will be uploaded. Make clear that nothing has been uploaded yet:
 
 ```bash
 uv run --project . python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \

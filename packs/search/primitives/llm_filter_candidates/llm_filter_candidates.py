@@ -200,7 +200,6 @@ def trait_lines(state: dict[str, Any]) -> str:
         lines.append(f"- Role search: {role_query}")
     for key in [
         "role_tracks",
-        "role_function",
         "seniority_bands",
         "cities",
         "metro_areas",

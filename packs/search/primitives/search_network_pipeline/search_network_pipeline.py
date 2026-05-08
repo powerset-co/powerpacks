@@ -85,10 +85,83 @@ def approval_id(kind: str, payload: dict[str, Any]) -> str:
 
 def is_approved(l: dict[str, Any], aid: str) -> bool: return bool(l.get("approvals",{}).get(aid,{}).get("confirmed"))
 
+def uv_python_command(args, subcommand: str, lp: Path, extra: str = "") -> str:
+    env_file=getattr(args,"env_file",".env") or ".env"
+    base=(
+        f"uv run --env-file {shlex.quote(env_file)} --project . python "
+        f"packs/search/primitives/search_network_pipeline/search_network_pipeline.py {subcommand} "
+        f"--ledger {shlex.quote(str(lp))}"
+    )
+    return base + (" " + extra if extra else "")
+
 def block(lp: Path, l: dict[str, Any], args, kind: str, step: str, payload: dict[str, Any], msg: str):
     aid=approval_id(kind,payload)
-    b={"primitive":"search_network_pipeline","status":"blocked_approval","approval_type":kind,"approval_id":aid,"message":msg,"payload":payload,"ledger":str(lp),"continue_command":f"python packs/search/primitives/search_network_pipeline/search_network_pipeline.py approve {kind} --ledger {shlex.quote(str(lp))} --approval-id {aid} --confirm && python packs/search/primitives/search_network_pipeline/search_network_pipeline.py continue --ledger {shlex.quote(str(lp))}"}
-    l["current_block"]=b; mark(lp,l,step,"blocked_approval",summary=b); raise Blocked(b)
+    approve=uv_python_command(args,"approve",lp,f"{kind} --approval-id {aid} --confirm")
+    cont=uv_python_command(args,"continue",lp)
+    b={"primitive":"search_network_pipeline","status":"blocked_approval","approval_type":kind,"approval_id":aid,"message":msg,"payload":payload,"ledger":str(lp),"continue_command":f"{approve} && {cont}"}
+    l["current_block"]=b; mark(lp,l,step,"blocked_approval",summary=compact_summary(b)); raise Blocked(b)
+
+LARGE_LIST_KEYS={"candidate_ids","candidates","company_union_candidate_ids","company_union_candidates","base_candidate_ids","profile_ids","rows","people"}
+ARTIFACT_KEYS={"state","retrieval_artifact","profiles_path","llm_profiles_path","csv","jsonl","manifest","artifact_dir","query_results_csv","raw_rerank_results_jsonl","scores_jsonl","filtered_jsonl","batch_prompts_jsonl"}
+COUNT_KEYS={"resolved_count","hard_semantic_count","base_candidate_count","company_union_candidate_count","returned_people","hydrated","requested","row_count","frontier_count","hydrated_count","position_rows_count","unique_people_count","candidate_count","scored_count","passed_count","filtered_count","ranked_count"}
+MODE_KEYS={"search_mode","retrieval_mode","prefilter_short_circuit","base_id_batch_count","base_id_batch_size","company_union_added","limit","top_k","profiles_compressed"}
+
+def compact_summary(value: Any) -> Any:
+    if isinstance(value, list):
+        return {"count":len(value)} if len(value)>20 else [compact_summary(v) for v in value]
+    if not isinstance(value, dict):
+        return value
+    out: dict[str, Any]={}
+    for k,v in value.items():
+        if k in LARGE_LIST_KEYS:
+            out[k+"_count" if not k.endswith("_count") else k]=len(v) if isinstance(v,list) else 0
+        elif k in ARTIFACT_KEYS or k in COUNT_KEYS or k in MODE_KEYS or k in {"primitive","status","approval_type","approval_id","message","ledger","continue_command","error","namespace","query","task_id","created_at"}:
+            out[k]=compact_summary(v)
+        elif k=="artifacts" and isinstance(v,dict):
+            out[k]={ak:av for ak,av in v.items() if isinstance(av,(str,int,float,bool))}
+        elif k.endswith("_count") or k.endswith("_path"):
+            out[k]=v
+    return out
+
+def collect_artifacts(summary: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any]={}
+    for k in ARTIFACT_KEYS:
+        v=summary.get(k)
+        if isinstance(v,str) and v:
+            out[k]=v
+    artifacts=summary.get("artifacts")
+    if isinstance(artifacts,dict):
+        for k,v in artifacts.items():
+            if isinstance(v,str) and v:
+                out[k]=v
+    return out
+
+def pipeline_summary(l: dict[str, Any]) -> dict[str, Any]:
+    steps=l.get("steps",{}) or {}
+    def s(step: str) -> dict[str, Any]:
+        return (steps.get(step,{}) or {}).get("summary",{}) or {}
+    resolved=s("resolve_companies")
+    pre=s("apply_prefilters")
+    retrieval=s("execute_role_search")
+    hydrate=s("hydrate_people")
+    llm_filter=s("llm_filter_candidates")
+    rerank=s("llm_rerank_candidates")
+    persist=s("persist_search_results")
+    return {k:v for k,v in {
+        "resolved_companies": resolved.get("resolved_count"),
+        "search_mode": retrieval.get("search_mode") or pre.get("search_mode"),
+        "retrieval_mode": retrieval.get("retrieval_mode"),
+        "base_candidates": pre.get("base_candidate_count"),
+        "company_union_candidates": pre.get("company_union_candidate_count") or retrieval.get("company_union_candidate_count"),
+        "company_union_added": retrieval.get("company_union_added"),
+        "returned_people": retrieval.get("returned_people"),
+        "hydrated": hydrate.get("hydrated"),
+        "llm_scored": llm_filter.get("scored_count"),
+        "llm_passed": llm_filter.get("passed_count"),
+        "llm_filtered": llm_filter.get("filtered_count"),
+        "ranked": rerank.get("ranked_count"),
+        "rows": persist.get("row_count"),
+    }.items() if v is not None}
 
 def state_has_step(state: Path, step: str) -> bool:
     s=read_json(state,{}) or {}; return any(x.get("id")==step for x in s.get("steps",[]))
@@ -104,11 +177,11 @@ def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     cmd=[sys.executable,str(ROOT/"packs/search/primitives/task_state/task_state.py"),"init","--query",args.query]
     res=run(cmd, env_file=args.env_file, timeout=args.timeout); out=require_ok(res,"task_state init")
     state=Path(out["state"]); l["state"]=str(state); l.setdefault("artifacts",{})["state"]=str(state)
-    mark(lp,l,"init_state","completed",summary=out,command=" ".join(cmd))
+    mark(lp,l,"init_state","completed",summary=compact_summary(out),command=" ".join(cmd))
     payload=read_json(Path(args.payload_json))
     cmd=[sys.executable,str(ROOT/"packs/search/primitives/task_state/task_state.py"),"record-step","--state",str(state),"--step-id","expand_search_request","--status","completed","--output-json",json.dumps(payload)]
     out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),"record expand_search_request")
-    mark(lp,l,"record_expand_search_request","completed",summary=out,command=" ".join(cmd))
+    mark(lp,l,"record_expand_search_request","completed",summary=compact_summary(out),command=" ".join(cmd))
     save(lp,l); return state
 
 def maybe_payload_filters(state: Path) -> dict[str, Any]:
@@ -125,12 +198,12 @@ def run_pipeline(args) -> dict[str, Any]:
     common={"--state":str(state),"--env-file":args.env_file}
     steps=[("resolve_set_operators",[sys.executable,str(ROOT/"packs/search/primitives/resolve_set_operators/resolve_set_operators.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"])]
     f=maybe_payload_filters(state)
-    if f.get("company_names") or f.get("company_ids") or f.get("current_company_names"):
+    if f.get("investor_names"):
+        steps.append(("resolve_investors",[sys.executable,str(ROOT/"packs/search/primitives/resolve_investors/resolve_investors.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
+    if f.get("company_names") or f.get("company_ids") or f.get("current_company_names") or f.get("company_semantic_queries") or f.get("sector_types") or f.get("investor_names"):
         steps.append(("resolve_companies",[sys.executable,str(ROOT/"packs/search/primitives/resolve_companies/resolve_companies.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
     if f.get("education_names"):
         steps.append(("resolve_education",[sys.executable,str(ROOT/"packs/search/primitives/resolve_education/resolve_education.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
-    if f.get("investor_names"):
-        steps.append(("resolve_investors",[sys.executable,str(ROOT/"packs/search/primitives/resolve_investors/resolve_investors.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
     steps += [
         ("apply_prefilters",[sys.executable,str(ROOT/"packs/search/primitives/apply_prefilters/apply_prefilters.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]),
         ("execute_role_search",[sys.executable,str(ROOT/"packs/search/primitives/execute_role_search/execute_role_search.py"),"--state",str(state),"--env-file",args.env_file,"--write-state","--limit",str(args.limit),"--top-k",str(args.top_k)]),
@@ -140,10 +213,11 @@ def run_pipeline(args) -> dict[str, Any]:
         if done(l,step) and not args.force: continue
         mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
         out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),step)
-        mark(lp,l,step,"completed",summary=out,command=" ".join(shlex.quote(x) for x in cmd))
+        l.setdefault("artifacts",{}).update(collect_artifacts(out))
+        mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not args.search_only:
         payload={"state":str(state),"model":args.model,"mode":"filter_rerank"}; aid=approval_id("llm",payload)
-        if not is_approved(l,aid) and not args.confirm_llm:
+        if not is_approved(l,aid) and not args.confirm_llm and not args.execute_approved:
             block(lp,l,args,"llm","llm_filter_rerank",payload,"Run LLM filter + rerank for this search? This may spend OpenAI credits.")
         for step,cmd in [
             ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--write-state"]),
@@ -152,11 +226,13 @@ def run_pipeline(args) -> dict[str, Any]:
             if done(l,step) and not args.force: continue
             mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
             out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout),step)
-            mark(lp,l,step,"completed",summary=out,command=" ".join(shlex.quote(x) for x in cmd))
+            l.setdefault("artifacts",{}).update(collect_artifacts(out))
+            mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not done(l,"persist_search_results") or args.force:
         cmd=[sys.executable,str(ROOT/"packs/search/primitives/persist_search_results/results_io.py"),"export","--state",str(state)]
-        mark(lp,l,"persist_search_results","running",command=" ".join(cmd)); out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),"persist_search_results"); mark(lp,l,"persist_search_results","completed",summary=out,command=" ".join(cmd))
-    return {"primitive":"search_network_pipeline","status":"completed","ledger":str(lp),"state":str(state),"artifacts":l.get("artifacts",{})}
+        mark(lp,l,"persist_search_results","running",command=" ".join(cmd)); out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),"persist_search_results"); l.setdefault("artifacts",{}).update(collect_artifacts(out)); mark(lp,l,"persist_search_results","completed",summary=compact_summary(out),command=" ".join(cmd))
+    l["current_block"]=None; save(lp,l)
+    return {"primitive":"search_network_pipeline","status":"completed","ledger":str(lp),"state":str(state),"summary":pipeline_summary(l),"artifacts":l.get("artifacts",{})}
 
 def cmd_run(args):
     try: emit(run_pipeline(args)); return 0
@@ -165,7 +241,7 @@ def cmd_run(args):
 
 def cmd_status(args):
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None); l=load_ledger(lp)
-    emit({"primitive":"search_network_pipeline","status":"ok","ledger":str(lp),"current_block":l.get("current_block"),"step_counts":{s:sum(1 for r in l.get('steps',{}).values() if r.get('status')==s) for s in sorted({r.get('status') for r in l.get('steps',{}).values()})}}); return 0
+    emit({"primitive":"search_network_pipeline","status":"ok","ledger":str(lp),"state":l.get("state"),"current_block":l.get("current_block"),"artifacts":l.get("artifacts",{}),"summary":pipeline_summary(l),"step_counts":{s:sum(1 for r in l.get('steps',{}).values() if r.get('status')==s) for s in sorted({r.get('status') for r in l.get('steps',{}).values()})}}); return 0
 
 def cmd_approve(args):
     if not args.confirm: emit({"status":"blocked","error":"pass --confirm"}); return 2
@@ -174,7 +250,7 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_run(p):
-    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true"); p.add_argument("--confirm-llm",action="store_true"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--rerank-concurrency",type=int,default=200); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
+    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--rerank-concurrency",type=int,default=200); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
 
 def main():
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)

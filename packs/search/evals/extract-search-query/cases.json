@@ -1,0 +1,66 @@
+[
+  {
+    "id": "founders_fintech_startups",
+    "query": "founders at fintech startups",
+    "expect": {
+      "role_search_filters.role_ids": {"contains": "founder"},
+      "role_search_filters.company_semantic_queries": {"non_empty": true}
+    },
+    "reject": {
+      "role_search_filters.seniority_bands": {"contains": "c_suite"}
+    }
+  },
+  {
+    "id": "founders_fund_investor_not_founder_role",
+    "query": "people backed by Founders Fund",
+    "expect": {
+      "role_search_filters.investor_names": {"contains_case_insensitive": "Founders Fund"}
+    },
+    "reject": {
+      "role_search_filters.role_ids": {"contains": "founder"}
+    }
+  },
+  {
+    "id": "ctos_at_ai_companies",
+    "query": "CTOs at AI companies",
+    "expect": {
+      "role_search_filters.role_ids": {"contains": "chief_technology_officer"},
+      "role_search_filters.seniority_bands": {"contains": "c_suite"},
+      "role_search_filters.company_semantic_queries": {"non_empty": true}
+    }
+  },
+  {
+    "id": "current_engineers_openai",
+    "query": "current engineers at OpenAI",
+    "expect": {
+      "role_search_filters.company_names": {"contains_case_insensitive": "OpenAI"},
+      "role_search_filters.is_current_role": true,
+      "role_search_filters.is_current_company": true
+    },
+    "reject": {
+      "role_search_filters.is_current": {"exists": true}
+    }
+  },
+  {
+    "id": "past_pm_current_openai",
+    "query": "people currently at OpenAI who used to be PMs",
+    "expect": {
+      "role_search_filters.company_names": {"contains_case_insensitive": "OpenAI"},
+      "role_search_filters.is_current_company": true,
+      "role_search_filters.is_current_role": false
+    },
+    "reject": {
+      "role_search_filters.is_current": {"exists": true}
+    }
+  },
+  {
+    "id": "ai_engineers_fintech_company_domain",
+    "query": "AI engineers at fintech companies",
+    "expect": {
+      "role_search_filters.company_semantic_queries": {"non_empty": true},
+      "role_search_filters.sector_types": {"non_empty": true},
+      "role_search_filters.company_sector_strategy": {"one_of": ["staged", "soft_union", "hard_filter", "semantic_only"]},
+      "role_search_filters.has_domain_intent": true
+    }
+  }
+]

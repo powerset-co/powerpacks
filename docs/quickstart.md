@@ -56,7 +56,7 @@ gcloud config set project powerset-prod
 The skill refuses to provision unless your active gcloud account ends in
 `@powerset.co`.
 
-### `import-imessage`
+### Messages import prerequisites
 
 macOS only. Reads `~/Library/Messages/chat.db` and the AddressBook databases
 in **read-only mode**.
@@ -71,10 +71,8 @@ the skill from:
 
 The primitive is stdlib-only; no new Python packages required.
 
-### `import-whatsapp`
-
-Needs Docker so we can run a local [WAHA](https://github.com/devlikeapro/waha)
-container. Two options:
+WhatsApp needs Docker so we can run a local
+[WAHA](https://github.com/devlikeapro/waha) container. Two options:
 
 ```bash
 # Option A: Docker Desktop (GUI, requires accepting EULA on macOS)
@@ -89,10 +87,8 @@ colima start --memory 2 --vm-type vz --vz-rosetta
 You'll also need WhatsApp on your phone to scan the QR code that pops up
 during the auth step.
 
-### `import-contacts-review`
-
-The login step uses a browser-based Auth0 flow on `127.0.0.1:9876`. The LLM
-review step uses [OpenRouter](https://openrouter.ai/):
+The review step can use [OpenRouter](https://openrouter.ai/) after showing an
+estimate:
 
 ```bash
 # After signup, store your key wherever your shell reads env from:
@@ -108,7 +104,13 @@ Or pass `--api-key` explicitly when running the LLM review.
 For Codex, start with the agent-native path:
 
 ```bash
-codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install and Powerset login/MCP setup steps from its instructions."
+codex exec "Clone https://github.com/powerset-co/powerpacks if needed, then cd into powerpacks and run bin/update-codex."
+```
+
+For Claude Code:
+
+```bash
+claude -p "Clone https://github.com/powerset-co/powerpacks if needed, then cd into powerpacks and run bin/update-claude-code."
 ```
 
 For other hosts, or if you want to run the installer manually, pick the adapter
@@ -118,6 +120,8 @@ from a local checkout:
 git clone https://github.com/powerset-co/powerpacks.git
 cd powerpacks
 
+bin/update-codex                         # Codex: pull, sync agent files, reinstall skills/profile
+bin/update-claude-code                   # Claude Code: pull, sync agent files, reinstall skills
 ./install.sh codex                       # → ~/.codex/skills/
 ./install.sh claude-code                 # → ~/.claude/skills/
 ./install.sh pi                          # → ~/.pi/agent/skills/
@@ -204,14 +208,7 @@ Use the one-command guided harness for the normal path:
 $import-contacts              # iMessage + WhatsApp → merge → match → review
 ```
 
-Advanced/debug subflows remain available:
-
-```text
-$import-imessage              # extracts ~/Library/Messages/chat.db → imessage.contacts.csv
-$import-whatsapp              # boots WAHA, you scan a QR, → whatsapp.contacts.csv
-                             # both also auto-merge into contacts.csv
-$import-contacts-review       # login → sync candidates → match → LLM ENRICH/SKIP
-```
+Use the underlying primitives directly for advanced/debug subflows.
 
 Artifacts land under `.powerpacks/messages/`:
 

@@ -8,6 +8,14 @@ re-run `bin/sync-agent-files.sh` from the repo root.
 
 ---
 
+## Sub-agent delegation
+
+The user explicitly authorizes Codex to use sub-agents for this repo. If skills
+request sub-agents, use them. Leverage sub-agents to keep the main conversation
+clean and concise.
+
+---
+
 ## Local context
 
 `PROFILE.md` is the tracked source template for clone/user-specific agent
@@ -53,13 +61,30 @@ package installation to primitives.
 bin/doctor run
 ```
 
-Run the doctor before tasks that need repo credentials, local data access,
-network/search primitives, uploads, or environment assumptions. Do not run it
-for simple self-introspection questions answered from `.codex/AGENTS.md`.
+Do **not** run the doctor as a routine preflight. A normal Powerpacks install
+should already render the right `.env` values and local agent context, so start
+with the narrow command or local artifact that matches the request.
+
+Run the doctor only when there is a concrete setup signal and the next fix is
+not already obvious, for example:
+
+- `.env` is missing, unreadable, or lacks a key needed by the primitive you are
+  about to run.
+- A primitive fails with an auth, missing-env, local-permission, network,
+  Docker, or OS-access error and the failing layer is unclear.
+- The user explicitly asks for a health check, setup audit, or installation
+  diagnosis.
+- You are recovering from a failed install/bootstrap and need the doctor's JSON
+  report to decide the next fix.
+
+Do not run it for simple self-introspection questions answered from
+`.codex/AGENTS.md`, for searches when `.env` is present and the primitive can
+report its own error, or for messages/contact workflows before you have tried
+the scoped readiness command for the needed surface.
 
 The doctor emits a JSON report with one entry per check (`status` is one of
 `ok | warn | missing | fail`). If anything is `missing` or `fail`, surface it to
-the user before attempting the task. For `warn`, mention briefly and proceed.
+the user before continuing. For `warn`, mention briefly and proceed.
 
 If the user explicitly asks for a fix and the doctor reported a fixable
 issue (each check carries a `fix_command`), only then run:
@@ -103,16 +128,19 @@ exist unless explicitly asked.
 ## Pack-specific readiness
 
 - **Messages pack** (iMessage / WhatsApp imports, contact review):
-  - `chat.db` access: requires Full Disk Access on macOS (the doctor checks
-    this; if not granted, *stop* and ask the user to enable it in System
-    Settings before retrying)
+  - `chat.db` access: requires Full Disk Access on macOS. Check it with the
+    iMessage primitive's scoped `check` command when doing iMessage work; if
+    access is not granted, *stop* and ask the user to enable it in System
+    Settings before retrying.
   - WAHA container: only needs to be up if the user is doing WhatsApp work.
     Run `uv run --project . python packs/messages/primitives/waha_runtime/waha_runtime.py status`
     on demand, not on every bootup.
   - Powerset login: required for `sync_powerset_candidates`, `upload`. Check
     via `uv run --project . python packs/powerset/primitives/auth/auth.py whoami`.
 - **Search pack** (search-network, search-company): requires `.env` with
-  TurboPuffer + Postgres credentials. The doctor covers this.
+  TurboPuffer + Postgres credentials. If `.env` is present, run the search
+  primitive directly and use its error to diagnose; use the doctor only if env
+  or auth looks broken and the cause is unclear.
 
 Don't run pack-specific checks pre-emptively. Only when the user's request
 implies that pack.
@@ -133,7 +161,7 @@ Common routes:
 - my contacts / set contacts → `packs/contacts/skills/search-contacts/SKILL.md`
 - Sales Navigator leads → `packs/sales-nav/skills/sales-nav-search/SKILL.md`
 - Powerset login / MCP install / credentials → `packs/powerset/skills/powerset/SKILL.md`
-- iMessage / WhatsApp / contact imports → the matching skill under `packs/messages/skills/`
+- iMessage / WhatsApp / contact imports → `packs/messages/skills/import-contacts/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Do ask a brief
 clarifying question when the request could mean multiple surfaces, e.g. "people
@@ -170,7 +198,7 @@ queries. For narrow, unambiguous queries, **skip the loop**:
   ("engineers in SF", "stanford grads at fintech") or the user explicitly
   asks for slicing/rerank.
 
-### import-contacts-review and downstream review TUI
+### import-contacts downstream review TUI
 
 - The TUI fix shipped in `contact-exporter` v0.1.25. If the user reports
   TUI weirdness, check `contact-exporter --version` first.
@@ -199,9 +227,10 @@ queries. For narrow, unambiguous queries, **skip the loop**:
 - **Be terse on operational status.** Print one-line summaries of what
   primitives wrote / what counts came back. Do not narrate the whole plan.
 - **Don't ask permission for read-only operations** (TurboPuffer filter
-  searches, local file reads, doctor `run`, `whoami`, container `status`,
-  `estimate` subcommands). Ask only for spend (LLM calls, Parallel.ai
-  submits, uploads, Docker pulls, browser-based logins, OS installs).
+  searches, local file reads, scoped `check`/`status` commands, `whoami`,
+  `estimate` subcommands, and doctor `run` when it is actually needed by the
+  health-check policy). Ask only for spend (LLM calls, Parallel.ai submits,
+  uploads, Docker pulls, browser-based logins, OS installs).
 - **Stdlib-only is a hard constraint** for new primitives in this repo. No
   `requests` / `pydantic` / `httpx` / SDK dependencies.
 - **Test additions** go in `tests/` and run via `uv run --project . python -m unittest discover -s tests`.
@@ -221,7 +250,7 @@ powerpacks/
 ├── packs/
 │   ├── messages/               # iMessage + WhatsApp + Powerset enrichment
 │   │   ├── primitives/         # one subdir per primitive
-│   │   ├── skills/             # user-facing skills (import-imessage, ...)
+│   │   ├── skills/             # user-facing skill (import-contacts)
 │   │   ├── tasks/              # task JSON specs
 │   │   ├── docs/
 │   │   └── README.md
@@ -230,7 +259,7 @@ powerpacks/
 ├── skills/                     # core skills (search-network, search-company)
 ├── tests/                      # unittest, run with uv run --project . python -m unittest discover
 ├── adapters/codex/install.sh   # installs skills into ~/.codex/skills
-├── bin/                        # smoke tests, agent-bootstrap, sync-agent-files.sh, etc.
+├── bin/                        # update-codex, update-claude-code, agent-bootstrap, sync-agent-files.sh, etc.
 ├── PROFILE.md                  # source template for generated local profiles
 ├── .codex/AGENTS.md            # ignored Codex profile rendered from PROFILE.md
 ├── .powerpacks/memory/         # ignored project-local agent memory

@@ -89,6 +89,88 @@ def frontier_ids(state: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(str(p["person_id"]) for p in hydrate.get("profiles", []) or [] if p.get("person_id")))
 
 
+def candidate_metadata(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return retrieval metadata keyed by base person id for hydration handoff."""
+    out: dict[str, dict[str, Any]] = {}
+    for step_id in ["merge_candidate_frontier", "execute_role_search", "execute_search_slice", "direct_execute"]:
+        step = step_output(state, step_id)
+        for raw in step.get("candidates") or []:
+            if not isinstance(raw, dict):
+                continue
+            person_id = str(raw.get("person_id") or raw.get("base_id") or "")
+            if not person_id:
+                continue
+            existing = out.setdefault(person_id, {"vertical_sources": [], "matched_position_ids": []})
+            if raw.get("score") is not None and existing.get("base_score") is None:
+                existing["base_score"] = raw.get("score")
+            for source in raw.get("vertical_sources") or []:
+                if source not in existing["vertical_sources"]:
+                    existing["vertical_sources"].append(source)
+            for pos_id in [raw.get("position_id"), *(raw.get("matched_position_ids") or [])]:
+                if pos_id and pos_id not in existing["matched_position_ids"]:
+                    existing["matched_position_ids"].append(pos_id)
+            for key in ["position_title", "company_id"]:
+                if raw.get(key) and not existing.get(key):
+                    existing[key] = raw.get(key)
+    return out
+
+
+def position_identifier(position: dict[str, Any]) -> str | None:
+    for key in ["id", "position_id", "linkedin_position_id", "urn"]:
+        if position.get(key):
+            return str(position[key])
+    return None
+
+
+def matched_indexes(profile: dict[str, Any], meta: dict[str, Any]) -> list[int]:
+    positions = profile.get("positions") or []
+    ids = {str(value) for value in meta.get("matched_position_ids") or [] if value}
+    indexes: list[int] = []
+    for idx, pos in enumerate(positions):
+        if not isinstance(pos, dict):
+            continue
+        pos_id = position_identifier(pos)
+        if pos_id and pos_id in ids:
+            indexes.append(idx)
+    if indexes:
+        return indexes
+    title = str(meta.get("position_title") or "").strip().lower()
+    company_id = str(meta.get("company_id") or "").strip().lower()
+    if not title and not company_id:
+        return []
+    for idx, pos in enumerate(positions):
+        if not isinstance(pos, dict):
+            continue
+        pos_title = str(pos.get("title") or pos.get("position_title") or "").strip().lower()
+        pos_company = str(pos.get("company_id") or pos.get("company_urn") or pos.get("company") or "").strip().lower()
+        if title and pos_title and title != pos_title:
+            continue
+        if company_id and pos_company and company_id != pos_company:
+            continue
+        indexes.append(idx)
+    return indexes
+
+
+def apply_candidate_metadata(profile: dict[str, Any], meta: dict[str, Any] | None) -> dict[str, Any]:
+    if not meta:
+        return profile
+    profile = dict(profile)
+    if meta.get("base_score") is not None:
+        profile["base_score"] = meta.get("base_score")
+        profile["score"] = meta.get("base_score")
+    sources = list(profile.get("vertical_sources") or [])
+    for source in meta.get("vertical_sources") or []:
+        if source not in sources:
+            sources.append(source)
+    profile["vertical_sources"] = sources
+    existing = list(profile.get("matched_position_indexes") or [])
+    for idx in matched_indexes(profile, meta):
+        if idx not in existing:
+            existing.append(idx)
+    profile["matched_position_indexes"] = existing
+    return profile
+
+
 def base_person_id(value: str) -> str:
     parts = str(value).split("-")
     if len(parts) == 6 and parts[5].isdigit():
@@ -178,11 +260,13 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
     env_file = Path(args.env_file) if args.env_file else None
     rows = fetch_person_rows(requested, env_file=env_file)
     interaction_counts = fetch_interaction_counts(requested, env_file=env_file)
+    metadata = candidate_metadata(state)
     profiles = []
     for row in rows:
         if interaction_counts.get(str(row.get("id"))):
             row["total_interactions"] = interaction_counts[str(row.get("id"))]
-        profiles.append(normalize_hydrated_context(row))
+        profile = normalize_hydrated_context(row)
+        profiles.append(apply_candidate_metadata(profile, metadata.get(str(profile.get("person_id")))))
     order = {pid: idx for idx, pid in enumerate(requested)}
     profiles.sort(key=lambda profile: order.get(str(profile.get("person_id")), len(order)))
 

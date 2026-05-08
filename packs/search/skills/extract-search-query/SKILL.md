@@ -73,8 +73,17 @@ company/date/location/education filters.
 - Use `company_semantic_queries` for vertical/domain company intent such as
   database companies, fintech startups, AI infrastructure, healthcare, or
   developer tooling.
-- Always choose `company_sector_strategy` explicitly when both
-  `company_semantic_queries` and `sector_types` are present.
+- For common known company domains, also include the corresponding
+  `sector_types` when obvious so company resolution can use backend-parity
+  staged/soft-union behavior. Examples: fintech → `fintech`, database/data
+  infrastructure → `data`, AI/ML → `ai_ml`, developer tools/infrastructure →
+  `infra_devtools`, healthcare/mental health → `healthcare`, cybersecurity →
+  `security`, crypto/web3 → `crypto_web3`, climate → `climate`, logistics →
+  `logistics`, SaaS → `enterprise_saas`, semiconductors → `semiconductors`.
+- Always choose `company_sector_strategy` explicitly when `sector_types` are
+  present with `company_semantic_queries`; default to `staged` for normal domain
+  searches unless the user asks for strict (`hard_filter`) or recall-heavy
+  broadening (`soft_union`).
 - Treat tenure/date constraints as overlapping-position windows:
   `position_after_date` means the position overlaps after that date, not merely
   that it started after that date.
@@ -95,6 +104,14 @@ company/date/location/education filters.
   leave a note for the orchestrator to ask before retrieval.
 - For recall-style tests, do not add seniority unless the query or test
   explicitly requires it.
+- Founder shortcut: for founder/co-founder/founding-team queries, include
+  canonical `role_ids: ["founder"]`, include founder title aliases in
+  `bm25_queries`, and do not add `seniority_bands` unless the user explicitly
+  asks for a non-founder seniority constraint.
+- C-suite shortcut: for CEO/CTO/CFO/CMO/COO/CPO/CRO/CISO queries, include the
+  canonical role ID when known (for example `chief_technology_officer` for CTO),
+  and use `seniority_bands: ["c_suite"]` unless the user asks for all executive
+  levels.
 
 ## Semantic Query Standard
 

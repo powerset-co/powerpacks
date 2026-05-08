@@ -13,7 +13,13 @@ only the install adapter differs.
 For Codex, let Codex fetch/update the repo and run the installer:
 
 ```bash
-codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install and Powerset login/MCP setup steps from its instructions."
+codex exec "Clone https://github.com/powerset-co/powerpacks if needed, then cd into powerpacks and run bin/update-codex."
+```
+
+For Claude Code:
+
+```bash
+claude -p "Clone https://github.com/powerset-co/powerpacks if needed, then cd into powerpacks and run bin/update-claude-code."
 ```
 
 For direct/manual installs, run the adapter install for your harness:
@@ -56,9 +62,6 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 | Skill | Trigger | What it does |
 | --- | --- | --- |
 | [`import-contacts`](packs/messages/skills/import-contacts/SKILL.md) | `$import-contacts` | One-command guided harness for iMessage + WhatsApp import, merge, Powerset candidate sync, local matching, browser review, and queue prep. No bodies. |
-| [`import-imessage`](packs/messages/skills/import-imessage/SKILL.md) | `$import-imessage` | Advanced subflow: read local macOS Messages SQLite, extract phone+name+volume metadata only. No bodies. |
-| [`import-whatsapp`](packs/messages/skills/import-whatsapp/SKILL.md) | `$import-whatsapp` | Advanced subflow: run a local [WAHA](https://github.com/devlikeapro/waha) Docker container, scan a QR with your phone, extract WhatsApp contact metadata. No bodies. |
-| [`import-contacts-review`](packs/messages/skills/import-contacts-review/SKILL.md) | `$import-contacts-review` | Advanced subflow after import: sync your operator catalog, run local name matching, LLM-review unmatched contacts (ENRICH/SKIP). |
 
 ## Goal
 
@@ -66,7 +69,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
   guess field names, operators, or value types
 - give the agent operational entrypoints: `$search-network <query>`,
   `$search-company <query>`, `$powerset login`, and the messages-pack import
-  skills
+  skill
 - decompose broad recruiting queries into bounded retrieval plans
 - persist task state and CSV/JSONL artifacts so users can refine prior runs
 - keep host-specific runtime glue isolated under `adapters/`
@@ -106,8 +109,7 @@ powerpacks/
 │   │   │                   harnesses/, workflows/
 │   │   └── evals/          recall, company-search, founder parity
 │   └── messages/           iMessage + WhatsApp + Powerset enrichment
-│       ├── skills/         import-contacts, import-imessage,
-│       │                   import-whatsapp, import-contacts-review
+│       ├── skills/         import-contacts
 │       ├── primitives/     iMessage / WAHA / matching / LLM-review /
 │       │                   deep-research primitives
 │       ├── schemas/        message-contact, messages-run-manifest
@@ -159,10 +161,6 @@ $search-network senior infra eng at fintech
 $search-company stripe-like fintech infra companies
 $powerset login                   # provisions .env from GCP Secret Manager
 $import-contacts                  # guided iMessage + WhatsApp import harness
-# advanced/debug subflows:
-#   $import-imessage
-#   $import-whatsapp
-#   $import-contacts-review
 ```
 
 ### Prereqs by skill family
@@ -173,9 +171,6 @@ $import-contacts                  # guided iMessage + WhatsApp import harness
 | `search-network` / `search-company` | `.env` populated with Powerpacks runtime secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `powerset login` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
 | `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, plus optional review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
-| `import-imessage` | macOS, **Full Disk Access** for your terminal (`System Settings > Privacy & Security > Full Disk Access`) so Python can read `~/Library/Messages/chat.db` |
-| `import-whatsapp` | Docker (`brew install --cask docker` or `brew install colima docker`), the WhatsApp app on your phone for QR scan |
-| `import-contacts-review` | Auth0 login via browser (popped automatically), plus review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `sales-nav-search` | `$powerset login` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
 
 ### Secrets / env vars
@@ -205,9 +200,10 @@ to uninstall first; each adapter wipes and re-copies the skill directories).
 ### Codex
 
 ```bash
-codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install and Powerset login/MCP setup steps from its instructions."
+codex exec "Clone https://github.com/powerset-co/powerpacks if needed, then cd into powerpacks and run bin/update-codex."
 
 # Manual equivalent from a local checkout:
+bin/update-codex                           # pull, sync agent files, reinstall Codex skills/profile
 ./install.sh codex                          # default: ~/.codex/skills/
 ./install.sh codex /custom/skills/dir       # explicit target
 ```
@@ -215,6 +211,11 @@ codex exec "Clone or update https://github.com/powerset-co/powerpacks in the cur
 ### Claude Code
 
 ```bash
+claude -p "Clone https://github.com/powerset-co/powerpacks if needed, then cd into powerpacks and run bin/update-claude-code."
+
+# Manual equivalent from a local checkout:
+bin/update-claude-code                    # pull, sync agent files, reinstall Claude Code skills
+bin/update-claude                         # alias for update-claude-code
 ./install.sh claude-code                    # default: ~/.claude/skills/
 ./install.sh claude-code ./.claude/skills   # project-level install
 ```
@@ -258,8 +259,9 @@ threaded CLI channel, and keeps NanoClaw-specific TUI/runtime code under
 
 ```bash
 cd powerpacks
-git pull
-./install.sh codex          # or claude-code, pi, or nanoclaw <path>
+bin/update-codex            # Codex: pull, sync agent files, reinstall skills/profile
+bin/update-claude-code       # Claude Code: pull, sync agent files, reinstall skills
+./install.sh pi              # or nanoclaw <path>
 # then restart the agent host, or run /reload in Pi, so it re-reads the skill list
 ```
 

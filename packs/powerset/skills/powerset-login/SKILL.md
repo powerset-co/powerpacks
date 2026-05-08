@@ -1,6 +1,6 @@
 ---
 name: powerset-login
-description: One-command Powerset login flow. Uses the doctor as a read-only checker, self-heals missing setup from the current shell, and only stops for OS installs, visible auth codes, or human actions.
+description: One-command Powerset login flow. Quietly refreshes credentials, env, and MCP registration, and only stops for OS installs, visible auth codes, or human actions.
 ---
 
 # Powerset Login
@@ -11,19 +11,32 @@ Powerset". Also the right skill when an unrelated Powerpacks command failed
 because of a missing key or expired session.
 
 **This skill is built to be fast and quiet.** The user said "log me in" — do
-that. Don't ask permission for every step. Use the doctor's `fix_kind`
-classification to decide what needs asking, but run fixes yourself from the
-current invocation/shell so prompts, URLs, and failures are visible.
+that. Don't ask permission for every step. Use setup-check classifications to
+decide what needs asking, but run fixes yourself from the current
+invocation/shell so prompts, URLs, and failures are visible.
+
+User-facing output must be terse:
+
+- Start with exactly: `Updating your credentials...`
+- Do not narrate setup checks, missing check names, token formats, MCP config
+  details, or successful substeps.
+- If a browser/code login is needed, show only the auth URL/code prompt.
+- On success, say exactly:
+  `Credentials updated. Please restart Codex to reload the Powerset MCP token.`
+- If everything was already valid, say:
+  `Credentials are already up to date. Restart Codex if the Powerset MCP still fails.`
+- For unresolved human-action blockers, give one short sentence with the action
+  required. Do not paste raw reports.
 
 ## Core rule
 
-`doctor.py run` is a checker. In the normal skill flow, do **not** run
-`doctor.py fix`; it hides interactive work inside a nested subprocess and can
+Use the read-only setup checker for diagnosis. In the normal skill flow, do not
+run nested fix commands; they can hide interactive work inside a subprocess and
 swallow browser/code prompts. Let the skill self-heal by running the relevant
 primitive or CLI command directly.
 
 Only use install commands when something is actually missing. Do not reinstall
-Powerpacks adapters, MCP config, `gcloud`, or credentials when the doctor says
+Powerpacks adapters, MCP config, `gcloud`, or credentials when the setup check says
 the check is already `ok`.
 
 ## Path setup
@@ -39,7 +52,7 @@ Prefer `python3` if `python` is not on PATH.
 
 ## Happy path
 
-Run one read-only check:
+Run one internal read-only setup check:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
@@ -48,13 +61,13 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/d
   --gcp-project powerset-search
 ```
 
-If `overall == "ok"`, tell the user "Already set up as `<email>`" and stop.
-The doctor does not check gcloud application-default credentials by default;
+If `overall == "ok"`, use the already-valid success sentence above and stop.
+The setup check does not check gcloud application-default credentials by default;
 ADC is not needed for normal Powerpacks workflows.
 
-## How to handle the doctor's report
+## How to handle the setup report
 
-`doctor run` returns one JSON object. The fields you care about are `checks`,
+The setup check returns one JSON object. The fields you care about are `checks`,
 `by_fix_kind`, and `next_actions`. Each missing/fail check has a `fix_kind`:
 
 | `fix_kind` | What to do | Ask the user? |
@@ -69,11 +82,11 @@ ADC is not needed for normal Powerpacks workflows.
 ### Step 1 — Install/bootstrap only when missing
 
 If `gcloud_installed` is missing, ask before running the exact OS install
-command from the doctor (`brew install --cask google-cloud-sdk` on macOS).
+command from the setup report (`brew install --cask google-cloud-sdk` on macOS).
 
 If the Powerpacks skill bundle or host adapter is missing and you are in the
 Powerpacks repo, run the repo installer for the current host instead of trying
-to repair it through the doctor:
+to repair it through a nested fix command:
 
 ```bash
 ./install.sh codex
@@ -154,11 +167,11 @@ missing shared infra key.
 
 ### Step 5 — Final state
 
-Re-run `doctor run` and report a one-line summary:
+Re-run the setup check and report a terse final message:
 
-- `overall: ok` → "Logged in as `<email>`. `.env` populated from per-user
-  secrets (`<N>` keys)."
-- `overall: warn` → same, but mention the remaining warning.
+- `overall: ok` → "Credentials updated. Please restart Codex to reload the
+  Powerset MCP token."
+- `overall: warn` → same, but mention the remaining warning in one short phrase.
 - `overall: needs_setup` → list the still-blocked items and what the user
   needs to do.
 
@@ -179,13 +192,13 @@ Re-run `doctor run` and report a one-line summary:
 | Profile | Includes | When to pick |
 | --- | --- | --- |
 | `search-core` | Standard Powerpacks runtime secrets | default setup for search plus messages review/research |
-| `messages` | OpenRouter + Parallel | `import-contacts-review` LLM/research extras |
+| `messages` | OpenRouter + Parallel | `import-contacts` LLM/research extras |
 | `sales-nav` | RapidAPI LinkedIn | LinkedIn enrichment |
 | `twitter` | RapidAPI Twitter | Twitter pipelines |
 | `supabase-admin` | Supabase URL + service role | admin only |
 | `all` | every allowlisted key | one-shot full setup |
 
-Pass `--profile <name>` to `doctor run` and to the direct provisioning
+Pass `--profile <name>` to the setup check and to the direct provisioning
 primitive.
 
 ## Maintainer-only: provisioning a new user

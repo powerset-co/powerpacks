@@ -3,6 +3,12 @@
 Merge N per-channel message-contact CSVs into a single canonical
 `contacts.csv`. Stdlib-only.
 
+Schema reference: `packs/messages/schemas/contacts-csv.md`.
+If an input CSV uses legacy headers such as `phone_e164`, `display_name`, or
+`total_messages`, convert it to the canonical contacts schema before rerunning.
+The primitive fails fast with the schema path instead of silently writing an
+empty merge.
+
 ## Usage
 
 ```bash
@@ -31,6 +37,20 @@ python packs/messages/primitives/merge_message_contacts/merge_message_contacts.p
 | `last_message` | Maximum ISO timestamp |
 | `skip` | Logical OR |
 | `match_*` | Highest `match_confidence` wins; tie-breaker `matched > suggested > unmatched > empty` |
+
+## Input schema
+
+Minimal accepted input columns:
+
+```text
+phone,name
+```
+
+Canonical output header:
+
+```text
+phone,name,source,is_in_group_chats,group_names,message_count,last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason
+```
 
 ## Output
 

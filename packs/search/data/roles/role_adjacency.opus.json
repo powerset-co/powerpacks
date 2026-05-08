@@ -1,0 +1,991 @@
+{
+  "_metadata": {
+    "description": "Role adjacency map over canonical_role_map.json (175 functions × 23 departments). For each role_id, lists adjacent role_ids a searcher might also want. Cross-department links capture functional overlap (e.g. software_engineer ↔ ml_engineer).",
+    "source": "data/roles/canonical_role_map.json",
+    "created": "2026-04-07",
+    "generated_by": "claude-opus-4-6",
+    "total_roles": 175
+  },
+  "software_engineer": [
+    "backend_engineer",
+    "frontend_engineer",
+    "full_stack_engineer",
+    "mobile_engineer",
+    "systems_engineer",
+    "devops_engineer",
+    "ml_engineer",
+    "ai_engineer",
+    "data_engineer",
+    "embedded_engineer",
+    "blockchain_engineer",
+    "software_architect",
+    "technical_lead"
+  ],
+  "backend_engineer": [
+    "software_engineer",
+    "full_stack_engineer",
+    "systems_engineer",
+    "devops_engineer",
+    "data_engineer",
+    "software_architect"
+  ],
+  "frontend_engineer": [
+    "software_engineer",
+    "full_stack_engineer",
+    "mobile_engineer",
+    "ui_designer",
+    "ux_designer"
+  ],
+  "full_stack_engineer": [
+    "software_engineer",
+    "backend_engineer",
+    "frontend_engineer",
+    "mobile_engineer"
+  ],
+  "mobile_engineer": [
+    "software_engineer",
+    "frontend_engineer",
+    "full_stack_engineer"
+  ],
+  "systems_engineer": [
+    "software_engineer",
+    "backend_engineer",
+    "devops_engineer",
+    "embedded_engineer",
+    "network_engineer"
+  ],
+  "devops_engineer": [
+    "software_engineer",
+    "backend_engineer",
+    "systems_engineer",
+    "security_engineer",
+    "network_engineer"
+  ],
+  "software_architect": [
+    "software_engineer",
+    "backend_engineer",
+    "technical_lead",
+    "engineering_manager",
+    "systems_engineer"
+  ],
+  "technical_lead": [
+    "software_engineer",
+    "engineering_manager",
+    "software_architect",
+    "backend_engineer"
+  ],
+  "engineering_manager": [
+    "technical_lead",
+    "software_engineer",
+    "product_manager",
+    "chief_technology_officer",
+    "software_architect"
+  ],
+  "chief_technology_officer": [
+    "engineering_manager",
+    "software_engineer",
+    "chief_product_officer",
+    "chief_executive_officer",
+    "software_architect"
+  ],
+  "embedded_engineer": [
+    "software_engineer",
+    "hardware_engineer",
+    "systems_engineer",
+    "robotics_engineer",
+    "electrical_engineer"
+  ],
+  "hardware_engineer": [
+    "embedded_engineer",
+    "electrical_engineer",
+    "mechanical_engineer",
+    "robotics_engineer",
+    "systems_engineer"
+  ],
+  "electrical_engineer": [
+    "hardware_engineer",
+    "embedded_engineer",
+    "mechanical_engineer",
+    "systems_engineer"
+  ],
+  "mechanical_engineer": [
+    "hardware_engineer",
+    "electrical_engineer",
+    "robotics_engineer",
+    "process_engineer",
+    "civil_engineer"
+  ],
+  "robotics_engineer": [
+    "embedded_engineer",
+    "software_engineer",
+    "hardware_engineer",
+    "ml_engineer",
+    "mechanical_engineer",
+    "systems_engineer"
+  ],
+  "aerospace_engineer": [
+    "mechanical_engineer",
+    "systems_engineer",
+    "electrical_engineer",
+    "embedded_engineer"
+  ],
+  "biomedical_engineer": [
+    "mechanical_engineer",
+    "electrical_engineer",
+    "research_engineer",
+    "clinical_researcher"
+  ],
+  "blockchain_engineer": [
+    "software_engineer",
+    "backend_engineer",
+    "full_stack_engineer"
+  ],
+  "civil_engineer": [
+    "mechanical_engineer",
+    "process_engineer",
+    "field_engineer"
+  ],
+  "process_engineer": [
+    "mechanical_engineer",
+    "civil_engineer",
+    "field_engineer",
+    "process_engineer"
+  ],
+  "field_engineer": [
+    "solutions_engineer",
+    "support_engineer",
+    "systems_engineer",
+    "process_engineer"
+  ],
+  "network_engineer": [
+    "systems_engineer",
+    "devops_engineer",
+    "security_engineer",
+    "it_support"
+  ],
+  "qa_engineer": [
+    "software_engineer",
+    "devops_engineer",
+    "support_engineer"
+  ],
+  "research_engineer": [
+    "software_engineer",
+    "ml_engineer",
+    "researcher",
+    "ai_researcher",
+    "data_scientist"
+  ],
+  "solutions_engineer": [
+    "software_engineer",
+    "sales_engineer",
+    "field_engineer",
+    "customer_success_manager"
+  ],
+  "support_engineer": [
+    "solutions_engineer",
+    "customer_support",
+    "it_support",
+    "qa_engineer"
+  ],
+  "audio_engineer": [
+    "producer",
+    "creator"
+  ],
+  "it_support": [
+    "network_engineer",
+    "support_engineer",
+    "systems_engineer"
+  ],
+  "developer_advocate": [
+    "software_engineer",
+    "community_manager",
+    "content_marketer",
+    "solutions_engineer",
+    "technical_writer"
+  ],
+  "ai_engineer": [
+    "ml_engineer",
+    "software_engineer",
+    "data_scientist",
+    "ai_researcher",
+    "data_engineer",
+    "research_engineer"
+  ],
+  "ai_researcher": [
+    "ai_engineer",
+    "ml_engineer",
+    "data_scientist",
+    "researcher",
+    "research_engineer",
+    "professor"
+  ],
+  "ml_engineer": [
+    "ai_engineer",
+    "software_engineer",
+    "data_scientist",
+    "data_engineer",
+    "ai_researcher",
+    "research_engineer"
+  ],
+  "data_scientist": [
+    "ml_engineer",
+    "ai_engineer",
+    "data_analyst",
+    "data_engineer",
+    "ai_researcher",
+    "data_science_manager"
+  ],
+  "data_engineer": [
+    "software_engineer",
+    "backend_engineer",
+    "data_scientist",
+    "ml_engineer",
+    "data_architect",
+    "devops_engineer"
+  ],
+  "data_analyst": [
+    "data_scientist",
+    "data_engineer",
+    "business_analyst",
+    "financial_analyst",
+    "marketing_analyst",
+    "product_analyst"
+  ],
+  "data_architect": [
+    "data_engineer",
+    "software_architect",
+    "data_scientist",
+    "backend_engineer"
+  ],
+  "data_science_manager": [
+    "data_scientist",
+    "ml_engineer",
+    "engineering_manager",
+    "ai_engineer"
+  ],
+  "security_engineer": [
+    "software_engineer",
+    "devops_engineer",
+    "systems_engineer",
+    "security_analyst",
+    "security_architect"
+  ],
+  "security_analyst": [
+    "security_engineer",
+    "security_architect",
+    "compliance_analyst",
+    "data_analyst"
+  ],
+  "security_architect": [
+    "security_engineer",
+    "software_architect",
+    "security_manager",
+    "systems_engineer"
+  ],
+  "security_manager": [
+    "security_engineer",
+    "security_architect",
+    "engineering_manager",
+    "compliance_manager"
+  ],
+  "product_manager": [
+    "product_analyst",
+    "product_ops",
+    "chief_product_officer",
+    "engineering_manager",
+    "ux_designer",
+    "product_designer"
+  ],
+  "product_analyst": [
+    "product_manager",
+    "data_analyst",
+    "business_analyst",
+    "product_ops"
+  ],
+  "product_ops": [
+    "product_manager",
+    "product_analyst",
+    "operations_manager"
+  ],
+  "chief_product_officer": [
+    "product_manager",
+    "chief_technology_officer",
+    "chief_executive_officer",
+    "engineering_manager"
+  ],
+  "product_designer": [
+    "ux_designer",
+    "ui_designer",
+    "ux_researcher",
+    "product_manager",
+    "creative_director"
+  ],
+  "ux_designer": [
+    "product_designer",
+    "ui_designer",
+    "ux_researcher",
+    "frontend_engineer"
+  ],
+  "ui_designer": [
+    "ux_designer",
+    "product_designer",
+    "frontend_engineer",
+    "graphic_designer"
+  ],
+  "ux_researcher": [
+    "product_designer",
+    "ux_designer",
+    "product_manager",
+    "data_analyst"
+  ],
+  "graphic_designer": [
+    "ui_designer",
+    "creative_director",
+    "brand_manager",
+    "motion_designer"
+  ],
+  "motion_designer": [
+    "graphic_designer",
+    "creative_director",
+    "filmmaker",
+    "ui_designer"
+  ],
+  "creative_director": [
+    "product_designer",
+    "graphic_designer",
+    "brand_manager",
+    "motion_designer"
+  ],
+  "account_executive": [
+    "account_manager",
+    "sdr",
+    "sales_rep",
+    "sales_manager",
+    "business_development"
+  ],
+  "account_manager": [
+    "account_executive",
+    "customer_success_manager",
+    "sales_manager",
+    "engagement_manager"
+  ],
+  "sdr": [
+    "account_executive",
+    "sales_rep",
+    "business_development"
+  ],
+  "sales_rep": [
+    "account_executive",
+    "sdr",
+    "sales_manager"
+  ],
+  "sales_manager": [
+    "account_executive",
+    "account_manager",
+    "chief_revenue_officer",
+    "sales_operations"
+  ],
+  "sales_engineer": [
+    "solutions_engineer",
+    "software_engineer",
+    "account_executive",
+    "field_engineer"
+  ],
+  "sales_operations": [
+    "sales_manager",
+    "sales_operations",
+    "operations_manager",
+    "marketing_ops"
+  ],
+  "chief_revenue_officer": [
+    "sales_manager",
+    "chief_marketing_officer",
+    "chief_executive_officer",
+    "sales_operations"
+  ],
+  "enablement": [
+    "sales_manager",
+    "training_manager",
+    "sales_operations"
+  ],
+  "business_development": [
+    "partnerships",
+    "account_executive",
+    "sdr",
+    "corporate_development"
+  ],
+  "partnerships": [
+    "business_development",
+    "corporate_development",
+    "account_manager"
+  ],
+  "corporate_development": [
+    "business_development",
+    "partnerships",
+    "investment_banker",
+    "strategist"
+  ],
+  "customer_success_manager": [
+    "account_manager",
+    "engagement_manager",
+    "customer_support",
+    "solutions_engineer"
+  ],
+  "customer_support": [
+    "customer_success_manager",
+    "support_engineer",
+    "it_support"
+  ],
+  "engagement_manager": [
+    "customer_success_manager",
+    "account_manager",
+    "management_consultant"
+  ],
+  "marketing_manager": [
+    "growth_marketer",
+    "brand_manager",
+    "content_marketer",
+    "marketing_ops",
+    "chief_marketing_officer",
+    "marketing_coordinator"
+  ],
+  "growth_marketer": [
+    "marketing_manager",
+    "marketing_analyst",
+    "product_manager",
+    "data_analyst"
+  ],
+  "brand_manager": [
+    "marketing_manager",
+    "creative_director",
+    "communications_manager",
+    "content_marketer"
+  ],
+  "content_marketer": [
+    "marketing_manager",
+    "brand_manager",
+    "social_media_manager",
+    "writer",
+    "technical_writer"
+  ],
+  "marketing_analyst": [
+    "data_analyst",
+    "growth_marketer",
+    "marketing_manager",
+    "marketing_ops"
+  ],
+  "marketing_coordinator": [
+    "marketing_manager",
+    "marketing_ops",
+    "social_media_manager"
+  ],
+  "marketing_ops": [
+    "marketing_manager",
+    "sales_operations",
+    "marketing_analyst",
+    "growth_marketer"
+  ],
+  "social_media_manager": [
+    "content_marketer",
+    "community_manager",
+    "brand_manager",
+    "creator"
+  ],
+  "communications_manager": [
+    "communications_manager",
+    "finance_manager",
+    "corporate_development"
+  ],
+  "publicist": [
+    "communications_manager",
+    "brand_manager",
+    "journalist"
+  ],
+  "community_manager": [
+    "social_media_manager",
+    "developer_advocate",
+    "customer_success_manager",
+    "content_marketer"
+  ],
+  "chief_marketing_officer": [
+    "marketing_manager",
+    "growth_marketer",
+    "chief_revenue_officer",
+    "chief_executive_officer"
+  ],
+  "chief_executive_officer": [
+    "chief_operating_officer",
+    "chief_technology_officer",
+    "chief_financial_officer",
+    "chief_product_officer",
+    "founder",
+    "president"
+  ],
+  "chief_operating_officer": [
+    "chief_executive_officer",
+    "operations_manager",
+    "chief_of_staff",
+    "vice_president"
+  ],
+  "chief_financial_officer": [
+    "chief_executive_officer",
+    "finance_manager",
+    "controller",
+    "financial_analyst"
+  ],
+  "chief_of_staff": [
+    "chief_executive_officer",
+    "chief_operating_officer",
+    "operations_manager",
+    "strategist"
+  ],
+  "founder": [
+    "chief_executive_officer",
+    "chief_technology_officer",
+    "angel_investor",
+    "founder"
+  ],
+  "president": [
+    "chief_executive_officer",
+    "vice_president",
+    "chief_operating_officer"
+  ],
+  "vice_president": [
+    "director",
+    "president",
+    "chief_operating_officer"
+  ],
+  "director": [
+    "vice_president",
+    "manager",
+    "head_of"
+  ],
+  "head_of": [
+    "director",
+    "vice_president",
+    "manager"
+  ],
+  "manager": [
+    "director",
+    "head_of",
+    "coordinator"
+  ],
+  "coordinator": [
+    "manager",
+    "admin_assistant",
+    "marketing_coordinator"
+  ],
+  "analyst": [
+    "data_analyst",
+    "business_analyst",
+    "financial_analyst"
+  ],
+  "associate": [
+    "analyst",
+    "vc_associate"
+  ],
+  "consultant": [
+    "management_consultant",
+    "strategist",
+    "solutions_engineer"
+  ],
+  "specialist": [
+    "analyst",
+    "coordinator"
+  ],
+  "officer": [],
+  "owner": [
+    "founder",
+    "chief_executive_officer"
+  ],
+  "principal": [
+    "director",
+    "vice_president",
+    "management_consultant"
+  ],
+  "advisor": [
+    "board_advisor",
+    "board_member",
+    "management_consultant",
+    "angel_investor"
+  ],
+  "board_advisor": [
+    "advisor",
+    "board_member",
+    "angel_investor"
+  ],
+  "board_chairman": [
+    "board_member",
+    "chief_executive_officer"
+  ],
+  "board_member": [
+    "board_chairman",
+    "board_advisor",
+    "advisor",
+    "angel_investor",
+    "general_partner"
+  ],
+  "trustee": [
+    "board_member",
+    "board_chairman"
+  ],
+  "angel_investor": [
+    "venture_capitalist",
+    "general_partner",
+    "founder",
+    "board_member"
+  ],
+  "venture_capitalist": [
+    "general_partner",
+    "venture_partner",
+    "vc_associate",
+    "angel_investor"
+  ],
+  "general_partner": [
+    "venture_capitalist",
+    "venture_partner",
+    "vc_associate",
+    "limited_partner",
+    "angel_investor"
+  ],
+  "venture_partner": [
+    "general_partner",
+    "venture_capitalist",
+    "vc_associate",
+    "scout"
+  ],
+  "vc_associate": [
+    "venture_capitalist",
+    "general_partner",
+    "financial_analyst",
+    "scout"
+  ],
+  "limited_partner": [
+    "general_partner",
+    "angel_investor",
+    "portfolio_manager"
+  ],
+  "portfolio_manager": [
+    "limited_partner",
+    "financial_analyst",
+    "investment_banker"
+  ],
+  "scout": [
+    "vc_associate",
+    "venture_partner",
+    "angel_investor"
+  ],
+  "finance_manager": [
+    "chief_financial_officer",
+    "controller",
+    "financial_analyst",
+    "accountant"
+  ],
+  "financial_analyst": [
+    "finance_manager",
+    "data_analyst",
+    "accountant",
+    "investment_banker",
+    "vc_associate"
+  ],
+  "accountant": [
+    "finance_manager",
+    "financial_analyst",
+    "controller",
+    "auditor"
+  ],
+  "controller": [
+    "chief_financial_officer",
+    "accountant",
+    "finance_manager"
+  ],
+  "auditor": [
+    "accountant",
+    "compliance_analyst",
+    "controller"
+  ],
+  "actuary": [
+    "financial_analyst",
+    "data_scientist",
+    "data_analyst"
+  ],
+  "investment_banker": [
+    "financial_analyst",
+    "corporate_development",
+    "portfolio_manager",
+    "venture_capitalist"
+  ],
+  "underwriter": [
+    "financial_analyst",
+    "actuary"
+  ],
+  "operations_manager": [
+    "chief_operating_officer",
+    "business_analyst",
+    "logistics_manager",
+    "supply_chain",
+    "chief_of_staff"
+  ],
+  "business_analyst": [
+    "data_analyst",
+    "operations_manager",
+    "product_analyst",
+    "strategist"
+  ],
+  "logistics_manager": [
+    "operations_manager",
+    "supply_chain"
+  ],
+  "supply_chain": [
+    "logistics_manager",
+    "operations_manager"
+  ],
+  "admin_assistant": [
+    "coordinator",
+    "operations_manager"
+  ],
+  "attorney": [
+    "general_counsel",
+    "compliance_manager",
+    "paralegal"
+  ],
+  "general_counsel": [
+    "attorney",
+    "chief_executive_officer",
+    "compliance_manager"
+  ],
+  "compliance_manager": [
+    "compliance_analyst",
+    "attorney",
+    "general_counsel",
+    "auditor"
+  ],
+  "compliance_analyst": [
+    "compliance_manager",
+    "auditor",
+    "security_analyst"
+  ],
+  "paralegal": [
+    "attorney",
+    "legal_clerk"
+  ],
+  "legal_clerk": [
+    "paralegal",
+    "attorney"
+  ],
+  "recruiter": [
+    "hr_manager",
+    "hr_coordinator"
+  ],
+  "hr_manager": [
+    "recruiter",
+    "hr_coordinator",
+    "training_manager",
+    "chief_of_staff"
+  ],
+  "hr_coordinator": [
+    "hr_manager",
+    "recruiter",
+    "admin_assistant"
+  ],
+  "training_manager": [
+    "hr_manager",
+    "enablement",
+    "educator"
+  ],
+  "management_consultant": [
+    "strategist",
+    "consultant",
+    "business_analyst",
+    "corporate_development"
+  ],
+  "strategist": [
+    "management_consultant",
+    "business_analyst",
+    "chief_of_staff",
+    "corporate_development"
+  ],
+  "policy_analyst": [
+    "strategist",
+    "management_consultant",
+    "data_analyst"
+  ],
+  "researcher": [
+    "ai_researcher",
+    "professor",
+    "research_engineer",
+    "research_assistant",
+    "data_scientist"
+  ],
+  "professor": [
+    "researcher",
+    "ai_researcher",
+    "lecturer",
+    "educator"
+  ],
+  "lecturer": [
+    "professor",
+    "educator",
+    "teaching_assistant"
+  ],
+  "educator": [
+    "professor",
+    "lecturer",
+    "training_manager",
+    "teaching_assistant"
+  ],
+  "research_assistant": [
+    "researcher",
+    "student",
+    "data_analyst"
+  ],
+  "teaching_assistant": [
+    "educator",
+    "lecturer",
+    "student"
+  ],
+  "student": [
+    "research_assistant",
+    "teaching_assistant"
+  ],
+  "clinical_researcher": [
+    "researcher",
+    "physician",
+    "biomedical_engineer"
+  ],
+  "physician": [
+    "clinical_researcher",
+    "healthcare_administrator"
+  ],
+  "nurse": [
+    "physician",
+    "healthcare_administrator"
+  ],
+  "pharmacist": [
+    "physician",
+    "clinical_researcher"
+  ],
+  "dentist": [
+    "physician"
+  ],
+  "therapist": [
+    "physician",
+    "nurse"
+  ],
+  "healthcare_administrator": [
+    "operations_manager",
+    "physician",
+    "nurse"
+  ],
+  "creator": [
+    "content_marketer",
+    "social_media_manager",
+    "writer",
+    "filmmaker",
+    "photographer"
+  ],
+  "writer": [
+    "content_marketer",
+    "technical_writer",
+    "editor",
+    "journalist",
+    "creator"
+  ],
+  "technical_writer": [
+    "writer",
+    "software_engineer",
+    "developer_advocate",
+    "content_marketer"
+  ],
+  "editor": [
+    "writer",
+    "journalist",
+    "creator"
+  ],
+  "journalist": [
+    "writer",
+    "editor",
+    "publicist",
+    "communications_manager"
+  ],
+  "filmmaker": [
+    "creator",
+    "producer",
+    "photographer",
+    "motion_designer"
+  ],
+  "photographer": [
+    "creator",
+    "filmmaker",
+    "graphic_designer"
+  ],
+  "producer": [
+    "filmmaker",
+    "creator",
+    "editor"
+  ],
+  "real_estate_agent": [
+    "real_estate_developer",
+    "real_estate_analyst",
+    "mortgage_specialist"
+  ],
+  "real_estate_developer": [
+    "real_estate_investor",
+    "real_estate_agent",
+    "real_estate_analyst"
+  ],
+  "real_estate_investor": [
+    "real_estate_developer",
+    "angel_investor",
+    "real_estate_analyst"
+  ],
+  "real_estate_analyst": [
+    "real_estate_developer",
+    "real_estate_agent",
+    "financial_analyst"
+  ],
+  "real_estate_appraiser": [
+    "real_estate_analyst",
+    "real_estate_agent"
+  ],
+  "property_manager": [
+    "real_estate_agent",
+    "operations_manager"
+  ],
+  "mortgage_specialist": [
+    "real_estate_agent",
+    "financial_analyst",
+    "underwriter"
+  ],
+  "technician": [
+    "field_engineer",
+    "it_support",
+    "support_engineer"
+  ],
+  "alumni": [],
+  "athlete": [
+    "coach",
+    "personal_trainer"
+  ],
+  "coach": [
+    "personal_trainer",
+    "training_manager"
+  ],
+  "food_service_worker": [],
+  "guide": [],
+  "laborer": [
+    "technician"
+  ],
+  "participant": [],
+  "personal_trainer": [
+    "coach",
+    "therapist"
+  ],
+  "pilot": [
+    "aerospace_engineer"
+  ],
+  "referee": [],
+  "resident_advisor": [],
+  "retired": [],
+  "winner": []
+}

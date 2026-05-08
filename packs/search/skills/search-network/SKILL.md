@@ -1,6 +1,6 @@
 ---
 name: search-network
-description: Run a role-first people search from a natural-language query, job description, or URL. Use when the user wants the agent to decompose the request, choose a search strategy, retrieve candidates from TurboPuffer, review the frontier, and hydrate the best results without using expensive scoring.
+description: Run a role-first people search from a natural-language query, job description, or URL. Use when the user wants the agent to decompose the request, show one compact search preview, then execute retrieval, hydration, LLM filtering/reranking, and result export.
 ---
 
 # Search Network
@@ -24,9 +24,10 @@ The agent should:
 - decide whether adjacent/domain search is off, confirmed, or should be asked
   about
 - decide whether to search directly, count first, or generate slices
-- ask the user to choose `search only`, `rerank`, or requested changes before
-  executing retrieval
-- execute retrieval through TurboPuffer
+- show one compact search preview after extraction and ask the user to
+  `execute`, `modify`, or `search only`
+- after `execute`, run retrieval, hydration, LLM filtering/reranking, and
+  persistence without a second approval gate
 - review the candidate frontier after each step
 - hydrate the full candidate frontier through Postgres into local JSONL handoff
   files; do not pass large profile blobs through chat or command arguments
@@ -84,28 +85,45 @@ each boundary has a written artifact.
 ## Fast path runner
 
 For the normal semantic/role search path, prefer the resumable orchestrator once
-`extract-search-query` has produced an `expand_search_request` payload:
+`extract-search-query` has produced an `expand_search_request` payload and the
+user has approved the compact search preview:
 
 ```bash
-python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
+uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
   --query "<user query>" \
-  --payload-json .powerpacks/search/<run>/expand_search_request.json
+  --payload-json .powerpacks/search/<run>/expand_search_request.json \
+  --execute-approved
 ```
 
-It runs the mechanical primitive sequence, records a ledger next to the task
-state, and exits at the LLM filter/rerank approval gate. Feed confirmation back
-with:
+`--execute-approved` means the user already saw and approved the extracted
+search. The orchestrator should then run retrieval, hydration, LLM filtering,
+LLM reranking, and persistence without another chat-visible approval gate.
 
-```bash
-python packs/search/primitives/search_network_pipeline/search_network_pipeline.py approve llm \
-  --ledger <ledger> --approval-id <approval_id> --confirm
-python packs/search/primitives/search_network_pipeline/search_network_pipeline.py continue \
-  --ledger <ledger>
-```
+Use `--search-only` only when the user explicitly chooses to skip LLM
+filter/rerank. If query extraction or currentness semantics are still ambiguous,
+resolve those before showing the preview or invoking the orchestrator.
 
-Use `--search-only` when the user chooses to skip LLM spend. If query extraction
-or currentness semantics are still ambiguous, resolve those before invoking the
-orchestrator.
+### Quiet Execution
+
+After query extraction/currentness is resolved and the user has selected
+`execute` or `search only`, do not create a separate chat-visible plan for
+normal orchestrator runs. Keep invoking `search_network_pipeline.py` until it
+finishes or emits a concrete `blocked_approval` / `blocked_user_action`.
+
+When the harness has a worker/sub-agent facility, dispatch noisy orchestrator
+execution to a worker sub-agent. The only chat-visible handoff line should be
+exactly:
+
+`Starting search through sub-agent.`
+
+The main chat should show only required user actions and the final compact
+result summary with state, ledger, CSV/JSONL/manifest paths, rerank CSV path,
+and top candidates. The worker may inspect the ledger, task state, primitive
+JSON, and artifacts, but should not stream full primitive JSON or terminal
+transcripts into the main chat unless diagnosis is needed.
+
+If sub-agents are unavailable, say that once, then keep status messages
+decision-oriented and terse.
 
 ## Strategy Loop
 
@@ -212,34 +230,29 @@ search.
 
 ## First Response Contract
 
-For an initial `/search-network ...` request, do not reply with only a short
-acknowledgement such as "kicking off the search." The first response must give
-the user operational status:
+For an initial `/search-network ...` request, do not reply with a long visible
+plan. Extract the query, run the payload quality gate below, then show one
+compact search preview and ask for exactly one decision:
 
-- the state file path, or the exact state path you are about to create
-- whether this is direct, count-first, or sliced
-- the hard filters and prefilters you plan to use
-- the set scope: explicit `set_id`, env/default set, or personal-set fallback,
-  plus whether `operator_ids` have already been resolved
-- the currentness semantics: whether `is_current_role` and/or
-  `is_current_company` are set, and whether the query is current-only,
-  all-time, or past-only for each dimension
-- whether any runtime dependency or credential is missing
-- the proposed next step
-- the approval choices: `run full pipeline` (default: retrieve → hydrate → LLM
-  filter → LLM rerank → persist), `search only` (skip LLM spend), or requested
-  changes
+`Execute this search, modify it, or run search-only without LLM rerank?`
 
-Do not execute TurboPuffer retrieval, Postgres hydration, LLM filtering,
-reranking, package installation, or credential setup before this approval gate
-unless the current task state already records `approval.status = "approved"`.
-After approval, run the selected pipeline to completion in one shot. The default
-approved mode is `run full pipeline`: retrieval → hydration → conservative LLM
-filter → async LLM rerank → persistence. Do not pause again between hydration,
-filtering, reranking, and persistence unless a primitive fails or the user chose
-`search only`.
+The preview should include only:
 
-Before showing the approval prompt, perform this payload quality gate:
+- normalized query
+- state path or exact state path to create
+- set scope: explicit `set_id`, env/default set, or personal-set fallback
+- currentness semantics: `is_current_role` / `is_current_company`
+- role/title intent: dense `semantic_query` summary plus `bm25_queries`
+- company/domain/investor/education/location/seniority filters
+- expected execution: retrieval → hydration → LLM filter → LLM rerank → persist
+- runtime blockers, if any
+
+If the user chooses `execute`, invoke `search_network_pipeline --execute-approved`
+so there is no second LLM approval gate. If the user chooses `search-only`, pass
+`--search-only`. If the user asks for changes, update/regenerate the extraction
+and show the compact preview again.
+
+Before showing the preview, perform this payload quality gate:
 
 - If the query has role/profile/domain intent, `role_search_filters.semantic_query`
   must be dense semantic retrieval prose, not a title or keyword phrase.
@@ -258,9 +271,10 @@ Before showing the approval prompt, perform this payload quality gate:
 
 ## Rules
 
-- default to LLM filtering and LLM reranking after approval; only skip them when
-  the user chooses `search only`, when `OPENAI_API_KEY` is missing, or when the
-  task is the company-directory MCP fast path
+- default to LLM filtering and LLM reranking after the user approves the search
+  preview; only skip them when the user chooses `search only`, when
+  `OPENAI_API_KEY` is missing, or when the task is the company-directory MCP
+  fast path
 - do not force slices when the query is already specific
 - use counts and frontier feedback to decide whether to widen or narrow
 - produce a short decision trace after each stage
@@ -274,8 +288,8 @@ Before showing the approval prompt, perform this payload quality gate:
   `is_current_company` / `is_current_role` instead of silently conflating them.
 - use `education_names` for school names that are not already canonical IDs,
   then run `resolve_education` before `apply_prefilters`
-- do not use broad `role_function` values such as `engineering` as a hard proxy
-  for representative titles. For normal engineering/product/operator searches,
+- do not use broad role labels such as `engineering` as hard proxies for
+  representative titles. For normal engineering/product/operator searches,
   express title intent in `semantic_query` + `bm25_queries` and inspect/resolve
   representative title strings when needed. Use `role_ids` only for canonical
   roles where the index semantics are known to be reliable (notably founder /
@@ -340,28 +354,13 @@ Before showing the approval prompt, perform this payload quality gate:
   the user, or recorded as a separate exploratory slice
 - use persisted task state and artifacts as the source of truth; do not paste
   the full candidate set into chat
-- do not run expensive scoring in V1
-- do not run sharded agentic candidate review unless approval records
-  `execution_mode = "rerank"` or the user explicitly asks to rerank/review a
-  completed run
-- when asking for approval, offer `search only` and `rerank` as first-class
-  choices. `search only` runs retrieval, hydration, and normal persistence.
-  `rerank` runs those steps plus sharded agentic review after hydration.
-- treat `approve` as `search only` for backwards compatibility
-- when sharded review is used, final user-facing output must be
-  `ranked_candidates.csv` and `ranked_candidates.jsonl` from the reducer, not
-  individual shard outputs
-- after `agentic_candidate_review prepare`, use the task JSON's
-  `artifacts.agentic_candidate_review.shards` as the dispatch source; do not
-  rediscover shards from the filesystem
-- after `agentic_candidate_review reduce`, present final ranked artifact paths
-  from `artifacts.agentic_candidate_review`
-- after planning, use `task_state request-approval` before real retrieval
-  with `plan.planned_steps` populated in execution order
-- if the user chooses search only or says approve, use
-  `task_state approve --execution-mode search_only`
-- if the user chooses rerank, use `task_state approve --execution-mode rerank`
-- if the user asks for changes, use `task_state request-changes --note "<user instruction>"`
+- the normal approval vocabulary is `execute`, `modify`, or `search only`.
+  `execute` runs retrieval, hydration, LLM filter, LLM rerank, and persistence;
+  `search only` runs retrieval, hydration, and persistence; `modify` revises the
+  extracted payload before any retrieval.
+- do not run sharded agentic candidate review in the normal path. Use the
+  packaged `llm_filter_candidates` and `llm_rerank_candidates` primitives via
+  `search_network_pipeline --execute-approved`.
 - do not write new retrieval scripts during a search run. Use the packaged
   primitives under `powerpacks/primitives/`.
 
@@ -420,77 +419,30 @@ the same shape in the final response.
 
 ## Executable Commands
 
-After approval, use the packaged primitive scripts rather than writing ad hoc
-code:
+After the user approves the compact preview, use the packaged orchestrator rather
+than writing ad hoc code or running bare `python` commands:
 
 ```bash
-python powerpacks/packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
-  --write-state
+uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
+  --query "<user query>" \
+  --payload-json .powerpacks/search/<run>/expand_search_request.json \
+  --execute-approved
 ```
 
-```bash
-python powerpacks/packs/search/primitives/resolve_education/resolve_education.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
-  --write-state
-```
+For explicit search-only runs:
 
 ```bash
-python powerpacks/packs/search/primitives/resolve_companies/resolve_companies.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
-  --write-state
+uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
+  --query "<user query>" \
+  --payload-json .powerpacks/search/<run>/expand_search_request.json \
+  --search-only
 ```
 
-```bash
-python powerpacks/packs/search/primitives/resolve_investors/resolve_investors.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
-  --write-state
-```
+For status/continuation diagnostics, keep using `uv run --env-file .env`:
 
 ```bash
-python powerpacks/packs/search/primitives/apply_prefilters/apply_prefilters.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
-  --write-state
-```
-
-```bash
-python powerpacks/packs/search/primitives/count_candidates/count_candidates.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
-  --write-state
-```
-
-```bash
-python powerpacks/packs/search/primitives/execute_role_search/execute_role_search.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
-  --limit 200 \
-  --write-state
-```
-
-```bash
-python powerpacks/packs/search/primitives/execute_search_slice/execute_search_slice.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --slice-id <slice-id> \
-  --env-file .env \
-  --write-state
-```
-
-```bash
-python powerpacks/packs/search/primitives/hydrate_people/hydrate_people.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
-  --write-state
-```
-
-```bash
-python powerpacks/packs/search/primitives/persist_search_results/results_io.py export \
-  --state .powerpacks/runs/search-network-<id>.json
+uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py status \
+  --ledger <ledger>
 ```
 
 ## Artifact Review
@@ -522,7 +474,7 @@ artifact rather than mutating the original run.
 - `plan_candidate_review`
 - `hydrate_people`
 - `llm_filter_candidates`
-- `agentic_candidate_review`
+- `llm_rerank_candidates`
 - `persist_search_results`
 - `refine_search_results`
 

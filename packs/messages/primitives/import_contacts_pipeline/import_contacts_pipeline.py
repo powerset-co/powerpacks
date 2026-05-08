@@ -35,14 +35,39 @@ from typing import Any
 DEFAULT_LEDGER = Path(".powerpacks/messages/import-run.json")
 DEFAULT_CONTACTS = Path(".powerpacks/messages/contacts.csv")
 DEFAULT_IMESSAGE_CONTACTS = Path(".powerpacks/messages/imessage.contacts.csv")
+DEFAULT_IMESSAGE_JSONL = Path(".powerpacks/messages/imessage.contacts.raw.jsonl")
+DEFAULT_IMESSAGE_NORMALIZED = Path(".powerpacks/messages/imessage.contacts.normalized.jsonl")
+DEFAULT_IMESSAGE_MANIFEST = Path(".powerpacks/messages/imessage.manifest.json")
+DEFAULT_IMESSAGE_NORMALIZED_MANIFEST = Path(".powerpacks/messages/imessage.contacts.normalized.jsonl.manifest.json")
 DEFAULT_WHATSAPP_CONTACTS = Path(".powerpacks/messages/whatsapp.contacts.csv")
+DEFAULT_WHATSAPP_JSONL = Path(".powerpacks/messages/whatsapp.contacts.raw.jsonl")
+DEFAULT_WHATSAPP_NORMALIZED = Path(".powerpacks/messages/whatsapp.contacts.normalized.jsonl")
+DEFAULT_WHATSAPP_MANIFEST = Path(".powerpacks/messages/whatsapp.contacts.csv.manifest.json")
+DEFAULT_WHATSAPP_NORMALIZED_MANIFEST = Path(".powerpacks/messages/whatsapp.contacts.normalized.jsonl.manifest.json")
 DEFAULT_CANDIDATES = Path(".powerpacks/messages/powerset_contacts.csv")
 DEFAULT_RESEARCH_QUEUE = Path(".powerpacks/messages/research_queue.csv")
 DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
 DEFAULT_REVIEW_CSV = Path(".powerpacks/messages/research_review.csv")
+DEFAULT_RETARGET_QUEUE = Path(".powerpacks/messages/retarget_queue.csv")
+DEFAULT_RETARGET_LEDGER = Path(".powerpacks/messages/retarget_attempts.json")
+DEFAULT_RETARGET_RESEARCH_DIR = Path(".powerpacks/messages/research_retarget")
 DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 DEFAULT_PROCESSOR = "core2x"
 ALLOWED_PARALLEL_PROCESSORS = ("core", "core2x", "pro")
+PARALLEL_LATENCY = {
+    "core": {
+        "per_task": "60s-5min",
+        "rough_wall_clock": "about 1-5 min once submitted",
+    },
+    "core2x": {
+        "per_task": "60s-10min",
+        "rough_wall_clock": "about 10-15 min once submitted",
+    },
+    "pro": {
+        "per_task": "2-10min",
+        "rough_wall_clock": "about 2-10 min once submitted",
+    },
+}
 DEFAULT_LLM_AUTO_APPROVE_USD = 10.0
 DEFAULT_REVIEW_PORT = 8766
 CONTACT_CSV_HEADERS = [
@@ -61,6 +86,31 @@ CONTACT_CSV_HEADERS = [
     "match_confidence",
     "match_method",
     "match_reason",
+]
+REQUIRED_CONTACT_HEADERS = {"phone", "name"}
+CONTACT_SCHEMA_DOC = "packs/messages/schemas/contacts-csv.md"
+CONTACT_SCHEMA_JSON = "packs/messages/schemas/contacts-csv.schema.json"
+REVIEW_CSV_HEADERS = [
+    "bucket",
+    "handle",
+    "full_name",
+    "phone_e164",
+    "area_code",
+    "total_messages",
+    "message_source",
+    "group_names",
+    "location_city",
+    "location_country",
+    "top_titles",
+    "top_companies",
+    "top_title_company_pairs",
+    "schools",
+    "short_reason",
+    "identity_risk",
+    "signals",
+    "retarget_hint",
+    "exclude",
+    "enrich_decision",
 ]
 
 
@@ -106,6 +156,33 @@ def read_json(path: Path, default: Any = None) -> Any:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def contact_schema_error(path: Path, fieldnames: list[str] | None) -> str:
+    fields = ",".join(fieldnames or []) or "<none>"
+    header = ",".join(CONTACT_CSV_HEADERS)
+    return (
+        f"CSV schema mismatch for {path}. Please convert this file into the Powerpacks messages contacts CSV schema before retrying. "
+        f"Required input columns: phone,name. Canonical header: {header}. "
+        f"Detected columns: {fields}. Schema docs: {CONTACT_SCHEMA_DOC}. JSON schema: {CONTACT_SCHEMA_JSON}. "
+        "Common legacy mappings: phone_e164/phone_number -> phone; display_name/full_name -> name; "
+        "total_messages -> message_count; message_source/source_channel -> source."
+    )
+
+
+def read_csv_fieldnames(path: Path) -> list[str] | None:
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            return csv.DictReader(handle).fieldnames
+    except OSError:
+        return None
+
+
+def validate_contacts_csv(path: Path) -> None:
+    fieldnames = read_csv_fieldnames(path)
+    names = {str(value or "").strip() for value in (fieldnames or [])}
+    if not REQUIRED_CONTACT_HEADERS.issubset(names):
+        raise PipelineFailed(contact_schema_error(path, fieldnames))
 
 
 def load_ledger(path: Path) -> dict[str, Any]:
@@ -228,6 +305,19 @@ def is_approved(ledger: dict[str, Any], approval_id_value: str) -> bool:
     return bool((ledger.get("approvals") or {}).get(approval_id_value, {}).get("confirmed"))
 
 
+def parallel_latency_summary(processor: str, estimate_payload: dict[str, Any]) -> dict[str, Any]:
+    latency = estimate_payload.get("estimated_latency")
+    if isinstance(latency, dict):
+        return latency
+    fallback = PARALLEL_LATENCY.get(processor) or PARALLEL_LATENCY[DEFAULT_PROCESSOR]
+    return {"processor": processor, **fallback}
+
+
+def parallel_approval_message(estimated_usd: float, latency: dict[str, Any]) -> str:
+    rough = latency.get("rough_wall_clock") or "roughly a few minutes once submitted"
+    return f"Estimated deep research cost: ${estimated_usd:.4f}, completion time is {rough}. Approve?"
+
+
 def approval_command(args: argparse.Namespace, kind: str, approval_id_value: str) -> str:
     return (
         f"uv run --project . python {rel(Path(__file__).resolve())} approve {kind} "
@@ -294,33 +384,266 @@ def read_manifest(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def write_empty_contacts_csv(path: Path) -> dict[str, Any]:
+def ensure_artifact_dirs(args: argparse.Namespace) -> None:
+    for path in (
+        Path(args.ledger),
+        Path(args.contacts),
+        Path(args.candidates),
+        Path(args.research_queue),
+        Path(args.review_csv),
+        Path(args.retarget_queue),
+        Path(args.retarget_ledger),
+        DEFAULT_IMESSAGE_CONTACTS,
+        DEFAULT_IMESSAGE_JSONL,
+        DEFAULT_IMESSAGE_NORMALIZED,
+        DEFAULT_WHATSAPP_CONTACTS,
+        DEFAULT_WHATSAPP_JSONL,
+        DEFAULT_WHATSAPP_NORMALIZED,
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    Path(args.research_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.retarget_research_dir).mkdir(parents=True, exist_ok=True)
+
+
+def csv_data_rows(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return sum(1 for _ in csv.DictReader(handle))
+    except OSError:
+        return 0
+
+
+def write_empty_csv(path: Path, fieldnames: list[str], *, manifest_reason: str | None = None) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        csv.DictWriter(handle, fieldnames=CONTACT_CSV_HEADERS).writeheader()
+        csv.DictWriter(handle, fieldnames=fieldnames).writeheader()
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
     manifest = {
         "primitive": "import_contacts_pipeline",
-        "command": "ensure_contacts",
         "created_at": now_iso(),
         "output": str(path),
         "manifest_path": str(manifest_path),
-        "counts": {
-            "rows_written": 0,
-            "unique_phones": 0,
-            "cross_channel_phones": 0,
-            "by_source": {},
-        },
+        "counts": {"rows_written": 0},
         "status": "ok",
-        "reason": "no_channel_contact_exports_found",
     }
+    if manifest_reason:
+        manifest["reason"] = manifest_reason
     write_json(manifest_path, manifest)
     return manifest
 
 
+def write_empty_jsonl(path: Path, *, manifest: Path | None = None, reason: str = "empty") -> dict[str, Any]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
+    manifest_path = manifest or path.with_suffix(path.suffix + ".manifest.json")
+    payload = {
+        "primitive": "import_contacts_pipeline",
+        "created_at": now_iso(),
+        "output": str(path),
+        "manifest_path": str(manifest_path),
+        "counts": {"rows_written": 0},
+        "status": "ok",
+        "reason": reason,
+    }
+    write_json(manifest_path, payload)
+    return payload
+
+
+def remove_stale_empty_contacts(args: argparse.Namespace) -> None:
+    """Drop the orchestrator's old empty-bootstrap artifact before re-merge."""
+    contacts = Path(args.contacts)
+    manifest = read_manifest(contacts.with_suffix(contacts.suffix + ".manifest.json")) or {}
+    if (
+        contacts.exists()
+        and csv_data_rows(contacts) == 0
+        and manifest.get("primitive") == "import_contacts_pipeline"
+        and manifest.get("reason") == "no_channel_contact_exports_found"
+        and (DEFAULT_IMESSAGE_CONTACTS.exists() or DEFAULT_WHATSAPP_CONTACTS.exists())
+    ):
+        contacts.unlink()
+
+
+def extract_imessage(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    if DEFAULT_IMESSAGE_CONTACTS.exists() and not args.force_imessage:
+        ledger.setdefault("artifacts", {})["imessage_contacts_csv"] = str(DEFAULT_IMESSAGE_CONTACTS)
+        mark_step(ledger_path, ledger, "extract_imessage", "completed", summary={"reused": str(DEFAULT_IMESSAGE_CONTACTS)})
+        return
+
+    check_cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py"),
+        "check",
+        "--strict",
+    ]
+    mark_step(ledger_path, ledger, "check_imessage", "running", command=check_cmd)
+    check_result = run_command(check_cmd, timeout=args.timeout, env=pipeline_env(args))
+    check_payload = check_result.get("json") or {}
+    if check_result["returncode"] != 0:
+        payload = {
+            "primitive": "import_contacts_pipeline",
+            "status": "blocked_user_action",
+            "message": "Enable macOS Full Disk Access / Contacts access for this terminal, then continue.",
+            "detail": check_payload or (check_result.get("stderr") or check_result.get("stdout") or "")[-1000:],
+            "ledger": str(ledger_path),
+        }
+        ledger["current_block"] = payload
+        mark_step(ledger_path, ledger, "check_imessage", "blocked_user_action", summary=payload, command=check_cmd)
+        raise PipelineBlocked(payload, code=21)
+    mark_step(ledger_path, ledger, "check_imessage", "completed", summary=check_payload, command=check_cmd)
+
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py"),
+        "extract",
+        "--output-csv", str(DEFAULT_IMESSAGE_CONTACTS),
+        "--output-jsonl", str(DEFAULT_IMESSAGE_JSONL),
+        "--manifest", str(DEFAULT_IMESSAGE_MANIFEST),
+    ]
+    mark_step(ledger_path, ledger, "extract_imessage", "running", command=cmd)
+    result = run_command(cmd, timeout=max(args.timeout, 600), env=pipeline_env(args))
+    payload = require_ok(result, "extract_imessage")
+    ledger.setdefault("artifacts", {})["imessage_contacts_csv"] = str(DEFAULT_IMESSAGE_CONTACTS)
+    mark_step(ledger_path, ledger, "extract_imessage", "completed", summary=payload, command=cmd)
+
+
+def normalize_channel(
+    args: argparse.Namespace,
+    ledger_path: Path,
+    ledger: dict[str, Any],
+    *,
+    step_id: str,
+    input_csv: Path,
+    output_jsonl: Path,
+    manifest: Path,
+    force: bool,
+) -> None:
+    if output_jsonl.exists() and not force:
+        mark_step(ledger_path, ledger, step_id, "completed", summary={"reused": str(output_jsonl)})
+        return
+    if not input_csv.exists():
+        payload = write_empty_jsonl(output_jsonl, manifest=manifest, reason=f"missing_input:{input_csv}")
+        mark_step(ledger_path, ledger, step_id, "completed", summary=payload)
+        return
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/normalize_message_contacts/normalize_message_contacts.py"),
+        "normalize",
+        "--input", str(input_csv),
+        "--out-jsonl", str(output_jsonl),
+        "--manifest", str(manifest),
+    ]
+    mark_step(ledger_path, ledger, step_id, "running", command=cmd)
+    result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
+    payload = require_ok(result, step_id)
+    mark_step(ledger_path, ledger, step_id, "completed", summary=payload, command=cmd)
+
+
+def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    if DEFAULT_WHATSAPP_CONTACTS.exists() and not args.force_whatsapp:
+        ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
+        mark_step(ledger_path, ledger, "extract_whatsapp", "completed", summary={"reused": str(DEFAULT_WHATSAPP_CONTACTS)})
+        return
+
+    check_cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/waha_runtime/waha_runtime.py"),
+        "check",
+    ]
+    mark_step(ledger_path, ledger, "check_docker_and_waha", "running", command=check_cmd)
+    check_result = run_command(check_cmd, timeout=args.timeout, env=pipeline_env(args))
+    check_payload = check_result.get("json") or {}
+    if check_result["returncode"] != 0:
+        payload = {
+            "primitive": "import_contacts_pipeline",
+            "status": "blocked_user_action",
+            "message": "Start Docker/Colima, then continue the import.",
+            "detail": check_payload or (check_result.get("stderr") or check_result.get("stdout") or "")[-1000:],
+            "ledger": str(ledger_path),
+        }
+        ledger["current_block"] = payload
+        mark_step(ledger_path, ledger, "check_docker_and_waha", "blocked_user_action", summary=payload, command=check_cmd)
+        raise PipelineBlocked(payload, code=21)
+    mark_step(ledger_path, ledger, "check_docker_and_waha", "completed", summary=check_payload, command=check_cmd)
+
+    up_cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/waha_runtime/waha_runtime.py"),
+        "up",
+    ]
+    mark_step(ledger_path, ledger, "start_waha_container", "running", command=up_cmd)
+    up_result = run_command(up_cmd, timeout=max(args.timeout, 600), env=pipeline_env(args))
+    up_payload = require_ok(up_result, "start_waha_container")
+    mark_step(ledger_path, ledger, "start_waha_container", "completed", summary=up_payload, command=up_cmd)
+
+    session_cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/waha_session/waha_session.py"),
+        "start",
+        "--open",
+        "--wait",
+    ]
+    mark_step(ledger_path, ledger, "authenticate_whatsapp", "running", command=session_cmd)
+    session_result = run_command(session_cmd, timeout=max(args.timeout, 600), env=pipeline_env(args))
+    session_payload = session_result.get("json") or {}
+    if session_result["returncode"] != 0:
+        if session_payload.get("status") == "timeout":
+            payload = {
+                "primitive": "import_contacts_pipeline",
+                "status": "blocked_user_action",
+                "message": "Scan the WhatsApp QR, then continue the import.",
+                "qr_path": str(Path(".powerpacks/messages/whatsapp/qr.png")),
+                "continue_command": f"uv run --project . python {rel(Path(__file__).resolve())} continue --ledger {shlex.quote(str(args.ledger))}",
+                "ledger": str(ledger_path),
+            }
+            ledger["current_block"] = payload
+            mark_step(ledger_path, ledger, "authenticate_whatsapp", "blocked_user_action", summary=payload, command=session_cmd)
+            raise PipelineBlocked(payload, code=21)
+        raise PipelineFailed(f"authenticate_whatsapp failed rc={session_result['returncode']}: {((session_result.get('stderr') or session_result.get('stdout') or '').strip())[-1000:]}")
+    mark_step(ledger_path, ledger, "authenticate_whatsapp", "completed", summary=session_payload, command=session_cmd)
+
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py"),
+        "extract",
+        "--output-csv", str(DEFAULT_WHATSAPP_CONTACTS),
+        "--output-jsonl", str(DEFAULT_WHATSAPP_JSONL),
+        "--manifest", str(DEFAULT_WHATSAPP_MANIFEST),
+    ]
+    mark_step(ledger_path, ledger, "extract_whatsapp", "running", command=cmd)
+    result = run_command(cmd, timeout=args.parallel_timeout, env=pipeline_env(args))
+    payload = require_ok(result, "extract_whatsapp")
+    ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
+    mark_step(ledger_path, ledger, "extract_whatsapp", "completed", summary=payload, command=cmd)
+
+
+def write_empty_contacts_csv(path: Path) -> dict[str, Any]:
+    manifest = write_empty_csv(path, CONTACT_CSV_HEADERS, manifest_reason="no_channel_contact_exports_found")
+    manifest["command"] = "ensure_contacts"
+    manifest["counts"] = {
+        "rows_written": 0,
+        "unique_phones": 0,
+        "cross_channel_phones": 0,
+        "by_source": {},
+    }
+    write_json(Path(manifest["manifest_path"]), manifest)
+    return manifest
+
+
 def ensure_contacts(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    remove_stale_empty_contacts(args)
     contacts = Path(args.contacts)
     if contacts.exists():
+        try:
+            validate_contacts_csv(contacts)
+        except PipelineFailed as exc:
+            mark_step(ledger_path, ledger, "ensure_contacts", "failed", summary={
+                "contacts": str(contacts),
+                "schema_docs": CONTACT_SCHEMA_DOC,
+                "schema_json": CONTACT_SCHEMA_JSON,
+            }, error=str(exc))
+            raise
         ledger.setdefault("artifacts", {})["contacts_csv"] = str(contacts)
         mark_step(ledger_path, ledger, "ensure_contacts", "completed", summary={"contacts": str(contacts)})
         return
@@ -519,11 +842,17 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
 
     would_submit = int(estimate_payload.get("would_submit") or 0)
     estimated_usd = float(estimate_payload.get("estimated_usd") or 0.0)
+    latency = parallel_latency_summary(args.processor, estimate_payload)
     if would_submit <= 0:
         mark_step(ledger_path, ledger, "deep_research", "completed", summary={"status": "no_work", **estimate_payload})
         return
 
-    payload = {"estimated_usd": estimated_usd}
+    payload = {
+        "estimated_usd": estimated_usd,
+        "estimated_latency": latency,
+        "processor": args.processor,
+        "would_submit": would_submit,
+    }
     aid = approval_id("parallel", payload)
     if not is_approved(ledger, aid):
         block_for_approval(
@@ -533,7 +862,7 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
             step_id="deep_research",
             kind="parallel",
             payload=payload,
-            message=f"Estimated Parallel cost: ${estimated_usd:.4f}. Approve?",
+            message=parallel_approval_message(estimated_usd, latency),
         )
 
     run_cmd = [
@@ -557,6 +886,28 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
 def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
     if completed(ledger, "build_research_review_csv") and not args.force_build_review:
         return
+    if completed(ledger, "build_raw_review_csv") and Path(args.review_csv).exists() and not args.force_build_review:
+        mark_step(
+            ledger_path,
+            ledger,
+            "build_research_review_csv",
+            "skipped",
+            summary={"reason": "raw_review_csv_active", "review_csv": str(args.review_csv)},
+        )
+        return
+    research_dir = Path(args.research_dir)
+    research_dir.mkdir(parents=True, exist_ok=True)
+    research_packets = list(research_dir.glob("*/01_research_parallel.json"))
+    if not research_packets:
+        write_empty_csv(Path(args.review_csv), REVIEW_CSV_HEADERS, manifest_reason="no_research_packets")
+        mark_step(
+            ledger_path,
+            ledger,
+            "build_research_review_csv",
+            "skipped",
+            summary={"reason": "no_research_packets", "research_dir": str(args.research_dir), "review_csv": str(args.review_csv)},
+        )
+        return
     cmd = [
         sys.executable,
         primitive_path("packs/messages/primitives/build_research_review_csv/build_research_review_csv.py"),
@@ -570,6 +921,10 @@ def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
     payload = require_ok(result, "build_research_review_csv")
     ledger.setdefault("artifacts", {})["research_review_csv"] = str(args.review_csv)
     mark_step(ledger_path, ledger, "build_research_review_csv", "completed", summary=payload, command=cmd)
+
+
+def has_research_review(args: argparse.Namespace) -> bool:
+    return Path(args.review_csv).exists() and csv_data_rows(Path(args.review_csv)) > 0
 
 
 def review_url(args: argparse.Namespace) -> str:
@@ -611,6 +966,282 @@ def open_review_server(args: argparse.Namespace, ledger_path: Path, ledger: dict
     pid_path.write_text(str(proc.pid) + "\n", encoding="utf-8")
     time.sleep(1)
     mark_step(ledger_path, ledger, "review_research_web", "completed", summary={"url": review_url(args), "pid": proc.pid, "log": str(log_path)}, command=cmd)
+
+
+def raw_review_url(args: argparse.Namespace) -> str:
+    return f"http://{args.review_host}:{args.review_port}/"
+
+
+def open_raw_contacts_review_server(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    if args.no_open_review:
+        mark_step(ledger_path, ledger, "review_contacts_web_fallback", "skipped", summary={"reason": "--no-open-review"})
+        return
+    server_dir = repo_root() / ".powerpacks/servers"
+    server_dir.mkdir(parents=True, exist_ok=True)
+    pid_path = server_dir / "contacts-review-http.pid"
+    log_path = server_dir / "contacts-review-http.log"
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text().strip())
+            os.kill(pid, 0)
+            mark_step(ledger_path, ledger, "review_contacts_web_fallback", "completed", summary={"url": raw_review_url(args), "pid": pid, "reused": True})
+            return
+        except Exception:
+            pid_path.unlink(missing_ok=True)
+
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/review_contacts_web/review_contacts_web.py"),
+        "serve",
+        "--contacts", str(args.contacts),
+        "--host", args.review_host,
+        "--port", str(args.review_port),
+    ]
+    if args.open_browser:
+        cmd.append("--open")
+    mark_step(ledger_path, ledger, "review_contacts_web_fallback", "running", command=cmd)
+    with log_path.open("ab") as log:
+        proc = subprocess.Popen(cmd, cwd=repo_root(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    pid_path.write_text(str(proc.pid) + "\n", encoding="utf-8")
+    time.sleep(1)
+    mark_step(ledger_path, ledger, "review_contacts_web_fallback", "completed", summary={"url": raw_review_url(args), "pid": proc.pid, "log": str(log_path)}, command=cmd)
+
+
+def digits_only(value: str) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def phone_area_code(phone: str) -> str:
+    digits = digits_only(phone)
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits[:3] if len(digits) >= 10 else ""
+
+
+def phone_handle(phone: str, name: str = "") -> str:
+    digits = digits_only(phone)
+    if len(digits) >= 10:
+        return f"phone-{digits[-10:]}"
+    safe_name = "".join(ch.lower() if ch.isalnum() else "-" for ch in (name or "unknown")).strip("-")
+    while "--" in safe_name:
+        safe_name = safe_name.replace("--", "-")
+    return safe_name or "unknown"
+
+
+def load_queue_rows_by_phone(path: Path) -> dict[str, dict[str, str]]:
+    if not path.exists():
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                phone = digits_only(row.get("phone_e164", ""))
+                if phone:
+                    out[phone] = {key: value or "" for key, value in row.items()}
+    except OSError:
+        return {}
+    return out
+
+
+def raw_decision(row: dict[str, str]) -> tuple[str, str, str]:
+    explicit = (row.get("enrich_decision") or "").strip().lower()
+    skip = (row.get("skip") or "").strip().lower()
+    if explicit == "yes" or skip in {"false", "0", "no"}:
+        return "yes", "false", "yes"
+    if explicit == "no" or skip in {"true", "1", "yes"}:
+        return "no", "true", "no"
+    return "review", "", ""
+
+
+def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    if completed(ledger, "build_raw_review_csv") and Path(args.review_csv).exists() and not args.force_build_review:
+        return
+    contacts_path = Path(args.contacts)
+    queue_by_phone = load_queue_rows_by_phone(Path(args.research_queue))
+    rows: list[dict[str, str]] = []
+    if contacts_path.exists():
+        with contacts_path.open(newline="", encoding="utf-8-sig") as handle:
+            for contact in csv.DictReader(handle):
+                contact = {key: value or "" for key, value in contact.items()}
+                phone = contact.get("phone", "")
+                name = contact.get("matched_name") or contact.get("name") or ""
+                queue_row = queue_by_phone.get(digits_only(phone), {})
+                bucket, exclude, enrich_decision = raw_decision(contact)
+                rows.append({
+                    "bucket": bucket,
+                    "handle": queue_row.get("handle") or phone_handle(phone, name),
+                    "full_name": queue_row.get("display_name") or name,
+                    "phone_e164": queue_row.get("phone_e164") or phone,
+                    "area_code": queue_row.get("area_code") or phone_area_code(phone),
+                    "total_messages": queue_row.get("total_messages") or contact.get("message_count", ""),
+                    "message_source": queue_row.get("message_source") or contact.get("source", ""),
+                    "group_names": queue_row.get("group_names") or contact.get("group_names", ""),
+                    "location_city": "",
+                    "location_country": "",
+                    "top_titles": "",
+                    "top_companies": "",
+                    "top_title_company_pairs": "",
+                    "schools": "",
+                    "short_reason": "Raw contact review fallback",
+                    "identity_risk": "",
+                    "signals": "",
+                    "retarget_hint": "",
+                    "exclude": exclude,
+                    "enrich_decision": enrich_decision,
+                })
+    review_csv = Path(args.review_csv)
+    review_csv.parent.mkdir(parents=True, exist_ok=True)
+    with review_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=REVIEW_CSV_HEADERS)
+        writer.writeheader()
+        writer.writerows(rows)
+    manifest = {
+        "primitive": "import_contacts_pipeline",
+        "command": "build_raw_review_csv",
+        "created_at": now_iso(),
+        "contacts": str(contacts_path),
+        "output": str(review_csv),
+        "counts": {
+            "rows_written": len(rows),
+            "yes": sum(1 for row in rows if row["bucket"] == "yes"),
+            "no": sum(1 for row in rows if row["bucket"] == "no"),
+            "review": sum(1 for row in rows if row["bucket"] == "review"),
+        },
+        "status": "ok",
+    }
+    write_json(review_csv.with_suffix(review_csv.suffix + ".manifest.json"), manifest)
+    ledger.setdefault("artifacts", {})["research_review_csv"] = str(review_csv)
+    mark_step(ledger_path, ledger, "build_raw_review_csv", "completed", summary=manifest)
+
+
+def retarget_rows_from_payload(payload: dict[str, Any]) -> int:
+    counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
+    return int(payload.get("rows_written") or counts.get("queued") or 0)
+
+
+def prepare_retarget_queue(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
+    step_id = "prepare_retarget_queue"
+    if completed(ledger, step_id) and not args.rerun_retarget:
+        return ((ledger.get("steps") or {}).get(step_id) or {}).get("summary") or {}
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/prepare_retarget_queue/prepare_retarget_queue.py"),
+        "prepare",
+        "--review-csv", str(args.review_csv),
+        "--base-queue", str(args.research_queue),
+        "--output", str(args.retarget_queue),
+        "--ledger", str(args.retarget_ledger),
+        "--retarget-output-dir", str(args.retarget_research_dir),
+    ]
+    mark_step(ledger_path, ledger, step_id, "running", command=cmd)
+    result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
+    payload = require_ok(result, step_id)
+    ledger.setdefault("artifacts", {})["retarget_queue_csv"] = str(args.retarget_queue)
+    ledger.setdefault("artifacts", {})["retarget_attempts_json"] = str(args.retarget_ledger)
+    ledger.setdefault("artifacts", {})["retarget_research_dir"] = str(args.retarget_research_dir)
+    mark_step(ledger_path, ledger, step_id, "completed", summary=payload, command=cmd)
+    return payload
+
+
+def mark_retarget_completed(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/prepare_retarget_queue/prepare_retarget_queue.py"),
+        "mark-completed",
+        "--ledger", str(args.retarget_ledger),
+        "--retarget-output-dir", str(args.retarget_research_dir),
+        "--review-csv", str(args.review_csv),
+    ]
+    mark_step(ledger_path, ledger, "retarget_mark_completed", "running", command=cmd)
+    result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
+    payload = require_ok(result, "retarget_mark_completed")
+    mark_step(ledger_path, ledger, "retarget_mark_completed", "completed", summary=payload, command=cmd)
+    return payload
+
+
+def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    if completed(ledger, "retarget_research") and not args.rerun_retarget:
+        return
+    prepare_payload = prepare_retarget_queue(args, ledger_path, ledger)
+    rows_written = retarget_rows_from_payload(prepare_payload)
+    if rows_written <= 0:
+        mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
+            "status": "no_work",
+            "reason": "no_new_retarget_hints",
+            "prepare_retarget_queue": prepare_payload,
+        })
+        return
+
+    estimate_cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/deep_research_contacts/deep_research_contacts.py"),
+        "estimate",
+        "--input", str(args.retarget_queue),
+        "--processor", args.processor,
+        "--output-dir", str(args.retarget_research_dir),
+    ]
+    mark_step(ledger_path, ledger, "retarget_parallel_estimate", "running", command=estimate_cmd)
+    estimate_result = run_command(estimate_cmd, timeout=args.timeout, env=pipeline_env(args))
+    estimate_payload = require_ok(estimate_result, "retarget_parallel_estimate")
+    mark_step(ledger_path, ledger, "retarget_parallel_estimate", "completed", summary=estimate_payload, command=estimate_cmd)
+
+    would_submit = int(estimate_payload.get("would_submit") or 0)
+    estimated_usd = float(estimate_payload.get("estimated_usd") or 0.0)
+    latency = parallel_latency_summary(args.processor, estimate_payload)
+    if would_submit <= 0:
+        mark_payload = mark_retarget_completed(args, ledger_path, ledger)
+        mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
+            "status": "no_work",
+            "reason": "retarget_results_already_cached",
+            "prepare_retarget_queue": prepare_payload,
+            "estimate": estimate_payload,
+            "mark_completed": mark_payload,
+        })
+        return
+
+    approval_payload = {
+        "kind": "retarget_parallel",
+        "estimated_usd": estimated_usd,
+        "estimated_latency": latency,
+        "processor": args.processor,
+        "would_submit": would_submit,
+        "feedback_rows": rows_written,
+    }
+    aid = approval_id("parallel", approval_payload)
+    if not is_approved(ledger, aid):
+        block_for_approval(
+            ledger_path,
+            ledger,
+            args,
+            step_id="retarget_research",
+            kind="parallel",
+            payload=approval_payload,
+            message=(
+                f"Feedback found; approve another deep research pass for ${estimated_usd:.4f}? "
+                f"Completion time is {latency.get('rough_wall_clock') or 'roughly a few minutes once submitted'}."
+            ),
+        )
+
+    run_cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/deep_research_contacts/deep_research_contacts.py"),
+        "run",
+        "--input", str(args.retarget_queue),
+        "--processor", args.processor,
+        "--output-dir", str(args.retarget_research_dir),
+    ]
+    mark_step(ledger_path, ledger, "retarget_research", "running", command=run_cmd)
+    run_result = run_command(run_cmd, timeout=args.parallel_timeout, env=pipeline_env(args))
+    payloads = run_result.get("json_objects") or []
+    final_payload = payloads[-1] if payloads else None
+    if run_result["returncode"] != 0:
+        raise PipelineFailed(f"retarget deep_research failed rc={run_result['returncode']}: {((run_result.get('stderr') or run_result.get('stdout') or '').strip())[-1000:]}")
+    mark_payload = mark_retarget_completed(args, ledger_path, ledger)
+    mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
+        "outputs": payloads,
+        "final": final_payload,
+        "mark_completed": mark_payload,
+    }, command=run_cmd)
 
 
 def summarize_upload(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
@@ -663,6 +1294,39 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
     mark_step(ledger_path, ledger, "upload_research_review", "completed", summary=upload_payload, command=cmd)
 
 
+def sync_contact_datalake(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    if completed(ledger, "sync_contact_datalake") and not args.rerun_upload:
+        return
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py"),
+        "sync",
+        "--csv", str(args.review_csv),
+        "--research-dir", str(args.research_dir),
+        "--confirm-sync",
+    ]
+    mark_step(ledger_path, ledger, "sync_contact_datalake", "running", command=cmd)
+    result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
+    payload = require_ok(result, "sync_contact_datalake")
+    mark_step(ledger_path, ledger, "sync_contact_datalake", "completed", summary=payload, command=cmd)
+
+
+def fill_arg_defaults(args: argparse.Namespace) -> None:
+    defaults = {
+        "retarget_queue": DEFAULT_RETARGET_QUEUE,
+        "retarget_ledger": DEFAULT_RETARGET_LEDGER,
+        "retarget_research_dir": DEFAULT_RETARGET_RESEARCH_DIR,
+        "rerun_retarget": False,
+        "timeout": 300,
+        "parallel_timeout": 7600,
+        "env_file": ".env",
+        "processor": DEFAULT_PROCESSOR,
+    }
+    for attr, value in defaults.items():
+        if not hasattr(args, attr):
+            setattr(args, attr, value)
+
+
 def hydrate_args_from_ledger(args: argparse.Namespace, ledger: dict[str, Any]) -> None:
     """Use persisted paths/model on resume unless the caller supplied overrides.
 
@@ -676,6 +1340,9 @@ def hydrate_args_from_ledger(args: argparse.Namespace, ledger: dict[str, Any]) -
         "research_queue": DEFAULT_RESEARCH_QUEUE,
         "research_dir": DEFAULT_RESEARCH_DIR,
         "review_csv": DEFAULT_REVIEW_CSV,
+        "retarget_queue": DEFAULT_RETARGET_QUEUE,
+        "retarget_ledger": DEFAULT_RETARGET_LEDGER,
+        "retarget_research_dir": DEFAULT_RETARGET_RESEARCH_DIR,
     }
     for attr, default in path_defaults.items():
         if cfg.get(attr) and Path(getattr(args, attr)) == default:
@@ -687,9 +1354,12 @@ def hydrate_args_from_ledger(args: argparse.Namespace, ledger: dict[str, Any]) -
 
 
 def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
+    fill_arg_defaults(args)
     ledger_path = Path(args.ledger)
+    ensure_artifact_dirs(args)
     ledger = load_ledger(ledger_path)
     hydrate_args_from_ledger(args, ledger)
+    ensure_artifact_dirs(args)
     if args.processor not in ALLOWED_PARALLEL_PROCESSORS:
         raise PipelineFailed(
             f"processor '{args.processor}' is blocked for Powerpacks contact research; "
@@ -702,11 +1372,36 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "research_queue": str(args.research_queue),
         "research_dir": str(args.research_dir),
         "review_csv": str(args.review_csv),
+        "retarget_queue": str(args.retarget_queue),
+        "retarget_ledger": str(args.retarget_ledger),
+        "retarget_research_dir": str(args.retarget_research_dir),
         "model": args.model,
         "processor": args.processor,
     }
     save_ledger(ledger_path, ledger)
 
+    extract_imessage(args, ledger_path, ledger)
+    normalize_channel(
+        args,
+        ledger_path,
+        ledger,
+        step_id="normalize_imessage",
+        input_csv=DEFAULT_IMESSAGE_CONTACTS,
+        output_jsonl=DEFAULT_IMESSAGE_NORMALIZED,
+        manifest=DEFAULT_IMESSAGE_NORMALIZED_MANIFEST,
+        force=args.force_imessage,
+    )
+    extract_whatsapp(args, ledger_path, ledger)
+    normalize_channel(
+        args,
+        ledger_path,
+        ledger,
+        step_id="normalize_whatsapp",
+        input_csv=DEFAULT_WHATSAPP_CONTACTS,
+        output_jsonl=DEFAULT_WHATSAPP_NORMALIZED,
+        manifest=DEFAULT_WHATSAPP_NORMALIZED_MANIFEST,
+        force=args.force_whatsapp,
+    )
     ensure_contacts(args, ledger_path, ledger)
     sync_candidates(args, ledger_path, ledger)
     match_contacts(args, ledger_path, ledger)
@@ -715,25 +1410,44 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     sync_research_cache(args, ledger_path, ledger)
     parallel_research(args, ledger_path, ledger)
     build_review_csv(args, ledger_path, ledger)
-    open_review_server(args, ledger_path, ledger)
-    if args.stop_before_upload:
-        payload = {
-            "primitive": "import_contacts_pipeline",
-            "status": "blocked_user_action",
-            "message": f"Review the web UI at {review_url(args)}. When you're done, tell the agent: 'done with review, upload'. The agent will summarize counts and ask for explicit upload/datalake approval before syncing anything.",
-            "review_url": review_url(args),
-            "ledger": str(ledger_path),
-        }
-        ledger["current_block"] = payload
-        save_ledger(ledger_path, ledger)
-        raise PipelineBlocked(payload, code=21)
+    if has_research_review(args):
+        if not completed(ledger, "review_research_web") or args.stop_before_upload:
+            open_review_server(args, ledger_path, ledger)
+            payload = {
+                "primitive": "import_contacts_pipeline",
+                "status": "blocked_user_action",
+                "message": f"Review the web UI at {review_url(args)}. When you're done, tell the agent: 'done with review, upload'. The agent will summarize counts and ask for explicit upload/datalake approval before syncing anything.",
+                "review_url": review_url(args),
+                "ledger": str(ledger_path),
+            }
+            ledger["current_block"] = payload
+            save_ledger(ledger_path, ledger)
+            raise PipelineBlocked(payload, code=21)
+    else:
+        if completed(ledger, "review_contacts_web_fallback") or args.no_open_review:
+            build_raw_review_csv(args, ledger_path, ledger)
+        else:
+            open_raw_contacts_review_server(args, ledger_path, ledger)
+            payload = {
+                "primitive": "import_contacts_pipeline",
+                "status": "blocked_user_action",
+                "message": f"Review the web UI at {raw_review_url(args)}. When you're done, tell the agent: 'done with review, upload'. The agent will summarize counts and ask for explicit upload/datalake approval before syncing anything.",
+                "review_url": raw_review_url(args),
+                "ledger": str(ledger_path),
+            }
+            ledger["current_block"] = payload
+            save_ledger(ledger_path, ledger)
+            raise PipelineBlocked(payload, code=21)
+    retarget_research_after_review(args, ledger_path, ledger)
     upload_review(args, ledger_path, ledger)
+    sync_contact_datalake(args, ledger_path, ledger)
 
     payload = {
         "primitive": "import_contacts_pipeline",
         "status": "completed",
         "ledger": str(ledger_path),
         "artifacts": ledger.get("artifacts", {}),
+        "sync": (ledger.get("steps") or {}).get("sync_contact_datalake", {}).get("summary"),
         "warnings": ledger.get("warnings", []),
     }
     save_ledger(ledger_path, ledger)
@@ -816,6 +1530,9 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--research-queue", type=Path, default=DEFAULT_RESEARCH_QUEUE)
     parser.add_argument("--research-dir", type=Path, default=DEFAULT_RESEARCH_DIR)
     parser.add_argument("--review-csv", type=Path, default=DEFAULT_REVIEW_CSV)
+    parser.add_argument("--retarget-queue", type=Path, default=DEFAULT_RETARGET_QUEUE)
+    parser.add_argument("--retarget-ledger", type=Path, default=DEFAULT_RETARGET_LEDGER)
+    parser.add_argument("--retarget-research-dir", type=Path, default=DEFAULT_RETARGET_RESEARCH_DIR)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=ALLOWED_PARALLEL_PROCESSORS)
     parser.add_argument("--llm-auto-approve-usd", type=float, default=DEFAULT_LLM_AUTO_APPROVE_USD)
@@ -831,6 +1548,8 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--open-browser", action="store_true")
     parser.add_argument("--no-open-review", action="store_true")
     parser.add_argument("--stop-before-upload", action="store_true", help="Stop after opening review UI instead of summarizing/blocking upload")
+    parser.add_argument("--force-imessage", action="store_true")
+    parser.add_argument("--force-whatsapp", action="store_true")
     parser.add_argument("--force-sync-candidates", action="store_true")
     parser.add_argument("--force-match", action="store_true")
     parser.add_argument("--force-prepare-queue", action="store_true")
@@ -838,6 +1557,7 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force-build-review", action="store_true")
     parser.add_argument("--rerun-llm", action="store_true")
     parser.add_argument("--rerun-parallel", action="store_true")
+    parser.add_argument("--rerun-retarget", action="store_true")
     parser.add_argument("--rerun-upload", action="store_true")
 
 

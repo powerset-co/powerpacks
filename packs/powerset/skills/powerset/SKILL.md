@@ -15,7 +15,7 @@ selection.
 | --- | --- |
 | `$powerset`, `$powerset help` | Print the supported subcommands below. |
 | `$powerset login` | Run the login workflow below. |
-| `$powerset status`, `$powerset doctor` | Run the doctor read-only and summarize blockers. |
+| `$powerset status` | Run the setup check quietly and summarize only blockers. |
 | `$powerset whoami` | Run the Auth0 `whoami` primitive. |
 | `$powerset sets`, `$powerset sets list` | List sets via the Powerset Search MCP. |
 | `$powerset sets use <id|name>` | Resolve a set via MCP and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
@@ -31,7 +31,7 @@ When asked for help, respond with:
 
 ```text
 $powerset login                 log in and provision local Powerpacks config
-$powerset status|doctor         check local setup
+$powerset status                check local setup
 $powerset whoami                show current Powerset/Auth0 identity
 $powerset sets list             list visible Powerset sets
 $powerset sets use <id|name>    set local default set in .env
@@ -53,7 +53,20 @@ Prefer `python3` if `python` is not on PATH.
 
 ## `$powerset login`
 
-Run one read-only check:
+User-facing output must be terse:
+
+- Start with exactly: `Updating your credentials...`
+- Do not narrate setup checks, missing check names, token formats, MCP config
+  details, or successful substeps.
+- If a browser/code login is needed, show only the auth URL/code prompt.
+- On success, say exactly:
+  `Credentials updated. Please restart Codex to reload the Powerset MCP token.`
+- If everything was already valid, say:
+  `Credentials are already up to date. Restart Codex if the Powerset MCP still fails.`
+- For unresolved human-action blockers, give one short sentence with the action
+  required. Do not paste raw reports.
+
+Run one internal setup check:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
@@ -62,11 +75,11 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/d
   --gcp-project powerset-search
 ```
 
-The doctor intentionally does **not** check gcloud application-default
+This check intentionally does **not** check gcloud application-default
 credentials. ADC is not needed for normal Powerpacks workflows.
 
-If `overall == "ok"`, tell the user they are already set up and stop. Otherwise
-handle the doctor's `fix_kind` values:
+If `overall == "ok"`, use the already-valid success sentence above and stop.
+Otherwise handle `fix_kind` values internally:
 
 - `auto`: run the primitive directly from this shell.
 - `interactive`: run the CLI directly from this shell. For browser/code flows,
@@ -83,28 +96,30 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/provisio
 uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
-Do **not** run `doctor.py fix` in the normal login flow; it can hide
-interactive work inside a nested subprocess. Never print secret values.
+Do not run nested fix commands in the normal login flow; they can hide
+interactive work inside a subprocess. Run the direct primitives above instead.
+Never print secret values.
 
-The doctor only probes per-user Secret Manager access when `.env` is incomplete
+The setup check only probes per-user Secret Manager access when `.env` is incomplete
 (or when `--check-user-secrets` is used for refresh debugging). If `.env` already
 has the requested profile keys, expired gcloud Secret Manager auth is not a
 login blocker and should not be surfaced.
 
-If the doctor reports `user_secrets` with `fix_kind: interactive` or a message
+If the setup check reports `user_secrets` with `fix_kind: interactive` or a message
 like `gcloud credentials need reauthentication`, this is not a Slack/IAM issue:
 the selected `@powerset.co` account is fine, but gcloud's cached token expired.
 For explicit `$powerset login` or `$powerset env pull` requests, immediately run
 `gcloud auth login --no-launch-browser`, relay the verification URL/code prompt,
 and ask them to paste the code. Do not stop for a separate yes/no confirmation.
 
-Re-run doctor at the end and give a one-line summary. If `user_secrets` is still
+Re-run the setup check at the end and use one of the terse final messages above.
+If `user_secrets` is still
 a human-action blocker, tell the user to ping `#powerpacks` with their
 `@powerset.co` email so a maintainer can provision per-user secrets.
 
-## `$powerset status` / `$powerset doctor`
+## `$powerset status`
 
-Run doctor read-only with the requested or default profile:
+Run the setup check read-only with the requested or default profile:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
@@ -113,8 +128,9 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/d
   --gcp-project powerset-search
 ```
 
-Summarize `overall`, missing/fail checks, and `next_actions`. Do not mention ADC
-unless the user explicitly asks for application-default credential debugging.
+Summarize only `Ready` or the concise blocker/action. Do not mention the checker,
+raw counts, ADC, or individual passed checks unless the user explicitly asks for
+debugging detail.
 
 ## `$powerset whoami`
 
@@ -151,7 +167,7 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/provisio
   --best-effort
 ```
 
-If this reports expired gcloud credentials or the doctor reports
+If this reports expired gcloud credentials or the setup check reports
 `user_secrets` with `fix_kind: interactive`, immediately run:
 
 ```bash

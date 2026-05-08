@@ -73,10 +73,6 @@ Cross-channel:
 - `import-contacts`: one-command guided iMessage + WhatsApp import, merge,
   candidate sync, local matching, web review, queue prep, and optional
   Parallel deep research after cost approval
-- `import-imessage`: local-only iMessage extraction and normalization
-- `import-whatsapp`: WhatsApp extraction via the three WAHA primitives above
-- `import-contacts-review`: Powerset login + candidate sync + local matching +
-  LLM ENRICH/SKIP review on the imported contacts CSV
 
 ## Harness Stance
 

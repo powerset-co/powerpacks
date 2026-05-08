@@ -17,14 +17,26 @@ LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 sys.path.insert(0, str(LIB_DIR))
 
 from turbopuffer_client import (  # noqa: E402
+    ADJACENCY_EXCLUDE_SENIORITY,
+    ADJACENCY_LIMIT,
+    adjacency_family_for_payload,
     allowed_operator_ids_from_payload,
+    bm25_adjacency_rows,
     comparison,
+    company_filter_applies_to_role_search,
+    effective_adjacent_role_ids,
     extract_base_ids,
     filter_only_rows_for_namespace,
     filters_from_role_payload,
+    get_adjacency_queries,
+    has_role_constraint,
+    is_non_operational_title,
     load_env_file,
+    merge_adjacency_queries,
     namespace_name,
     role_payload_from_state,
+    search_mode_for_payload,
+    seniority_intent,
 )
 from postgres_client import fetch_interaction_filter_person_ids, fetch_social_filter_person_ids  # noqa: E402
 
@@ -154,6 +166,63 @@ def interaction_base_ids(payload: dict[str, Any], *, env_file: Path | None, max_
     return ids[:max_ids], {"stage": "interaction", "filters": active, "matched": len(ids)}
 
 
+def company_people_payload(
+    payload: dict[str, Any],
+    company_ids: list[str],
+    *,
+    base_candidate_ids: list[str] | None,
+    include_role_filters: bool,
+    adjacent_role_filter: bool = False,
+) -> dict[str, Any]:
+    people_payload = dict(payload)
+    people_payload["company_ids"] = company_ids
+    people_payload["search_mode"] = "COMPANY_INTERSECTION"
+    if base_candidate_ids:
+        people_payload["base_candidate_ids"] = base_candidate_ids
+    if payload.get("is_current_company") is not None:
+        people_payload["is_current_role"] = bool(payload.get("is_current_company"))
+    if not include_role_filters:
+        for key in ["role_ids", "role_tracks", "semantic_query", "bm25_queries"]:
+            people_payload.pop(key, None)
+    if adjacent_role_filter:
+        people_payload.pop("role_tracks", None)
+        people_payload["role_ids"] = effective_adjacent_role_ids(payload)
+        if payload.get("adjacent_departments"):
+            people_payload["role_tracks"] = [str(value) for value in payload.get("adjacent_departments") or [] if value]
+        if payload.get("adjacent_seniority"):
+            people_payload["seniority_bands"] = [str(value) for value in payload.get("adjacent_seniority") or [] if value]
+    return people_payload
+
+
+def with_adjacency_exclusions(filters: tuple | None) -> tuple | None:
+    exclusion = comparison("seniority_band", "NotIn", ADJACENCY_EXCLUDE_SENIORITY)
+    if filters is None:
+        return exclusion
+    if isinstance(filters, tuple) and filters and filters[0] == "And":
+        return ("And", [*list(filters[1]), exclusion])
+    return ("And", [filters, exclusion])
+
+
+def candidate_from_row(row: dict[str, Any], *, source: str, rank: int | None = None) -> dict[str, Any]:
+    person_id = str(row.get("base_id") or row.get("person_id") or row.get("id") or "")
+    out = {
+        "person_id": person_id,
+        "position_id": row.get("position_id") or row.get("id"),
+        "position_title": row.get("position_title"),
+        "city": row.get("city"),
+        "state": row.get("state"),
+        "role_track": row.get("role_track"),
+        "seniority_band": row.get("seniority_band"),
+        "company_id": row.get("company_id"),
+        "is_current": row.get("is_current"),
+        "score": row.get("score"),
+        "vertical_sources": [source],
+    }
+    if rank is not None:
+        out["company_union_rank"] = rank
+    return out
+
+
 async def company_base_ids(
     payload: dict[str, Any],
     *,
@@ -161,34 +230,112 @@ async def company_base_ids(
     max_ids: int,
     company_chunk_size: int,
     company_concurrency: int,
+    base_candidate_ids: list[str] | None = None,
 ) -> tuple[list[str], dict[str, Any]] | None:
     company_ids = [str(value) for value in payload.get("company_ids") or [] if value]
     if not company_ids:
         return None
 
+    mode = search_mode_for_payload(payload)
+    role_prefilter = company_filter_applies_to_role_search(payload)
+    role_constrained = has_role_constraint(payload)
+    adjacency_queries: list[str] = []
+    adjacency_source = None
+    adjacency_method = "filter_only"
+    adjacent_ids = effective_adjacent_role_ids(payload)
+    if not role_prefilter and role_constrained and not adjacent_ids:
+        static_queries = get_adjacency_queries(adjacency_family_for_payload(payload), seniority_intent(payload))
+        adjacency_queries, adjacency_source = merge_adjacency_queries(
+            [str(value) for value in payload.get("company_adjacency_queries") or [] if str(value).strip()],
+            static_queries,
+        )
+        adjacency_method = "bm25"
+    elif not role_prefilter and adjacent_ids:
+        adjacency_method = "role_id"
+
     async def run_chunk(chunk: list[str], semaphore: asyncio.Semaphore) -> list[dict[str, Any]]:
         async with semaphore:
-            people_payload = dict(payload)
-            people_payload["company_ids"] = chunk
-            if payload.get("is_current_company") is not None:
-                people_payload["is_current_role"] = bool(payload.get("is_current_company"))
+            if not role_prefilter and role_constrained and adjacent_ids:
+                people_payload = company_people_payload(
+                    payload,
+                    chunk,
+                    base_candidate_ids=base_candidate_ids,
+                    include_role_filters=False,
+                    adjacent_role_filter=True,
+                )
+                filters = with_adjacency_exclusions(filters_from_role_payload(people_payload))
+                if filters is None:
+                    return []
+                return await filter_only_rows_for_namespace(
+                    "people",
+                    filters,
+                    ["base_id", "position_title", "city", "state", "role_track", "seniority_band", "company_id", "is_current"],
+                    page_size=page_size,
+                    max_results=max_ids,
+                )
+            if not role_prefilter and role_constrained:
+                people_payload = company_people_payload(
+                    payload,
+                    chunk,
+                    base_candidate_ids=base_candidate_ids,
+                    include_role_filters=False,
+                )
+                filters = with_adjacency_exclusions(filters_from_role_payload(people_payload))
+                if filters is None:
+                    return []
+                rows = await bm25_adjacency_rows(
+                    adjacency_queries,
+                    filters,
+                    top_k=min(max_ids, ADJACENCY_LIMIT),
+                    include_attributes=["base_id", "position_title", "city", "state", "role_track", "seniority_band", "company_id", "is_current"],
+                )
+                return [row for row in rows if not is_non_operational_title(str(row.get("position_title") or ""))]
+
+            people_payload = company_people_payload(
+                payload,
+                chunk,
+                base_candidate_ids=base_candidate_ids,
+                include_role_filters=True,
+            )
             filters = filters_from_role_payload(people_payload)
             if filters is None:
                 return []
-            return await filter_only_rows_for_namespace("people", filters, ["base_id"], page_size=page_size, max_results=max_ids)
+            return await filter_only_rows_for_namespace(
+                "people",
+                filters,
+                ["base_id", "position_title", "city", "state", "role_track", "seniority_band", "company_id", "is_current"],
+                page_size=page_size,
+                max_results=max_ids,
+            )
 
     chunked = chunks(company_ids, max(1, company_chunk_size))
     semaphore = asyncio.Semaphore(max(1, company_concurrency))
     chunk_rows = await asyncio.gather(*(run_chunk(chunk, semaphore) for chunk in chunked))
     rows = [row for batch in chunk_rows for row in batch]
     ids = extract_base_ids(rows)
+    candidates = []
+    seen_people: set[str] = set()
+    for rank, row in enumerate(rows, start=1):
+        person_id = str(row.get("base_id") or row.get("person_id") or row.get("id") or "")
+        if not person_id or person_id in seen_people:
+            continue
+        seen_people.add(person_id)
+        candidates.append(candidate_from_row(row, source="company_filter", rank=rank))
+    stage_name = "company_current" if payload.get("is_current_company") is not None else "large_company_intersection"
     return ids[:max_ids], {
-        "stage": "company_current" if payload.get("is_current_company") is not None else "large_company_intersection",
+        "stage": stage_name,
+        "role_prefilter": role_prefilter,
+        "search_mode": mode,
+        "adjacency_method": adjacency_method if not role_prefilter else None,
+        "adjacency_query_source": adjacency_source,
+        "adjacency_queries": adjacency_queries,
         "input_count": len(company_ids),
         "matched": len(ids),
+        "candidates": candidates[:max_ids] if not role_prefilter else [],
         "company_id_batches": len(chunked),
         "company_id_batch_size": company_chunk_size,
         "company_id_batch_concurrency": company_concurrency,
+        "base_candidate_filter_count": len(base_candidate_ids or []),
     }
 
 
@@ -196,7 +343,12 @@ def should_run_company_prefilter(payload: dict[str, Any], threshold: int) -> boo
     company_ids = payload.get("company_ids") or []
     stages = ((payload.get("prefilters") or {}).get("stages") or [])
     explicit = any(stage.get("stage") in {"large_company_intersection", "company_current"} for stage in stages if isinstance(stage, dict))
-    return explicit or bool(company_ids and payload.get("is_current_company") is not None) or len(company_ids) >= threshold
+    return (
+        explicit
+        or bool(company_ids and payload.get("is_current_company") is not None)
+        or search_mode_for_payload(payload) == "COMPANY_UNION"
+        or len(company_ids) >= threshold
+    )
 
 
 async def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -206,26 +358,40 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     payload = json.loads(args.payload_json) if args.payload_json else role_payload_from_state(state)
 
     base_ids: list[str] | None = None
+    company_union_ids: list[str] = []
     stage_outputs: list[dict[str, Any]] = []
     env_file = Path(args.env_file) if args.env_file else None
-    for maybe_result in [
+    prefilter_results = [
         await education_base_ids(payload, page_size=args.page_size, max_ids=args.max_ids),
         await tech_skill_base_ids(payload, page_size=args.page_size, max_ids=args.max_ids),
         social_base_ids(payload, env_file=env_file, max_ids=args.max_ids),
         interaction_base_ids(payload, env_file=env_file, max_ids=args.max_ids),
-        await company_base_ids(
-            payload,
-            page_size=args.page_size,
-            max_ids=args.max_ids,
-            company_chunk_size=args.company_id_batch_size,
-            company_concurrency=args.company_id_batch_concurrency,
-        ) if should_run_company_prefilter(payload, args.company_prefilter_threshold) else None,
-    ]:
+    ]
+    for maybe_result in prefilter_results:
         if maybe_result is None:
             continue
         ids, stage = maybe_result
         base_ids = intersect_ordered(base_ids, ids)
         stage["frontier_after_stage"] = len(base_ids or [])
+        stage_outputs.append(stage)
+
+    maybe_company = await company_base_ids(
+        payload,
+        page_size=args.page_size,
+        max_ids=args.max_ids,
+        company_chunk_size=args.company_id_batch_size,
+        company_concurrency=args.company_id_batch_concurrency,
+        base_candidate_ids=base_ids,
+    ) if should_run_company_prefilter(payload, args.company_prefilter_threshold) else None
+    if maybe_company is not None:
+        ids, stage = maybe_company
+        if stage.get("role_prefilter") is False:
+            company_union_ids = list(dict.fromkeys([*company_union_ids, *ids]))
+            stage["frontier_after_stage"] = len(base_ids or [])
+            stage["union_candidate_count"] = len(company_union_ids)
+        else:
+            base_ids = intersect_ordered(base_ids, ids)
+            stage["frontier_after_stage"] = len(base_ids or [])
         stage_outputs.append(stage)
 
     final_ids = base_ids if base_ids is not None else []
@@ -236,9 +402,19 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "summaries": namespace_name("summaries"),
         },
         "stages": stage_outputs,
+        "search_mode": search_mode_for_payload(payload),
         "ran_prefilters": bool(stage_outputs),
+        "role_prefilter_ran": base_ids is not None,
         "base_candidate_ids": final_ids[: args.max_ids],
         "base_candidate_count": len(final_ids),
+        "company_union_candidate_ids": company_union_ids[: args.max_ids],
+        "company_union_candidates": [
+            candidate
+            for stage in stage_outputs
+            if stage.get("role_prefilter") is False
+            for candidate in (stage.get("candidates") or [])
+        ][: args.max_ids],
+        "company_union_candidate_count": len(company_union_ids),
         "truncated": len(final_ids) > args.max_ids,
     }
 
@@ -274,7 +450,7 @@ def main() -> None:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--page-size", type=int, default=10000)
     parser.add_argument("--max-ids", type=int, default=50000)
-    parser.add_argument("--company-prefilter-threshold", type=int, default=500)
+    parser.add_argument("--company-prefilter-threshold", type=int, default=3000)
     parser.add_argument("--company-id-batch-size", type=int, default=500)
     parser.add_argument("--company-id-batch-concurrency", type=int, default=8)
     args = parser.parse_args()

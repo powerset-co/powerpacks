@@ -49,6 +49,9 @@ CSV_HEADERS = [
     "match_method",
     "match_reason",
 ]
+REQUIRED_INPUT_HEADERS = {"phone", "name"}
+SCHEMA_DOC = "packs/messages/schemas/contacts-csv.md"
+SCHEMA_JSON = "packs/messages/schemas/contacts-csv.schema.json"
 
 GROUP_SEPARATOR = " | "
 STATUS_RANK = {"matched": 3, "suggested": 2, "unmatched": 1, "": 0}
@@ -69,6 +72,24 @@ def emit(value: Any) -> None:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def schema_error(path: Path, fieldnames: list[str] | None) -> str:
+    fields = ",".join(fieldnames or []) or "<none>"
+    header = ",".join(CSV_HEADERS)
+    return (
+        f"CSV schema mismatch for {path}. Please convert this file into the Powerpacks messages contacts CSV schema before retrying. "
+        f"Required input columns: phone,name. Canonical header: {header}. "
+        f"Detected columns: {fields}. Schema docs: {SCHEMA_DOC}. JSON schema: {SCHEMA_JSON}. "
+        "Common legacy mappings: phone_e164/phone_number -> phone; display_name/full_name -> name; "
+        "total_messages -> message_count; message_source/source_channel -> source."
+    )
+
+
+def validate_input_headers(path: Path, fieldnames: list[str] | None) -> None:
+    names = {str(value or "").strip() for value in (fieldnames or [])}
+    if not REQUIRED_INPUT_HEADERS.issubset(names):
+        raise SystemExit(schema_error(path, fieldnames))
 
 
 def canonicalize_phone(raw: str) -> str:
@@ -234,8 +255,9 @@ def read_input_csv(path: Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
         raise SystemExit(f"input CSV not found: {path}")
     records: list[dict[str, Any]] = []
     counts = {"input_rows": 0, "kept_rows": 0, "invalid_rows": 0}
-    with path.open(newline="", encoding="utf-8") as handle:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
+        validate_input_headers(path, reader.fieldnames)
         for row in reader:
             counts["input_rows"] += 1
             record = _record_from_row(row)
