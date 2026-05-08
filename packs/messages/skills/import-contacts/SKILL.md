@@ -17,7 +17,7 @@ Ask once at the beginning:
 
 > This imports local message/contact metadata only. It never reads or stores
 > message bodies. It may read local iMessage metadata, local Contacts names,
-> start a local WAHA Docker container, ask you to scan a WhatsApp QR, merge CSVs,
+> start the local WhatsApp sync, ask you to scan a WhatsApp QR, merge CSVs,
 > and sync your Powerset candidate catalog for local matching. Continue?
 
 After the user says yes, do not ask again for local metadata extraction,
@@ -82,9 +82,14 @@ the main chat unless the user asks for details or a failure requires diagnosis.
 The worker may run the verbose terminal commands, poll sidecar progress files,
 and inspect JSON manifests. Its final response must be one summary block per
 stage with artifact paths and counts for the main agent to use internally. Do
-not stream full primitive JSON, terminal transcripts, QR/WAHA status payloads,
+not stream full primitive JSON, terminal transcripts, QR/status payloads,
 or progress JSONL into the main chat unless a user action is required or a
 failure needs diagnosis.
+
+Keep WhatsApp status messages user-facing. Say "We're syncing WhatsApp",
+"WhatsApp is taking a bit longer", "WhatsApp needs a QR scan", or "WhatsApp
+sync finished"; do not mention implementation internals in chat unless
+the user asks for debugging detail.
 
 If the current harness blocks worker delegation or sub-agents are unavailable,
 say that plainly once, then keep status messages decision-oriented and avoid
@@ -116,7 +121,7 @@ list and update it as work proceeds:
 
 1. Check iMessage access
 2. Import iMessage
-3. Check Docker / WAHA
+3. Get WhatsApp sync ready
 4. Link WhatsApp
 5. Import WhatsApp
 6. Merge contacts
@@ -129,6 +134,8 @@ list and update it as work proceeds:
 13. Upload reviewed artifact when explicitly approved
 
 Use `.powerpacks/messages/import-run.json` as the run ledger when practical.
+`run` is a fresh import: it archives old contact/import artifacts before
+extracting channels again. Use `continue` only to resume the active blocked run.
 Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
 `skipped`.
 
@@ -142,9 +149,9 @@ Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
    - if readable, run `extract` to `.powerpacks/messages/imessage.contacts.*`
    - normalize to `.powerpacks/messages/imessage.contacts.normalized.jsonl`
 3. Run WhatsApp:
-   - Tell the user: "I'll start a local WAHA Docker container. No message bodies
-     are read. When the QR opens, use WhatsApp > Settings > Linked Devices >
-     Link a Device. The exhaustive sync can take up to an hour; that's OK."
+   - Tell the user: "We're syncing WhatsApp. No message bodies are read. When
+     the QR opens, use WhatsApp > Settings > Linked Devices > Link a Device.
+     WhatsApp can take a bit longer when there are many chats; that's OK."
    - `waha_runtime.py check`
    - if Docker is installed but stopped, ask before starting Docker/Colima
    - `waha_runtime.py up`
@@ -304,7 +311,7 @@ reason; never send message bodies.
 
 - If iMessage already produced `imessage.contacts.csv`, do not re-extract
   unless the user asks.
-- If WAHA session is `WORKING`, do not show a QR again.
+- If WhatsApp is already connected, do not show a QR again.
 - If `contacts.csv` exists, merge can be rerun safely.
 - If `powerset_contacts.csv` exists and sync fails, use the cached catalog and
   continue to local matching.

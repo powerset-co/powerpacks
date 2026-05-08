@@ -40,12 +40,14 @@ class SyncMessagesResearchCacheTests(unittest.TestCase):
             (root / "phone-a" / "01_research_parallel.json").write_text("{}")
             (root / "phone-a" / "04_final_profile.json").write_text("{}")
             (root / "phone-b").mkdir()
+            (root / "phone-b" / "03_network_review.json").write_text("{}")
             (root / "phone-b" / "06_network_review.json").write_text("{}")
             counts = mod.count_local_profiles(root)
         self.assertEqual(counts["profile_dirs"], 2)
         self.assertEqual(counts["research_parallel_json"], 1)
         self.assertEqual(counts["final_profile_json"], 1)
         self.assertEqual(counts["network_review_json"], 1)
+        self.assertEqual(counts["legacy_network_review_json"], 1)
 
 
 if __name__ == "__main__":

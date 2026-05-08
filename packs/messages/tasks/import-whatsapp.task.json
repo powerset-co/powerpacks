@@ -1,7 +1,7 @@
 {
   "task": "import_whatsapp",
   "version": 2,
-  "description": "Import WhatsApp contacts via a user-controlled local WAHA Docker container. No contact-exporter dependency.",
+  "description": "Import WhatsApp contacts through a user-controlled local WhatsApp sync. No contact-exporter dependency.",
   "default_constraints": {
     "no_message_content": true,
     "workflow_consent_can_cover_extraction": true,
@@ -11,12 +11,14 @@
   "steps": [
     {
       "id": "check_docker_and_waha",
+      "display": "Get WhatsApp sync ready",
       "kind": "primitive",
       "primitive": "waha_runtime",
       "command": "check"
     },
     {
       "id": "start_waha_container",
+      "display": "Start WhatsApp sync",
       "kind": "primitive",
       "primitive": "waha_runtime",
       "command": "up",
@@ -24,6 +26,7 @@
     },
     {
       "id": "authenticate_session",
+      "display": "Connect WhatsApp",
       "kind": "primitive",
       "primitive": "waha_session",
       "command": "start",
@@ -33,6 +36,7 @@
     },
     {
       "id": "extract_whatsapp_contacts",
+      "display": "Sync WhatsApp",
       "kind": "primitive",
       "primitive": "extract_whatsapp_contacts",
       "command": "extract",

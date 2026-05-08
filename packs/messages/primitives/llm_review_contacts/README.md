@@ -4,6 +4,10 @@ LLM ENRICH/SKIP review of message contacts via OpenRouter. Stdlib-only.
 
 By default only unmatched or suggested named contacts are reviewed. The
 verdict is used to update the `skip` column in the contacts CSV in place.
+The model call is deterministic (`temperature: 0`) and the prompt asks it to
+skip personal-note/context labels such as dating-app/source notes, location
+shorthand, event tags, and relationship labels when those notes are what make
+the contact identifiable.
 
 ## Privacy contract
 
@@ -18,8 +22,9 @@ The primitive sends only:
 
 It does **not** send phone numbers, message text, or any other identifier.
 
-The only field updated in the CSV is `skip`. A JSONL of per-contact verdicts
-is written next to the CSV for auditability.
+The only field updated in the CSV is `skip`. `SKIP` writes `skip=yes`; `ENRICH`
+clears stale skip values. A JSONL of per-contact verdicts is written next to
+the CSV for auditability.
 
 ## Usage
 

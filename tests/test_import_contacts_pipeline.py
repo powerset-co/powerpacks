@@ -54,6 +54,17 @@ class ImportContactsPipelineTests(unittest.TestCase):
         self.assertEqual(len(parsed), 2)
         self.assertEqual(parsed[-1]["command"], "poll")
 
+    def test_whatsapp_step_status_uses_user_facing_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            mod.mark_step(ledger_path, ledger, "extract_whatsapp", "running")
+            saved = mod.read_json(ledger_path)
+            step = saved["steps"]["extract_whatsapp"]
+            self.assertIn("We're syncing WhatsApp", step["user_message"])
+            self.assertIn("taking a bit longer", step["user_message"])
+            self.assertNotIn("WAHA", step["user_message"])
+
     def test_approve_current_block_records_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "import-run.json"
@@ -67,7 +78,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 "steps": {},
                 "approvals": {},
             })
-            args = SimpleNamespace(ledger=ledger, kind="parallel", approval_id=None, confirm=True)
+            args = SimpleNamespace(ledger=ledger, kind=None, approval_id=None, confirm=False)
             rc = mod.cmd_approve(args)
             saved = mod.read_json(ledger)
         self.assertEqual(rc, 0)
@@ -82,6 +93,10 @@ class ImportContactsPipelineTests(unittest.TestCase):
         command = mod.approval_command(args, "parallel", "parallel_abc123")
         self.assertIn("uv run --project . python", command)
         self.assertNotIn("&& python ", command)
+        self.assertNotIn("--approval-id", command)
+        self.assertNotIn("--confirm", command)
+        self.assertNotIn("--ledger", command)
+        self.assertIn(" approve && ", command)
 
     def test_parallel_approval_message_includes_cost_and_rough_time(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -271,6 +286,75 @@ class ImportContactsPipelineTests(unittest.TestCase):
             run_command.assert_not_called()
             self.assertEqual(mod.read_json(ledger_path)["steps"]["ensure_contacts"]["status"], "completed")
 
+    def test_new_run_archives_previous_contact_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            contacts = Path(tmp) / "contacts.csv"
+            candidates = Path(tmp) / "powerset_contacts.csv"
+            research_queue = Path(tmp) / "research_queue.csv"
+            review_csv = Path(tmp) / "research_review.csv"
+            retarget_queue = Path(tmp) / "retarget_queue.csv"
+            retarget_ledger = Path(tmp) / "retarget_attempts.json"
+            for path in (ledger_path, contacts, candidates, research_queue, review_csv, retarget_queue, retarget_ledger):
+                path.write_text("old\n", encoding="utf-8")
+
+            imessage = Path(tmp) / "imessage.contacts.csv"
+            whatsapp = Path(tmp) / "whatsapp.contacts.csv"
+            imessage.write_text("old imessage\n", encoding="utf-8")
+            whatsapp.write_text("old whatsapp\n", encoding="utf-8")
+            default_paths = {
+                "DEFAULT_IMESSAGE_CONTACTS": imessage,
+                "DEFAULT_IMESSAGE_JSONL": Path(tmp) / "imessage.contacts.raw.jsonl",
+                "DEFAULT_IMESSAGE_MANIFEST": Path(tmp) / "imessage.manifest.json",
+                "DEFAULT_IMESSAGE_NORMALIZED": Path(tmp) / "imessage.contacts.normalized.jsonl",
+                "DEFAULT_IMESSAGE_NORMALIZED_MANIFEST": Path(tmp) / "imessage.contacts.normalized.jsonl.manifest.json",
+                "DEFAULT_WHATSAPP_CONTACTS": whatsapp,
+                "DEFAULT_WHATSAPP_JSONL": Path(tmp) / "whatsapp.contacts.raw.jsonl",
+                "DEFAULT_WHATSAPP_MANIFEST": Path(tmp) / "whatsapp.contacts.csv.manifest.json",
+                "DEFAULT_WHATSAPP_NORMALIZED": Path(tmp) / "whatsapp.contacts.normalized.jsonl",
+                "DEFAULT_WHATSAPP_NORMALIZED_MANIFEST": Path(tmp) / "whatsapp.contacts.normalized.jsonl.manifest.json",
+                "ARCHIVE_ROOT": Path(tmp) / "archive",
+            }
+
+            args = SimpleNamespace(
+                command="run",
+                ledger=ledger_path,
+                contacts=contacts,
+                candidates=candidates,
+                research_queue=research_queue,
+                review_csv=review_csv,
+                retarget_queue=retarget_queue,
+                retarget_ledger=retarget_ledger,
+            )
+            with ExitStack() as stack:
+                for attr, value in default_paths.items():
+                    stack.enter_context(mock.patch.object(mod, attr, value))
+                summary = mod.archive_existing_run_artifacts(args)
+
+            self.assertIsNotNone(summary)
+            self.assertFalse(contacts.exists())
+            self.assertFalse(imessage.exists())
+            self.assertFalse(whatsapp.exists())
+            self.assertGreaterEqual(summary["moved_count"], 9)
+            self.assertTrue((Path(summary["archive_dir"]) / "manifest.json").exists())
+
+    def test_continue_does_not_archive_previous_contact_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            contacts = Path(tmp) / "contacts.csv"
+            contacts.write_text("old\n", encoding="utf-8")
+            args = SimpleNamespace(
+                command="continue",
+                ledger=Path(tmp) / "import-run.json",
+                contacts=contacts,
+                candidates=Path(tmp) / "powerset_contacts.csv",
+                research_queue=Path(tmp) / "research_queue.csv",
+                review_csv=Path(tmp) / "research_review.csv",
+                retarget_queue=Path(tmp) / "retarget_queue.csv",
+                retarget_ledger=Path(tmp) / "retarget_attempts.json",
+            )
+            self.assertIsNone(mod.archive_existing_run_artifacts(args))
+            self.assertTrue(contacts.exists())
+
     def test_existing_contacts_with_legacy_queue_schema_fails_actionably(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"
@@ -308,7 +392,6 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 timeout=30,
                 parallel_timeout=60,
                 env_file=".env",
-                rerun_retarget=False,
             )
             with self.assertRaises(mod.PipelineBlocked) as ctx:
                 mod.retarget_research_after_review(args, ledger_path, ledger)
@@ -320,6 +403,60 @@ class ImportContactsPipelineTests(unittest.TestCase):
             saved = mod.read_json(ledger_path)
             self.assertEqual(saved["steps"]["prepare_retarget_queue"]["status"], "completed")
             self.assertEqual(saved["steps"]["retarget_research"]["status"], "blocked_approval")
+
+    def test_retarget_approval_continue_reuses_prepared_feedback_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            retarget_queue = tmp_path / "retarget_queue.csv"
+            retarget_queue.write_text("handle\nphone-1__retarget_abc\n", encoding="utf-8")
+            ledger = mod.load_ledger(ledger_path)
+            ledger["steps"]["prepare_retarget_queue"] = {
+                "id": "prepare_retarget_queue",
+                "status": "completed",
+                "summary": {"rows_written": 1, "counts": {"queued": 1}},
+            }
+            ledger["steps"]["retarget_research"] = {"id": "retarget_research", "status": "blocked_approval"}
+            approval_payload = {
+                "kind": "retarget_parallel",
+                "estimated_usd": 0.05,
+                "estimated_latency": {"rough_wall_clock": "about 10-15 min once submitted"},
+                "processor": "core2x",
+                "would_submit": 1,
+                "feedback_rows": 1,
+            }
+            ledger["approvals"][mod.approval_id("parallel", approval_payload)] = {"confirmed": True}
+            mod.save_ledger(ledger_path, ledger)
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                review_csv=tmp_path / "research_review.csv",
+                research_queue=tmp_path / "research_queue.csv",
+                retarget_queue=retarget_queue,
+                retarget_ledger=tmp_path / "retarget_attempts.json",
+                retarget_research_dir=tmp_path / "research_retarget",
+                processor="core2x",
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+            )
+            estimate = {
+                "primitive": "deep_research_contacts",
+                "command": "estimate",
+                "would_submit": 1,
+                "processor": "core2x",
+                "estimated_usd": 0.05,
+                "estimated_latency": {"rough_wall_clock": "about 10-15 min once submitted"},
+            }
+            run_payload = {"primitive": "deep_research_contacts", "command": "poll", "status": "completed"}
+            with mock.patch.object(mod, "run_command", side_effect=[
+                {"returncode": 0, "json": estimate},
+                {"returncode": 0, "json_objects": [run_payload]},
+                {"returncode": 0, "json": {"status": "ok", "completed_marked": 1}},
+            ]) as run_command:
+                mod.retarget_research_after_review(args, ledger_path, ledger)
+            self.assertEqual(run_command.call_count, 3)
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["steps"]["retarget_research"]["status"], "completed")
 
     def test_build_review_creates_empty_review_csv_without_research_packets(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -342,6 +479,44 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertEqual(saved["steps"]["build_research_review_csv"]["summary"]["reason"], "no_research_packets")
             self.assertTrue(review_csv.exists())
             self.assertIn("top_title_company_pairs", review_csv.read_text(encoding="utf-8").splitlines()[0])
+
+    def test_build_review_runs_network_review_by_default_and_auto_approves_small_estimate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            research_dir = tmp_path / "research"
+            handle_dir = research_dir / "phone-1"
+            handle_dir.mkdir(parents=True)
+            (handle_dir / "01_research_parallel.json").write_text("{}", encoding="utf-8")
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                research_dir=research_dir,
+                research_queue=tmp_path / "research_queue.csv",
+                review_csv=tmp_path / "research_review.csv",
+                force_build_review=False,
+                timeout=30,
+                env_file=".env",
+                llm_auto_approve_usd=10.0,
+            )
+            payload = {
+                "primitive": "build_research_review_csv",
+                "command": "build",
+                "status": "ok",
+                "rows_written": 1,
+                "counts": {"scored_via_llm": 1, "network_review_written": 1},
+            }
+            with mock.patch.object(mod, "run_command", return_value={"returncode": 0, "json": payload}) as run_command:
+                mod.build_review_csv(args, ledger_path, ledger)
+
+            cmd = run_command.call_args.args[0]
+            self.assertNotIn("--bucket-mode", cmd)
+            self.assertIn("--model", cmd)
+            self.assertIn("openai/gpt-4.1", cmd)
+            saved = mod.read_json(ledger_path)
+            summary = saved["steps"]["build_research_review_csv"]["summary"]
+            self.assertEqual(summary["scoring_estimate"]["candidates"], 1)
+            self.assertIn("auto_approved_reason", summary)
 
     def test_run_pipeline_extracts_channels_before_merge(self):
         with tempfile.TemporaryDirectory() as tmp:

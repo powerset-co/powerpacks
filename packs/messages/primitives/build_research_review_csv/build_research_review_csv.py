@@ -13,14 +13,11 @@ upload. Columns:
 Buckets are `confident | medium | review`. The TUI maps these onto its
 yes / maybe / no tabs.
 
-Two bucketing modes:
-
-    --bucket-mode heuristic   (default, free, stdlib-only)
-    --bucket-mode llm         (OpenRouter, mirrors aleph-mvp's
-                               review_phone_research.py SYSTEM_PROMPT)
-
-LLM scoring is cached per handle at `<output-dir>/<handle>/02_review_cache.json`
-so re-running is idempotent and incremental.
+By default, each researched contact is scored by the network-review LLM
+(OpenRouter, mirrors aleph-mvp's review_phone_research.py SYSTEM_PROMPT).
+The score is cached per handle at
+`<output-dir>/<handle>/03_network_review.json` so re-running is idempotent and
+incremental.
 """
 
 from __future__ import annotations
@@ -85,6 +82,9 @@ CSV_FIELDS = [
 DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
 DEFAULT_QUEUE_CSV = Path(".powerpacks/messages/research_queue.csv")
 DEFAULT_OUTPUT_CSV = Path(".powerpacks/messages/research_review.csv")
+LEGACY_REVIEW_CACHE_NAME = "02_review_cache.json"
+NETWORK_REVIEW_CACHE_NAME = "03_network_review.json"
+LEGACY_NETWORK_REVIEW_CACHE_NAME = "06_network_review.json"
 
 # Bucket order for sorting and reporting.
 BUCKET_ORDER = {"confident": 0, "medium": 1, "review": 2}
@@ -110,6 +110,11 @@ The reviewer is especially likely to value people who overlap with a high-contex
 - top-tier venture firms, breakout startups, frontier research labs, high-agency operators, and repeat builders
 - people who are obviously additive to a founder/investor network even if they are not personally famous
 
+Treat these as strong positive signals that usually belong in confident when the name, geography, and public profile are plausible:
+- sovereign wealth funds, royal/ruling-family business figures, business magnates, major investors, and public company or fund executives
+- family offices, large asset allocators, high-profile founders, celebrities building companies, and widely recognized public figures
+- elite schools or elite professional tracks when paired with credible career signal
+
 Be discriminating. Do not inflate weak candidates.
 
 Bucket definitions:
@@ -120,6 +125,8 @@ Bucket definitions:
 Important:
 - Do not assume the reviewer literally knows the person already.
 - Penalize identity ambiguity separately from relevance.
+- Do not require public phone-number proof for confident when the display name, country/location, group context, and public profile strongly align.
+- Keep medium for high-value profiles only when there is material identity ambiguity, such as multiple plausible same-name people or weak name/geography fit.
 - Keep output terse and concrete.
 - Return valid JSON only.
 """
@@ -152,6 +159,65 @@ def shared_token(a: str, b: str) -> bool:
         cleaned = re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower())
         return {t for t in cleaned.split() if len(t) >= 3 and t.isalpha()}
     return bool(toks(a) & toks(b))
+
+
+def linkedin_public_identifier(url: str | None) -> str:
+    text = (url or "").strip().split("?", 1)[0].rstrip("/")
+    if not text:
+        return ""
+    if "/in/" in text:
+        return text.rsplit("/in/", 1)[-1].strip("/")
+    return text.rsplit("/", 1)[-1].strip("/")
+
+
+def normalize_review_payload(review: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(review, dict):
+        return None
+    bucket = (review.get("bucket") or "").strip().lower()
+    if bucket not in BUCKET_ORDER:
+        return None
+    signals = review.get("signals") or []
+    if not isinstance(signals, list):
+        signals = [str(signals)]
+    return {
+        "bucket": bucket,
+        "short_reason": (review.get("short_reason") or "").strip(),
+        "identity_risk": (review.get("identity_risk") or "").strip(),
+        "signals": [str(s) for s in signals if str(s)],
+    }
+
+
+def network_review_payload(
+    handle: str,
+    queue_row: dict[str, str],
+    research_packet: dict[str, Any],
+    model: str,
+    review: dict[str, Any],
+) -> dict[str, Any]:
+    person = research_packet.get("person") or {}
+    social = research_packet.get("social") or {}
+    full_name = (person.get("full_name") or "").strip() or queue_row.get("display_name", "")
+    linkedin_url = (social.get("linkedin_url") or "").strip()
+    return {
+        "handle": handle,
+        "public_identifier": linkedin_public_identifier(linkedin_url),
+        "full_name": full_name,
+        "linkedin_url": linkedin_url,
+        "source_channel": queue_row.get("source_channel") or "phone",
+        "model": model,
+        "review": review,
+    }
+
+
+def write_network_review_cache(
+    path: Path,
+    handle: str,
+    queue_row: dict[str, str],
+    research_packet: dict[str, Any],
+    model: str,
+    review: dict[str, Any],
+) -> None:
+    write_json(path, network_review_payload(handle, queue_row, research_packet, model, review))
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +509,12 @@ def llm_bucket(
     }
 
 
+def network_review_bucket(cache: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the cached network-review bucket payload, if present."""
+    review = cache.get("review") if isinstance(cache, dict) else None
+    return normalize_review_payload(review)
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -477,13 +549,7 @@ def cmd_build(args: argparse.Namespace) -> int:
               "error": f"no per-handle subdirectories in {research_dir}"})
         return 1
 
-    api_key = None
-    if args.bucket_mode == "llm":
-        api_key = args.api_key or os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            emit({"primitive": "build_research_review_csv", "command": "build", "status": "failed",
-                  "error": "OPENROUTER_API_KEY not set (pass --api-key or add it to the repo .env)"})
-            return 1
+    api_key = args.api_key or os.environ.get("OPENROUTER_API_KEY")
 
     rows: list[dict[str, str]] = []
     counts = {
@@ -491,8 +557,10 @@ def cmd_build(args: argparse.Namespace) -> int:
         "missing_research_packet": 0,
         "filtered_no_queue_row": 0,
         "scored_via_cache": 0,
+        "scored_via_network_review": 0,
         "scored_via_llm": 0,
         "scored_via_heuristic": 0,
+        "network_review_written": 0,
         "llm_errors": 0,
     }
     bucket_counts: dict[str, int] = {bucket: 0 for bucket in BUCKET_ORDER}
@@ -505,7 +573,9 @@ def cmd_build(args: argparse.Namespace) -> int:
         counts["handles_seen"] += 1
         research_path = d / "01_research_parallel.json"
         raw_path = d / "00_parallel_raw.json"
-        cache_path = d / "02_review_cache.json"
+        legacy_cache_path = d / LEGACY_REVIEW_CACHE_NAME
+        network_review_path = d / NETWORK_REVIEW_CACHE_NAME
+        legacy_network_review_path = d / LEGACY_NETWORK_REVIEW_CACHE_NAME
         if not research_path.exists():
             counts["missing_research_packet"] += 1
             continue
@@ -530,17 +600,40 @@ def cmd_build(args: argparse.Namespace) -> int:
                          "total_messages": "0", "message_source": "", "group_names": "",
                          "display_name": (research_packet.get("person") or {}).get("full_name", "")}
 
-        if args.bucket_mode == "llm":
-            bucket_payload: dict[str, Any] | None = None
-            if cache_path.exists() and not args.refresh_cache:
+        bucket_payload: dict[str, Any] | None = None
+        if network_review_path.exists() and not args.refresh_cache:
+            try:
+                bucket_payload = network_review_bucket(read_json(network_review_path))
+                if bucket_payload is not None:
+                    counts["scored_via_network_review"] += 1
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        if bucket_payload is not None:
+            pass
+        elif args.bucket_mode == "llm":
+            if legacy_cache_path.exists() and not args.refresh_cache:
                 try:
-                    cached = read_json(cache_path)
-                    if isinstance(cached, dict) and (cached.get("review") or {}).get("bucket"):
-                        bucket_payload = cached["review"]
+                    cached = read_json(legacy_cache_path)
+                    bucket_payload = normalize_review_payload(cached.get("review") if isinstance(cached, dict) else None)
+                    if bucket_payload is not None:
                         counts["scored_via_cache"] += 1
+                        write_network_review_cache(
+                            network_review_path,
+                            handle,
+                            queue_row,
+                            research_packet,
+                            str(cached.get("model") or args.model),
+                            bucket_payload,
+                        )
+                        counts["network_review_written"] += 1
                 except (json.JSONDecodeError, OSError):
                     pass
             if bucket_payload is None:
+                if not api_key:
+                    emit({"primitive": "build_research_review_csv", "command": "build", "status": "failed",
+                          "error": "OPENROUTER_API_KEY not set (pass --api-key or add it to the repo .env)"})
+                    return 1
                 bucket_payload = llm_bucket(api_key, args.model, queue_row, research_packet, raw_packet)
                 usage = bucket_payload.pop("_usage", None) or {}
                 total_input_tokens += int(usage.get("prompt_tokens") or 0)
@@ -550,14 +643,19 @@ def cmd_build(args: argparse.Namespace) -> int:
                     counts["scored_via_heuristic"] += 1
                 else:
                     counts["scored_via_llm"] += 1
-                    write_json(cache_path, {
-                        "scored_at": now_iso(),
-                        "model": args.model,
-                        "review": bucket_payload,
-                    })
+                    write_network_review_cache(network_review_path, handle, queue_row, research_packet, args.model, bucket_payload)
+                    counts["network_review_written"] += 1
         else:
-            bucket_payload = heuristic_bucket(queue_row, research_packet, raw_packet)
-            counts["scored_via_heuristic"] += 1
+            if legacy_network_review_path.exists() and not args.refresh_cache:
+                try:
+                    bucket_payload = network_review_bucket(read_json(legacy_network_review_path))
+                    if bucket_payload is not None:
+                        counts["scored_via_network_review"] += 1
+                except (json.JSONDecodeError, OSError):
+                    pass
+            if bucket_payload is None:
+                bucket_payload = heuristic_bucket(queue_row, research_packet, raw_packet)
+                counts["scored_via_heuristic"] += 1
 
         flat = flatten_row(handle, queue_row, research_packet, raw_packet, bucket_payload)
         rows.append(flat)
@@ -631,12 +729,11 @@ def main() -> None:
                        help="research_queue.csv used as input to deep_research_contacts")
     build.add_argument("--output-csv", default=str(DEFAULT_OUTPUT_CSV))
     build.add_argument("--manifest", help="Path to write the run manifest JSON")
-    build.add_argument("--bucket-mode", choices=["heuristic", "llm"], default="heuristic")
+    build.add_argument("--bucket-mode", choices=["heuristic", "llm"], default="llm", help=argparse.SUPPRESS)
     build.add_argument("--model", default=DEFAULT_SCORE_MODEL,
-                       help="Model used when --bucket-mode llm (OpenRouter slug)")
+                       help="Network-review model (OpenRouter slug)")
     build.add_argument("--api-key", help="OpenRouter API key (defaults to OPENROUTER_API_KEY from env or repo .env)")
-    build.add_argument("--refresh-cache", action="store_true",
-                       help="Ignore cached LLM scores in 02_review_cache.json and re-score")
+    build.add_argument("--refresh-cache", action="store_true", help=argparse.SUPPRESS)
     build.add_argument("--allow-missing-queue", action="store_true",
                        help="Include handles not present in queue_csv (uses defaults)")
     build.set_defaults(func=cmd_build)

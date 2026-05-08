@@ -198,8 +198,8 @@ class MessagesPackTests(unittest.TestCase):
                     """
                     CREATE TABLE ZABCDRECORD (Z_PK INTEGER PRIMARY KEY, ZFIRSTNAME TEXT, ZLASTNAME TEXT);
                     CREATE TABLE ZABCDPHONENUMBER (ZOWNER INTEGER, ZFULLNUMBER TEXT);
-                    INSERT INTO ZABCDRECORD (Z_PK, ZFIRSTNAME, ZLASTNAME) VALUES (1, 'Jane', 'Doe');
-                    INSERT INTO ZABCDPHONENUMBER (ZOWNER, ZFULLNUMBER) VALUES (1, '(415) 555-0101');
+                    INSERT INTO ZABCDRECORD (Z_PK, ZFIRSTNAME, ZLASTNAME) VALUES (1, 'Jane', 'Doe'), (2, 'Grace', 'Hopper');
+                    INSERT INTO ZABCDPHONENUMBER (ZOWNER, ZFULLNUMBER) VALUES (1, '(415) 555-0101'), (2, '(415) 555-0102');
                     """
                 )
 
@@ -221,7 +221,7 @@ class MessagesPackTests(unittest.TestCase):
             )
             check_payload = json.loads(check_result.stdout)
             self.assertTrue(check_payload["addressbook"]["readable"])
-            self.assertEqual(check_payload["addressbook"]["contacts"], 1)
+            self.assertEqual(check_payload["addressbook"]["contacts"], 2)
             self.assertEqual(check_payload["addressbook"]["readable_databases"], 1)
 
             output_csv = tmp / "out.csv"
@@ -252,13 +252,16 @@ class MessagesPackTests(unittest.TestCase):
             )
             summary = json.loads(result.stdout)
             self.assertEqual(summary["status"], "completed")
-            self.assertEqual(summary["counts"]["contacts"], 1)
+            self.assertEqual(summary["counts"]["contacts"], 2)
+            self.assertEqual(summary["counts"]["contact_only"], 1)
             rows = [json.loads(line) for line in output_jsonl.read_text().splitlines()]
-            self.assertEqual(rows[0]["phone"], "+14155550101")
-            self.assertEqual(rows[0]["name"], "Jane Doe")
-            self.assertEqual(rows[0]["message_count"], 2)
-            self.assertTrue(rows[0]["is_in_group_chats"])
-            self.assertEqual(rows[0]["group_names"], ["Founders"])
+            rows_by_phone = {row["phone"]: row for row in rows}
+            self.assertEqual(rows_by_phone["+14155550101"]["name"], "Jane Doe")
+            self.assertEqual(rows_by_phone["+14155550101"]["message_count"], 2)
+            self.assertTrue(rows_by_phone["+14155550101"]["is_in_group_chats"])
+            self.assertEqual(rows_by_phone["+14155550101"]["group_names"], ["Founders"])
+            self.assertEqual(rows_by_phone["+14155550102"]["name"], "Grace Hopper")
+            self.assertIsNone(rows_by_phone["+14155550102"]["message_count"])
 
     def test_upload_research_review_summary_applies_explicit_include_exclude(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -963,6 +966,57 @@ class LlmReviewContactsTests(unittest.TestCase):
             self.assertEqual(manifest["max_workers"], 2)
             self.assertEqual(manifest["counts"]["verdicts"], 5)
 
+    def test_review_clears_skip_when_llm_enriches_normal_full_names(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            contacts = tmp / "contacts.csv"
+            fields = ["phone", "name", "source", "is_in_group_chats", "group_names", "message_count", "last_message", "skip", "match_status", "matched_person_id"]
+            with contacts.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                writer.writerow({
+                    "phone": "+15550000001",
+                    "name": "Hind Bahwan",
+                    "source": "imessage",
+                    "message_count": "",
+                    "skip": "yes",
+                    "match_status": "unmatched",
+                })
+            args = type("Args", (), {
+                "api_key": "test-key",
+                "dry_run": False,
+                "input": str(contacts),
+                "all": False,
+                "include_skipped": True,
+                "model": "anthropic/claude-sonnet-4-6",
+                "batch_size": 20,
+                "max_workers": 2,
+                "max_retries": 0,
+                "timeout": 1,
+                "results": str(tmp / "results.jsonl"),
+                "manifest": str(tmp / "manifest.json"),
+            })()
+
+            def fake_call(_api_key, contacts_json, _model, *, timeout, max_retries):
+                batch = json.loads(contacts_json)
+                return (
+                    [{"idx": item["idx"], "verdict": "ENRICH", "reason": "normal full name"} for item in batch],
+                    10,
+                    5,
+                    None,
+                )
+
+            with mock.patch.object(self.mod, "call_openrouter_with_retries", side_effect=fake_call) as call:
+                rc = self.mod.cmd_review(args)
+            self.assertEqual(rc, 0)
+            call.assert_called_once()
+
+            with contacts.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[0]["skip"], "")
+            manifest = json.loads((tmp / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["counts"]["enrich"], 1)
+
 
 class DeepResearchContactsTests(unittest.TestCase):
     DR = ROOT / "packs/messages/primitives/deep_research_contacts/deep_research_contacts.py"
@@ -1440,6 +1494,8 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                     str(queue),
                     "--output-csv",
                     str(output),
+                    "--bucket-mode",
+                    "heuristic",
                     "--allow-missing-queue",
                 ],
                 cwd=ROOT,
@@ -1481,6 +1537,143 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             empty = by_handle["phone-4444444444"]
             self.assertEqual(empty["bucket"], "review")
             self.assertEqual(empty["identity_risk"], "no_real_name")
+
+    def test_network_review_cache_overrides_heuristic_bucket(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            research_dir = tmp / "research"
+            queue = tmp / "queue.csv"
+            output = tmp / "review.csv"
+
+            handle = "phone-5555555555"
+            self._write_research_artifact(
+                research_dir,
+                handle,
+                real_name="Sheikh Saoud Salem Abdulaziz Al-Sabah",
+                linkedin=None,
+                name_conf=0.35,
+                positions=[{"title": "Managing Director", "company_name": "Kuwait Investment Authority"}],
+                city="Kuwait City",
+                country="Kuwait",
+            )
+            (research_dir / handle / "03_network_review.json").write_text(
+                json.dumps(
+                    {
+                        "handle": handle,
+                        "full_name": "Sheikh Saoud Salem Abdulaziz Al-Sabah",
+                        "model": "gpt-4.1",
+                        "review": {
+                            "bucket": "confident",
+                            "short_reason": "Sovereign wealth leadership; prioritize despite phone ambiguity.",
+                            "identity_risk": "Plausible but phone link unconfirmed.",
+                            "signals": ["sovereign wealth", "royal-family signal"],
+                        },
+                    }
+                )
+            )
+            with queue.open("w", newline="") as h:
+                writer = csv.DictWriter(h, fieldnames=["handle", "display_name", "phone_e164", "area_code"])
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "handle": handle,
+                        "display_name": "Saoud Al-Sabah",
+                        "phone_e164": "+96599011511",
+                        "area_code": "965",
+                    }
+                )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(self.BUILD),
+                    "build",
+                    "--research-dir",
+                    str(research_dir),
+                    "--queue-csv",
+                    str(queue),
+                    "--output-csv",
+                    str(output),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=True,
+            )
+            manifest = json.loads(result.stdout)
+            self.assertEqual(manifest["counts"]["scored_via_network_review"], 1)
+
+            with output.open(newline="") as h:
+                rows = list(csv.DictReader(h))
+            self.assertEqual(rows[0]["bucket"], "confident")
+            self.assertEqual(rows[0]["short_reason"], "Sovereign wealth leadership; prioritize despite phone ambiguity.")
+            self.assertIn("sovereign wealth", rows[0]["signals"])
+
+    def test_llm_bucket_writes_upstream_network_review_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            research_dir = tmp / "research"
+            queue = tmp / "queue.csv"
+            output = tmp / "review.csv"
+            handle = "phone-6666666666"
+            self._write_research_artifact(
+                research_dir,
+                handle,
+                real_name="Aisha Founder",
+                linkedin="https://www.linkedin.com/in/aisha-founder/",
+                name_conf=0.91,
+                positions=[{"title": "Founder", "company_name": "Example AI"}],
+                city="San Francisco",
+                country="United States",
+            )
+            with queue.open("w", newline="") as h:
+                writer = csv.DictWriter(h, fieldnames=["handle", "display_name", "phone_e164", "source_channel"])
+                writer.writeheader()
+                writer.writerow({
+                    "handle": handle,
+                    "display_name": "Aisha Founder",
+                    "phone_e164": "+14155556666",
+                    "source_channel": "phone",
+                })
+
+            spec = importlib.util.spec_from_file_location("build_research_review_csv", self.BUILD)
+            assert spec and spec.loader
+            build_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(build_mod)
+            args = type("Args", (), {
+                "research_dir": research_dir,
+                "queue_csv": str(queue),
+                "output_csv": str(output),
+                "manifest": None,
+                "bucket_mode": "llm",
+                "model": "openai/gpt-4.1",
+                "api_key": "test-key",
+                "refresh_cache": False,
+                "allow_missing_queue": False,
+            })()
+
+            llm_response = {
+                "parsed": {
+                    "bucket": "confident",
+                    "short_reason": "Founder with credible AI startup signal.",
+                    "identity_risk": "",
+                    "signals": ["founder", "venture-network"],
+                },
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+            }
+            with mock.patch.object(build_mod, "_openrouter_chat", return_value=(llm_response, None)), \
+                    mock.patch.object(build_mod, "emit"):
+                rc = build_mod.cmd_build(args)
+
+            self.assertEqual(rc, 0)
+            network_review = json.loads((research_dir / handle / "03_network_review.json").read_text(encoding="utf-8"))
+            self.assertEqual(network_review["handle"], handle)
+            self.assertEqual(network_review["public_identifier"], "aisha-founder")
+            self.assertEqual(network_review["model"], "openai/gpt-4.1")
+            self.assertEqual(network_review["review"]["bucket"], "confident")
+            manifest = json.loads(output.with_suffix(output.suffix + ".manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["counts"]["network_review_written"], 1)
 
 
 class ReviewContactsWebTests(unittest.TestCase):

@@ -108,12 +108,13 @@ def resolve_skip_status(args: argparse.Namespace) -> dict[str, Any]:
 
 def count_local_profiles(profiles_dir: Path) -> dict[str, int]:
     if not profiles_dir.exists():
-        return {"profile_dirs": 0, "research_parallel_json": 0, "final_profile_json": 0, "network_review_json": 0}
+        return {"profile_dirs": 0, "research_parallel_json": 0, "final_profile_json": 0, "network_review_json": 0, "legacy_network_review_json": 0}
     return {
         "profile_dirs": sum(1 for p in profiles_dir.iterdir() if p.is_dir()),
         "research_parallel_json": sum(1 for _ in profiles_dir.glob("*/01_research_parallel.json")),
         "final_profile_json": sum(1 for _ in profiles_dir.glob("*/04_final_profile.json")),
-        "network_review_json": sum(1 for _ in profiles_dir.glob("*/06_network_review.json")),
+        "network_review_json": sum(1 for _ in profiles_dir.glob("*/03_network_review.json")),
+        "legacy_network_review_json": sum(1 for _ in profiles_dir.glob("*/06_network_review.json")),
     }
 
 

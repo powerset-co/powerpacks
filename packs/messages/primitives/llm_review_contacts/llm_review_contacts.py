@@ -96,6 +96,8 @@ professional relationships worth looking up on LinkedIn.
 
 For each contact, decide: ENRICH or SKIP.
 
+Use a deterministic rubric. The same input should receive the same verdict.
+
 Consider these factors (in priority order):
 - **Name quality & notability**: Use your training data and world knowledge \
 to actively identify whether a name matches or resembles known public figures, \
@@ -108,21 +110,22 @@ already filtered to people they actually know.
 - **Message volume**: Higher message counts suggest a real relationship.
 - **Recency**: Recently contacted people are more valuable, but a recognizable \
 full name can override low recency.
-- **Skip patterns**: Skip entries that are:
-  - Service providers, businesses, or roles rather than people \
-(e.g., "Plumber", "HVAC", "Vet", "Groomer")
-  - Clearly placeholder, coded, or non-standard naming patterns that wouldn't \
-map to a real LinkedIn profile (e.g., numbered labels, pet names, inside jokes, \
-private aliases for informal relationships)
-  - Just a single first name with no last name AND zero message count \
-(impossible to look up)
+	- **Skip patterns**: Skip entries that are service providers, businesses, \
+roles rather than people, placeholders, coded labels, nicknames, private aliases, \
+identifiers, or single first names with no last name and zero message count.
+  - Personal notes appended to a name should usually SKIP when the note is the \
+reason the entry is identifiable rather than the person's real name. Examples \
+include dating-app/source notes, location shorthand, event/context tags, or \
+relationship labels. If the remaining name is still a clear normal full name, \
+ENRICH; if it is just a first name plus a personal note, SKIP.
 - **Group chat only**: If someone ONLY appears in group chats with low \
 individual message count, they're less valuable. Named groups can still add \
 useful context.
 
-Be optimistic — these are real phone contacts, not random leads. When in doubt \
-about a full name, ALWAYS lean ENRICH. Only SKIP names that clearly cannot map \
-to a LinkedIn profile.
+Be optimistic — these are real phone contacts, not random leads. Normal human \
+full names should be ENRICH, even with zero message count. When in doubt about \
+a full name, ALWAYS lean ENRICH. Only SKIP names that clearly cannot map to a \
+LinkedIn profile.
 
 Contacts to evaluate:
 {contacts_json}
@@ -240,6 +243,7 @@ def call_openrouter(
     prompt = REVIEW_PROMPT.format(contacts_json=contacts_json)
     body = json.dumps({
         "model": model,
+        "temperature": 0,
         "messages": [{"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"},
     }).encode("utf-8")
@@ -397,6 +401,8 @@ def update_csv_with_verdicts(
             verdict = verdicts.get(phone)
             if verdict == "SKIP":
                 row["skip"] = "yes"
+            elif verdict == "ENRICH":
+                row["skip"] = ""
             rows.append(row)
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

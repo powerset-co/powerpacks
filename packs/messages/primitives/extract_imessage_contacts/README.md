@@ -9,8 +9,10 @@ This primitive is intentionally stdlib-only:
 - no `contact-exporter`
 - no message content reads
 
-It reads `~/Library/Messages/chat.db` in SQLite read-only mode and optionally
-uses local AddressBook SQLite databases for phone-to-name lookup.
+It reads `~/Library/Messages/chat.db` in SQLite read-only mode and uses local
+AddressBook SQLite databases for phone inventory and phone-to-name lookup. The
+default export includes Contacts.app phone rows even when they do not have
+iMessage history, so it matches the one-step contact import experience.
 
 Examples:
 

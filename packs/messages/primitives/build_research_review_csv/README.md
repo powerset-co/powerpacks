@@ -20,26 +20,19 @@ legacy TUI both map those buckets to `yes / maybe / no` tabs.
 ## Usage
 
 ```bash
-# 1. Heuristic bucketing (default, free, stdlib-only).
+# 1. LLM network-review bucketing (default).
 python packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
   --research-dir .powerpacks/messages/research \
   --queue-csv .powerpacks/messages/research_queue.csv \
   --output-csv .powerpacks/messages/research_review.csv
 
-# 2. LLM-scored bucketing (uses the same SYSTEM_PROMPT aleph-mvp
-#    review_phone_research.py uses, via OpenRouter). Auto-loads
-#    OPENROUTER_API_KEY from the repo .env.
-python ... build_research_review_csv.py build \
-  --bucket-mode llm \
-  --model anthropic/claude-sonnet-4-6
-
-# 3. Review in the native web UI:
+# 2. Review in the native web UI:
 python packs/messages/primitives/review_research_web/review_research_web.py serve \
   --csv .powerpacks/messages/research_review.csv \
   --research-dir .powerpacks/messages/research \
   --open
 
-# 4. Upload back to Powerset after review:
+# 3. Upload back to Powerset after review:
 python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
   --csv .powerpacks/messages/research_review.csv
 
@@ -48,25 +41,19 @@ python packs/messages/primitives/upload_research_review/upload_research_review.p
   --confirm-upload
 ```
 
-## Heuristic bucket rules
+## Heuristic Fallback
 
-| Outcome | Condition |
-| --- | --- |
-| `review` | no real_name surfaced, OR returned name shares zero tokens with input name (likely wrong person) |
-| `confident` | linkedin_url AND name_confidence ≥ 0.85 AND ≥1 work position |
-| `medium` | linkedin_url + positions but lower name confidence, OR real_name + positions/location without linkedin |
-| `review` | otherwise (real name only, no career evidence) |
+If OpenRouter is unavailable while scoring an individual row, the primitive
+falls back to deterministic identity-safety heuristics rather than failing the
+whole CSV build. The normal path is the LLM network-review scorer.
 
-The shared-token check on input vs returned name catches the failure mode we
-saw in our smoke test: `input=L*** S***` came back as `W** S***` (different
-first name, confidence 0.90). Heuristic bucketer routes those to `review`
-with `identity_risk: wrong_person`.
+## Network Review Cache
 
-## LLM bucket cache
-
-In `--bucket-mode llm` mode, results are cached at
-`<research-dir>/<handle>/02_review_cache.json` so re-runs skip already-scored
-handles. Use `--refresh-cache` to invalidate.
+LLM results are cached at `<research-dir>/<handle>/03_network_review.json`.
+Powerpacks treats that as the local source of truth for yes/maybe/no review.
+Legacy `02_review_cache.json` can still be read and upgraded to `03`; legacy
+synced `06_network_review.json` is kept only as fallback data for non-LLM/debug
+paths.
 
 ## Pricing reference (LLM mode)
 

@@ -9,7 +9,7 @@ upload.
 It does not infer approval from stdin. Agents should ask the user, then feed the
 confirmation back with:
 
-    uv run --project . python ... import_contacts_pipeline.py approve parallel --approval-id <id> --confirm
+    uv run --project . python ... import_contacts_pipeline.py approve
     uv run --project . python ... import_contacts_pipeline.py continue
 
 Stdlib-only.
@@ -52,6 +52,7 @@ DEFAULT_RETARGET_QUEUE = Path(".powerpacks/messages/retarget_queue.csv")
 DEFAULT_RETARGET_LEDGER = Path(".powerpacks/messages/retarget_attempts.json")
 DEFAULT_RETARGET_RESEARCH_DIR = Path(".powerpacks/messages/research_retarget")
 DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
+DEFAULT_NETWORK_REVIEW_MODEL = "openai/gpt-4.1"
 DEFAULT_PROCESSOR = "core2x"
 ALLOWED_PARALLEL_PROCESSORS = ("core", "core2x", "pro")
 PARALLEL_LATENCY = {
@@ -69,7 +70,9 @@ PARALLEL_LATENCY = {
     },
 }
 DEFAULT_LLM_AUTO_APPROVE_USD = 10.0
+NETWORK_REVIEW_TOKEN_ESTIMATE = {"input": 600, "output": 80}
 DEFAULT_REVIEW_PORT = 8766
+ARCHIVE_ROOT = Path(".powerpacks/messages/archive")
 CONTACT_CSV_HEADERS = [
     "phone",
     "name",
@@ -209,6 +212,36 @@ def step_record(ledger: dict[str, Any], step_id: str) -> dict[str, Any]:
     return rec
 
 
+WHATSAPP_STEP_MESSAGES = {
+    "check_docker_and_waha": {
+        "running": "Getting WhatsApp sync ready.",
+        "completed": "WhatsApp sync is ready.",
+        "blocked_user_action": "WhatsApp sync needs the local helper app running before it can continue.",
+    },
+    "start_waha_container": {
+        "running": "Starting WhatsApp sync.",
+        "completed": "WhatsApp sync started.",
+    },
+    "authenticate_whatsapp": {
+        "running": "Connecting WhatsApp.",
+        "completed": "WhatsApp is connected.",
+        "blocked_user_action": "WhatsApp needs you to scan the QR, then continue the import.",
+    },
+    "extract_whatsapp": {
+        "running": "We're syncing WhatsApp. WhatsApp is taking a bit longer when there are many chats.",
+        "completed": "WhatsApp sync finished.",
+    },
+    "normalize_whatsapp": {
+        "running": "Preparing synced WhatsApp contacts.",
+        "completed": "WhatsApp contacts are ready.",
+    },
+}
+
+
+def user_message_for_step(step_id: str, status: str) -> str | None:
+    return WHATSAPP_STEP_MESSAGES.get(step_id, {}).get(status)
+
+
 def mark_step(
     ledger_path: Path,
     ledger: dict[str, Any],
@@ -227,6 +260,9 @@ def mark_step(
     rec["status"] = status
     if command is not None:
         rec["command"] = " ".join(shlex.quote(part) for part in command)
+    user_message = user_message_for_step(step_id, status)
+    if user_message:
+        rec["user_message"] = user_message
     if summary is not None:
         rec["summary"] = summary
     if error:
@@ -320,9 +356,8 @@ def parallel_approval_message(estimated_usd: float, latency: dict[str, Any]) -> 
 
 def approval_command(args: argparse.Namespace, kind: str, approval_id_value: str) -> str:
     return (
-        f"uv run --project . python {rel(Path(__file__).resolve())} approve {kind} "
-        f"--ledger {shlex.quote(str(args.ledger))} --approval-id {approval_id_value} --confirm && "
-        f"uv run --project . python {rel(Path(__file__).resolve())} continue --ledger {shlex.quote(str(args.ledger))}"
+        f"uv run --project . python {rel(Path(__file__).resolve())} approve && "
+        f"uv run --project . python {rel(Path(__file__).resolve())} continue"
     )
 
 
@@ -403,6 +438,116 @@ def ensure_artifact_dirs(args: argparse.Namespace) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
     Path(args.research_dir).mkdir(parents=True, exist_ok=True)
     Path(args.retarget_research_dir).mkdir(parents=True, exist_ok=True)
+
+
+def sidecar_manifest(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".manifest.json")
+
+
+def fresh_run_artifact_paths(args: argparse.Namespace) -> list[Path]:
+    """Artifacts owned by a single import run.
+
+    Research profile directories are intentionally excluded: deep research is
+    cache-addressed by handle and expensive to rebuild, but the contact exports,
+    queues, reviews, and ledger should be regenerated for a new `run`.
+    """
+    base_paths = [
+        Path(args.ledger),
+        Path(args.contacts),
+        Path(args.candidates),
+        Path(args.research_queue),
+        Path(args.review_csv),
+        Path(args.retarget_queue),
+        Path(args.retarget_ledger),
+        DEFAULT_IMESSAGE_CONTACTS,
+        DEFAULT_IMESSAGE_JSONL,
+        DEFAULT_IMESSAGE_MANIFEST,
+        DEFAULT_IMESSAGE_NORMALIZED,
+        DEFAULT_IMESSAGE_NORMALIZED_MANIFEST,
+        DEFAULT_WHATSAPP_CONTACTS,
+        DEFAULT_WHATSAPP_JSONL,
+        DEFAULT_WHATSAPP_MANIFEST,
+        DEFAULT_WHATSAPP_NORMALIZED,
+        DEFAULT_WHATSAPP_NORMALIZED_MANIFEST,
+        Path(args.contacts).with_suffix(Path(args.contacts).suffix + ".llm_review.jsonl"),
+    ]
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for path in base_paths:
+        for candidate in (path, sidecar_manifest(path)):
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(candidate)
+    return paths
+
+
+def archive_destination(archive_dir: Path, path: Path, used: set[str]) -> Path:
+    name = path.name
+    if str(path).startswith(".powerpacks/messages/"):
+        try:
+            name = str(path.relative_to(".powerpacks/messages"))
+        except ValueError:
+            name = path.name
+    dest = archive_dir / name
+    if str(dest) not in used:
+        used.add(str(dest))
+        return dest
+    stem = dest.stem
+    suffix = dest.suffix
+    parent = dest.parent
+    index = 2
+    while True:
+        candidate = parent / f"{stem}.{index}{suffix}"
+        if str(candidate) not in used:
+            used.add(str(candidate))
+            return candidate
+        index += 1
+
+
+def fresh_archive_dir() -> Path:
+    base = ARCHIVE_ROOT / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    if not base.exists():
+        return base
+    index = 2
+    while True:
+        candidate = Path(f"{base}.{index}")
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def archive_existing_run_artifacts(args: argparse.Namespace) -> dict[str, Any] | None:
+    if getattr(args, "command", "") != "run":
+        return None
+
+    paths = [path for path in fresh_run_artifact_paths(args) if path.exists() and path.is_file()]
+    if not paths:
+        return None
+
+    archive_dir = fresh_archive_dir()
+    moved: list[dict[str, str]] = []
+    used: set[str] = set()
+    for path in paths:
+        dest = archive_destination(archive_dir, path, used)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        path.rename(dest)
+        moved.append({"from": str(path), "to": str(dest)})
+
+    summary = {
+        "status": "archived",
+        "reason": "fresh_import_run",
+        "archive_dir": str(archive_dir),
+        "moved_count": len(moved),
+        "moved": moved,
+    }
+    write_json(archive_dir / "manifest.json", {
+        "primitive": "import_contacts_pipeline",
+        "created_at": now_iso(),
+        **summary,
+    })
+    return summary
 
 
 def csv_data_rows(path: Path) -> int:
@@ -558,7 +703,7 @@ def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
         payload = {
             "primitive": "import_contacts_pipeline",
             "status": "blocked_user_action",
-            "message": "Start Docker/Colima, then continue the import.",
+            "message": "Start Docker Desktop or Colima so WhatsApp sync can run, then continue the import.",
             "detail": check_payload or (check_result.get("stderr") or check_result.get("stdout") or "")[-1000:],
             "ledger": str(ledger_path),
         }
@@ -592,7 +737,7 @@ def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
             payload = {
                 "primitive": "import_contacts_pipeline",
                 "status": "blocked_user_action",
-                "message": "Scan the WhatsApp QR, then continue the import.",
+                "message": "WhatsApp needs you to scan the QR, then continue the import.",
                 "qr_path": str(Path(".powerpacks/messages/whatsapp/qr.png")),
                 "continue_command": f"uv run --project . python {rel(Path(__file__).resolve())} continue --ledger {shlex.quote(str(args.ledger))}",
                 "ledger": str(ledger_path),
@@ -777,6 +922,39 @@ def llm_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, An
     mark_step(ledger_path, ledger, "llm_review", "completed", summary=review_payload, command=review_cmd)
 
 
+def llm_pricing(model: str) -> tuple[float, float]:
+    return {
+        "anthropic/claude-sonnet-4-6": (3.00, 15.00),
+        "anthropic/claude-haiku-4-5": (0.80, 4.00),
+        "openai/gpt-4.1": (2.00, 8.00),
+        "openai/gpt-4.1-mini": (0.40, 1.60),
+        "openai/gpt-4.1-nano": (0.10, 0.40),
+    }.get(model, (2.00, 8.00))
+
+
+def estimate_network_review_scoring(args: argparse.Namespace) -> dict[str, Any]:
+    research_dir = Path(args.research_dir)
+    model = DEFAULT_NETWORK_REVIEW_MODEL
+    candidates = 0
+    for research_packet in research_dir.glob("*/01_research_parallel.json"):
+        profile_dir = research_packet.parent
+        if (profile_dir / "03_network_review.json").exists():
+            continue
+        if (profile_dir / "02_review_cache.json").exists():
+            continue
+        candidates += 1
+    input_price, output_price = llm_pricing(model)
+    input_tokens = candidates * NETWORK_REVIEW_TOKEN_ESTIMATE["input"]
+    output_tokens = candidates * NETWORK_REVIEW_TOKEN_ESTIMATE["output"]
+    estimated_usd = round((input_tokens / 1e6) * input_price + (output_tokens / 1e6) * output_price, 4)
+    return {
+        "candidates": candidates,
+        "model": model,
+        "estimated_tokens": {"input": input_tokens, "output": output_tokens},
+        "estimated_usd": estimated_usd,
+    }
+
+
 def prepare_queue(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
     if completed(ledger, "prepare_research_queue") and not args.force_prepare_queue:
         return
@@ -908,6 +1086,28 @@ def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
             summary={"reason": "no_research_packets", "research_dir": str(args.research_dir), "review_csv": str(args.review_csv)},
         )
         return
+    scoring_estimate: dict[str, Any] | None = None
+    auto_ok = False
+    scoring_estimate = estimate_network_review_scoring(args)
+    if int(scoring_estimate.get("candidates") or 0) > 0:
+        auto_threshold = float(getattr(args, "llm_auto_approve_usd", DEFAULT_LLM_AUTO_APPROVE_USD))
+        auto_ok = float(scoring_estimate.get("estimated_usd") or 0.0) < auto_threshold
+        payload = {"phase": "network_review", **scoring_estimate}
+        aid = approval_id("llm", payload)
+        if not auto_ok and not is_approved(ledger, aid):
+            block_for_approval(
+                ledger_path,
+                ledger,
+                args,
+                step_id="build_research_review_csv",
+                kind="llm",
+                payload=payload,
+                message=(
+                    "Estimated OpenRouter cost for deep-research yes/maybe/no scoring: "
+                    f"${float(scoring_estimate.get('estimated_usd') or 0.0):.4f}. Approve?"
+                )
+            )
+
     cmd = [
         sys.executable,
         primitive_path("packs/messages/primitives/build_research_review_csv/build_research_review_csv.py"),
@@ -915,10 +1115,15 @@ def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
         "--research-dir", str(args.research_dir),
         "--queue-csv", str(args.research_queue),
         "--output-csv", str(args.review_csv),
+        "--model", DEFAULT_NETWORK_REVIEW_MODEL,
     ]
     mark_step(ledger_path, ledger, "build_research_review_csv", "running", command=cmd)
     result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
     payload = require_ok(result, "build_research_review_csv")
+    if scoring_estimate is not None:
+        payload["scoring_estimate"] = scoring_estimate
+    if auto_ok:
+        payload["auto_approved_reason"] = f"openrouter_under_{getattr(args, 'llm_auto_approve_usd', DEFAULT_LLM_AUTO_APPROVE_USD)}_usd"
     ledger.setdefault("artifacts", {})["research_review_csv"] = str(args.review_csv)
     mark_step(ledger_path, ledger, "build_research_review_csv", "completed", summary=payload, command=cmd)
 
@@ -1121,7 +1326,8 @@ def retarget_rows_from_payload(payload: dict[str, Any]) -> int:
 
 def prepare_retarget_queue(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
     step_id = "prepare_retarget_queue"
-    if completed(ledger, step_id) and not args.rerun_retarget:
+    retarget_status = ((ledger.get("steps") or {}).get("retarget_research") or {}).get("status")
+    if completed(ledger, step_id) and retarget_status == "blocked_approval":
         return ((ledger.get("steps") or {}).get(step_id) or {}).get("summary") or {}
     cmd = [
         sys.executable,
@@ -1160,8 +1366,6 @@ def mark_retarget_completed(args: argparse.Namespace, ledger_path: Path, ledger:
 
 
 def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    if completed(ledger, "retarget_research") and not args.rerun_retarget:
-        return
     prepare_payload = prepare_retarget_queue(args, ledger_path, ledger)
     rows_written = retarget_rows_from_payload(prepare_payload)
     if rows_written <= 0:
@@ -1290,7 +1494,13 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
     mark_step(ledger_path, ledger, "upload_research_review", "running", command=cmd)
     result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
     upload_payload = require_ok(result, "upload_research_review")
-    ledger.setdefault("artifacts", {})["uploaded_artifact_id"] = ((upload_payload.get("response") or {}).get("artifact_id"))
+    response = upload_payload.get("response") or {}
+    reference_id = upload_payload.get("reference_id") or response.get("artifact_id")
+    if reference_id:
+        upload_payload["reference_id"] = reference_id
+        upload_payload["user_message"] = f"Uploaded {int(response.get('yes_count') or 0)} contacts. Reference id: {reference_id}."
+        ledger.setdefault("artifacts", {})["uploaded_reference_id"] = reference_id
+        ledger.setdefault("artifacts", {})["uploaded_artifact_id"] = reference_id
     mark_step(ledger_path, ledger, "upload_research_review", "completed", summary=upload_payload, command=cmd)
 
 
@@ -1316,7 +1526,6 @@ def fill_arg_defaults(args: argparse.Namespace) -> None:
         "retarget_queue": DEFAULT_RETARGET_QUEUE,
         "retarget_ledger": DEFAULT_RETARGET_LEDGER,
         "retarget_research_dir": DEFAULT_RETARGET_RESEARCH_DIR,
-        "rerun_retarget": False,
         "timeout": 300,
         "parallel_timeout": 7600,
         "env_file": ".env",
@@ -1357,6 +1566,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     fill_arg_defaults(args)
     ledger_path = Path(args.ledger)
     ensure_artifact_dirs(args)
+    fresh_archive = archive_existing_run_artifacts(args)
     ledger = load_ledger(ledger_path)
     hydrate_args_from_ledger(args, ledger)
     ensure_artifact_dirs(args)
@@ -1376,8 +1586,19 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "retarget_ledger": str(args.retarget_ledger),
         "retarget_research_dir": str(args.retarget_research_dir),
         "model": args.model,
+        "network_review_model": DEFAULT_NETWORK_REVIEW_MODEL,
         "processor": args.processor,
     }
+    if fresh_archive:
+        ledger["fresh_run"] = fresh_archive
+        ledger.setdefault("warnings", []).append({
+            "step": "fresh_run_start",
+            "status": "archived",
+            "message": "Started a fresh import run and moved previous run artifacts out of the way.",
+            "archive_dir": fresh_archive["archive_dir"],
+            "moved_count": fresh_archive["moved_count"],
+            "recorded_at": now_iso(),
+        })
     save_ledger(ledger_path, ledger)
 
     extract_imessage(args, ledger_path, ledger)
@@ -1490,14 +1711,6 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
-    if not args.confirm:
-        emit({
-            "primitive": "import_contacts_pipeline",
-            "command": "approve",
-            "status": "blocked",
-            "error": "pass --confirm after the user explicitly approves this gate",
-        })
-        return 2
     ledger_path = Path(args.ledger)
     ledger = load_ledger(ledger_path)
     current = ledger.get("current_block") or {}
@@ -1505,12 +1718,16 @@ def cmd_approve(args: argparse.Namespace) -> int:
     if not aid:
         emit({"primitive": "import_contacts_pipeline", "command": "approve", "status": "failed", "error": "no approval_id provided and no current block"})
         return 1
-    if args.kind not in aid and current.get("approval_type") and current.get("approval_type") != args.kind:
+    kind = args.kind or current.get("approval_type")
+    if not kind:
+        emit({"primitive": "import_contacts_pipeline", "command": "approve", "status": "failed", "error": "no approval type in current block"})
+        return 1
+    if kind not in aid and current.get("approval_type") and current.get("approval_type") != kind:
         emit({"primitive": "import_contacts_pipeline", "command": "approve", "status": "failed", "error": f"approval type mismatch: requested {args.kind}, current {current.get('approval_type')}"})
         return 1
     ledger.setdefault("approvals", {})[aid] = {
         "approval_id": aid,
-        "type": args.kind,
+        "type": kind,
         "confirmed": True,
         "approved_at": now_iso(),
         "approved_by": "user_confirmed_in_agent_chat",
@@ -1519,46 +1736,48 @@ def cmd_approve(args: argparse.Namespace) -> int:
     if current.get("approval_id") == aid:
         ledger["current_block"] = None
     save_ledger(ledger_path, ledger)
-    emit({"primitive": "import_contacts_pipeline", "command": "approve", "status": "ok", "approval_id": aid, "type": args.kind, "ledger": str(ledger_path)})
+    emit({"primitive": "import_contacts_pipeline", "command": "approve", "status": "ok", "approval_id": aid, "type": kind, "ledger": str(ledger_path)})
     return 0
 
 
+def add_hidden_arg(parser: argparse.ArgumentParser, *names: str, **kwargs: Any) -> None:
+    kwargs.setdefault("help", argparse.SUPPRESS)
+    parser.add_argument(*names, **kwargs)
+
+
 def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
-    parser.add_argument("--contacts", type=Path, default=DEFAULT_CONTACTS)
-    parser.add_argument("--candidates", type=Path, default=DEFAULT_CANDIDATES)
-    parser.add_argument("--research-queue", type=Path, default=DEFAULT_RESEARCH_QUEUE)
-    parser.add_argument("--research-dir", type=Path, default=DEFAULT_RESEARCH_DIR)
-    parser.add_argument("--review-csv", type=Path, default=DEFAULT_REVIEW_CSV)
-    parser.add_argument("--retarget-queue", type=Path, default=DEFAULT_RETARGET_QUEUE)
-    parser.add_argument("--retarget-ledger", type=Path, default=DEFAULT_RETARGET_LEDGER)
-    parser.add_argument("--retarget-research-dir", type=Path, default=DEFAULT_RETARGET_RESEARCH_DIR)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=ALLOWED_PARALLEL_PROCESSORS)
-    parser.add_argument("--llm-auto-approve-usd", type=float, default=DEFAULT_LLM_AUTO_APPROVE_USD)
-    parser.add_argument("--llm-batch-size", type=int, default=20,
-                        help="Contacts per OpenRouter LLM review request")
-    parser.add_argument("--llm-max-workers", type=int, default=4,
-                        help="Concurrent OpenRouter LLM review requests")
-    parser.add_argument("--env-file", default=".env")
-    parser.add_argument("--timeout", type=int, default=300)
-    parser.add_argument("--parallel-timeout", type=int, default=7600)
-    parser.add_argument("--review-host", default="127.0.0.1")
-    parser.add_argument("--review-port", type=int, default=DEFAULT_REVIEW_PORT)
-    parser.add_argument("--open-browser", action="store_true")
-    parser.add_argument("--no-open-review", action="store_true")
-    parser.add_argument("--stop-before-upload", action="store_true", help="Stop after opening review UI instead of summarizing/blocking upload")
-    parser.add_argument("--force-imessage", action="store_true")
-    parser.add_argument("--force-whatsapp", action="store_true")
-    parser.add_argument("--force-sync-candidates", action="store_true")
-    parser.add_argument("--force-match", action="store_true")
-    parser.add_argument("--force-prepare-queue", action="store_true")
-    parser.add_argument("--force-sync-cache", action="store_true")
-    parser.add_argument("--force-build-review", action="store_true")
-    parser.add_argument("--rerun-llm", action="store_true")
-    parser.add_argument("--rerun-parallel", action="store_true")
-    parser.add_argument("--rerun-retarget", action="store_true")
-    parser.add_argument("--rerun-upload", action="store_true")
+    add_hidden_arg(parser, "--ledger", type=Path, default=DEFAULT_LEDGER)
+    add_hidden_arg(parser, "--contacts", type=Path, default=DEFAULT_CONTACTS)
+    add_hidden_arg(parser, "--candidates", type=Path, default=DEFAULT_CANDIDATES)
+    add_hidden_arg(parser, "--research-queue", type=Path, default=DEFAULT_RESEARCH_QUEUE)
+    add_hidden_arg(parser, "--research-dir", type=Path, default=DEFAULT_RESEARCH_DIR)
+    add_hidden_arg(parser, "--review-csv", type=Path, default=DEFAULT_REVIEW_CSV)
+    add_hidden_arg(parser, "--retarget-queue", type=Path, default=DEFAULT_RETARGET_QUEUE)
+    add_hidden_arg(parser, "--retarget-ledger", type=Path, default=DEFAULT_RETARGET_LEDGER)
+    add_hidden_arg(parser, "--retarget-research-dir", type=Path, default=DEFAULT_RETARGET_RESEARCH_DIR)
+    add_hidden_arg(parser, "--model", default=DEFAULT_MODEL)
+    add_hidden_arg(parser, "--processor", default=DEFAULT_PROCESSOR, choices=ALLOWED_PARALLEL_PROCESSORS)
+    add_hidden_arg(parser, "--llm-auto-approve-usd", type=float, default=DEFAULT_LLM_AUTO_APPROVE_USD)
+    add_hidden_arg(parser, "--llm-batch-size", type=int, default=20)
+    add_hidden_arg(parser, "--llm-max-workers", type=int, default=4)
+    add_hidden_arg(parser, "--env-file", default=".env")
+    add_hidden_arg(parser, "--timeout", type=int, default=300)
+    add_hidden_arg(parser, "--parallel-timeout", type=int, default=7600)
+    add_hidden_arg(parser, "--review-host", default="127.0.0.1")
+    add_hidden_arg(parser, "--review-port", type=int, default=DEFAULT_REVIEW_PORT)
+    add_hidden_arg(parser, "--open-browser", action="store_true")
+    add_hidden_arg(parser, "--no-open-review", action="store_true")
+    add_hidden_arg(parser, "--stop-before-upload", action="store_true")
+    add_hidden_arg(parser, "--force-imessage", action="store_true")
+    add_hidden_arg(parser, "--force-whatsapp", action="store_true")
+    add_hidden_arg(parser, "--force-sync-candidates", action="store_true")
+    add_hidden_arg(parser, "--force-match", action="store_true")
+    add_hidden_arg(parser, "--force-prepare-queue", action="store_true")
+    add_hidden_arg(parser, "--force-sync-cache", action="store_true")
+    add_hidden_arg(parser, "--force-build-review", action="store_true")
+    add_hidden_arg(parser, "--rerun-llm", action="store_true")
+    add_hidden_arg(parser, "--rerun-parallel", action="store_true")
+    add_hidden_arg(parser, "--rerun-upload", action="store_true")
 
 
 def main() -> int:
@@ -1574,14 +1793,14 @@ def main() -> int:
     cont.set_defaults(func=cmd_run)
 
     status = sub.add_parser("status", help="Show ledger status")
-    status.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
+    add_hidden_arg(status, "--ledger", type=Path, default=DEFAULT_LEDGER)
     status.set_defaults(func=cmd_status)
 
-    approve = sub.add_parser("approve", help="Record explicit user approval for a blocked gate")
-    approve.add_argument("kind", choices=["llm", "parallel", "upload"])
-    approve.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
-    approve.add_argument("--approval-id")
-    approve.add_argument("--confirm", action="store_true")
+    approve = sub.add_parser("approve", help="Approve the current blocked gate")
+    approve.add_argument("kind", nargs="?", choices=["llm", "parallel", "upload"], help=argparse.SUPPRESS)
+    add_hidden_arg(approve, "--ledger", type=Path, default=DEFAULT_LEDGER)
+    add_hidden_arg(approve, "--approval-id")
+    add_hidden_arg(approve, "--confirm", action="store_true")
     approve.set_defaults(func=cmd_approve)
 
     args = parser.parse_args()

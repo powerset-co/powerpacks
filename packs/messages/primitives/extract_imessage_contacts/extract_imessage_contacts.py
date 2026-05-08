@@ -532,6 +532,7 @@ def cmd_extract(args: argparse.Namespace) -> None:
                 "with_group_context": sum(1 for contact in contacts if contact.is_in_group_chats),
                 "addressbook_contacts": len(addressbook_contacts),
                 "message_handles": len(message_stats),
+                "contact_only": sum(1 for contact in contacts if not contact.message_count),
             },
         }
         write_json(manifest_path, manifest)
@@ -576,7 +577,18 @@ def main() -> None:
     extract.add_argument("--output-jsonl", type=Path, default=DEFAULT_OUT_DIR / "imessage.contacts.jsonl")
     extract.add_argument("--manifest", type=Path, default=DEFAULT_OUT_DIR / "imessage.manifest.json")
     extract.add_argument("--run-id")
-    extract.add_argument("--include-contact-only", action="store_true")
+    extract.set_defaults(include_contact_only=True)
+    extract.add_argument(
+        "--include-contact-only",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    extract.add_argument(
+        "--message-handles-only",
+        dest="include_contact_only",
+        action="store_false",
+        help="Only export phone handles that appear in iMessage history",
+    )
     extract.add_argument("--limit", type=int)
     extract.set_defaults(func=cmd_extract)
 
