@@ -23,7 +23,8 @@ The payload includes:
 
 - operator context from API auth/request body
 - phone/name/message metadata from the review CSV (`phone_e164`/`phone` and
-  `full_name`/`name` are both sent explicitly for WhatsApp/iMessage rows)
+  `full_name`/`name` are both sent explicitly; total, iMessage, and WhatsApp
+  counts/timestamps are sent separately)
 - stable `source_key` derived from the normalized phone number
 - optional canonical `linkedin_url`
 - `public_identifier` using Aleph's synthetic rules (`linkedin slug`, then
