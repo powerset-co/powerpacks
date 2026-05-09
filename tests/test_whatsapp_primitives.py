@@ -54,9 +54,10 @@ class FakeWAHAHandler(BaseHTTPRequestHandler):
             return self._json(200, self.routes["chats"])
         if path == "/api/contacts/all":
             return self._json(200, self.routes["contacts"])
-        # Group participants endpoint — not used in this fixture.
-        if path.startswith("/api/default/groups/"):
-            return self._json(200, [])
+        if path.startswith("/api/default/groups/") and path.endswith("/participants"):
+            group_id = path.split("/")[-2]
+            participants = self.routes.get("group_participants", {}).get(group_id, [])
+            return self._json(200, participants)
         if path.startswith("/api/default/chats/") and path.endswith("/messages"):
             chat_id = path.split("/")[-2]
             offset = int(params.get("offset", ["0"])[0])
@@ -137,11 +138,16 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                         "subject": "Founders",
                         "participants": [
                             {"id": {"_serialized": "14155550101@c.us"}},
-                            {"id": {"_serialized": "14155550202@c.us"}},
                         ],
                     },
                 },
             ],
+            "group_participants": {
+                "987654321%40g.us": [
+                    {"id": {"_serialized": "14155550101@c.us"}},
+                    {"id": {"_serialized": "14155550202@c.us"}},
+                ],
+            },
             "messages_by_chat": {
                 "14155550202%40c.us": [{"id": i} for i in range(3)],
             },
@@ -200,7 +206,13 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 self.assertEqual(jane["message_count"], "42")
 
                 bob = next(row for row in rows if row["phone"] == "+14155550202")
+                self.assertEqual(bob["is_in_group_chats"], "true")
+                self.assertEqual(bob["group_names"], "Founders")
                 self.assertEqual(bob["message_count"], "3")
+                self.assertEqual(
+                    FakeWAHAHandler.request_counts.get("/api/default/groups/987654321%40g.us/participants"),
+                    1,
+                )
 
                 # JSONL records carry the same shape used by normalize_message_contacts.
                 jsonl_rows = [json.loads(line) for line in jsonl_path.read_text().splitlines()]

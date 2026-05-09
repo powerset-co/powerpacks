@@ -376,7 +376,7 @@ def _get_chat_message_count(base_url: str, api_key: str, session: str, chat_id: 
     return len(payload)
 
 
-def _fetch_group_participants(base_url: str, api_key: str, session: str, chat_id: str) -> list[dict[str, Any]]:
+def _fetch_group_participants(base_url: str, api_key: str, session: str, chat_id: str) -> list[dict[str, Any]] | None:
     encoded = urllib.parse.quote(chat_id, safe="")
     try:
         status, payload = _waha_get(
@@ -385,10 +385,10 @@ def _fetch_group_participants(base_url: str, api_key: str, session: str, chat_id
             retries=2,
         )
     except Exception:
-        return []
+        return None
     if status == 200 and isinstance(payload, list):
         return payload
-    return []
+    return None
 
 
 def extract_contacts(
@@ -410,6 +410,8 @@ def extract_contacts(
         "raw_chats": 0,
         "direct_chats": 0,
         "group_chats": 0,
+        "group_participants_fetched": 0,
+        "group_participants_fallback": 0,
         "lid_resolved": 0,
         "group_member_phones": 0,
         "fetched_message_counts_for": 0,
@@ -498,9 +500,15 @@ def extract_contacts(
         if "@g.us" in chat_id:
             diagnostics["group_chats"] += 1
             display_name = group_chat_name(chat, chat_id)
-            participants = chat.get("participants") or (chat.get("groupMetadata") or {}).get("participants") or []
-            if not participants:
-                participants = _fetch_group_participants(base_url, api_key, session, chat_id)
+            fallback_participants = chat.get("participants") or (chat.get("groupMetadata") or {}).get("participants") or []
+            fetched_participants = _fetch_group_participants(base_url, api_key, session, chat_id)
+            if fetched_participants:
+                participants = fetched_participants
+                diagnostics["group_participants_fetched"] += 1
+            else:
+                participants = fallback_participants
+                if fallback_participants:
+                    diagnostics["group_participants_fallback"] += 1
             for p in participants:
                 if not isinstance(p, dict):
                     continue
