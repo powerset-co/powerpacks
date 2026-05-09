@@ -52,9 +52,24 @@ class SyncContactDatalakeTests(unittest.TestCase):
             }
             (research_dir / handle / "01_research_parallel.json").write_text(json.dumps(profile))
             with csv_path.open("w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=["handle", "phone_e164", "full_name", "total_messages", "bucket"])
+                writer = csv.DictWriter(f, fieldnames=[
+                    "handle", "phone_e164", "full_name", "total_messages",
+                    "imessage_message_count", "whatsapp_message_count", "last_message",
+                    "imessage_last_message", "whatsapp_last_message", "bucket",
+                ])
                 writer.writeheader()
-                writer.writerow({"handle": handle, "phone_e164": "+15551234567", "full_name": "Jane Doe", "total_messages": "5", "bucket": "yes"})
+                writer.writerow({
+                    "handle": handle,
+                    "phone_e164": "+15551234567",
+                    "full_name": "Jane Doe",
+                    "total_messages": "7",
+                    "imessage_message_count": "2",
+                    "whatsapp_message_count": "5",
+                    "last_message": "2026-05-02T00:00:00Z",
+                    "imessage_last_message": "2026-05-01T00:00:00Z",
+                    "whatsapp_last_message": "2026-05-02T00:00:00Z",
+                    "bucket": "yes",
+                })
 
             records = sync_contact_datalake.load_records(csv_path, research_dir)
 
@@ -67,6 +82,12 @@ class SyncContactDatalakeTests(unittest.TestCase):
         self.assertEqual(record["linkedin_url"], "https://www.linkedin.com/in/jane-doe")
         self.assertEqual(record["public_identifier"], "jane-doe")
         self.assertEqual(record["processing_status"], "staged")
+        self.assertEqual(record["message_count"], 7)
+        self.assertEqual(record["imessage_message_count"], 2)
+        self.assertEqual(record["whatsapp_message_count"], 5)
+        self.assertEqual(record["last_message"], "2026-05-02T00:00:00Z")
+        self.assertEqual(record["imessage_last_message"], "2026-05-01T00:00:00Z")
+        self.assertEqual(record["whatsapp_last_message"], "2026-05-02T00:00:00Z")
         self.assertEqual(record["research_profile"]["research_id"], "r1")
         synthetic = record["synthetic_profile"]
         self.assertEqual(synthetic["public_identifier"], "jane-doe")

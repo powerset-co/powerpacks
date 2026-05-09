@@ -2,6 +2,7 @@ import asyncio
 import gzip
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -30,6 +31,14 @@ results_io = load_module("results_io", ROOT / "packs/search/primitives/persist_s
 
 
 class TurbopufferPrimitiveTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Full test discovery imports message primitives that load repo .env.
+        # Unit tests for low-level search filters should exercise explicit
+        # payload behavior only, not project-local default operator filtering.
+        os.environ.pop("POWERPACKS_DEFAULT_SET_ID", None)
+        os.environ.pop("POWERPACKS_DEFAULT_OPERATOR_ID", None)
+        os.environ.pop("POWERPACKS_DEFAULT_OPERATOR_IDS", None)
+
     def test_filters_from_role_payload_uses_contract_fields(self) -> None:
         filters = turbopuffer_client.filters_from_role_payload(
             {
