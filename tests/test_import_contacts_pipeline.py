@@ -31,7 +31,6 @@ class ImportContactsPipelineTests(unittest.TestCase):
             "match_contacts": record("match_contacts"),
             "llm_review": record("llm_review"),
             "prepare_queue": record("prepare_queue"),
-            "sync_research_cache": record("sync_research_cache"),
             "parallel_research": record("parallel_research"),
             "build_review_csv": record("build_review_csv"),
             "retarget_research_after_review": record("retarget_research_after_review"),
@@ -182,6 +181,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 ledger=ledger_path,
                 review_csv=Path(tmp) / "review.csv",
                 timeout=30,
+                env_file=".env",
                 rerun_upload=False,
             )
             with mock.patch.object(mod, "summarize_upload", return_value={
@@ -196,9 +196,38 @@ class ImportContactsPipelineTests(unittest.TestCase):
                     mod.upload_review(args, ledger_path, ledger)
             block = cm.exception.payload
             self.assertIn("uploading 10", block["message"])
+            self.assertNotIn("artifact", block["message"].lower())
             self.assertNotIn("maybe", block["message"])
             self.assertNotIn("no=", block["message"])
             self.assertEqual(set(block["payload"]), {"upload_count"})
+
+    def test_upload_completion_user_message_hides_artifact_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                review_csv=Path(tmp) / "review.csv",
+                timeout=30,
+                env_file=".env",
+                rerun_upload=False,
+            )
+            summary = {"yes_count": 10}
+            ledger["approvals"][mod.approval_id("upload", {"upload_count": 10})] = {"confirmed": True}
+            with mock.patch.object(mod, "summarize_upload", return_value=summary):
+                with mock.patch.object(mod, "run_command", return_value={
+                    "returncode": 0,
+                    "json": {
+                        "status": "ok",
+                        "response": {"artifact_id": "artifact-1", "yes_count": 10},
+                    },
+                }):
+                    mod.upload_review(args, ledger_path, ledger)
+            saved = mod.read_json(ledger_path)
+            upload_summary = saved["steps"]["upload_research_review"]["summary"]
+            self.assertEqual(upload_summary["user_message"], "Uploaded 10 contacts")
+            self.assertNotIn("artifact-1", upload_summary["user_message"])
+            self.assertNotIn("artifact", upload_summary["user_message"].lower())
 
     def test_missing_contacts_bootstraps_empty_csv(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -300,8 +329,10 @@ class ImportContactsPipelineTests(unittest.TestCase):
 
             imessage = Path(tmp) / "imessage.contacts.csv"
             whatsapp = Path(tmp) / "whatsapp.contacts.csv"
+            whatsapp_count_cache = Path(tmp) / "whatsapp.message-count-cache.json"
             imessage.write_text("old imessage\n", encoding="utf-8")
             whatsapp.write_text("old whatsapp\n", encoding="utf-8")
+            whatsapp_count_cache.write_text("{}\n", encoding="utf-8")
             default_paths = {
                 "DEFAULT_IMESSAGE_CONTACTS": imessage,
                 "DEFAULT_IMESSAGE_JSONL": Path(tmp) / "imessage.contacts.raw.jsonl",
@@ -313,6 +344,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 "DEFAULT_WHATSAPP_MANIFEST": Path(tmp) / "whatsapp.contacts.csv.manifest.json",
                 "DEFAULT_WHATSAPP_NORMALIZED": Path(tmp) / "whatsapp.contacts.normalized.jsonl",
                 "DEFAULT_WHATSAPP_NORMALIZED_MANIFEST": Path(tmp) / "whatsapp.contacts.normalized.jsonl.manifest.json",
+                "DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE": whatsapp_count_cache,
                 "ARCHIVE_ROOT": Path(tmp) / "archive",
             }
 
@@ -335,8 +367,12 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertFalse(contacts.exists())
             self.assertFalse(imessage.exists())
             self.assertFalse(whatsapp.exists())
+            self.assertTrue(whatsapp_count_cache.exists())
             self.assertGreaterEqual(summary["moved_count"], 9)
             self.assertTrue((Path(summary["archive_dir"]) / "manifest.json").exists())
+            previous_review = mod.archived_artifact(summary, review_csv)
+            self.assertIsNotNone(previous_review)
+            self.assertTrue(Path(previous_review).exists())
 
     def test_continue_does_not_archive_previous_contact_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -354,6 +390,31 @@ class ImportContactsPipelineTests(unittest.TestCase):
             )
             self.assertIsNone(mod.archive_existing_run_artifacts(args))
             self.assertTrue(contacts.exists())
+
+    def test_extract_whatsapp_reuses_only_completed_active_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            ledger["steps"]["extract_whatsapp"] = {"id": "extract_whatsapp", "status": "completed"}
+            whatsapp_csv = tmp_path / "whatsapp.contacts.csv"
+            whatsapp_count_cache = tmp_path / "whatsapp.message-count-cache.json"
+            whatsapp_csv.write_text(
+                ",".join(mod.CONTACT_CSV_HEADERS) + "\n"
+                "+15550000001,Ada,whatsapp,false,,3,2026-01-01,,,,,,,,\n",
+                encoding="utf-8",
+            )
+            whatsapp_count_cache.write_text("{}\n", encoding="utf-8")
+            args = SimpleNamespace(force_whatsapp=False, timeout=30, parallel_timeout=30, env_file=".env")
+            with mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", whatsapp_csv), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE", whatsapp_count_cache), \
+                    mock.patch.object(mod, "run_command") as run_command:
+                mod.extract_whatsapp(args, ledger_path, ledger)
+
+            run_command.assert_not_called()
+            saved = mod.read_json(ledger_path)
+            summary = saved["steps"]["extract_whatsapp"]["summary"]
+            self.assertEqual(summary["reason"], "active_run_completed")
 
     def test_existing_contacts_with_legacy_queue_schema_fails_actionably(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -510,13 +571,53 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 mod.build_review_csv(args, ledger_path, ledger)
 
             cmd = run_command.call_args.args[0]
-            self.assertNotIn("--bucket-mode", cmd)
             self.assertIn("--model", cmd)
             self.assertIn("openai/gpt-4.1", cmd)
             saved = mod.read_json(ledger_path)
             summary = saved["steps"]["build_research_review_csv"]["summary"]
             self.assertEqual(summary["scoring_estimate"]["candidates"], 1)
             self.assertIn("auto_approved_reason", summary)
+
+    def test_build_review_passes_archived_previous_review_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            research_dir = tmp_path / "research"
+            handle_dir = research_dir / "phone-1"
+            handle_dir.mkdir(parents=True)
+            (handle_dir / "01_research_parallel.json").write_text("{}", encoding="utf-8")
+            previous_review = tmp_path / "archive" / "research_review.csv"
+            previous_review.parent.mkdir()
+            previous_review.write_text(
+                "bucket,handle,phone_e164,exclude,enrich_decision,retarget_hint\n"
+                "medium,phone-1,+14155550101,no,yes,https://linkedin.test/rina\n",
+                encoding="utf-8",
+            )
+            ledger.setdefault("artifacts", {})["previous_research_review_csv"] = str(previous_review)
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                research_dir=research_dir,
+                research_queue=tmp_path / "research_queue.csv",
+                review_csv=tmp_path / "research_review.csv",
+                force_build_review=False,
+                timeout=30,
+                env_file=".env",
+                llm_auto_approve_usd=10.0,
+            )
+            payload = {
+                "primitive": "build_research_review_csv",
+                "command": "build",
+                "status": "ok",
+                "rows_written": 1,
+                "counts": {"scored_via_network_review": 1, "previous_review_decisions_applied": 1},
+            }
+            with mock.patch.object(mod, "run_command", return_value={"returncode": 0, "json": payload}) as run_command:
+                mod.build_review_csv(args, ledger_path, ledger)
+
+            cmd = run_command.call_args.args[0]
+            self.assertIn("--previous-csv", cmd)
+            self.assertIn(str(previous_review), cmd)
 
     def test_run_pipeline_extracts_channels_before_merge(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -39,6 +39,8 @@ RESEARCH_COLUMNS = [
     "primary_email",
     "domain",
     "total_messages",
+    "imessage_message_count",
+    "whatsapp_message_count",
     "bio",
     "all_emails",
     "operator_id",
@@ -66,6 +68,8 @@ RESEARCH_COLUMNS = [
     "area_code",
     "message_source",
     "last_message",
+    "imessage_last_message",
+    "whatsapp_last_message",
     "is_in_group_chats",
     "match_status",
     "group_names",
@@ -91,7 +95,7 @@ BLOCKED_LAST_NAME_TOKENS = {"hinge", "raya", "tinder", "bumble"}
 REQUIRED_INPUT_HEADERS = {"phone", "name"}
 SCHEMA_DOC = "packs/messages/schemas/contacts-csv.md"
 SCHEMA_JSON = "packs/messages/schemas/contacts-csv.schema.json"
-CANONICAL_HEADER = "phone,name,source,is_in_group_chats,group_names,message_count,last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason"
+CANONICAL_HEADER = "phone,name,source,is_in_group_chats,group_names,message_count,imessage_message_count,whatsapp_message_count,last_message,imessage_last_message,whatsapp_last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason"
 
 
 def emit(value: Any) -> None:
@@ -110,7 +114,8 @@ def schema_error(path: Path, fieldnames: list[str] | None) -> str:
         f"Required input columns: phone,name. Canonical header: {CANONICAL_HEADER}. "
         f"Detected columns: {fields}. Schema docs: {SCHEMA_DOC}. JSON schema: {SCHEMA_JSON}. "
         "Common legacy mappings: phone_e164/phone_number -> phone; display_name/full_name -> name; "
-        "total_messages -> message_count; message_source/source_channel -> source."
+        "total_messages -> message_count; imessage_count/imessage_messages -> imessage_message_count; "
+        "whatsapp_count/whatsapp_messages -> whatsapp_message_count; message_source/source_channel -> source."
     )
 
 
@@ -249,6 +254,8 @@ def transform_row(row: dict[str, str]) -> dict[str, str]:
         "primary_email": "",
         "domain": "",
         "total_messages": str(parse_int(row.get("message_count"))) if row.get("message_count") else "",
+        "imessage_message_count": str(parse_int(row.get("imessage_message_count"))) if row.get("imessage_message_count") else "",
+        "whatsapp_message_count": str(parse_int(row.get("whatsapp_message_count"))) if row.get("whatsapp_message_count") else "",
         "bio": "",
         "all_emails": "",
         "operator_id": "",
@@ -276,6 +283,8 @@ def transform_row(row: dict[str, str]) -> dict[str, str]:
         "area_code": area_code(phone),
         "message_source": row.get("source", "") or "",
         "last_message": row.get("last_message", "") or "",
+        "imessage_last_message": row.get("imessage_last_message", "") or "",
+        "whatsapp_last_message": row.get("whatsapp_last_message", "") or "",
         "is_in_group_chats": row.get("is_in_group_chats", "") or "false",
         "match_status": row.get("match_status", "") or "",
         "group_names": row.get("group_names", "") or "",

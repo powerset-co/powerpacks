@@ -13,9 +13,12 @@ Per-phone merge rules (consistent with `normalize_message_contacts`):
 - `source`: comma-joined unique source values, preserving first-seen order
 - `is_in_group_chats`: logical OR
 - `group_names`: union, sorted case-insensitively, ` | ` joined
-- `message_count`: maximum across inputs (treats absent as 0; matches
-  `normalize_message_contacts.merge_contact`)
+- `message_count`: total across known per-channel message counts
+- `imessage_message_count` / `whatsapp_message_count`: per-channel counts;
+  later rows for the same phone+channel overwrite earlier rows
 - `last_message`: maximum ISO timestamp across inputs
+- `imessage_last_message` / `whatsapp_last_message`: per-channel latest message;
+  later rows for the same phone+channel overwrite earlier rows
 - `skip`: logical OR
 - `match_*`: keep the highest-confidence match block. Tie-breaker: prefer the
   one whose `match_status` is matched > suggested > unmatched > empty.
@@ -39,7 +42,11 @@ CSV_HEADERS = [
     "is_in_group_chats",
     "group_names",
     "message_count",
+    "imessage_message_count",
+    "whatsapp_message_count",
     "last_message",
+    "imessage_last_message",
+    "whatsapp_last_message",
     "skip",
     "match_status",
     "matched_person_id",
@@ -55,6 +62,7 @@ SCHEMA_JSON = "packs/messages/schemas/contacts-csv.schema.json"
 
 GROUP_SEPARATOR = " | "
 STATUS_RANK = {"matched": 3, "suggested": 2, "unmatched": 1, "": 0}
+MESSAGE_CHANNELS = ("imessage", "whatsapp")
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +90,8 @@ def schema_error(path: Path, fieldnames: list[str] | None) -> str:
         f"Required input columns: phone,name. Canonical header: {header}. "
         f"Detected columns: {fields}. Schema docs: {SCHEMA_DOC}. JSON schema: {SCHEMA_JSON}. "
         "Common legacy mappings: phone_e164/phone_number -> phone; display_name/full_name -> name; "
-        "total_messages -> message_count; message_source/source_channel -> source."
+        "total_messages -> message_count; imessage_count/imessage_messages -> imessage_message_count; "
+        "whatsapp_count/whatsapp_messages -> whatsapp_message_count; message_source/source_channel -> source."
     )
 
 
@@ -142,6 +151,36 @@ def parse_sources(value: str | None) -> list[str]:
     return sources
 
 
+def channel_counts_from_row(row: dict[str, str], sources: list[str], legacy_count: int | None) -> dict[str, int | None]:
+    counts = {channel: parse_int(row.get(f"{channel}_message_count")) for channel in MESSAGE_CHANNELS}
+    # Transitional support for old per-channel CSVs: a single-source row's
+    # legacy message_count belongs to that source.
+    if legacy_count is not None and len(sources) == 1 and sources[0] in MESSAGE_CHANNELS and counts.get(sources[0]) is None:
+        counts[sources[0]] = legacy_count
+    return counts
+
+
+def channel_last_messages_from_row(row: dict[str, str], sources: list[str], legacy_last: str | None) -> dict[str, str | None]:
+    values = {channel: (row.get(f"{channel}_last_message") or "").strip() or None for channel in MESSAGE_CHANNELS}
+    if legacy_last and len(sources) == 1 and sources[0] in MESSAGE_CHANNELS and values.get(sources[0]) is None:
+        values[sources[0]] = legacy_last
+    return values
+
+
+def total_message_count(record: dict[str, Any]) -> int | None:
+    counts = [value for value in (record.get("channel_counts") or {}).values() if value is not None]
+    if counts:
+        return sum(int(value) for value in counts)
+    return record.get("legacy_message_count")
+
+
+def latest_message(record: dict[str, Any]) -> str | None:
+    values = [value for value in (record.get("channel_last_messages") or {}).values() if value]
+    if record.get("legacy_last_message"):
+        values.append(record["legacy_last_message"])
+    return max(values, default=None)
+
+
 def parse_groups(value: str | None) -> list[str]:
     groups: list[str] = []
     for part in (value or "").split(GROUP_SEPARATOR):
@@ -176,14 +215,19 @@ def _record_from_row(row: dict[str, str]) -> dict[str, Any] | None:
     phone = canonicalize_phone(row.get("phone", ""))
     if not phone:
         return None
+    sources = parse_sources(row.get("source"))
+    legacy_count = parse_int(row.get("message_count"))
+    legacy_last = (row.get("last_message") or "").strip() or None
     return {
         "phone": phone,
         "name": (row.get("name") or "").strip(),
-        "sources": parse_sources(row.get("source")),
+        "sources": sources,
         "is_in_group_chats": parse_bool(row.get("is_in_group_chats")),
         "group_names": parse_groups(row.get("group_names")),
-        "message_count": parse_int(row.get("message_count")),
-        "last_message": (row.get("last_message") or "").strip() or None,
+        "channel_counts": channel_counts_from_row(row, sources, legacy_count),
+        "channel_last_messages": channel_last_messages_from_row(row, sources, legacy_last),
+        "legacy_message_count": legacy_count,
+        "legacy_last_message": legacy_last,
         "skip": parse_bool(row.get("skip")),
         "match_status": (row.get("match_status") or "").strip().lower(),
         "matched_person_id": (row.get("matched_person_id") or "").strip(),
@@ -213,16 +257,14 @@ def _better_match(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]
 def _merge_records(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
     sources = list(dict.fromkeys([*existing["sources"], *new["sources"]]))
     groups = list(dict.fromkeys([*existing["group_names"], *new["group_names"]]))
-    existing_count = existing.get("message_count")
-    new_count = new.get("message_count")
-    if existing_count is None and new_count is None:
-        message_count = None
-    else:
-        message_count = max(existing_count or 0, new_count or 0)
-    last_message = max(
-        [v for v in (existing.get("last_message"), new.get("last_message")) if v],
-        default=None,
-    )
+    channel_counts = dict(existing.get("channel_counts") or {})
+    for channel, value in (new.get("channel_counts") or {}).items():
+        if value is not None:
+            channel_counts[channel] = value
+    channel_last_messages = dict(existing.get("channel_last_messages") or {})
+    for channel, value in (new.get("channel_last_messages") or {}).items():
+        if value:
+            channel_last_messages[channel] = value
     name = existing["name"] or new["name"] or ""
 
     match_winner = _better_match(existing, new)
@@ -233,8 +275,10 @@ def _merge_records(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, A
         "sources": sources,
         "is_in_group_chats": bool(existing["is_in_group_chats"] or new["is_in_group_chats"] or groups),
         "group_names": groups,
-        "message_count": message_count,
-        "last_message": last_message,
+        "channel_counts": channel_counts,
+        "channel_last_messages": channel_last_messages,
+        "legacy_message_count": new.get("legacy_message_count") if new.get("legacy_message_count") is not None else existing.get("legacy_message_count"),
+        "legacy_last_message": max([v for v in (existing.get("legacy_last_message"), new.get("legacy_last_message")) if v], default=None),
         "skip": bool(existing["skip"] or new["skip"]),
         "match_status": match_winner.get("match_status", ""),
         "matched_person_id": match_winner.get("matched_person_id", ""),
@@ -274,8 +318,8 @@ def write_output_csv(path: Path, records: list[dict[str, Any]]) -> int:
     rows = sorted(
         records,
         key=lambda r: (
-            -(r.get("message_count") or 0),
-            r.get("last_message") or "",
+            -(total_message_count(r) or 0),
+            latest_message(r) or "",
             r.get("phone") or "",
         ),
     )
@@ -287,14 +331,21 @@ def write_output_csv(path: Path, records: list[dict[str, Any]]) -> int:
             confidence_str = ""
             if confidence is not None:
                 confidence_str = f"{confidence:.3f}".rstrip("0").rstrip(".") or "0"
+            channel_counts = r.get("channel_counts") or {}
+            channel_last_messages = r.get("channel_last_messages") or {}
+            message_count = total_message_count(r)
             writer.writerow({
                 "phone": r["phone"],
                 "name": r.get("name") or "",
                 "source": serialize_sources(r.get("sources") or []),
                 "is_in_group_chats": "true" if r.get("is_in_group_chats") else "false",
                 "group_names": serialize_groups(r.get("group_names") or []),
-                "message_count": "" if r.get("message_count") is None else str(r["message_count"]),
-                "last_message": r.get("last_message") or "",
+                "message_count": "" if message_count is None else str(message_count),
+                "imessage_message_count": "" if channel_counts.get("imessage") is None else str(channel_counts["imessage"]),
+                "whatsapp_message_count": "" if channel_counts.get("whatsapp") is None else str(channel_counts["whatsapp"]),
+                "last_message": latest_message(r) or "",
+                "imessage_last_message": channel_last_messages.get("imessage") or "",
+                "whatsapp_last_message": channel_last_messages.get("whatsapp") or "",
                 "skip": "yes" if r.get("skip") else "",
                 "match_status": r.get("match_status") or "",
                 "matched_person_id": r.get("matched_person_id") or "",

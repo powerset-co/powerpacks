@@ -12,7 +12,6 @@ resumed with `continue`.
 ```bash
 uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
 uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py continue
-uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py status
 uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve
 ```
 
@@ -46,10 +45,14 @@ Gates:
 ## Steps
 
 1. On `run`, archive prior contact/import artifacts so stale channel exports,
-   queues, review CSVs, and ledgers cannot be silently reused. `continue` keeps
-   the active ledger/artifacts.
-2. Extract iMessage/Contacts.app rows and WhatsApp rows, then normalize both
-   channel exports.
+   derived queues, review CSVs, and ledgers cannot be silently reused. The
+   WhatsApp message-count cache, `01_research_parallel.json`, and
+   `03_network_review.json` stay in place. Explicit review decisions plus
+   retarget hints are carried forward from the archived review CSV. `continue`
+   keeps the active ledger/artifacts.
+2. Extract iMessage/Contacts.app rows and rescan live WhatsApp. The WhatsApp
+   scan reuses cached counts for unchanged chats, then both channel exports are
+   normalized.
 3. Merge existing channel exports into `.powerpacks/messages/contacts.csv`, or
    create an empty canonical CSV if no channel export exists. If an existing CSV
    has incompatible headers, the pipeline fails fast with
@@ -59,14 +62,12 @@ Gates:
 5. Match local contacts.
 6. Estimate/run LLM review if no completed review manifest exists.
 7. Prepare `research_queue.csv`.
-8. Optimistically sync prior deep-research cache from GCS. If `gcloud rsync`
-   fails, record a warning and continue with the local cache.
-9. Estimate/run Parallel deep research after approval.
-10. Build `research_review.csv`.
-11. Start the local review web UI and block for the user to finish review.
-12. On `continue`, detect saved `retarget_hint` feedback. If new hints exist,
+8. Estimate/run Parallel deep research after approval.
+9. Build `research_review.csv`.
+10. Start the local review web UI and block for the user to finish review.
+11. On `continue`, detect saved `retarget_hint` feedback. If new hints exist,
     build `retarget_queue.csv`, estimate targeted Parallel research, and block
-    for `approve parallel` before upload.
-13. Merge completed retarget results back into `research_review.csv`.
-14. Summarize and block for upload approval.
-15. Upload with `--confirm-upload` after approval.
+    for `approve` before upload.
+12. Merge completed retarget results back into `research_review.csv`.
+13. Summarize and block for upload approval.
+14. Upload after approval.

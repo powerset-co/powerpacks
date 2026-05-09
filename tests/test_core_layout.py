@@ -123,11 +123,13 @@ class CoreLayoutTests(unittest.TestCase):
 
     def test_import_contacts_documents_guided_flow(self) -> None:
         text = (ROOT / "packs/messages/skills/import-contacts/SKILL.md").read_text()
-        self.assertIn("Ask once at the beginning", text)
-        self.assertIn("Check iMessage access", text)
-        self.assertIn("Link WhatsApp", text)
-        self.assertIn("review_contacts_web", text)
-        self.assertIn("review_research_web", text)
+        self.assertIn("`$import-contacts` starts with a fresh run", text)
+        self.assertIn("only use", text)
+        self.assertIn("continue", text)
+        self.assertIn("approve", text)
+        self.assertIn("Starting work through sub-agent.", text)
+        self.assertIn("Never upload automatically.", text)
+        self.assertIn("Retarget feedback is automatic", text)
 
     def test_search_network_uses_single_execute_preview_gate(self) -> None:
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()

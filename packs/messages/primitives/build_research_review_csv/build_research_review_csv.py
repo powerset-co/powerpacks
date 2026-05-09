@@ -6,9 +6,12 @@ TUI (`contact-exporter review --file ...`) and `/v2/messages-research/artifacts`
 upload. Columns:
 
     bucket, handle, full_name, phone_e164, area_code, total_messages,
-    message_source, group_names, location_city, location_country,
+    imessage_message_count, whatsapp_message_count, message_source,
+    last_message, imessage_last_message, whatsapp_last_message, group_names,
+    location_city, location_country,
     top_titles, top_companies, top_title_company_pairs, schools,
-    short_reason, identity_risk, signals
+    short_reason, identity_risk, signals, retarget_hint, exclude,
+    enrich_decision
 
 Buckets are `confident | medium | review`. The TUI maps these onto its
 yes / maybe / no tabs.
@@ -26,7 +29,6 @@ import argparse
 import csv
 import json
 import os
-import re
 import time
 import urllib.error
 import urllib.request
@@ -65,7 +67,12 @@ CSV_FIELDS = [
     "phone_e164",
     "area_code",
     "total_messages",
+    "imessage_message_count",
+    "whatsapp_message_count",
     "message_source",
+    "last_message",
+    "imessage_last_message",
+    "whatsapp_last_message",
     "group_names",
     "location_city",
     "location_country",
@@ -77,18 +84,18 @@ CSV_FIELDS = [
     "identity_risk",
     "signals",
     "retarget_hint",
+    "exclude",
+    "enrich_decision",
 ]
 
 DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
 DEFAULT_QUEUE_CSV = Path(".powerpacks/messages/research_queue.csv")
 DEFAULT_OUTPUT_CSV = Path(".powerpacks/messages/research_review.csv")
-LEGACY_REVIEW_CACHE_NAME = "02_review_cache.json"
 NETWORK_REVIEW_CACHE_NAME = "03_network_review.json"
-LEGACY_NETWORK_REVIEW_CACHE_NAME = "06_network_review.json"
 
 # Bucket order for sorting and reporting.
 BUCKET_ORDER = {"confident": 0, "medium": 1, "review": 2}
-BUCKET_TO_TAB = {"confident": "yes", "medium": "maybe", "review": "no"}
+REVIEW_DECISION_FIELDS = ("exclude", "enrich_decision", "retarget_hint")
 
 
 # ---------------------------------------------------------------------------
@@ -151,14 +158,6 @@ def write_json(path: Path, value: Any) -> None:
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def shared_token(a: str, b: str) -> bool:
-    """True when the two name strings share at least one >=3-char alpha token."""
-    def toks(s: str) -> set[str]:
-        cleaned = re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower())
-        return {t for t in cleaned.split() if len(t) >= 3 and t.isalpha()}
-    return bool(toks(a) & toks(b))
 
 
 def linkedin_public_identifier(url: str | None) -> str:
@@ -275,7 +274,12 @@ def flatten_row(
         "phone_e164": queue_row.get("phone_e164", "") or "",
         "area_code": queue_row.get("area_code", "") or "",
         "total_messages": queue_row.get("total_messages", "") or "0",
+        "imessage_message_count": queue_row.get("imessage_message_count", "") or "",
+        "whatsapp_message_count": queue_row.get("whatsapp_message_count", "") or "",
         "message_source": queue_row.get("message_source", "") or "",
+        "last_message": queue_row.get("last_message", "") or "",
+        "imessage_last_message": queue_row.get("imessage_last_message", "") or "",
+        "whatsapp_last_message": queue_row.get("whatsapp_last_message", "") or "",
         "group_names": queue_row.get("group_names", "") or "",
         "location_city": (location.get("city") or "").strip(),
         "location_country": (location.get("country") or "").strip(),
@@ -287,102 +291,19 @@ def flatten_row(
         "identity_risk": bucket_payload.get("identity_risk", "") or "",
         "signals": " | ".join(bucket_payload.get("signals") or []),
         "retarget_hint": queue_row.get("retarget_hint", "") or "",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Heuristic bucketing
-# ---------------------------------------------------------------------------
-
-def heuristic_bucket(
-    queue_row: dict[str, str],
-    research_packet: dict[str, Any] | None,
-    raw_packet: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Bucket using only the artifacts we already have. No API spend.
-
-    Rules:
-      - if no real_name surfaced → review
-      - if input first name doesn't share a token with returned name → review (likely wrong person)
-      - if has linkedin_url AND name_confidence>=0.85 AND >=1 position → confident
-      - elif has linkedin_url AND >=1 position → medium
-      - elif has real_name AND (>=1 position OR location surfaced) → medium
-      - else review
-    """
-    person = (research_packet or {}).get("person", {}) or {}
-    social = (research_packet or {}).get("social", {}) or {}
-    real_name = (person.get("full_name") or "").strip()
-    name_conf = float(person.get("confidence") or 0)
-    linkedin_url = (social.get("linkedin_url") or "").strip()
-    positions = (research_packet or {}).get("positions") or []
-    location = (research_packet or {}).get("location", {}) or {}
-    has_location = bool((location.get("city") or "").strip() or (location.get("country") or "").strip())
-
-    input_name = queue_row.get("display_name", "") or ""
-    signals: list[str] = []
-    identity_risk = ""
-
-    if not real_name or real_name.lower() == "unknown":
-        return {
-            "bucket": "review",
-            "short_reason": "No real name surfaced by deep research.",
-            "identity_risk": "no_real_name",
-            "signals": signals,
-        }
-
-    if input_name and not shared_token(input_name, real_name):
-        identity_risk = "wrong_person"
-        return {
-            "bucket": "review",
-            "short_reason": f"Returned name '{real_name}' shares no token with input '{input_name}'.",
-            "identity_risk": identity_risk,
-            "signals": signals,
-        }
-
-    if linkedin_url:
-        signals.append("linkedin")
-    if positions:
-        signals.append(f"{len(positions)}_positions")
-    if has_location:
-        signals.append("location")
-    if name_conf >= 0.9:
-        signals.append("high_name_confidence")
-
-    if linkedin_url and name_conf >= 0.85 and positions:
-        return {
-            "bucket": "confident",
-            "short_reason": (
-                f"{real_name} — {positions[0].get('title','')} @ {positions[0].get('company_name','')}"
-                if positions else real_name
-            ).strip(" —@"),
-            "identity_risk": "" if name_conf >= 0.95 else "low_certainty_name",
-            "signals": signals,
-        }
-    if linkedin_url and positions:
-        return {
-            "bucket": "medium",
-            "short_reason": f"LinkedIn found, lower name confidence ({name_conf:.2f}).",
-            "identity_risk": "low_certainty_name" if name_conf < 0.85 else "",
-            "signals": signals,
-        }
-    if positions or has_location:
-        return {
-            "bucket": "medium",
-            "short_reason": f"Real name + {('career' if positions else 'location')} signal but no LinkedIn.",
-            "identity_risk": "no_linkedin",
-            "signals": signals,
-        }
-    return {
-        "bucket": "review",
-        "short_reason": "Real name returned but no career / LinkedIn / location evidence.",
-        "identity_risk": "no_evidence",
-        "signals": signals,
+        "exclude": "",
+        "enrich_decision": "",
     }
 
 
 # ---------------------------------------------------------------------------
 # LLM bucketing (OpenRouter)
 # ---------------------------------------------------------------------------
+
+
+class NetworkReviewError(RuntimeError):
+    pass
+
 
 def _openrouter_chat(api_key: str, model: str, messages: list[dict], *, timeout: int = 90) -> tuple[dict[str, Any] | None, str | None]:
     base = os.environ.get("POWERPACKS_OPENROUTER_BASE", "https://openrouter.ai/api/v1")
@@ -440,12 +361,11 @@ def llm_bucket(
     model: str,
     queue_row: dict[str, str],
     research_packet: dict[str, Any] | None,
-    raw_packet: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Call OpenRouter with the network-fit SYSTEM_PROMPT to bucket the candidate.
 
-    On API failure falls back to heuristic bucketing and stamps `identity_risk`
-    with the failure reason so the run never throws.
+    There is no heuristic mode. If the LLM cannot return a valid bucket, fail
+    the build so the review CSV does not silently contain low-quality guesses.
     """
     person = (research_packet or {}).get("person", {}) or {}
     social = (research_packet or {}).get("social", {}) or {}
@@ -457,7 +377,12 @@ def llm_bucket(
             "phone_e164": queue_row.get("phone_e164", ""),
             "area_code": queue_row.get("area_code", ""),
             "total_messages": queue_row.get("total_messages", "0"),
+            "imessage_message_count": queue_row.get("imessage_message_count", ""),
+            "whatsapp_message_count": queue_row.get("whatsapp_message_count", ""),
             "message_source": queue_row.get("message_source", ""),
+            "last_message": queue_row.get("last_message", ""),
+            "imessage_last_message": queue_row.get("imessage_last_message", ""),
+            "whatsapp_last_message": queue_row.get("whatsapp_last_message", ""),
             "group_names": queue_row.get("group_names", ""),
             "retarget_hint": queue_row.get("retarget_hint", ""),
         },
@@ -487,16 +412,13 @@ def llm_bucket(
         {"role": "user", "content": user_prompt},
     ])
     if err or not response:
-        fallback = heuristic_bucket(queue_row, research_packet, raw_packet)
-        fallback.setdefault("signals", []).append(f"llm_fallback:{err}")
-        fallback["identity_risk"] = fallback.get("identity_risk") or "llm_unavailable"
-        return fallback
+        raise NetworkReviewError(f"network review failed: {err or 'empty response'}")
     parsed = response["parsed"] if isinstance(response, dict) else None
     if not isinstance(parsed, dict):
-        return heuristic_bucket(queue_row, research_packet, raw_packet)
+        raise NetworkReviewError("network review response missing JSON object")
     bucket = (parsed.get("bucket") or "").strip().lower()
     if bucket not in BUCKET_ORDER:
-        bucket = "review"
+        raise NetworkReviewError(f"network review returned invalid bucket: {bucket or '<empty>'}")
     signals = parsed.get("signals") or []
     if not isinstance(signals, list):
         signals = [str(signals)]
@@ -532,11 +454,54 @@ def load_queue(queue_path: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
+def load_previous_review_decisions(path: Path | None) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]], int]:
+    """Load human review state from an older CSV without trusting stale buckets."""
+    if path is None or not path.exists():
+        return {}, {}, 0
+    by_handle: dict[str, dict[str, str]] = {}
+    by_phone: dict[str, dict[str, str]] = {}
+    carried = 0
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            decision = {field: (row.get(field) or "").strip() for field in REVIEW_DECISION_FIELDS}
+            if not any(decision.values()):
+                continue
+            carried += 1
+            row_handle = (row.get("handle") or "").strip()
+            phone = (row.get("phone_e164") or "").strip()
+            if row_handle:
+                by_handle[row_handle] = decision
+            if phone:
+                by_phone[phone] = decision
+    return by_handle, by_phone, carried
+
+
+def apply_previous_review_decision(
+    row: dict[str, str],
+    by_handle: dict[str, dict[str, str]],
+    by_phone: dict[str, dict[str, str]],
+) -> bool:
+    decision = by_handle.get(row.get("handle", "")) or by_phone.get(row.get("phone_e164", ""))
+    if not decision:
+        return False
+    applied = False
+    for field in REVIEW_DECISION_FIELDS:
+        value = decision.get(field, "")
+        if value:
+            row[field] = value
+            applied = True
+    return applied
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     research_dir = Path(args.research_dir)
     queue_rows = load_queue(Path(args.queue_csv))
     output_csv = Path(args.output_csv)
     manifest_path = Path(args.manifest) if args.manifest else output_csv.with_suffix(output_csv.suffix + ".manifest.json")
+    previous_csv_arg = getattr(args, "previous_csv", None)
+    previous_csv = Path(previous_csv_arg) if previous_csv_arg else None
+    previous_by_handle, previous_by_phone, previous_decision_rows = load_previous_review_decisions(previous_csv)
 
     if not research_dir.exists():
         emit({"primitive": "build_research_review_csv", "command": "build", "status": "failed",
@@ -556,12 +521,12 @@ def cmd_build(args: argparse.Namespace) -> int:
         "handles_seen": 0,
         "missing_research_packet": 0,
         "filtered_no_queue_row": 0,
-        "scored_via_cache": 0,
         "scored_via_network_review": 0,
         "scored_via_llm": 0,
-        "scored_via_heuristic": 0,
         "network_review_written": 0,
         "llm_errors": 0,
+        "previous_review_decision_rows": previous_decision_rows,
+        "previous_review_decisions_applied": 0,
     }
     bucket_counts: dict[str, int] = {bucket: 0 for bucket in BUCKET_ORDER}
     total_input_tokens = 0
@@ -573,9 +538,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         counts["handles_seen"] += 1
         research_path = d / "01_research_parallel.json"
         raw_path = d / "00_parallel_raw.json"
-        legacy_cache_path = d / LEGACY_REVIEW_CACHE_NAME
         network_review_path = d / NETWORK_REVIEW_CACHE_NAME
-        legacy_network_review_path = d / LEGACY_NETWORK_REVIEW_CACHE_NAME
         if not research_path.exists():
             counts["missing_research_packet"] += 1
             continue
@@ -611,53 +574,34 @@ def cmd_build(args: argparse.Namespace) -> int:
 
         if bucket_payload is not None:
             pass
-        elif args.bucket_mode == "llm":
-            if legacy_cache_path.exists() and not args.refresh_cache:
-                try:
-                    cached = read_json(legacy_cache_path)
-                    bucket_payload = normalize_review_payload(cached.get("review") if isinstance(cached, dict) else None)
-                    if bucket_payload is not None:
-                        counts["scored_via_cache"] += 1
-                        write_network_review_cache(
-                            network_review_path,
-                            handle,
-                            queue_row,
-                            research_packet,
-                            str(cached.get("model") or args.model),
-                            bucket_payload,
-                        )
-                        counts["network_review_written"] += 1
-                except (json.JSONDecodeError, OSError):
-                    pass
-            if bucket_payload is None:
-                if not api_key:
-                    emit({"primitive": "build_research_review_csv", "command": "build", "status": "failed",
-                          "error": "OPENROUTER_API_KEY not set (pass --api-key or add it to the repo .env)"})
-                    return 1
-                bucket_payload = llm_bucket(api_key, args.model, queue_row, research_packet, raw_packet)
-                usage = bucket_payload.pop("_usage", None) or {}
-                total_input_tokens += int(usage.get("prompt_tokens") or 0)
-                total_output_tokens += int(usage.get("completion_tokens") or 0)
-                if any(s.startswith("llm_fallback:") for s in (bucket_payload.get("signals") or [])):
-                    counts["llm_errors"] += 1
-                    counts["scored_via_heuristic"] += 1
-                else:
-                    counts["scored_via_llm"] += 1
-                    write_network_review_cache(network_review_path, handle, queue_row, research_packet, args.model, bucket_payload)
-                    counts["network_review_written"] += 1
         else:
-            if legacy_network_review_path.exists() and not args.refresh_cache:
-                try:
-                    bucket_payload = network_review_bucket(read_json(legacy_network_review_path))
-                    if bucket_payload is not None:
-                        counts["scored_via_network_review"] += 1
-                except (json.JSONDecodeError, OSError):
-                    pass
-            if bucket_payload is None:
-                bucket_payload = heuristic_bucket(queue_row, research_packet, raw_packet)
-                counts["scored_via_heuristic"] += 1
+            if not api_key:
+                emit({"primitive": "build_research_review_csv", "command": "build", "status": "failed",
+                      "error": "OPENROUTER_API_KEY not set (pass --api-key or add it to the repo .env)"})
+                return 1
+            try:
+                bucket_payload = llm_bucket(api_key, args.model, queue_row, research_packet)
+            except NetworkReviewError as exc:
+                counts["llm_errors"] += 1
+                emit({
+                    "primitive": "build_research_review_csv",
+                    "command": "build",
+                    "status": "failed",
+                    "handle": handle,
+                    "error": str(exc),
+                    "counts": counts,
+                })
+                return 1
+            usage = bucket_payload.pop("_usage", None) or {}
+            total_input_tokens += int(usage.get("prompt_tokens") or 0)
+            total_output_tokens += int(usage.get("completion_tokens") or 0)
+            counts["scored_via_llm"] += 1
+            write_network_review_cache(network_review_path, handle, queue_row, research_packet, args.model, bucket_payload)
+            counts["network_review_written"] += 1
 
         flat = flatten_row(handle, queue_row, research_packet, raw_packet, bucket_payload)
+        if apply_previous_review_decision(flat, previous_by_handle, previous_by_phone):
+            counts["previous_review_decisions_applied"] += 1
         rows.append(flat)
         bucket_counts[flat["bucket"]] = bucket_counts.get(flat["bucket"], 0) + 1
 
@@ -673,25 +617,23 @@ def cmd_build(args: argparse.Namespace) -> int:
         writer.writeheader()
         writer.writerows(rows)
 
-    cost_usd = 0.0
-    if args.bucket_mode == "llm":
-        # Same coarse pricing table used by llm_review_contacts.
-        pricing = {
-            "anthropic/claude-sonnet-4-6": (3.00, 15.00),
-            "anthropic/claude-haiku-4-5": (0.80, 4.00),
-            "openai/gpt-4.1": (2.00, 8.00),
-            "openai/gpt-4.1-mini": (0.40, 1.60),
-            "openai/gpt-4.1-nano": (0.10, 0.40),
-        }.get(args.model, (2.00, 8.00))
-        cost_usd = round((total_input_tokens / 1e6) * pricing[0]
-                         + (total_output_tokens / 1e6) * pricing[1], 4)
+    # Same coarse pricing table used by llm_review_contacts.
+    pricing = {
+        "anthropic/claude-sonnet-4-6": (3.00, 15.00),
+        "anthropic/claude-haiku-4-5": (0.80, 4.00),
+        "openai/gpt-4.1": (2.00, 8.00),
+        "openai/gpt-4.1-mini": (0.40, 1.60),
+        "openai/gpt-4.1-nano": (0.10, 0.40),
+    }.get(args.model, (2.00, 8.00))
+    cost_usd = round((total_input_tokens / 1e6) * pricing[0]
+                     + (total_output_tokens / 1e6) * pricing[1], 4)
 
     manifest = {
         "primitive": "build_research_review_csv",
         "command": "build",
         "status": "ok",
-        "bucket_mode": args.bucket_mode,
-        "model": args.model if args.bucket_mode == "llm" else None,
+        "review_source": "network_review_llm",
+        "model": args.model,
         "research_dir": str(research_dir),
         "queue_csv": str(args.queue_csv),
         "output_csv": str(output_csv),
@@ -729,10 +671,10 @@ def main() -> None:
                        help="research_queue.csv used as input to deep_research_contacts")
     build.add_argument("--output-csv", default=str(DEFAULT_OUTPUT_CSV))
     build.add_argument("--manifest", help="Path to write the run manifest JSON")
-    build.add_argument("--bucket-mode", choices=["heuristic", "llm"], default="llm", help=argparse.SUPPRESS)
     build.add_argument("--model", default=DEFAULT_SCORE_MODEL,
                        help="Network-review model (OpenRouter slug)")
     build.add_argument("--api-key", help="OpenRouter API key (defaults to OPENROUTER_API_KEY from env or repo .env)")
+    build.add_argument("--previous-csv", type=Path, help=argparse.SUPPRESS)
     build.add_argument("--refresh-cache", action="store_true", help=argparse.SUPPRESS)
     build.add_argument("--allow-missing-queue", action="store_true",
                        help="Include handles not present in queue_csv (uses defaults)")

@@ -33,8 +33,10 @@ python packs/messages/primitives/merge_message_contacts/merge_message_contacts.p
 | `source` | Comma-joined unique sources, first-seen order |
 | `is_in_group_chats` | Logical OR |
 | `group_names` | Union, sorted case-insensitively, ` \| ` joined |
-| `message_count` | Maximum across inputs (matches `normalize_message_contacts`) |
+| `message_count` | Total across known per-channel counts |
+| `imessage_message_count`, `whatsapp_message_count` | Per-channel counts; later rows for the same phone+channel overwrite earlier rows |
 | `last_message` | Maximum ISO timestamp |
+| `imessage_last_message`, `whatsapp_last_message` | Per-channel latest timestamp; later rows for the same phone+channel overwrite earlier rows |
 | `skip` | Logical OR |
 | `match_*` | Highest `match_confidence` wins; tie-breaker `matched > suggested > unmatched > empty` |
 
@@ -49,7 +51,7 @@ phone,name
 Canonical output header:
 
 ```text
-phone,name,source,is_in_group_chats,group_names,message_count,last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason
+phone,name,source,is_in_group_chats,group_names,message_count,imessage_message_count,whatsapp_message_count,last_message,imessage_last_message,whatsapp_last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason
 ```
 
 ## Output

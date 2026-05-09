@@ -8,7 +8,7 @@ Subcommands:
 
 Privacy contract:
 
-- Only `name`, `source`, `message_count`, last-contact recency, and whether
+- Only `name`, `source`, message counts, last-contact recency, and whether
   the row appears in group chats are sent. No phone numbers, group names, or
   message content.
 - The `skip` column is the only field updated in the contacts CSV.
@@ -61,7 +61,11 @@ CSV_HEADERS = [
     "is_in_group_chats",
     "group_names",
     "message_count",
+    "imessage_message_count",
+    "whatsapp_message_count",
     "last_message",
+    "imessage_last_message",
+    "whatsapp_last_message",
     "skip",
     "match_status",
     "matched_person_id",
@@ -210,7 +214,11 @@ def load_contacts_for_review(
                 "is_in_group_chats": row.get("is_in_group_chats", "false"),
                 "group_names": row.get("group_names", ""),
                 "message_count": row.get("message_count", "") or "0",
+                "imessage_message_count": row.get("imessage_message_count", ""),
+                "whatsapp_message_count": row.get("whatsapp_message_count", ""),
                 "last_message": row.get("last_message", ""),
+                "imessage_last_message": row.get("imessage_last_message", ""),
+                "whatsapp_last_message": row.get("whatsapp_last_message", ""),
                 "match_status": effective or "unmatched",
                 "matched_person_id": matched_person_id,
             })
@@ -229,7 +237,11 @@ def build_batch_payload(batch: list[dict[str, str]]) -> list[dict[str, Any]]:
             "name": c["name"],
             "source": c.get("source", ""),
             "message_count": msg_count,
+            "imessage_message_count": c.get("imessage_message_count", ""),
+            "whatsapp_message_count": c.get("whatsapp_message_count", ""),
             "last_contacted": format_recency(c.get("last_message", "")),
+            "imessage_last_contacted": format_recency(c.get("imessage_last_message", "")),
+            "whatsapp_last_contacted": format_recency(c.get("whatsapp_last_message", "")),
             "in_group_chats": c.get("is_in_group_chats", "false"),
         })
     return payload

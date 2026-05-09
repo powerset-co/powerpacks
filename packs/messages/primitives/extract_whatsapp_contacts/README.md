@@ -14,7 +14,7 @@ not handle QR auth. Use:
 
 - Never reads or stores message content
 - Only collects: `phone, name, source, is_in_group_chats, group_names,
-  message_count, last_message`
+  message_count, whatsapp_message_count, last_message, whatsapp_last_message`
 - Output schema matches `normalize_message_contacts` and the canonical
   `message-contact.schema.json`
 

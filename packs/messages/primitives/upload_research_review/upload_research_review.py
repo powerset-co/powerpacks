@@ -247,7 +247,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
             "primitive": "upload_research_review",
             "command": "upload",
             "status": "blocked",
-            "error": "pass --confirm-upload after the user explicitly approves uploading the reviewed artifact",
+            "error": "pass --confirm-upload after the user explicitly approves uploading the reviewed contacts",
         })
         return 2
     api_url = args.api_url or os.getenv("POWERPACKS_API_URL") or os.getenv("POWERSET_API_URL") or DEFAULT_API_URL
@@ -274,7 +274,7 @@ def main() -> int:
     prepare.add_argument("--output", default=".powerpacks/messages/research_review.upload.csv")
     prepare.set_defaults(func=cmd_prepare)
 
-    upload = sub.add_parser("upload", help="Upload the reviewed CSV artifact")
+    upload = sub.add_parser("upload", help="Upload the reviewed contacts CSV")
     upload.add_argument("--csv", default=DEFAULT_CSV)
     upload.add_argument("--api-url", default=None)
     upload.add_argument("--token", default=None)

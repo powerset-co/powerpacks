@@ -169,6 +169,13 @@ def synthetic_profile_from_research(profile, row):
             "draft":True,
         },
     }
+def parse_int_field(value):
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def row_to_record(row, research_dir, retarget_research_dir):
     handle=(row.get("handle") or "").strip()
     prof=profile_for_row(row,research_dir,retarget_research_dir)
@@ -187,7 +194,12 @@ def row_to_record(row, research_dir, retarget_research_dir):
         "full_name": full_name,
         "name": full_name,
         "source_channel": row.get("message_source") or "messages_research",
-        "message_count": int(float(row.get("total_messages") or 0)),
+        "message_count": parse_int_field(row.get("total_messages")),
+        "imessage_message_count": parse_int_field(row.get("imessage_message_count")),
+        "whatsapp_message_count": parse_int_field(row.get("whatsapp_message_count")),
+        "last_message": row.get("last_message") or None,
+        "imessage_last_message": row.get("imessage_last_message") or None,
+        "whatsapp_last_message": row.get("whatsapp_last_message") or None,
         "bucket": row.get("bucket") or "",
         "upload_decision": decision(row),
         "linkedin_url": linkedin,

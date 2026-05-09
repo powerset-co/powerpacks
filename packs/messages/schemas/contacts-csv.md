@@ -20,7 +20,7 @@ phone,name
 ## Canonical header order
 
 ```text
-phone,name,source,is_in_group_chats,group_names,message_count,last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason
+phone,name,source,is_in_group_chats,group_names,message_count,imessage_message_count,whatsapp_message_count,last_message,imessage_last_message,whatsapp_last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason
 ```
 
 ## Field notes
@@ -32,8 +32,12 @@ phone,name,source,is_in_group_chats,group_names,message_count,last_message,skip,
 | `source` | `imessage`, `whatsapp`, or comma-separated sources |
 | `is_in_group_chats` | `true`/`false` |
 | `group_names` | Group names joined with ` \| ` |
-| `message_count` | Non-negative integer if known |
-| `last_message` | ISO-8601 timestamp if known |
+| `message_count` | Total non-negative message count across known message sources |
+| `imessage_message_count` | iMessage/SMS message count if known |
+| `whatsapp_message_count` | WhatsApp direct-chat message count if known |
+| `last_message` | Latest ISO-8601 timestamp across known message sources |
+| `imessage_last_message` | Latest iMessage/SMS timestamp if known |
+| `whatsapp_last_message` | Latest WhatsApp timestamp if known |
 | `skip` | `yes`/`true` to exclude from research |
 | `match_status` | blank, `unmatched`, `suggested`, or `matched` |
 | `matched_person_id` | Powerset person ID for confirmed local match |
@@ -52,8 +56,12 @@ If the file looks like an old research queue or review CSV, use these mappings:
 | `phone_e164`, `phone_number`, `primary_phone` | `phone` |
 | `display_name`, `full_name`, `real_name` | `name` |
 | `total_messages` | `message_count` |
+| `imessage_messages`, `imessage_count`, `imessage_message_count` | `imessage_message_count` |
+| `whatsapp_messages`, `whatsapp_count`, `whatsapp_message_count` | `whatsapp_message_count` |
 | `message_source`, `source_channel` | `source` |
 | `last_message` | `last_message` |
+| `imessage_last_message` | `imessage_last_message` |
+| `whatsapp_last_message` | `whatsapp_last_message` |
 | `is_in_group_chats` | `is_in_group_chats` |
 | `group_names` | `group_names` |
 | `match_status` | `match_status` |
@@ -62,4 +70,6 @@ If the file looks like an old research queue or review CSV, use these mappings:
 | `match_reason` | `match_reason` |
 
 Fill missing optional canonical columns with blanks, except `source` can default
-to `phone` or the known channel if no better source is available.
+to `phone` or the known channel if no better source is available. For new
+exports, agents should preserve per-source counts and set `message_count` to the
+total across known message sources.

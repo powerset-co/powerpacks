@@ -32,7 +32,11 @@ CSV_HEADERS = [
     "is_in_group_chats",
     "group_names",
     "message_count",
+    "imessage_message_count",
+    "whatsapp_message_count",
     "last_message",
+    "imessage_last_message",
+    "whatsapp_last_message",
     "skip",
     "match_status",
     "matched_person_id",
@@ -149,6 +153,15 @@ def apple_timestamp_to_iso(value: int | float | None) -> str | None:
         return None
 
 
+def iso_desc_sort_value(value: str | None) -> float:
+    if not value:
+        return float("inf")
+    try:
+        return -datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return float("inf")
+
+
 def open_sqlite_readonly(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
@@ -207,8 +220,9 @@ def read_addressbook_contacts(addressbook_glob: str) -> tuple[dict[str, str], li
         FROM ZABCDPHONENUMBER p
         JOIN ZABCDRECORD r ON p.ZOWNER = r.Z_PK
         WHERE p.ZFULLNUMBER IS NOT NULL AND p.ZFULLNUMBER <> ''
+        ORDER BY p.ZFULLNUMBER, r.ZLASTNAME, r.ZFIRSTNAME
     """
-    for db_name in glob.glob(addressbook_glob):
+    for db_name in sorted(glob.glob(addressbook_glob)):
         path = Path(db_name)
         try:
             with open_sqlite_readonly(path) as conn:
@@ -217,7 +231,12 @@ def read_addressbook_contacts(addressbook_glob: str) -> tuple[dict[str, str], li
                     if not phone:
                         continue
                     name = clean_name(row["ZFIRSTNAME"] or "", row["ZLASTNAME"] or "")
-                    if name and (not contacts.get(phone) or len(name) > len(contacts[phone])):
+                    current = contacts.get(phone, "")
+                    if name and (
+                        not current
+                        or len(name) > len(current)
+                        or (len(name) == len(current) and name.casefold() < current.casefold())
+                    ):
                         contacts[phone] = name
             diagnostics.append({"path": str(path), "status": "read"})
         except sqlite3.Error as exc:
@@ -239,6 +258,7 @@ def aggregate_message_stats(chat_db: Path) -> dict[str, dict[str, Any]]:
                OR m.associated_message_type < 2000
                OR m.associated_message_type > 3006)
         GROUP BY h.id
+        ORDER BY h.id COLLATE NOCASE
     """
     stats: dict[str, dict[str, Any]] = {}
     with open_sqlite_readonly(chat_db) as conn:
@@ -277,6 +297,8 @@ def read_group_metadata(chat_db: Path) -> dict[str, set[str]]:
         JOIN chat_handle_join chj ON chj.chat_id = c.ROWID
         JOIN handle h ON h.ROWID = chj.handle_id
         WHERE c.chat_identifier LIKE 'chat%'
+        ORDER BY h.id COLLATE NOCASE, c.chat_identifier COLLATE NOCASE,
+                 c.display_name COLLATE NOCASE, c.room_name COLLATE NOCASE
     """
     groups_by_key: dict[str, set[str]] = {}
     try:
@@ -324,8 +346,12 @@ def build_contacts(
 
     return sorted(
         contacts_by_phone.values(),
-        key=lambda contact: (contact.message_count or 0, contact.last_message or ""),
-        reverse=True,
+        key=lambda contact: (
+            -(contact.message_count or 0),
+            iso_desc_sort_value(contact.last_message),
+            contact.phone,
+            contact.name.casefold(),
+        ),
     )
 
 
@@ -337,7 +363,11 @@ def contact_to_csv_row(contact: Contact) -> list[str]:
         str(contact.is_in_group_chats).lower(),
         GROUP_SEPARATOR.join(contact.group_names or []),
         str(contact.message_count) if contact.message_count is not None else "",
+        str(contact.message_count) if contact.message_count is not None else "",
+        "",
         contact.last_message or "",
+        contact.last_message or "",
+        "",
         "",
         "",
         "",
@@ -357,7 +387,11 @@ def contact_to_json(contact: Contact) -> dict[str, Any]:
         "is_in_group_chats": contact.is_in_group_chats,
         "group_names": contact.group_names or [],
         "message_count": contact.message_count,
+        "imessage_message_count": contact.message_count,
+        "whatsapp_message_count": None,
         "last_message": contact.last_message,
+        "imessage_last_message": contact.last_message,
+        "whatsapp_last_message": None,
         "skip": False,
         "match": {
             "status": None,

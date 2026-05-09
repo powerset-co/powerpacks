@@ -60,9 +60,11 @@ Most columns are blank for phone-source contacts (`primary_email`, `domain`,
 
 ```
 handle, display_name, first_name, last_name,
-total_messages, source_channel="phone", message_source,
+total_messages, imessage_message_count, whatsapp_message_count,
+source_channel="phone", message_source,
 phone_e164, phone_last4, area_code,
-last_message, is_in_group_chats, group_names,
+last_message, imessage_last_message, whatsapp_last_message,
+is_in_group_chats, group_names,
 match_status, match_confidence, match_method, match_reason
 ```
 

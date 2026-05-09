@@ -352,6 +352,13 @@ def build_known_info(row: dict[str, str]) -> str:
         parts.append(f"User retarget hint: {row['retarget_hint']}")
     if (row.get("total_messages") or "").strip():
         parts.append(f"Message count: {row['total_messages']}")
+    channel_counts = []
+    if (row.get("imessage_message_count") or "").strip():
+        channel_counts.append(f"iMessage: {row['imessage_message_count']}")
+    if (row.get("whatsapp_message_count") or "").strip():
+        channel_counts.append(f"WhatsApp: {row['whatsapp_message_count']}")
+    if channel_counts:
+        parts.append("Message counts by source: " + "; ".join(channel_counts))
     if (row.get("phone_e164") or "").strip():
         parts.append(f"Phone: {row['phone_e164']}")
     if (row.get("area_code") or "").strip():
@@ -360,6 +367,13 @@ def build_known_info(row: dict[str, str]) -> str:
         parts.append(f"Message source: {row['message_source']}")
     if (row.get("last_message") or "").strip():
         parts.append(f"Last message timestamp: {row['last_message']}")
+    channel_last_messages = []
+    if (row.get("imessage_last_message") or "").strip():
+        channel_last_messages.append(f"iMessage: {row['imessage_last_message']}")
+    if (row.get("whatsapp_last_message") or "").strip():
+        channel_last_messages.append(f"WhatsApp: {row['whatsapp_last_message']}")
+    if channel_last_messages:
+        parts.append("Last message by source: " + "; ".join(channel_last_messages))
     if (row.get("is_in_group_chats") or "").strip():
         parts.append(f"In group chats: {row['is_in_group_chats']}")
     if (row.get("group_names") or "").strip():

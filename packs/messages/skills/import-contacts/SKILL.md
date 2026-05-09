@@ -1,328 +1,121 @@
 ---
 name: import-contacts
-description: One-command guided contact import workflow. Orchestrates iMessage, WhatsApp, merge, Powerset candidate sync, local matching, review, and enrichment queue prep with a resumable checklist.
+description: One-command guided contact import workflow. Orchestrates iMessage, WhatsApp, merge, Powerset matching, research, review, retarget feedback, and upload gates.
 ---
 
 # Import Contacts
 
-Use this skill when the user wants to import contacts, import both iMessage and
-WhatsApp, set up relationship signals, or run the full contacts harness.
+Use this skill for `$import-contacts` or any request to import iMessage /
+WhatsApp contacts into the Powerset messages research workflow.
 
-This is the single user-facing entrypoint for the messages import workflow.
-Use the underlying primitives directly for narrow debugging.
+## Rule
 
-## Consent Model
-
-Ask once at the beginning:
-
-> This imports local message/contact metadata only. It never reads or stores
-> message bodies. It may read local iMessage metadata, local Contacts names,
-> start the local WhatsApp sync, ask you to scan a WhatsApp QR, merge CSVs,
-> and sync your Powerset candidate catalog for local matching. Continue?
-
-After the user says yes, do not ask again for local metadata extraction,
-normalization, merge, Powerset login, candidate sync, or local matching. Stop
-only for real human actions:
-
-- macOS Full Disk Access / Contacts permission
-- Docker install/start approval if Docker is missing or stopped
-- WhatsApp QR scan
-- LLM cost approval
-- Parallel.ai/deep-research cost approval
-- upload approval
-
-Never upload contacts. The only upload step is the final reviewed research
-artifact upload, and it requires a separate explicit approval after showing the
-summary counts.
-
-For OpenRouter LLM review/bucketing, always estimate first. If the estimate is
-under `$10.00`, the initial workflow consent is enough; report only the cost and
-proceed. If the estimate is `>= $10.00`, stop for explicit LLM cost approval.
-
-For Parallel.ai deep research, always stop for explicit spend approval after the
-estimate, even for small batches. Show only the cost and rough time, e.g.
-"Estimated deep research cost: $Z, completion time is about 10-15 min once submitted. Approve?"
-
-## Fast path: resumable orchestrator
-
-Prefer the orchestrator for normal runs. It is a mechanical task runner around
-the primitives below and writes `.powerpacks/messages/import-run.json`.
-
-Do **not** create a separate chat-visible plan for normal runs. After the user
-gives the initial workflow consent, keep invoking the orchestrator until it
-finishes or emits a concrete approval/user-action block. When blocked, show only
-the concise block message (cost or action), collect the user's answer, then run
-the printed `approve ... --confirm && continue` command or `continue` as
-appropriate.
-
-### Quiet execution
-
-Keep the main chat quiet during long local stages. After initial workflow
-consent, always dispatch noisy execution to a worker sub-agent when the harness
-has a worker/sub-agent facility available. The worker should collect per-stage
-stats for debugging and for the ledger, but the main agent should not show them
-by default.
-
-After consent, the only chat-visible handoff line should be exactly:
-`Starting work through sub-agent.`
-
-The main chat should show only:
-
-- required user actions, such as QR scan or OS permission steps
-- spend prompts that require approval, with cost only
-- upload prompts, with upload count only
-- final upload result, exactly `Uploaded X contacts`
-
-After local import/match/queue prep succeeds, use decision-oriented wording such
-as `Imported contacts. LLM review estimated $X; continuing.` when the
-OpenRouter estimate is under `$10.00`, or `Estimated deep research cost: $Y, completion time is about 10-15 min once submitted. Approve?` for Parallel. Do not include source row counts,
-matched/unmatched counts, chat counts, candidate counts, or artifact paths in
-the main chat unless the user asks for details or a failure requires diagnosis.
-
-The worker may run the verbose terminal commands, poll sidecar progress files,
-and inspect JSON manifests. Its final response must be one summary block per
-stage with artifact paths and counts for the main agent to use internally. Do
-not stream full primitive JSON, terminal transcripts, QR/status payloads,
-or progress JSONL into the main chat unless a user action is required or a
-failure needs diagnosis.
-
-Keep WhatsApp status messages user-facing. Say "We're syncing WhatsApp",
-"WhatsApp is taking a bit longer", "WhatsApp needs a QR scan", or "WhatsApp
-sync finished"; do not mention implementation internals in chat unless
-the user asks for debugging detail.
-
-If the current harness blocks worker delegation or sub-agents are unavailable,
-say that plainly once, then keep status messages decision-oriented and avoid
-per-stage stats. Summarize command outputs from manifests internally instead of
-narrating intermediate polling.
+`$import-contacts` starts with a fresh run:
 
 ```bash
 uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run
 ```
 
-It exits intentionally at approval gates and prints the exact question plus the
-`approve ... --confirm && continue` command. Feed confirmations back with the
-approval subcommand only after the user approves:
+After that, only use:
 
 ```bash
-uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve parallel \
-  --approval-id <approval_id> --confirm
 uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py continue
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve
 ```
 
-Use the same pattern for `approve upload`. GCS research-cache sync is
-optimistic: if `gcloud storage rsync` fails, the orchestrator records a warning
-and continues with the local `.powerpacks/messages/research` cache.
+Do not ask the user to choose flags. Do not walk them through primitive
+commands. Use primitives directly only for narrow debugging after the
+orchestrator reports a concrete failure.
 
-## Checklist
+## Fresh Slate
 
-When running manually instead of through the orchestrator, keep a visible task
-list and update it as work proceeds:
+`run` starts a new import and archives stale run-owned files first:
 
-1. Check iMessage access
-2. Import iMessage
-3. Get WhatsApp sync ready
-4. Link WhatsApp
-5. Import WhatsApp
-6. Merge contacts
-7. Sync Powerset candidates
-8. Match local contacts
-9. Build enrichment queue
-10. Sync existing deep-research cache from GCS into `.powerpacks/messages/research`
-11. Estimate/run deep research when explicitly approved
-12. Review profile cards / enrichment decisions
-13. Upload reviewed artifact when explicitly approved
+- active ledger
+- merged contacts CSV
+- channel exports and manifests
+- Powerset candidate cache
+- research queue
+- review CSV
+- retarget queue and ledger
 
-Use `.powerpacks/messages/import-run.json` as the run ledger when practical.
-`run` is a fresh import: it archives old contact/import artifacts before
-extracting channels again. Use `continue` only to resume the active blocked run.
-Statuses: `pending`, `running`, `blocked_user_action`, `completed`, `failed`,
-`skipped`.
+It keeps expensive files:
 
-## Workflow
+- WhatsApp message-count cache for unchanged live chats
+- deep research files, especially
+`.powerpacks/messages/research/<handle>/01_research_parallel.json` and
+`03_network_review.json`
 
-1. Read `packs/messages/tasks/import-contacts.task.json`. For the default path,
-   run `import_contacts_pipeline.py run` and follow its approval blocks instead
-   of manually dispatching every primitive.
-2. Run iMessage:
-   - `extract_imessage_contacts.py check`
-   - if readable, run `extract` to `.powerpacks/messages/imessage.contacts.*`
-   - normalize to `.powerpacks/messages/imessage.contacts.normalized.jsonl`
-3. Run WhatsApp:
-   - Tell the user: "We're syncing WhatsApp. No message bodies are read. When
-     the QR opens, use WhatsApp > Settings > Linked Devices > Link a Device.
-     WhatsApp can take a bit longer when there are many chats; that's OK."
-   - `waha_runtime.py check`
-   - if Docker is installed but stopped, ask before starting Docker/Colima
-   - `waha_runtime.py up`
-   - `waha_session.py start --open --wait`
-   - if QR is needed, show the user the QR path and wait; on timeout, run
-     `waha_session.py wait` again instead of skipping WhatsApp
-   - `extract_whatsapp_contacts.py extract` and keep message counts enabled.
-     Do not add `--skip-message-counts` in normal runs. The primitive emits
-     progress/heartbeat JSONL while it counts messages; let it run to completion.
-   - normalize to `.powerpacks/messages/whatsapp.contacts.normalized.jsonl`
-4. Merge whichever sources exist:
+So fresh runs rescan live WhatsApp but do not recount unchanged chats, and
+already-researched handles are reused.
+When a prior review CSV is archived, the regenerated review carries forward
+explicit human decisions (`exclude`, `enrich_decision`) and `retarget_hint`
+values for matching handles/phones.
 
-```bash
-uv run --project . python packs/messages/primitives/merge_message_contacts/merge_message_contacts.py merge \
-  --input .powerpacks/messages/imessage.contacts.csv \
-  --input .powerpacks/messages/whatsapp.contacts.csv \
-  --output .powerpacks/messages/contacts.csv
-```
+`continue` resumes the active run and does not clear anything.
 
-Only include input files that exist.
+## Consent
 
-5. Sync and match:
+Ask once before starting:
 
-```bash
-uv run --project . python packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py sync \
-  --output .powerpacks/messages/powerset_contacts.csv
+> This imports local message/contact metadata only. It never reads message
+> bodies. It may read iMessage metadata, local Contacts names, sync WhatsApp,
+> ask for a WhatsApp QR scan, match against your Powerset contacts, run paid
+> research after approval, and ask again before upload. Continue?
 
-uv run --project . python packs/messages/primitives/match_local_candidates/match_local_candidates.py match \
-  --contacts .powerpacks/messages/contacts.csv \
-  --candidates .powerpacks/messages/powerset_contacts.csv
-```
+After consent, do not ask again for local extraction, normalization, merge,
+Powerset login, candidate sync, or matching. Stop only for:
 
-6. Build the enrichment queue:
+- macOS Full Disk Access / Contacts permission
+- Docker/WhatsApp QR action
+- LLM cost approval when estimate is at least `$10.00`
+- Parallel.ai research approval
+- final upload approval
 
-```bash
-uv run --project . python packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
-  --input .powerpacks/messages/contacts.csv \
-  --output .powerpacks/messages/research_queue.csv
-```
+Never upload automatically.
 
-This queue uses the same name-quality and prune rules ported from
-`../network-search-api/data_pipeline_v2/pipelines/synthetic/prepare_phone_contacts.py`:
-only named, searchable, unresolved contacts with enough signal become paid
-research candidates.
+## Execution
 
-7. Sync already-researched profiles before estimating Parallel spend.
+Use a worker sub-agent for the long-running orchestrator loop when available.
+After consent, the main-chat handoff line should be exactly:
 
-This uses the cached Powerset token to resolve the current operator and `gcloud
-storage rsync` to download the operator-scoped processing cache into the local
-Powerpacks research dir. For Arthur this should resolve to operator
-`e33a648a-ae5f-432e-83ce-b90d75546ada` / `thearthurchen@gmail.com`.
+`Starting work through sub-agent.`
 
-```bash
-uv run --project . python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py status
-uv run --project . python packs/messages/primitives/sync_messages_research_cache/sync_messages_research_cache.py download
-```
+The main chat should show only:
 
-Then estimate Parallel deep research. The estimate skips rows that already have
-`.powerpacks/messages/research/<handle>/01_research_parallel.json`:
+- QR / permission actions
+- spend prompts, with cost only
+- upload prompts, with upload count only
+- final result, exactly `Uploaded X contacts`
 
-```bash
-uv run --project . python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py estimate \
-  --input .powerpacks/messages/research_queue.csv \
-  --processor core2x \
-  --output-dir .powerpacks/messages/research
-```
+Do not stream primitive JSON, terminal transcripts, progress logs, local file
+paths, row counts, matched/unmatched counts, or implementation details unless a
+failure needs diagnosis or the user asks.
 
-Stop here and ask for explicit Parallel spend approval. After the user confirms:
+For WhatsApp, use plain user-facing status:
 
-```bash
-uv run --project . python packs/messages/primitives/deep_research_contacts/deep_research_contacts.py run \
-  --input .powerpacks/messages/research_queue.csv \
-  --processor core2x \
-  --output-dir .powerpacks/messages/research
-```
+- `We're syncing WhatsApp.`
+- `WhatsApp is taking a bit longer.`
+- `WhatsApp needs a QR scan.`
+- `WhatsApp sync finished.`
 
-8. Build and open the profile-card review:
+## Loop
 
-```bash
-uv run --project . python packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
-  --research-dir .powerpacks/messages/research \
-  --queue-csv .powerpacks/messages/research_queue.csv \
-  --output-csv .powerpacks/messages/research_review.csv
-
-uv run --project . python packs/messages/primitives/review_research_web/review_research_web.py serve \
-  --csv .powerpacks/messages/research_review.csv \
-  --research-dir .powerpacks/messages/research \
-  --open
-```
-
-This is the default review surface after Parallel runs. It shows the profile
-data from `01_research_parallel.json` and autosaves yes/no decisions to the
-`exclude` column in `research_review.csv`.
-
-After opening the review UI, tell the user: "When you're done reviewing, say
-'done with review, upload'. I'll check feedback first, then ask for explicit
-approval before syncing anything." On `continue`, the orchestrator detects saved
-`retarget_hint` feedback before upload. If it writes retarget rows, it emits a
-Parallel approval block phrased as `Feedback found; approve another deep
-research pass for $X?`, then merges completed retarget results back into
-`research_review.csv` before upload.
-After feedback/retarget handling, ask for upload approval using only the number
-of yes rows that will be uploaded. Make clear that nothing has been uploaded yet:
-
-```bash
-uv run --project . python packs/messages/primitives/upload_research_review/upload_research_review.py summarize \
-  --csv .powerpacks/messages/research_review.csv
-```
-
-Only after the user explicitly approves the upload:
-
-```bash
-uv run --project . python packs/messages/primitives/upload_research_review/upload_research_review.py upload \
-  --csv .powerpacks/messages/research_review.csv \
-  --confirm-upload
-```
-
-This posts to `/v2/messages-research/artifacts`. The server stores a reviewed
-artifact with yes/maybe/no splits; the yes split is the include/enrich set. The
-primitive translates the web UI's `exclude` decisions into upload buckets so
-explicit yes/no enrich choices are reflected in that split.
-
-Then upload the reviewed rows plus joined deep-research profiles to Powerset:
-
-```bash
-uv run --project . python packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py sync \
-  --csv .powerpacks/messages/research_review.csv \
-  --research-dir .powerpacks/messages/research \
-  --confirm-sync
-```
-
-This posts to `/v2/contact-datalake/import` and is covered by the same explicit
-final upload/sync approval. Report the result to the user as only:
-`Uploaded X contacts`.
-
-If Parallel is skipped, unavailable, or the queue is empty, fall back to the raw
-contacts yes/no reviewer:
-
-```bash
-uv run --project . python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
-  --contacts .powerpacks/messages/contacts.csv \
-  --open
-```
-
-Use the web reviewer for yes/no enrichment decisions only. Do not ask the user
-to edit names, match details, or free-text fields in the normal import flow.
-Use LLM review only after showing the estimate; OpenRouter estimates under
-`$10.00` may proceed without another approval, while anything else requires
-explicit LLM cost approval.
-
-If `PARALLEL_API_KEY` is unavailable and the user still wants review help,
-fall back to parallel sub-agent review over small queue shards. Each sub-agent
-should return only public LinkedIn/profile candidates plus a confidence and
-reason; never send message bodies.
-
-## Resume Rules
-
-- If iMessage already produced `imessage.contacts.csv`, do not re-extract
-  unless the user asks.
-- If WhatsApp is already connected, do not show a QR again.
-- If `contacts.csv` exists, merge can be rerun safely.
-- If `powerset_contacts.csv` exists and sync fails, use the cached catalog and
-  continue to local matching.
-- If a step blocks on user action, report the exact action and the command to
-  continue.
+1. Run `run`.
+2. If blocked on a user action, tell the user the action, then run `continue`.
+3. If blocked on spend/upload approval, ask the exact approval question. If the
+   user approves, run `approve`, then `continue`.
+4. If review opens, tell the user:
+   `Review opened. When done, say: done with review, upload`
+5. On review completion, run `continue`. Retarget feedback is automatic:
+   edited `retarget_hint` rows are queued, researched after approval, merged
+   back into the review CSV, then upload approval is requested.
 
 ## Output
 
-End with only the next action or final result:
+Be terse.
 
-- if blocked on spend: `Estimated <provider> cost: $X. Approve?`
-- if review is ready: `Review opened. When done, say: done with review, upload`
-- if upload is approved and complete: `Uploaded X contacts`
-- include detailed stats only if the user explicitly asks or a failure needs diagnosis
+- Spend: `Estimated deep research cost: $X, completion time is about Y. Approve?`
+- Review: `Review opened. When done, say: done with review, upload`
+- Upload: `Upload reviewed contacts? uploading X.`
+- Done: `Uploaded X contacts`

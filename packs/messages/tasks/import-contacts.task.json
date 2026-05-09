@@ -98,14 +98,6 @@
       "command": "prepare"
     },
     {
-      "id": "sync_messages_research_cache",
-      "kind": "primitive",
-      "primitive": "sync_messages_research_cache",
-      "command": "download",
-      "optional": true,
-      "description": "Download operator-scoped prior deep research from GCS into .powerpacks/messages/research before estimating paid Parallel work."
-    },
-    {
       "id": "estimate_research_cost",
       "kind": "primitive",
       "primitive": "deep_research_contacts",

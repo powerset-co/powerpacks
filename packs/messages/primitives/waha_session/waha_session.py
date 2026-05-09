@@ -81,6 +81,8 @@ def _request(
         return exc.code, body, dict(exc.headers.items()) if exc.headers else {}
     except urllib.error.URLError as exc:
         raise ConnectionError(str(exc.reason)) from exc
+    except TimeoutError as exc:
+        raise ConnectionError("timed out") from exc
 
 
 def _decode_json(body: bytes) -> Any:

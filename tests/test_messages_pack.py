@@ -119,7 +119,12 @@ class MessagesPackTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["phone"], "+14155550101")
             self.assertEqual(rows[0]["sources"], ["imessage", "whatsapp"])
-            self.assertEqual(rows[0]["message_count"], 20)
+            self.assertEqual(rows[0]["message_count"], 32)
+            self.assertEqual(rows[0]["imessage_message_count"], 12)
+            self.assertEqual(rows[0]["whatsapp_message_count"], 20)
+            self.assertEqual(rows[0]["last_message"], "2026-04-02T00:00:00+00:00")
+            self.assertEqual(rows[0]["imessage_last_message"], "2026-04-01T00:00:00+00:00")
+            self.assertEqual(rows[0]["whatsapp_last_message"], "2026-04-02T00:00:00+00:00")
             self.assertTrue(rows[0]["skip"])
             self.assertIn("Operators", rows[0]["group_names"])
 
@@ -262,6 +267,87 @@ class MessagesPackTests(unittest.TestCase):
             self.assertEqual(rows_by_phone["+14155550101"]["group_names"], ["Founders"])
             self.assertEqual(rows_by_phone["+14155550102"]["name"], "Grace Hopper")
             self.assertIsNone(rows_by_phone["+14155550102"]["message_count"])
+
+    def test_extract_imessage_contacts_has_deterministic_order(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            chat_db = tmp / "chat.db"
+            addressbook_dir = tmp / "AddressBook" / "Sources" / "fixture"
+            addressbook_dir.mkdir(parents=True)
+            addressbook_db = addressbook_dir / "AddressBook-v22.abcddb"
+
+            with sqlite3.connect(chat_db) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+                    CREATE TABLE message (
+                      ROWID INTEGER PRIMARY KEY,
+                      handle_id INTEGER,
+                      date INTEGER,
+                      associated_message_type INTEGER
+                    );
+                    INSERT INTO handle (ROWID, id)
+                      VALUES (3, '+14155550103'),
+                             (1, '+14155550101'),
+                             (2, '+14155550102');
+                    INSERT INTO message (handle_id, date, associated_message_type)
+                      VALUES (3, 725846500000000000, NULL),
+                             (3, 725846400000000000, NULL),
+                             (1, 725846500000000000, NULL),
+                             (1, 725846400000000000, NULL),
+                             (2, 725846600000000000, NULL);
+                    """
+                )
+
+            with sqlite3.connect(addressbook_db) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE ZABCDRECORD (Z_PK INTEGER PRIMARY KEY, ZFIRSTNAME TEXT, ZLASTNAME TEXT);
+                    CREATE TABLE ZABCDPHONENUMBER (ZOWNER INTEGER, ZFULLNUMBER TEXT);
+                    INSERT INTO ZABCDRECORD (Z_PK, ZFIRSTNAME, ZLASTNAME)
+                      VALUES (1, 'One', 'Person'),
+                             (2, 'Two', 'Person'),
+                             (3, 'Three', 'Person'),
+                             (4, 'Contact', 'Only');
+                    INSERT INTO ZABCDPHONENUMBER (ZOWNER, ZFULLNUMBER)
+                      VALUES (1, '(415) 555-0101'),
+                             (2, '(415) 555-0102'),
+                             (3, '(415) 555-0103'),
+                             (4, '(415) 555-0104');
+                    """
+                )
+
+            output_csv = tmp / "out.csv"
+            subprocess.run(
+                [
+                    "python3",
+                    str(IMESSAGE),
+                    "--chat-db",
+                    str(chat_db),
+                    "--addressbook-glob",
+                    str(tmp / "AddressBook/Sources/*/AddressBook-v22.abcddb"),
+                    "extract",
+                    "--output-csv",
+                    str(output_csv),
+                    "--output-jsonl",
+                    str(tmp / "out.jsonl"),
+                    "--manifest",
+                    str(tmp / "manifest.json"),
+                    "--run-id",
+                    "fixture-order-run",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            with output_csv.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(
+                [row["phone"] for row in rows],
+                ["+14155550101", "+14155550103", "+14155550102", "+14155550104"],
+            )
 
     def test_upload_research_review_summary_applies_explicit_include_exclude(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -578,15 +664,19 @@ class MergeMessageContactsTests(unittest.TestCase):
 
             jane = by_phone["+14155550101"]
             self.assertEqual(jane["source"], "imessage,whatsapp")
-            # max(120, 200) = 200
-            self.assertEqual(jane["message_count"], "200")
+            # total across channels: 120 + 200 = 320
+            self.assertEqual(jane["message_count"], "320")
+            self.assertEqual(jane["imessage_message_count"], "120")
+            self.assertEqual(jane["whatsapp_message_count"], "200")
             # OR'd skip
             self.assertEqual(jane["skip"], "yes")
             # OR'd group flag, sorted union of group_names
             self.assertEqual(jane["is_in_group_chats"], "true")
             self.assertEqual(jane["group_names"], "Board | Founders")
-            # max(last_message)
+            # max(last_message), with per-source last-message columns preserved.
             self.assertEqual(jane["last_message"], "2026-03-01T00:00:00+00:00")
+            self.assertEqual(jane["imessage_last_message"], "2026-01-01T00:00:00+00:00")
+            self.assertEqual(jane["whatsapp_last_message"], "2026-03-01T00:00:00+00:00")
 
             bob = by_phone["+14155550202"]
             # Empty-name iMessage row should not overwrite WhatsApp's name; the merge
@@ -604,7 +694,7 @@ class MergeMessageContactsTests(unittest.TestCase):
             self.assertIn("+14155550999", by_phone)
 
             # CSV is sorted by (message_count desc, last_message desc, phone).
-            self.assertEqual(rows[0]["phone"], "+14155550101")  # 200
+            self.assertEqual(rows[0]["phone"], "+14155550101")  # 320
 
     def test_merge_rejects_legacy_queue_schema_with_conversion_hint(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1371,14 +1461,28 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             )
         )
 
-    def test_heuristic_buckets_and_tui_columns(self) -> None:
+    def test_network_review_cache_buckets_and_tui_columns(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             research_dir = tmp / "research"
             queue = tmp / "queue.csv"
             output = tmp / "review.csv"
 
-            # Confident: linkedin + high conf + position + name shares token with input
+            def write_network_review(handle: str, bucket: str, reason: str, risk: str, signals: list[str]) -> None:
+                (research_dir / handle / "03_network_review.json").write_text(
+                    json.dumps({
+                        "handle": handle,
+                        "model": "openai/gpt-4.1",
+                        "review": {
+                            "bucket": bucket,
+                            "short_reason": reason,
+                            "identity_risk": risk,
+                            "signals": signals,
+                        },
+                    }),
+                    encoding="utf-8",
+                )
+
             self._write_research_artifact(
                 research_dir,
                 "phone-1111111111",
@@ -1389,7 +1493,8 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 city="San Francisco",
                 country="United States",
             )
-            # Medium: real name + position but no linkedin
+            write_network_review("phone-1111111111", "confident", "Strong operator signal.", "", ["linkedin", "operator"])
+
             self._write_research_artifact(
                 research_dir,
                 "phone-2222222222",
@@ -1398,7 +1503,8 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 name_conf=0.7,
                 positions=[{"title": "Engineer", "company_name": "Acme"}],
             )
-            # Review (wrong_person): returned name shares no token with input
+            write_network_review("phone-2222222222", "medium", "Some career signal.", "identity_uncertain", ["career"])
+
             self._write_research_artifact(
                 research_dir,
                 "phone-3333333333",
@@ -1407,7 +1513,8 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 name_conf=0.9,
                 positions=[{"title": "VP", "company_name": "Bigco"}],
             )
-            # Review (no_real_name): nothing surfaced
+            write_network_review("phone-3333333333", "review", "Likely wrong person.", "wrong_person", ["name_mismatch"])
+
             self._write_research_artifact(
                 research_dir,
                 "phone-4444444444",
@@ -1416,6 +1523,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 name_conf=0.0,
                 positions=[],
             )
+            write_network_review("phone-4444444444", "review", "No real name surfaced.", "no_real_name", [])
 
             # Queue rows for the first 3 handles. Last handle deliberately
             # missing from queue to exercise --allow-missing-queue.
@@ -1494,8 +1602,6 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                     str(queue),
                     "--output-csv",
                     str(output),
-                    "--bucket-mode",
-                    "heuristic",
                     "--allow-missing-queue",
                 ],
                 cwd=ROOT,
@@ -1513,7 +1619,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             with output.open(newline="") as h:
                 fieldnames = next(csv.reader(h))
             # The contact-exporter TUI _is_research_csv requires these 4 keys
-            required = {"bucket", "full_name", "phone_e164", "top_title_company_pairs"}
+            required = {"bucket", "full_name", "phone_e164", "top_title_company_pairs", "exclude", "enrich_decision"}
             self.assertTrue(
                 required.issubset(set(fieldnames)), f"missing TUI-routing columns: {required - set(fieldnames)}"
             )
@@ -1538,7 +1644,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertEqual(empty["bucket"], "review")
             self.assertEqual(empty["identity_risk"], "no_real_name")
 
-    def test_network_review_cache_overrides_heuristic_bucket(self) -> None:
+    def test_network_review_cache_is_used_without_llm(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             research_dir = tmp / "research"
@@ -1610,6 +1716,93 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertEqual(rows[0]["short_reason"], "Sovereign wealth leadership; prioritize despite phone ambiguity.")
             self.assertIn("sovereign wealth", rows[0]["signals"])
 
+    def test_previous_review_decisions_are_carried_forward(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            research_dir = tmp / "research"
+            queue = tmp / "queue.csv"
+            previous = tmp / "previous_review.csv"
+            output = tmp / "review.csv"
+            handle = "phone-5555551212"
+
+            self._write_research_artifact(
+                research_dir,
+                handle,
+                real_name="Rina Investor",
+                linkedin="https://www.linkedin.com/in/rina-investor/",
+                name_conf=0.93,
+                positions=[{"title": "Partner", "company_name": "Example Capital"}],
+            )
+            (research_dir / handle / "03_network_review.json").write_text(
+                json.dumps(
+                    {
+                        "handle": handle,
+                        "model": "openai/gpt-4.1",
+                        "review": {
+                            "bucket": "medium",
+                            "short_reason": "Investor signal, needs context.",
+                            "identity_risk": "",
+                            "signals": ["investor"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with queue.open("w", newline="") as h:
+                writer = csv.DictWriter(h, fieldnames=["handle", "display_name", "phone_e164", "area_code"])
+                writer.writeheader()
+                writer.writerow({
+                    "handle": handle,
+                    "display_name": "Rina Investor",
+                    "phone_e164": "+14155551212",
+                    "area_code": "415",
+                })
+            with previous.open("w", newline="") as h:
+                writer = csv.DictWriter(
+                    h,
+                    fieldnames=["bucket", "handle", "phone_e164", "exclude", "enrich_decision", "retarget_hint"],
+                )
+                writer.writeheader()
+                writer.writerow({
+                    "bucket": "review",
+                    "handle": handle,
+                    "phone_e164": "+14155551212",
+                    "exclude": "no",
+                    "enrich_decision": "yes",
+                    "retarget_hint": "https://www.linkedin.com/in/rina-investor/",
+                })
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(self.BUILD),
+                    "build",
+                    "--research-dir",
+                    str(research_dir),
+                    "--queue-csv",
+                    str(queue),
+                    "--output-csv",
+                    str(output),
+                    "--previous-csv",
+                    str(previous),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=True,
+            )
+            manifest = json.loads(result.stdout)
+            self.assertEqual(manifest["counts"]["previous_review_decision_rows"], 1)
+            self.assertEqual(manifest["counts"]["previous_review_decisions_applied"], 1)
+
+            with output.open(newline="") as h:
+                rows = list(csv.DictReader(h))
+            self.assertEqual(rows[0]["bucket"], "medium")
+            self.assertEqual(rows[0]["exclude"], "no")
+            self.assertEqual(rows[0]["enrich_decision"], "yes")
+            self.assertEqual(rows[0]["retarget_hint"], "https://www.linkedin.com/in/rina-investor/")
+
     def test_llm_bucket_writes_upstream_network_review_cache(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -1646,7 +1839,6 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 "queue_csv": str(queue),
                 "output_csv": str(output),
                 "manifest": None,
-                "bucket_mode": "llm",
                 "model": "openai/gpt-4.1",
                 "api_key": "test-key",
                 "refresh_cache": False,
@@ -1673,7 +1865,60 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertEqual(network_review["model"], "openai/gpt-4.1")
             self.assertEqual(network_review["review"]["bucket"], "confident")
             manifest = json.loads(output.with_suffix(output.suffix + ".manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["review_source"], "network_review_llm")
             self.assertEqual(manifest["counts"]["network_review_written"], 1)
+
+    def test_llm_review_failure_does_not_fall_back_to_heuristic(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            research_dir = tmp / "research"
+            queue = tmp / "queue.csv"
+            output = tmp / "review.csv"
+            handle = "phone-7777777777"
+            self._write_research_artifact(
+                research_dir,
+                handle,
+                real_name="Aisha Founder",
+                linkedin="https://www.linkedin.com/in/aisha-founder/",
+                name_conf=0.91,
+                positions=[{"title": "Founder", "company_name": "Example AI"}],
+                city="San Francisco",
+                country="United States",
+            )
+            with queue.open("w", newline="") as h:
+                writer = csv.DictWriter(h, fieldnames=["handle", "display_name", "phone_e164", "source_channel"])
+                writer.writeheader()
+                writer.writerow({
+                    "handle": handle,
+                    "display_name": "Aisha Founder",
+                    "phone_e164": "+14155557777",
+                    "source_channel": "phone",
+                })
+
+            spec = importlib.util.spec_from_file_location("build_research_review_csv", self.BUILD)
+            assert spec and spec.loader
+            build_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(build_mod)
+            args = type("Args", (), {
+                "research_dir": research_dir,
+                "queue_csv": str(queue),
+                "output_csv": str(output),
+                "manifest": None,
+                "model": "openai/gpt-4.1",
+                "api_key": "test-key",
+                "refresh_cache": False,
+                "allow_missing_queue": False,
+            })()
+
+            emitted = []
+            with mock.patch.object(build_mod, "_openrouter_chat", return_value=(None, "HTTP 500")), \
+                    mock.patch.object(build_mod, "emit", side_effect=emitted.append):
+                rc = build_mod.cmd_build(args)
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(emitted[-1]["status"], "failed")
+            self.assertIn("network review failed", emitted[-1]["error"])
+            self.assertFalse((research_dir / handle / "03_network_review.json").exists())
 
 
 class ReviewContactsWebTests(unittest.TestCase):

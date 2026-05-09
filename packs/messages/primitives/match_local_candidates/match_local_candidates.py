@@ -39,7 +39,11 @@ CSV_HEADERS = [
     "is_in_group_chats",
     "group_names",
     "message_count",
+    "imessage_message_count",
+    "whatsapp_message_count",
     "last_message",
+    "imessage_last_message",
+    "whatsapp_last_message",
     "skip",
     "match_status",
     "matched_person_id",
@@ -127,7 +131,8 @@ def schema_error(path: Path, fieldnames: list[str] | None) -> str:
         f"Required input columns: phone,name. Canonical header: {header}. "
         f"Detected columns: {fields}. Schema docs: {SCHEMA_DOC}. JSON schema: {SCHEMA_JSON}. "
         "Common legacy mappings: phone_e164/phone_number -> phone; display_name/full_name -> name; "
-        "total_messages -> message_count; message_source/source_channel -> source."
+        "total_messages -> message_count; imessage_count/imessage_messages -> imessage_message_count; "
+        "whatsapp_count/whatsapp_messages -> whatsapp_message_count; message_source/source_channel -> source."
     )
 
 

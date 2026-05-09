@@ -9,9 +9,12 @@ CSV columns:
 
 ```
 bucket, handle, full_name, phone_e164, area_code, total_messages,
-message_source, group_names, location_city, location_country,
+imessage_message_count, whatsapp_message_count, message_source,
+last_message, imessage_last_message, whatsapp_last_message,
+group_names, location_city, location_country,
 top_titles, top_companies, top_title_company_pairs, schools,
-short_reason, identity_risk, signals
+short_reason, identity_risk, signals, retarget_hint, exclude,
+enrich_decision
 ```
 
 Buckets are `confident | medium | review`. `review_research_web` and the
@@ -20,7 +23,7 @@ legacy TUI both map those buckets to `yes / maybe / no` tabs.
 ## Usage
 
 ```bash
-# 1. LLM network-review bucketing (default).
+# 1. LLM network-review bucketing.
 python packs/messages/primitives/build_research_review_csv/build_research_review_csv.py build \
   --research-dir .powerpacks/messages/research \
   --queue-csv .powerpacks/messages/research_queue.csv \
@@ -41,21 +44,19 @@ python packs/messages/primitives/upload_research_review/upload_research_review.p
   --confirm-upload
 ```
 
-## Heuristic Fallback
-
-If OpenRouter is unavailable while scoring an individual row, the primitive
-falls back to deterministic identity-safety heuristics rather than failing the
-whole CSV build. The normal path is the LLM network-review scorer.
-
 ## Network Review Cache
 
 LLM results are cached at `<research-dir>/<handle>/03_network_review.json`.
 Powerpacks treats that as the local source of truth for yes/maybe/no review.
-Legacy `02_review_cache.json` can still be read and upgraded to `03`; legacy
-synced `06_network_review.json` is kept only as fallback data for non-LLM/debug
-paths.
+There is no alternate bucket mode and no heuristic fallback; if OpenRouter
+cannot return a valid network review, the build fails instead of guessing.
 
-## Pricing reference (LLM mode)
+Fresh import runs regenerate the active review CSV from current source data.
+When the orchestrator archives an older review CSV, this primitive carries
+forward only human state (`exclude`, `enrich_decision`, `retarget_hint`) and
+does not reuse stale buckets.
+
+## Pricing reference
 
 | Model | Input $/1M | Output $/1M |
 | --- | --- | --- |

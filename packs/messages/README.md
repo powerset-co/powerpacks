@@ -42,9 +42,6 @@ Cross-channel:
   deep-research input CSV (with per-processor cost estimates)
 - `prepare_retarget_queue`: build a targeted re-research queue from review
   feedback hints, skipping hints already attempted for the same person
-- `sync_messages_research_cache`: download operator-scoped prior deep research
-  from the processing GCS bucket into `.powerpacks/messages/research` before
-  spending new Parallel credits
 - `deep_research_contacts`: run Parallel.ai deep research over the queue and
   write per-handle `01_research_parallel.json` artifacts; native HTTP port of
   aleph-mvp's `research_parallel.py` so Powerpacks does not depend on the
@@ -52,7 +49,8 @@ Cross-channel:
 - `build_research_review_csv`: flatten the per-handle research artifacts into
   a single CSV in the shape `contact-exporter`'s research-review TUI consumes
   (`bucket / yes-maybe-no` view) and `/v2/messages-research/artifacts` accepts
-  on upload
+  on upload; reruns reuse `03_network_review.json` and carry forward explicit
+  human decisions from an archived review CSV
 - `review_research_web`: local browser port of the research-review TUI with
   yes/maybe/no tabs, profile cards, and autosaved yes/no enrichment decisions
 - `upload_research_review`: upload the reviewed research CSV to

@@ -23,7 +23,12 @@ DEFAULT_COLUMNS = [
     "phone_e164",
     "area_code",
     "total_messages",
+    "imessage_message_count",
+    "whatsapp_message_count",
     "message_source",
+    "last_message",
+    "imessage_last_message",
+    "whatsapp_last_message",
     "group_names",
     "location_city",
     "location_country",
@@ -42,6 +47,7 @@ DEFAULT_COLUMNS = [
     "retarget_name_confidence",
     "retarget_notes",
     "exclude",
+    "enrich_decision",
 ]
 
 VALID_TABS = {"yes", "maybe", "no"}
@@ -308,12 +314,18 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             linkedin_icon = f"<a class='li-icon' href='{esc(linkedin)}' target='_blank' rel='noreferrer' title='LinkedIn' aria-label='Open LinkedIn profile'>in</a>" if linkedin else ""
             retarget_badge = "<span class='retarget-badge'>Re-researched</span>" if (row.get("retarget_status") or "").strip() else ""
             hint = row.get("retarget_hint", "")
+            channel_bits = []
+            if row.get("imessage_message_count"):
+                channel_bits.append(f"iMessage {row.get('imessage_message_count')}")
+            if row.get("whatsapp_message_count"):
+                channel_bits.append(f"WhatsApp {row.get('whatsapp_message_count')}")
+            channel_detail = f" ({' · '.join(channel_bits)})" if channel_bits else ""
             parts.extend([
                 f"<article class='{card_class}' role='button' tabindex='0' data-row='{idx}' data-selected='{str(selected).lower()}' data-decision='{esc(label)}'>",
                 "<div class='head'>",
                 f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{retarget_badge}</div><span class='{bucket_class}'>{esc(label)}</span></div>",
                 f"<div class='decision'>{decision}</div></div>",
-                f"<div class='line'><strong>phone</strong> {esc(row.get('phone_e164') or 'unknown')} &middot; <strong>msgs</strong> {esc(row.get('total_messages') or '0')}</div>",
+                f"<div class='line'><strong>phone</strong> {esc(row.get('phone_e164') or 'unknown')} &middot; <strong>msgs</strong> {esc(row.get('total_messages') or '0')}{esc(channel_detail)}</div>",
                 f"<div class='line'><strong>source</strong> {esc(row.get('message_source') or 'unknown')}</div>",
                 f"<div class='line'><strong>location</strong> {esc(location)}</div>",
                 f"<div class='line'><strong>groups</strong> {esc(groups)}</div>",

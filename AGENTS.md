@@ -215,10 +215,6 @@ queries. For narrow, unambiguous queries, **skip the loop**:
   recommend `submit` + come back later for `poll`.
 - Idempotency: re-runs skip handles that already have
   `01_research_parallel.json`. Safe to re-run.
-- If prior-cache sync / `gcloud storage rsync` fails because gcloud auth expired,
-  stop before any paid Parallel submit/run. Reauthenticate with
-  `gcloud auth login --no-launch-browser`, rerun the sync, then estimate. Never
-  proceed to paid research just because the cache sync could not authenticate.
 
 ---
 
