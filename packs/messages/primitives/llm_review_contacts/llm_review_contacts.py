@@ -127,6 +127,10 @@ full names should be ENRICH, even with zero message count. When in doubt about \
 a full name, ALWAYS lean ENRICH. Only SKIP names that clearly cannot map to a \
 LinkedIn profile.
 
+Do not use duplicates as a SKIP reason. If multiple rows appear to be the same \
+person or have the same name, give each row the verdict its name quality \
+deserves. Merging and deduplication happen later in a separate step.
+
 Contacts to evaluate:
 {contacts_json}
 

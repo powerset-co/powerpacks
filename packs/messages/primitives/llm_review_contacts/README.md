@@ -7,7 +7,8 @@ verdict is used to update the `skip` column in the contacts CSV in place.
 The model call is deterministic (`temperature: 0`) and the prompt asks it to
 skip personal-note/context labels such as dating-app/source notes, location
 shorthand, event tags, and relationship labels when those notes are what make
-the contact identifiable.
+the contact identifiable. It must not use duplicate/same-name rows as a skip
+reason; merging and deduplication happen later.
 
 ## Privacy contract
 
