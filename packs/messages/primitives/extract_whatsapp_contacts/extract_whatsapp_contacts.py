@@ -31,7 +31,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,11 +60,12 @@ DEFAULT_BASE_URL = os.environ.get("POWERPACKS_WAHA_BASE_URL", "http://127.0.0.1:
 DEFAULT_API_KEY = os.environ.get("POWERPACKS_WAHA_API_KEY", "powerpacks-local")
 DEFAULT_SESSION = os.environ.get("POWERPACKS_WAHA_SESSION", "default")
 DEFAULT_OUT_DIR = Path(".powerpacks/messages")
+DEFAULT_MESSAGE_COUNT_CACHE = DEFAULT_OUT_DIR / "whatsapp.message-count-cache.json"
 GROUP_SEPARATOR = " | "
 MIN_PHONE_DIGITS = 7
 MAX_PHONE_DIGITS = 15
 MESSAGE_PAGE_SIZE = 500
-MIN_REQUEST_INTERVAL = 0.5
+MIN_REQUEST_INTERVAL = float(os.environ.get("POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL", "1.0"))
 DEFAULT_HEARTBEAT_INTERVAL = int(os.environ.get("POWERPACKS_WHATSAPP_HEARTBEAT_INTERVAL", "30"))
 
 
@@ -91,6 +91,15 @@ def now_iso() -> str:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_json(path: Path, default: Any = None) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
 
 
 def emit(value: Any) -> None:
@@ -243,6 +252,69 @@ def parse_timestamp(ts: Any) -> str | None:
         return None
 
 
+def chat_last_message(chat: dict[str, Any]) -> str | None:
+    candidates = (
+        chat.get("timestamp"),
+        chat.get("last_message_timestamp"),
+        chat.get("conversationTimestamp"),
+        chat.get("lastMessageRecvTimestamp"),
+    )
+    for candidate in candidates:
+        parsed = parse_timestamp(candidate)
+        if parsed:
+            return parsed
+    last_message = chat.get("lastMessage")
+    if isinstance(last_message, dict):
+        for key in ("timestamp", "messageTimestamp", "t"):
+            parsed = parse_timestamp(last_message.get(key))
+            if parsed:
+                return parsed
+    return None
+
+
+def load_message_count_cache(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {"version": 1, "chats": {}}
+    data = read_json(path, {})
+    if not isinstance(data, dict):
+        return {"version": 1, "chats": {}}
+    chats = data.get("chats")
+    if not isinstance(chats, dict):
+        data["chats"] = {}
+    data["version"] = 1
+    return data
+
+
+def cache_count_for_chat(cache: dict[str, Any], jid: str, last_message: str | None) -> int | None:
+    if not last_message:
+        return None
+    chats = cache.get("chats")
+    if not isinstance(chats, dict):
+        return None
+    entry = chats.get(jid)
+    if not isinstance(entry, dict) or entry.get("last_message") != last_message:
+        return None
+    value = entry.get("message_count")
+    if isinstance(value, int) and value >= 0:
+        return value
+    return None
+
+
+def update_count_cache(cache: dict[str, Any], jid: str, count: int, last_message: str | None, source: str) -> None:
+    if not last_message:
+        return
+    chats = cache.setdefault("chats", {})
+    if not isinstance(chats, dict):
+        cache["chats"] = {}
+        chats = cache["chats"]
+    chats[jid] = {
+        "message_count": max(0, int(count or 0)),
+        "last_message": last_message,
+        "source": source,
+        "updated_at": now_iso(),
+    }
+
+
 def serialize_groups(groups: Iterable[str]) -> str:
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -279,31 +351,25 @@ def _ensure_session_working(base_url: str, api_key: str, session: str) -> dict[s
 
 
 def _get_chat_message_count(base_url: str, api_key: str, session: str, chat_id: str) -> int:
-    """Best-effort total message count for a 1:1 chat via paginated reads."""
-    total = 0
-    offset = 0
-    pages = 0
-    max_pages = 10_000
+    """Best-effort capped message count for a 1:1 chat.
+
+    We only need a relationship-strength signal. If chat metadata lacks a
+    message-count hint, fetch one page and treat 500 as "500+" rather than
+    paginating through the full history.
+    """
     encoded = urllib.parse.quote(chat_id, safe="")
-    while pages < max_pages:
-        try:
-            status, payload = _waha_get(
-                base_url, api_key,
-                f"/api/{session}/chats/{encoded}/messages",
-                params={"limit": MESSAGE_PAGE_SIZE, "offset": offset, "downloadMedia": False},
-                retries=2,
-            )
-        except Exception:
-            break
-        if status != 200 or not isinstance(payload, list):
-            break
-        n = len(payload)
-        total += n
-        pages += 1
-        if n < MESSAGE_PAGE_SIZE:
-            break
-        offset += n
-    return total
+    try:
+        status, payload = _waha_get(
+            base_url, api_key,
+            f"/api/{session}/chats/{encoded}/messages",
+            params={"limit": MESSAGE_PAGE_SIZE, "offset": 0, "downloadMedia": False},
+            retries=2,
+        )
+    except Exception:
+        return 0
+    if status != 200 or not isinstance(payload, list):
+        return 0
+    return len(payload)
 
 
 def _fetch_group_participants(base_url: str, api_key: str, session: str, chat_id: str) -> list[dict[str, Any]]:
@@ -327,13 +393,14 @@ def extract_contacts(
     session: str,
     *,
     fetch_message_counts: bool = True,
-    workers: int = 4,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     heartbeat_interval: int = DEFAULT_HEARTBEAT_INTERVAL,
+    message_count_cache: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Contact], dict[str, Any]]:
     """Pull contacts and chat metadata from the WAHA API."""
 
     started = time.time()
+    count_cache = message_count_cache if message_count_cache is not None else {"version": 1, "chats": {}}
     diagnostics: dict[str, Any] = {
         "raw_contacts": 0,
         "raw_chats": 0,
@@ -342,8 +409,13 @@ def extract_contacts(
         "lid_resolved": 0,
         "group_member_phones": 0,
         "fetched_message_counts_for": 0,
+        "message_count_cap": MESSAGE_PAGE_SIZE,
+        "message_count_mode": "single_page_serial",
+        "request_interval_seconds": MIN_REQUEST_INTERVAL,
         "message_count_completed": 0,
         "message_count_total": 0,
+        "message_count_cached": 0,
+        "message_count_cache_entries_before": len(count_cache.get("chats") or {}) if isinstance(count_cache.get("chats"), dict) else 0,
         "errors": [],
     }
 
@@ -462,7 +534,7 @@ def extract_contacts(
         for phone in all_contact_phones
     }
 
-    # 6. Resolve direct-chat message counts (parallel for chats without hint).
+    # 6. Resolve direct-chat message counts for chats without a count hint.
     direct_jids = [
         jid for jid in direct_chats
         if jid_to_phone(jid) or lid_to_phones.get(jid)
@@ -471,55 +543,42 @@ def extract_contacts(
     needs_fetch: list[str] = []
     for jid in direct_jids:
         chat = direct_chats.get(jid, {})
+        last_message = chat_last_message(chat)
         hinted = chat_message_count_hint(chat)
         if hinted is not None:
             counts_by_jid[jid] = hinted
+            update_count_cache(count_cache, jid, hinted, last_message, "chat_hint")
+        elif fetch_message_counts:
+            cached_count = cache_count_for_chat(count_cache, jid, last_message)
+            if cached_count is not None:
+                counts_by_jid[jid] = cached_count
+                diagnostics["message_count_cached"] += 1
+            else:
+                needs_fetch.append(jid)
         else:
             needs_fetch.append(jid)
 
     if fetch_message_counts and needs_fetch:
         diagnostics["fetched_message_counts_for"] = len(needs_fetch)
         diagnostics["message_count_total"] = len(needs_fetch)
-        progress("message_counts_start", total=len(needs_fetch), workers=max(1, workers))
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-            fut_map = {
-                pool.submit(_get_chat_message_count, base_url, api_key, session, jid): jid
-                for jid in needs_fetch
-            }
-            pending = set(fut_map)
-            completed_count = 0
-            last_emit = 0.0
-            while pending:
-                done, pending = wait(
-                    pending,
-                    timeout=max(1, heartbeat_interval),
-                    return_when=FIRST_COMPLETED,
+        progress("message_counts_start", total=len(needs_fetch), cap=MESSAGE_PAGE_SIZE)
+        last_emit = 0.0
+        for completed_count, jid in enumerate(needs_fetch, start=1):
+            try:
+                counts_by_jid[jid] = _get_chat_message_count(base_url, api_key, session, jid)
+                update_count_cache(count_cache, jid, counts_by_jid[jid], chat_last_message(direct_chats.get(jid, {})), "messages_page")
+            except Exception as exc:
+                diagnostics["errors"].append({"step": "message_count", "jid": jid, "error": str(exc)})
+                counts_by_jid[jid] = 0
+            diagnostics["message_count_completed"] = completed_count
+            if time.time() - last_emit >= max(1, heartbeat_interval) or completed_count == len(needs_fetch):
+                progress(
+                    "message_counts_progress",
+                    completed=completed_count,
+                    total=len(needs_fetch),
+                    remaining=len(needs_fetch) - completed_count,
                 )
-                if not done:
-                    progress(
-                        "message_counts_heartbeat",
-                        completed=completed_count,
-                        total=len(needs_fetch),
-                        remaining=len(pending),
-                    )
-                    continue
-                for fut in done:
-                    jid = fut_map[fut]
-                    try:
-                        counts_by_jid[jid] = fut.result()
-                    except Exception as exc:
-                        diagnostics["errors"].append({"step": "message_count", "jid": jid, "error": str(exc)})
-                        counts_by_jid[jid] = 0
-                    completed_count += 1
-                    diagnostics["message_count_completed"] = completed_count
-                if time.time() - last_emit >= max(1, heartbeat_interval) or completed_count == len(needs_fetch):
-                    progress(
-                        "message_counts_progress",
-                        completed=completed_count,
-                        total=len(needs_fetch),
-                        remaining=len(pending),
-                    )
-                    last_emit = time.time()
+                last_emit = time.time()
 
     # 7. Collapse direct-chat stats by phone.
     direct_stats: dict[str, dict[str, Any]] = {}
@@ -530,7 +589,7 @@ def extract_contacts(
             continue
         count = int(counts_by_jid.get(jid, 0))
         chat = direct_chats[jid]
-        last_message = parse_timestamp(chat.get("timestamp") or chat.get("last_message_timestamp"))
+        last_message = chat_last_message(chat)
         for phone in phones:
             resolved_name = (
                 jid_to_name.get(jid, "")
@@ -597,6 +656,7 @@ def extract_contacts(
             continue
         contact.phone = canonical_phone
         canonical[canonical_phone] = contact
+    diagnostics["message_count_cache_entries_after"] = len(count_cache.get("chats") or {}) if isinstance(count_cache.get("chats"), dict) else 0
     return canonical, diagnostics
 
 
@@ -690,6 +750,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
     output_csv = Path(args.output_csv) if args.output_csv else DEFAULT_OUT_DIR / f"{run_id}.contacts.csv"
     output_jsonl = Path(args.output_jsonl) if args.output_jsonl else None
     manifest_path = Path(args.manifest) if args.manifest else output_csv.with_suffix(output_csv.suffix + ".manifest.json")
+    message_count_cache_path = Path(args.message_count_cache) if args.message_count_cache else DEFAULT_MESSAGE_COUNT_CACHE
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     started = time.time()
@@ -713,15 +774,19 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
     try:
         progress_path = Path(args.progress_jsonl) if args.progress_jsonl else manifest_path.with_suffix(manifest_path.suffix + ".progress.jsonl")
+        message_count_cache = load_message_count_cache(message_count_cache_path)
         contacts, diagnostics = extract_contacts(
             args.base_url,
             args.api_key,
             args.session,
             fetch_message_counts=not args.skip_message_counts,
-            workers=args.workers,
             progress_callback=lambda payload: emit_progress(payload, progress_path),
             heartbeat_interval=args.heartbeat_interval,
+            message_count_cache=message_count_cache,
         )
+        message_count_cache["updated_at"] = now_iso()
+        message_count_cache["session"] = args.session
+        write_json(message_count_cache_path, message_count_cache)
     except Exception as exc:
         write_csv(output_csv, {})
         manifest = {
@@ -755,6 +820,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             "jsonl": str(output_jsonl) if output_jsonl else None,
             "manifest": str(manifest_path),
             "progress_jsonl": str(progress_path),
+            "message_count_cache": str(message_count_cache_path),
         },
         "counts": {
             "csv_rows": csv_rows,
@@ -790,10 +856,10 @@ def main() -> None:
     extract.add_argument("--output-jsonl", help="Optional JSONL output path", default=None)
     extract.add_argument("--manifest", help="Manifest output path")
     extract.add_argument("--run-id", help="Stable id used in default file names")
-    extract.add_argument("--workers", type=int, default=4, help="Parallel workers for message-count fetches")
     extract.add_argument("--heartbeat-interval", type=int, default=DEFAULT_HEARTBEAT_INTERVAL,
-                         help="Seconds between progress heartbeats while exhaustive message-count sync is running")
+                         help="Seconds between progress heartbeats while capped message-count sync is running")
     extract.add_argument("--progress-jsonl", help="Progress/heartbeat JSONL path; defaults next to the manifest")
+    extract.add_argument("--message-count-cache", default=str(DEFAULT_MESSAGE_COUNT_CACHE), help=argparse.SUPPRESS)
     extract.add_argument("--skip-message-counts", action="store_true",
                          help="Skip per-chat message-count fetches (faster, less complete; not recommended for normal imports)")
     extract.set_defaults(func=cmd_extract)

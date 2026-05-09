@@ -42,6 +42,10 @@ writes the same events to `<manifest>.progress.jsonl` (or `--progress-jsonl`).
 Harnesses should monitor those heartbeats and allow long exhaustive syncs to run
 rather than killing the process or retrying with `--skip-message-counts`.
 
+The import-contacts orchestrator rescans live WhatsApp on fresh runs. The
+incremental cache is per-chat message counts: unchanged chats reuse cached
+counts, while new or changed chats are counted from WAHA.
+
 ## Failure mode
 
 If the session is not `WORKING`, the primitive writes an empty CSV plus a

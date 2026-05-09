@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import socket
 import subprocess
 import tempfile
@@ -34,6 +35,7 @@ class FakeWAHAHandler(BaseHTTPRequestHandler):
     """Minimal WAHA-shaped HTTP server for extraction tests."""
 
     routes: dict[str, object] = {}
+    request_counts: dict[str, int] = {}
 
     def log_message(self, format, *args):  # noqa: A002 - silence test logs
         return
@@ -42,6 +44,7 @@ class FakeWAHAHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         params = parse_qs(parsed.query)
+        self.request_counts[path] = self.request_counts.get(path, 0) + 1
         # /api/sessions/{name}
         if path == "/api/sessions/default":
             return self._json(200, {"name": "default", "status": "WORKING", "engine": {"engine": "NOWEB"}})
@@ -104,6 +107,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
         self.assertFalse(payload["state"].get("reachable"))
 
     def test_extract_whatsapp_contacts_against_fake_waha(self) -> None:
+        FakeWAHAHandler.request_counts = {}
         FakeWAHAHandler.routes = {
             "contacts": [
                 {
@@ -152,6 +156,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 csv_path = tmp / "wa.csv"
                 jsonl_path = tmp / "wa.jsonl"
                 manifest_path = tmp / "wa.manifest.json"
+                cache_path = tmp / "wa.message-count-cache.json"
                 result = subprocess.run(
                     [
                         "python3", str(EXTRACT_WHATSAPP), "extract",
@@ -163,8 +168,13 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                         "--manifest", str(manifest_path),
                         "--run-id", "test-run",
                         "--heartbeat-interval", "1",
+                        "--message-count-cache", str(cache_path),
                     ],
-                    cwd=ROOT, capture_output=True, text=True, timeout=60,
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={**os.environ, "POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL": "0"},
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 manifest = json.loads(result.stdout)
@@ -196,6 +206,131 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 jsonl_rows = [json.loads(line) for line in jsonl_path.read_text().splitlines()]
                 self.assertEqual(len(jsonl_rows), len(rows))
                 self.assertEqual(jsonl_rows[0]["sources"], ["whatsapp"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_message_count_fetch_is_single_page_serial(self) -> None:
+        FakeWAHAHandler.request_counts = {}
+        FakeWAHAHandler.routes = {
+            "contacts": [
+                {"id": {"_serialized": "14155550303@c.us"}, "name": "Long Chat"},
+            ],
+            "chats": [
+                {"id": {"_serialized": "14155550303@c.us"}, "timestamp": 1735689800},
+            ],
+            "messages_by_chat": {
+                "14155550303%40c.us": [{"id": i} for i in range(750)],
+            },
+        }
+        port = _free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), FakeWAHAHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                csv_path = tmp / "wa.csv"
+                manifest_path = tmp / "wa.manifest.json"
+                cache_path = tmp / "wa.message-count-cache.json"
+                result = subprocess.run(
+                    [
+                        "python3", str(EXTRACT_WHATSAPP), "extract",
+                        "--base-url", f"http://127.0.0.1:{port}",
+                        "--api-key", "test",
+                        "--session", "default",
+                        "--output-csv", str(csv_path),
+                        "--manifest", str(manifest_path),
+                        "--message-count-cache", str(cache_path),
+                        "--run-id", "test-run",
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={**os.environ, "POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL": "0"},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["diagnostics"]["message_count_mode"], "single_page_serial")
+                self.assertEqual(manifest["diagnostics"]["message_count_cap"], 500)
+                self.assertEqual(manifest["diagnostics"]["message_count_completed"], 1)
+                self.assertEqual(
+                    FakeWAHAHandler.request_counts.get("/api/default/chats/14155550303%40c.us/messages"),
+                    1,
+                )
+                with csv_path.open(encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                self.assertEqual(rows[0]["message_count"], "500")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_message_count_cache_skips_unchanged_live_chat_recount(self) -> None:
+        FakeWAHAHandler.request_counts = {}
+        FakeWAHAHandler.routes = {
+            "contacts": [
+                {"id": "14155550404@s.whatsapp.net", "name": "Cached Chat"},
+            ],
+            "chats": [
+                {"id": "14155550404@s.whatsapp.net", "conversationTimestamp": 1735689900},
+            ],
+            "messages_by_chat": {
+                "14155550404%40s.whatsapp.net": [{"id": i} for i in range(7)],
+            },
+        }
+        port = _free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), FakeWAHAHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                cache_path = tmp / "message-count-cache.json"
+                env = {**os.environ, "POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL": "0"}
+                base_cmd = [
+                    "python3", str(EXTRACT_WHATSAPP), "extract",
+                    "--base-url", f"http://127.0.0.1:{port}",
+                    "--api-key", "test",
+                    "--session", "default",
+                    "--message-count-cache", str(cache_path),
+                ]
+                first = subprocess.run(
+                    base_cmd
+                    + ["--output-csv", str(tmp / "first.csv"), "--manifest", str(tmp / "first.manifest.json")],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=env,
+                )
+                self.assertEqual(first.returncode, 0, first.stderr)
+                first_manifest = json.loads(first.stdout)
+                self.assertEqual(first_manifest["diagnostics"]["message_count_completed"], 1)
+                self.assertEqual(first_manifest["diagnostics"]["message_count_cached"], 0)
+                self.assertEqual(
+                    FakeWAHAHandler.request_counts.get("/api/default/chats/14155550404%40s.whatsapp.net/messages"),
+                    1,
+                )
+
+                FakeWAHAHandler.request_counts = {}
+                second = subprocess.run(
+                    base_cmd
+                    + ["--output-csv", str(tmp / "second.csv"), "--manifest", str(tmp / "second.manifest.json")],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=env,
+                )
+                self.assertEqual(second.returncode, 0, second.stderr)
+                second_manifest = json.loads(second.stdout)
+                self.assertEqual(second_manifest["diagnostics"]["message_count_cached"], 1)
+                self.assertEqual(second_manifest["diagnostics"]["message_count_total"], 0)
+                self.assertIsNone(FakeWAHAHandler.request_counts.get("/api/default/chats/14155550404%40s.whatsapp.net/messages"))
+                with (tmp / "second.csv").open(encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                self.assertEqual(rows[0]["message_count"], "7")
         finally:
             server.shutdown()
             server.server_close()
