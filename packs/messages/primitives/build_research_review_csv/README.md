@@ -17,9 +17,8 @@ short_reason, identity_risk, signals, retarget_hint, exclude,
 enrich_decision
 ```
 
-Buckets are `confident | medium | review`. `review_research_web` and the
-legacy TUI map those buckets to review tabs, but upload/sync uses the product
-field `approved`.
+Buckets are `yes | maybe | no`. Legacy cached buckets are still accepted and
+normalized as `confident -> yes`, `medium|review -> maybe`.
 
 ## Usage
 

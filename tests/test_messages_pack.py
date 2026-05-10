@@ -19,6 +19,7 @@ NORMALIZE = ROOT / "packs/messages/primitives/normalize_message_contacts/normali
 HARNESS = ROOT / "packs/messages/primitives/powerset_contacts_harness/powerset_contacts_harness.py"
 IMESSAGE = ROOT / "packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py"
 UPLOAD_REVIEW = ROOT / "packs/messages/primitives/upload_research_review/upload_research_review.py"
+MIGRATE_REVIEW = ROOT / "packs/messages/primitives/migrate_review_schema/migrate_review_schema.py"
 
 
 class MessagesPackTests(unittest.TestCase):
@@ -500,6 +501,54 @@ class MessagesPackTests(unittest.TestCase):
         self.assertIn("yes,phone-1", body_text)
         self.assertNotIn("upload_decision", body_text)
         self.assertNotIn("phone-2", body_text)
+
+    def test_migrate_review_schema_canonicalizes_buckets_and_adds_network_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            contacts = tmp / "contacts.csv"
+            review = tmp / "research_review.csv"
+            out = tmp / "final.csv"
+            contacts.write_text(
+                "phone,name,source,is_in_group_chats,group_names,message_count,imessage_message_count,whatsapp_message_count,last_message,imessage_last_message,whatsapp_last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason\n"
+                "+14155550101,Ada,imessage,false,,7,7,,2026-01-01,2026-01-01,,,matched,p1,Ada Lovelace,https://www.linkedin.com/in/ada,0.99,name_exact,exact\n"
+                "+14155550202,Bob,whatsapp,false,,3,,3,2026-01-02,,2026-01-02,,matched,p2,Bob Smith,https://www.linkedin.com/in/bob,0.98,name_exact,exact\n",
+                encoding="utf-8",
+            )
+            review.write_text(
+                "bucket,handle,full_name,phone_e164,total_messages,short_reason,signals,exclude,enrich_decision\n"
+                "medium,phone-4155550101,Ada,+14155550101,7,Some signal,founder,,\n"
+                "review,phone-4155550999,Carol,+14155550999,1,Needs review,,,\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(MIGRATE_REVIEW),
+                    "migrate",
+                    "--review-csv", str(review),
+                    "--contacts-csv", str(contacts),
+                    "--output-csv", str(out),
+                    "--no-backup",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["rows_in"], 2)
+            self.assertEqual(payload["rows_written"], 3)
+            self.assertEqual(payload["in_network_added"], 1)
+            self.assertEqual(payload["bucket_counts"], {"maybe": 1, "no": 0, "yes": 2})
+
+            with out.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            by_phone = {row["phone_e164"]: row for row in rows}
+            self.assertEqual(by_phone["+14155550101"]["bucket"], "yes")
+            self.assertEqual(by_phone["+14155550101"]["in_network"], "true")
+            self.assertEqual(by_phone["+14155550101"]["network_person_id"], "p1")
+            self.assertEqual(by_phone["+14155550202"]["review_source"], "in_network_match")
+            self.assertEqual(by_phone["+14155550999"]["bucket"], "maybe")
 
     def test_extract_imessage_privacy_settings_print_only(self) -> None:
         result = subprocess.run(
@@ -1488,7 +1537,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             calls["count"] += 1
             if calls["count"] == 1:
                 return None, "HTTP 502: upstream"
-            return {"parsed": {"bucket": "confident", "short_reason": "ok", "identity_risk": "", "signals": []}, "usage": {}}, None
+            return {"parsed": {"bucket": "yes", "short_reason": "ok", "identity_risk": "", "signals": []}, "usage": {}}, None
 
         with mock.patch.object(build, "_chat_completion", side_effect=fake_chat), \
              mock.patch.object(build.time, "sleep", return_value=None):
@@ -1496,7 +1545,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 "key", "model", [], provider="openrouter", max_retries=1
             )
         self.assertIsNone(err)
-        self.assertEqual(response["parsed"]["bucket"], "confident")
+        self.assertEqual(response["parsed"]["bucket"], "yes")
         self.assertEqual(calls["count"], 2)
 
     def test_network_review_cache_buckets_and_tui_columns(self) -> None:
@@ -1561,7 +1610,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 name_conf=0.0,
                 positions=[],
             )
-            write_network_review("phone-4444444444", "review", "No real name surfaced.", "no_real_name", [])
+            write_network_review("phone-4444444444", "no", "No real name surfaced.", "no_real_name", [])
 
             # Queue rows for the first 3 handles. Last handle deliberately
             # missing from queue to exercise --allow-missing-queue.
@@ -1650,9 +1699,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             )
             manifest = json.loads(result.stdout)
             self.assertEqual(manifest["rows_written"], 4)
-            self.assertEqual(manifest["bucket_counts"]["confident"], 1)
-            self.assertEqual(manifest["bucket_counts"]["medium"], 1)
-            self.assertEqual(manifest["bucket_counts"]["review"], 2)
+            self.assertEqual(manifest["bucket_counts"], {"yes": 1, "maybe": 2, "no": 1})
 
             with output.open(newline="") as h:
                 fieldnames = next(csv.reader(h))
@@ -1667,19 +1714,19 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             by_handle = {r["handle"]: r for r in rows}
 
             jane = by_handle["phone-1111111111"]
-            self.assertEqual(jane["bucket"], "confident")
+            self.assertEqual(jane["bucket"], "yes")
             self.assertEqual(jane["top_title_company_pairs"], "Director @ Roblox")
             self.assertEqual(jane["location_city"], "San Francisco")
 
             bob = by_handle["phone-2222222222"]
-            self.assertEqual(bob["bucket"], "medium")
+            self.assertEqual(bob["bucket"], "maybe")
 
             mismatch = by_handle["phone-3333333333"]
-            self.assertEqual(mismatch["bucket"], "review")
+            self.assertEqual(mismatch["bucket"], "maybe")
             self.assertEqual(mismatch["identity_risk"], "wrong_person")
 
             empty = by_handle["phone-4444444444"]
-            self.assertEqual(empty["bucket"], "review")
+            self.assertEqual(empty["bucket"], "no")
             self.assertEqual(empty["identity_risk"], "no_real_name")
 
     def test_network_review_cache_is_used_without_llm(self) -> None:
@@ -1750,7 +1797,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
 
             with output.open(newline="") as h:
                 rows = list(csv.DictReader(h))
-            self.assertEqual(rows[0]["bucket"], "confident")
+            self.assertEqual(rows[0]["bucket"], "yes")
             self.assertEqual(rows[0]["short_reason"], "Sovereign wealth leadership; prioritize despite phone ambiguity.")
             self.assertIn("sovereign wealth", rows[0]["signals"])
 
@@ -1836,7 +1883,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
 
             with output.open(newline="") as h:
                 rows = list(csv.DictReader(h))
-            self.assertEqual(rows[0]["bucket"], "medium")
+            self.assertEqual(rows[0]["bucket"], "maybe")
             self.assertEqual(rows[0]["exclude"], "no")
             self.assertEqual(rows[0]["enrich_decision"], "yes")
             self.assertEqual(rows[0]["retarget_hint"], "https://www.linkedin.com/in/rina-investor/")
@@ -1934,7 +1981,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
 
             llm_response = {
                 "parsed": {
-                    "bucket": "confident",
+                    "bucket": "yes",
                     "short_reason": "Founder with credible AI startup signal.",
                     "identity_risk": "",
                     "signals": ["founder", "venture-network"],
@@ -1950,7 +1997,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertEqual(network_review["handle"], handle)
             self.assertEqual(network_review["public_identifier"], "aisha-founder")
             self.assertEqual(network_review["model"], "openai/gpt-4.1")
-            self.assertEqual(network_review["review"]["bucket"], "confident")
+            self.assertEqual(network_review["review"]["bucket"], "yes")
             manifest = json.loads(output.with_suffix(output.suffix + ".manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["review_source"], "network_review_llm")
             self.assertEqual(manifest["counts"]["network_review_written"], 1)
@@ -2061,8 +2108,8 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertEqual(selected, [True, False, False, True, False])
         summary = self.mod.summarize(rows)
         self.assertEqual(summary["yes"], 2)
-        self.assertEqual(summary["maybe"], 1)
-        self.assertEqual(summary["no"], 2)
+        self.assertEqual(summary["maybe"], 2)
+        self.assertEqual(summary["no"], 1)
 
     def test_profile_fields_are_loaded_from_research_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:

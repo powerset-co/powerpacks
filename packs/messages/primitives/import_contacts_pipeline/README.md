@@ -64,10 +64,12 @@ Gates:
 7. Prepare `research_queue.csv`.
 8. Estimate/run Parallel deep research after approval.
 9. Build `research_review.csv`.
-10. Start the local review web UI and block for the user to finish review.
-11. On `continue`, detect saved `retarget_hint` feedback. If new hints exist,
+10. Run the one-off final-schema migration so legacy buckets are canonical and
+    existing Powerset matches are visible as `in_network`.
+11. Start the local review web UI and block for the user to finish review.
+12. On `continue`, detect saved `retarget_hint` feedback. If new hints exist,
     build `retarget_queue.csv`, estimate targeted Parallel research, and block
     for `approve` before upload.
-12. Merge completed retarget results back into `research_review.csv`.
-13. Summarize and block for upload approval.
-14. Upload after approval.
+13. Merge completed retarget results back into `research_review.csv`.
+14. Summarize and block for upload approval.
+15. Upload after approval.

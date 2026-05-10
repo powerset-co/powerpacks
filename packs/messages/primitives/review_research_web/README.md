@@ -26,4 +26,10 @@ Decision encoding matches approved upload semantics:
 - `exclude=no` means explicitly approved
 - `exclude=yes` means explicitly unapproved
 - blank falls back to the review bucket default (`confident|yes` is approved;
-  `medium|maybe` and `review|no` are unapproved)
+  `medium|review|maybe` and `no` are unapproved)
+
+Badges:
+
+- `in network` means the row matched an existing Powerset contact; it is shown
+  so the upload can add message counts and contact metadata.
+- `re-research` means feedback triggered a targeted deep-research rerun.

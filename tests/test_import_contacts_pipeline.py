@@ -35,6 +35,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
             "prepare_queue": record("prepare_queue"),
             "parallel_research": record("parallel_research"),
             "build_review_csv": record("build_review_csv"),
+            "migrate_review_schema": record("migrate_review_schema"),
             "retarget_research_after_review": record("retarget_research_after_review"),
             "normalize_channel": lambda *_args, **kwargs: calls.append(kwargs["step_id"]),
         }

@@ -124,6 +124,15 @@ REVIEW_CSV_HEADERS = [
     "retarget_hint",
     "exclude",
     "enrich_decision",
+    "in_network",
+    "network_match_status",
+    "network_person_id",
+    "network_name",
+    "network_linkedin_url",
+    "network_match_confidence",
+    "network_match_method",
+    "network_match_reason",
+    "review_source",
 ]
 
 
@@ -1353,6 +1362,35 @@ def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
     mark_step(ledger_path, ledger, "build_research_review_csv", "completed", summary=payload, command=cmd)
 
 
+def migrate_review_schema(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    step_id = "migrate_review_schema"
+    review_csv = Path(args.review_csv)
+    contacts_csv = Path(args.contacts)
+    if completed(ledger, step_id) and review_csv.exists() and not args.force_build_review:
+        fields = set(read_csv_fieldnames(review_csv) or [])
+        if {"in_network", "network_person_id", "review_source"}.issubset(fields):
+            return
+    if not review_csv.exists() or csv_data_rows(review_csv) == 0:
+        mark_step(ledger_path, ledger, step_id, "skipped", summary={"reason": "no_review_csv", "review_csv": str(review_csv)})
+        return
+    if not contacts_csv.exists():
+        mark_step(ledger_path, ledger, step_id, "skipped", summary={"reason": "no_contacts_csv", "contacts_csv": str(contacts_csv)})
+        return
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/migrate_review_schema/migrate_review_schema.py"),
+        "migrate",
+        "--artifacts-dir", str(review_csv.parent),
+        "--review-csv", str(review_csv),
+        "--contacts-csv", str(contacts_csv),
+    ]
+    mark_step(ledger_path, ledger, step_id, "running", command=cmd)
+    result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
+    payload = require_ok(result, "migrate_review_schema")
+    ledger.setdefault("artifacts", {})["research_review_csv"] = str(review_csv)
+    mark_step(ledger_path, ledger, step_id, "completed", summary=payload, command=cmd)
+
+
 def has_research_review(args: argparse.Namespace) -> bool:
     return Path(args.review_csv).exists() and csv_data_rows(Path(args.review_csv)) > 0
 
@@ -1480,7 +1518,7 @@ def raw_decision(row: dict[str, str]) -> tuple[str, str, str]:
         return "yes", "false", "yes"
     if explicit == "no" or skip in {"true", "1", "yes"}:
         return "no", "true", "no"
-    return "review", "", ""
+    return "maybe", "", ""
 
 
 def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
@@ -1523,6 +1561,15 @@ def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: di
                     "retarget_hint": "",
                     "exclude": exclude,
                     "enrich_decision": enrich_decision,
+                    "in_network": "",
+                    "network_match_status": "",
+                    "network_person_id": "",
+                    "network_name": "",
+                    "network_linkedin_url": "",
+                    "network_match_confidence": "",
+                    "network_match_method": "",
+                    "network_match_reason": "",
+                    "review_source": "raw_review",
                 })
     review_csv = Path(args.review_csv)
     review_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -1539,8 +1586,8 @@ def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: di
         "counts": {
             "rows_written": len(rows),
             "yes": sum(1 for row in rows if row["bucket"] == "yes"),
+            "maybe": sum(1 for row in rows if row["bucket"] == "maybe"),
             "no": sum(1 for row in rows if row["bucket"] == "no"),
-            "review": sum(1 for row in rows if row["bucket"] == "review"),
         },
         "status": "ok",
     }
@@ -1868,6 +1915,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     parallel_research(args, ledger_path, ledger)
     build_review_csv(args, ledger_path, ledger)
     if has_research_review(args):
+        migrate_review_schema(args, ledger_path, ledger)
         reapply_previous_review_state(args, ledger_path, ledger)
         if not completed(ledger, "review_research_web") or args.stop_before_upload:
             open_review_server(args, ledger_path, ledger)
@@ -1884,6 +1932,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     else:
         if completed(ledger, "review_contacts_web_fallback") or args.no_open_review:
             build_raw_review_csv(args, ledger_path, ledger)
+            migrate_review_schema(args, ledger_path, ledger)
         else:
             open_raw_contacts_review_server(args, ledger_path, ledger)
             payload = {
@@ -1897,6 +1946,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             save_ledger(ledger_path, ledger)
             raise PipelineBlocked(payload, code=21)
     if has_research_review(args):
+        migrate_review_schema(args, ledger_path, ledger)
         reapply_previous_review_state(args, ledger_path, ledger)
     retarget_research_after_review(args, ledger_path, ledger)
     upload_review(args, ledger_path, ledger)

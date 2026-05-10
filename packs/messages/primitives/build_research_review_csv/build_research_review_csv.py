@@ -13,8 +13,8 @@ upload. Columns:
     short_reason, identity_risk, signals, retarget_hint, exclude,
     enrich_decision
 
-Buckets are `confident | medium | review`. The TUI maps these onto its
-yes / maybe / no tabs.
+Buckets are `yes | maybe | no`. Legacy cached buckets are normalized as
+`confident -> yes`, `medium|review -> maybe`.
 
 By default, each researched contact is scored by the network-review LLM
 (OpenRouter, mirrors aleph-mvp's review_phone_research.py SYSTEM_PROMPT).
@@ -88,6 +88,15 @@ CSV_FIELDS = [
     "retarget_hint",
     "exclude",
     "enrich_decision",
+    "in_network",
+    "network_match_status",
+    "network_person_id",
+    "network_name",
+    "network_linkedin_url",
+    "network_match_confidence",
+    "network_match_method",
+    "network_match_reason",
+    "review_source",
 ]
 
 DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
@@ -95,8 +104,17 @@ DEFAULT_QUEUE_CSV = Path(".powerpacks/messages/research_queue.csv")
 DEFAULT_OUTPUT_CSV = Path(".powerpacks/messages/research_review.csv")
 NETWORK_REVIEW_CACHE_NAME = "03_network_review.json"
 
-# Bucket order for sorting and reporting.
-BUCKET_ORDER = {"confident": 0, "medium": 1, "review": 2}
+# Canonical bucket order for sorting and reporting. Older 03_network_review.json
+# files used confident/medium/review; keep reading them, but write yes/maybe/no.
+BUCKET_ORDER = {"yes": 0, "maybe": 1, "no": 2}
+BUCKET_ALIASES = {
+    "yes": "yes",
+    "confident": "yes",
+    "maybe": "maybe",
+    "medium": "maybe",
+    "review": "maybe",
+    "no": "no",
+}
 REVIEW_DECISION_FIELDS = ("exclude", "enrich_decision", "retarget_hint")
 
 
@@ -119,7 +137,7 @@ The reviewer is especially likely to value people who overlap with a high-contex
 - top-tier venture firms, breakout startups, frontier research labs, high-agency operators, and repeat builders
 - people who are obviously additive to a founder/investor network even if they are not personally famous
 
-Treat these as strong positive signals that usually belong in confident when the name, geography, and public profile are plausible:
+Treat these as strong positive signals that usually belong in yes when the name, geography, and public profile are plausible:
 - sovereign wealth funds, royal/ruling-family business figures, business magnates, major investors, and public company or fund executives
 - family offices, large asset allocators, high-profile founders, celebrities building companies, and widely recognized public figures
 - elite schools or elite professional tracks when paired with credible career signal
@@ -127,15 +145,16 @@ Treat these as strong positive signals that usually belong in confident when the
 Be discriminating. Do not inflate weak candidates.
 
 Bucket definitions:
-- confident: this person is high-signal and likely worth knowing or staying connected to now
-- medium: there is some real signal, but identity fit or value is uncertain
-- review: likely the wrong person, too low-signal, or too weakly evidenced for prioritization
+- yes: this person is high-signal and likely worth knowing or staying connected to now
+- maybe: there is some real signal, but identity fit or value is uncertain enough to need human review
+- no: likely the wrong person, ordinary/low-signal, too weakly evidenced, or not worth prioritizing
 
 Important:
 - Do not assume the reviewer literally knows the person already.
 - Penalize identity ambiguity separately from relevance.
-- Do not require public phone-number proof for confident when the display name, country/location, group context, and public profile strongly align.
-- Keep medium for high-value profiles only when there is material identity ambiguity, such as multiple plausible same-name people or weak name/geography fit.
+- Do not require public phone-number proof for yes when the display name, country/location, group context, and public profile strongly align.
+- Use maybe for high-value profiles only when there is material identity ambiguity, such as multiple plausible same-name people or weak name/geography fit.
+- Use no for ordinary service-provider or transactional contacts unless there is independent high-signal evidence: travel agents, drivers, concierges, recruiters with no special signal, local vendors, support reps, generic consultants, and similar random contacts.
 - Keep output terse and concrete.
 - Return valid JSON only.
 """
@@ -171,10 +190,14 @@ def linkedin_public_identifier(url: str | None) -> str:
     return text.rsplit("/", 1)[-1].strip("/")
 
 
+def normalize_bucket(value: Any) -> str | None:
+    return BUCKET_ALIASES.get(str(value or "").strip().lower())
+
+
 def normalize_review_payload(review: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(review, dict):
         return None
-    bucket = (review.get("bucket") or "").strip().lower()
+    bucket = normalize_bucket(review.get("bucket"))
     if bucket not in BUCKET_ORDER:
         return None
     signals = review.get("signals") or []
@@ -270,7 +293,7 @@ def flatten_row(
 
     full_name = (person.get("full_name") or "").strip() or queue_row.get("display_name", "")
     return {
-        "bucket": bucket_payload.get("bucket", "review"),
+        "bucket": bucket_payload.get("bucket", "maybe"),
         "handle": handle,
         "full_name": full_name,
         "phone_e164": queue_row.get("phone_e164", "") or "",
@@ -295,6 +318,15 @@ def flatten_row(
         "retarget_hint": queue_row.get("retarget_hint", "") or "",
         "exclude": "",
         "enrich_decision": "",
+        "in_network": "",
+        "network_match_status": "",
+        "network_person_id": "",
+        "network_name": "",
+        "network_linkedin_url": "",
+        "network_match_confidence": "",
+        "network_match_method": "",
+        "network_match_reason": "",
+        "review_source": "llm_network_review",
     }
 
 
@@ -478,7 +510,7 @@ def llm_bucket(
     }
     user_prompt = (
         "Classify the following deep-researched phone contact into a bucket "
-        "(confident | medium | review). Return ONLY a JSON object with keys: "
+        "(yes | maybe | no). Return ONLY a JSON object with keys: "
         "bucket, short_reason, identity_risk, signals (array of short strings). "
         "Keep short_reason under 25 words.\n\n"
         + json.dumps(payload, indent=2, sort_keys=True)
@@ -497,9 +529,10 @@ def llm_bucket(
     parsed = response["parsed"] if isinstance(response, dict) else None
     if not isinstance(parsed, dict):
         raise NetworkReviewError("network review response missing JSON object")
-    bucket = (parsed.get("bucket") or "").strip().lower()
+    bucket = normalize_bucket(parsed.get("bucket"))
     if bucket not in BUCKET_ORDER:
-        raise NetworkReviewError(f"network review returned invalid bucket: {bucket or '<empty>'}")
+        raw_bucket = (parsed.get("bucket") or "").strip().lower()
+        raise NetworkReviewError(f"network review returned invalid bucket: {raw_bucket or '<empty>'}")
     signals = parsed.get("signals") or []
     if not isinstance(signals, list):
         signals = [str(signals)]

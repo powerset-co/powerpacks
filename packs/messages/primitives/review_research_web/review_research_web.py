@@ -48,6 +48,15 @@ DEFAULT_COLUMNS = [
     "retarget_notes",
     "exclude",
     "enrich_decision",
+    "in_network",
+    "network_match_status",
+    "network_person_id",
+    "network_name",
+    "network_linkedin_url",
+    "network_match_confidence",
+    "network_match_method",
+    "network_match_reason",
+    "review_source",
 ]
 
 VALID_TABS = {"yes", "maybe", "no"}
@@ -69,8 +78,10 @@ def bucket_label(bucket: str) -> str:
     raw = (bucket or "").strip().lower()
     if raw in {"yes", "confident"}:
         return "yes"
-    if raw in {"maybe", "medium"}:
+    if raw in {"maybe", "medium", "review"}:
         return "maybe"
+    if raw == "no":
+        return "no"
     return "no"
 
 
@@ -86,6 +97,13 @@ def upload_bucket(row: dict[str, str]) -> str:
 
 def is_selected(row: dict[str, str]) -> bool:
     return upload_bucket(row) == "yes"
+
+
+def is_in_network(row: dict[str, str]) -> bool:
+    raw = (row.get("in_network") or "").strip().lower()
+    if raw in {"1", "true", "yes", "y", "on"}:
+        return True
+    return bool((row.get("network_person_id") or "").strip())
 
 
 def read_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
@@ -175,16 +193,16 @@ def row_view(row: dict[str, str], research_dir: Path | None) -> dict[str, str]:
         country = (row.get("location_country") or location.get("country") or "").strip()
         title_pairs = row.get("top_title_company_pairs", "") or positions_from_profile(profile)
         schools = row.get("schools", "") or schools_from_profile(profile)
-        linkedin = row.get("retarget_linkedin_url", "") or row.get("linkedin_url", "") or social_url(profile, "linkedin_url")
+        linkedin = row.get("retarget_linkedin_url", "") or row.get("linkedin_url", "") or row.get("network_linkedin_url", "") or social_url(profile, "linkedin_url")
         notes = row.get("retarget_notes", "") or metadata.get("research_notes") or row.get("research_notes", "")
         summary_text = row.get("summary", "") or summary.get("text") or notes
     else:
-        name = (person.get("full_name") or row.get("full_name") or "").strip() or "Unknown"
+        name = (row.get("network_name") or person.get("full_name") or row.get("full_name") or "").strip() or "Unknown"
         city = (location.get("city") or row.get("location_city") or "").strip()
         country = (location.get("country") or row.get("location_country") or "").strip()
         title_pairs = positions_from_profile(profile) or row.get("top_title_company_pairs", "")
         schools = schools_from_profile(profile) or row.get("schools", "")
-        linkedin = social_url(profile, "linkedin_url") or row.get("linkedin_url", "")
+        linkedin = social_url(profile, "linkedin_url") or row.get("linkedin_url", "") or row.get("network_linkedin_url", "")
         notes = metadata.get("research_notes") or row.get("research_notes", "")
         summary_text = summary.get("text") or row.get("summary", "")
 
@@ -217,6 +235,10 @@ def matches_filter(row: dict[str, str], params: dict[str, list[str]], research_d
             row.get("signals", ""),
             row.get("short_reason", ""),
             row.get("retarget_hint", ""),
+            row.get("network_name", ""),
+            row.get("network_linkedin_url", ""),
+            row.get("network_match_method", ""),
+            row.get("review_source", ""),
             view["name"],
             view["title_pairs"],
             view["schools"],
@@ -234,8 +256,13 @@ def summarize(rows: list[dict[str, str]]) -> dict[str, int]:
     return out
 
 
+def network_count(rows: list[dict[str, str]]) -> int:
+    return sum(1 for row in rows if is_in_network(row))
+
+
 def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list[str]], research_dir: Path | None) -> bytes:
     summary = summarize(rows)
+    in_network_total = network_count(rows)
     active_tab = (params.get("tab") or ["yes"])[0].strip().lower()
     if active_tab not in VALID_TABS:
         active_tab = "yes"
@@ -270,9 +297,10 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         ".stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 10px}.stat span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}.stat strong{font-size:20px}",
         ".tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:12px}.tab{display:flex;gap:8px;align-items:center;padding:9px 12px;border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;text-decoration:none;color:var(--muted);font-size:13px}.tab.active{background:var(--panel);border-color:var(--line);color:var(--text);margin-bottom:-1px}.tab strong{font-size:12px;color:var(--text);background:var(--soft);border-radius:999px;padding:2px 7px}",
         ".filters{display:flex;gap:8px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:14px}.filters input{font:inherit;border:1px solid #b8c1cc;border-radius:6px;padding:7px 8px;min-width:280px;flex:1}.filters button{font:inherit;border:1px solid var(--ink);background:var(--ink);color:#fff;border-radius:6px;padding:7px 12px}.filters a{display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;padding:0 6px}",
+        ".legend{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin:-2px 0 12px}.badge{display:inline-block;height:18px;line-height:18px;border-radius:999px;padding:0 7px;font-size:11px;font-weight:800;white-space:nowrap}.badge.network{background:#d9f3ee;color:#0f5f59}.badge.retarget{background:#e9ddff;color:#5b21b6}",
         ".cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}",
         ".card{background:var(--panel);border:1px solid var(--line);border-radius:8px;min-height:292px;padding:14px;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,.04);transition:border-color .12s,box-shadow .12s,opacity .12s}.card:hover{border-color:#aeb8c5;box-shadow:0 3px 10px rgba(15,23,42,.08)}.card.selected{border-color:#63b7aa;background:#f1fbf8}.card.excluded{opacity:.64}.card.saving{outline:2px solid #f6c76b}",
-        ".head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.name-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.name{font-weight:800;font-size:17px;line-height:1.2}.li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#0a66c2;color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{filter:brightness(.92);text-decoration:none}.retarget-badge{display:inline-block;height:18px;line-height:18px;border-radius:999px;padding:0 7px;background:#e9ddff;color:#5b21b6;font-size:11px;font-weight:800;white-space:nowrap}.decision{display:inline-block;height:20px;line-height:20px;font-size:12px;font-weight:800;border-radius:999px;padding:0 8px;background:#eceff3;color:#5b6876;white-space:nowrap}.selected .decision{background:#ccefe8;color:#0f5f59}",
+        ".head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.name-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.name{font-weight:800;font-size:17px;line-height:1.2}.li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#0a66c2;color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{filter:brightness(.92);text-decoration:none}.decision{display:inline-block;height:20px;line-height:20px;font-size:12px;font-weight:800;border-radius:999px;padding:0 8px;background:#eceff3;color:#5b6876;white-space:nowrap}.selected .decision{background:#ccefe8;color:#0f5f59}",
         ".bucket{display:inline-block;height:20px;line-height:20px;border-radius:999px;padding:0 8px;background:#eef2f6;color:#334155;font-size:12px;margin-top:6px;white-space:nowrap;vertical-align:baseline}.bucket.yes{background:#d9f3ee;color:#0f5f59}.bucket.maybe{background:#fff1d6;color:#7a4b00}",
         ".line{font-size:13px;color:var(--muted);line-height:1.38;margin:5px 0;overflow-wrap:anywhere}.line strong{color:#334155;font-weight:650}.profile{border-top:1px solid #e5e9ef;margin-top:10px;padding-top:10px}.profile a{color:#0f5f59;text-decoration:none}.profile a:hover{text-decoration:underline}",
         ".hint{margin-top:10px}.hint label{display:block;color:#334155;font-size:12px;font-weight:700;margin-bottom:5px}.hint textarea{width:100%;min-height:54px;resize:vertical;border:1px solid #c6ced8;border-radius:7px;background:#fff;color:var(--text);font-size:13px;line-height:1.35;padding:7px 8px}.hint textarea:focus{outline:2px solid #9dd8cf;border-color:#63b7aa}.hint-actions{display:flex;align-items:center;gap:8px;margin-top:5px}.hint button{border:1px solid #9aa8b7;background:#fff;color:#334155;border-radius:6px;font-size:12px;line-height:1;font-weight:700;padding:6px 9px;cursor:pointer}.hint button:hover{border-color:#63b7aa;color:#0f5f59}.hint .hint-status{display:inline-block;min-height:16px;color:var(--muted);font-size:11px}",
@@ -290,6 +318,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         tab_link("maybe", "Maybe", summary["maybe"]),
         tab_link("no", "No", summary["no"]),
         "</nav>",
+        f"<div class='legend'><span class='badge network'>in network</span><span>adding message count and contact information ({in_network_total})</span><span class='badge retarget'>re-research</span><span>deep research with feedback</span></div>",
         "<form class='filters' method='get' action='/'>",
         f"<input type='hidden' name='tab' value='{esc(active_tab)}'>",
         f"<input name='q' placeholder='Search name, company, school, signal, LinkedIn' value='{esc(q)}'>",
@@ -312,7 +341,8 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             card_class = "card selected" if selected else "card excluded"
             bucket_class = f"bucket {label}" if label in {"yes", "maybe"} else "bucket"
             linkedin_icon = f"<a class='li-icon' href='{esc(linkedin)}' target='_blank' rel='noreferrer' title='LinkedIn' aria-label='Open LinkedIn profile'>in</a>" if linkedin else ""
-            retarget_badge = "<span class='retarget-badge'>Re-researched</span>" if (row.get("retarget_status") or "").strip() else ""
+            network_badge = "<span class='badge network'>in network</span>" if is_in_network(row) else ""
+            retarget_badge = "<span class='badge retarget'>re-research</span>" if (row.get("retarget_status") or "").strip() else ""
             hint = row.get("retarget_hint", "")
             channel_bits = []
             if row.get("imessage_message_count"):
@@ -323,12 +353,13 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             parts.extend([
                 f"<article class='{card_class}' role='button' tabindex='0' data-row='{idx}' data-selected='{str(selected).lower()}' data-decision='{esc(label)}'>",
                 "<div class='head'>",
-                f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{retarget_badge}</div><span class='{bucket_class}'>{esc(label)}</span></div>",
+                f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{network_badge}{retarget_badge}</div><span class='{bucket_class}'>{esc(label)}</span></div>",
                 f"<div class='decision'>{decision}</div></div>",
                 f"<div class='line'><strong>phone</strong> {esc(row.get('phone_e164') or 'unknown')} &middot; <strong>msgs</strong> {esc(row.get('total_messages') or '0')}{esc(channel_detail)}</div>",
                 f"<div class='line'><strong>source</strong> {esc(row.get('message_source') or 'unknown')}</div>",
                 f"<div class='line'><strong>location</strong> {esc(location)}</div>",
                 f"<div class='line'><strong>groups</strong> {esc(groups)}</div>",
+                f"<div class='line'><strong>network</strong> {esc((row.get('network_name') or 'none') if is_in_network(row) else 'none')}</div>",
                 "<div class='profile'>",
                 f"<div class='line'><strong>title@company</strong> {esc(view['title_pairs'] or 'unknown')}</div>",
                 f"<div class='line'><strong>education</strong> {esc(view['schools'] or 'unknown')}</div>",

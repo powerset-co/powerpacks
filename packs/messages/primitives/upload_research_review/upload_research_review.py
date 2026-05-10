@@ -23,7 +23,7 @@ DEFAULT_API_URL = "https://search-api-7wk4uhe77q-uw.a.run.app"
 VALID_BUCKETS = {
     "confident": "yes",
     "medium": "maybe",
-    "review": "no",
+    "review": "maybe",
     "yes": "yes",
     "maybe": "maybe",
     "no": "no",
@@ -47,7 +47,7 @@ def repo_root() -> Path:
 def normalize_bucket(value: str) -> str:
     bucket = VALID_BUCKETS.get((value or "").strip().lower())
     if not bucket:
-        raise UploadError("CSV must include bucket values confident|medium|review or yes|maybe|no")
+        raise UploadError("CSV must include bucket values yes|maybe|no or legacy confident|medium|review")
     return bucket
 
 
