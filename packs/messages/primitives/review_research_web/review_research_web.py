@@ -59,7 +59,7 @@ DEFAULT_COLUMNS = [
     "review_source",
 ]
 
-VALID_TABS = {"in_network", "yes", "maybe", "no"}
+VALID_TABS = {"yes", "maybe", "no", "in_network"}
 
 
 def esc(value: Any) -> str:
@@ -318,15 +318,15 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         "<header><div><h1>Powerpacks Research Review</h1>",
         f"<div class='meta'>{esc(csv_path)} &middot; showing {len(visible)} {esc(active_tab.replace('_', ' '))} rows. Click a card to toggle upload yes/no; every change autosaves.</div></div>",
         "<div class='stats'>",
-        f"<div class='stat'><span>in network</span><strong data-count='in_network'>{summary['in_network']}</strong></div>",
         f"<div class='stat'><span>yes</span><strong data-count='yes'>{summary['yes']}</strong></div>",
         f"<div class='stat'><span>maybe</span><strong data-count='maybe'>{summary['maybe']}</strong></div>",
         f"<div class='stat'><span>no</span><strong data-count='no'>{summary['no']}</strong></div>",
+        f"<div class='stat'><span>in network</span><strong data-count='in_network'>{summary['in_network']}</strong></div>",
         "</div></header><nav class='tabs'>",
-        tab_link("in_network", "In Network", summary["in_network"]),
         tab_link("yes", "Yes", summary["yes"]),
         tab_link("maybe", "Maybe", summary["maybe"]),
         tab_link("no", "No", summary["no"]),
+        tab_link("in_network", "In Network", summary["in_network"]),
         "</nav>",
         "<form class='filters' method='get' action='/'>",
         f"<input type='hidden' name='tab' value='{esc(active_tab)}'>",
