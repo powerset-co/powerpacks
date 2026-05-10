@@ -423,10 +423,8 @@ class MessagesPackTests(unittest.TestCase):
                         "artifact_id": "artifact-1",
                         "status": "ready",
                         "created_at": "2026-05-05T00:00:00+00:00",
-                        "total_count": 2,
-                        "yes_count": 1,
-                        "maybe_count": 0,
-                        "no_count": 1,
+                        "total_count": 1,
+                        "approved_count": 1,
                     }
                 ).encode("utf-8")
                 self.send_response(200)

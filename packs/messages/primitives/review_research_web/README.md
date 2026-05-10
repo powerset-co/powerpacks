@@ -12,17 +12,18 @@ python packs/messages/primitives/review_research_web/review_research_web.py serv
 This ports the `contact-exporter review --file research_review.csv` TUI into a
 browser surface:
 
-- yes / maybe / no tabs based on the effective upload decision
+- review tabs based on the effective approved state
 - card rows with phone signal, location, title/company, education, reason, and
   profile links pulled from `01_research_parallel.json` when available
-- click a card to toggle enrich yes/no
+- click a card to toggle approved/unapproved
 - add optional `retarget_hint` notes (LinkedIn URL, company, title, location, etc.)
   for targeted reruns
 - every click/hint edit immediately writes the CSV, so refresh/quit does not
   lose progress
 
-Decision encoding matches upload semantics:
+Decision encoding matches approved upload semantics:
 
-- `exclude=no` means explicit include / enrich yes
-- `exclude=yes` means explicit exclude / enrich no
-- blank falls back to bucket default (`confident|yes`, `medium|maybe`, `review|no`)
+- `exclude=no` means explicitly approved
+- `exclude=yes` means explicitly unapproved
+- blank falls back to the review bucket default (`confident|yes` is approved;
+  `medium|maybe` and `review|no` are unapproved)

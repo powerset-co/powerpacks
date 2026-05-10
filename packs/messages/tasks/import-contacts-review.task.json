@@ -84,21 +84,21 @@
       "kind": "primitive",
       "primitive": "build_research_review_csv",
       "command": "build",
-      "description": "Flatten per-handle research artifacts into a research-review CSV compatible with contact-exporter's yes/maybe/no TUI."
+      "description": "Flatten per-handle research artifacts into a research-review CSV compatible with the approval review UI."
     },
     {
       "id": "review_research_web",
       "kind": "primitive",
       "primitive": "review_research_web",
       "command": "serve",
-      "description": "Open a local browser reviewer for profile-card yes/no enrichment decisions."
+      "description": "Open a local browser reviewer for profile-card approved/unapproved decisions."
     },
     {
       "id": "summarize_research_upload",
       "kind": "primitive",
       "primitive": "upload_research_review",
       "command": "summarize",
-      "description": "Preview the yes/maybe/no artifact counts after applying explicit include/exclude decisions."
+      "description": "Preview approved contact counts before upload."
     },
     {
       "id": "upload_research_review",

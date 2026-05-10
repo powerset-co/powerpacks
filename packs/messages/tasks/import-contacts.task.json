@@ -140,7 +140,7 @@
       "primitive": "upload_research_review",
       "command": "upload",
       "requires_explicit_user_request": true,
-      "user_action": "Approve uploading the reviewed yes/no enrichment artifact to Powerset."
+      "user_action": "Approve uploading approved contacts to Powerset."
     },
     {
       "id": "review_contacts_web_fallback",

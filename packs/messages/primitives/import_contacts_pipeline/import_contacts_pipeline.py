@@ -1325,7 +1325,7 @@ def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
                 kind="llm",
                 payload=payload,
                 message=(
-                    "Estimated OpenRouter cost for deep-research yes/maybe/no scoring: "
+                    "Estimated OpenRouter cost for deep-research approval scoring: "
                     f"${float(scoring_estimate.get('estimated_usd') or 0.0):.4f}. Approve?"
                 )
             )
@@ -1697,7 +1697,7 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
         return
     summary = summarize_upload(args, ledger_path, ledger)
     payload = {
-        "approved_count": int(summary.get("approved_count") or summary.get("yes_count") or 0),
+        "approved_count": int(summary.get("approved_count") or 0),
     }
     aid = approval_id("upload", payload)
     if not is_approved(ledger, aid):
@@ -1726,10 +1726,9 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
     upload_payload = require_ok(result, "upload_research_review")
     response = upload_payload.get("response") or {}
     upload_count = (
-        response.get("approved_count")
-        or response.get("yes_count")
+        upload_payload.get("approved_count")
+        or response.get("approved_count")
         or (upload_payload.get("prepared_summary") or {}).get("approved_count")
-        or (upload_payload.get("prepared_summary") or {}).get("yes_count")
     )
     if upload_count is not None:
         upload_payload["approved_count"] = int(upload_count)

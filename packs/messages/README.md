@@ -52,17 +52,17 @@ Cross-channel:
   on upload; reruns reuse `03_network_review.json` and carry forward explicit
   human decisions from an archived review CSV
 - `review_research_web`: local browser port of the research-review TUI with
-  yes/maybe/no tabs, profile cards, and autosaved yes/no enrichment decisions
-- `upload_research_review`: upload the reviewed research CSV to
-  `/v2/messages-research/artifacts` after explicit approval, translating the
-  UI's `exclude` decisions into server upload buckets
-- `sync_contact_datalake`: post reviewed rows plus joined deep-research profiles
+  review tabs, profile cards, and autosaved approved/unapproved decisions
+- `upload_research_review`: upload only approved contacts to
+  `/v2/messages-research/artifacts` after explicit approval; legacy CSV/UI
+  columns are normalized into the product-level `approved` field
+- `sync_contact_datalake`: post approved rows plus joined deep-research profiles
   to `/v2/contact-datalake/import` as datalake-only payloads for downstream
   processing/materialization
 - `powerset_contacts_harness`: optional compatibility shim for non-WhatsApp
   channels of `contact-exporter` (review/match-local/upload). Not used by the
   WhatsApp skill.
-- `review_contacts_web`: local browser yes/no enrichment reviewer on the merged
+- `review_contacts_web`: local browser enrichment reviewer on the merged
   contacts CSV, with tabs for matched, suggested, actionable unmatched,
   low-signal, and skipped rows
 

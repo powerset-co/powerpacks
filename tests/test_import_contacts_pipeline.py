@@ -217,7 +217,8 @@ class ImportContactsPipelineTests(unittest.TestCase):
                     "returncode": 0,
                     "json": {
                         "status": "ok",
-                        "response": {"artifact_id": "artifact-1", "yes_count": 10},
+                        "approved_count": 10,
+                        "response": {"artifact_id": "artifact-1", "approved_count": 10},
                     },
                 }):
                     mod.upload_review(args, ledger_path, ledger)

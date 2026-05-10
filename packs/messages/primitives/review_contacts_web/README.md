@@ -1,6 +1,6 @@
 # review_contacts_web
 
-Local-only yes/no enrichment reviewer for `.powerpacks/messages/contacts.csv`.
+Local-only enrichment reviewer for `.powerpacks/messages/contacts.csv`.
 
 ```bash
 python packs/messages/primitives/review_contacts_web/review_contacts_web.py serve \
