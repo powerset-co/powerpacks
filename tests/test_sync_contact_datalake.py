@@ -102,22 +102,24 @@ class SyncContactDatalakeTests(unittest.TestCase):
             root = Path(td)
             csv_path = root / "research_review.csv"
             research_dir = root / "research"
-            for handle in ("phone-yes", "phone-maybe", "phone-no"):
+            for handle in ("phone-yes", "phone-default-yes", "phone-maybe", "phone-network", "phone-no"):
                 (research_dir / handle).mkdir(parents=True)
                 (research_dir / handle / "01_research_parallel.json").write_text(
                     json.dumps({"person": {"full_name": handle}, "social": {}}),
                     encoding="utf-8",
                 )
             with csv_path.open("w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=["bucket", "handle", "phone_e164", "full_name", "exclude"])
+                writer = csv.DictWriter(f, fieldnames=["bucket", "handle", "phone_e164", "full_name", "exclude", "in_network"])
                 writer.writeheader()
-                writer.writerow({"bucket": "medium", "handle": "phone-yes", "phone_e164": "+15550000001", "full_name": "Yes", "exclude": "no"})
-                writer.writerow({"bucket": "medium", "handle": "phone-maybe", "phone_e164": "+15550000002", "full_name": "Maybe", "exclude": ""})
-                writer.writerow({"bucket": "confident", "handle": "phone-no", "phone_e164": "+15550000003", "full_name": "No", "exclude": "yes"})
+                writer.writerow({"bucket": "medium", "handle": "phone-yes", "phone_e164": "+15550000001", "full_name": "Yes", "exclude": "no", "in_network": ""})
+                writer.writerow({"bucket": "yes", "handle": "phone-default-yes", "phone_e164": "+15550000005", "full_name": "Default Yes", "exclude": "", "in_network": "false"})
+                writer.writerow({"bucket": "medium", "handle": "phone-maybe", "phone_e164": "+15550000002", "full_name": "Maybe", "exclude": "", "in_network": ""})
+                writer.writerow({"bucket": "medium", "handle": "phone-network", "phone_e164": "+15550000004", "full_name": "Network", "exclude": "", "in_network": "true"})
+                writer.writerow({"bucket": "confident", "handle": "phone-no", "phone_e164": "+15550000003", "full_name": "No", "exclude": "yes", "in_network": ""})
 
             records = sync_contact_datalake.load_records(csv_path, research_dir)
 
-        self.assertEqual([record["handle"] for record in records], ["phone-yes"])
+        self.assertEqual([record["handle"] for record in records], ["phone-yes", "phone-default-yes", "phone-network"])
         self.assertTrue(records[0]["approved"])
         self.assertNotIn("include", records[0])
         self.assertNotIn("upload_decision", records[0])

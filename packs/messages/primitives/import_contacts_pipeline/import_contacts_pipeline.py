@@ -1396,7 +1396,7 @@ def has_research_review(args: argparse.Namespace) -> bool:
 
 
 def review_url(args: argparse.Namespace) -> str:
-    query = urllib.parse.urlencode({"tab": "yes"})
+    query = urllib.parse.urlencode({"tab": "in_network"})
     return f"http://{args.review_host}:{args.review_port}/?{query}"
 
 

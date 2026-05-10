@@ -33,6 +33,8 @@ def approved(row):
     ex=(row.get("exclude") or "").strip().lower()
     if ex in {"yes","true","1"}: return False
     if ex in {"no","false","0"}: return True
+    in_network=(row.get("in_network") or "").strip().lower()
+    if in_network in {"yes","true","1"}: return True
     b=(row.get("bucket") or "").strip().lower()
     return b in {"confident","yes"}
 
@@ -95,6 +97,11 @@ def norm_text(v):
         return "\n".join(parts) or None
     s=str(v).replace("\x00","").strip()
     return s or None
+def parse_float(raw, default=0.0):
+    try:
+        return float(raw or default)
+    except (TypeError, ValueError):
+        return default
 def to_harmonic_date(raw):
     if not raw: return None
     parts=str(raw).split("-")
@@ -114,7 +121,7 @@ def synthetic_profile_from_research(profile, row):
     pub=compute_public_identifier(social, person); person_id=generate_person_id(pub)
     work=[]
     for pos in profile.get("positions") or []:
-        if float(pos.get("confidence") or 0) < 0.7: continue
+        if parse_float(pos.get("confidence")) < 0.7: continue
         end_raw=pos.get("end_date")
         if str(end_raw or "").lower().strip() in {"present","current","now"}: end_raw=None
         start=to_harmonic_date(pos.get("start_date")); end=to_harmonic_date(end_raw)
@@ -133,7 +140,7 @@ def synthetic_profile_from_research(profile, row):
         })
     edu=[]
     for e in profile.get("education") or []:
-        if float(e.get("confidence") or 0) < 0.5 or not e.get("school_name"): continue
+        if parse_float(e.get("confidence")) < 0.5 or not e.get("school_name"): continue
         edu.append({
             "school":{"name":e.get("school_name") or "","linkedin_url":None,"logo_url":None,"entity_urn":None},
             "degree":e.get("degree") or None,
