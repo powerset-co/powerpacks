@@ -357,7 +357,7 @@ class MatchLocalTests(unittest.TestCase):
             for row in rows:
                 w.writerow({k: row.get(k, "") for k in headers})
 
-    def test_single_token_first_name_resolves_to_unique_candidate(self) -> None:
+    def test_single_token_first_name_suggests_unique_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             contacts = tmp / "contacts.csv"
@@ -384,8 +384,8 @@ class MatchLocalTests(unittest.TestCase):
             )
             payload = json.loads(result.stdout)
             self.assertEqual(payload["stats"]["total"], 3)
-            self.assertEqual(payload["stats"]["matched"], 1)
-            self.assertEqual(payload["stats"]["suggested"], 1)
+            self.assertEqual(payload["stats"]["matched"], 0)
+            self.assertEqual(payload["stats"]["suggested"], 2)
             self.assertEqual(payload["stats"]["unmatched"], 1)
 
             with contacts.open(newline="") as h:
@@ -393,10 +393,10 @@ class MatchLocalTests(unittest.TestCase):
             by_phone = {r["phone"]: r for r in rows}
 
             tanner = by_phone["+18055550101"]
-            self.assertEqual(tanner["match_status"], "matched")
+            self.assertEqual(tanner["match_status"], "suggested")
             self.assertEqual(tanner["matched_person_id"], "p1")
             self.assertEqual(tanner["matched_name"], "Tanner Vega")
-            self.assertEqual(tanner["match_method"], "name_first_only_unique")
+            self.assertEqual(tanner["match_method"], "name_first_only_unique_suggested")
 
             alex = by_phone["+14155550202"]
             self.assertEqual(alex["match_status"], "suggested")

@@ -7,11 +7,12 @@ Tiers (highest precedence first):
 
 1. Single exact normalized-name match → matched, confidence 1.0
 2. Multiple exact normalized-name matches → suggested, confidence 0.80
-3. Same last-name pool with a unique first-name prefix candidate → matched
-4. Same last-name pool with multiple prefix candidates → suggested (best score)
-5. Fuzzy ratio in same-last-name pool ≥ 0.94 with margin ≥ 0.05 → matched
-6. Fuzzy ratio ≥ 0.80 → suggested
-7. Otherwise unmatched
+3. Single-token first-name-only match → suggested, never matched
+4. Same last-name pool with a unique first-name prefix candidate → matched
+5. Same last-name pool with multiple prefix candidates → suggested (best score)
+6. Fuzzy ratio in same-last-name pool ≥ 0.94 with margin ≥ 0.05 → matched
+7. Fuzzy ratio ≥ 0.80 → suggested
+8. Otherwise unmatched
 
 Updates the message-contacts CSV in place with the
 `match_status / matched_person_id / matched_name / matched_linkedin_url /
@@ -229,16 +230,13 @@ def apply_matching(rows: list[dict[str, str]], candidates: list[Candidate]) -> d
 
         tokens = norm_contact.split(" ")
         if len(tokens) < 2:
-            # Single-token contact name (e.g. "Tanner"). Try a first-name-only
-            # lookup against multi-token candidates so a unique "Tanner X"
-            # in the catalog still resolves to a match.
             first_pool = list(first_name_index.get(tokens[0], []))
             if len(first_pool) == 1:
-                matched += 1
+                suggested += 1
                 _set_match(
-                    row, status="matched", candidate=first_pool[0], confidence=0.85,
-                    method="name_first_only_unique",
-                    reason="single-token contact name uniquely matched candidate's first name",
+                    row, status="suggested", candidate=first_pool[0], confidence=0.60,
+                    method="name_first_only_unique_suggested",
+                    reason="single-token first-name-only candidate requires review",
                 )
                 continue
             if len(first_pool) > 1:
