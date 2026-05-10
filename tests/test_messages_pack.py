@@ -539,16 +539,28 @@ class MessagesPackTests(unittest.TestCase):
             self.assertEqual(payload["rows_in"], 2)
             self.assertEqual(payload["rows_written"], 3)
             self.assertEqual(payload["in_network_added"], 1)
-            self.assertEqual(payload["bucket_counts"], {"maybe": 1, "no": 0, "yes": 2})
+            self.assertEqual(payload["research_bucket_counts"], {"maybe": 1, "no": 0, "yes": 0})
+            self.assertEqual(payload["tab_counts"], {"in_network": 2, "maybe": 1, "no": 0, "yes": 0})
 
             with out.open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             by_phone = {row["phone_e164"]: row for row in rows}
-            self.assertEqual(by_phone["+14155550101"]["bucket"], "yes")
+            self.assertEqual(by_phone["+14155550101"]["bucket"], "maybe")
             self.assertEqual(by_phone["+14155550101"]["in_network"], "true")
             self.assertEqual(by_phone["+14155550101"]["network_person_id"], "p1")
             self.assertEqual(by_phone["+14155550202"]["review_source"], "in_network_match")
             self.assertEqual(by_phone["+14155550999"]["bucket"], "maybe")
+
+            upload_result = subprocess.run(
+                ["python3", str(UPLOAD_REVIEW), "summarize", "--csv", str(out)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            upload_payload = json.loads(upload_result.stdout)
+            self.assertEqual(upload_payload["approved_count"], 2)
+            self.assertEqual(upload_payload["skipped_unapproved_count"], 1)
 
     def test_extract_imessage_privacy_settings_print_only(self) -> None:
         result = subprocess.run(
@@ -2107,9 +2119,22 @@ class ReviewResearchWebTests(unittest.TestCase):
         selected = [self.mod.is_selected(row) for row in rows]
         self.assertEqual(selected, [True, False, False, True, False])
         summary = self.mod.summarize(rows)
+        self.assertEqual(summary["in_network"], 0)
         self.assertEqual(summary["yes"], 2)
         self.assertEqual(summary["maybe"], 2)
         self.assertEqual(summary["no"], 1)
+
+    def test_in_network_rows_have_separate_review_tab(self) -> None:
+        rows = [
+            {"bucket": "maybe", "exclude": "", "in_network": "true", "network_person_id": "p1"},
+            {"bucket": "yes", "exclude": "", "in_network": "", "network_person_id": ""},
+            {"bucket": "maybe", "exclude": "", "in_network": "", "network_person_id": ""},
+        ]
+        summary = self.mod.summarize(rows)
+        self.assertEqual(summary, {"in_network": 1, "yes": 1, "maybe": 1, "no": 0})
+        self.assertTrue(self.mod.is_selected(rows[0]))
+        self.assertTrue(self.mod.is_selected(rows[1]))
+        self.assertFalse(self.mod.is_selected(rows[2]))
 
     def test_profile_fields_are_loaded_from_research_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:

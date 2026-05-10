@@ -145,9 +145,9 @@ def contact_network_fields(contact: dict[str, str]) -> dict[str, str]:
     return {
         "in_network": "true" if matched else "false",
         "network_match_status": (contact.get("match_status") or "").strip(),
-        "network_person_id": (contact.get("matched_person_id") or "").strip(),
-        "network_name": (contact.get("matched_name") or "").strip(),
-        "network_linkedin_url": (contact.get("matched_linkedin_url") or "").strip(),
+        "network_person_id": (contact.get("matched_person_id") or "").strip() if matched else "",
+        "network_name": (contact.get("matched_name") or "").strip() if matched else "",
+        "network_linkedin_url": (contact.get("matched_linkedin_url") or "").strip() if matched else "",
         "network_match_confidence": (contact.get("match_confidence") or "").strip(),
         "network_match_method": (contact.get("match_method") or "").strip(),
         "network_match_reason": (contact.get("match_reason") or "").strip(),
@@ -160,7 +160,7 @@ def canonical_review_row(row: dict[str, str], contact: dict[str, str] | None) ->
     network = contact_network_fields(contact or {})
     in_network = network["in_network"] == "true"
     out.update(network)
-    out["bucket"] = "yes" if in_network else original_bucket
+    out["bucket"] = original_bucket
     out["review_source"] = "in_network_match" if in_network else (row.get("review_source") or "llm_network_review")
     if in_network:
         out["full_name"] = out["network_name"] or out["full_name"]
@@ -180,7 +180,7 @@ def network_contact_row(contact: dict[str, str]) -> dict[str, str]:
     network = contact_network_fields(contact)
     row = {field: "" for field in FINAL_FIELDS}
     row.update({
-        "bucket": "yes",
+        "bucket": "maybe",
         "handle": phone_handle(phone, name),
         "full_name": name,
         "phone_e164": phone,
@@ -207,7 +207,8 @@ def sort_key(row: dict[str, str]) -> tuple[int, int, str]:
         messages = int(row.get("total_messages") or 0)
     except ValueError:
         messages = 0
-    return (BUCKET_ORDER.get(row.get("bucket", ""), 99), -messages, (row.get("full_name") or "").lower())
+    network_rank = 0 if row.get("in_network") == "true" else 1
+    return (network_rank, BUCKET_ORDER.get(row.get("bucket", ""), 99), -messages, (row.get("full_name") or "").lower())
 
 
 def migrate(review_csv: Path, contacts_csv: Path, output_csv: Path, *, backup: bool) -> dict[str, Any]:
@@ -266,7 +267,17 @@ def migrate(review_csv: Path, contacts_csv: Path, output_csv: Path, *, backup: b
         "rows_written": len(rows),
         "in_network_added": in_network_added,
         "in_network_review_rows": in_network_review_rows,
-        "bucket_counts": {bucket: sum(1 for row in rows if row.get("bucket") == bucket) for bucket in BUCKET_ORDER},
+        "research_bucket_counts": {
+            bucket: sum(1 for row in rows if row.get("bucket") == bucket and row.get("in_network") != "true")
+            for bucket in BUCKET_ORDER
+        },
+        "tab_counts": {
+            "in_network": sum(1 for row in rows if row.get("in_network") == "true"),
+            **{
+                bucket: sum(1 for row in rows if row.get("bucket") == bucket and row.get("in_network") != "true")
+                for bucket in BUCKET_ORDER
+            },
+        },
         "bucket_conversions": bucket_conversions,
     }
     output_csv.with_suffix(output_csv.suffix + ".manifest.json").write_text(

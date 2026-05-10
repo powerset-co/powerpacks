@@ -28,8 +28,5 @@ Decision encoding matches approved upload semantics:
 - blank falls back to the review bucket default (`confident|yes` is approved;
   `medium|review|maybe` and `no` are unapproved)
 
-Badges:
-
-- `in network` means the row matched an existing Powerset contact; it is shown
-  so the upload can add message counts and contact metadata.
-- `re-research` means feedback triggered a targeted deep-research rerun.
+The `In Network` tab shows rows matched to existing Powerset contacts. They are
+separate from the LLM `yes | maybe | no` review tabs.

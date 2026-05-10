@@ -8,7 +8,8 @@ It rewrites `research_review.csv` into the final review schema:
 - legacy `confident -> yes`
 - legacy `medium | review -> maybe`
 - existing Powerset matches from `contacts.csv` are added as `in_network`
-- matched contacts that were not researched are added as `yes` rows
+- matched contacts that were not researched are added to the separate
+  `In Network` review tab
 
 The orchestrator calls this after building the review CSV. Once older handoffs
 are migrated and the normal builders emit the final schema directly, this module

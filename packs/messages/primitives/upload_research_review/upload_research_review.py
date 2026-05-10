@@ -66,10 +66,21 @@ def normalize_exclude(value: str) -> bool | None:
     return None
 
 
+def is_in_network(row: dict[str, str]) -> bool:
+    raw = (row.get("in_network") or "").strip().lower()
+    if raw in TRUTHY:
+        return True
+    if raw in FALSY:
+        return False
+    return bool((row.get("network_person_id") or "").strip())
+
+
 def approved_for_row(row: dict[str, str]) -> bool:
     explicit = normalize_exclude(row.get("exclude", ""))
     if explicit is not None:
         return explicit
+    if is_in_network(row):
+        return True
     return normalize_bucket(row.get("bucket", "")) == "yes"
 
 
