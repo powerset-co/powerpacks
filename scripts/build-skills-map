@@ -16,6 +16,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_OUT = ROOT / "docs" / "skills-map.html"
 JSON_OUT = ROOT / ".powerpacks" / "skills-map" / "skills-map.json"
+TRACKED_PATHS: set[str] | None = None
 
 
 def now_iso() -> str:
@@ -32,6 +34,32 @@ def now_iso() -> str:
 
 def rel(path: Path) -> str:
     return str(path.relative_to(ROOT))
+
+
+def tracked_paths() -> set[str] | None:
+    global TRACKED_PATHS
+    if TRACKED_PATHS is not None:
+        return TRACKED_PATHS
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    TRACKED_PATHS = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    return TRACKED_PATHS
+
+
+def is_tracked(path: Path) -> bool:
+    tracked = tracked_paths()
+    if tracked is None:
+        return True
+    path_rel = rel(path)
+    return path_rel in tracked or any(item.startswith(f"{path_rel}/") for item in tracked)
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -65,8 +93,10 @@ def collect_primitives() -> dict[str, dict[str, Any]]:
         if not prim_root.exists():
             continue
         for d in sorted(p for p in prim_root.iterdir() if p.is_dir()):
+            if not is_tracked(d):
+                continue
             py = d / f"{d.name}.py"
-            files = sorted(p for p in d.iterdir() if p.is_file())
+            files = sorted(p for p in d.iterdir() if p.is_file() and is_tracked(p))
             primitives[d.name] = {
                 "name": d.name,
                 "pack": pack_dir.name,
@@ -157,6 +187,8 @@ def infer_references(body: str, primitives: dict[str, dict[str, Any]]) -> tuple[
 def collect_skills(primitives: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     skills: list[dict[str, Any]] = []
     for path in sorted((ROOT / "packs").glob("*/skills/*/SKILL.md")):
+        if not is_tracked(path):
+            continue
         pack = path.parts[path.parts.index("packs") + 1]
         skill_dir = path.parent.name
         text = path.read_text(errors="replace")

@@ -40,7 +40,7 @@ Gates:
 - Parallel.ai deep research always blocks on `approve` when there is
   paid work to submit; the user-facing block shows cost and rough time only.
 - Upload always blocks on `approve`; the user-facing block shows only
-  the number of yes/upload rows.
+  the number of approved contacts.
 
 ## Steps
 

@@ -1,10 +1,10 @@
 # sync_contact_datalake
 
-Build and sync reviewed messages research rows to the server-side contact
+Build and sync approved messages research rows to the server-side contact
 datalake endpoint (`POST /v2/contact-datalake/import`).
 
 This is separate from `upload_research_review`: artifact upload stores the
-review ZIP; contact datalake sync stages contact/linkedin/profile rows for the
+review ZIP; contact datalake sync stages only approved contact/linkedin/profile rows for the
 backend to process later.
 
 ```bash
@@ -26,6 +26,7 @@ The payload includes:
   `full_name`/`name` are both sent explicitly; total, iMessage, and WhatsApp
   counts/timestamps are sent separately)
 - stable `source_key` derived from the normalized phone number
+- product-level `approved: true` marker
 - optional canonical `linkedin_url`
 - `public_identifier` using Aleph's synthetic rules (`linkedin slug`, then
   `synth-x-*`, `synth-phone-*`, etc.)

@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -349,7 +350,7 @@ class MessagesPackTests(unittest.TestCase):
                 ["+14155550101", "+14155550103", "+14155550102", "+14155550104"],
             )
 
-    def test_upload_research_review_summary_applies_explicit_include_exclude(self) -> None:
+    def test_upload_research_review_summary_applies_approved_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             csv_path = Path(td) / "research_review.csv"
             with csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -397,9 +398,11 @@ class MessagesPackTests(unittest.TestCase):
                 check=True,
             )
             payload = json.loads(result.stdout)
-            self.assertEqual(payload["yes_count"], 1)
-            self.assertEqual(payload["maybe_count"], 1)
-            self.assertEqual(payload["no_count"], 1)
+            self.assertEqual(payload["approved_count"], 1)
+            self.assertEqual(payload["skipped_unapproved_count"], 2)
+            self.assertNotIn("yes_count", payload)
+            self.assertNotIn("maybe_count", payload)
+            self.assertNotIn("no_count", payload)
             self.assertNotIn("explicit_include_count", payload)
             self.assertNotIn("explicit_exclude_count", payload)
             self.assertNotIn("bucket_default_count", payload)
@@ -487,16 +490,18 @@ class MessagesPackTests(unittest.TestCase):
 
         payload = json.loads(result.stdout)
         self.assertEqual(payload["response"]["artifact_id"], "artifact-1")
-        self.assertEqual(payload["prepared_summary"]["yes_count"], 1)
-        self.assertEqual(payload["prepared_summary"]["no_count"], 1)
+        self.assertEqual(payload["approved_count"], 1)
+        self.assertEqual(payload["prepared_summary"]["approved_count"], 1)
+        self.assertEqual(payload["prepared_summary"]["skipped_unapproved_count"], 1)
         self.assertEqual(observed["path"], "/v2/messages-research/artifacts")
         self.assertEqual(observed["authorization"], "Bearer test-token")
         self.assertIn("multipart/form-data", str(observed["content_type"]))
         body_text = bytes(observed["body"]).decode("utf-8", errors="replace")
         self.assertIn("source_bucket", body_text)
-        self.assertIn("upload_decision", body_text)
+        self.assertIn("approved", body_text)
         self.assertIn("yes,phone-1", body_text)
-        self.assertIn("no,phone-2", body_text)
+        self.assertNotIn("upload_decision", body_text)
+        self.assertNotIn("phone-2", body_text)
 
     def test_extract_imessage_privacy_settings_print_only(self) -> None:
         result = subprocess.run(
@@ -1435,6 +1440,13 @@ class DeepResearchContactsTests(unittest.TestCase):
 class BuildResearchReviewCsvTests(unittest.TestCase):
     BUILD = ROOT / "packs/messages/primitives/build_research_review_csv/build_research_review_csv.py"
 
+    def _load_build_module(self):
+        spec = importlib.util.spec_from_file_location("build_research_review_csv_test", self.BUILD)
+        module = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(module)
+        return module
+
     def _write_research_artifact(self, root, handle, *, real_name, linkedin, name_conf, positions, city="", country=""):
         d = root / handle
         d.mkdir(parents=True, exist_ok=True)
@@ -1460,6 +1472,34 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 }
             )
         )
+
+    def test_network_review_uses_openai_key_when_openrouter_missing(self) -> None:
+        build = self._load_build_module()
+        args = SimpleNamespace(api_key=None, model="openai/gpt-4.1")
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-openai"}, clear=True):
+            provider, key, model = build.llm_provider_and_key(args)
+        self.assertEqual(provider, "openai")
+        self.assertEqual(key, "test-openai")
+        self.assertEqual(model, "gpt-4.1")
+
+    def test_network_review_retries_502_and_succeeds(self) -> None:
+        build = self._load_build_module()
+        calls = {"count": 0}
+
+        def fake_chat(*_args, **_kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return None, "HTTP 502: upstream"
+            return {"parsed": {"bucket": "confident", "short_reason": "ok", "identity_risk": "", "signals": []}, "usage": {}}, None
+
+        with mock.patch.object(build, "_chat_completion", side_effect=fake_chat), \
+             mock.patch.object(build.time, "sleep", return_value=None):
+            response, err = build._chat_completion_with_retries(
+                "key", "model", [], provider="openrouter", max_retries=1
+            )
+        self.assertIsNone(err)
+        self.assertEqual(response["parsed"]["bucket"], "confident")
+        self.assertEqual(calls["count"], 2)
 
     def test_network_review_cache_buckets_and_tui_columns(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1803,6 +1843,55 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertEqual(rows[0]["enrich_decision"], "yes")
             self.assertEqual(rows[0]["retarget_hint"], "https://www.linkedin.com/in/rina-investor/")
 
+    def test_previous_yes_no_buckets_are_carried_forward_as_explicit_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            research_dir = tmp / "research"
+            queue = tmp / "queue.csv"
+            previous = tmp / "previous_review.csv"
+            output = tmp / "review.csv"
+            handle = "phone-5555599999"
+
+            self._write_research_artifact(
+                research_dir,
+                handle,
+                real_name="Nora Builder",
+                linkedin="https://www.linkedin.com/in/nora-builder/",
+                name_conf=0.9,
+                positions=[{"title": "Founder", "company_name": "Example"}],
+            )
+            (research_dir / handle / "03_network_review.json").write_text(
+                json.dumps({"review": {"bucket": "medium", "short_reason": "ok", "identity_risk": "", "signals": []}}),
+                encoding="utf-8",
+            )
+            with queue.open("w", newline="") as h:
+                writer = csv.DictWriter(h, fieldnames=["handle", "display_name", "phone_e164"])
+                writer.writeheader()
+                writer.writerow({"handle": handle, "display_name": "Nora Builder", "phone_e164": "+14155559999"})
+            with previous.open("w", newline="") as h:
+                writer = csv.DictWriter(h, fieldnames=["bucket", "handle", "phone_e164", "retarget_hint"])
+                writer.writeheader()
+                writer.writerow({"bucket": "no", "handle": handle, "phone_e164": "+14155559999", "retarget_hint": "wrong person"})
+
+            subprocess.run(
+                [
+                    "python3", str(self.BUILD), "build",
+                    "--research-dir", str(research_dir),
+                    "--queue-csv", str(queue),
+                    "--output-csv", str(output),
+                    "--previous-csv", str(previous),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=True,
+            )
+            with output.open(newline="") as h:
+                rows = list(csv.DictReader(h))
+            self.assertEqual(rows[0]["exclude"], "yes")
+            self.assertEqual(rows[0]["retarget_hint"], "wrong person")
+
     def test_llm_bucket_writes_upstream_network_review_cache(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -1854,7 +1943,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 },
                 "usage": {"prompt_tokens": 100, "completion_tokens": 20},
             }
-            with mock.patch.object(build_mod, "_openrouter_chat", return_value=(llm_response, None)), \
+            with mock.patch.object(build_mod, "_chat_completion_with_retries", return_value=(llm_response, None)), \
                     mock.patch.object(build_mod, "emit"):
                 rc = build_mod.cmd_build(args)
 
@@ -1911,7 +2000,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             })()
 
             emitted = []
-            with mock.patch.object(build_mod, "_openrouter_chat", return_value=(None, "HTTP 500")), \
+            with mock.patch.object(build_mod, "_chat_completion_with_retries", return_value=(None, "HTTP 500")), \
                     mock.patch.object(build_mod, "emit", side_effect=emitted.append):
                 rc = build_mod.cmd_build(args)
 

@@ -1,4 +1,6 @@
+import csv
 import importlib.util
+import os
 from contextlib import ExitStack
 import tempfile
 import unittest
@@ -185,12 +187,8 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 rerun_upload=False,
             )
             with mock.patch.object(mod, "summarize_upload", return_value={
-                "row_count": 99,
-                "yes_count": 10,
-                "maybe_count": 11,
-                "no_count": 1,
-                "explicit_include_count": 10,
-                "explicit_exclude_count": 1,
+                "approved_count": 10,
+                "skipped_unapproved_count": 12,
             }):
                 with self.assertRaises(mod.PipelineBlocked) as cm:
                     mod.upload_review(args, ledger_path, ledger)
@@ -199,7 +197,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertNotIn("artifact", block["message"].lower())
             self.assertNotIn("maybe", block["message"])
             self.assertNotIn("no=", block["message"])
-            self.assertEqual(set(block["payload"]), {"upload_count"})
+            self.assertEqual(set(block["payload"]), {"approved_count"})
 
     def test_upload_completion_user_message_hides_artifact_id(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -212,8 +210,8 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 env_file=".env",
                 rerun_upload=False,
             )
-            summary = {"yes_count": 10}
-            ledger["approvals"][mod.approval_id("upload", {"upload_count": 10})] = {"confirmed": True}
+            summary = {"approved_count": 10}
+            ledger["approvals"][mod.approval_id("upload", {"approved_count": 10})] = {"confirmed": True}
             with mock.patch.object(mod, "summarize_upload", return_value=summary):
                 with mock.patch.object(mod, "run_command", return_value={
                     "returncode": 0,
@@ -225,7 +223,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                     mod.upload_review(args, ledger_path, ledger)
             saved = mod.read_json(ledger_path)
             upload_summary = saved["steps"]["upload_research_review"]["summary"]
-            self.assertEqual(upload_summary["user_message"], "Uploaded 10 contacts")
+            self.assertEqual(upload_summary["user_message"], "Uploaded 10 approved contacts")
             self.assertNotIn("artifact-1", upload_summary["user_message"])
             self.assertNotIn("artifact", upload_summary["user_message"].lower())
 
@@ -618,6 +616,122 @@ class ImportContactsPipelineTests(unittest.TestCase):
             cmd = run_command.call_args.args[0]
             self.assertIn("--previous-csv", cmd)
             self.assertIn(str(previous_review), cmd)
+
+    def test_build_review_falls_back_to_latest_archived_review_with_human_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            research_dir = tmp_path / "research"
+            (research_dir / "phone-1").mkdir(parents=True)
+            ((research_dir / "phone-1") / "01_research_parallel.json").write_text("{}", encoding="utf-8")
+            archive_root = tmp_path / "archive"
+            old_review = archive_root / "messages-old" / "research_review.csv"
+            old_review.parent.mkdir(parents=True)
+            old_review.write_text(
+                "bucket,handle,phone_e164,exclude,enrich_decision,retarget_hint\n"
+                "medium,phone-1,+14155550101,no,yes,https://linkedin.test/rina\n",
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                research_dir=research_dir,
+                research_queue=tmp_path / "research_queue.csv",
+                review_csv=tmp_path / "research_review.csv",
+                force_build_review=False,
+                timeout=30,
+                env_file=".env",
+                llm_auto_approve_usd=10.0,
+            )
+            payload = {
+                "primitive": "build_research_review_csv",
+                "command": "build",
+                "status": "ok",
+                "rows_written": 1,
+                "counts": {"scored_via_network_review": 1, "previous_review_decisions_applied": 1},
+            }
+            with mock.patch.object(mod, "ARCHIVE_ROOT", archive_root), \
+                 mock.patch.object(mod, "run_command", return_value={"returncode": 0, "json": payload}) as run_command:
+                mod.build_review_csv(args, ledger_path, ledger)
+
+            cmd = run_command.call_args.args[0]
+            self.assertIn("--previous-csv", cmd)
+            self.assertIn(str(old_review), cmd)
+
+    def test_continue_reapplies_archived_review_state_to_existing_review_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            review_csv = tmp_path / "research_review.csv"
+            old_review = tmp_path / "archive" / "research_review.csv"
+            old_review.parent.mkdir(parents=True)
+            review_csv.write_text(
+                "bucket,handle,phone_e164,retarget_hint\n"
+                "medium,phone-1,+14155550101,\n",
+                encoding="utf-8",
+            )
+            old_review.write_text(
+                "bucket,handle,phone_e164,exclude,enrich_decision,retarget_hint\n"
+                "medium,phone-1,+14155550101,no,yes,https://linkedin.test/rina\n",
+                encoding="utf-8",
+            )
+            ledger = mod.load_ledger(ledger_path)
+            args = SimpleNamespace(review_csv=review_csv, force_build_review=False)
+            with mock.patch.object(mod, "ARCHIVE_ROOT", tmp_path / "archive"):
+                mod.reapply_previous_review_state(args, ledger_path, ledger)
+
+            with review_csv.open(newline="", encoding="utf-8-sig") as handle:
+                row = next(csv.DictReader(handle))
+            self.assertEqual(row["exclude"], "no")
+            self.assertEqual(row["enrich_decision"], "yes")
+            self.assertEqual(row["retarget_hint"], "https://linkedin.test/rina")
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["steps"]["reapply_previous_review_state"]["summary"]["decisions_applied"], 1)
+            self.assertEqual(saved["steps"]["reapply_previous_review_state"]["summary"]["feedback_applied"], 1)
+
+    def test_continue_scans_all_prior_review_runs_and_latest_decision_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            review_csv = tmp_path / "research_review.csv"
+            archive_root = tmp_path / "archive"
+            older = archive_root / "messages-old" / "research_review.csv"
+            newer = archive_root / "messages-new" / "research_review.csv"
+            older.parent.mkdir(parents=True)
+            newer.parent.mkdir(parents=True)
+            review_csv.write_text(
+                "bucket,handle,phone_e164\n"
+                "medium,phone-1,+14155550101\n"
+                "medium,phone-2,+14155550202\n",
+                encoding="utf-8",
+            )
+            older.write_text(
+                "bucket,handle,phone_e164,exclude,retarget_hint\n"
+                "medium,phone-1,+14155550101,yes,old no\n"
+                "medium,phone-2,+14155550202,no,only old\n",
+                encoding="utf-8",
+            )
+            newer.write_text(
+                "bucket,handle,phone_e164,exclude,retarget_hint\n"
+                "medium,phone-1,+14155550101,no,new yes\n",
+                encoding="utf-8",
+            )
+            os.utime(older, (1_700_000_000, 1_700_000_000))
+            os.utime(newer, (1_700_000_100, 1_700_000_100))
+            ledger = mod.load_ledger(ledger_path)
+            args = SimpleNamespace(review_csv=review_csv, force_build_review=False)
+            with mock.patch.object(mod, "archived_review_candidates", return_value=[newer, older]):
+                mod.reapply_previous_review_state(args, ledger_path, ledger)
+
+            with review_csv.open(newline="", encoding="utf-8-sig") as handle:
+                rows = {row["handle"]: row for row in csv.DictReader(handle)}
+            self.assertEqual(rows["phone-1"]["exclude"], "no")
+            self.assertEqual(rows["phone-1"]["retarget_hint"], "new yes")
+            self.assertEqual(rows["phone-2"]["exclude"], "no")
+            self.assertEqual(rows["phone-2"]["retarget_hint"], "only old")
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["steps"]["reapply_previous_review_state"]["summary"]["previous_run_count"], 2)
+            self.assertEqual(saved["steps"]["reapply_previous_review_state"]["summary"]["matched_rows"], 2)
 
     def test_run_pipeline_extracts_channels_before_merge(self):
         with tempfile.TemporaryDirectory() as tmp:

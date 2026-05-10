@@ -419,9 +419,9 @@ def load_dotenv_values(path: Path, keys: list[str]) -> dict[str, str]:
 
 def pipeline_env(args: argparse.Namespace) -> dict[str, str]:
     env = dict(os.environ)
-    env.update(load_dotenv_values(repo_root() / args.env_file, ["OPENROUTER_API_KEY", "PARALLEL_API_KEY"]))
+    env.update(load_dotenv_values(repo_root() / args.env_file, ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "PARALLEL_API_KEY"]))
     fallback = repo_root() / "../network-search-api/.env"
-    env.update(load_dotenv_values(fallback.resolve(), ["OPENROUTER_API_KEY", "PARALLEL_API_KEY"]))
+    env.update(load_dotenv_values(fallback.resolve(), ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "PARALLEL_API_KEY"]))
     return env
 
 
@@ -581,6 +581,228 @@ def csv_data_rows(path: Path) -> int:
             return sum(1 for _ in csv.DictReader(handle))
     except OSError:
         return 0
+
+
+def review_human_state_rows(path: Path) -> int:
+    """Count rows with explicit human review state worth carrying forward."""
+    if not path.exists() or not path.is_file():
+        return 0
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            rows = csv.DictReader(handle)
+            total = 0
+            for row in rows:
+                explicit = any((row.get(field) or "").strip() for field in ("exclude", "enrich_decision", "retarget_hint"))
+                # Older/prepared review artifacts may encode explicit upload choices
+                # directly as yes/no buckets. Do not treat confident/medium/review
+                # buckets as human state; those are model defaults.
+                bucket = (row.get("bucket") or "").strip().lower()
+                if explicit or bucket in {"yes", "no"}:
+                    total += 1
+            return total
+    except OSError:
+        return 0
+
+
+def archived_review_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    roots = [ARCHIVE_ROOT, Path(".powerpacks/archive")]
+    seen: set[str] = set()
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.glob("**/research_review.csv"):
+            key = str(path)
+            if key not in seen:
+                seen.add(key)
+                candidates.append(path)
+    return sorted(candidates, key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+
+
+def previous_review_state_sources(
+    args: argparse.Namespace,
+    ledger: dict[str, Any],
+    *,
+    include_active_for_rebuild: bool = False,
+) -> list[Path]:
+    """Return prior review CSVs with human state, newest/highest-priority first.
+
+    Normal fresh runs record `artifacts.previous_research_review_csv` while
+    archiving the active review CSV. Older/manual runs may only exist under an
+    archive directory, so scan all archived `research_review.csv` files and let
+    row-level handle/phone matching decide what applies to the active run.
+    """
+    active = Path(args.review_csv)
+    candidates: list[Path] = []
+    configured = (ledger.get("artifacts") or {}).get("previous_research_review_csv")
+    if configured:
+        candidates.append(Path(configured))
+    if include_active_for_rebuild and getattr(args, "force_build_review", False):
+        candidates.append(active)
+    candidates.extend(archived_review_candidates())
+
+    out: list[Path] = []
+    seen: set[str] = set()
+    active_resolved = active.resolve() if active.exists() else active.absolute()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve() if candidate.exists() else candidate.absolute()
+        except OSError:
+            resolved = candidate.absolute()
+        if not include_active_for_rebuild and resolved == active_resolved:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if review_human_state_rows(candidate):
+            out.append(candidate)
+    return out
+
+
+def fallback_previous_review_csv(args: argparse.Namespace, ledger: dict[str, Any]) -> str | None:
+    sources = previous_review_state_sources(args, ledger, include_active_for_rebuild=True)
+    return str(sources[0]) if sources else None
+
+
+def truthy(value: str) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def falsy(value: str) -> bool:
+    return (value or "").strip().lower() in {"0", "false", "no", "n", "off"}
+
+
+def previous_review_state(row: dict[str, str]) -> dict[str, str]:
+    """Normalize human state from prior review CSV rows.
+
+    Native review UI stores explicit decisions in `exclude` (`no` means upload
+    yes, `yes` means upload no). Older artifacts may have final yes/no directly
+    in `bucket`, so treat those as explicit decisions too. Model buckets such as
+    confident/medium/review are not human state.
+    """
+    state = {
+        "exclude": (row.get("exclude") or "").strip(),
+        "enrich_decision": (row.get("enrich_decision") or "").strip(),
+        "retarget_hint": (row.get("retarget_hint") or "").strip(),
+    }
+    bucket = (row.get("bucket") or "").strip().lower()
+    if not state["exclude"] and bucket == "yes":
+        state["exclude"] = "no"
+    elif not state["exclude"] and bucket == "no":
+        state["exclude"] = "yes"
+    return state
+
+
+def load_previous_review_state(path: Path | None) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]], int]:
+    if path is None or not path.exists() or not path.is_file():
+        return {}, {}, 0
+    by_handle: dict[str, dict[str, str]] = {}
+    by_phone: dict[str, dict[str, str]] = {}
+    count = 0
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                state = previous_review_state({key: value or "" for key, value in row.items()})
+                if not any(state.values()):
+                    continue
+                count += 1
+                row_handle = (row.get("handle") or "").strip()
+                phone = (row.get("phone_e164") or "").strip()
+                if row_handle:
+                    by_handle[row_handle] = state
+                if phone:
+                    by_phone[phone] = state
+    except OSError:
+        return {}, {}, 0
+    return by_handle, by_phone, count
+
+
+def load_previous_review_states(paths: list[Path]) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]], int]:
+    """Merge human state from multiple prior runs; newer sources win."""
+    merged_by_handle: dict[str, dict[str, str]] = {}
+    merged_by_phone: dict[str, dict[str, str]] = {}
+    total_rows = 0
+    # Sources are newest/highest-priority first. Apply older first, then newer
+    # overwrites by handle/phone for stable "latest decision wins" behavior.
+    for path in reversed(paths):
+        by_handle, by_phone, rows = load_previous_review_state(path)
+        total_rows += rows
+        merged_by_handle.update(by_handle)
+        merged_by_phone.update(by_phone)
+    return merged_by_handle, merged_by_phone, total_rows
+
+
+def reapply_previous_review_state(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    """Patch the active review CSV with prior human decisions/feedback.
+
+    This runs even when `build_research_review_csv` was already completed, so a
+    plain `continue` cannot regress prior yes/no decisions back to model buckets.
+    Existing current-session explicit decisions win over archived state.
+    """
+    review_csv = Path(args.review_csv)
+    sources = previous_review_state_sources(args, ledger)
+    if not sources or not review_csv.exists():
+        mark_step(ledger_path, ledger, "reapply_previous_review_state", "skipped", summary={"reason": "no_previous_review_state"})
+        return
+    by_handle, by_phone, previous_rows = load_previous_review_states(sources)
+    if previous_rows == 0:
+        mark_step(
+            ledger_path,
+            ledger,
+            "reapply_previous_review_state",
+            "skipped",
+            summary={"reason": "previous_reviews_have_no_human_state", "previous_csvs": [str(path) for path in sources]},
+        )
+        return
+
+    with review_csv.open(newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = list(reader.fieldnames or REVIEW_CSV_HEADERS)
+        rows = [{key: value or "" for key, value in row.items()} for row in reader]
+    for column in ("exclude", "enrich_decision", "retarget_hint"):
+        if column not in fieldnames:
+            fieldnames.append(column)
+            for row in rows:
+                row[column] = ""
+
+    decisions_applied = 0
+    feedback_applied = 0
+    matched = 0
+    for row in rows:
+        state = by_handle.get((row.get("handle") or "").strip()) or by_phone.get((row.get("phone_e164") or "").strip())
+        if not state:
+            continue
+        matched += 1
+        current_exclude = (row.get("exclude") or "").strip()
+        if not current_exclude and state.get("exclude"):
+            row["exclude"] = state["exclude"]
+            decisions_applied += 1
+        current_enrich = (row.get("enrich_decision") or "").strip()
+        if not current_enrich and state.get("enrich_decision"):
+            row["enrich_decision"] = state["enrich_decision"]
+        current_hint = (row.get("retarget_hint") or "").strip()
+        if not current_hint and state.get("retarget_hint"):
+            row["retarget_hint"] = state["retarget_hint"]
+            feedback_applied += 1
+
+    tmp = review_csv.with_suffix(review_csv.suffix + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    tmp.replace(review_csv)
+    summary = {
+        "previous_csv": str(sources[0]) if sources else None,
+        "previous_csvs": [str(path) for path in sources],
+        "previous_run_count": len(sources),
+        "previous_human_state_rows": previous_rows,
+        "matched_rows": matched,
+        "decisions_applied": decisions_applied,
+        "feedback_applied": feedback_applied,
+        "review_csv": str(review_csv),
+    }
+    mark_step(ledger_path, ledger, "reapply_previous_review_state", "completed", summary=summary)
 
 
 def write_empty_csv(path: Path, fieldnames: list[str], *, manifest_reason: str | None = None) -> dict[str, Any]:
@@ -1117,11 +1339,11 @@ def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
         "--output-csv", str(args.review_csv),
         "--model", DEFAULT_NETWORK_REVIEW_MODEL,
     ]
-    previous_review_csv = (ledger.get("artifacts") or {}).get("previous_research_review_csv")
+    previous_review_csv = fallback_previous_review_csv(args, ledger)
     if previous_review_csv and Path(previous_review_csv).exists():
         cmd.extend(["--previous-csv", str(previous_review_csv)])
     mark_step(ledger_path, ledger, "build_research_review_csv", "running", command=cmd)
-    result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
+    result = run_command(cmd, timeout=max(args.timeout, 3600), env=pipeline_env(args))
     payload = require_ok(result, "build_research_review_csv")
     if scoring_estimate is not None:
         payload["scoring_estimate"] = scoring_estimate
@@ -1475,7 +1697,7 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
         return
     summary = summarize_upload(args, ledger_path, ledger)
     payload = {
-        "upload_count": int(summary.get("yes_count") or 0),
+        "approved_count": int(summary.get("approved_count") or summary.get("yes_count") or 0),
     }
     aid = approval_id("upload", payload)
     if not is_approved(ledger, aid):
@@ -1487,8 +1709,8 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
             kind="upload",
             payload=payload,
             message=(
-                "Upload reviewed contacts to Powerset? "
-                f"uploading {payload['upload_count']}."
+                "Upload approved contacts to Powerset? "
+                f"uploading {payload['approved_count']}."
             ),
         )
 
@@ -1503,9 +1725,15 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
     result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
     upload_payload = require_ok(result, "upload_research_review")
     response = upload_payload.get("response") or {}
-    upload_count = response.get("yes_count") or (upload_payload.get("prepared_summary") or {}).get("yes_count")
+    upload_count = (
+        response.get("approved_count")
+        or response.get("yes_count")
+        or (upload_payload.get("prepared_summary") or {}).get("approved_count")
+        or (upload_payload.get("prepared_summary") or {}).get("yes_count")
+    )
     if upload_count is not None:
-        upload_payload["user_message"] = f"Uploaded {int(upload_count)} contacts"
+        upload_payload["approved_count"] = int(upload_count)
+        upload_payload["user_message"] = f"Uploaded {int(upload_count)} approved contacts"
     ledger.setdefault("artifacts", {})["uploaded_artifact_id"] = response.get("artifact_id")
     mark_step(ledger_path, ledger, "upload_research_review", "completed", summary=upload_payload, command=cmd)
 
@@ -1641,6 +1869,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     parallel_research(args, ledger_path, ledger)
     build_review_csv(args, ledger_path, ledger)
     if has_research_review(args):
+        reapply_previous_review_state(args, ledger_path, ledger)
         if not completed(ledger, "review_research_web") or args.stop_before_upload:
             open_review_server(args, ledger_path, ledger)
             payload = {
@@ -1668,6 +1897,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             ledger["current_block"] = payload
             save_ledger(ledger_path, ledger)
             raise PipelineBlocked(payload, code=21)
+    if has_research_review(args):
+        reapply_previous_review_state(args, ledger_path, ledger)
     retarget_research_after_review(args, ledger_path, ledger)
     upload_review(args, ledger_path, ledger)
     sync_contact_datalake(args, ledger_path, ledger)

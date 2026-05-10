@@ -97,6 +97,31 @@ class SyncContactDatalakeTests(unittest.TestCase):
         self.assertIn("person_id", synthetic)
         self.assertTrue(synthetic["synthetic_metadata"]["draft"])
 
+    def test_load_records_syncs_only_approved_contacts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            csv_path = root / "research_review.csv"
+            research_dir = root / "research"
+            for handle in ("phone-yes", "phone-maybe", "phone-no"):
+                (research_dir / handle).mkdir(parents=True)
+                (research_dir / handle / "01_research_parallel.json").write_text(
+                    json.dumps({"person": {"full_name": handle}, "social": {}}),
+                    encoding="utf-8",
+                )
+            with csv_path.open("w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=["bucket", "handle", "phone_e164", "full_name", "exclude"])
+                writer.writeheader()
+                writer.writerow({"bucket": "medium", "handle": "phone-yes", "phone_e164": "+15550000001", "full_name": "Yes", "exclude": "no"})
+                writer.writerow({"bucket": "medium", "handle": "phone-maybe", "phone_e164": "+15550000002", "full_name": "Maybe", "exclude": ""})
+                writer.writerow({"bucket": "confident", "handle": "phone-no", "phone_e164": "+15550000003", "full_name": "No", "exclude": "yes"})
+
+            records = sync_contact_datalake.load_records(csv_path, research_dir)
+
+        self.assertEqual([record["handle"] for record in records], ["phone-yes"])
+        self.assertTrue(records[0]["approved"])
+        self.assertNotIn("include", records[0])
+        self.assertNotIn("upload_decision", records[0])
+
 
 if __name__ == "__main__":
     unittest.main()

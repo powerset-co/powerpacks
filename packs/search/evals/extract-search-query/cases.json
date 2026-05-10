@@ -35,7 +35,8 @@
     "expect": {
       "role_search_filters.company_names": {"contains_case_insensitive": "OpenAI"},
       "role_search_filters.is_current_role": true,
-      "role_search_filters.is_current_company": true
+      "role_search_filters.is_current_company": true,
+      "role_search_filters.seniority_bands": {"contains": "senior"}
     },
     "reject": {
       "role_search_filters.is_current": {"exists": true}
@@ -60,7 +61,13 @@
       "role_search_filters.company_semantic_queries": {"non_empty": true},
       "role_search_filters.sector_types": {"non_empty": true},
       "role_search_filters.company_sector_strategy": {"one_of": ["staged", "soft_union", "hard_filter", "semantic_only"]},
-      "role_search_filters.has_domain_intent": true
+      "role_search_filters.has_domain_intent": true,
+      "role_search_filters.is_current_role": true,
+      "role_search_filters.is_current_company": true,
+      "role_search_filters.seniority_bands": {"contains": "senior"}
+    },
+    "reject": {
+      "role_search_filters.seniority_bands": {"contains": "director"}
     }
   }
 ]

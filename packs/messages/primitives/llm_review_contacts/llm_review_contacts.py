@@ -23,6 +23,7 @@ import csv
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -286,6 +287,10 @@ def call_openrouter(
         if retry_after:
             prefix += f" retry_after={retry_after}"
         return [], 0, 0, f"{prefix}: {raw[:300]}"
+    except TimeoutError as exc:
+        return [], 0, 0, f"timeout: {exc}"
+    except socket.timeout as exc:
+        return [], 0, 0, f"timeout: {exc}"
     except urllib.error.URLError as exc:
         return [], 0, 0, f"network: {exc.reason}"
 
@@ -365,7 +370,15 @@ def call_openrouter_with_retries(
         last_error = err
         if not err:
             return results, total_in, total_out, None
-        retryable = err.startswith("HTTP 429") or err.startswith("HTTP 529") or "rate" in err.lower()
+        status_match = re.match(r"HTTP (\d+)", err or "")
+        status_code = int(status_match.group(1)) if status_match else 0
+        retryable = (
+            status_code == 429
+            or 500 <= status_code <= 599
+            or "rate" in (err or "").lower()
+            or "timeout" in (err or "").lower()
+            or "network" in (err or "").lower()
+        )
         if not retryable or attempt >= max_retries:
             return results, total_in, total_out, err
         time.sleep(_retry_after_seconds(err, attempt))

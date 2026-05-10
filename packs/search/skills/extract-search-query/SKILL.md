@@ -98,12 +98,28 @@ company/date/location/education filters.
   `is_current_role: true` and `is_current_company: true`; "people currently at
   OpenAI who used to be PMs" sets `is_current_company: true` and leaves role
   currentness false/past if encoded separately.
+- For simple "ROLE at COMPANY/domain" recruiting queries, interpret `at` as
+  current by default and emit both `is_current_role: true` and
+  `is_current_company: true`, unless the user asks for past/all-time experience.
 - For role or company queries, include a `notes` entry that makes currentness
   semantics explicit: current-only, all-time, or past-only for each dimension.
-  If the user's wording does not make currentness clear, do not choose silently;
-  leave a note for the orchestrator to ask before retrieval.
-- For recall-style tests, do not add seniority unless the query or test
-  explicitly requires it.
+  If a note says current-only, the matching `is_current_role` and/or
+  `is_current_company` fields must be present. If the user's wording does not
+  make currentness clear, do not choose silently; leave a note for the
+  orchestrator to ask before retrieval.
+- Infer seniority intent instead of leaving broad role searches unbounded:
+  - For hands-on IC role queries such as engineers, AI/ML engineers, data
+    scientists, designers, product managers, analysts, or marketers, emit IC
+    `seniority_bands` unless the user asks for leadership. Default broad IC
+    bands to `["mid", "senior", "staff", "principal"]`; use
+    `["entry", "junior"]` only when the query says intern, new grad, junior, or
+    entry-level.
+  - For leadership queries containing terms such as leader, leadership, manager,
+    head, director, VP, executive, C-suite, or chief, emit leadership bands such
+    as `["manager", "director", "vice_president", "c_suite"]`, narrowed when
+    the user names a specific level.
+  - If the user explicitly says all seniorities or broad recall, omit
+    `seniority_bands` and note that seniority is intentionally unbounded.
 - Founder shortcut: for founder/co-founder/founding-team queries, include
   canonical `role_ids: ["founder"]`, include founder title aliases in
   `bm25_queries`, and do not add `seniority_bands` unless the user explicitly

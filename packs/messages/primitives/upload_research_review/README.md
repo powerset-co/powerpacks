@@ -4,16 +4,11 @@ Uploads a reviewed messages research CSV to Powerset through:
 
 `POST /v2/messages-research/artifacts`
 
-The review UI writes yes/no decisions to `exclude`. The backend artifact
-endpoint currently splits by `bucket`, so this primitive prepares an upload CSV
-where:
-
-- `exclude=yes` becomes `bucket=no`
-- `exclude=no` becomes `bucket=yes`
-- blank `exclude` keeps the original bucket default
-
-The server artifact stores yes/maybe/no splits. The yes split is the
-include/enrich set; maybe/no are preserved as reviewed context.
+The product-level upload concept is `approved`. The review UI still stores
+legacy explicit decisions in `exclude` (`exclude=no` means approved,
+`exclude=yes` means unapproved). This primitive prepares an upload CSV containing
+only approved contacts. For backend artifact compatibility, approved rows are
+sent with `bucket=yes` and an `approved=true` column.
 
 It reuses the cached Powerset login from `~/.powerpacks/credentials.json`.
 
@@ -27,4 +22,4 @@ python packs/messages/primitives/upload_research_review/upload_research_review.p
 ```
 
 Never run `upload --confirm-upload` until the user explicitly approves uploading
-the reviewed artifact.
+the approved contacts.

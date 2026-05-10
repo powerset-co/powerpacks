@@ -51,22 +51,26 @@ def normalize_bucket(value: str) -> str:
     return bucket
 
 
-def normalize_exclude(value: str) -> str | None:
+def normalize_exclude(value: str) -> bool | None:
+    """Return explicit approved state from legacy `exclude` column.
+
+    `exclude=no` means approved. `exclude=yes` means not approved. The rest of
+    the upload path speaks in terms of approved/unapproved only; yes is just the
+    server artifact bucket used for approved rows.
+    """
     raw = (value or "").strip().lower()
     if raw in TRUTHY:
-        return "exclude"
+        return False
     if raw in FALSY:
-        return "include"
+        return True
     return None
 
 
-def upload_bucket_for_row(row: dict[str, str]) -> str:
-    decision = normalize_exclude(row.get("exclude", ""))
-    if decision == "exclude":
-        return "no"
-    if decision == "include":
-        return "yes"
-    return normalize_bucket(row.get("bucket", ""))
+def approved_for_row(row: dict[str, str]) -> bool:
+    explicit = normalize_exclude(row.get("exclude", ""))
+    if explicit is not None:
+        return explicit
+    return normalize_bucket(row.get("bucket", "")) == "yes"
 
 
 def load_review_rows(csv_path: Path) -> tuple[list[str], list[dict[str, str]]]:
@@ -88,24 +92,32 @@ def load_review_rows(csv_path: Path) -> tuple[list[str], list[dict[str, str]]]:
 def prepare_upload_csv(csv_path: Path) -> tuple[bytes, dict[str, Any]]:
     fieldnames, rows = load_review_rows(csv_path)
     output_fields = list(fieldnames)
-    for extra in ("source_bucket", "upload_decision"):
+    for extra in ("source_bucket", "approved"):
         if extra not in output_fields:
             output_fields.append(extra)
 
     prepared: list[dict[str, str]] = []
-    counts = {"yes": 0, "maybe": 0, "no": 0}
-    explicit = {"include": 0, "exclude": 0, "blank": 0}
+    source_counts = {"approved": 0, "unapproved": 0}
+    explicit = {"approved": 0, "unapproved": 0, "blank": 0}
     for row in rows:
         original_bucket = normalize_bucket(row.get("bucket", ""))
-        decision = normalize_exclude(row.get("exclude", ""))
-        upload_bucket = upload_bucket_for_row(row)
-        counts[upload_bucket] += 1
-        explicit[decision or "blank"] += 1
+        explicit_approved = normalize_exclude(row.get("exclude", ""))
+        approved = approved_for_row(row)
+        source_counts["approved" if approved else "unapproved"] += 1
+        if explicit_approved is True:
+            explicit["approved"] += 1
+        elif explicit_approved is False:
+            explicit["unapproved"] += 1
+        else:
+            explicit["blank"] += 1
+        if not approved:
+            continue
 
         next_row = {key: row.get(key, "") for key in output_fields}
         next_row["source_bucket"] = original_bucket
-        next_row["bucket"] = upload_bucket
-        next_row["upload_decision"] = decision or "bucket_default"
+        # Backend artifact compatibility: approved rows are stored in the yes bucket.
+        next_row["bucket"] = "yes"
+        next_row["approved"] = "true"
         prepared.append(next_row)
 
     buf = io.StringIO()
@@ -115,11 +127,12 @@ def prepare_upload_csv(csv_path: Path) -> tuple[bytes, dict[str, Any]]:
     summary = {
         "csv": str(csv_path),
         "row_count": len(prepared),
-        "yes_count": counts["yes"],
-        "maybe_count": counts["maybe"],
-        "no_count": counts["no"],
-        "explicit_include_count": explicit["include"],
-        "explicit_exclude_count": explicit["exclude"],
+        "approved_count": len(prepared),
+        "source_approved_count": source_counts["approved"],
+        "source_unapproved_count": source_counts["unapproved"],
+        "skipped_unapproved_count": source_counts["unapproved"],
+        "explicit_approved_count": explicit["approved"],
+        "explicit_unapproved_count": explicit["unapproved"],
         "bucket_default_count": explicit["blank"],
     }
     return buf.getvalue().encode("utf-8"), summary
@@ -199,6 +212,7 @@ def upload_review_csv(*, csv_path: Path, api_url: str, token: str, timeout: int)
     return {
         "status_code": status,
         "elapsed_seconds": round(time.monotonic() - started, 3),
+        "approved_count": summary["approved_count"],
         "prepared_summary": summary,
         "response": response_json,
         "url": endpoint,
@@ -215,9 +229,8 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         "primitive": "upload_research_review",
         "command": "summarize",
         "status": "ok",
-        "yes_count": summary["yes_count"],
-        "maybe_count": summary["maybe_count"],
-        "no_count": summary["no_count"],
+        "approved_count": summary["approved_count"],
+        "skipped_unapproved_count": summary["skipped_unapproved_count"],
     })
     return 0
 
@@ -247,7 +260,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
             "primitive": "upload_research_review",
             "command": "upload",
             "status": "blocked",
-            "error": "pass --confirm-upload after the user explicitly approves uploading the reviewed contacts",
+            "error": "pass --confirm-upload after the user explicitly approves uploading approved contacts",
         })
         return 2
     api_url = args.api_url or os.getenv("POWERPACKS_API_URL") or os.getenv("POWERSET_API_URL") or DEFAULT_API_URL
@@ -265,7 +278,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Upload a reviewed messages research CSV to Powerset")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    summarize = sub.add_parser("summarize", help="Preview upload yes/maybe/no counts")
+    summarize = sub.add_parser("summarize", help="Preview approved upload count")
     summarize.add_argument("--csv", default=DEFAULT_CSV)
     summarize.set_defaults(func=cmd_summarize)
 
@@ -274,7 +287,7 @@ def main() -> int:
     prepare.add_argument("--output", default=".powerpacks/messages/research_review.upload.csv")
     prepare.set_defaults(func=cmd_prepare)
 
-    upload = sub.add_parser("upload", help="Upload the reviewed contacts CSV")
+    upload = sub.add_parser("upload", help="Upload approved contacts from the reviewed contacts CSV")
     upload.add_argument("--csv", default=DEFAULT_CSV)
     upload.add_argument("--api-url", default=None)
     upload.add_argument("--token", default=None)

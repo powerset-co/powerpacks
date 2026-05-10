@@ -29,6 +29,8 @@ import argparse
 import csv
 import json
 import os
+import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -297,7 +299,7 @@ def flatten_row(
 
 
 # ---------------------------------------------------------------------------
-# LLM bucketing (OpenRouter)
+# LLM bucketing (OpenRouter or direct OpenAI)
 # ---------------------------------------------------------------------------
 
 
@@ -305,15 +307,36 @@ class NetworkReviewError(RuntimeError):
     pass
 
 
-def _openrouter_chat(api_key: str, model: str, messages: list[dict], *, timeout: int = 90) -> tuple[dict[str, Any] | None, str | None]:
-    base = os.environ.get("POWERPACKS_OPENROUTER_BASE", "https://openrouter.ai/api/v1")
+def llm_provider_and_key(args: argparse.Namespace) -> tuple[str, str | None, str]:
+    if args.api_key:
+        return "openrouter", args.api_key, args.model
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return "openrouter", os.environ.get("OPENROUTER_API_KEY"), args.model
+    if os.environ.get("OPENAI_API_KEY"):
+        model = args.model.removeprefix("openai/")
+        return "openai", os.environ.get("OPENAI_API_KEY"), model
+    return "openrouter", None, args.model
+
+
+def _chat_completion(
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    *,
+    provider: str,
+    timeout: int = 120,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if provider == "openai":
+        base = os.environ.get("POWERPACKS_OPENAI_BASE", os.environ.get("OPENAI_API_BASE", "https://api.openai.com"))
+    else:
+        base = os.environ.get("POWERPACKS_OPENROUTER_BASE", "https://openrouter.ai/api/v1")
     body = json.dumps({
         "model": model,
         "messages": messages,
         "response_format": {"type": "json_object"},
     }).encode("utf-8")
     req = urllib.request.Request(
-        f"{base}/chat/completions",
+        f"{base.rstrip('/')}/v1/chat/completions" if provider == "openai" and not base.rstrip('/').endswith('/v1') else f"{base.rstrip('/')}/chat/completions",
         data=body,
         method="POST",
         headers={
@@ -330,7 +353,15 @@ def _openrouter_chat(api_key: str, model: str, messages: list[dict], *, timeout:
             raw = exc.read().decode("utf-8", errors="replace")
         except Exception:
             raw = ""
-        return None, f"HTTP {exc.code}: {raw[:300]}"
+        retry_after = exc.headers.get("retry-after") if exc.headers else None
+        prefix = f"HTTP {exc.code}"
+        if retry_after:
+            prefix += f" retry_after={retry_after}"
+        return None, f"{prefix}: {raw[:300]}"
+    except TimeoutError as exc:
+        return None, f"timeout: {exc}"
+    except socket.timeout as exc:
+        return None, f"timeout: {exc}"
     except urllib.error.URLError as exc:
         return None, f"network: {exc.reason}"
     try:
@@ -356,13 +387,58 @@ def _openrouter_chat(api_key: str, model: str, messages: list[dict], *, timeout:
     return {"parsed": parsed, "usage": usage}, None
 
 
+def _retry_after_seconds(error: str | None, attempt: int) -> float:
+    if error:
+        match = re.search(r"retry_after=([0-9.]+)", error)
+        if match:
+            try:
+                return max(0.0, float(match.group(1)))
+            except ValueError:
+                pass
+    return min(30.0, float(2 ** attempt))
+
+
+def _chat_completion_with_retries(
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    *,
+    provider: str,
+    timeout: int = 120,
+    max_retries: int = 3,
+) -> tuple[dict[str, Any] | None, str | None]:
+    last_response: dict[str, Any] | None = None
+    last_error: str | None = None
+    for attempt in range(max_retries + 1):
+        response, err = _chat_completion(api_key, model, messages, provider=provider, timeout=timeout)
+        last_response = response
+        last_error = err
+        if not err:
+            return response, None
+        status_match = re.match(r"HTTP (\d+)", err or "")
+        status_code = int(status_match.group(1)) if status_match else 0
+        retryable = (
+            status_code == 429
+            or 500 <= status_code <= 599
+            or "rate" in (err or "").lower()
+            or "timeout" in (err or "").lower()
+            or "network" in (err or "").lower()
+        )
+        if not retryable or attempt >= max_retries:
+            return last_response, last_error
+        time.sleep(_retry_after_seconds(err, attempt))
+    return last_response, last_error
+
+
 def llm_bucket(
     api_key: str,
     model: str,
     queue_row: dict[str, str],
     research_packet: dict[str, Any] | None,
+    *,
+    provider: str = "openrouter",
 ) -> dict[str, Any]:
-    """Call OpenRouter with the network-fit SYSTEM_PROMPT to bucket the candidate.
+    """Call an LLM with the network-fit SYSTEM_PROMPT to bucket the candidate.
 
     There is no heuristic mode. If the LLM cannot return a valid bucket, fail
     the build so the review CSV does not silently contain low-quality guesses.
@@ -407,10 +483,15 @@ def llm_bucket(
         "Keep short_reason under 25 words.\n\n"
         + json.dumps(payload, indent=2, sort_keys=True)
     )
-    response, err = _openrouter_chat(api_key, model, [
-        {"role": "system", "content": SCORE_SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ])
+    response, err = _chat_completion_with_retries(
+        api_key,
+        model,
+        [
+            {"role": "system", "content": SCORE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        provider=provider,
+    )
     if err or not response:
         raise NetworkReviewError(f"network review failed: {err or 'empty response'}")
     parsed = response["parsed"] if isinstance(response, dict) else None
@@ -465,6 +546,11 @@ def load_previous_review_decisions(path: Path | None) -> tuple[dict[str, dict[st
         reader = csv.DictReader(handle)
         for row in reader:
             decision = {field: (row.get(field) or "").strip() for field in REVIEW_DECISION_FIELDS}
+            bucket = (row.get("bucket") or "").strip().lower()
+            if not decision.get("exclude") and bucket == "yes":
+                decision["exclude"] = "no"
+            elif not decision.get("exclude") and bucket == "no":
+                decision["exclude"] = "yes"
             if not any(decision.values()):
                 continue
             carried += 1
@@ -514,7 +600,7 @@ def cmd_build(args: argparse.Namespace) -> int:
               "error": f"no per-handle subdirectories in {research_dir}"})
         return 1
 
-    api_key = args.api_key or os.environ.get("OPENROUTER_API_KEY")
+    llm_provider, api_key, llm_model = llm_provider_and_key(args)
 
     rows: list[dict[str, str]] = []
     counts = {
@@ -577,10 +663,10 @@ def cmd_build(args: argparse.Namespace) -> int:
         else:
             if not api_key:
                 emit({"primitive": "build_research_review_csv", "command": "build", "status": "failed",
-                      "error": "OPENROUTER_API_KEY not set (pass --api-key or add it to the repo .env)"})
+                      "error": "OPENROUTER_API_KEY or OPENAI_API_KEY not set (pass --api-key or add one to the repo .env)"})
                 return 1
             try:
-                bucket_payload = llm_bucket(api_key, args.model, queue_row, research_packet)
+                bucket_payload = llm_bucket(api_key, llm_model, queue_row, research_packet, provider=llm_provider)
             except NetworkReviewError as exc:
                 counts["llm_errors"] += 1
                 emit({
@@ -596,7 +682,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             total_input_tokens += int(usage.get("prompt_tokens") or 0)
             total_output_tokens += int(usage.get("completion_tokens") or 0)
             counts["scored_via_llm"] += 1
-            write_network_review_cache(network_review_path, handle, queue_row, research_packet, args.model, bucket_payload)
+            write_network_review_cache(network_review_path, handle, queue_row, research_packet, llm_model, bucket_payload)
             counts["network_review_written"] += 1
 
         flat = flatten_row(handle, queue_row, research_packet, raw_packet, bucket_payload)
@@ -633,7 +719,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         "command": "build",
         "status": "ok",
         "review_source": "network_review_llm",
-        "model": args.model,
+        "model": llm_model,
+        "llm_provider": llm_provider,
         "research_dir": str(research_dir),
         "queue_csv": str(args.queue_csv),
         "output_csv": str(output_csv),

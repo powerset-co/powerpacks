@@ -29,14 +29,19 @@ def auth_token():
     p=subprocess.run(cmd,cwd=repo_root(),text=True,capture_output=True)
     if p.returncode!=0 or not p.stdout.strip(): raise RuntimeError("could not get Powerset token; run $powerset login")
     return p.stdout.strip()
-def decision(row):
+def approved(row):
     ex=(row.get("exclude") or "").strip().lower()
-    if ex in {"yes","true","1"}: return "exclude"
-    if ex in {"no","false","0"}: return "include"
+    if ex in {"yes","true","1"}: return False
+    if ex in {"no","false","0"}: return True
     b=(row.get("bucket") or "").strip().lower()
-    if b in {"confident","yes"}: return "include"
-    if b in {"review","no"}: return "exclude"
-    return "bucket_default"
+    return b in {"confident","yes"}
+
+
+def should_sync_record(rec):
+    # Product invariant: only approved contacts are synced to the contact
+    # datalake. Maybe/no rows can exist in review artifacts, but they must not
+    # become staged contact records.
+    return bool(rec.get("approved"))
 def profile_for(handle, research_dir):
     p=research_dir/handle/"01_research_parallel.json"
     return read_json(p,{}) if p.exists() else {}
@@ -185,6 +190,7 @@ def row_to_record(row, research_dir, retarget_research_dir):
     linkedin=canonical_linkedin_url(row.get("retarget_linkedin_url") or linkedin_from_profile(prof))
     phone=row.get("phone_e164") or social.get("primary_phone")
     full_name=row.get("full_name") or row.get("name") or person.get("full_name")
+    is_approved=approved(row)
     return {
         "source_key": phone_source_key(phone, handle),
         "handle": handle or None,
@@ -201,7 +207,7 @@ def row_to_record(row, research_dir, retarget_research_dir):
         "imessage_last_message": row.get("imessage_last_message") or None,
         "whatsapp_last_message": row.get("whatsapp_last_message") or None,
         "bucket": row.get("bucket") or "",
-        "upload_decision": decision(row),
+        "approved": is_approved,
         "linkedin_url": linkedin,
         "public_identifier": (synthetic or {}).get("public_identifier"),
         "research_profile": prof or None,
@@ -209,13 +215,13 @@ def row_to_record(row, research_dir, retarget_research_dir):
         "processing_status": "staged",
         "raw_record": row,
     }
-def load_records(csv_path, research_dir, only_include=False, retarget_research_dir=DEFAULT_RETARGET_RESEARCH_DIR):
+def load_records(csv_path, research_dir, retarget_research_dir=DEFAULT_RETARGET_RESEARCH_DIR):
     with csv_path.open(newline='',encoding='utf-8-sig') as f:
         rows=list(csv.DictReader(f))
     records=[]
     for row in rows:
         rec=row_to_record(row,research_dir,retarget_research_dir)
-        if only_include and rec["upload_decision"]=="exclude": continue
+        if not should_sync_record(rec): continue
         records.append(rec)
     return records
 def post_json(api_url, token, payload, timeout=120):
@@ -237,7 +243,7 @@ def summarize_sync_response(body):
         "errors": int(body.get("errors") or 0) if isinstance(body,dict) else 0,
     }
 def cmd_build(args):
-    recs=load_records(Path(args.csv),Path(args.research_dir),args.only_include,Path(args.retarget_research_dir))
+    recs=load_records(Path(args.csv),Path(args.research_dir),Path(args.retarget_research_dir))
     linked=sum(1 for r in recs if r.get("linkedin_url"))
     named=sum(1 for r in recs if r.get("full_name") or r.get("name"))
     phoned=sum(1 for r in recs if r.get("phone_e164") or r.get("phone"))
@@ -250,14 +256,14 @@ def cmd_build(args):
 def cmd_sync(args):
     if not args.confirm_sync:
         emit({"primitive":"sync_contact_datalake","command":"sync","status":"blocked","error":"pass --confirm-sync after explicit approval"}); return 2
-    recs=load_records(Path(args.csv),Path(args.research_dir),args.only_include,Path(args.retarget_research_dir))
+    recs=load_records(Path(args.csv),Path(args.research_dir),Path(args.retarget_research_dir))
     status,body=post_json(args.api_url, args.token or auth_token(), {"records":recs,"source":"messages_research_review","dry_run":False}, timeout=args.timeout)
     emit({"primitive":"sync_contact_datalake","command":"sync","status":"ok","status_code":status,**summarize_sync_response(body)})
     return 0
 def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest='cmd',required=True)
     for name in ['build','sync']:
-        s=sub.add_parser(name); s.add_argument('--csv',default=str(DEFAULT_CSV)); s.add_argument('--research-dir',default=str(DEFAULT_RESEARCH_DIR)); s.add_argument('--retarget-research-dir',default=str(DEFAULT_RETARGET_RESEARCH_DIR)); s.add_argument('--only-include',action='store_true'); s.set_defaults(func=cmd_build if name=='build' else cmd_sync)
+        s=sub.add_parser(name); s.add_argument('--csv',default=str(DEFAULT_CSV)); s.add_argument('--research-dir',default=str(DEFAULT_RESEARCH_DIR)); s.add_argument('--retarget-research-dir',default=str(DEFAULT_RETARGET_RESEARCH_DIR)); s.set_defaults(func=cmd_build if name=='build' else cmd_sync)
         if name=='build': s.add_argument('--output'); s.add_argument('--dry-run',action='store_true')
         else: s.add_argument('--api-url',default=os.getenv('POWERPACKS_API_URL') or os.getenv('POWERSET_API_URL') or DEFAULT_API_URL); s.add_argument('--token'); s.add_argument('--timeout',type=int,default=120); s.add_argument('--confirm-sync',action='store_true')
     a=p.parse_args(); raise SystemExit(a.func(a))

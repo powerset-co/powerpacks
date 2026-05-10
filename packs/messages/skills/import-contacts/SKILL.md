@@ -85,8 +85,8 @@ The main chat should show only:
 
 - QR / permission actions
 - spend prompts, with cost only
-- upload prompts, with upload count only
-- final result, exactly `Uploaded X contacts`
+- upload prompts, with approved contact count only
+- final result, exactly `Uploaded X approved contacts`
 
 Do not stream primitive JSON, terminal transcripts, progress logs, local file
 paths, row counts, matched/unmatched counts, or implementation details unless a
@@ -117,5 +117,5 @@ Be terse.
 
 - Spend: `Estimated deep research cost: $X, completion time is about Y. Approve?`
 - Review: `Review opened. When done, say: done with review, upload`
-- Upload: `Upload reviewed contacts? uploading X.`
-- Done: `Uploaded X contacts`
+- Upload: `Upload approved contacts? uploading X.`
+- Done: `Uploaded X approved contacts`

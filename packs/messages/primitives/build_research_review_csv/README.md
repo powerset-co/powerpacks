@@ -18,7 +18,8 @@ enrich_decision
 ```
 
 Buckets are `confident | medium | review`. `review_research_web` and the
-legacy TUI both map those buckets to `yes / maybe / no` tabs.
+legacy TUI map those buckets to review tabs, but upload/sync uses the product
+field `approved`.
 
 ## Usage
 
@@ -47,9 +48,12 @@ python packs/messages/primitives/upload_research_review/upload_research_review.p
 ## Network Review Cache
 
 LLM results are cached at `<research-dir>/<handle>/03_network_review.json`.
-Powerpacks treats that as the local source of truth for yes/maybe/no review.
-There is no alternate bucket mode and no heuristic fallback; if OpenRouter
-cannot return a valid network review, the build fails instead of guessing.
+Powerpacks treats that as the local source of truth for network review.
+There is no alternate bucket mode and no heuristic fallback; if the configured
+LLM cannot return a valid network review after retrying transient 429/5xx,
+timeout, and network errors, the build fails instead of guessing. The primitive
+uses `OPENROUTER_API_KEY` when present and falls back to direct `OPENAI_API_KEY`
+for `openai/...` models.
 
 Fresh import runs regenerate the active review CSV from current source data.
 When the orchestrator archives an older review CSV, this primitive carries
