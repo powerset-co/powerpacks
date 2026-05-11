@@ -161,6 +161,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 "987654321%40g.us": [
                     {"id": "14155550101@c.us", "pn": "14155550101@c.us", "role": "participant"},
                     {"id": "14155550202@c.us", "pn": "14155550202@c.us", "role": "participant"},
+                    {"id": "14155550606@c.us", "pn": "14155550606@c.us", "role": "participant", "name": "Group Charlie"},
                 ],
             },
             "group_participants": {
@@ -230,6 +231,11 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 self.assertEqual(bob["is_in_group_chats"], "true")
                 self.assertEqual(bob["group_names"], "Founders")
                 self.assertEqual(bob["message_count"], "3")
+
+                charlie = next(row for row in rows if row["phone"] == "+14155550606")
+                self.assertEqual(charlie["name"], "Group Charlie")
+                self.assertEqual(charlie["is_in_group_chats"], "true")
+                self.assertEqual(charlie["group_names"], "Founders")
                 self.assertEqual(
                     FakeWAHAHandler.request_counts.get("/api/default/groups/987654321%40g.us/participants/v2"),
                     1,
