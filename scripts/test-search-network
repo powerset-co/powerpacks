@@ -34,12 +34,28 @@ Commands:
       then feed the result into the primitive recall path. This may hit
       model, TurboPuffer, and Postgres APIs.
 
+  pipeline-eval [--bucket BUCKET] [--case-glob REGEX] [--max-cases N]
+      Run recall YAMLs through agent extraction + search_network_pipeline.
+      Tests the full product flow: Codex extracts query → pipeline runs
+      retrieval/hydration → recall checked. Defaults to --search-only
+      (no LLM rerank) unless POWERPACKS_PIPELINE_SKIP_LLM=false.
+
+  pipeline-eval-dry-run [--bucket BUCKET] [--case-glob REGEX] [--max-cases N]
+      Write extraction prompts for pipeline-eval without invoking agent or
+      pipeline.
+
+  pipeline-eval-list [--bucket BUCKET] [--case-glob REGEX]
+      List matching recall cases for pipeline-eval.
+
 Environment:
-  CODEX_MODEL       Optional model override for codex exec.
-  APP_DIR           Defaults to /Users/arthur/workspace/aleph-mvp.
-  RECALL_DIR        Defaults to $APP_DIR/tests/recall.
-  ENV_FILE          Retrieval primitive env file. Defaults to .env under APP_DIR.
-  LIMIT_CAP         Defaults to 1000.
+  CODEX_MODEL                      Optional model override for codex exec.
+  APP_DIR                           Defaults to /Users/arthur/workspace/aleph-mvp (recall/agent-extract)
+                                    or /Users/arthur/workspace/network-search-api (pipeline-eval).
+  RECALL_DIR                        Defaults to $APP_DIR/tests/recall.
+  ENV_FILE                          Retrieval primitive env file. Defaults to .env.
+  LIMIT_CAP                         Defaults to 1000.
+  POWERPACKS_PIPELINE_SKIP_LLM      Set to true/1 to skip LLM filter/rerank in pipeline-eval. Default: true.
+  POWERPACKS_PIPELINE_SET_ID        Override set_id for pipeline-eval. Use to scope to an org set.
 EOF
 }
 
@@ -109,6 +125,41 @@ case "$command" in
     ;;
   agent-extract)
     run_agent_harness live "$@"
+    ;;
+  pipeline-eval)
+    uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
+      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
+      --env-file "${ENV_FILE:-.env}" \
+      --limit-cap "${LIMIT_CAP:-1000}" \
+      "$@"
+    ;;
+  pipeline-eval-codex)
+    uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
+      --agent-command "$ROOT/scripts/codex-search-network-pipeline {prompt_file} {output_json}" \
+      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
+      --env-file "${ENV_FILE:-.env}" \
+      --limit-cap "${LIMIT_CAP:-1000}" \
+      "$@"
+    ;;
+  pipeline-eval-dry-run)
+    uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
+      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
+      --env-file "${ENV_FILE:-.env}" \
+      --limit-cap "${LIMIT_CAP:-1000}" \
+      --dry-run \
+      "$@"
+    ;;
+  pipeline-eval-list)
+    uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
+      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
+      --list \
+      "$@"
+    ;;
+  extractor-eval)
+    uv run --env-file "${ENV_FILE:-.env}" python "$SEARCH_EVALS/extractor_eval.py" \
+      --dataset-dir "${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/evals/query_expansion/datasets" \
+      --env-file "${ENV_FILE:-.env}" \
+      "$@"
     ;;
   ""|-h|--help|help)
     usage

@@ -85,7 +85,10 @@ def education_filter(payload: dict[str, Any], education_ids: list[str] | None = 
     if ids:
         clauses.append(comparison("canonical_education_id", "In", ids))
     if payload.get("degree_levels"):
-        clauses.append(comparison("degree_normalized", "In", payload["degree_levels"]))
+        # Normalize to title-case to match TurboPuffer degree_normalized values
+        degree_map = {"bachelors": "Bachelors", "masters": "Masters", "mba": "MBA", "phd": "PhD", "md": "MD", "jd": "JD"}
+        degrees = [degree_map.get(d.lower(), d) for d in payload["degree_levels"]]
+        clauses.append(comparison("degree_normalized", "In", degrees))
     if payload.get("fields_of_study"):
         fields = list(payload["fields_of_study"])
         if len(fields) == 1:

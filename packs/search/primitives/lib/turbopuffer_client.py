@@ -431,7 +431,7 @@ def detects_founder_shortcut(payload: dict[str, Any], query: str | None = None) 
 
 def detect_csuite_shortcut(payload: dict[str, Any], query: str | None = None) -> dict[str, Any] | None:
     text = _payload_text(payload, query).lower()
-    words = {word.rstrip("s") for word in TOKEN_RE.findall(text)}
+    words = set(TOKEN_RE.findall(text))
     for abbrev, spec in CSUITE_SHORTCUTS.items():
         if abbrev in words or str(spec["display"]).lower() in text:
             return spec
@@ -947,7 +947,7 @@ def is_filter_only_payload(payload: dict[str, Any]) -> bool:
 async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
     if filters is None:
         raise ValueError("filter-only search requires at least one TurboPuffer filter")
-    rows = await filter_only_rows(filters, include_attributes, max_results=top_k)
+    rows = await filter_only_rows(filters, include_attributes, max_results=0)
     out: list[dict[str, Any]] = []
     for index, row in enumerate(rows, start=1):
         doc_id = str(row.get("id") or "")
