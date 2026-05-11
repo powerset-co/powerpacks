@@ -61,6 +61,29 @@ DEFAULT_COLUMNS = [
 
 VALID_TABS = {"yes", "maybe", "no", "in_network"}
 
+TAB_INFO = {
+    "yes": {
+        "label": "Yes",
+        "icon": """<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/><circle cx='12' cy='12' r='10'/></svg>""",
+        "body": "These are contacts that you explicitly approved for us to upload into your Powerset Personal Network.",
+    },
+    "maybe": {
+        "label": "Maybe",
+        "icon": """<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='M9.1 9a3 3 0 1 1 4.8 2.4c-.9.6-1.4 1.2-1.4 2.1'/><path d='M12 17h.01'/></svg>""",
+        "body": "These are candidates that are worth adding, but require your review to explicitly approve uploads.",
+    },
+    "no": {
+        "label": "No",
+        "icon": """<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='m15 9-6 6'/><path d='m9 9 6 6'/></svg>""",
+        "body": "These are contacts that do not seem worthwhile to add to your network, you may still approve for us to upload into your Powerset Personal Network.",
+    },
+    "in_network": {
+        "label": "In Network",
+        "icon": """<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><path d='M22 21v-2a4 4 0 0 0-3-3.87'/><path d='M16 3.13a4 4 0 0 1 0 7.75'/></svg>""",
+        "body": "These are contacts that were matched to your existing Powerset Personal Network. All contacts in this section will be updated with the phone number and message count (counts above 500 are capped). Deselect any you do not wish to upload, or select all/none.",
+    },
+}
+
 
 def esc(value: Any) -> str:
     return html.escape(str(value or ""), quote=True)
@@ -105,18 +128,25 @@ def is_in_network(row: dict[str, str]) -> bool:
 
 
 def row_tab(row: dict[str, str]) -> str:
+    if is_in_network(row):
+        return "in_network"
     exclude = (row.get("exclude") or "").strip().lower()
     if truthy(exclude):
         return "no"
-    if is_in_network(row):
-        return "in_network"
     if falsy(exclude):
         return "yes"
     return bucket_label(row.get("bucket", ""))
 
 
 def is_selected(row: dict[str, str]) -> bool:
-    return row_tab(row) in {"in_network", "yes"}
+    exclude = (row.get("exclude") or "").strip().lower()
+    if truthy(exclude):
+        return False
+    if falsy(exclude):
+        return True
+    if is_in_network(row):
+        return True
+    return bucket_label(row.get("bucket", "")) == "yes"
 
 
 def read_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
@@ -233,10 +263,10 @@ def row_view(row: dict[str, str], research_dir: Path | None) -> dict[str, str]:
 
 
 def matches_filter(row: dict[str, str], params: dict[str, list[str]], research_dir: Path | None) -> bool:
-    tab = (params.get("tab") or ["in_network"])[0].strip().lower()
+    tab = (params.get("tab") or ["yes"])[0].strip().lower()
     q = (params.get("q") or [""])[0].strip().lower()
     if tab not in VALID_TABS:
-        tab = "in_network"
+        tab = "yes"
     if row_tab(row) != tab:
         return False
     if q:
@@ -265,17 +295,44 @@ def matches_filter(row: dict[str, str], params: dict[str, list[str]], research_d
 def summarize(rows: list[dict[str, str]]) -> dict[str, int]:
     out = {"in_network": 0, "yes": 0, "maybe": 0, "no": 0}
     for row in rows:
-        out[row_tab(row)] += 1
+        tab = row_tab(row)
+        if tab == "in_network":
+            if is_selected(row):
+                out["in_network"] += 1
+        else:
+            out[tab] += 1
     return out
+
+
+def apply_bulk_selection(rows: list[dict[str, str]], tab: str, selected: bool) -> int:
+    """Apply an include/exclude decision to every CSV row in a logical tab.
+
+    For in-network, target every matched network row even if it is currently
+    excluded and therefore appears under No. This keeps select all/none whole
+    rather than limited to the rendered or currently selected page.
+    """
+    if tab not in VALID_TABS:
+        raise ValueError(f"unknown tab: {tab}")
+    changed = 0
+    next_exclude = "no" if selected else "yes"
+    for row in rows:
+        target = is_in_network(row) if tab == "in_network" else row_tab(row) == tab
+        if not target:
+            continue
+        if (row.get("exclude") or "") != next_exclude:
+            changed += 1
+        row["exclude"] = next_exclude
+    return changed
 
 
 def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list[str]], research_dir: Path | None) -> bytes:
     summary = summarize(rows)
-    active_tab = (params.get("tab") or ["in_network"])[0].strip().lower()
+    active_tab = (params.get("tab") or ["yes"])[0].strip().lower()
     if active_tab not in VALID_TABS:
-        active_tab = "in_network"
+        active_tab = "yes"
     visible = [(idx, row) for idx, row in enumerate(rows) if matches_filter(row, params, research_dir)]
     q = (params.get("q") or [""])[0]
+    info = TAB_INFO[active_tab]
 
     def tab_href(tab: str) -> str:
         next_params = {
@@ -284,11 +341,11 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             if key not in {"tab"} and values and values[0]
         }
         next_params["tab"] = tab
-        return "/?" + urllib.parse.urlencode(next_params) if next_params else "/?tab=in_network"
+        return "/?" + urllib.parse.urlencode(next_params) if next_params else "/?tab=yes"
 
     def tab_link(tab: str, label: str, count: int) -> str:
         klass = "tab active" if active_tab == tab else "tab"
-        return f"<a class='{klass}' href='{esc(tab_href(tab))}'><span>{esc(label)}</span><strong>{count}</strong></a>"
+        return f"<a class='{klass}' href='{esc(tab_href(tab))}'><span>{esc(label)}</span><strong data-count='{esc(tab)}'>{count}</strong></a>"
 
     parts = [
         "<!doctype html><html><head><meta charset='utf-8'>",
@@ -298,12 +355,11 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         ":root{color-scheme:light;--bg:#f5f6f8;--panel:#fff;--line:#d8dee6;--text:#17202a;--muted:#5f6c7a;--soft:#eef2f6;--ink:#17202a;--font:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}",
         "*{box-sizing:border-box}body,button,input,textarea{font-family:var(--font)}body{margin:0;background:var(--bg);color:var(--text)}",
         ".wrap{max-width:1480px;margin:0 auto;padding:28px 24px 42px}",
-        "header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:18px}",
+        "header{margin-bottom:18px}",
         "h1{font-size:24px;line-height:1.15;margin:0 0 7px}",
         ".meta{color:var(--muted);font-size:13px;line-height:1.4;overflow-wrap:anywhere}",
-        ".stats{display:grid;grid-template-columns:repeat(4,minmax(104px,1fr));gap:8px;min-width:460px}",
-        ".stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 10px}.stat span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}.stat strong{font-size:20px}",
         ".tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:12px}.tab{display:flex;gap:8px;align-items:center;padding:9px 12px;border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;text-decoration:none;color:var(--muted);font-size:13px}.tab.active{background:var(--panel);border-color:var(--line);color:var(--text);margin-bottom:-1px}.tab strong{font-size:12px;color:var(--text);background:var(--soft);border-radius:999px;padding:2px 7px}",
+        ".info-panel{display:flex;align-items:flex-start;gap:12px;background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:14px 16px;margin:0 0 14px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.info-panel h2{font-size:15px;line-height:1.25;margin:0 0 3px}.info-panel p{margin:0;color:var(--muted);font-size:13px;line-height:1.45}.info-body{flex:1}.info-icon{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:999px;flex:0 0 auto}.info-icon svg{width:18px;height:18px}.bulk-actions{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}.bulk-actions button{font:inherit;border:1px solid #9aa8b7;background:#fff;color:#334155;border-radius:7px;font-size:12px;font-weight:800;padding:7px 10px;cursor:pointer}.bulk-actions button:hover{border-color:#63b7aa;color:#0f5f59}.bulk-actions button:disabled{opacity:.6;cursor:wait}.info-panel.yes,.info-panel.in_network{border-left-color:#43a99a}.info-panel.yes .info-icon,.info-panel.in_network .info-icon{background:#d9f3ee;color:#0f5f59}.info-panel.maybe{border-left-color:#d49322}.info-panel.maybe .info-icon{background:#fff1d6;color:#7a4b00}.info-panel.no{border-left-color:#b65b5b}.info-panel.no .info-icon{background:#fde2e2;color:#8a2424}",
         ".filters{display:flex;gap:8px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:14px}.filters input{font:inherit;border:1px solid #b8c1cc;border-radius:6px;padding:7px 8px;min-width:280px;flex:1}.filters button{font:inherit;border:1px solid var(--ink);background:var(--ink);color:#fff;border-radius:6px;padding:7px 12px}.filters a{display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;padding:0 6px}",
         ".badge{display:inline-block;height:18px;line-height:18px;border-radius:999px;padding:0 7px;font-size:11px;font-weight:800;white-space:nowrap}.badge.retarget{background:#e9ddff;color:#5b21b6}",
         ".cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}",
@@ -313,21 +369,17 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         ".line{font-size:13px;color:var(--muted);line-height:1.38;margin:5px 0;overflow-wrap:anywhere}.line strong{color:#334155;font-weight:650}.profile{border-top:1px solid #e5e9ef;margin-top:10px;padding-top:10px}.profile a{color:#0f5f59;text-decoration:none}.profile a:hover{text-decoration:underline}",
         ".hint{margin-top:10px}.hint label{display:block;color:#334155;font-size:12px;font-weight:700;margin-bottom:5px}.hint textarea{width:100%;min-height:54px;resize:vertical;border:1px solid #c6ced8;border-radius:7px;background:#fff;color:var(--text);font-size:13px;line-height:1.35;padding:7px 8px}.hint textarea:focus{outline:2px solid #9dd8cf;border-color:#63b7aa}.hint-actions{display:flex;align-items:center;gap:8px;margin-top:5px}.hint button{border:1px solid #9aa8b7;background:#fff;color:#334155;border-radius:6px;font-size:12px;line-height:1;font-weight:700;padding:6px 9px;cursor:pointer}.hint button:hover{border-color:#63b7aa;color:#0f5f59}.hint .hint-status{display:inline-block;min-height:16px;color:var(--muted);font-size:11px}",
         ".empty{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:24px;color:var(--muted)}.toast{position:fixed;right:16px;bottom:16px;background:#17202a;color:#fff;border-radius:8px;padding:9px 12px;font-size:13px;opacity:0;transform:translateY(8px);transition:opacity .15s,transform .15s;pointer-events:none}.toast.show{opacity:1;transform:translateY(0)}",
-        "@media(max-width:900px){.wrap{padding:20px 14px}header{display:block}.stats{grid-template-columns:repeat(2,minmax(0,1fr));min-width:0;margin-top:14px}.cards{grid-template-columns:1fr}.filters input{min-width:180px}}",
+        "@media(max-width:900px){.wrap{padding:20px 14px}.info-panel{display:block}.info-icon{margin-bottom:8px}.bulk-actions{margin:10px 0 0}.cards{grid-template-columns:1fr}.filters input{min-width:180px}}",
         "</style></head><body><div class='wrap'>",
-        "<header><div><h1>Powerpacks Research Review</h1>",
-        f"<div class='meta'>{esc(csv_path)} &middot; showing {len(visible)} {esc(active_tab.replace('_', ' '))} rows. Click a card to toggle upload yes/no; every change autosaves.</div></div>",
-        "<div class='stats'>",
-        f"<div class='stat'><span>yes</span><strong data-count='yes'>{summary['yes']}</strong></div>",
-        f"<div class='stat'><span>maybe</span><strong data-count='maybe'>{summary['maybe']}</strong></div>",
-        f"<div class='stat'><span>no</span><strong data-count='no'>{summary['no']}</strong></div>",
-        f"<div class='stat'><span>in network</span><strong data-count='in_network'>{summary['in_network']}</strong></div>",
-        "</div></header><nav class='tabs'>",
+        "<header><h1>Powerpacks Research Review</h1>",
+        "<div class='meta'>Click a card to toggle include or exclude in upload. Every change autosaves.</div></header>",
+        "<nav class='tabs'>",
         tab_link("yes", "Yes", summary["yes"]),
         tab_link("maybe", "Maybe", summary["maybe"]),
         tab_link("no", "No", summary["no"]),
         tab_link("in_network", "In Network", summary["in_network"]),
         "</nav>",
+        f"<section class='info-panel {esc(active_tab)}' aria-label='{esc(info['label'])} guidance'><div class='info-icon' aria-hidden='true'>{info['icon']}</div><div class='info-body'><h2>{esc(info['label'])}</h2><p>{esc(info['body'])}</p></div>" + ("<div class='bulk-actions' aria-label='Bulk in-network actions'><button type='button' data-bulk-selected='true'>Select all</button><button type='button' data-bulk-selected='false'>Select none</button></div>" if active_tab == "in_network" else "") + "</section>",
         "<form class='filters' method='get' action='/'>",
         f"<input type='hidden' name='tab' value='{esc(active_tab)}'>",
         f"<input name='q' placeholder='Search name, company, school, signal, LinkedIn' value='{esc(q)}'>",
@@ -347,7 +399,8 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             signals = " | ".join(split_pipe(row.get("signals", ""), limit=5)) or "none"
             linkedin = view["linkedin_url"]
             github = view["github_url"]
-            decision = "IN NETWORK" if label == "in_network" else ("YES" if selected else "NO")
+            decision = "IN NETWORK" if label == "in_network" and selected else ("YES" if selected else "EXCLUDED")
+            count_key = "in_network" if label == "in_network" and selected else (label if label != "in_network" else "")
             card_class = "card selected" if selected else "card excluded"
             bucket_class = f"bucket {label}" if label in {"in_network", "yes", "maybe"} else "bucket"
             linkedin_icon = f"<a class='li-icon' href='{esc(linkedin)}' target='_blank' rel='noreferrer' title='LinkedIn' aria-label='Open LinkedIn profile'>in</a>" if linkedin else ""
@@ -360,7 +413,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
                 channel_bits.append(f"WhatsApp {row.get('whatsapp_message_count')}")
             channel_detail = f" ({' · '.join(channel_bits)})" if channel_bits else ""
             parts.extend([
-                f"<article class='{card_class}' role='button' tabindex='0' data-row='{idx}' data-selected='{str(selected).lower()}' data-decision='{esc(label)}' data-network='{str(is_in_network(row)).lower()}'>",
+                f"<article class='{card_class}' role='button' tabindex='0' data-row='{idx}' data-selected='{str(selected).lower()}' data-decision='{esc(count_key)}' data-network='{str(is_in_network(row)).lower()}'>",
                 "<div class='head'>",
                 f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{retarget_badge}</div><span class='{bucket_class}'>{esc(label_text)}</span></div>",
                 f"<div class='decision'>{decision}</div></div>",
@@ -386,12 +439,14 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         "<script>",
         "const toast=document.getElementById('toast');let toastTimer=null;",
         "function showToast(text){toast.textContent=text;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1100)}",
-        "function bump(label,delta){const el=document.querySelector('[data-count='+label+']');if(el)el.textContent=String(Math.max(0,Number(el.textContent||0)+delta))}",
-        "function cardDecision(card,selected){if(!selected)return'no';return card.dataset.network==='true'?'in_network':'yes'}",
-        "function decisionLabel(decision){return decision==='in_network'?'in network':decision}",
-        "function setCard(card,selected){const decision=cardDecision(card,selected);card.dataset.selected=String(selected);card.classList.toggle('selected',selected);card.classList.toggle('excluded',!selected);card.querySelector('.decision').textContent=decision==='in_network'?'IN NETWORK':(selected?'YES':'NO');card.dataset.decision=decision;const badge=card.querySelector('.bucket');if(badge){badge.textContent=decisionLabel(decision);badge.className='bucket '+(decision==='yes'||decision==='in_network'?decision:'')}}",
-        "async function toggle(card){const was=card.dataset.selected==='true';const oldDecision=card.dataset.decision||'no';const next=!was;const nextDecision=cardDecision(card,next);card.classList.add('saving');try{const body=new URLSearchParams({row:card.dataset.row,selected:String(next)});const res=await fetch('/toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());setCard(card,next);if(oldDecision!==nextDecision){bump(oldDecision,-1);bump(nextDecision,1)}showToast(next?(nextDecision==='in_network'?'Saved: in network':'Saved: upload yes'):'Saved: upload no')}catch(e){showToast('Save failed');}finally{card.classList.remove('saving')}}",
+        "function bump(label,delta){if(!label)return;const el=document.querySelector('[data-count='+label+']');if(el)el.textContent=String(Math.max(0,Number(el.textContent||0)+delta))}",
+        "function cardDecision(card,selected){if(card.dataset.network==='true')return selected?'in_network':'';if(!selected)return'no';return'yes'}",
+        "function decisionLabel(card,decision){return card.dataset.network==='true'?'in network':decision}",
+        "function setCard(card,selected){const decision=cardDecision(card,selected);card.dataset.selected=String(selected);card.classList.toggle('selected',selected);card.classList.toggle('excluded',!selected);card.querySelector('.decision').textContent=card.dataset.network==='true'?(selected?'IN NETWORK':'EXCLUDED'):(selected?'YES':'EXCLUDED');card.dataset.decision=decision;const badge=card.querySelector('.bucket');if(badge){badge.textContent=decisionLabel(card,decision);badge.className='bucket '+(card.dataset.network==='true'?'in_network':(decision==='yes'?decision:''))}}",
+        "async function toggle(card){const was=card.dataset.selected==='true';const oldDecision=card.dataset.decision||'';const next=!was;const nextDecision=cardDecision(card,next);card.classList.add('saving');try{const body=new URLSearchParams({row:card.dataset.row,selected:String(next)});const res=await fetch('/toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());setCard(card,next);if(oldDecision!==nextDecision){bump(oldDecision,-1);bump(nextDecision,1)}showToast(next?(nextDecision==='in_network'?'Saved: in network':'Saved: upload yes'):'Saved: excluded')}catch(e){showToast('Save failed');}finally{card.classList.remove('saving')}}",
         "async function saveHint(el){const status=el.parentElement.querySelector('.hint-status');if(status)status.textContent='saving…';try{const body=new URLSearchParams({row:el.dataset.row,hint:el.value});const res=await fetch('/hint',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());if(status)status.textContent='saved';showToast('Saved hint')}catch(e){if(status)status.textContent='save failed';showToast('Hint save failed')}}",
+        "async function bulkSelect(btn){const selected=btn.dataset.bulkSelected==='true';document.querySelectorAll('[data-bulk-selected]').forEach(b=>b.disabled=true);try{const body=new URLSearchParams({tab:'in_network',selected:String(selected)});const res=await fetch('/bulk-toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());showToast(selected?'Selected all in-network':'Deselected all in-network');setTimeout(()=>location.reload(),250)}catch(e){showToast('Bulk save failed');document.querySelectorAll('[data-bulk-selected]').forEach(b=>b.disabled=false)}}",
+        "document.querySelectorAll('[data-bulk-selected]').forEach(btn=>btn.addEventListener('click',e=>{e.preventDefault();bulkSelect(btn)}));",
         "document.querySelectorAll('.card').forEach(card=>{card.addEventListener('click',e=>{if(e.target.closest('a,textarea,input,button,label'))return;toggle(card)});card.addEventListener('keydown',e=>{if(e.target.closest('textarea,input,button'))return;if(e.key===' '||e.key==='Enter'){e.preventDefault();toggle(card)}})});",
         "document.querySelectorAll('.hint textarea').forEach(el=>{let t=null;el.addEventListener('click',e=>e.stopPropagation());el.addEventListener('keydown',e=>{e.stopPropagation();if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();saveHint(el)}});el.addEventListener('input',()=>{const status=el.parentElement.querySelector('.hint-status');if(status)status.textContent='unsaved';clearTimeout(t);t=setTimeout(()=>saveHint(el),1200)});el.addEventListener('blur',()=>{clearTimeout(t);saveHint(el)})});document.querySelectorAll('[data-save-hint]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();const box=btn.closest('.hint').querySelector('textarea');if(box)saveHint(box)})});"
         "</script></div></body></html>",
@@ -425,17 +480,40 @@ def make_handler(csv_path: Path, research_dir: Path | None):
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path not in {"/toggle", "/hint"}:
+            if parsed.path not in {"/toggle", "/hint", "/bulk-toggle"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             length = int(self.headers.get("Content-Length", "0"))
             form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
+            fieldnames, rows = read_rows(csv_path)
+
+            if parsed.path == "/bulk-toggle":
+                selected = (form.get("selected") or [""])[0].strip().lower()
+                tab = (form.get("tab") or [""])[0].strip().lower()
+                if selected not in {"true", "false"}:
+                    self.send_bytes(b"selected must be true or false", "text/plain", status=400)
+                    return
+                if tab not in VALID_TABS:
+                    self.send_bytes(b"unknown tab", "text/plain", status=400)
+                    return
+                if "exclude" not in fieldnames:
+                    fieldnames.append("exclude")
+                changed = apply_bulk_selection(rows, tab, selected == "true")
+                atomic_write(csv_path, fieldnames, rows)
+                self.send_bytes(json.dumps({
+                    "ok": True,
+                    "tab": tab,
+                    "selected": selected == "true",
+                    "changed": changed,
+                    "summary": summarize(rows),
+                }).encode(), "application/json")
+                return
+
             try:
                 row_idx = int((form.get("row") or [""])[0])
             except ValueError:
                 self.send_bytes(b"bad row", "text/plain", status=400)
                 return
-            fieldnames, rows = read_rows(csv_path)
             if row_idx < 0 or row_idx >= len(rows):
                 self.send_bytes(b"row out of range", "text/plain", status=400)
                 return

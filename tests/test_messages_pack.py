@@ -1,5 +1,6 @@
 import csv
 import importlib.util
+import io
 import json
 import os
 import sqlite3
@@ -1111,10 +1112,13 @@ class LlmReviewContactsTests(unittest.TestCase):
                     None,
                 )
 
-            with mock.patch.object(self.mod, "call_openrouter_with_retries", side_effect=fake_call) as call:
+            with mock.patch.object(self.mod, "call_openrouter_with_retries", side_effect=fake_call) as call, \
+                 mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
                 rc = self.mod.cmd_review(args)
             self.assertEqual(rc, 0)
             self.assertEqual(call.call_count, 3)
+            self.assertIn("[llm_review_contacts] started 0/3 batches", stderr.getvalue())
+            self.assertIn("[llm_review_contacts] completed 3/3 batches", stderr.getvalue())
             manifest = json.loads((tmp / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["batch_size"], 2)
             self.assertEqual(manifest["max_workers"], 2)
@@ -1710,6 +1714,8 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 check=True,
             )
             manifest = json.loads(result.stdout)
+            self.assertIn("[build_research_review_csv] started 0/4 handles", result.stderr)
+            self.assertIn("[build_research_review_csv] completed 4/4 handles", result.stderr)
             self.assertEqual(manifest["rows_written"], 4)
             self.assertEqual(manifest["bucket_counts"], {"yes": 1, "maybe": 2, "no": 1})
 
@@ -2135,6 +2141,31 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertTrue(self.mod.is_selected(rows[0]))
         self.assertTrue(self.mod.is_selected(rows[1]))
         self.assertFalse(self.mod.is_selected(rows[2]))
+
+    def test_review_defaults_to_yes_tab(self) -> None:
+        rows = [
+            {"bucket": "maybe", "exclude": "", "in_network": "true", "network_person_id": "p1"},
+            {"bucket": "yes", "exclude": "", "in_network": "", "network_person_id": ""},
+            {"bucket": "maybe", "exclude": "", "in_network": "", "network_person_id": ""},
+        ]
+        self.assertTrue(self.mod.matches_filter(rows[1], {}, None))
+        self.assertFalse(self.mod.matches_filter(rows[0], {}, None))
+
+    def test_bulk_in_network_selection_targets_all_network_rows(self) -> None:
+        rows = [
+            {"bucket": "maybe", "exclude": "", "in_network": "true", "network_person_id": "p1"},
+            {"bucket": "maybe", "exclude": "yes", "in_network": "true", "network_person_id": "p2"},
+            {"bucket": "maybe", "exclude": "", "in_network": "", "network_person_id": ""},
+        ]
+        changed = self.mod.apply_bulk_selection(rows, "in_network", False)
+        self.assertEqual(changed, 1)
+        self.assertEqual([row["exclude"] for row in rows], ["yes", "yes", ""])
+        self.assertEqual(self.mod.summarize(rows), {"in_network": 0, "yes": 0, "maybe": 1, "no": 0})
+
+        changed = self.mod.apply_bulk_selection(rows, "in_network", True)
+        self.assertEqual(changed, 2)
+        self.assertEqual([row["exclude"] for row in rows], ["no", "no", ""])
+        self.assertEqual(self.mod.summarize(rows), {"in_network": 2, "yes": 0, "maybe": 1, "no": 0})
 
     def test_profile_fields_are_loaded_from_research_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:

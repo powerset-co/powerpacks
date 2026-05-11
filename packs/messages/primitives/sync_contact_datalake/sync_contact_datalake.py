@@ -194,10 +194,14 @@ def row_to_record(row, research_dir, retarget_research_dir):
     person=(prof.get("person") or {}) if isinstance(prof,dict) else {}
     social=(prof.get("social") or {}) if isinstance(prof,dict) else {}
     synthetic=synthetic_profile_from_research(prof,row)
-    linkedin=canonical_linkedin_url(row.get("retarget_linkedin_url") or linkedin_from_profile(prof))
+    is_approved=approved(row)
+    row_in_network=(row.get("in_network") or "").strip().lower() in {"yes","true","1"} or bool((row.get("network_person_id") or "").strip())
+    network_person_id=(row.get("network_person_id") or "").strip() if is_approved and row_in_network else ""
+    raw_network_linkedin=(row.get("network_linkedin_url") or "").strip() if is_approved and row_in_network else ""
+    network_linkedin=(canonical_linkedin_url(raw_network_linkedin) or raw_network_linkedin) if raw_network_linkedin else ""
+    linkedin=canonical_linkedin_url(row.get("retarget_linkedin_url") or linkedin_from_profile(prof) or network_linkedin)
     phone=row.get("phone_e164") or social.get("primary_phone")
     full_name=row.get("full_name") or row.get("name") or person.get("full_name")
-    is_approved=approved(row)
     return {
         "source_key": phone_source_key(phone, handle),
         "handle": handle or None,
@@ -217,6 +221,8 @@ def row_to_record(row, research_dir, retarget_research_dir):
         "approved": is_approved,
         "linkedin_url": linkedin,
         "public_identifier": (synthetic or {}).get("public_identifier"),
+        "network_person_id": network_person_id or None,
+        "network_linkedin_url": network_linkedin or None,
         "research_profile": prof or None,
         "synthetic_profile": synthetic,
         "processing_status": "staged",
