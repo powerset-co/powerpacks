@@ -690,6 +690,10 @@ def search_mode_for_payload(payload: dict[str, Any]) -> str:
         return SEARCH_ONLY
     if is_founder_payload(payload):
         return COMPANY_INTERSECTION
+    if is_filter_only_payload(payload):
+        # Pure company + hard-filter queries (e.g. "who worked at Meta after 2020")
+        # should intersect directly, not union with an empty semantic search.
+        return COMPANY_INTERSECTION
     if has_role_constraint(payload) and has_company_domain_intent(payload):
         return COMPANY_UNION
     if not has_role_constraint(payload):
