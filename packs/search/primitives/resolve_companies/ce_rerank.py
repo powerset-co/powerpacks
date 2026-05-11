@@ -107,22 +107,31 @@ async def ce_rerank_companies(
 ) -> dict[str, Any]:
     """Score and rerank companies by query relevance using LLM cross-encoder.
 
+    Matches the app's CE behavior:
+    - Score all companies
+    - Apply mean + 1 stdev threshold (adaptive cutoff)
+    - Floor: keep at least max(50, 10% of input)
+    - No hard cap — let the data decide
+
     Args:
         query: The company semantic query (e.g. "database companies")
         companies: List of company dicts with at least 'id' and 'company_name'.
                    Optionally 'description', 'entity_sector_text', 'sector_types'.
-        top_n: Keep top N companies by CE score.
+        top_n: Fallback max if adaptive threshold keeps more than this.
         model: OpenAI model to use.
         batch_size: Companies per API call.
         concurrency: Max parallel API calls.
 
     Returns:
         {
-            "scored_companies": [...],  # top_n companies sorted by CE score desc
+            "scored_companies": [...],  # companies above threshold, sorted by CE score desc
             "total_scored": int,
             "kept": int,
             "ce_model": str,
             "elapsed_ms": int,
+            "threshold": float,
+            "mean_score": float,
+            "std_score": float,
             "score_distribution": {"10": N, "9": N, ...}
         }
     """
@@ -152,22 +161,41 @@ async def ce_rerank_companies(
     await asyncio.gather(*(run_batch(b) for b in batches))
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
-    # Attach scores to companies and sort
+    # Attach scores to companies
     for c in companies:
         c["ce_score"] = all_scores.get(str(c.get("id", "")), 5)
 
-    scored = sorted(companies, key=lambda c: c.get("ce_score", 0), reverse=True)
-    kept = scored[:top_n]
+    # Adaptive threshold: mean + 1 stdev (matching app behavior)
+    scores_list = [c["ce_score"] for c in companies]
+    n = len(scores_list)
+    mean_score = sum(scores_list) / n
+    variance = sum((s - mean_score) ** 2 for s in scores_list) / n
+    std_score = variance ** 0.5
+    threshold = mean_score + std_score
+
+    # Filter above threshold
+    above = [c for c in companies if c["ce_score"] >= threshold]
+
+    # Floor: keep at least max(50, 10% of input)
+    min_results = max(50, len(companies) // 10)
+    if len(above) < min_results:
+        sorted_all = sorted(companies, key=lambda c: c["ce_score"], reverse=True)
+        above = sorted_all[:min_results]
+        logger.info(f"CE threshold too strict ({len(above)} < {min_results}), keeping top {min_results}")
+
+    # Sort by CE score descending
+    kept = sorted(above, key=lambda c: c["ce_score"], reverse=True)
 
     # Score distribution
     dist: dict[str, int] = {}
-    for c in scored:
+    for c in companies:
         s = str(c.get("ce_score", 0))
         dist[s] = dist.get(s, 0) + 1
 
     logger.info(
-        f"CE rerank: {len(companies)} companies → {len(kept)} kept "
-        f"(model={model}, {len(batches)} batches, {elapsed_ms}ms)"
+        f"CE rerank: {len(companies)} → {len(kept)} companies "
+        f"(threshold={threshold:.1f}, mean={mean_score:.1f}, std={std_score:.1f}, "
+        f"model={model}, {len(batches)} batches, {elapsed_ms}ms)"
     )
 
     return {
@@ -176,5 +204,8 @@ async def ce_rerank_companies(
         "kept": len(kept),
         "ce_model": model,
         "elapsed_ms": elapsed_ms,
+        "threshold": round(threshold, 2),
+        "mean_score": round(mean_score, 2),
+        "std_score": round(std_score, 2),
         "score_distribution": dist,
     }

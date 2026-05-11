@@ -338,32 +338,53 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     hard_semantic_count = 0
     sector_strategy_broadened = False
+    ce_result = None
     if names:
         exact_rows = await exact_name_lookup(names, filters, top_k=args.name_top_k)
         rows.extend(exact_rows)
         if not exact_rows:
             rows.extend(await name_bm25_lookup(names, filters, top_k=args.name_top_k))
     if semantic_queries:
+        # Collect semantic rows separately for CE filtering
+        semantic_rows_all: list[dict[str, Any]] = []
         if strategy == "hard_filter":
             semantic_rows = await semantic_lookup(semantic_queries, filters, top_k=args.semantic_top_k)
             hard_semantic_count = len(dedupe_rows(semantic_rows))
-            rows.extend(semantic_rows)
+            semantic_rows_all.extend(semantic_rows)
         elif strategy == "semantic_only" or soft_filters is None:
             semantic_rows = await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k)
             hard_semantic_count = len(dedupe_rows(semantic_rows))
-            rows.extend(semantic_rows)
+            semantic_rows_all.extend(semantic_rows)
         elif strategy == "staged":
             hard_rows = await semantic_lookup(semantic_queries, filters, top_k=args.semantic_top_k)
             hard_semantic_count = len(dedupe_rows(hard_rows))
-            rows.extend(hard_rows)
+            semantic_rows_all.extend(hard_rows)
             sector_strategy_broadened = hard_semantic_count < min_results
             if sector_strategy_broadened:
-                rows.extend(await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k))
+                semantic_rows_all.extend(await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k))
         else:
             semantic_rows = await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k)
             hard_semantic_count = len(dedupe_rows(semantic_rows))
-            rows.extend(semantic_rows)
+            semantic_rows_all.extend(semantic_rows)
 
+        # CE rerank semantic rows before union with sector filter rows
+        semantic_rows_deduped = dedupe_rows(semantic_rows_all)
+        if len(semantic_rows_deduped) > args.ce_threshold and not args.no_ce:
+            query_text = " ".join(semantic_queries)
+            from ce_rerank import ce_rerank_companies
+            ce_result = await ce_rerank_companies(
+                query_text,
+                semantic_rows_deduped,
+                top_n=args.ce_top_n or len(semantic_rows_deduped),
+                model=args.ce_model,
+                batch_size=args.ce_batch_size,
+                concurrency=args.ce_concurrency,
+            )
+            rows.extend(ce_result["scored_companies"])
+        else:
+            rows.extend(semantic_rows_all)
+
+        # Soft filter rows always pass through (sector/entity type matches)
         if soft_filters is not None and (strategy == "soft_union" or sector_strategy_broadened):
             soft_rows = await filter_only_company_rows(
                 soft_union_filters,
@@ -377,22 +398,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         rows.extend(await filter_only_company_rows(filters, page_size=args.page_size, max_results=args.max_companies))
 
     rows = dedupe_rows(rows)
-
-    # CE rerank: if semantic results are large, score and trim
-    ce_result = None
-    pre_ce_count = len(rows)
-    if semantic_queries and len(rows) > args.ce_threshold and not args.no_ce:
-        query_text = " ".join(semantic_queries)
-        from ce_rerank import ce_rerank_companies
-        ce_result = await ce_rerank_companies(
-            query_text,
-            rows,
-            top_n=args.ce_top_n,
-            model=args.ce_model,
-            batch_size=args.ce_batch_size,
-            concurrency=args.ce_concurrency,
-        )
-        rows = ce_result["scored_companies"]
 
     company_ids = list(dict.fromkeys([*existing, *(str(row["id"]) for row in rows if row.get("id"))]))
     result = {
@@ -413,10 +418,13 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     if ce_result:
         result["ce_rerank"] = {
-            "pre_ce_count": pre_ce_count,
+            "pre_ce_count": ce_result["total_scored"],
             "post_ce_count": ce_result["kept"],
             "model": ce_result["ce_model"],
             "elapsed_ms": ce_result["elapsed_ms"],
+            "threshold": ce_result.get("threshold"),
+            "mean_score": ce_result.get("mean_score"),
+            "std_score": ce_result.get("std_score"),
             "score_distribution": ce_result["score_distribution"],
         }
     return result
@@ -461,7 +469,7 @@ def main() -> None:
     # CE rerank args
     parser.add_argument("--no-ce", action="store_true", help="Disable cross-encoder reranking")
     parser.add_argument("--ce-threshold", type=int, default=500, help="Min companies to trigger CE rerank")
-    parser.add_argument("--ce-top-n", type=int, default=1000, help="Keep top N companies after CE scoring")
+    parser.add_argument("--ce-top-n", type=int, default=0, help="Hard cap after CE (0 = use adaptive threshold only)")
     parser.add_argument("--ce-model", default=None, help="Model for CE scoring (default: gpt-4.1-nano)")
     parser.add_argument("--ce-batch-size", type=int, default=20, help="Companies per CE API call")
     parser.add_argument("--ce-concurrency", type=int, default=10, help="Max parallel CE API calls")
