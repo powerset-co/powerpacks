@@ -71,6 +71,7 @@ MAX_PHONE_DIGITS = 15
 MESSAGE_PAGE_SIZE = 500
 MIN_REQUEST_INTERVAL = float(os.environ.get("POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL", "1.0"))
 DEFAULT_HEARTBEAT_INTERVAL = int(os.environ.get("POWERPACKS_WHATSAPP_HEARTBEAT_INTERVAL", "30"))
+GROUP_PARTICIPANTS_TIMEOUT = int(os.environ.get("POWERPACKS_WHATSAPP_GROUP_PARTICIPANTS_TIMEOUT", "120"))
 
 
 @dataclass
@@ -376,19 +377,55 @@ def _get_chat_message_count(base_url: str, api_key: str, session: str, chat_id: 
     return len(payload)
 
 
-def _fetch_group_participants(base_url: str, api_key: str, session: str, chat_id: str) -> list[dict[str, Any]] | None:
+def _fetch_group_participants_endpoint(
+    base_url: str,
+    api_key: str,
+    session: str,
+    chat_id: str,
+    endpoint: str,
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
     encoded = urllib.parse.quote(chat_id, safe="")
     try:
         status, payload = _waha_get(
             base_url, api_key,
-            f"/api/{session}/groups/{encoded}/participants",
+            f"/api/{session}/groups/{encoded}/{endpoint}",
+            timeout=GROUP_PARTICIPANTS_TIMEOUT,
             retries=2,
         )
-    except Exception:
-        return None
+    except Exception as exc:
+        return None, {
+            "step": "group_participants",
+            "endpoint": endpoint,
+            "chat_id": chat_id,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     if status == 200 and isinstance(payload, list):
-        return payload
-    return None
+        return payload, None
+    return None, {
+        "step": "group_participants",
+        "endpoint": endpoint,
+        "chat_id": chat_id,
+        "http_status": status,
+        "payload": payload if isinstance(payload, (str, int, float, bool, type(None))) else str(payload)[:500],
+    }
+
+
+def _fetch_group_participants(
+    base_url: str,
+    api_key: str,
+    session: str,
+    chat_id: str,
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
+    # Prefer WAHA's newer participants/v2 endpoint for WEBJS/Chrome stability;
+    # fall back to the legacy endpoint for older images/engines.
+    first_error: dict[str, Any] | None = None
+    for endpoint in ("participants/v2", "participants"):
+        participants, error = _fetch_group_participants_endpoint(base_url, api_key, session, chat_id, endpoint)
+        if participants is not None:
+            return participants, None
+        if first_error is None:
+            first_error = error
+    return None, first_error
 
 
 def extract_contacts(
@@ -412,6 +449,8 @@ def extract_contacts(
         "group_chats": 0,
         "group_participants_fetched": 0,
         "group_participants_fallback": 0,
+        "group_participants_empty": 0,
+        "group_participants_failed": 0,
         "lid_resolved": 0,
         "group_member_phones": 0,
         "fetched_message_counts_for": 0,
@@ -501,11 +540,17 @@ def extract_contacts(
             diagnostics["group_chats"] += 1
             display_name = group_chat_name(chat, chat_id)
             fallback_participants = chat.get("participants") or (chat.get("groupMetadata") or {}).get("participants") or []
-            fetched_participants = _fetch_group_participants(base_url, api_key, session, chat_id)
+            fetched_participants, participant_error = _fetch_group_participants(base_url, api_key, session, chat_id)
             if fetched_participants:
                 participants = fetched_participants
                 diagnostics["group_participants_fetched"] += 1
             else:
+                if fetched_participants == []:
+                    diagnostics["group_participants_empty"] += 1
+                if participant_error:
+                    participant_error["group_name"] = display_name
+                    diagnostics["errors"].append(participant_error)
+                    diagnostics["group_participants_failed"] += 1
                 participants = fallback_participants
                 if fallback_participants:
                     diagnostics["group_participants_fallback"] += 1

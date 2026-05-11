@@ -54,8 +54,23 @@ class FakeWAHAHandler(BaseHTTPRequestHandler):
             return self._json(200, self.routes["chats"])
         if path == "/api/contacts/all":
             return self._json(200, self.routes["contacts"])
+        if path.startswith("/api/default/groups/") and path.endswith("/participants/v2"):
+            group_id = path.split("/")[-3]
+            participant_errors = self.routes.get("group_participants_v2_errors", {})
+            if isinstance(participant_errors, dict) and group_id in participant_errors:
+                status, payload = participant_errors[group_id]
+                return self._json(status, payload)
+            participants = self.routes.get("group_participants_v2", {}).get(
+                group_id,
+                self.routes.get("group_participants", {}).get(group_id, []),
+            )
+            return self._json(200, participants)
         if path.startswith("/api/default/groups/") and path.endswith("/participants"):
             group_id = path.split("/")[-2]
+            participant_errors = self.routes.get("group_participants_errors", {})
+            if isinstance(participant_errors, dict) and group_id in participant_errors:
+                status, payload = participant_errors[group_id]
+                return self._json(status, payload)
             participants = self.routes.get("group_participants", {}).get(group_id, [])
             return self._json(200, participants)
         if path.startswith("/api/default/chats/") and path.endswith("/messages"):
@@ -210,8 +225,11 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 self.assertEqual(bob["group_names"], "Founders")
                 self.assertEqual(bob["message_count"], "3")
                 self.assertEqual(
-                    FakeWAHAHandler.request_counts.get("/api/default/groups/987654321%40g.us/participants"),
+                    FakeWAHAHandler.request_counts.get("/api/default/groups/987654321%40g.us/participants/v2"),
                     1,
+                )
+                self.assertIsNone(
+                    FakeWAHAHandler.request_counts.get("/api/default/groups/987654321%40g.us/participants"),
                 )
 
                 # JSONL records carry the same shape used by normalize_message_contacts.
@@ -274,6 +292,74 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 with csv_path.open(encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))
                 self.assertEqual(rows[0]["message_count"], "500")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_group_participant_fetch_failure_is_recorded_and_falls_back(self) -> None:
+        FakeWAHAHandler.request_counts = {}
+        FakeWAHAHandler.routes = {
+            "contacts": [
+                {"id": {"_serialized": "14155550101@c.us"}, "name": "Jane Doe"},
+            ],
+            "chats": [
+                {
+                    "id": {"_serialized": "987654321@g.us"},
+                    "name": "Founders",
+                    "groupMetadata": {
+                        "subject": "Founders",
+                        "participants": [
+                            {"id": {"_serialized": "14155550101@c.us"}},
+                        ],
+                    },
+                },
+            ],
+            "group_participants_v2_errors": {
+                "987654321%40g.us": (404, {"error": "not found"}),
+            },
+            "group_participants_errors": {
+                "987654321%40g.us": (404, {"error": "not found"}),
+            },
+            "messages_by_chat": {},
+        }
+        port = _free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), FakeWAHAHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                csv_path = tmp / "wa.csv"
+                manifest_path = tmp / "wa.manifest.json"
+                result = subprocess.run(
+                    [
+                        "python3", str(EXTRACT_WHATSAPP), "extract",
+                        "--base-url", f"http://127.0.0.1:{port}",
+                        "--api-key", "test",
+                        "--session", "default",
+                        "--output-csv", str(csv_path),
+                        "--manifest", str(manifest_path),
+                        "--skip-message-counts",
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={
+                        **os.environ,
+                        "POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL": "0",
+                        "POWERPACKS_WHATSAPP_GROUP_PARTICIPANTS_TIMEOUT": "5",
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["diagnostics"]["group_participants_failed"], 1)
+                self.assertEqual(manifest["diagnostics"]["group_participants_fallback"], 1)
+                self.assertEqual(manifest["diagnostics"]["errors"][0]["step"], "group_participants")
+                with csv_path.open(encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                self.assertEqual(rows[0]["phone"], "+14155550101")
+                self.assertEqual(rows[0]["is_in_group_chats"], "true")
         finally:
             server.shutdown()
             server.server_close()

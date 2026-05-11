@@ -5,8 +5,8 @@ Docker + WAHA container lifecycle for the WhatsApp pack. Stdlib-only.
 This primitive does **not** call the WAHA HTTP API. It only:
 
 - checks whether Docker is installed and the daemon is reachable
-- pulls and runs the WAHA NOWEB image as `powerpacks-waha`
-- mounts `~/.powerpacks/waha-sessions` so QR-scanned credentials persist
+- pulls and runs the WAHA Chrome/WEBJS image as `powerpacks-waha`
+- mounts `~/.powerpacks/waha-sessions-chrome` so QR-scanned credentials persist
 - stops / removes the container
 - reports container status
 
@@ -43,7 +43,8 @@ explicit consent before installing anything.
 | `POWERPACKS_WAHA_CONTAINER` | `powerpacks-waha` | Docker container name |
 | `POWERPACKS_WAHA_PORT` | `3000` | Host port WAHA is bound to |
 | `POWERPACKS_WAHA_API_KEY` | `powerpacks-local` | Value forced via `WAHA_API_KEY` |
-| `POWERPACKS_WAHA_IMAGE` | `devlikeapro/waha:noweb-2026.3.4` | WAHA image tag |
-| `POWERPACKS_WAHA_SESSIONS_DIR` | `~/.powerpacks/waha-sessions` | Persistent session dir |
+| `POWERPACKS_WAHA_IMAGE` | `devlikeapro/waha:chrome-2026.3.4` | WAHA image tag |
+| `POWERPACKS_WAHA_ENGINE` | `WEBJS` | WAHA engine (`WEBJS` by default; `NOWEB` for legacy mode) |
+| `POWERPACKS_WAHA_SESSIONS_DIR` | `~/.powerpacks/waha-sessions-chrome` | Persistent session dir |
 
 The same values can be passed as flags (`--container-name`, `--port`, etc.).

@@ -32,6 +32,7 @@ from typing import Any
 DEFAULT_BASE_URL = os.environ.get("POWERPACKS_WAHA_BASE_URL", "http://127.0.0.1:3000")
 DEFAULT_API_KEY = os.environ.get("POWERPACKS_WAHA_API_KEY", "powerpacks-local")
 DEFAULT_SESSION = os.environ.get("POWERPACKS_WAHA_SESSION", "default")
+DEFAULT_ENGINE = os.environ.get("POWERPACKS_WAHA_ENGINE", "WEBJS")
 DEFAULT_QR_DIR = Path(os.environ.get(
     "POWERPACKS_WAHA_QR_DIR",
     str(Path(".powerpacks/messages/whatsapp")),
@@ -143,15 +144,14 @@ def stop_session(base_url: str, api_key: str, session: str) -> dict[str, Any]:
     return {"actions": logs}
 
 
-def start_session(base_url: str, api_key: str, session: str) -> dict[str, Any]:
-    body = {
-        "name": session,
-        "config": {
+def start_session(base_url: str, api_key: str, session: str, engine: str = DEFAULT_ENGINE) -> dict[str, Any]:
+    body: dict[str, Any] = {"name": session}
+    if engine.upper() == "NOWEB":
+        body["config"] = {
             "noweb": {
                 "store": {"enabled": True, "full_sync": True},
             },
-        },
-    }
+        }
     try:
         status, raw, _ = _request(base_url, api_key, "POST", "/api/sessions/start", json_body=body, timeout=15)
     except ConnectionError as exc:
@@ -275,7 +275,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         if pre_state.get("exists") and args.force:
             stop_session(args.base_url, args.api_key, args.session)
             time.sleep(1)
-        started_payload = start_session(args.base_url, args.api_key, args.session)
+        started_payload = start_session(args.base_url, args.api_key, args.session, args.engine)
         if not started_payload.get("started"):
             emit({
                 "primitive": "waha_session",
@@ -391,6 +391,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--api-key", default=DEFAULT_API_KEY)
     parser.add_argument("--session", default=DEFAULT_SESSION)
+    parser.add_argument("--engine", default=DEFAULT_ENGINE)
 
 
 def main() -> None:

@@ -4,7 +4,7 @@
 This primitive is intentionally narrow:
 
 - check that Docker is installed and the daemon is reachable
-- pull and start a local WAHA container (NOWEB engine)
+- pull and start a local WAHA container (Chrome/WEBJS engine by default)
 - stop / remove the container
 - report container status
 
@@ -31,10 +31,11 @@ from typing import Any
 DEFAULT_CONTAINER_NAME = os.environ.get("POWERPACKS_WAHA_CONTAINER", "powerpacks-waha")
 DEFAULT_PORT = int(os.environ.get("POWERPACKS_WAHA_PORT", "3000"))
 DEFAULT_API_KEY = os.environ.get("POWERPACKS_WAHA_API_KEY", "powerpacks-local")
-DEFAULT_IMAGE = os.environ.get("POWERPACKS_WAHA_IMAGE", "devlikeapro/waha:noweb-2026.3.4")
+DEFAULT_ENGINE = os.environ.get("POWERPACKS_WAHA_ENGINE", "WEBJS")
+DEFAULT_IMAGE = os.environ.get("POWERPACKS_WAHA_IMAGE", "devlikeapro/waha:chrome-2026.3.4")
 DEFAULT_SESSIONS_DIR = Path(os.environ.get(
     "POWERPACKS_WAHA_SESSIONS_DIR",
-    str(Path.home() / ".powerpacks" / "waha-sessions"),
+    str(Path.home() / ".powerpacks" / "waha-sessions-chrome"),
 ))
 
 
@@ -154,6 +155,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         "docker": docker,
         "container": container,
         "image": args.image,
+        "engine": args.engine,
         "session_dir": str(args.session_dir),
         "ready_to_start": bool(docker["installed"] and docker["daemon_ok"]),
     }
@@ -197,6 +199,7 @@ def cmd_up(args: argparse.Namespace) -> int:
             "status": "already_running",
             "container": pre_state,
             "image": args.image,
+            "engine": args.engine,
             "session_dir": str(args.session_dir),
         })
         return 0
@@ -232,8 +235,8 @@ def cmd_up(args: argparse.Namespace) -> int:
         "--name", args.container_name,
         "-p", f"127.0.0.1:{args.port}:3000",
         "-v", f"{args.session_dir}:/app/.sessions",
-        "-e", "WAHA_DEFAULT_ENGINE=NOWEB",
-        "-e", "WHATSAPP_DEFAULT_ENGINE=NOWEB",
+        "-e", f"WAHA_DEFAULT_ENGINE={args.engine}",
+        "-e", f"WHATSAPP_DEFAULT_ENGINE={args.engine}",
         "-e", "WHATSAPP_RESTART_ALL_SESSIONS=true",
         "-e", f"WAHA_API_KEY={args.api_key}",
         args.image,
@@ -257,6 +260,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         "status": "started",
         "container": post_state,
         "image": args.image,
+        "engine": args.engine,
         "port": args.port,
         "api_key": args.api_key,
         "base_url": f"http://127.0.0.1:{args.port}",
@@ -318,6 +322,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         "container": container,
         "base_url": f"http://127.0.0.1:{args.port}",
         "image": args.image,
+        "engine": args.engine,
         "session_dir": str(args.session_dir),
     }
     emit(payload)
@@ -329,6 +334,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--api-key", default=DEFAULT_API_KEY)
     parser.add_argument("--image", default=DEFAULT_IMAGE)
+    parser.add_argument("--engine", default=DEFAULT_ENGINE)
     parser.add_argument("--session-dir", type=Path, default=DEFAULT_SESSIONS_DIR)
 
 
