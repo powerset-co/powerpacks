@@ -257,7 +257,7 @@ async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: i
 
     ns = namespace("companies")
     query_embedding = await embedding(query)
-    include_attributes = ["company_name", "headcount", "funding_stage", "sector_types", "entity_types"]
+    include_attributes = ["company_name", "headcount", "funding_stage", "sector_types", "entity_types", "description"]
     subqueries = [
         {
             "rank_by": ("semantic_text", "BM25", query),
@@ -377,8 +377,25 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         rows.extend(await filter_only_company_rows(filters, page_size=args.page_size, max_results=args.max_companies))
 
     rows = dedupe_rows(rows)
+
+    # CE rerank: if semantic results are large, score and trim
+    ce_result = None
+    pre_ce_count = len(rows)
+    if semantic_queries and len(rows) > args.ce_threshold and not args.no_ce:
+        query_text = " ".join(semantic_queries)
+        from ce_rerank import ce_rerank_companies
+        ce_result = await ce_rerank_companies(
+            query_text,
+            rows,
+            top_n=args.ce_top_n,
+            model=args.ce_model,
+            batch_size=args.ce_batch_size,
+            concurrency=args.ce_concurrency,
+        )
+        rows = ce_result["scored_companies"]
+
     company_ids = list(dict.fromkeys([*existing, *(str(row["id"]) for row in rows if row.get("id"))]))
-    return {
+    result = {
         "namespace": namespace_name("companies"),
         "company_names": names,
         "company_semantic_queries": semantic_queries,
@@ -394,6 +411,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "sector_strategy_broadened": sector_strategy_broadened,
         "soft_filter_unioned": bool(semantic_queries and soft_filters is not None and (strategy == "soft_union" or sector_strategy_broadened)),
     }
+    if ce_result:
+        result["ce_rerank"] = {
+            "pre_ce_count": pre_ce_count,
+            "post_ce_count": ce_result["kept"],
+            "model": ce_result["ce_model"],
+            "elapsed_ms": ce_result["elapsed_ms"],
+            "score_distribution": ce_result["score_distribution"],
+        }
+    return result
 
 
 def record_step(state_path: Path, state: dict[str, Any], output: dict[str, Any], elapsed_ms: int) -> None:
@@ -432,6 +458,13 @@ def main() -> None:
     parser.add_argument("--max-soft-companies", type=int, default=10000)
     parser.add_argument("--page-size", type=int, default=10000)
     parser.add_argument("--max-companies", type=int, default=10000)
+    # CE rerank args
+    parser.add_argument("--no-ce", action="store_true", help="Disable cross-encoder reranking")
+    parser.add_argument("--ce-threshold", type=int, default=500, help="Min companies to trigger CE rerank")
+    parser.add_argument("--ce-top-n", type=int, default=1000, help="Keep top N companies after CE scoring")
+    parser.add_argument("--ce-model", default=None, help="Model for CE scoring (default: gpt-4.1-nano)")
+    parser.add_argument("--ce-batch-size", type=int, default=20, help="Companies per CE API call")
+    parser.add_argument("--ce-concurrency", type=int, default=10, help="Max parallel CE API calls")
     args = parser.parse_args()
 
     started = time.time()
