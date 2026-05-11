@@ -420,13 +420,12 @@ def run_case(
     payload_path.write_text(json.dumps(decomposition, indent=2, sort_keys=True) + "\n")
 
     # 3. Run pipeline (each case gets its own ledger to avoid cross-contamination)
-    result_limit = min(meta.limit, limit_cap)
     ledger_path = extraction_dir / f"{cid}.ledger.json"
     pipeline_out = run_pipeline(
         payload_path,
         meta.query,
         env_file=env_file,
-        limit=result_limit,
+        limit=limit_cap,
         do_skip_llm=do_skip_llm,
         ledger_path=ledger_path,
     )

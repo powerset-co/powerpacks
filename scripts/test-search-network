@@ -67,7 +67,7 @@ run_agent_harness() {
     --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}"
     --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/aleph-mvp}/tests/recall}"
     --env-file "${ENV_FILE:-.env}"
-    --limit-cap "${LIMIT_CAP:-1000}"
+    --limit-cap "${LIMIT_CAP:-10000}"
   )
   if [[ "$mode" == "dry" ]]; then
     args+=(--dry-run)
@@ -117,7 +117,7 @@ case "$command" in
       --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}" \
       --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/aleph-mvp}/tests/recall}" \
       --env-file "${ENV_FILE:-.env}" \
-      --limit-cap "${LIMIT_CAP:-1000}" \
+      --limit-cap "${LIMIT_CAP:-10000}" \
       "$@"
     ;;
   agent-extract-dry-run)
@@ -130,7 +130,7 @@ case "$command" in
     uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
       --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
       --env-file "${ENV_FILE:-.env}" \
-      --limit-cap "${LIMIT_CAP:-1000}" \
+      --limit-cap "${LIMIT_CAP:-10000}" \
       "$@"
     ;;
   pipeline-eval-codex)
@@ -138,14 +138,14 @@ case "$command" in
       --agent-command "$ROOT/scripts/codex-search-network-pipeline {prompt_file} {output_json}" \
       --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
       --env-file "${ENV_FILE:-.env}" \
-      --limit-cap "${LIMIT_CAP:-1000}" \
+      --limit-cap "${LIMIT_CAP:-10000}" \
       "$@"
     ;;
   pipeline-eval-dry-run)
     uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
       --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
       --env-file "${ENV_FILE:-.env}" \
-      --limit-cap "${LIMIT_CAP:-1000}" \
+      --limit-cap "${LIMIT_CAP:-10000}" \
       --dry-run \
       "$@"
     ;;
