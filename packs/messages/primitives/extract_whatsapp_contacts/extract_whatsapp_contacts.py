@@ -558,7 +558,11 @@ def extract_contacts(
                 if not isinstance(p, dict):
                     continue
                 p_jid = extract_jid(p.get("id", ""))
-                phone = jid_to_phone(extract_jid(p.get("phoneNumber", ""))) or jid_to_phone(p_jid)
+                phone = (
+                    jid_to_phone(extract_jid(p.get("phoneNumber", "")))
+                    or jid_to_phone(extract_jid(p.get("pn", "")))
+                    or jid_to_phone(p_jid)
+                )
                 if phone:
                     group_member_phones.add(phone)
                     if display_name:

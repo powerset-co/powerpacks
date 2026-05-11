@@ -157,6 +157,12 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                     },
                 },
             ],
+            "group_participants_v2": {
+                "987654321%40g.us": [
+                    {"id": "14155550101@c.us", "pn": "14155550101@c.us", "role": "participant"},
+                    {"id": "14155550202@c.us", "pn": "14155550202@c.us", "role": "participant"},
+                ],
+            },
             "group_participants": {
                 "987654321%40g.us": [
                     {"id": {"_serialized": "14155550101@c.us"}},
