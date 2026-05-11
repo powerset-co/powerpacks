@@ -1,3 +1,8 @@
+---
+name: import-twitter-network
+description: Import a Twitter/X network into Powerpacks-local ingestion artifacts using the RapidAPI-backed crawl and local review pipeline.
+---
+
 # import-twitter-network
 
 Use this skill when the user asks to import a Twitter/X network into Powerpacks-local ingestion artifacts.

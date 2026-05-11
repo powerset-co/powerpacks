@@ -27,6 +27,14 @@ class CoreLayoutTests(unittest.TestCase):
         )
         self.assertEqual(messages_pack, ["import-contacts"])
 
+    def test_pack_skills_have_codex_frontmatter(self) -> None:
+        for path in sorted((ROOT / "packs").glob("*/skills/*/SKILL.md")):
+            with self.subTest(path=path.relative_to(ROOT)):
+                lines = path.read_text().splitlines()
+                self.assertGreaterEqual(len(lines), 3)
+                self.assertEqual(lines[0], "---")
+                self.assertIn("---", lines[1:])
+
     def test_no_legacy_add_skill_references_in_core_skill(self) -> None:
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
         self.assertNotIn("skills/add-", text)
@@ -62,6 +70,11 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertFalse(
                 (skills_dir / "powerset" / "powerpacks" / "packs" / "powerset" / "skills" / "powerset" / "SKILL.md").exists()
             )
+            nested_skill_files = sorted(
+                path.relative_to(skills_dir)
+                for path in skills_dir.glob("*/powerpacks/packs/*/skills/*/SKILL.md")
+            )
+            self.assertEqual(nested_skill_files, [])
 
     def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
