@@ -49,7 +49,7 @@ EXPAND = PRIMITIVES / "expand_search_request" / "expand_search_request.py"
 DEFAULT_APP_DIR = Path("/Users/arthur/workspace/network-search-api")
 DEFAULT_RECALL_DIR = DEFAULT_APP_DIR / "tests" / "recall"
 REPORT_PATH = SEARCH_ROOT / "evals" / "pipeline_eval.md"
-RESULT_LIMIT_CAP = 1000
+RESULT_LIMIT_CAP = 10000
 
 
 def now_iso() -> str:
@@ -132,7 +132,7 @@ def load_case(path: Path, recall_dir: Path) -> CaseMeta:
         relpath=relpath,
         bucket=bucket_for(relpath),
         query=str(data.get("query") or Path(relpath).stem.replace("_", " ")),
-        limit=int(data.get("limit") or RESULT_LIMIT_CAP),
+        limit=RESULT_LIMIT_CAP,  # Ignore YAML limit — use limit_cap for eval consistency
         expected_count=int(data.get("expected_count") or 0),
         min_recall=float(data.get("min_recall") or 0.5),
         expected_ids=list(dict.fromkeys(expected_ids)),
