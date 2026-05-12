@@ -445,21 +445,43 @@ def state_hydrated_profiles(state: dict[str, Any], *, llm_handoff: bool) -> dict
 
 
 def state_trait_lines(state: dict[str, Any]) -> list[str]:
+    """Build concise scoring traits from extraction state.
+
+    Produces 2-4 traits matching the app's trait generator pattern:
+    one for role/profile intent, one for company/investor context,
+    and optionally location or education. Does NOT dump raw filter
+    fields as traits.
+    """
     expand = step_output(state, "expand_search_request") or step_output(state, "expand")
     role_filters = expand.get("role_search_filters") if isinstance(expand.get("role_search_filters"), dict) else expand
     traits: list[str] = []
-    for key in ["semantic_query", "role_semantic_query"]:
-        value = role_filters.get(key)
-        if value:
-            traits.append(str(value))
-    for key in [
-        "bm25_queries", "company_names", "company_semantic_queries", "seniority_bands",
-        "cities", "states", "metro_areas", "education_names", "investor_names",
-        "years_experience_min", "years_experience_max", "age_min", "age_max",
-    ]:
-        value = role_filters.get(key)
-        if value not in (None, [], ""):
-            traits.append(f"{key}: {value}")
+
+    # Role/profile trait from semantic_query
+    sq = role_filters.get("semantic_query") or role_filters.get("role_semantic_query")
+    if sq:
+        traits.append(str(sq))
+
+    # Company/investor context as a single trait
+    company_parts = []
+    for name in role_filters.get("company_names") or []:
+        company_parts.append(f"Works at {name}")
+    for inv in role_filters.get("investor_names") or []:
+        company_parts.append(f"Company backed by {inv}")
+    for csq in role_filters.get("company_semantic_queries") or []:
+        company_parts.append(f"Works at {csq}")
+    if company_parts:
+        traits.append("; ".join(company_parts))
+
+    # Location trait
+    locs = role_filters.get("cities") or role_filters.get("states") or role_filters.get("metro_areas") or role_filters.get("countries") or []
+    if locs:
+        traits.append(f"Based in {', '.join(str(v) for v in locs)}")
+
+    # Education trait
+    schools = role_filters.get("education_names") or []
+    if schools:
+        traits.append(f"Attended {', '.join(str(v) for v in schools)}")
+
     return traits or [state.get("query") or "Relevant to the original query"]
 
 
