@@ -1941,25 +1941,6 @@ def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, 
 
     refresh_payload = run_retarget_linkedin_refresh(args, ledger_path, ledger, refresh_estimate)
 
-    retarget_harness = getattr(args, "retarget_harness", "off")
-    retarget_harness_threshold = getattr(args, "retarget_harness_threshold", DEFAULT_RETARGET_HARNESS_THRESHOLD)
-    rapidapi_refreshed = int(refresh_payload.get("refreshed") or 0)
-    if retarget_harness != "off" and rapidapi_refreshed <= 0 and rows_written < retarget_harness_threshold:
-        harness_payload = run_harness_retarget_research(args, ledger_path, ledger)
-        mark_payload = mark_retarget_completed(args, ledger_path, ledger)
-        merged = int(mark_payload.get("review_rows_merged") or 0)
-        if merged <= 0:
-            raise PipelineFailed("retarget harness completed but no review rows were merged")
-        mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
-            "mode": "harness",
-            "threshold": retarget_harness_threshold,
-            "refresh_retarget_linkedin_profiles": refresh_payload,
-            "prepare_retarget_queue": prepare_payload,
-            "harness": harness_payload,
-            "mark_completed": mark_payload,
-        })
-        return
-
     estimate_payload = estimate_retarget_parallel(args, ledger_path, ledger, step_id="retarget_parallel_estimate_after_refresh")
     would_submit = int(estimate_payload.get("would_submit") or 0)
     if would_submit <= 0:
@@ -1971,6 +1952,26 @@ def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, 
             "prepare_retarget_queue": prepare_payload,
             "pre_refresh_estimate": pre_estimate_payload,
             "estimate": estimate_payload,
+            "mark_completed": mark_payload,
+        })
+        return
+
+    retarget_harness = getattr(args, "retarget_harness", "off")
+    retarget_harness_threshold = getattr(args, "retarget_harness_threshold", DEFAULT_RETARGET_HARNESS_THRESHOLD)
+    if retarget_harness != "off" and would_submit < retarget_harness_threshold:
+        harness_payload = run_harness_retarget_research(args, ledger_path, ledger)
+        mark_payload = mark_retarget_completed(args, ledger_path, ledger)
+        merged = int(mark_payload.get("review_rows_merged") or 0)
+        if merged <= 0:
+            raise PipelineFailed("retarget harness completed but no review rows were merged")
+        mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
+            "mode": "harness",
+            "threshold": retarget_harness_threshold,
+            "refresh_retarget_linkedin_profiles": refresh_payload,
+            "prepare_retarget_queue": prepare_payload,
+            "pre_refresh_estimate": pre_estimate_payload,
+            "estimate": estimate_payload,
+            "harness": harness_payload,
             "mark_completed": mark_payload,
         })
         return

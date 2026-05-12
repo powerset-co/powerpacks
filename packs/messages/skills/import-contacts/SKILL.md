@@ -158,9 +158,10 @@ right path; pause and inspect counts/estimates before approving spend.
    `Review opened: <url>. When done, say: done with review, upload`
 5. On review completion, run `continue`. Retarget feedback is automatic:
    edited `retarget_hint` rows use one re-research approval; exact LinkedIn URL
-   hints refresh that profile through RapidAPI where possible, remaining hints
-   are researched through the existing retarget path, results merge back into
-   the review CSV, then upload approval is requested.
+   hints refresh that profile through RapidAPI where possible, then small
+   remaining retarget batches run through the Codex/Claude harness before
+   falling back to Parallel, results merge back into the review CSV, then upload
+   approval is requested.
 
 ## Output
 

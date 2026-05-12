@@ -617,6 +617,90 @@ class ImportContactsPipelineTests(unittest.TestCase):
             saved = mod.read_json(ledger_path)
             self.assertEqual(saved["steps"]["retarget_research"]["status"], "completed")
 
+    def test_retarget_continue_uses_harness_for_remaining_rows_after_rapidapi_refresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            retarget_queue = tmp_path / "retarget_queue.csv"
+            retarget_queue.write_text("handle\nphone-1__retarget_abc\nphone-2__retarget_def\n", encoding="utf-8")
+            ledger = mod.load_ledger(ledger_path)
+            ledger["steps"]["prepare_retarget_queue"] = {
+                "id": "prepare_retarget_queue",
+                "status": "completed",
+                "summary": {"rows_written": 2, "counts": {"queued": 2}},
+            }
+            ledger["steps"]["retarget_research"] = {"id": "retarget_research", "status": "blocked_approval"}
+            ledger["steps"]["retarget_rapidapi_estimate"] = {
+                "id": "retarget_rapidapi_estimate",
+                "status": "completed",
+                "summary": {"api_key_present": True, "would_fetch": 1},
+            }
+            approval_payload = {
+                "kind": "retarget_research",
+                "estimated_usd": 0.10,
+                "estimated_latency": {"rough_wall_clock": "about 10-15 min once submitted"},
+                "processor": "core2x",
+                "would_submit": 2,
+                "feedback_rows": 2,
+                "rapidapi_would_fetch": 1,
+            }
+            ledger["approvals"][mod.approval_id("parallel", approval_payload)] = {"confirmed": True}
+            mod.save_ledger(ledger_path, ledger)
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                review_csv=tmp_path / "research_review.csv",
+                research_queue=tmp_path / "research_queue.csv",
+                retarget_queue=retarget_queue,
+                retarget_ledger=tmp_path / "retarget_attempts.json",
+                retarget_research_dir=tmp_path / "research_retarget",
+                processor="core2x",
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+                retarget_harness="auto",
+                retarget_harness_threshold=100,
+                retarget_harness_timeout=30,
+                retarget_harness_max_workers=10,
+                retarget_harness_prompt_dir=tmp_path / "prompts",
+            )
+            pre_estimate = {
+                "primitive": "deep_research_contacts",
+                "command": "estimate",
+                "would_submit": 2,
+                "processor": "core2x",
+                "estimated_usd": 0.10,
+                "estimated_latency": {"rough_wall_clock": "about 10-15 min once submitted"},
+            }
+            refresh = {"primitive": "refresh_retarget_linkedin_profiles", "status": "ok", "refreshed": 1}
+            after_refresh_estimate = {
+                "primitive": "deep_research_contacts",
+                "command": "estimate",
+                "would_submit": 1,
+                "processor": "core2x",
+                "estimated_usd": 0.05,
+            }
+            harness = {"primitive": "harness_retarget_research", "status": "ok", "processed": 1, "failed": 0}
+            mark = {"status": "ok", "completed_marked": 1, "review_rows_merged": 1}
+            with mock.patch.object(mod, "run_command", side_effect=[
+                {"returncode": 0, "json": pre_estimate},
+                {"returncode": 0, "json": refresh},
+                {"returncode": 0, "json": after_refresh_estimate},
+                {"returncode": 0, "json": harness},
+                {"returncode": 0, "json": mark},
+            ]) as run_command:
+                mod.retarget_research_after_review(args, ledger_path, ledger)
+
+            commands = [call.args[0] for call in run_command.call_args_list]
+            self.assertTrue(any(any(str(part).endswith("harness_retarget_research.py") for part in command) for command in commands))
+            self.assertFalse(any(
+                any(str(part).endswith("deep_research_contacts.py") for part in command) and "run" in command
+                for command in commands
+            ))
+            saved = mod.read_json(ledger_path)
+            summary = saved["steps"]["retarget_research"]["summary"]
+            self.assertEqual(summary["mode"], "harness")
+            self.assertEqual(summary["estimate"]["would_submit"], 1)
+
     def test_cached_retarget_results_are_merged_without_rerunning_research(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
