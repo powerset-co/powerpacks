@@ -85,7 +85,7 @@ PROVISION_PLAN: list[dict[str, Any]] = [
         "env_key": "RAPIDAPI_LINKEDIN_KEY",
         "secret_suffix": "rapidapi-linkedin-key",
         "capability": "rapidapi-linkedin",
-        "profile": "sales-nav",
+        "profile": "search-core",
         "source": {"kind": "secret", "name": "rapidapi-key"},
     },
     {

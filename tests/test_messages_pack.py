@@ -1097,6 +1097,123 @@ class PrepareRetargetQueueTests(unittest.TestCase):
             self.assertEqual(row["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
 
 
+class RefreshRetargetLinkedInProfilesTests(unittest.TestCase):
+    MODULE_PATH = ROOT / "packs/messages/primitives/refresh_retarget_linkedin_profiles/refresh_retarget_linkedin_profiles.py"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        spec = importlib.util.spec_from_file_location("refresh_retarget_linkedin_profiles", cls.MODULE_PATH)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)  # type: ignore[union-attr]
+
+    def test_exact_linkedin_hint_overwrites_stale_cached_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            review_csv = tmp / "research_review.csv"
+            ledger = tmp / "retarget_attempts.json"
+            out_dir = tmp / "research_retarget"
+            hint = "new profile: https://www.linkedin.com/in/charles-lin/"
+            with review_csv.open("w", newline="", encoding="utf-8") as h:
+                writer = csv.DictWriter(h, fieldnames=["handle", "full_name", "retarget_hint"])
+                writer.writeheader()
+                writer.writerow({"handle": "phone-1", "full_name": "Old Charles", "retarget_hint": hint})
+
+            hsh = hashlib.sha256(hint.lower().encode("utf-8")).hexdigest()[:16]
+            retarget_handle = f"phone-1__retarget_{hsh[:10]}"
+            profile_dir = out_dir / retarget_handle
+            profile_dir.mkdir(parents=True)
+            (profile_dir / "01_research_parallel.json").write_text(json.dumps({
+                "person": {"full_name": "Old Charles", "confidence": 0.4},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/old-charles"},
+                "positions": [{"title": "Old Role", "company_name": "OldCo"}],
+                "metadata": {"research_method": "parallel-core2x"},
+            }), encoding="utf-8")
+
+            rapid_response = {
+                "data": {
+                    "full_name": "Charles Lin",
+                    "headline": "Founder at NewCo",
+                    "linkedin_url": "https://www.linkedin.com/in/charles-lin/",
+                    "city": "San Francisco",
+                    "country": "United States",
+                    "experiences": [
+                        {"title": "Founder", "company_name": "NewCo", "starts_at": {"year": 2022}},
+                    ],
+                    "education": [
+                        {"school_name": "Stanford University", "degree_name": "BS"},
+                    ],
+                }
+            }
+            args = SimpleNamespace(
+                review_csv=review_csv,
+                ledger=ledger,
+                retarget_output_dir=out_dir,
+                manifest=None,
+                force=False,
+                sleep_seconds=0,
+            )
+            with mock.patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "test-key"}, clear=False), \
+                    mock.patch.object(self.mod, "rapidapi_profile", return_value={"status_code": 200, "data": rapid_response, "error": ""}):
+                self.assertEqual(self.mod.cmd_run(args), 0)
+
+            profile = json.loads((profile_dir / "01_research_parallel.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["person"]["full_name"], "Charles Lin")
+            self.assertEqual(profile["social"]["linkedin_url"], "https://www.linkedin.com/in/charles-lin")
+            self.assertEqual(profile["positions"][0]["title"], "Founder")
+            self.assertEqual(profile["positions"][0]["company_name"], "NewCo")
+            self.assertEqual(profile["education"][0]["school_name"], "Stanford University")
+            self.assertEqual(profile["metadata"]["research_method"], "rapidapi-linkedin-retarget")
+
+            attempts = json.loads(ledger.read_text(encoding="utf-8"))["attempts"]["phone-1"]
+            self.assertEqual(attempts[-1]["status"], "completed")
+            self.assertEqual(attempts[-1]["provider"], "rapidapi")
+            rows, counts = self.mod.candidate_rows(review_csv, out_dir)
+            self.assertEqual(rows, [])
+            self.assertEqual(counts["skipped_already_refreshed"], 1)
+
+    def test_empty_rapidapi_profile_does_not_overwrite_cached_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            review_csv = tmp / "research_review.csv"
+            ledger = tmp / "retarget_attempts.json"
+            out_dir = tmp / "research_retarget"
+            hint = "https://www.linkedin.com/in/arthur-lam/"
+            with review_csv.open("w", newline="", encoding="utf-8") as h:
+                writer = csv.DictWriter(h, fieldnames=["handle", "full_name", "retarget_hint"])
+                writer.writeheader()
+                writer.writerow({"handle": "phone-2", "full_name": "Arthur Lam", "retarget_hint": hint})
+
+            hsh = hashlib.sha256(hint.lower().encode("utf-8")).hexdigest()[:16]
+            retarget_handle = f"phone-2__retarget_{hsh[:10]}"
+            profile_dir = out_dir / retarget_handle
+            profile_dir.mkdir(parents=True)
+            cached = {
+                "person": {"full_name": "Cached Arthur", "confidence": 0.8},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/cached-arthur"},
+                "positions": [{"title": "Founder", "company_name": "CachedCo"}],
+                "metadata": {"research_method": "parallel-core2x"},
+            }
+            (profile_dir / "01_research_parallel.json").write_text(json.dumps(cached), encoding="utf-8")
+
+            args = SimpleNamespace(
+                review_csv=review_csv,
+                ledger=ledger,
+                retarget_output_dir=out_dir,
+                manifest=None,
+                force=False,
+                sleep_seconds=0,
+            )
+            with mock.patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "test-key"}, clear=False), \
+                    mock.patch.object(self.mod, "rapidapi_profile", return_value={"status_code": 200, "data": {"data": {}}, "error": ""}):
+                self.assertEqual(self.mod.cmd_run(args), 0)
+
+            profile = json.loads((profile_dir / "01_research_parallel.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile, cached)
+            manifest = json.loads((out_dir / "_rapidapi_retarget_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "ok_with_failures")
+            self.assertEqual(manifest["failed"], 1)
+
+
 class LlmReviewContactsTests(unittest.TestCase):
     LLM = ROOT / "packs/messages/primitives/llm_review_contacts/llm_review_contacts.py"
 

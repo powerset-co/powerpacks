@@ -44,10 +44,12 @@ PROFILES = {
         # works for LLM review + Parallel research without a second sync.
         "OPENROUTER_API_KEY",
         "PARALLEL_API_KEY",
+        "RAPIDAPI_LINKEDIN_KEY",
     ],
     "messages": [
         "OPENROUTER_API_KEY",
         "PARALLEL_API_KEY",
+        "RAPIDAPI_LINKEDIN_KEY",
     ],
     "sales-nav": [
         "RAPIDAPI_LINKEDIN_KEY",

@@ -474,14 +474,85 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 parallel_timeout=60,
                 env_file=".env",
             )
-            with self.assertRaises(mod.PipelineBlocked) as ctx:
+            with mock.patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "", "RAPIDAPI_KEY": ""}, clear=False), \
+                    self.assertRaises(mod.PipelineBlocked) as ctx:
                 mod.retarget_research_after_review(args, ledger_path, ledger)
             block = ctx.exception.payload
             self.assertEqual(block["status"], "blocked_approval")
             self.assertEqual(block["approval_type"], "parallel")
-            self.assertIn("Feedback found; approve another deep research pass for $", block["message"])
+            self.assertEqual(
+                block["message"],
+                "Feedback found; approve another re-research pass? Completion time is up to 10-15 min.",
+            )
             self.assertTrue(args.retarget_queue.exists())
             saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["steps"]["prepare_retarget_queue"]["status"], "completed")
+            self.assertEqual(saved["steps"]["retarget_research"]["status"], "blocked_approval")
+
+    def test_exact_linkedin_retarget_uses_single_reresearch_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            review_csv = tmp_path / "research_review.csv"
+            review_csv.write_text(
+                "bucket,handle,full_name,phone_e164,retarget_hint\n"
+                "yes,phone-1,Charles Lin,+15550000001,https://www.linkedin.com/in/charles-lin/\n",
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                review_csv=review_csv,
+                research_queue=tmp_path / "research_queue.csv",
+                retarget_queue=tmp_path / "retarget_queue.csv",
+                retarget_ledger=tmp_path / "retarget_attempts.json",
+                retarget_research_dir=tmp_path / "research_retarget",
+                processor="core2x",
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+            )
+            estimate = {
+                "primitive": "refresh_retarget_linkedin_profiles",
+                "command": "estimate",
+                "status": "ok",
+                "api_key_present": True,
+                "would_fetch": 1,
+                "counts": {"with_linkedin_url": 1, "would_fetch": 1},
+            }
+            prepare = {
+                "primitive": "prepare_retarget_queue",
+                "command": "prepare",
+                "status": "ok",
+                "rows_written": 1,
+                "counts": {"queued": 1},
+            }
+            parallel_estimate = {
+                "primitive": "deep_research_contacts",
+                "command": "estimate",
+                "would_submit": 1,
+                "processor": "core2x",
+                "estimated_usd": 0.05,
+                "estimated_latency": {"rough_wall_clock": "about 10-15 min once submitted"},
+            }
+            with mock.patch.object(mod, "run_command", side_effect=[
+                {"returncode": 0, "json": estimate},
+                {"returncode": 0, "json": prepare},
+                {"returncode": 0, "json": parallel_estimate},
+            ]) as run_command:
+                with self.assertRaises(mod.PipelineBlocked) as ctx:
+                    mod.retarget_research_after_review(args, ledger_path, ledger)
+
+            block = ctx.exception.payload
+            self.assertEqual(block["approval_type"], "parallel")
+            self.assertEqual(
+                block["message"],
+                "Feedback found; approve another re-research pass? Completion time is up to 10-15 min.",
+            )
+            self.assertEqual(block["payload"]["rapidapi_would_fetch"], 1)
+            self.assertEqual(run_command.call_count, 3)
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["steps"]["retarget_rapidapi_estimate"]["status"], "completed")
             self.assertEqual(saved["steps"]["prepare_retarget_queue"]["status"], "completed")
             self.assertEqual(saved["steps"]["retarget_research"]["status"], "blocked_approval")
 
@@ -498,13 +569,19 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 "summary": {"rows_written": 1, "counts": {"queued": 1}},
             }
             ledger["steps"]["retarget_research"] = {"id": "retarget_research", "status": "blocked_approval"}
+            ledger["steps"]["retarget_rapidapi_estimate"] = {
+                "id": "retarget_rapidapi_estimate",
+                "status": "completed",
+                "summary": {"api_key_present": False, "would_fetch": 0},
+            }
             approval_payload = {
-                "kind": "retarget_parallel",
+                "kind": "retarget_research",
                 "estimated_usd": 0.05,
                 "estimated_latency": {"rough_wall_clock": "about 10-15 min once submitted"},
                 "processor": "core2x",
                 "would_submit": 1,
                 "feedback_rows": 1,
+                "rapidapi_would_fetch": 0,
             }
             ledger["approvals"][mod.approval_id("parallel", approval_payload)] = {"confirmed": True}
             mod.save_ledger(ledger_path, ledger)
@@ -531,11 +608,12 @@ class ImportContactsPipelineTests(unittest.TestCase):
             run_payload = {"primitive": "deep_research_contacts", "command": "poll", "status": "completed"}
             with mock.patch.object(mod, "run_command", side_effect=[
                 {"returncode": 0, "json": estimate},
+                {"returncode": 0, "json": estimate},
                 {"returncode": 0, "json_objects": [run_payload]},
                 {"returncode": 0, "json": {"status": "ok", "completed_marked": 1}},
             ]) as run_command:
                 mod.retarget_research_after_review(args, ledger_path, ledger)
-            self.assertEqual(run_command.call_count, 3)
+            self.assertEqual(run_command.call_count, 4)
             saved = mod.read_json(ledger_path)
             self.assertEqual(saved["steps"]["retarget_research"]["status"], "completed")
 

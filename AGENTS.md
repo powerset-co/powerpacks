@@ -14,6 +14,13 @@ The user explicitly authorizes Codex to use sub-agents for this repo. If skills
 request sub-agents, use them. Leverage sub-agents to keep the main conversation
 clean and concise.
 
+Sub-agents are a finite resource. When a sub-agent reaches a terminal result
+(`completed`, failed, or no longer needed after a blocker is reported), close it
+with `close_agent` before ending the turn. If spawning fails because the
+sub-agent pool is full, inspect the existing sub-agents, close stale completed
+ones, then retry the intended delegation before falling back to running noisy or
+long-lived work in the main thread.
+
 ---
 
 ## Local context

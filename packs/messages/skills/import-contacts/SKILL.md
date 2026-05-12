@@ -10,6 +10,11 @@ WhatsApp contacts into the Powerset messages research workflow.
 
 ## Rule
 
+When the user literally types `$import-contacts`, treat that command as explicit
+consent to start a fresh import in this turn. Run the fresh-run command
+immediately. Do not print this skill file, ask what command to run, or ask the
+local metadata consent question again.
+
 `$import-contacts` starts with a fresh run:
 
 ```bash
@@ -56,7 +61,8 @@ values for matching handles/phones.
 
 ## Consent
 
-Ask once before starting:
+For natural-language import requests that do not include the literal
+`$import-contacts` command, ask once before starting:
 
 ```text
 Import contacts
@@ -78,7 +84,8 @@ Powerset login, candidate sync, or matching. Stop only for:
 - macOS Full Disk Access / Contacts permission
 - Docker/WhatsApp QR action
 - LLM cost approval when estimate is at least `$10.00`
-- Parallel.ai research approval
+- retarget re-research approval after feedback, using RapidAPI for exact
+  LinkedIn URL hints and Parallel.ai for anything still unresolved
 - final upload approval
 
 Never upload automatically.
@@ -89,6 +96,12 @@ Use a worker sub-agent for the long-running orchestrator loop when available.
 After consent, the main-chat handoff line should be exactly:
 
 `Starting work through sub-agent.`
+
+Close the worker with `close_agent` after it reports a terminal state, including
+review opened, approval needed, upload approval needed, completion, or failure.
+If spawning the worker fails because the sub-agent pool is full, close stale
+completed sub-agents and retry the worker once before running the orchestrator
+in the main shell.
 
 The worker handoff must explicitly say consent was already granted in the main
 thread, and that the worker must not ask for consent again. Give it the exact
@@ -144,14 +157,16 @@ right path; pause and inspect counts/estimates before approving spend.
 4. If review opens, tell the user:
    `Review opened: <url>. When done, say: done with review, upload`
 5. On review completion, run `continue`. Retarget feedback is automatic:
-   edited `retarget_hint` rows are queued, researched after approval, merged
-   back into the review CSV, then upload approval is requested.
+   edited `retarget_hint` rows use one re-research approval; exact LinkedIn URL
+   hints refresh that profile through RapidAPI where possible, remaining hints
+   are researched through the existing retarget path, results merge back into
+   the review CSV, then upload approval is requested.
 
 ## Output
 
 Be terse.
 
-- Spend: `Estimated deep research cost: $X, completion time is about Y. Approve?`
+- Retarget: `Feedback found; approve another re-research pass? Completion time is up to 10-15 min.`
 - Review: `Review opened: <url>. When done, say: done with review, upload`
 - Upload: `Upload approved contacts? uploading X.`
 - Done: `Uploaded X approved contacts`

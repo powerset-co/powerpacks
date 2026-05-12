@@ -420,6 +420,10 @@ def parallel_approval_message(estimated_usd: float, latency: dict[str, Any]) -> 
     return f"Estimated deep research cost: ${estimated_usd:.4f}, completion time is {rough}. Approve?"
 
 
+def retarget_approval_message() -> str:
+    return "Feedback found; approve another re-research pass? Completion time is up to 10-15 min."
+
+
 def approval_command(args: argparse.Namespace, kind: str, approval_id_value: str) -> str:
     return (
         f"uv run --project . python {rel(Path(__file__).resolve())} approve && "
@@ -474,9 +478,8 @@ def load_dotenv_values(path: Path, keys: list[str]) -> dict[str, str]:
 
 def pipeline_env(args: argparse.Namespace) -> dict[str, str]:
     env = dict(os.environ)
-    env.update(load_dotenv_values(repo_root() / args.env_file, ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "PARALLEL_API_KEY"]))
-    fallback = repo_root() / "../network-search-api/.env"
-    env.update(load_dotenv_values(fallback.resolve(), ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "PARALLEL_API_KEY"]))
+    provider_keys = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "PARALLEL_API_KEY", "RAPIDAPI_LINKEDIN_KEY"]
+    env.update(load_dotenv_values(repo_root() / args.env_file, provider_keys))
     return env
 
 
@@ -1726,6 +1729,83 @@ def retarget_rows_from_payload(payload: dict[str, Any]) -> int:
     return int(payload.get("rows_written") or counts.get("queued") or 0)
 
 
+def estimate_retarget_linkedin_profiles(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
+    retarget_status = ((ledger.get("steps") or {}).get("retarget_research") or {}).get("status")
+    step_id = "retarget_rapidapi_estimate"
+    if completed(ledger, step_id) and retarget_status == "blocked_approval":
+        return ((ledger.get("steps") or {}).get(step_id) or {}).get("summary") or {}
+
+    estimate_cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/refresh_retarget_linkedin_profiles/refresh_retarget_linkedin_profiles.py"),
+        "estimate",
+        "--review-csv", str(args.review_csv),
+        "--retarget-output-dir", str(args.retarget_research_dir),
+    ]
+    mark_step(ledger_path, ledger, step_id, "running", command=estimate_cmd)
+    estimate_result = run_command(estimate_cmd, timeout=args.timeout, env=pipeline_env(args))
+    estimate_payload = require_ok(estimate_result, step_id)
+    mark_step(ledger_path, ledger, step_id, "completed", summary=estimate_payload, command=estimate_cmd)
+    return estimate_payload
+
+
+def run_retarget_linkedin_refresh(
+    args: argparse.Namespace,
+    ledger_path: Path,
+    ledger: dict[str, Any],
+    estimate_payload: dict[str, Any],
+) -> dict[str, Any]:
+    step_id = "refresh_retarget_linkedin_profiles"
+    if completed(ledger, step_id):
+        return ((ledger.get("steps") or {}).get(step_id) or {}).get("summary") or {}
+    would_fetch = int(estimate_payload.get("would_fetch") or 0)
+    if would_fetch <= 0:
+        payload = {"status": "no_work", "estimate": estimate_payload}
+        mark_step(ledger_path, ledger, step_id, "completed", summary=payload)
+        return payload
+    if not estimate_payload.get("api_key_present"):
+        payload = {"status": "skipped", "reason": "missing_rapidapi_key", "estimate": estimate_payload}
+        mark_step(ledger_path, ledger, step_id, "completed", summary=payload)
+        return payload
+
+    run_cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/refresh_retarget_linkedin_profiles/refresh_retarget_linkedin_profiles.py"),
+        "run",
+        "--review-csv", str(args.review_csv),
+        "--ledger", str(args.retarget_ledger),
+        "--retarget-output-dir", str(args.retarget_research_dir),
+        "--max-workers", str(getattr(args, "retarget_rapidapi_max_workers", DEFAULT_RETARGET_HARNESS_MAX_WORKERS)),
+    ]
+    mark_step(ledger_path, ledger, step_id, "running", command=run_cmd)
+    run_result = run_command(run_cmd, timeout=args.timeout, env=pipeline_env(args))
+    payload = require_ok(run_result, step_id)
+    mark_step(ledger_path, ledger, step_id, "completed", summary=payload, command=run_cmd)
+    return payload
+
+
+def estimate_retarget_parallel(
+    args: argparse.Namespace,
+    ledger_path: Path,
+    ledger: dict[str, Any],
+    *,
+    step_id: str = "retarget_parallel_estimate",
+) -> dict[str, Any]:
+    estimate_cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/deep_research_contacts/deep_research_contacts.py"),
+        "estimate",
+        "--input", str(args.retarget_queue),
+        "--processor", args.processor,
+        "--output-dir", str(args.retarget_research_dir),
+    ]
+    mark_step(ledger_path, ledger, step_id, "running", command=estimate_cmd)
+    estimate_result = run_command(estimate_cmd, timeout=args.timeout, env=pipeline_env(args))
+    estimate_payload = require_ok(estimate_result, step_id)
+    mark_step(ledger_path, ledger, step_id, "completed", summary=estimate_payload, command=estimate_cmd)
+    return estimate_payload
+
+
 def prepare_retarget_queue(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
     step_id = "prepare_retarget_queue"
     retarget_status = ((ledger.get("steps") or {}).get("retarget_research") or {}).get("status")
@@ -1812,70 +1892,40 @@ def run_harness_retarget_research(args: argparse.Namespace, ledger_path: Path, l
 
 
 def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    refresh_estimate = estimate_retarget_linkedin_profiles(args, ledger_path, ledger)
     prepare_payload = prepare_retarget_queue(args, ledger_path, ledger)
     rows_written = retarget_rows_from_payload(prepare_payload)
-    if rows_written <= 0:
+    rapidapi_would_fetch = int(refresh_estimate.get("would_fetch") or 0) if refresh_estimate.get("api_key_present") else 0
+    if rows_written <= 0 and rapidapi_would_fetch <= 0:
         mark_payload = mark_retarget_completed(args, ledger_path, ledger)
         merged = int(mark_payload.get("review_rows_merged") or 0)
         mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
             "status": "cached_results_merged" if merged > 0 else "no_work",
             "reason": "retarget_results_already_cached" if merged > 0 else "no_new_retarget_hints",
+            "refresh_retarget_linkedin_profiles": {"status": "no_work", "estimate": refresh_estimate},
             "prepare_retarget_queue": prepare_payload,
             "mark_completed": mark_payload,
         })
         return
 
-    retarget_harness = getattr(args, "retarget_harness", "off")
-    retarget_harness_threshold = getattr(args, "retarget_harness_threshold", DEFAULT_RETARGET_HARNESS_THRESHOLD)
-    if retarget_harness != "off" and rows_written < retarget_harness_threshold:
-        harness_payload = run_harness_retarget_research(args, ledger_path, ledger)
-        mark_payload = mark_retarget_completed(args, ledger_path, ledger)
-        merged = int(mark_payload.get("review_rows_merged") or 0)
-        if merged <= 0:
-            raise PipelineFailed("retarget harness completed but no review rows were merged")
-        mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
-            "mode": "harness",
-            "threshold": retarget_harness_threshold,
-            "prepare_retarget_queue": prepare_payload,
-            "harness": harness_payload,
-            "mark_completed": mark_payload,
-        })
-        return
-
-    estimate_cmd = [
-        sys.executable,
-        primitive_path("packs/messages/primitives/deep_research_contacts/deep_research_contacts.py"),
-        "estimate",
-        "--input", str(args.retarget_queue),
-        "--processor", args.processor,
-        "--output-dir", str(args.retarget_research_dir),
-    ]
-    mark_step(ledger_path, ledger, "retarget_parallel_estimate", "running", command=estimate_cmd)
-    estimate_result = run_command(estimate_cmd, timeout=args.timeout, env=pipeline_env(args))
-    estimate_payload = require_ok(estimate_result, "retarget_parallel_estimate")
-    mark_step(ledger_path, ledger, "retarget_parallel_estimate", "completed", summary=estimate_payload, command=estimate_cmd)
-
-    would_submit = int(estimate_payload.get("would_submit") or 0)
-    estimated_usd = float(estimate_payload.get("estimated_usd") or 0.0)
-    latency = parallel_latency_summary(args.processor, estimate_payload)
-    if would_submit <= 0:
-        mark_payload = mark_retarget_completed(args, ledger_path, ledger)
-        mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
-            "status": "no_work",
-            "reason": "retarget_results_already_cached",
-            "prepare_retarget_queue": prepare_payload,
-            "estimate": estimate_payload,
-            "mark_completed": mark_payload,
-        })
-        return
+    pre_estimate_payload: dict[str, Any] = {}
+    would_submit = 0
+    estimated_usd = 0.0
+    latency: dict[str, Any] = {"rough_wall_clock": "roughly a few minutes once submitted"}
+    if rows_written > 0:
+        pre_estimate_payload = estimate_retarget_parallel(args, ledger_path, ledger)
+        would_submit = int(pre_estimate_payload.get("would_submit") or 0)
+        estimated_usd = float(pre_estimate_payload.get("estimated_usd") or 0.0)
+        latency = parallel_latency_summary(args.processor, pre_estimate_payload)
 
     approval_payload = {
-        "kind": "retarget_parallel",
+        "kind": "retarget_research",
         "estimated_usd": estimated_usd,
         "estimated_latency": latency,
         "processor": args.processor,
         "would_submit": would_submit,
         "feedback_rows": rows_written,
+        "rapidapi_would_fetch": rapidapi_would_fetch,
     }
     aid = approval_id("parallel", approval_payload)
     if not is_approved(ledger, aid):
@@ -1886,11 +1936,44 @@ def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, 
             step_id="retarget_research",
             kind="parallel",
             payload=approval_payload,
-            message=(
-                f"Feedback found; approve another deep research pass for ${estimated_usd:.4f}? "
-                f"Completion time is {latency.get('rough_wall_clock') or 'roughly a few minutes once submitted'}."
-            ),
+            message=retarget_approval_message(),
         )
+
+    refresh_payload = run_retarget_linkedin_refresh(args, ledger_path, ledger, refresh_estimate)
+
+    retarget_harness = getattr(args, "retarget_harness", "off")
+    retarget_harness_threshold = getattr(args, "retarget_harness_threshold", DEFAULT_RETARGET_HARNESS_THRESHOLD)
+    rapidapi_refreshed = int(refresh_payload.get("refreshed") or 0)
+    if retarget_harness != "off" and rapidapi_refreshed <= 0 and rows_written < retarget_harness_threshold:
+        harness_payload = run_harness_retarget_research(args, ledger_path, ledger)
+        mark_payload = mark_retarget_completed(args, ledger_path, ledger)
+        merged = int(mark_payload.get("review_rows_merged") or 0)
+        if merged <= 0:
+            raise PipelineFailed("retarget harness completed but no review rows were merged")
+        mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
+            "mode": "harness",
+            "threshold": retarget_harness_threshold,
+            "refresh_retarget_linkedin_profiles": refresh_payload,
+            "prepare_retarget_queue": prepare_payload,
+            "harness": harness_payload,
+            "mark_completed": mark_payload,
+        })
+        return
+
+    estimate_payload = estimate_retarget_parallel(args, ledger_path, ledger, step_id="retarget_parallel_estimate_after_refresh")
+    would_submit = int(estimate_payload.get("would_submit") or 0)
+    if would_submit <= 0:
+        mark_payload = mark_retarget_completed(args, ledger_path, ledger)
+        mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
+            "status": "no_work",
+            "reason": "retarget_results_already_cached",
+            "refresh_retarget_linkedin_profiles": refresh_payload,
+            "prepare_retarget_queue": prepare_payload,
+            "pre_refresh_estimate": pre_estimate_payload,
+            "estimate": estimate_payload,
+            "mark_completed": mark_payload,
+        })
+        return
 
     run_cmd = [
         sys.executable,
@@ -1908,6 +1991,8 @@ def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, 
         raise PipelineFailed(f"retarget deep_research failed rc={run_result['returncode']}: {((run_result.get('stderr') or run_result.get('stdout') or '').strip())[-1000:]}")
     mark_payload = mark_retarget_completed(args, ledger_path, ledger)
     mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
+        "refresh_retarget_linkedin_profiles": refresh_payload,
+        "pre_refresh_estimate": pre_estimate_payload,
         "outputs": payloads,
         "final": final_payload,
         "mark_completed": mark_payload,
@@ -2228,6 +2313,7 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--retarget-harness-timeout", type=int, default=900)
     add_hidden_arg(parser, "--retarget-harness-max-workers", type=int, default=DEFAULT_RETARGET_HARNESS_MAX_WORKERS)
     add_hidden_arg(parser, "--retarget-harness-prompt-dir", type=Path, default=DEFAULT_RETARGET_HARNESS_PROMPT_DIR)
+    add_hidden_arg(parser, "--retarget-rapidapi-max-workers", type=int, default=10)
     add_hidden_arg(parser, "--review-host", default="127.0.0.1")
     add_hidden_arg(parser, "--review-port", type=int, default=DEFAULT_REVIEW_PORT)
     parser.set_defaults(open_browser=True)
