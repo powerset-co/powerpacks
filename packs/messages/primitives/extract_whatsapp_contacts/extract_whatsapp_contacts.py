@@ -69,7 +69,8 @@ GROUP_SEPARATOR = " | "
 MIN_PHONE_DIGITS = 7
 MAX_PHONE_DIGITS = 15
 MESSAGE_PAGE_SIZE = 500
-MIN_REQUEST_INTERVAL = float(os.environ.get("POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL", "1.0"))
+WAHA_LIST_PAGE_SIZE = int(os.environ.get("POWERPACKS_WHATSAPP_LIST_PAGE_SIZE", "100"))
+MIN_REQUEST_INTERVAL = float(os.environ.get("POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL", "0.1"))
 DEFAULT_HEARTBEAT_INTERVAL = int(os.environ.get("POWERPACKS_WHATSAPP_HEARTBEAT_INTERVAL", "30"))
 GROUP_PARTICIPANTS_TIMEOUT = int(os.environ.get("POWERPACKS_WHATSAPP_GROUP_PARTICIPANTS_TIMEOUT", "120"))
 MAX_GROUP_PARTICIPANTS = int(os.environ.get("POWERPACKS_WHATSAPP_MAX_GROUP_PARTICIPANTS", "30"))
@@ -225,6 +226,116 @@ def chat_message_count_hint(chat: dict) -> int | None:
         if isinstance(value, int) and value >= 0:
             return value
     return None
+
+
+def item_identity(item: Any) -> str:
+    if isinstance(item, dict):
+        jid = extract_jid(item.get("id", ""))
+        if jid:
+            return jid
+        for key in ("number", "phoneNumber", "name", "pushname", "shortName"):
+            value = item.get(key)
+            if value:
+                return f"{key}:{value}"
+    try:
+        return json.dumps(item, sort_keys=True)
+    except TypeError:
+        return str(item)
+
+
+def fetch_paginated_list(
+    base_url: str,
+    api_key: str,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    sort_by: str | None = None,
+    sort_order: str = "asc",
+    page_size: int = WAHA_LIST_PAGE_SIZE,
+    retries: int = 3,
+    allow_unpaged_full_response: bool = True,
+) -> tuple[list[Any], dict[str, Any] | None, dict[str, Any]]:
+    """Fetch a WAHA list endpoint with limit/offset pagination.
+
+    Some WAHA versions/endpoints may ignore pagination parameters and return the
+    whole list. Accept that response and stop instead of duplicating rows.
+    """
+    if page_size <= 0:
+        page_size = WAHA_LIST_PAGE_SIZE
+    items: list[Any] = []
+    seen: set[str] = set()
+    offset = 0
+    pages = 0
+    meta: dict[str, Any] = {
+        "path": path,
+        "page_size": page_size,
+        "pages": 0,
+        "items": 0,
+        "stopped_reason": None,
+    }
+    while True:
+        request_params = dict(params or {})
+        request_params.update({"limit": page_size, "offset": offset})
+        if sort_by:
+            request_params["sortBy"] = sort_by
+            request_params["sortOrder"] = sort_order
+        status, payload = _waha_get(base_url, api_key, path, params=request_params, retries=retries)
+        pages += 1
+        meta["pages"] = pages
+        if status != 200 or not isinstance(payload, list):
+            meta["items"] = len(items)
+            meta["stopped_reason"] = "error"
+            return items, {
+                "step": "paginated_list",
+                "path": path,
+                "http_status": status,
+                "offset": offset,
+                "payload": payload if isinstance(payload, (str, int, float, bool, type(None))) else str(payload)[:500],
+            }, meta
+        if not payload:
+            meta["stopped_reason"] = "empty_page"
+            break
+
+        new_count = 0
+        for item in payload:
+            key = item_identity(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(item)
+            new_count += 1
+
+        if len(payload) > page_size:
+            if not allow_unpaged_full_response:
+                meta["items"] = len(items)
+                meta["stopped_reason"] = "limit_not_honored"
+                return items, {
+                    "step": "paginated_list",
+                    "path": path,
+                    "offset": offset,
+                    "error": "pagination limit was not honored",
+                    "requested_limit": page_size,
+                    "returned_count": len(payload),
+                }, meta
+            # Pagination was ignored; the endpoint returned the full list.
+            meta["stopped_reason"] = "unpaged_full_response"
+            break
+        if len(payload) < page_size:
+            meta["stopped_reason"] = "short_page"
+            break
+        if new_count == 0:
+            meta["items"] = len(items)
+            meta["stopped_reason"] = "duplicate_page"
+            return items, {
+                "step": "paginated_list",
+                "path": path,
+                "offset": offset,
+                "error": "pagination returned only duplicate rows",
+            }, meta
+        offset += page_size
+
+    meta["items"] = len(items)
+    return items, None, meta
 
 
 def group_chat_name(chat: dict, chat_id: str) -> str:
@@ -500,6 +611,8 @@ def extract_contacts(
     diagnostics: dict[str, Any] = {
         "raw_contacts": 0,
         "raw_chats": 0,
+        "contacts_page_size": WAHA_LIST_PAGE_SIZE,
+        "chats_page_size": WAHA_LIST_PAGE_SIZE,
         "direct_chats": 0,
         "group_chats": 0,
         "group_participants_fetched": 0,
@@ -533,22 +646,43 @@ def extract_contacts(
         })
 
     # 1. Pull all chats.
-    status, chats_payload = _waha_get(base_url, api_key, f"/api/{session}/chats", retries=3)
-    if status != 200 or not isinstance(chats_payload, list):
-        diagnostics["errors"].append({"step": "chats", "http_status": status, "payload": chats_payload})
-        chats_payload = []
-    diagnostics["raw_chats"] = len(chats_payload)
-
-    # 2. Pull contacts for name resolution.
-    status, contacts_payload = _waha_get(
-        base_url, api_key, "/api/contacts/all",
-        params={"session": session},
+    chats_payload, chats_error, chats_meta = fetch_paginated_list(
+        base_url,
+        api_key,
+        f"/api/{session}/chats",
+        sort_by="id",
+        sort_order="asc",
         retries=3,
     )
-    if status != 200 or not isinstance(contacts_payload, list):
-        diagnostics["errors"].append({"step": "contacts", "http_status": status, "payload": contacts_payload})
-        contacts_payload = []
+    if chats_error:
+        chats_error["step"] = "chats"
+        diagnostics["errors"].append(chats_error)
+    diagnostics["raw_chats"] = len(chats_payload)
+    diagnostics["chats_pages"] = chats_meta.get("pages", 0)
+    diagnostics["chats_pagination_stopped_reason"] = chats_meta.get("stopped_reason")
+
+    # 2. Pull contacts for name resolution.
+    contacts_payload, contacts_error, contacts_meta = fetch_paginated_list(
+        base_url,
+        api_key,
+        "/api/contacts/all",
+        params={"session": session},
+        sort_by="id",
+        sort_order="asc",
+        retries=3,
+        allow_unpaged_full_response=False,
+    )
+    if contacts_error:
+        contacts_error["step"] = "contacts"
+        diagnostics["errors"].append(contacts_error)
+        if contacts_error.get("error") in {
+            "pagination limit was not honored",
+            "pagination returned only duplicate rows",
+        }:
+            raise RuntimeError(f"WAHA contacts pagination failed: {contacts_error.get('error')}")
     diagnostics["raw_contacts"] = len(contacts_payload)
+    diagnostics["contacts_pages"] = contacts_meta.get("pages", 0)
+    diagnostics["contacts_pagination_stopped_reason"] = contacts_meta.get("stopped_reason")
 
     # 3. Index by JID and name; build @lid → phones map.
     jid_to_name: dict[str, str] = {}

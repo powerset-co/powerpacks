@@ -25,6 +25,8 @@ not handle QR auth. Use:
 python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py check
 
 # Pull contacts exhaustively. Writes CSV/JSONL, manifest, and progress JSONL.
+# WAHA chat/contact list endpoints are paginated with limit/offset; default page size is 100.
+# Requests are serialized with a 0.1s default interval; override with POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL.
 # Large histories can take up to an hour; keep message counts enabled.
 python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py extract \
   --output-csv .powerpacks/messages/whatsapp.contacts.csv \

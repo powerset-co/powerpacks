@@ -147,74 +147,31 @@ implies that pack.
 
 ---
 
-## Natural skill routing
+## Skill routing
 
-When the user asks for an outcome that matches a Powerpacks skill, proactively
-load and follow that skill's `SKILL.md` even if the user did not type a slash
-command. Treat skills as the natural harness for this repo, not just explicit
-commands.
+When a user request matches a Powerpacks skill, load that skill's `SKILL.md` and
+follow it. This section only routes intent to skills; it does not define skill
+internals, primitive sequences, or orchestration details.
 
-Common routes:
+Routes:
 
-- people/network/company-directory queries → `packs/search/skills/search-network/SKILL.md`
-- company set resolution / company IDs → `packs/search/skills/search-company/SKILL.md`
-- my contacts / set contacts → `packs/contacts/skills/search-contacts/SKILL.md`
-- Sales Navigator leads → `packs/sales-nav/skills/sales-nav-search/SKILL.md`
-- Powerset login / MCP install / credentials → `packs/powerset/skills/powerset/SKILL.md`
-- iMessage / WhatsApp / contact imports → `packs/messages/skills/import-contacts/SKILL.md`
+- `$search-network`, people search, network search, role/title/location/school
+  searches, "who is...", "find people...", company-directory queries →
+  `packs/search/skills/search-network/SKILL.md`
+- `$search-company`, company lookup, company IDs, investor/funding/sector or
+  company-set resolution → `packs/search/skills/search-company/SKILL.md`
+- `$search-contacts`, my contacts, set contacts, contact field filtering →
+  `packs/contacts/skills/search-contacts/SKILL.md`
+- `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
+  `packs/sales-nav/skills/sales-nav-search/SKILL.md`
+- `$powerset`, Powerset login/status/whoami/sets/MCP/env credentials →
+  `packs/powerset/skills/powerset/SKILL.md`
+- `$import-contacts`, iMessage, WhatsApp, contact import/review/upload/retarget →
+  `packs/messages/skills/import-contacts/SKILL.md`
 
-Do not ask the user to pick a skill when the route is obvious. Do ask a brief
-clarifying question when the request could mean multiple surfaces, e.g. "people
-at OpenAI" (company directory) vs "AI engineers at OpenAI" (semantic/role
-search), or "contacts at OpenAI" (contacts field filter).
-
-## Skill behavior overrides
-
-These are nudges that override defaults baked into individual `SKILL.md`
-files. They apply to every session in this repo.
-
-### search-network
-
-Default behavior in `packs/search/skills/search-network/SKILL.md` is a 16-step
-strategy loop with mandatory approval gate. That is correct for messy/broad
-queries. For narrow, unambiguous queries, **skip the loop**:
-
-- If the query is only "people who work at <company>" / "employees of
-  <company>" with no role/title/seniority/domain constraint, use the
-  company-directory fast path: call MCP `list_company_people`, page results,
-  and do not run semantic people search or local retrieval primitives.
-- A query is otherwise narrow when it has a single named company, a single named
-  person, ≤ 3 hard filters, or obvious structure.
-- For narrow non-directory queries, run only: `task_state init` →
-  `resolve_companies` (or `resolve_education` / `resolve_investors` if relevant)
-  → `execute_role_search` → `hydrate_people` → `persist_search_results`. Five
-  primitives, no approval gate, no slicing, no count, no LLM filter, no agentic
-  rerank.
-- Do not invoke `plan_adjacency_search`, `decide_search_strategy`,
-  `count_candidates`, `assess_frontier`, `plan_candidate_review`, or
-  `llm_filter_candidates` for narrow queries. They are all no-ops on
-  unambiguous input and just add turns.
-- Run the full strategy loop only when the query is genuinely ambiguous
-  ("engineers in SF", "stanford grads at fintech") or the user explicitly
-  asks for slicing/rerank.
-
-### import-contacts downstream review TUI
-
-- The TUI fix shipped in `contact-exporter` v0.1.25. If the user reports
-  TUI weirdness, check `contact-exporter --version` first.
-- Bucket counts in our research-review CSV map to TUI tabs as
-  `confident → yes`, `medium → maybe`, `review → no`. The server's
-  `yes_count / maybe_count / no_count` on `/v2/messages-research/artifacts`
-  upload uses the same accounting.
-
-### deep_research_contacts (Parallel.ai)
-
-- Parallel contact research may only use these processors: `core`, `core2x`, and `pro`.
-- `submit` and `poll` can be split if the user is okay with backgrounding.
-  For a small batch (< 30 contacts) just `run`. For larger queues,
-  recommend `submit` + come back later for `poll`.
-- Idempotency: re-runs skip handles that already have
-  `01_research_parallel.json`. Safe to re-run.
+Do not ask the user to pick a skill when the route is obvious. Ask a brief
+clarifying question only when the same wording could mean multiple surfaces,
+for example "people at OpenAI" versus "contacts at OpenAI".
 
 ---
 

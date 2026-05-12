@@ -51,9 +51,11 @@ class FakeWAHAHandler(BaseHTTPRequestHandler):
         if path == "/api/sessions":
             return self._json(200, [{"name": "default", "status": "WORKING"}])
         if path == "/api/default/chats":
-            return self._json(200, self.routes["chats"])
+            return self._json(200, self._page(self.routes["chats"], params))
         if path == "/api/contacts/all":
-            return self._json(200, self.routes["contacts"])
+            if self.routes.get("ignore_contacts_pagination"):
+                return self._json(200, self.routes["contacts"])
+            return self._json(200, self._page(self.routes["contacts"], params))
         if path.startswith("/api/default/groups/") and "/participants" not in path:
             group_id = path.split("/")[-1]
             metadata = self.routes.get("group_metadata", {}).get(group_id)
@@ -93,6 +95,13 @@ class FakeWAHAHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _page(self, payload: object, params: dict[str, list[str]]) -> object:
+        if not isinstance(payload, list) or "limit" not in params:
+            return payload
+        limit = int(params.get("limit", ["100"])[0])
+        offset = int(params.get("offset", ["0"])[0])
+        return payload[offset:offset + limit]
 
 
 def _free_port() -> int:
@@ -212,11 +221,19 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                     timeout=60,
-                    env={**os.environ, "POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL": "0"},
+                    env={
+                        **os.environ,
+                        "POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL": "0",
+                        "POWERPACKS_WHATSAPP_LIST_PAGE_SIZE": "2",
+                    },
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 manifest = json.loads(result.stdout)
                 self.assertEqual(manifest["status"], "completed")
+                self.assertEqual(manifest["diagnostics"]["contacts_page_size"], 2)
+                self.assertEqual(manifest["diagnostics"]["chats_page_size"], 2)
+                self.assertEqual(FakeWAHAHandler.request_counts.get("/api/contacts/all"), 2)
+                self.assertEqual(FakeWAHAHandler.request_counts.get("/api/default/chats"), 2)
                 self.assertGreaterEqual(manifest["counts"]["contacts"], 2)
                 self.assertEqual(manifest["diagnostics"]["message_count_total"], 1)
                 progress_path = Path(manifest["artifacts"]["progress_jsonl"])
@@ -259,6 +276,53 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 jsonl_rows = [json.loads(line) for line in jsonl_path.read_text().splitlines()]
                 self.assertEqual(len(jsonl_rows), len(rows))
                 self.assertEqual(jsonl_rows[0]["sources"], ["whatsapp"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_contacts_pagination_must_be_honored(self) -> None:
+        FakeWAHAHandler.request_counts = {}
+        FakeWAHAHandler.routes = {
+            "ignore_contacts_pagination": True,
+            "contacts": [
+                {"id": {"_serialized": "14155550101@c.us"}, "name": "A"},
+                {"id": {"_serialized": "14155550202@c.us"}, "name": "B"},
+                {"id": {"_serialized": "14155550303@c.us"}, "name": "C"},
+            ],
+            "chats": [],
+            "messages_by_chat": {},
+        }
+        port = _free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), FakeWAHAHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                result = subprocess.run(
+                    [
+                        "python3", str(EXTRACT_WHATSAPP), "extract",
+                        "--base-url", f"http://127.0.0.1:{port}",
+                        "--api-key", "test",
+                        "--session", "default",
+                        "--output-csv", str(tmp / "wa.csv"),
+                        "--manifest", str(tmp / "wa.manifest.json"),
+                        "--skip-message-counts",
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={
+                        **os.environ,
+                        "POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL": "0",
+                        "POWERPACKS_WHATSAPP_LIST_PAGE_SIZE": "2",
+                    },
+                )
+                self.assertEqual(result.returncode, 1)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["status"], "failed")
+                self.assertIn("pagination failed", manifest["error"])
         finally:
             server.shutdown()
             server.server_close()
