@@ -33,6 +33,11 @@ python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_cont
 # Debug/last-resort only: skip per-chat message-count pagination.
 python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py extract \
   --skip-message-counts
+
+# Group participant imports skip groups larger than 30 members by default.
+# Raise/lower the cap, or set <=0 to disable the cap.
+python packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py extract \
+  --max-group-participants 30
 ```
 
 ## Progress / heartbeat

@@ -54,6 +54,12 @@ class FakeWAHAHandler(BaseHTTPRequestHandler):
             return self._json(200, self.routes["chats"])
         if path == "/api/contacts/all":
             return self._json(200, self.routes["contacts"])
+        if path.startswith("/api/default/groups/") and "/participants" not in path:
+            group_id = path.split("/")[-1]
+            metadata = self.routes.get("group_metadata", {}).get(group_id)
+            if metadata is not None:
+                return self._json(200, metadata)
+            return self._json(404, {"error": "not found"})
         if path.startswith("/api/default/groups/") and path.endswith("/participants/v2"):
             group_id = path.split("/")[-3]
             participant_errors = self.routes.get("group_participants_v2_errors", {})
@@ -134,6 +140,10 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 {
                     "id": {"_serialized": "14155550202@c.us"},
                     "name": "Op Bob",
+                },
+                {
+                    "id": {"_serialized": "14155559999@c.us"},
+                    "name": "Contacts Only",
                 },
             ],
             "chats": [
@@ -218,6 +228,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 phones = {row["phone"] for row in rows}
                 self.assertIn("+14155550101", phones)
                 self.assertIn("+14155550202", phones)
+                self.assertNotIn("+14155559999", phones)
 
                 # Jane: in group + has hinted message_count from chat payload.
                 jane = next(row for row in rows if row["phone"] == "+14155550101")
@@ -304,6 +315,66 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 with csv_path.open(encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))
                 self.assertEqual(rows[0]["message_count"], "500")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_large_group_participants_are_skipped_by_default(self) -> None:
+        FakeWAHAHandler.request_counts = {}
+        FakeWAHAHandler.routes = {
+            "contacts": [
+                {"id": {"_serialized": "14155550707@c.us"}, "name": "Large Group Contact"},
+            ],
+            "chats": [
+                {
+                    "id": {"_serialized": "987654321@g.us"},
+                    "name": "Huge Group",
+                    "groupMetadata": {"subject": "Huge Group", "size": 31},
+                },
+            ],
+            "group_participants_v2": {
+                "987654321%40g.us": [
+                    {"id": "14155550707@c.us", "pn": "14155550707@c.us", "role": "participant"},
+                ],
+            },
+            "messages_by_chat": {},
+        }
+        port = _free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), FakeWAHAHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                csv_path = tmp / "wa.csv"
+                manifest_path = tmp / "wa.manifest.json"
+                result = subprocess.run(
+                    [
+                        "python3", str(EXTRACT_WHATSAPP), "extract",
+                        "--base-url", f"http://127.0.0.1:{port}",
+                        "--api-key", "test",
+                        "--session", "default",
+                        "--output-csv", str(csv_path),
+                        "--manifest", str(manifest_path),
+                        "--skip-message-counts",
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={**os.environ, "POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL": "0"},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["diagnostics"]["max_group_participants"], 30)
+                self.assertEqual(manifest["diagnostics"]["group_participants_skipped_large"], 1)
+                self.assertEqual(manifest["diagnostics"]["group_participants_skipped_large_members"], 31)
+                self.assertIsNone(
+                    FakeWAHAHandler.request_counts.get("/api/default/groups/987654321%40g.us/participants/v2"),
+                )
+                with csv_path.open(encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                self.assertEqual(rows, [])
         finally:
             server.shutdown()
             server.server_close()

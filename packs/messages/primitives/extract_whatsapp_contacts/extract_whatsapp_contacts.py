@@ -72,6 +72,7 @@ MESSAGE_PAGE_SIZE = 500
 MIN_REQUEST_INTERVAL = float(os.environ.get("POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL", "1.0"))
 DEFAULT_HEARTBEAT_INTERVAL = int(os.environ.get("POWERPACKS_WHATSAPP_HEARTBEAT_INTERVAL", "30"))
 GROUP_PARTICIPANTS_TIMEOUT = int(os.environ.get("POWERPACKS_WHATSAPP_GROUP_PARTICIPANTS_TIMEOUT", "120"))
+MAX_GROUP_PARTICIPANTS = int(os.environ.get("POWERPACKS_WHATSAPP_MAX_GROUP_PARTICIPANTS", "30"))
 
 
 @dataclass
@@ -377,6 +378,59 @@ def _get_chat_message_count(base_url: str, api_key: str, session: str, chat_id: 
     return len(payload)
 
 
+def _parse_nonnegative_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def group_participant_count(payload: dict[str, Any]) -> int | None:
+    """Best-effort group size from chat or group metadata without fetching members."""
+    if not isinstance(payload, dict):
+        return None
+    metadata = payload.get("groupMetadata") if isinstance(payload.get("groupMetadata"), dict) else {}
+    for source in (payload, metadata):
+        for key in ("size", "participantsCount", "participants_count", "memberCount", "membersCount"):
+            parsed = _parse_nonnegative_int(source.get(key))
+            if parsed is not None:
+                return parsed
+    for source in (payload, metadata):
+        participants = source.get("participants")
+        if isinstance(participants, list):
+            return len(participants)
+    return None
+
+
+def _fetch_group_metadata(
+    base_url: str,
+    api_key: str,
+    session: str,
+    chat_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    encoded = urllib.parse.quote(chat_id, safe="")
+    try:
+        status, payload = _waha_get(
+            base_url, api_key,
+            f"/api/{session}/groups/{encoded}",
+            timeout=GROUP_PARTICIPANTS_TIMEOUT,
+            retries=2,
+        )
+    except Exception as exc:
+        return None, {"step": "group_metadata", "chat_id": chat_id, "error": f"{type(exc).__name__}: {exc}"}
+    if status == 200 and isinstance(payload, dict):
+        return payload, None
+    return None, {
+        "step": "group_metadata",
+        "chat_id": chat_id,
+        "http_status": status,
+        "payload": payload if isinstance(payload, (str, int, float, bool, type(None))) else str(payload)[:500],
+    }
+
+
 def _fetch_group_participants_endpoint(
     base_url: str,
     api_key: str,
@@ -437,6 +491,7 @@ def extract_contacts(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     heartbeat_interval: int = DEFAULT_HEARTBEAT_INTERVAL,
     message_count_cache: dict[str, Any] | None = None,
+    max_group_participants: int = MAX_GROUP_PARTICIPANTS,
 ) -> tuple[dict[str, Contact], dict[str, Any]]:
     """Pull contacts and chat metadata from the WAHA API."""
 
@@ -451,6 +506,10 @@ def extract_contacts(
         "group_participants_fallback": 0,
         "group_participants_empty": 0,
         "group_participants_failed": 0,
+        "group_participants_skipped_large": 0,
+        "group_participants_skipped_large_members": 0,
+        "group_participant_count_unknown": 0,
+        "max_group_participants": max_group_participants,
         "lid_resolved": 0,
         "group_member_phones": 0,
         "fetched_message_counts_for": 0,
@@ -539,7 +598,29 @@ def extract_contacts(
         if "@g.us" in chat_id:
             diagnostics["group_chats"] += 1
             display_name = group_chat_name(chat, chat_id)
-            fallback_participants = chat.get("participants") or (chat.get("groupMetadata") or {}).get("participants") or []
+            metadata: dict[str, Any] | None = None
+            participant_count = group_participant_count(chat)
+            if participant_count is None:
+                metadata, metadata_error = _fetch_group_metadata(base_url, api_key, session, chat_id)
+                if metadata:
+                    participant_count = group_participant_count(metadata)
+                elif metadata_error:
+                    diagnostics["errors"].append(metadata_error)
+
+            if participant_count is None:
+                diagnostics["group_participant_count_unknown"] += 1
+            elif max_group_participants > 0 and participant_count > max_group_participants:
+                diagnostics["group_participants_skipped_large"] += 1
+                diagnostics["group_participants_skipped_large_members"] += participant_count
+                continue
+
+            metadata_participants = metadata.get("participants") if isinstance(metadata, dict) else []
+            fallback_participants = (
+                chat.get("participants")
+                or (chat.get("groupMetadata") or {}).get("participants")
+                or metadata_participants
+                or []
+            )
             fetched_participants, participant_error = _fetch_group_participants(base_url, api_key, session, chat_id)
             if fetched_participants:
                 participants = fetched_participants
@@ -584,17 +665,10 @@ def extract_contacts(
     diagnostics["direct_chats"] = len(direct_chats)
     diagnostics["group_member_phones"] = len(group_member_phones)
 
-    # 5. Build base contacts dict from contact list.
-    contacts_by_phone: dict[str, Contact] = {
-        phone: Contact(
-            phone=phone,
-            name=phone_to_name.get(phone, ""),
-            source="whatsapp",
-            is_in_group_chats=phone in group_member_phones,
-            group_names=set(group_names_by_phone.get(phone, set())),
-        )
-        for phone in all_contact_phones
-    }
+    # 5. Start from eligible WhatsApp relationships only. `/contacts/all` is a
+    # name/identity directory, not an import list: a contact is imported only if
+    # they have a direct chat or are present in a group within the configured cap.
+    contacts_by_phone: dict[str, Contact] = {}
 
     # 6. Resolve direct-chat message counts for chats without a count hint.
     direct_jids = [
@@ -853,6 +927,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             progress_callback=lambda payload: emit_progress(payload, progress_path),
             heartbeat_interval=args.heartbeat_interval,
             message_count_cache=message_count_cache,
+            max_group_participants=args.max_group_participants,
         )
         message_count_cache["updated_at"] = now_iso()
         message_count_cache["session"] = args.session
@@ -930,6 +1005,8 @@ def main() -> None:
                          help="Seconds between progress heartbeats while capped message-count sync is running")
     extract.add_argument("--progress-jsonl", help="Progress/heartbeat JSONL path; defaults next to the manifest")
     extract.add_argument("--message-count-cache", default=str(DEFAULT_MESSAGE_COUNT_CACHE), help=argparse.SUPPRESS)
+    extract.add_argument("--max-group-participants", type=int, default=MAX_GROUP_PARTICIPANTS,
+                         help="Skip group participant imports for groups larger than this size; set <=0 to disable")
     extract.add_argument("--skip-message-counts", action="store_true",
                          help="Skip per-chat message-count fetches (faster, less complete; not recommended for normal imports)")
     extract.set_defaults(func=cmd_extract)
