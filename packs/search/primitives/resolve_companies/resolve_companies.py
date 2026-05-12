@@ -399,6 +399,30 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     rows = dedupe_rows(rows)
 
+    # Optional: CE on all rows (semantic + sector) for testing
+    if semantic_queries and args.ce_all and len(rows) > args.ce_threshold and not args.no_ce:
+        query_text = " ".join(semantic_queries)
+        from ce_rerank import ce_rerank_companies
+        ce_all_result = await ce_rerank_companies(
+            query_text,
+            rows,
+            top_n=args.ce_top_n or len(rows),
+            model=args.ce_model,
+            batch_size=args.ce_batch_size,
+            concurrency=args.ce_concurrency,
+        )
+        rows = ce_all_result["scored_companies"]
+        if not ce_result:
+            ce_result = ce_all_result
+        else:
+            ce_result["ce_all"] = {
+                "pre_ce_count": ce_all_result["total_scored"],
+                "post_ce_count": ce_all_result["kept"],
+                "threshold": ce_all_result.get("threshold"),
+                "mean_score": ce_all_result.get("mean_score"),
+                "std_score": ce_all_result.get("std_score"),
+            }
+
     company_ids = list(dict.fromkeys([*existing, *(str(row["id"]) for row in rows if row.get("id"))]))
     result = {
         "namespace": namespace_name("companies"),
@@ -468,6 +492,7 @@ def main() -> None:
     parser.add_argument("--max-companies", type=int, default=10000)
     # CE rerank args
     parser.add_argument("--no-ce", action="store_true", help="Disable cross-encoder reranking")
+    parser.add_argument("--ce-all", action="store_true", help="Run CE on ALL rows (semantic + sector filter), not just semantic")
     parser.add_argument("--ce-threshold", type=int, default=500, help="Min companies to trigger CE rerank")
     parser.add_argument("--ce-top-n", type=int, default=0, help="Hard cap after CE (0 = use adaptive threshold only)")
     parser.add_argument("--ce-model", default=None, help="Model for CE scoring (default: gpt-4.1-nano)")
