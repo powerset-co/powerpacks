@@ -252,14 +252,19 @@ def fetch_person_rows(person_ids: list[str], env_file: Path | None = None) -> li
         WHERE id = ANY(%s::uuid[])
           AND hydrated_context IS NOT NULL
     """
+    # Batch into chunks to avoid giant queries timing out
+    BATCH_SIZE = 500
+    all_rows: list[dict[str, Any]] = []
     with psycopg2.connect(database_url()) as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(query, (person_ids,))
-            rows = [dict(row) for row in cur.fetchall()]
+            for i in range(0, len(person_ids), BATCH_SIZE):
+                batch = person_ids[i:i + BATCH_SIZE]
+                cur.execute(query, (batch,))
+                all_rows.extend(dict(row) for row in cur.fetchall())
 
-    for row in rows:
+    for row in all_rows:
         row["hydrated_context"] = json_value(row.get("hydrated_context"))
-    return rows
+    return all_rows
 
 
 def fetch_interaction_counts(person_ids: list[str], env_file: Path | None = None) -> dict[str, int]:
