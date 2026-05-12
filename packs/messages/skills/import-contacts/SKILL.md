@@ -58,10 +58,19 @@ values for matching handles/phones.
 
 Ask once before starting:
 
-> This imports local message/contact metadata only. It never reads message
-> bodies. It may read iMessage metadata, local Contacts names, sync WhatsApp,
-> ask for a WhatsApp QR scan, match against your Powerset contacts, run paid
-> research after approval, and ask again before upload. Continue?
+```text
+Import contacts
+
+- Imports only local iMessage and WhatsApp message/contact metadata; message bodies are never read.
+- Reads contact names for matching.
+- WhatsApp may require a QR scan to link your device.
+- Uses Powerset Contacts to match your iMessage/WhatsApp contacts.
+- Runs paid research only after you approve it.
+
+**Your explicit permission will be required to share data after completing import and reviews.**
+
+Continue?
+```
 
 After consent, do not ask again for local extraction, normalization, merge,
 Powerset login, candidate sync, or matching. Stop only for:
@@ -81,6 +90,10 @@ After consent, the main-chat handoff line should be exactly:
 
 `Starting work through sub-agent.`
 
+The worker handoff must explicitly say consent was already granted in the main
+thread, and that the worker must not ask for consent again. Give it the exact
+orchestrator command to run.
+
 The main chat should show only:
 
 - QR / permission actions
@@ -92,12 +105,35 @@ Do not stream primitive JSON, terminal transcripts, progress logs, local file
 paths, row counts, matched/unmatched counts, or implementation details unless a
 failure needs diagnosis or the user asks.
 
+The terminal may show terse primitive progress lines while long steps run. That
+is expected; do not paste every line into chat. Use those lines only to confirm
+the process is alive or diagnose a real stall.
+
 For WhatsApp, use plain user-facing status:
 
 - `We're syncing WhatsApp.`
 - `WhatsApp is taking a bit longer.`
 - `WhatsApp needs a QR scan.`
 - `WhatsApp sync finished.`
+
+## Timing
+
+Do not treat long-running stages as failures just because they are quiet.
+
+- iMessage, merge, match, and queue prep are usually seconds to a few minutes.
+- WhatsApp live sync can take several minutes. Large accounts can take much
+  longer; the primitive writes heartbeat/progress events while counting changed
+  direct chats.
+- LLM skip/enrich review auto-runs under the cost threshold and can take
+  minutes on thousands of named unmatched contacts.
+- Parallel deep research uses the estimate block as the timing source. For
+  `core2x`, expect about 10-15 minutes after approval.
+- Network-review scoring writes `03_network_review.json` cache files and can
+  take minutes when many new researched profiles need scoring.
+
+At 10k contacts, expect local steps to remain viable but LLM and research gates
+to dominate. At 100k contacts, do not assume the current one-shot flow is the
+right path; pause and inspect counts/estimates before approving spend.
 
 ## Loop
 
@@ -106,7 +142,7 @@ For WhatsApp, use plain user-facing status:
 3. If blocked on spend/upload approval, ask the exact approval question. If the
    user approves, run `approve`, then `continue`.
 4. If review opens, tell the user:
-   `Review opened. When done, say: done with review, upload`
+   `Review opened: <url>. When done, say: done with review, upload`
 5. On review completion, run `continue`. Retarget feedback is automatic:
    edited `retarget_hint` rows are queued, researched after approval, merged
    back into the review CSV, then upload approval is requested.
@@ -116,6 +152,6 @@ For WhatsApp, use plain user-facing status:
 Be terse.
 
 - Spend: `Estimated deep research cost: $X, completion time is about Y. Approve?`
-- Review: `Review opened. When done, say: done with review, upload`
+- Review: `Review opened: <url>. When done, say: done with review, upload`
 - Upload: `Upload approved contacts? uploading X.`
 - Done: `Uploaded X approved contacts`

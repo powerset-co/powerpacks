@@ -37,8 +37,10 @@ Gates:
 
 - OpenRouter LLM review auto-runs when the estimate is under `$10.00`.
   Otherwise it blocks on `approve`.
-- Parallel.ai deep research always blocks on `approve` when there is
+- Parallel.ai first-pass deep research always blocks on `approve` when there is
   paid work to submit; the user-facing block shows cost and rough time only.
+- Retarget/correction research defaults to local Codex/Claude harness research
+  for batches under 100 rows. Larger batches fall back to Parallel approval.
 - Upload always blocks on `approve`; the user-facing block shows only
   the number of approved contacts.
 
@@ -68,8 +70,9 @@ Gates:
     existing Powerset matches are visible as `in_network`.
 11. Start the local review web UI and block for the user to finish review.
 12. On `continue`, detect saved `retarget_hint` feedback. If new hints exist,
-    build `retarget_queue.csv`, estimate targeted Parallel research, and block
-    for `approve` before upload.
+    build `retarget_queue.csv`. For fewer than 100 rows, run local Codex/Claude
+    harness retarget research and merge the results. For larger batches, estimate
+    targeted Parallel research and block for approval.
 13. Merge completed retarget results back into `research_review.csv`.
 14. Summarize and block for upload approval.
 15. Upload after approval.

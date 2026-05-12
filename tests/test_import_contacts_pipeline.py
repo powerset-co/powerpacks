@@ -391,6 +391,24 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertIsNone(mod.archive_existing_run_artifacts(args))
             self.assertTrue(contacts.exists())
 
+    def test_review_url_defaults_to_yes_tab(self):
+        args = SimpleNamespace(review_host="127.0.0.1", review_port=8766)
+        self.assertEqual(mod.review_url(args), "http://127.0.0.1:8766/?tab=yes")
+
+    def test_review_server_match_requires_current_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            review_csv = Path(tmp) / "research_review.csv"
+            other_csv = Path(tmp) / "old_review.csv"
+            review_csv.write_text("bucket,handle\n", encoding="utf-8")
+            other_csv.write_text("bucket,handle\n", encoding="utf-8")
+            args = SimpleNamespace(review_host="127.0.0.1", review_port=8766, review_csv=review_csv)
+            with mock.patch.object(mod, "read_review_server_health", return_value={"status": "ok", "csv": str(review_csv.resolve())}):
+                self.assertTrue(mod.review_server_matches_current_csv(args))
+            with mock.patch.object(mod, "read_review_server_health", return_value={"status": "ok", "csv": str(other_csv.resolve())}):
+                self.assertFalse(mod.review_server_matches_current_csv(args))
+            with mock.patch.object(mod, "read_review_server_health", return_value=None):
+                self.assertFalse(mod.review_server_matches_current_csv(args))
+
     def test_extract_whatsapp_reuses_only_completed_active_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

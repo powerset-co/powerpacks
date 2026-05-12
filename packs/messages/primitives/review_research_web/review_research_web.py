@@ -46,6 +46,7 @@ DEFAULT_COLUMNS = [
     "retarget_linkedin_url",
     "retarget_name_confidence",
     "retarget_notes",
+    "retarget_profile_status",
     "exclude",
     "enrich_decision",
     "in_network",
@@ -361,7 +362,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         ".tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:12px}.tab{display:flex;gap:8px;align-items:center;padding:9px 12px;border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;text-decoration:none;color:var(--muted);font-size:13px}.tab.active{background:var(--panel);border-color:var(--line);color:var(--text);margin-bottom:-1px}.tab strong{font-size:12px;color:var(--text);background:var(--soft);border-radius:999px;padding:2px 7px}",
         ".info-panel{display:flex;align-items:flex-start;gap:12px;background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:14px 16px;margin:0 0 14px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.info-panel h2{font-size:15px;line-height:1.25;margin:0 0 3px}.info-panel p{margin:0;color:var(--muted);font-size:13px;line-height:1.45}.info-body{flex:1}.info-icon{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:999px;flex:0 0 auto}.info-icon svg{width:18px;height:18px}.bulk-actions{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}.bulk-actions button{font:inherit;border:1px solid #9aa8b7;background:#fff;color:#334155;border-radius:7px;font-size:12px;font-weight:800;padding:7px 10px;cursor:pointer}.bulk-actions button:hover{border-color:#63b7aa;color:#0f5f59}.bulk-actions button:disabled{opacity:.6;cursor:wait}.info-panel.yes,.info-panel.in_network{border-left-color:#43a99a}.info-panel.yes .info-icon,.info-panel.in_network .info-icon{background:#d9f3ee;color:#0f5f59}.info-panel.maybe{border-left-color:#d49322}.info-panel.maybe .info-icon{background:#fff1d6;color:#7a4b00}.info-panel.no{border-left-color:#b65b5b}.info-panel.no .info-icon{background:#fde2e2;color:#8a2424}",
         ".filters{display:flex;gap:8px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:14px}.filters input{font:inherit;border:1px solid #b8c1cc;border-radius:6px;padding:7px 8px;min-width:280px;flex:1}.filters button{font:inherit;border:1px solid var(--ink);background:var(--ink);color:#fff;border-radius:6px;padding:7px 12px}.filters a{display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;padding:0 6px}",
-        ".badge{display:inline-block;height:18px;line-height:18px;border-radius:999px;padding:0 7px;font-size:11px;font-weight:800;white-space:nowrap}.badge.retarget{background:#e9ddff;color:#5b21b6}",
+        ".badge{display:inline-block;height:18px;line-height:18px;border-radius:999px;padding:0 7px;font-size:11px;font-weight:800;white-space:nowrap}.badge.retarget{background:#e9ddff;color:#5b21b6}.badge.new-profile{background:#dcfce7;color:#166534}",
         ".cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}",
         ".card{background:var(--panel);border:1px solid var(--line);border-radius:8px;min-height:292px;padding:14px;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,.04);transition:border-color .12s,box-shadow .12s,opacity .12s}.card:hover{border-color:#aeb8c5;box-shadow:0 3px 10px rgba(15,23,42,.08)}.card.selected{border-color:#63b7aa;background:#f1fbf8}.card.excluded{opacity:.64}.card.saving{outline:2px solid #f6c76b}",
         ".head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.name-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.name{font-weight:800;font-size:17px;line-height:1.2}.li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#0a66c2;color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{filter:brightness(.92);text-decoration:none}.decision{display:inline-block;height:20px;line-height:20px;font-size:12px;font-weight:800;border-radius:999px;padding:0 8px;background:#eceff3;color:#5b6876;white-space:nowrap}.selected .decision{background:#ccefe8;color:#0f5f59}",
@@ -404,8 +405,11 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             card_class = "card selected" if selected else "card excluded"
             bucket_class = f"bucket {label}" if label in {"in_network", "yes", "maybe"} else "bucket"
             linkedin_icon = f"<a class='li-icon' href='{esc(linkedin)}' target='_blank' rel='noreferrer' title='LinkedIn' aria-label='Open LinkedIn profile'>in</a>" if linkedin else ""
-            retarget_badge = "<span class='badge retarget'>re-research</span>" if (row.get("retarget_status") or "").strip() else ""
-            hint = row.get("retarget_hint", "")
+            is_retargeted = bool((row.get("retarget_status") or "").strip())
+            profile_status = (row.get("retarget_profile_status") or "").strip()
+            retarget_badge = "<span class='badge retarget'>re-researched</span>" if is_retargeted else ""
+            new_profile_badge = "<span class='badge new-profile'>new profile</span>" if profile_status == "new_profile" else ""
+            hint = "" if is_retargeted else row.get("retarget_hint", "")
             channel_bits = []
             if row.get("imessage_message_count"):
                 channel_bits.append(f"iMessage {row.get('imessage_message_count')}")
@@ -415,7 +419,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             parts.extend([
                 f"<article class='{card_class}' role='button' tabindex='0' data-row='{idx}' data-selected='{str(selected).lower()}' data-decision='{esc(count_key)}' data-network='{str(is_in_network(row)).lower()}'>",
                 "<div class='head'>",
-                f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{retarget_badge}</div><span class='{bucket_class}'>{esc(label_text)}</span></div>",
+                f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{retarget_badge}{new_profile_badge}</div><span class='{bucket_class}'>{esc(label_text)}</span></div>",
                 f"<div class='decision'>{decision}</div></div>",
                 f"<div class='line'><strong>phone</strong> {esc(row.get('phone_e164') or 'unknown')} &middot; <strong>msgs</strong> {esc(row.get('total_messages') or '0')}{esc(channel_detail)}</div>",
                 f"<div class='line'><strong>source</strong> {esc(row.get('message_source') or 'unknown')}</div>",
@@ -428,7 +432,8 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
                 f"<div class='line'><strong>reason</strong> {esc(row.get('short_reason') or 'none')}</div>",
                 f"<div class='line'><strong>identity</strong> {esc(row.get('identity_risk') or 'none')}</div>",
                 f"<div class='line'><strong>signals</strong> {esc(signals)}</div>",
-                f"<div class='hint'><label for='hint-{idx}'>feedback</label><textarea id='hint-{idx}' data-row='{idx}' placeholder='LinkedIn URL, company, title, location, or any clue'>{esc(hint)}</textarea><div class='hint-actions'><button type='button' data-save-hint='{idx}'>Save feedback</button><span class='hint-status'></span></div></div>",
+                (f"<div class='line'><strong>latest result</strong> showing latest re-researched profile. Add new feedback below to run another pass.</div>" if is_retargeted else ""),
+                f"<div class='hint'><label for='hint-{idx}'>{'new feedback' if is_retargeted else 'feedback'}</label><textarea id='hint-{idx}' data-row='{idx}' placeholder='LinkedIn URL, company, title, location, or any clue'>{esc(hint)}</textarea><div class='hint-actions'><button type='button' data-save-hint='{idx}'>Save feedback</button><span class='hint-status'></span></div></div>",
                 "</div></article>",
             ])
         parts.append("</section>")
@@ -466,7 +471,13 @@ def make_handler(csv_path: Path, research_dir: Path | None):
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/healthz":
-                self.send_bytes(b"ok", "text/plain")
+                _, rows = read_rows(csv_path)
+                self.send_bytes(json.dumps({
+                    "status": "ok",
+                    "csv": str(csv_path.resolve()),
+                    "research_dir": str(research_dir.resolve()) if research_dir else None,
+                    "row_count": len(rows),
+                }).encode(), "application/json")
                 return
             _, rows = read_rows(csv_path)
             if parsed.path == "/api/summary":

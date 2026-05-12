@@ -370,6 +370,7 @@ def merge_retarget_results(review_csv: Path, output_dir: Path, ledger: dict[str,
         "retarget_linkedin_url",
         "retarget_name_confidence",
         "retarget_notes",
+        "retarget_profile_status",
     ]:
         if column not in fieldnames:
             fieldnames.append(column)
@@ -406,6 +407,7 @@ def merge_retarget_results(review_csv: Path, output_dir: Path, ledger: dict[str,
         metadata = profile.get("metadata") or {}
         titles, companies, pairs = profile_positions(profile)
         schools = profile_schools(profile)
+        prior_linkedin = (target_row.get("linkedin_url") or target_row.get("network_linkedin_url") or "").strip().rstrip("/")
 
         target_row["full_name"] = (person.get("full_name") or target_row.get("full_name") or "").strip()
         target_row["location_city"] = (location.get("city") or "").strip()
@@ -417,7 +419,9 @@ def merge_retarget_results(review_csv: Path, output_dir: Path, ledger: dict[str,
         linkedin = ((social.get("linkedin_url") or "").strip())
         if linkedin:
             target_row["linkedin_url"] = linkedin
+        normalized_retarget_linkedin = linkedin.strip().rstrip("/")
         target_row["retarget_status"] = "re_researched"
+        target_row["retarget_profile_status"] = "new_profile" if normalized_retarget_linkedin and normalized_retarget_linkedin != prior_linkedin else "updated_profile"
         target_row["retarget_handle"] = queue_handle
         target_row["retarget_researched_at"] = attempt.get("completed_at") or now_iso()
         target_row["retarget_linkedin_url"] = linkedin

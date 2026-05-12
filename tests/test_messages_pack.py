@@ -1055,6 +1055,7 @@ class PrepareRetargetQueueTests(unittest.TestCase):
             with review_csv.open(newline="") as h:
                 reviewed = list(csv.DictReader(h))
             self.assertEqual(reviewed[0]["retarget_status"], "re_researched")
+            self.assertEqual(reviewed[0]["retarget_profile_status"], "new_profile")
             self.assertEqual(reviewed[0]["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
             self.assertEqual(reviewed[0]["top_title_company_pairs"], "Founder @ Acme")
 
@@ -2166,6 +2167,25 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertEqual(changed, 2)
         self.assertEqual([row["exclude"] for row in rows], ["no", "no", ""])
         self.assertEqual(self.mod.summarize(rows), {"in_network": 2, "yes": 0, "maybe": 1, "no": 0})
+
+    def test_retargeted_cards_blank_feedback_and_show_new_profile_badge(self) -> None:
+        row = {
+            "bucket": "yes",
+            "exclude": "",
+            "handle": "phone-1",
+            "full_name": "Jane Acme",
+            "retarget_status": "re_researched",
+            "retarget_profile_status": "new_profile",
+            "retarget_hint": "old feedback should be hidden",
+            "retarget_linkedin_url": "https://linkedin.test/jane-acme",
+        }
+        html = self.mod.page_html(Path("review.csv"), [row], {"tab": ["yes"]}, None).decode("utf-8")
+        self.assertIn("re-researched", html)
+        self.assertIn("new profile", html)
+        self.assertIn("latest result</strong> showing latest re-researched profile", html)
+        self.assertIn("new feedback", html)
+        self.assertIn("Save feedback", html)
+        self.assertNotIn("old feedback should be hidden", html)
 
     def test_profile_fields_are_loaded_from_research_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:

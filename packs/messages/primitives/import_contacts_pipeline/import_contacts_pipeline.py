@@ -25,8 +25,11 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
+import urllib.request
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -52,6 +55,9 @@ DEFAULT_REVIEW_CSV = Path(".powerpacks/messages/research_review.csv")
 DEFAULT_RETARGET_QUEUE = Path(".powerpacks/messages/retarget_queue.csv")
 DEFAULT_RETARGET_LEDGER = Path(".powerpacks/messages/retarget_attempts.json")
 DEFAULT_RETARGET_RESEARCH_DIR = Path(".powerpacks/messages/research_retarget")
+DEFAULT_RETARGET_HARNESS_PROMPT_DIR = Path(".powerpacks/messages/retarget_harness_prompts")
+DEFAULT_RETARGET_HARNESS_THRESHOLD = 100
+DEFAULT_RETARGET_HARNESS_MAX_WORKERS = 10
 DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 DEFAULT_NETWORK_REVIEW_MODEL = "openai/gpt-4.1"
 DEFAULT_PROCESSOR = "core2x"
@@ -320,24 +326,64 @@ def parse_json_objects(text: str) -> list[Any]:
     return out
 
 
+def _read_stream(pipe: Any, chunks: list[str], *, forward_to_stderr: bool = False) -> None:
+    try:
+        for line in iter(pipe.readline, ""):
+            chunks.append(line)
+            if forward_to_stderr:
+                print(line, end="", file=sys.stderr, flush=True)
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
 def run_command(cmd: list[str], *, timeout: int = 300, env: dict[str, str] | None = None) -> dict[str, Any]:
     started = time.monotonic()
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         cwd=repo_root(),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout,
         env=env,
-        check=False,
     )
-    json_objects = parse_json_objects(proc.stdout or "")
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    stdout_thread = threading.Thread(target=_read_stream, args=(proc.stdout, stdout_chunks), daemon=True)
+    stderr_thread = threading.Thread(
+        target=_read_stream,
+        args=(proc.stderr, stderr_chunks),
+        kwargs={"forward_to_stderr": True},
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+    try:
+        returncode = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        returncode = proc.wait()
+        stdout_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout,
+            output="".join(stdout_chunks),
+            stderr="".join(stderr_chunks),
+        ) from exc
+    stdout_thread.join(timeout=1)
+    stderr_thread.join(timeout=1)
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
+    json_objects = parse_json_objects(stdout or "")
     return {
         "cmd": cmd,
-        "returncode": proc.returncode,
+        "returncode": returncode,
         "elapsed_seconds": round(time.monotonic() - started, 3),
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
+        "stdout": stdout,
+        "stderr": stderr,
         "json_objects": json_objects,
         "json": json_objects[-1] if json_objects else None,
     }
@@ -1396,8 +1442,81 @@ def has_research_review(args: argparse.Namespace) -> bool:
 
 
 def review_url(args: argparse.Namespace) -> str:
-    query = urllib.parse.urlencode({"tab": "in_network"})
+    query = urllib.parse.urlencode({"tab": "yes"})
     return f"http://{args.review_host}:{args.review_port}/?{query}"
+
+
+def review_health_url(args: argparse.Namespace) -> str:
+    return f"http://{args.review_host}:{args.review_port}/healthz"
+
+
+def read_review_server_health(args: argparse.Namespace) -> dict[str, Any] | None:
+    try:
+        with urllib.request.urlopen(review_health_url(args), timeout=1) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def review_server_matches_current_csv(args: argparse.Namespace) -> bool:
+    health = read_review_server_health(args)
+    if not health or health.get("status") != "ok":
+        return False
+    served = health.get("csv")
+    if not served:
+        return False
+    try:
+        return Path(served).resolve() == Path(args.review_csv).resolve()
+    except OSError:
+        return False
+
+
+def process_command(pid: int) -> str:
+    try:
+        completed = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception:
+        return ""
+    return completed.stdout.strip()
+
+
+def stop_review_server_process(pid: int) -> None:
+    if "review_research_web.py" not in process_command(pid):
+        return
+    try:
+        os.kill(pid, 15)
+    except OSError:
+        return
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+
+
+def maybe_open_browser(args: argparse.Namespace) -> None:
+    if getattr(args, "open_browser", False):
+        webbrowser.open(review_url(args))
+
+
+def wait_for_review_server(args: argparse.Namespace, *, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if review_server_matches_current_csv(args):
+            return True
+        time.sleep(0.1)
+    return False
 
 
 def open_review_server(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
@@ -1412,8 +1531,12 @@ def open_review_server(args: argparse.Namespace, ledger_path: Path, ledger: dict
         try:
             pid = int(pid_path.read_text().strip())
             os.kill(pid, 0)
-            mark_step(ledger_path, ledger, "review_research_web", "completed", summary={"url": review_url(args), "pid": pid, "reused": True})
-            return
+            if review_server_matches_current_csv(args):
+                maybe_open_browser(args)
+                mark_step(ledger_path, ledger, "review_research_web", "completed", summary={"url": review_url(args), "pid": pid, "reused": True, "csv": str(Path(args.review_csv).resolve())})
+                return
+            stop_review_server_process(pid)
+            pid_path.unlink(missing_ok=True)
         except Exception:
             pid_path.unlink(missing_ok=True)
 
@@ -1426,14 +1549,16 @@ def open_review_server(args: argparse.Namespace, ledger_path: Path, ledger: dict
         "--host", args.review_host,
         "--port", str(args.review_port),
     ]
-    if args.open_browser:
+    if getattr(args, "open_browser", False):
         cmd.append("--open")
     mark_step(ledger_path, ledger, "review_research_web", "running", command=cmd)
     with log_path.open("ab") as log:
         proc = subprocess.Popen(cmd, cwd=repo_root(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     pid_path.write_text(str(proc.pid) + "\n", encoding="utf-8")
-    time.sleep(1)
-    mark_step(ledger_path, ledger, "review_research_web", "completed", summary={"url": review_url(args), "pid": proc.pid, "log": str(log_path)}, command=cmd)
+    if not wait_for_review_server(args):
+        mark_step(ledger_path, ledger, "review_research_web", "failed", summary={"url": review_url(args), "pid": proc.pid, "log": str(log_path)}, command=cmd, error="review_server_not_ready")
+        raise PipelineFailed(f"Review server did not become ready at {review_url(args)}")
+    mark_step(ledger_path, ledger, "review_research_web", "completed", summary={"url": review_url(args), "pid": proc.pid, "log": str(log_path), "csv": str(Path(args.review_csv).resolve())}, command=cmd)
 
 
 def raw_review_url(args: argparse.Namespace) -> str:
@@ -1465,7 +1590,7 @@ def open_raw_contacts_review_server(args: argparse.Namespace, ledger_path: Path,
         "--host", args.review_host,
         "--port", str(args.review_port),
     ]
-    if args.open_browser:
+    if getattr(args, "open_browser", False):
         cmd.append("--open")
     mark_step(ledger_path, ledger, "review_contacts_web_fallback", "running", command=cmd)
     with log_path.open("ab") as log:
@@ -1642,6 +1767,34 @@ def mark_retarget_completed(args: argparse.Namespace, ledger_path: Path, ledger:
     return payload
 
 
+def run_harness_retarget_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/harness_retarget_research/harness_retarget_research.py"),
+        "run",
+        "--input", str(args.retarget_queue),
+        "--output-dir", str(args.retarget_research_dir),
+        "--prompt-dir", str(getattr(args, "retarget_harness_prompt_dir", DEFAULT_RETARGET_HARNESS_PROMPT_DIR)),
+        "--harness", getattr(args, "retarget_harness", "off"),
+        "--timeout", str(getattr(args, "retarget_harness_timeout", 900)),
+        "--max-workers", str(getattr(args, "retarget_harness_max_workers", DEFAULT_RETARGET_HARNESS_MAX_WORKERS)),
+    ]
+    mark_step(ledger_path, ledger, "retarget_harness_research", "running", command=cmd)
+    rows = max(1, csv_data_rows(Path(args.retarget_queue)))
+    max_workers = max(1, int(getattr(args, "retarget_harness_max_workers", DEFAULT_RETARGET_HARNESS_MAX_WORKERS) or 1))
+    batches = max(1, (rows + max_workers - 1) // max_workers)
+    result = run_command(cmd, timeout=(getattr(args, "retarget_harness_timeout", 900) * batches) + 60, env=pipeline_env(args))
+    payload = require_ok(result, "retarget_harness_research")
+    if payload.get("status") == "prepared":
+        mark_step(ledger_path, ledger, "retarget_harness_research", "failed", summary=payload, command=cmd, error="no_cli_harness_available")
+        raise PipelineFailed(
+            "No Codex/Claude CLI harness was available; retarget prompts were prepared. "
+            "Run them manually or set --retarget-harness off to use Parallel."
+        )
+    mark_step(ledger_path, ledger, "retarget_harness_research", "completed", summary=payload, command=cmd)
+    return payload
+
+
 def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
     prepare_payload = prepare_retarget_queue(args, ledger_path, ledger)
     rows_written = retarget_rows_from_payload(prepare_payload)
@@ -1650,6 +1803,23 @@ def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, 
             "status": "no_work",
             "reason": "no_new_retarget_hints",
             "prepare_retarget_queue": prepare_payload,
+        })
+        return
+
+    retarget_harness = getattr(args, "retarget_harness", "off")
+    retarget_harness_threshold = getattr(args, "retarget_harness_threshold", DEFAULT_RETARGET_HARNESS_THRESHOLD)
+    if retarget_harness != "off" and rows_written < retarget_harness_threshold:
+        harness_payload = run_harness_retarget_research(args, ledger_path, ledger)
+        mark_payload = mark_retarget_completed(args, ledger_path, ledger)
+        merged = int(mark_payload.get("review_rows_merged") or 0)
+        if merged <= 0:
+            raise PipelineFailed("retarget harness completed but no review rows were merged")
+        mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
+            "mode": "harness",
+            "threshold": retarget_harness_threshold,
+            "prepare_retarget_queue": prepare_payload,
+            "harness": harness_payload,
+            "mark_completed": mark_payload,
         })
         return
 
@@ -1922,7 +2092,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             payload = {
                 "primitive": "import_contacts_pipeline",
                 "status": "blocked_user_action",
-                "message": f"Review the web UI at {review_url(args)}. When you're done, tell the agent: 'done with review, upload'. The agent will summarize counts and ask for explicit upload/datalake approval before syncing anything.",
+                "message": f"Review opened: {review_url(args)}. When done, say: done with review, upload",
                 "review_url": review_url(args),
                 "ledger": str(ledger_path),
             }
@@ -2033,9 +2203,16 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--env-file", default=".env")
     add_hidden_arg(parser, "--timeout", type=int, default=300)
     add_hidden_arg(parser, "--parallel-timeout", type=int, default=7600)
+    add_hidden_arg(parser, "--retarget-harness", default="auto", choices=("auto", "codex", "claude", "manual", "off"))
+    add_hidden_arg(parser, "--retarget-harness-threshold", type=int, default=DEFAULT_RETARGET_HARNESS_THRESHOLD)
+    add_hidden_arg(parser, "--retarget-harness-timeout", type=int, default=900)
+    add_hidden_arg(parser, "--retarget-harness-max-workers", type=int, default=DEFAULT_RETARGET_HARNESS_MAX_WORKERS)
+    add_hidden_arg(parser, "--retarget-harness-prompt-dir", type=Path, default=DEFAULT_RETARGET_HARNESS_PROMPT_DIR)
     add_hidden_arg(parser, "--review-host", default="127.0.0.1")
     add_hidden_arg(parser, "--review-port", type=int, default=DEFAULT_REVIEW_PORT)
-    add_hidden_arg(parser, "--open-browser", action="store_true")
+    parser.set_defaults(open_browser=True)
+    add_hidden_arg(parser, "--open-browser", dest="open_browser", action="store_true")
+    add_hidden_arg(parser, "--no-open-browser", dest="open_browser", action="store_false")
     add_hidden_arg(parser, "--no-open-review", action="store_true")
     add_hidden_arg(parser, "--stop-before-upload", action="store_true")
     add_hidden_arg(parser, "--force-imessage", action="store_true")

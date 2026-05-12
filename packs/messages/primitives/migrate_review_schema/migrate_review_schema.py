@@ -50,6 +50,7 @@ BASE_FIELDS = [
     "retarget_linkedin_url",
     "retarget_name_confidence",
     "retarget_notes",
+    "retarget_profile_status",
     "linkedin_url",
 ]
 
