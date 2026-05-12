@@ -32,7 +32,7 @@ from typing import Any
 DEFAULT_BASE_URL = os.environ.get("POWERPACKS_WAHA_BASE_URL", "http://127.0.0.1:3000")
 DEFAULT_API_KEY = os.environ.get("POWERPACKS_WAHA_API_KEY", "powerpacks-local")
 DEFAULT_SESSION = os.environ.get("POWERPACKS_WAHA_SESSION", "default")
-DEFAULT_ENGINE = os.environ.get("POWERPACKS_WAHA_ENGINE", "WEBJS")
+DEFAULT_ENGINE = os.environ.get("POWERPACKS_WAHA_ENGINE", "NOWEB")
 DEFAULT_QR_DIR = Path(os.environ.get(
     "POWERPACKS_WAHA_QR_DIR",
     str(Path(".powerpacks/messages/whatsapp")),

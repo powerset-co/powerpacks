@@ -118,50 +118,50 @@ def _free_port() -> int:
 
 
 class WhatsAppPrimitiveTests(unittest.TestCase):
-    def test_waha_runtime_accepts_expected_chrome_container(self) -> None:
+    def test_waha_runtime_accepts_expected_noweb_container(self) -> None:
         args = SimpleNamespace(
             container_name="powerpacks-waha",
-            image="devlikeapro/waha:chrome-2026.3.4",
-            engine="WEBJS",
+            image="devlikeapro/waha:noweb-2026.3.4",
+            engine="NOWEB",
             port=3000,
-            session_dir=Path("/tmp/waha-sessions-chrome"),
+            session_dir=Path("/tmp/waha-sessions"),
         )
         container = {
             "name": "powerpacks-waha",
             "exists": True,
             "running": True,
-            "image": "devlikeapro/waha:chrome-2026.3.4",
+            "image": "devlikeapro/waha:noweb-2026.3.4",
             "host_port": "3000",
-            "session_mount": "/tmp/waha-sessions-chrome",
+            "session_mount": "/tmp/waha-sessions",
             "api_key_set": True,
             "engine_env": {
-                "WAHA_DEFAULT_ENGINE": "WEBJS",
-                "WHATSAPP_DEFAULT_ENGINE": "WEBJS",
+                "WAHA_DEFAULT_ENGINE": "NOWEB",
+                "WHATSAPP_DEFAULT_ENGINE": "NOWEB",
                 "WHATSAPP_RESTART_ALL_SESSIONS": "true",
             },
         }
         self.assertEqual(waha_runtime.runtime_mismatches(container, args), [])
         self.assertTrue(waha_runtime.runtime_check(container, args)["ok"])
 
-    def test_waha_runtime_rejects_stale_noweb_container(self) -> None:
+    def test_waha_runtime_rejects_stale_chrome_container(self) -> None:
         args = SimpleNamespace(
             container_name="powerpacks-waha",
-            image="devlikeapro/waha:chrome-2026.3.4",
-            engine="WEBJS",
+            image="devlikeapro/waha:noweb-2026.3.4",
+            engine="NOWEB",
             port=3000,
-            session_dir=Path("/tmp/waha-sessions-chrome"),
+            session_dir=Path("/tmp/waha-sessions"),
         )
         container = {
             "name": "powerpacks-waha",
             "exists": True,
             "running": True,
-            "image": "devlikeapro/waha:noweb",
+            "image": "devlikeapro/waha:chrome-2026.3.4",
             "host_port": "3001",
-            "session_mount": "/tmp/waha-sessions",
+            "session_mount": "/tmp/waha-sessions-chrome",
             "api_key_set": False,
             "engine_env": {
-                "WAHA_DEFAULT_ENGINE": "NOWEB",
-                "WHATSAPP_DEFAULT_ENGINE": "NOWEB",
+                "WAHA_DEFAULT_ENGINE": "WEBJS",
+                "WHATSAPP_DEFAULT_ENGINE": "WEBJS",
                 "WHATSAPP_RESTART_ALL_SESSIONS": None,
             },
         }

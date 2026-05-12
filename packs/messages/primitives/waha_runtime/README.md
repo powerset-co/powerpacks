@@ -5,10 +5,10 @@ Docker + WAHA container lifecycle for the WhatsApp pack. Stdlib-only.
 This primitive does **not** call the WAHA HTTP API. It only:
 
 - checks whether Docker is installed and the daemon is reachable
-- pulls and runs the WAHA Chrome/WEBJS image as `powerpacks-waha`
-- verifies an existing container is the expected Chrome/WEBJS runtime before
+- pulls and runs the WAHA NOWEB image as `powerpacks-waha`
+- verifies an existing container is the expected NOWEB runtime before
   reusing it
-- mounts `~/.powerpacks/waha-sessions-chrome` so QR-scanned credentials persist
+- mounts `~/.powerpacks/waha-sessions` so QR-scanned credentials persist
 - stops / removes the container
 - reports container status
 
@@ -41,7 +41,7 @@ explicit consent before installing anything.
 `up` reuses a running container only when it matches the expected image, engine,
 port, API-key presence, and session mount. If a stale container exists, `up`
 removes and recreates it so the import orchestrator cannot silently run against
-an old WAHA image or NOWEB session directory.
+an old WAHA image or Chrome/WEBJS session directory.
 
 ## Environment overrides
 
@@ -50,8 +50,8 @@ an old WAHA image or NOWEB session directory.
 | `POWERPACKS_WAHA_CONTAINER` | `powerpacks-waha` | Docker container name |
 | `POWERPACKS_WAHA_PORT` | `3000` | Host port WAHA is bound to |
 | `POWERPACKS_WAHA_API_KEY` | `powerpacks-local` | Value forced via `WAHA_API_KEY` |
-| `POWERPACKS_WAHA_IMAGE` | `devlikeapro/waha:chrome-2026.3.4` | WAHA image tag |
-| `POWERPACKS_WAHA_ENGINE` | `WEBJS` | WAHA engine (`WEBJS` by default; `NOWEB` for legacy mode) |
-| `POWERPACKS_WAHA_SESSIONS_DIR` | `~/.powerpacks/waha-sessions-chrome` | Persistent session dir |
+| `POWERPACKS_WAHA_IMAGE` | `devlikeapro/waha:noweb-2026.3.4` | WAHA image tag |
+| `POWERPACKS_WAHA_ENGINE` | `NOWEB` | WAHA engine (`NOWEB` by default; `WEBJS` can be set explicitly) |
+| `POWERPACKS_WAHA_SESSIONS_DIR` | `~/.powerpacks/waha-sessions` | Persistent session dir |
 
 The same values can be passed as flags (`--container-name`, `--port`, etc.).

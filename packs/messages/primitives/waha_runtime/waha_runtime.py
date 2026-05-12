@@ -4,7 +4,7 @@
 This primitive is intentionally narrow:
 
 - check that Docker is installed and the daemon is reachable
-- pull and start a local WAHA container (Chrome/WEBJS engine by default)
+- pull and start a local WAHA container (NOWEB engine by default)
 - stop / remove the container
 - report container status
 
@@ -31,11 +31,11 @@ from typing import Any
 DEFAULT_CONTAINER_NAME = os.environ.get("POWERPACKS_WAHA_CONTAINER", "powerpacks-waha")
 DEFAULT_PORT = int(os.environ.get("POWERPACKS_WAHA_PORT", "3000"))
 DEFAULT_API_KEY = os.environ.get("POWERPACKS_WAHA_API_KEY", "powerpacks-local")
-DEFAULT_ENGINE = os.environ.get("POWERPACKS_WAHA_ENGINE", "WEBJS")
-DEFAULT_IMAGE = os.environ.get("POWERPACKS_WAHA_IMAGE", "devlikeapro/waha:chrome-2026.3.4")
+DEFAULT_ENGINE = os.environ.get("POWERPACKS_WAHA_ENGINE", "NOWEB")
+DEFAULT_IMAGE = os.environ.get("POWERPACKS_WAHA_IMAGE", "devlikeapro/waha:noweb-2026.3.4")
 DEFAULT_SESSIONS_DIR = Path(os.environ.get(
     "POWERPACKS_WAHA_SESSIONS_DIR",
-    str(Path.home() / ".powerpacks" / "waha-sessions-chrome"),
+    str(Path.home() / ".powerpacks" / "waha-sessions"),
 ))
 
 
@@ -273,7 +273,7 @@ def cmd_up(args: argparse.Namespace) -> int:
     pre_state = container_state(args.container_name)
     pre_runtime = runtime_check(pre_state, args)
 
-    # Reuse only the exact expected runtime; stale NOWEB/old-image containers
+    # Reuse only the exact expected runtime; stale Chrome/old-image containers
     # are recreated so the import orchestrator cannot silently use them.
     if pre_state.get("running") and pre_runtime["ok"] and not args.recreate:
         emit({
