@@ -210,7 +210,7 @@ def _merge(
 
     # Auto-add company_sector_strategy when both semantic + sector present
     if filters.get("company_semantic_queries") and filters.get("sector_types"):
-        filters.setdefault("company_sector_strategy", "staged")
+        filters.setdefault("company_sector_strategy", "soft_union")
 
     # Location (person)
     for key in ("cities", "states", "metro_areas", "countries", "macro_regions"):

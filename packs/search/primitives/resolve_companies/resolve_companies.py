@@ -428,9 +428,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "namespace": namespace_name("companies"),
         "company_names": names,
         "company_semantic_queries": semantic_queries,
-        "company_ids": company_ids[: args.max_companies],
-        "resolved_count": min(len(company_ids), args.max_companies),
-        "truncated": len(company_ids) > args.max_companies,
+        "company_ids": company_ids[:args.max_companies] if args.max_companies else company_ids,
+        "resolved_count": min(len(company_ids), args.max_companies) if args.max_companies else len(company_ids),
+        "truncated": bool(args.max_companies and len(company_ids) > args.max_companies),
         "sample_companies": rows[:20],
         "used_attribute_filters": filters is not None,
         "used_semantic_search": bool(semantic_queries),
@@ -485,11 +485,11 @@ def main() -> None:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--name-top-k", type=int, default=20)
     parser.add_argument("--semantic-top-k", type=int, default=2500)
-    parser.add_argument("--company-sector-strategy", choices=sorted(SECTOR_STRATEGIES), default="staged")
+    parser.add_argument("--company-sector-strategy", choices=sorted(SECTOR_STRATEGIES), default="soft_union")
     parser.add_argument("--company-sector-min-results", type=int, default=500)
-    parser.add_argument("--max-soft-companies", type=int, default=10000)
+    parser.add_argument("--max-soft-companies", type=int, default=0, help="Max soft filter companies (0 = paginate all)")
     parser.add_argument("--page-size", type=int, default=10000)
-    parser.add_argument("--max-companies", type=int, default=10000)
+    parser.add_argument("--max-companies", type=int, default=0, help="Max companies in output (0 = no cap)")
     # CE rerank args
     parser.add_argument("--no-ce", action="store_true", help="Disable cross-encoder reranking")
     parser.add_argument("--ce-all", action="store_true", help="Run CE on ALL rows (semantic + sector filter), not just semantic")
