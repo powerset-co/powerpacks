@@ -463,9 +463,8 @@ def state_trait_lines(state: dict[str, Any]) -> list[str]:
         for t in generated_traits:
             if isinstance(t, dict):
                 value = t.get("value", "")
-                temporal = t.get("temporal", "all")
                 if value:
-                    lines.append(f"{value} (scope: {temporal})")
+                    lines.append(value)
             elif isinstance(t, str) and t.strip():
                 lines.append(t)
         if lines:
