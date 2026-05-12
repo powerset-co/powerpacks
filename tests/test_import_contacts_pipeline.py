@@ -1,5 +1,7 @@
 import csv
+import hashlib
 import importlib.util
+import json
 import os
 from contextlib import ExitStack
 import tempfile
@@ -536,6 +538,53 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertEqual(run_command.call_count, 3)
             saved = mod.read_json(ledger_path)
             self.assertEqual(saved["steps"]["retarget_research"]["status"], "completed")
+
+    def test_cached_retarget_results_are_merged_without_rerunning_research(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            review_csv = tmp_path / "research_review.csv"
+            hint = "Jane Doe at Acme"
+            review_csv.write_text(
+                "bucket,handle,full_name,phone_e164,total_messages,retarget_hint\n"
+                f"yes,phone-1,Jane Doe,+14155550101,5,{hint}\n",
+                encoding="utf-8",
+            )
+            h = hashlib.sha256(hint.lower().encode("utf-8")).hexdigest()[:16]
+            queue_handle = f"phone-1__retarget_{h[:10]}"
+            retarget_research_dir = tmp_path / "research_retarget"
+            profile_dir = retarget_research_dir / queue_handle
+            profile_dir.mkdir(parents=True)
+            (profile_dir / "01_research_parallel.json").write_text(json.dumps({
+                "person": {"full_name": "Jane Acme", "confidence": 0.91},
+                "social": {"linkedin_url": "https://linkedin.test/jane-acme"},
+                "positions": [{"title": "Founder", "company_name": "Acme"}],
+                "metadata": {"research_notes": "cached retarget"},
+            }), encoding="utf-8")
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                review_csv=review_csv,
+                research_queue=tmp_path / "research_queue.csv",
+                retarget_queue=tmp_path / "retarget_queue.csv",
+                retarget_ledger=tmp_path / "retarget_attempts.json",
+                retarget_research_dir=retarget_research_dir,
+                processor="core2x",
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+            )
+
+            mod.retarget_research_after_review(args, ledger_path, ledger)
+
+            saved = mod.read_json(ledger_path)
+            summary = saved["steps"]["retarget_research"]["summary"]
+            self.assertEqual(summary["status"], "cached_results_merged")
+            self.assertEqual(summary["mark_completed"]["review_rows_merged"], 1)
+            with review_csv.open(newline="", encoding="utf-8-sig") as handle:
+                row = next(csv.DictReader(handle))
+            self.assertEqual(row["retarget_status"], "re_researched")
+            self.assertEqual(row["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
 
     def test_build_review_creates_empty_review_csv_without_research_packets(self):
         with tempfile.TemporaryDirectory() as tmp:

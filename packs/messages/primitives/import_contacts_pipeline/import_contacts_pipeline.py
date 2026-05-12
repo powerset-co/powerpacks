@@ -1767,6 +1767,22 @@ def mark_retarget_completed(args: argparse.Namespace, ledger_path: Path, ledger:
     return payload
 
 
+def merge_cached_retarget_results(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
+    cmd = [
+        sys.executable,
+        primitive_path("packs/messages/primitives/prepare_retarget_queue/prepare_retarget_queue.py"),
+        "merge-cached",
+        "--ledger", str(args.retarget_ledger),
+        "--retarget-output-dir", str(args.retarget_research_dir),
+        "--review-csv", str(args.review_csv),
+    ]
+    mark_step(ledger_path, ledger, "retarget_merge_cached", "running", command=cmd)
+    result = run_command(cmd, timeout=args.timeout, env=pipeline_env(args))
+    payload = require_ok(result, "retarget_merge_cached")
+    mark_step(ledger_path, ledger, "retarget_merge_cached", "completed", summary=payload, command=cmd)
+    return payload
+
+
 def run_harness_retarget_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
     cmd = [
         sys.executable,
@@ -1799,10 +1815,13 @@ def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, 
     prepare_payload = prepare_retarget_queue(args, ledger_path, ledger)
     rows_written = retarget_rows_from_payload(prepare_payload)
     if rows_written <= 0:
+        mark_payload = mark_retarget_completed(args, ledger_path, ledger)
+        merged = int(mark_payload.get("review_rows_merged") or 0)
         mark_step(ledger_path, ledger, "retarget_research", "completed", summary={
-            "status": "no_work",
-            "reason": "no_new_retarget_hints",
+            "status": "cached_results_merged" if merged > 0 else "no_work",
+            "reason": "retarget_results_already_cached" if merged > 0 else "no_new_retarget_hints",
             "prepare_retarget_queue": prepare_payload,
+            "mark_completed": mark_payload,
         })
         return
 
@@ -2087,6 +2106,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     if has_research_review(args):
         migrate_review_schema(args, ledger_path, ledger)
         reapply_previous_review_state(args, ledger_path, ledger)
+        merge_cached_retarget_results(args, ledger_path, ledger)
         if not completed(ledger, "review_research_web") or args.stop_before_upload:
             open_review_server(args, ledger_path, ledger)
             payload = {

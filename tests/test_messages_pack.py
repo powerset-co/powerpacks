@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import importlib.util
 import io
 import json
@@ -1058,6 +1059,42 @@ class PrepareRetargetQueueTests(unittest.TestCase):
             self.assertEqual(reviewed[0]["retarget_profile_status"], "new_profile")
             self.assertEqual(reviewed[0]["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
             self.assertEqual(reviewed[0]["top_title_company_pairs"], "Founder @ Acme")
+
+    def test_merge_cached_retarget_result_without_existing_attempt(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            review_csv = tmp / "research_review.csv"
+            ledger = tmp / "retarget_attempts.json"
+            out_dir = tmp / "research_retarget"
+            hint = "Jane Doe at Acme"
+            with review_csv.open("w", newline="") as h:
+                w = csv.DictWriter(h, fieldnames=["handle", "full_name", "phone_e164", "total_messages", "retarget_hint"])
+                w.writeheader()
+                w.writerow({"handle": "phone-1", "full_name": "Jane Doe", "phone_e164": "+14155550101", "total_messages": "5", "retarget_hint": hint})
+            h = hashlib.sha256(hint.lower().encode("utf-8")).hexdigest()[:16]
+            retarget_handle = f"phone-1__retarget_{h[:10]}"
+            profile_dir = out_dir / retarget_handle
+            profile_dir.mkdir(parents=True)
+            (profile_dir / "01_research_parallel.json").write_text(json.dumps({
+                "person": {"full_name": "Jane Acme", "confidence": 0.93},
+                "social": {"linkedin_url": "https://linkedin.test/jane-acme"},
+                "positions": [{"title": "Founder", "company_name": "Acme"}],
+                "metadata": {"research_notes": "cached retarget"},
+            }), encoding="utf-8")
+
+            result = subprocess.run([
+                "python3", str(self.PREPARE), "merge-cached",
+                "--ledger", str(ledger),
+                "--retarget-output-dir", str(out_dir),
+                "--review-csv", str(review_csv),
+            ], cwd=ROOT, capture_output=True, text=True, check=True)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["completed_recorded"], 1)
+            self.assertEqual(payload["review_rows_merged"], 1)
+            with review_csv.open(newline="") as h:
+                row = next(csv.DictReader(h))
+            self.assertEqual(row["retarget_status"], "re_researched")
+            self.assertEqual(row["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
 
 
 class LlmReviewContactsTests(unittest.TestCase):

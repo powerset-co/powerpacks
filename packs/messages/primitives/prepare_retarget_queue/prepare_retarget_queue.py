@@ -218,6 +218,17 @@ def already_attempted(
     return False
 
 
+def attempt_exists(ledger: dict[str, Any], source_handle: str, h: str, status: str | None = None) -> bool:
+    attempts = ((ledger.get("attempts") or {}).get(source_handle) or [])
+    for attempt in attempts:
+        if attempt.get("hint_hash") != h:
+            continue
+        if status is not None and attempt.get("status") != status:
+            continue
+        return True
+    return False
+
+
 def cmd_prepare(args: argparse.Namespace) -> int:
     review_csv = Path(args.review_csv)
     base_queue = Path(args.base_queue)
@@ -236,6 +247,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "review_rows": len(review_rows),
         "with_feedback": 0,
         "queued": 0,
+        "reused_cached_results": 0,
         "skipped_already_attempted": 0,
         "skipped_missing_handle": 0,
         "synthesized_from_review": 0,
@@ -252,8 +264,19 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             continue
         h = hint_hash(hint)
         queue_handle = retarget_handle(source_handle, h)
+        cached_profile = (retarget_output_dir / queue_handle / "01_research_parallel.json").exists()
         if already_attempted(ledger, source_handle, h, retarget_output_dir, queue_handle, args.include_failed):
             counts["skipped_already_attempted"] += 1
+            if cached_profile and not attempt_exists(ledger, source_handle, h, status="completed"):
+                counts["reused_cached_results"] += 1
+                attempts_to_record.append({
+                    "source_handle": source_handle,
+                    "queue_handle": queue_handle,
+                    "hint_hash": h,
+                    "hint": hint,
+                    "status": "completed",
+                    "completed_at": now_iso(),
+                })
             continue
         base = dict(base_by_handle.get(source_handle) or {})
         if not base:
@@ -274,6 +297,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             "queue_handle": queue_handle,
             "hint_hash": h,
             "hint": hint,
+            "status": "queued",
         })
         counts["queued"] += 1
 
@@ -292,8 +316,9 @@ def cmd_prepare(args: argparse.Namespace) -> int:
                 "hint_hash": attempt["hint_hash"],
                 "hint": attempt["hint"],
                 "queue_handle": attempt["queue_handle"],
-                "status": "queued",
+                "status": attempt.get("status") or "queued",
                 "queued_at": queued_at,
+                "completed_at": attempt.get("completed_at", ""),
                 "queue_csv": str(output),
                 "retarget_output_dir": str(retarget_output_dir),
             })
@@ -472,6 +497,65 @@ def cmd_mark_completed(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_merge_cached(args: argparse.Namespace) -> int:
+    review_csv = Path(args.review_csv)
+    ledger_path = Path(args.ledger)
+    output_dir = Path(args.retarget_output_dir)
+    ledger = read_json(ledger_path)
+    review_rows = load_csv(review_csv)
+    attempts = ledger.setdefault("attempts", {})
+    recorded = 0
+    already_completed = 0
+    with_feedback = 0
+    cached_profiles = 0
+    completed_at = now_iso()
+
+    for review_row in review_rows:
+        source_handle = (review_row.get("handle") or "").strip()
+        hint = normalize_hint(review_row.get("retarget_hint", ""))
+        if not hint:
+            continue
+        with_feedback += 1
+        if not source_handle:
+            continue
+        h = hint_hash(hint)
+        queue_handle = retarget_handle(source_handle, h)
+        if not (output_dir / queue_handle / "01_research_parallel.json").exists():
+            continue
+        cached_profiles += 1
+        if attempt_exists(ledger, source_handle, h, status="completed"):
+            already_completed += 1
+            continue
+        attempts.setdefault(source_handle, []).append({
+            "hint_hash": h,
+            "hint": hint,
+            "queue_handle": queue_handle,
+            "status": "completed",
+            "queued_at": completed_at,
+            "completed_at": completed_at,
+            "queue_csv": "",
+            "retarget_output_dir": str(output_dir),
+        })
+        recorded += 1
+
+    merged = merge_retarget_results(review_csv, output_dir, ledger) if review_csv.exists() else 0
+    write_json(ledger_path, ledger)
+    emit({
+        "primitive": "prepare_retarget_queue",
+        "command": "merge-cached",
+        "status": "ok",
+        "ledger": str(ledger_path),
+        "retarget_output_dir": str(output_dir),
+        "review_csv": str(review_csv),
+        "with_feedback": with_feedback,
+        "cached_profiles": cached_profiles,
+        "completed_recorded": recorded,
+        "already_completed": already_completed,
+        "review_rows_merged": merged,
+    })
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a targeted re-research queue from review feedback")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -493,6 +577,13 @@ def main() -> None:
     mark.add_argument("--review-csv", default=str(DEFAULT_REVIEW_CSV),
                       help="Review CSV to update with completed retarget results")
     mark.set_defaults(func=cmd_mark_completed)
+
+    cached = sub.add_parser("merge-cached")
+    cached.add_argument("--ledger", default=str(DEFAULT_LEDGER))
+    cached.add_argument("--retarget-output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    cached.add_argument("--review-csv", default=str(DEFAULT_REVIEW_CSV),
+                        help="Review CSV to update with cached retarget results")
+    cached.set_defaults(func=cmd_merge_cached)
 
     args = parser.parse_args()
     raise SystemExit(args.func(args))
