@@ -163,8 +163,8 @@ class RerankResult:
 # ---------------------------------------------------------------------------
 
 
-def build_user_prompt(query: str, traits: list[str], item: RerankItem) -> str:
-    traits_block = "\n".join(f"- {t}" for t in traits) if traits else "(none specified)"
+def build_user_prompt(query: str, traits: list[dict[str, str]], item: RerankItem) -> str:
+    traits_block = format_traits_block(traits)
     payload_json = json.dumps(item.payload, sort_keys=True, indent=2)
     return f"""Query: {query}
 
@@ -216,7 +216,7 @@ def call_chat_completion(
         return json.loads(resp.read().decode())
 
 
-def parse_verdict(raw_response: dict[str, Any], traits: list[str]) -> tuple[float, str, str, float, dict[str, float]]:
+def parse_verdict(raw_response: dict[str, Any], traits: list[dict[str, str]]) -> tuple[float, str, str, float, dict[str, float]]:
     """Extract (score, verdict, reason, confidence, trait_scores) from a chat response."""
     try:
         content = raw_response["choices"][0]["message"]["content"]
@@ -252,7 +252,7 @@ def parse_verdict(raw_response: dict[str, Any], traits: list[str]) -> tuple[floa
             except (TypeError, ValueError):
                 continue
     for trait in traits:
-        trait_scores.setdefault(trait, score)
+        trait_scores.setdefault(trait["value"], score)
     return score, verdict, reason, confidence, trait_scores
 
 
@@ -265,7 +265,7 @@ async def rerank_one(
     item: RerankItem,
     *,
     query: str,
-    traits: list[str],
+    traits: list[dict[str, str]],
     api_base: str,
     api_key: str,
     model: str,
@@ -343,7 +343,7 @@ async def rerank_all(
     items: list[RerankItem],
     *,
     query: str,
-    traits: list[str],
+    traits: list[dict[str, str]],
     api_base: str,
     api_key: str,
     model: str,
@@ -444,34 +444,45 @@ def state_hydrated_profiles(state: dict[str, Any], *, llm_handoff: bool) -> dict
     return out
 
 
-def state_trait_lines(state: dict[str, Any]) -> list[str]:
-    """Get scoring traits from the trait generator in expand_search_request.
+def state_traits(state: dict[str, Any]) -> list[dict[str, str]]:
+    """Get structured traits from the trait generator in expand_search_request.
 
-    The expand_search_request primitive runs a dedicated trait generator
-    (ported from the app's IntentDetector) that produces structured traits
-    with value, temporal scope, and meaning. We extract the trait values
-    as scoring lines for the reranker.
-
-    Falls back to query text if no traits were generated.
+    Returns list of {"value": ..., "temporal": ..., "meaning": ...} dicts
+    directly from the trait generator output. No string conversion.
     """
     expand = step_output(state, "expand_search_request") or step_output(state, "expand")
+    generated = expand.get("traits") or []
+    traits = []
+    for t in generated:
+        if isinstance(t, dict) and t.get("value"):
+            traits.append({
+                "value": t["value"],
+                "temporal": t.get("temporal", "all"),
+                "meaning": t.get("meaning", "general"),
+            })
+    if not traits:
+        # Fallback: wrap query as a single trait
+        query = state.get("query") or "Relevant to the original query"
+        traits = [{"value": query, "temporal": "all", "meaning": "general"}]
+    return traits
 
-    # First: check for generated traits from the trait generator
-    generated_traits = expand.get("traits") or []
-    if generated_traits:
-        lines = []
-        for t in generated_traits:
-            if isinstance(t, dict):
-                value = t.get("value", "")
-                if value:
-                    lines.append(value)
-            elif isinstance(t, str) and t.strip():
-                lines.append(t)
-        if lines:
-            return lines
 
-    # Fallback: use query
-    return [state.get("query") or "Relevant to the original query"]
+def format_traits_block(traits: list[dict[str, str]]) -> str:
+    """Format structured traits for the reranker prompt.
+
+    Matches the app's format: 1. "value" (scope: temporal, type: meaning)
+    """
+    if not traits:
+        return "(none specified)"
+    lines = []
+    for i, t in enumerate(traits, 1):
+        lines.append(f'{i}. "{t["value"]}" (scope: {t["temporal"]}, type: {t["meaning"]})')
+    return "\n".join(lines)
+
+
+def trait_values(traits: list[dict[str, str]]) -> list[str]:
+    """Extract just the value strings from structured traits."""
+    return [t["value"] for t in traits]
 
 
 def artifact_dir(state_path: Path, state: dict[str, Any]) -> Path:
@@ -642,7 +653,7 @@ def main() -> int:
     parser.add_argument("--state", help="Powerpacks task-state path; reads full hydrate_people profiles_path and writes rerank artifacts")
     parser.add_argument("--out", dest="out_path", default="-", help="JSONL path or '-' for stdout")
     parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
-    parser.add_argument("--traits", action="append", default=[], help="Expected trait (repeatable)")
+    parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable, wrapped to structured dict at parse time)")
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
@@ -657,6 +668,10 @@ def main() -> int:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
     args = parser.parse_args()
+
+    # Normalize CLI --traits strings to structured dicts immediately
+    if args.traits and isinstance(args.traits[0], str):
+        args.traits = [{"value": t, "temporal": "all", "meaning": "general"} for t in args.traits]
 
     if not args.in_path and not args.state:
         print("error: --in or --state required", file=sys.stderr)
@@ -673,7 +688,7 @@ def main() -> int:
             if not args.query:
                 args.query = state.get("query") or ""
             if not args.traits:
-                args.traits = state_trait_lines(state)
+                args.traits = state_traits(state)
         else:
             items = load_items(args.in_path)
             if args.max_candidates:
