@@ -51,8 +51,18 @@ When a sub-step is covered by another installed skill:
 
 Default composition:
 
-- `extract-search-query`: always use this first to produce
-  `expand_search_request` JSON
+- `expand_search_request` primitive: always use this first to produce
+  the extraction JSON. It runs 7 parallel domain-specific extractors
+  (role, company, location, education, temporal, seniority, social)
+  via OpenAI, matching the app's battle-tested prompts.
+
+  ```bash
+  uv run --env-file .env --project . python packs/search/primitives/expand_search_request/expand_search_request.py \
+    --query "<user query>" --env-file .env
+  ```
+
+  Do not use the `extract-search-query` skill for extraction — use the
+  primitive directly. The skill is retained as documentation only.
 - `search-company`: use when natural-language company criteria, investors,
   sectors, funding, headcount, or company-domain intent must resolve into
   canonical company IDs before people retrieval
@@ -170,9 +180,8 @@ search.
 1. Create task state from `powerpacks/tasks/search-network.task.json`.
    Use `task_state.py init --query "<query>"` so the default run file is
    unique under `.powerpacks/runs/`.
-2. Invoke the `extract-search-query` skill instructions to produce
-   `expand_search_request` JSON. Do not hide query extraction inside eval or
-   retrieval code.
+2. Run the `expand_search_request` primitive to produce the extraction JSON.
+   Save the output to `.powerpacks/search/<run>/expand_search_request.json`.
 3. Record the expansion output.
 4. If the request mentions adjacency or domain intent, run
    `plan_adjacency_search` and record whether to include adjacency, ask the
