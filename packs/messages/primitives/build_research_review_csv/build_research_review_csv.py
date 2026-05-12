@@ -31,6 +31,7 @@ import json
 import os
 import re
 import socket
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -652,7 +653,26 @@ def cmd_build(args: argparse.Namespace) -> int:
     total_output_tokens = 0
 
     started = time.time()
-    for d in handle_dirs:
+    last_progress = 0.0
+    total_handles = len(handle_dirs)
+
+    def progress(index: int, *, force: bool = False) -> None:
+        nonlocal last_progress
+        now = time.time()
+        if force or now - last_progress >= 30 or index == total_handles:
+            action = "started" if index == 0 else "completed"
+            print(
+                "[build_research_review_csv] "
+                f"{action} {index}/{total_handles} handles; rows={len(rows)}; "
+                f"cache={counts['scored_via_network_review']}; llm={counts['scored_via_llm']}",
+                file=sys.stderr,
+                flush=True,
+            )
+            last_progress = now
+
+    if total_handles:
+        progress(0, force=True)
+    for index, d in enumerate(handle_dirs, start=1):
         handle = d.name
         counts["handles_seen"] += 1
         research_path = d / "01_research_parallel.json"
@@ -723,6 +743,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             counts["previous_review_decisions_applied"] += 1
         rows.append(flat)
         bucket_counts[flat["bucket"]] = bucket_counts.get(flat["bucket"], 0) + 1
+        progress(index)
 
     rows.sort(key=lambda r: (
         BUCKET_ORDER.get(r["bucket"], 99),

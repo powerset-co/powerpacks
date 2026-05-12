@@ -24,6 +24,7 @@ import json
 import os
 import re
 import socket
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -525,6 +526,21 @@ def cmd_review(args: argparse.Namespace) -> int:
         (batch_index, contacts[i:i + batch_size])
         for batch_index, i in enumerate(range(0, len(contacts), batch_size))
     ]
+    total_batches = len(batches)
+    completed_count = 0
+    last_progress = 0.0
+
+    def progress(*, force: bool = False) -> None:
+        nonlocal last_progress
+        now = time.time()
+        if force or now - last_progress >= 30 or completed_count == total_batches:
+            action = "started" if completed_count == 0 else "completed"
+            print(
+                f"[llm_review_contacts] {action} {completed_count}/{total_batches} batches",
+                file=sys.stderr,
+                flush=True,
+            )
+            last_progress = now
 
     def run_batch(batch_item: tuple[int, list[dict[str, str]]]) -> dict[str, Any]:
         batch_index, batch = batch_item
@@ -546,13 +562,19 @@ def cmd_review(args: argparse.Namespace) -> int:
         }
 
     completed_batches: list[dict[str, Any]] = []
+    progress(force=True)
     if max_workers == 1 or len(batches) <= 1:
-        completed_batches = [run_batch(batch) for batch in batches]
+        for batch in batches:
+            completed_batches.append(run_batch(batch))
+            completed_count += 1
+            progress()
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(run_batch, batch) for batch in batches]
             for future in concurrent.futures.as_completed(futures):
                 completed_batches.append(future.result())
+                completed_count += 1
+                progress()
 
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with results_path.open("w", encoding="utf-8") as handle:
