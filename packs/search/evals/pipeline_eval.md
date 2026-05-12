@@ -1,6 +1,6 @@
 # Pipeline Eval
 
-Last run: `2026-05-11T19:36:17Z`
+Last run: `2026-05-12T20:02:15Z`
 
 Scope: recall YAMLs → agent extraction → search_network_pipeline (direct mode, no slicing).
 
@@ -8,13 +8,16 @@ LLM rerank skipped: `True`
 
 | Bucket | Pass | Fail | Ignored | Cases |
 |---|---:|---:|---:|---:|
-| education | 4 | 2 | 0 | 6 |
+| role | 8 | 1 | 0 | 9 |
 
 | Case | Bucket | Status | Returned | Hydrated | Hits/Expected | Recall | Notes |
 |---|---|---:|---:|---:|---:|---:|---|
-| education_field_psych_stanford.yaml | education | pass | 30 | 30 | 7/7 | 100% |  |
-| education_graduation_year.yaml | education | fail | 1000 | 1000 | 1/7 | 14% | missed 6+ expected |
-| education_recent_grads.yaml | education | fail | 398 | 398 | 0/4 | 0% | missed 4+ expected |
-| education_stanford_and_cal.yaml | education | pass | 166 | 166 | 5/5 | 100% |  |
-| education_stanford_grads_2014_2018.yaml | education | pass | 542 | 542 | 8/8 | 100% |  |
-| education_stanford_recent_grads.yaml | education | pass | 203 | 203 | 6/6 | 100% |  |
+| role_ai_engineers.yaml | role | pass | 8491 | 8490 | 34/35 | 97% | missed 1+ expected |
+| role_ai_researcher_phd.yaml | role | pass | 2170 | 2170 | 25/28 | 89% | missed 3+ expected |
+| role_data_infrastructure_expert.yaml | role | fail | 9487 | 9486 | 7/11 | 64% | missed 4+ expected |
+| role_data_scientist.yaml | role | pass | 9781 | 9779 | 28/30 | 93% | missed 2+ expected |
+| role_devops_engineers.yaml | role | pass | 8706 | 8705 | 16/19 | 84% | missed 3+ expected |
+| role_finance_team.yaml | role | pass | 10000 | 9999 | 14/14 | 100% |  |
+| role_operations_people.yaml | role | pass | 5692 | 5692 | 10/11 | 91% | missed 1+ expected |
+| role_ops_sf_startup_seniority.yaml | role | pass | 10000 | 10000 | 0/0 |  |  |
+| role_robotics_people.yaml | role | pass | 10000 | 9998 | 14/14 | 100% |  |
