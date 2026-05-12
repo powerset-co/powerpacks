@@ -62,7 +62,8 @@ Default composition:
   ```
 
   Do not use the `extract-search-query` skill for extraction — use the
-  primitive directly. The skill is retained as documentation only.
+  primitive directly. Do not hide query extraction inside eval or harness-only
+  code paths. The skill is retained as documentation only.
 - `search-company`: use when natural-language company criteria, investors,
   sectors, funding, headcount, or company-domain intent must resolve into
   canonical company IDs before people retrieval
