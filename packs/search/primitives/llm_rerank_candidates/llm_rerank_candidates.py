@@ -445,44 +445,34 @@ def state_hydrated_profiles(state: dict[str, Any], *, llm_handoff: bool) -> dict
 
 
 def state_trait_lines(state: dict[str, Any]) -> list[str]:
-    """Build concise scoring traits from extraction state.
+    """Get scoring traits from the trait generator in expand_search_request.
 
-    Produces 2-4 traits matching the app's trait generator pattern:
-    one for role/profile intent, one for company/investor context,
-    and optionally location or education. Does NOT dump raw filter
-    fields as traits.
+    The expand_search_request primitive runs a dedicated trait generator
+    (ported from the app's IntentDetector) that produces structured traits
+    with value, temporal scope, and meaning. We extract the trait values
+    as scoring lines for the reranker.
+
+    Falls back to query text if no traits were generated.
     """
     expand = step_output(state, "expand_search_request") or step_output(state, "expand")
-    role_filters = expand.get("role_search_filters") if isinstance(expand.get("role_search_filters"), dict) else expand
-    traits: list[str] = []
 
-    # Role/profile trait from semantic_query
-    sq = role_filters.get("semantic_query") or role_filters.get("role_semantic_query")
-    if sq:
-        traits.append(str(sq))
+    # First: check for generated traits from the trait generator
+    generated_traits = expand.get("traits") or []
+    if generated_traits:
+        lines = []
+        for t in generated_traits:
+            if isinstance(t, dict):
+                value = t.get("value", "")
+                temporal = t.get("temporal", "all")
+                if value:
+                    lines.append(f"{value} (scope: {temporal})")
+            elif isinstance(t, str) and t.strip():
+                lines.append(t)
+        if lines:
+            return lines
 
-    # Company/investor context as a single trait
-    company_parts = []
-    for name in role_filters.get("company_names") or []:
-        company_parts.append(f"Works at {name}")
-    for inv in role_filters.get("investor_names") or []:
-        company_parts.append(f"Company backed by {inv}")
-    for csq in role_filters.get("company_semantic_queries") or []:
-        company_parts.append(f"Works at {csq}")
-    if company_parts:
-        traits.append("; ".join(company_parts))
-
-    # Location trait
-    locs = role_filters.get("cities") or role_filters.get("states") or role_filters.get("metro_areas") or role_filters.get("countries") or []
-    if locs:
-        traits.append(f"Based in {', '.join(str(v) for v in locs)}")
-
-    # Education trait
-    schools = role_filters.get("education_names") or []
-    if schools:
-        traits.append(f"Attended {', '.join(str(v) for v in schools)}")
-
-    return traits or [state.get("query") or "Relevant to the original query"]
+    # Fallback: use query
+    return [state.get("query") or "Relevant to the original query"]
 
 
 def artifact_dir(state_path: Path, state: dict[str, Any]) -> Path:

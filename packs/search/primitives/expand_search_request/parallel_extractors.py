@@ -48,6 +48,7 @@ EXTRACTOR_MODELS = {
     "seniority": "gpt-4.1",
     "social": "gpt-4.1",
     "role": "gpt-4.1",
+    "trait_generation": "gpt-4.1",
 }
 
 
@@ -113,12 +114,17 @@ async def _extract(
 ) -> dict[str, Any]:
     """Run one extractor via OpenAI chat completion."""
     model = model or EXTRACTOR_MODELS.get(name, "gpt-4o-mini")
+    # Trait generation uses a specific user prompt format
+    if name == "trait_generation":
+        user_content = f'Generate traits for this query:\n\n"{query}"\n\nReturn JSON with: {{"traits": [{{"value": "...", "temporal": "current|past|all", "meaning": "role|experience|location|education|company|investor|general"}}], "has_domain_intent": true/false}}'
+    else:
+        user_content = query
     try:
         resp = await client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
+                {"role": "user", "content": user_content},
             ],
             temperature=0.0,
             response_format={"type": "json_object"},
@@ -319,6 +325,7 @@ async def expand_query_parallel(
         "seniority": _load_prompt("seniority"),
         "social": _load_prompt("social"),
         "role": ROLE_EXTRACTION_PROMPT,
+        "trait_generation": _load_prompt("trait_generation"),
     }
 
     # Fan out all extractors in parallel
@@ -334,7 +341,7 @@ async def expand_query_parallel(
         timings[name] = round(time.monotonic() - t0, 3)
         return result
 
-    role, company, location, education, temporal, seniority, social = await asyncio.gather(
+    role, company, location, education, temporal, seniority, social, traits = await asyncio.gather(
         timed_extract("role"),
         timed_extract("company"),
         timed_extract("location"),
@@ -342,6 +349,7 @@ async def expand_query_parallel(
         timed_extract("temporal"),
         timed_extract("seniority"),
         timed_extract("social"),
+        timed_extract("trait_generation"),
     )
 
     total_ms = int((time.monotonic() - started) * 1000)
@@ -349,12 +357,19 @@ async def expand_query_parallel(
     # Merge
     filters = _merge(role, company, location, education, temporal, seniority, social, query)
 
+    # Extract traits and has_domain_intent from trait generator
+    generated_traits = traits.get("traits") or []
+    has_domain_intent = traits.get("has_domain_intent")
+    if has_domain_intent is not None:
+        filters["has_domain_intent"] = bool(has_domain_intent)
+
     return {
         "intent_type": "role_search",
         "source_type": "query",
         "normalized_query": query,
         "vertical": "people_by_role",
         "role_search_filters": filters,
+        "traits": generated_traits,
         "notes": [],
         "extractor_timings": timings,
         "total_ms": total_ms,
