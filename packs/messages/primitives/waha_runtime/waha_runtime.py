@@ -123,23 +123,101 @@ def _docker_install_hints() -> list[dict[str, str]]:
 
 
 def container_state(container_name: str) -> dict[str, Any]:
-    code, out, err = run([
-        "docker", "inspect",
-        "--format",
-        "{{.State.Status}}|{{.State.Running}}|{{.Config.Image}}|{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}",
-        container_name,
-    ], timeout=10)
+    code, out, err = run(["docker", "inspect", container_name], timeout=10)
     if code != 0:
         return {"name": container_name, "exists": False, "running": False, "error": err.strip() or None}
-    parts = (out.strip().split("|") + ["", "", "", ""])[:4]
-    status, running, image, port = parts
+    try:
+        payload = json.loads(out)
+        raw = payload[0] if isinstance(payload, list) and payload else {}
+    except json.JSONDecodeError:
+        raw = {}
+
+    state = raw.get("State") if isinstance(raw.get("State"), dict) else {}
+    config = raw.get("Config") if isinstance(raw.get("Config"), dict) else {}
+    network = raw.get("NetworkSettings") if isinstance(raw.get("NetworkSettings"), dict) else {}
+    ports = network.get("Ports") if isinstance(network.get("Ports"), dict) else {}
+    port_bindings = ports.get("3000/tcp") if isinstance(ports.get("3000/tcp"), list) else []
+    host_port = None
+    if port_bindings and isinstance(port_bindings[0], dict):
+        host_port = port_bindings[0].get("HostPort")
+
+    env: dict[str, str] = {}
+    for item in config.get("Env") or []:
+        if isinstance(item, str) and "=" in item:
+            key, value = item.split("=", 1)
+            env[key] = value
+
+    session_mount = None
+    for mount in raw.get("Mounts") or []:
+        if not isinstance(mount, dict):
+            continue
+        if mount.get("Destination") == "/app/.sessions":
+            session_mount = mount.get("Source")
+            break
+
     return {
         "name": container_name,
         "exists": True,
-        "running": running.lower() == "true",
-        "status": status or None,
-        "image": image or None,
-        "host_port": port or None,
+        "running": bool(state.get("Running")),
+        "status": state.get("Status") or None,
+        "image": config.get("Image") or None,
+        "host_port": host_port,
+        "engine_env": {
+            "WAHA_DEFAULT_ENGINE": env.get("WAHA_DEFAULT_ENGINE"),
+            "WHATSAPP_DEFAULT_ENGINE": env.get("WHATSAPP_DEFAULT_ENGINE"),
+            "WHATSAPP_RESTART_ALL_SESSIONS": env.get("WHATSAPP_RESTART_ALL_SESSIONS"),
+        },
+        "api_key_set": bool(env.get("WAHA_API_KEY")),
+        "session_mount": session_mount,
+    }
+
+
+def expected_runtime(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "container_name": args.container_name,
+        "image": args.image,
+        "engine": args.engine,
+        "host_port": str(args.port),
+        "session_dir": str(args.session_dir),
+    }
+
+
+def runtime_mismatches(container: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
+    mismatches: list[dict[str, Any]] = []
+    expected = expected_runtime(args)
+    if not container.get("exists"):
+        mismatches.append({"field": "container", "expected": "present", "actual": "missing"})
+        return mismatches
+    if not container.get("running"):
+        mismatches.append({"field": "running", "expected": True, "actual": bool(container.get("running"))})
+    if container.get("image") != expected["image"]:
+        mismatches.append({"field": "image", "expected": expected["image"], "actual": container.get("image")})
+    if str(container.get("host_port") or "") != expected["host_port"]:
+        mismatches.append({"field": "host_port", "expected": expected["host_port"], "actual": container.get("host_port")})
+    if str(container.get("session_mount") or "") != expected["session_dir"]:
+        mismatches.append({"field": "session_dir", "expected": expected["session_dir"], "actual": container.get("session_mount")})
+
+    engine_env = container.get("engine_env") if isinstance(container.get("engine_env"), dict) else {}
+    for key in ("WAHA_DEFAULT_ENGINE", "WHATSAPP_DEFAULT_ENGINE"):
+        if engine_env.get(key) != expected["engine"]:
+            mismatches.append({"field": key, "expected": expected["engine"], "actual": engine_env.get(key)})
+    if engine_env.get("WHATSAPP_RESTART_ALL_SESSIONS") != "true":
+        mismatches.append({
+            "field": "WHATSAPP_RESTART_ALL_SESSIONS",
+            "expected": "true",
+            "actual": engine_env.get("WHATSAPP_RESTART_ALL_SESSIONS"),
+        })
+    if not container.get("api_key_set"):
+        mismatches.append({"field": "WAHA_API_KEY", "expected": "set", "actual": "missing"})
+    return mismatches
+
+
+def runtime_check(container: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    mismatches = runtime_mismatches(container, args)
+    return {
+        "ok": not mismatches,
+        "expected": expected_runtime(args),
+        "mismatches": mismatches,
     }
 
 
@@ -148,16 +226,19 @@ def cmd_check(args: argparse.Namespace) -> int:
     container = container_state(args.container_name) if docker["installed"] else {
         "name": args.container_name, "exists": False, "running": False, "error": "docker not installed",
     }
+    runtime = runtime_check(container, args)
     manifest = {
         "primitive": "waha_runtime",
         "command": "check",
         "checked_at": now_iso(),
         "docker": docker,
         "container": container,
+        "runtime": runtime,
         "image": args.image,
         "engine": args.engine,
         "session_dir": str(args.session_dir),
         "ready_to_start": bool(docker["installed"] and docker["daemon_ok"]),
+        "ready_to_use": bool(docker["installed"] and docker["daemon_ok"] and runtime["ok"]),
     }
     emit(manifest)
     if not manifest["ready_to_start"]:
@@ -190,14 +271,17 @@ def cmd_up(args: argparse.Namespace) -> int:
 
     _ensure_session_dir(args.session_dir)
     pre_state = container_state(args.container_name)
+    pre_runtime = runtime_check(pre_state, args)
 
-    # Reuse a healthy container unless --recreate is set.
-    if pre_state.get("running") and not args.recreate:
+    # Reuse only the exact expected runtime; stale NOWEB/old-image containers
+    # are recreated so the import orchestrator cannot silently use them.
+    if pre_state.get("running") and pre_runtime["ok"] and not args.recreate:
         emit({
             "primitive": "waha_runtime",
             "command": "up",
             "status": "already_running",
             "container": pre_state,
+            "runtime": pre_runtime,
             "image": args.image,
             "engine": args.engine,
             "session_dir": str(args.session_dir),
@@ -254,15 +338,31 @@ def cmd_up(args: argparse.Namespace) -> int:
         return code
 
     post_state = container_state(args.container_name)
+    post_runtime = runtime_check(post_state, args)
+    if not post_runtime["ok"]:
+        emit({
+            "primitive": "waha_runtime",
+            "command": "up",
+            "status": "failed",
+            "error": "WAHA container started but runtime did not match expected configuration",
+            "container": post_state,
+            "runtime": post_runtime,
+            "previous_container": pre_state if pre_state.get("exists") else None,
+        })
+        return 1
+
+    status = "recreated" if pre_state.get("exists") else "started"
     emit({
         "primitive": "waha_runtime",
         "command": "up",
-        "status": "started",
+        "status": status,
         "container": post_state,
+        "runtime": post_runtime,
+        "previous_container": pre_state if pre_state.get("exists") else None,
+        "recreate_reason": pre_runtime["mismatches"] if pre_state.get("exists") else [],
         "image": args.image,
         "engine": args.engine,
         "port": args.port,
-        "api_key": args.api_key,
         "base_url": f"http://127.0.0.1:{args.port}",
         "session_dir": str(args.session_dir),
         "logs": pull_logs,
@@ -314,19 +414,21 @@ def cmd_status(args: argparse.Namespace) -> int:
     container = container_state(args.container_name) if docker["installed"] else {
         "name": args.container_name, "exists": False, "running": False,
     }
+    runtime = runtime_check(container, args)
     payload = {
         "primitive": "waha_runtime",
         "command": "status",
         "checked_at": now_iso(),
         "docker": docker,
         "container": container,
+        "runtime": runtime,
         "base_url": f"http://127.0.0.1:{args.port}",
         "image": args.image,
         "engine": args.engine,
         "session_dir": str(args.session_dir),
     }
     emit(payload)
-    return 0 if container.get("running") else 1
+    return 0 if container.get("running") and runtime["ok"] else 1
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:

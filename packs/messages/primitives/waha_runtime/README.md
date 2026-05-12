@@ -6,6 +6,8 @@ This primitive does **not** call the WAHA HTTP API. It only:
 
 - checks whether Docker is installed and the daemon is reachable
 - pulls and runs the WAHA Chrome/WEBJS image as `powerpacks-waha`
+- verifies an existing container is the expected Chrome/WEBJS runtime before
+  reusing it
 - mounts `~/.powerpacks/waha-sessions-chrome` so QR-scanned credentials persist
 - stops / removes the container
 - reports container status
@@ -35,6 +37,11 @@ python packs/messages/primitives/waha_runtime/waha_runtime.py down --purge-sessi
 emits `alternatives` describing how to install Docker Desktop, Colima, or the
 Linux Docker engine. The skill should surface these to the user and ask for
 explicit consent before installing anything.
+
+`up` reuses a running container only when it matches the expected image, engine,
+port, API-key presence, and session mount. If a stale container exists, `up`
+removes and recreates it so the import orchestrator cannot silently run against
+an old WAHA image or NOWEB session directory.
 
 ## Environment overrides
 

@@ -9,6 +9,7 @@ Exercise:
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 import os
 import socket
@@ -18,6 +19,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 
@@ -25,6 +27,11 @@ ROOT = Path(__file__).resolve().parents[1]
 WAHA_RUNTIME = ROOT / "packs/messages/primitives/waha_runtime/waha_runtime.py"
 WAHA_SESSION = ROOT / "packs/messages/primitives/waha_session/waha_session.py"
 EXTRACT_WHATSAPP = ROOT / "packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py"
+
+_WAHA_RUNTIME_SPEC = importlib.util.spec_from_file_location("waha_runtime", WAHA_RUNTIME)
+assert _WAHA_RUNTIME_SPEC and _WAHA_RUNTIME_SPEC.loader
+waha_runtime = importlib.util.module_from_spec(_WAHA_RUNTIME_SPEC)
+_WAHA_RUNTIME_SPEC.loader.exec_module(waha_runtime)
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +118,62 @@ def _free_port() -> int:
 
 
 class WhatsAppPrimitiveTests(unittest.TestCase):
+    def test_waha_runtime_accepts_expected_chrome_container(self) -> None:
+        args = SimpleNamespace(
+            container_name="powerpacks-waha",
+            image="devlikeapro/waha:chrome-2026.3.4",
+            engine="WEBJS",
+            port=3000,
+            session_dir=Path("/tmp/waha-sessions-chrome"),
+        )
+        container = {
+            "name": "powerpacks-waha",
+            "exists": True,
+            "running": True,
+            "image": "devlikeapro/waha:chrome-2026.3.4",
+            "host_port": "3000",
+            "session_mount": "/tmp/waha-sessions-chrome",
+            "api_key_set": True,
+            "engine_env": {
+                "WAHA_DEFAULT_ENGINE": "WEBJS",
+                "WHATSAPP_DEFAULT_ENGINE": "WEBJS",
+                "WHATSAPP_RESTART_ALL_SESSIONS": "true",
+            },
+        }
+        self.assertEqual(waha_runtime.runtime_mismatches(container, args), [])
+        self.assertTrue(waha_runtime.runtime_check(container, args)["ok"])
+
+    def test_waha_runtime_rejects_stale_noweb_container(self) -> None:
+        args = SimpleNamespace(
+            container_name="powerpacks-waha",
+            image="devlikeapro/waha:chrome-2026.3.4",
+            engine="WEBJS",
+            port=3000,
+            session_dir=Path("/tmp/waha-sessions-chrome"),
+        )
+        container = {
+            "name": "powerpacks-waha",
+            "exists": True,
+            "running": True,
+            "image": "devlikeapro/waha:noweb",
+            "host_port": "3001",
+            "session_mount": "/tmp/waha-sessions",
+            "api_key_set": False,
+            "engine_env": {
+                "WAHA_DEFAULT_ENGINE": "NOWEB",
+                "WHATSAPP_DEFAULT_ENGINE": "NOWEB",
+                "WHATSAPP_RESTART_ALL_SESSIONS": None,
+            },
+        }
+        fields = {item["field"] for item in waha_runtime.runtime_mismatches(container, args)}
+        self.assertIn("image", fields)
+        self.assertIn("host_port", fields)
+        self.assertIn("session_dir", fields)
+        self.assertIn("WAHA_DEFAULT_ENGINE", fields)
+        self.assertIn("WHATSAPP_DEFAULT_ENGINE", fields)
+        self.assertIn("WAHA_API_KEY", fields)
+        self.assertFalse(waha_runtime.runtime_check(container, args)["ok"])
+
     def test_waha_runtime_check_returns_valid_json(self) -> None:
         result = subprocess.run(
             ["python3", str(WAHA_RUNTIME), "check"],
@@ -121,6 +184,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
         manifest = json.loads(result.stdout)
         self.assertEqual(manifest["primitive"], "waha_runtime")
         self.assertIn("docker", manifest)
+        self.assertIn("runtime", manifest)
         self.assertIn("alternatives", manifest["docker"])
         self.assertGreater(len(manifest["docker"]["alternatives"]), 0)
 
