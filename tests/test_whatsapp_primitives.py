@@ -65,6 +65,10 @@ class FakeWAHAHandler(BaseHTTPRequestHandler):
             return self._json(200, self._page(self.routes["contacts"], params))
         if path.startswith("/api/default/groups/") and "/participants" not in path:
             group_id = path.split("/")[-1]
+            metadata_errors = self.routes.get("group_metadata_errors", {})
+            if isinstance(metadata_errors, dict) and group_id in metadata_errors:
+                status, payload = metadata_errors[group_id]
+                return self._json(status, payload)
             metadata = self.routes.get("group_metadata", {}).get(group_id)
             if metadata is not None:
                 return self._json(200, metadata)
@@ -499,6 +503,86 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 self.assertEqual(manifest["diagnostics"]["group_participants_skipped_large_members"], 31)
                 self.assertIsNone(
                     FakeWAHAHandler.request_counts.get("/api/default/groups/987654321%40g.us/participants/v2"),
+                )
+                with csv_path.open(encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                self.assertEqual(rows, [])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_stale_group_is_skipped_without_retry_or_participant_fetch(self) -> None:
+        FakeWAHAHandler.request_counts = {}
+        FakeWAHAHandler.routes = {
+            "contacts": [
+                {"id": {"_serialized": "14155550707@c.us"}, "name": "Poker Friend"},
+            ],
+            "chats": [
+                {
+                    "id": {"_serialized": "15127589244-1589065328@g.us"},
+                    "name": "Poker",
+                },
+            ],
+            "group_metadata_errors": {
+                "15127589244-1589065328%40g.us": (
+                    500,
+                    {
+                        "statusCode": 500,
+                        "exception": {
+                            "message": "Group with id '15127589244-1589065328@g.us' not found",
+                        },
+                    },
+                ),
+            },
+            "group_participants_v2": {
+                "15127589244-1589065328%40g.us": [
+                    {"id": "14155550707@c.us", "pn": "14155550707@c.us", "role": "participant"},
+                ],
+            },
+            "messages_by_chat": {},
+        }
+        port = _free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), FakeWAHAHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                csv_path = tmp / "wa.csv"
+                manifest_path = tmp / "wa.manifest.json"
+                result = subprocess.run(
+                    [
+                        "python3", str(EXTRACT_WHATSAPP), "extract",
+                        "--base-url", f"http://127.0.0.1:{port}",
+                        "--api-key", "test",
+                        "--session", "default",
+                        "--output-csv", str(csv_path),
+                        "--manifest", str(manifest_path),
+                        "--skip-message-counts",
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={
+                        **os.environ,
+                        "POWERPACKS_WHATSAPP_MIN_REQUEST_INTERVAL": "0",
+                        "POWERPACKS_WHATSAPP_GROUP_PARTICIPANTS_TIMEOUT": "5",
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(result.stdout)
+                self.assertEqual(manifest["diagnostics"]["group_participants_skipped_stale"], 1)
+                self.assertEqual(manifest["diagnostics"]["group_participants_failed"], 0)
+                self.assertEqual(manifest["diagnostics"]["errors"], [])
+                self.assertEqual(
+                    FakeWAHAHandler.request_counts.get("/api/default/groups/15127589244-1589065328%40g.us"),
+                    1,
+                )
+                self.assertIsNone(
+                    FakeWAHAHandler.request_counts.get(
+                        "/api/default/groups/15127589244-1589065328%40g.us/participants/v2"
+                    ),
                 )
                 with csv_path.open(encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))

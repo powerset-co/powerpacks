@@ -127,6 +127,41 @@ def emit_progress(value: dict[str, Any], progress_path: Path | None = None) -> N
 # WAHA HTTP
 # ---------------------------------------------------------------------------
 
+def _payload_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return " ".join(_payload_text(item) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(_payload_text(item) for item in value)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
+
+
+def _decode_response_body(body: bytes) -> Any:
+    try:
+        return json.loads(body.decode("utf-8")) if body else None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return body.decode("utf-8", errors="replace") if body else None
+
+
+def is_stale_group_error(error: dict[str, Any] | None) -> bool:
+    if not isinstance(error, dict):
+        return False
+    status = error.get("http_status")
+    if status not in {404, 500}:
+        return False
+    text = _payload_text(error.get("payload") or error.get("error")).lower()
+    if "group with id" in text and "not found" in text:
+        return True
+    return "cannot read properties of undefined" in text and "participants" in text
+
+
+def _is_non_retryable_waha_error(path: str, status: int, payload: Any) -> bool:
+    if "/groups/" not in path or status not in {404, 500}:
+        return False
+    return is_stale_group_error({"http_status": status, "payload": payload})
+
+
 def _waha_get(
     base_url: str,
     api_key: str,
@@ -159,12 +194,8 @@ def _waha_get(
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     return resp.status, body
         except urllib.error.HTTPError as exc:
-            if exc.code < 500:
-                payload = None
-                try:
-                    payload = json.loads(exc.read().decode("utf-8"))
-                except Exception:
-                    pass
+            payload = _decode_response_body(exc.read())
+            if exc.code < 500 or _is_non_retryable_waha_error(path, exc.code, payload):
                 return exc.code, payload
             last_error = exc
         except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
@@ -588,6 +619,8 @@ def _fetch_group_participants(
         participants, error = _fetch_group_participants_endpoint(base_url, api_key, session, chat_id, endpoint)
         if participants is not None:
             return participants, None
+        if is_stale_group_error(error):
+            return None, error
         if first_error is None:
             first_error = error
     return None, first_error
@@ -621,6 +654,7 @@ def extract_contacts(
         "group_participants_failed": 0,
         "group_participants_skipped_large": 0,
         "group_participants_skipped_large_members": 0,
+        "group_participants_skipped_stale": 0,
         "group_participant_count_unknown": 0,
         "max_group_participants": max_group_participants,
         "lid_resolved": 0,
@@ -739,6 +773,9 @@ def extract_contacts(
                 if metadata:
                     participant_count = group_participant_count(metadata)
                 elif metadata_error:
+                    if is_stale_group_error(metadata_error):
+                        diagnostics["group_participants_skipped_stale"] += 1
+                        continue
                     diagnostics["errors"].append(metadata_error)
 
             if participant_count is None:
@@ -763,6 +800,9 @@ def extract_contacts(
                 if fetched_participants == []:
                     diagnostics["group_participants_empty"] += 1
                 if participant_error:
+                    if is_stale_group_error(participant_error):
+                        diagnostics["group_participants_skipped_stale"] += 1
+                        continue
                     participant_error["group_name"] = display_name
                     diagnostics["errors"].append(participant_error)
                     diagnostics["group_participants_failed"] += 1

@@ -238,30 +238,104 @@ def step_record(ledger: dict[str, Any], step_id: str) -> dict[str, Any]:
     return rec
 
 
-WHATSAPP_STEP_MESSAGES = {
-    "check_docker_and_waha": {
-        "running": "Getting WhatsApp sync ready.",
-        "completed": "WhatsApp sync is ready.",
-        "blocked_user_action": "WhatsApp sync needs the local helper app running before it can continue.",
-    },
-    "start_waha_container": {
-        "running": "Starting WhatsApp sync.",
-        "completed": "WhatsApp sync started.",
-    },
-    "authenticate_whatsapp": {
-        "running": "Connecting WhatsApp.",
-        "completed": "WhatsApp is connected.",
-        "blocked_user_action": "WhatsApp needs you to scan the QR, then continue the import.",
+STATUS_PREFIX = "[import-contacts]"
+STATUS_DISABLED_VALUES = {"0", "false", "no", "off"}
+STEP_STATUS_MESSAGES = {
+    "extract_imessage": {
+        "completed": "Imported iMessage contacts.",
     },
     "extract_whatsapp": {
-        "running": "We're syncing WhatsApp. WhatsApp is taking a bit longer when there are many chats.",
+        "running": "Syncing WhatsApp Messages and Contacts.",
         "completed": "WhatsApp sync finished.",
     },
-    "normalize_whatsapp": {
-        "running": "Preparing synced WhatsApp contacts.",
-        "completed": "WhatsApp contacts are ready.",
+    "match_local_contacts": {
+        "completed": "Message and Contacts import completed.",
+    },
+    "llm_review": {
+        "running": "Reviewing contacts for enrichment.",
+        "completed": "Contact enrichment review finished.",
+    },
+    "deep_research": {
+        "completed": "Paid research finished.",
+        "blocked_approval": "Requesting approval for paid research.",
+    },
+    "review_research_web": {
+        "running": "Requesting feedback on research.",
+    },
+    "retarget_research": {
+        "running": "Researching again on review feedback.",
+        "completed": "Review completed.",
     },
 }
+STEP_HEARTBEAT_MESSAGES = {
+    "extract_whatsapp": "Syncing WhatsApp Messages and Contacts.",
+    "llm_review": "Contact enrichment review is still running.",
+    "deep_research": "Paid research is still running.",
+    "refresh_retarget_linkedin_profiles": "Review still running.",
+    "retarget_harness_research": "Review still running.",
+    "retarget_research": "Review still running.",
+}
+
+
+WHATSAPP_STEP_MESSAGES = {
+    "check_docker_and_waha": {
+        "blocked_user_action": "WhatsApp sync needs the local helper app running before it can continue.",
+    },
+    "authenticate_whatsapp": {
+        "blocked_user_action": "WhatsApp needs a QR scan.",
+    },
+    "extract_whatsapp": {
+        "running": "Syncing WhatsApp Messages and Contacts.",
+        "completed": "WhatsApp sync finished.",
+    },
+}
+
+
+def status_broadcast_enabled() -> bool:
+    value = os.environ.get("POWERPACKS_IMPORT_CONTACTS_STATUS", "1").strip().lower()
+    return value not in STATUS_DISABLED_VALUES
+
+
+def emit_status_broadcast(message: str) -> None:
+    if not status_broadcast_enabled():
+        return
+    print(f"{STATUS_PREFIX} {message}", file=sys.stderr, flush=True)
+
+
+def append_status_event(ledger: dict[str, Any], step_id: str, status: str, message: str) -> None:
+    events = ledger.setdefault("status_events", [])
+    if events:
+        last = events[-1]
+        if (
+            isinstance(last, dict)
+            and last.get("step_id") == step_id
+            and last.get("status") == status
+            and last.get("message") == message
+        ):
+            return
+    events.append({
+        "event_id": len(events) + 1,
+        "recorded_at": now_iso(),
+        "step_id": step_id,
+        "status": status,
+        "message": message,
+    })
+
+
+def status_message_for_step(step_id: str, status: str) -> str | None:
+    return STEP_STATUS_MESSAGES.get(step_id, {}).get(status)
+
+
+def heartbeat_message_for_step(step_id: str) -> str | None:
+    return STEP_HEARTBEAT_MESSAGES.get(step_id)
+
+
+def status_heartbeat_seconds() -> float:
+    raw = os.environ.get("POWERPACKS_IMPORT_CONTACTS_HEARTBEAT_SECONDS", "120")
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return 120.0
 
 
 def user_message_for_step(step_id: str, status: str) -> str | None:
@@ -279,6 +353,7 @@ def mark_step(
     error: str | None = None,
 ) -> None:
     rec = step_record(ledger, step_id)
+    previous_status = rec.get("status")
     if rec.get("status") != "running" and status == "running":
         rec["started_at"] = now_iso()
     if status in {"completed", "skipped", "failed", "blocked_approval", "blocked_user_action", "warning"}:
@@ -289,6 +364,13 @@ def mark_step(
     user_message = user_message_for_step(step_id, status)
     if user_message:
         rec["user_message"] = user_message
+    status_message = status_message_for_step(step_id, status)
+    if status_message:
+        rec["status_message"] = status_message
+        if previous_status != status or rec.get("last_emitted_status_message") != status_message:
+            append_status_event(ledger, step_id, status, status_message)
+            emit_status_broadcast(status_message)
+            rec["last_emitted_status_message"] = status_message
     if summary is not None:
         rec["summary"] = summary
     if error:
@@ -339,7 +421,14 @@ def _read_stream(pipe: Any, chunks: list[str], *, forward_to_stderr: bool = Fals
             pass
 
 
-def run_command(cmd: list[str], *, timeout: int = 300, env: dict[str, str] | None = None) -> dict[str, Any]:
+def run_command(
+    cmd: list[str],
+    *,
+    timeout: int = 300,
+    env: dict[str, str] | None = None,
+    heartbeat_message: str | None = None,
+    heartbeat_interval: float | None = None,
+) -> dict[str, Any]:
     started = time.monotonic()
     proc = subprocess.Popen(
         cmd,
@@ -361,7 +450,20 @@ def run_command(cmd: list[str], *, timeout: int = 300, env: dict[str, str] | Non
     stdout_thread.start()
     stderr_thread.start()
     try:
-        returncode = proc.wait(timeout=timeout)
+        deadline = started + timeout
+        next_heartbeat = started + (heartbeat_interval or status_heartbeat_seconds())
+        while True:
+            returncode = proc.poll()
+            if returncode is not None:
+                break
+            now = time.monotonic()
+            if now >= deadline:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            if heartbeat_message and now >= next_heartbeat:
+                emit_status_broadcast(heartbeat_message)
+                next_heartbeat = now + (heartbeat_interval or status_heartbeat_seconds())
+            next_wake = min(deadline, next_heartbeat) if heartbeat_message else deadline
+            time.sleep(min(0.2, max(0.01, next_wake - now)))
     except subprocess.TimeoutExpired as exc:
         proc.kill()
         returncode = proc.wait()
@@ -1040,7 +1142,12 @@ def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
         "--wait",
     ]
     mark_step(ledger_path, ledger, "authenticate_whatsapp", "running", command=session_cmd)
-    session_result = run_command(session_cmd, timeout=max(args.timeout, 600), env=pipeline_env(args))
+    session_result = run_command(
+        session_cmd,
+        timeout=max(args.timeout, 600),
+        env=pipeline_env(args),
+        heartbeat_message=heartbeat_message_for_step("authenticate_whatsapp"),
+    )
     session_payload = session_result.get("json") or {}
     if session_result["returncode"] != 0:
         if session_payload.get("status") == "timeout":
@@ -1068,7 +1175,12 @@ def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
         "--message-count-cache", str(DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE),
     ]
     mark_step(ledger_path, ledger, "extract_whatsapp", "running", command=cmd)
-    result = run_command(cmd, timeout=args.parallel_timeout, env=pipeline_env(args))
+    result = run_command(
+        cmd,
+        timeout=args.parallel_timeout,
+        env=pipeline_env(args),
+        heartbeat_message=heartbeat_message_for_step("extract_whatsapp"),
+    )
     payload = require_ok(result, "extract_whatsapp")
     ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
     ledger.setdefault("artifacts", {})["whatsapp_message_count_cache"] = str(DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE)
@@ -1227,7 +1339,12 @@ def llm_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, An
         "--max-workers", str(args.llm_max_workers),
     ]
     mark_step(ledger_path, ledger, "llm_review", "running", command=review_cmd)
-    review_result = run_command(review_cmd, timeout=max(args.timeout, 600), env=pipeline_env(args))
+    review_result = run_command(
+        review_cmd,
+        timeout=max(args.timeout, 600),
+        env=pipeline_env(args),
+        heartbeat_message=heartbeat_message_for_step("llm_review"),
+    )
     review_payload = require_ok(review_result, "llm_review")
     if auto_ok:
         review_payload["auto_approved_reason"] = f"openrouter_under_{args.llm_auto_approve_usd}_usd"
@@ -1332,7 +1449,12 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
         "--output-dir", str(args.research_dir),
     ]
     mark_step(ledger_path, ledger, "deep_research", "running", command=run_cmd)
-    run_result = run_command(run_cmd, timeout=args.parallel_timeout, env=pipeline_env(args))
+    run_result = run_command(
+        run_cmd,
+        timeout=args.parallel_timeout,
+        env=pipeline_env(args),
+        heartbeat_message=heartbeat_message_for_step("deep_research"),
+    )
     # deep_research_contacts emits submit + poll JSON objects; final object is poll summary.
     payloads = run_result.get("json_objects") or []
     final_payload = payloads[-1] if payloads else None
@@ -1401,7 +1523,12 @@ def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
     if previous_review_csv and Path(previous_review_csv).exists():
         cmd.extend(["--previous-csv", str(previous_review_csv)])
     mark_step(ledger_path, ledger, "build_research_review_csv", "running", command=cmd)
-    result = run_command(cmd, timeout=max(args.timeout, 3600), env=pipeline_env(args))
+    result = run_command(
+        cmd,
+        timeout=max(args.timeout, 3600),
+        env=pipeline_env(args),
+        heartbeat_message=heartbeat_message_for_step("build_research_review_csv"),
+    )
     payload = require_ok(result, "build_research_review_csv")
     if scoring_estimate is not None:
         payload["scoring_estimate"] = scoring_estimate
@@ -1778,7 +1905,12 @@ def run_retarget_linkedin_refresh(
         "--max-workers", str(getattr(args, "retarget_rapidapi_max_workers", DEFAULT_RETARGET_HARNESS_MAX_WORKERS)),
     ]
     mark_step(ledger_path, ledger, step_id, "running", command=run_cmd)
-    run_result = run_command(run_cmd, timeout=args.timeout, env=pipeline_env(args))
+    run_result = run_command(
+        run_cmd,
+        timeout=args.timeout,
+        env=pipeline_env(args),
+        heartbeat_message=heartbeat_message_for_step("refresh_retarget_linkedin_profiles"),
+    )
     payload = require_ok(run_result, step_id)
     mark_step(ledger_path, ledger, step_id, "completed", summary=payload, command=run_cmd)
     return payload
@@ -1879,7 +2011,12 @@ def run_harness_retarget_research(args: argparse.Namespace, ledger_path: Path, l
     rows = max(1, csv_data_rows(Path(args.retarget_queue)))
     max_workers = max(1, int(getattr(args, "retarget_harness_max_workers", DEFAULT_RETARGET_HARNESS_MAX_WORKERS) or 1))
     batches = max(1, (rows + max_workers - 1) // max_workers)
-    result = run_command(cmd, timeout=(getattr(args, "retarget_harness_timeout", 900) * batches) + 60, env=pipeline_env(args))
+    result = run_command(
+        cmd,
+        timeout=(getattr(args, "retarget_harness_timeout", 900) * batches) + 60,
+        env=pipeline_env(args),
+        heartbeat_message=heartbeat_message_for_step("retarget_harness_research"),
+    )
     payload = require_ok(result, "retarget_harness_research")
     if payload.get("status") == "prepared":
         mark_step(ledger_path, ledger, "retarget_harness_research", "failed", summary=payload, command=cmd, error="no_cli_harness_available")
@@ -1939,6 +2076,7 @@ def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, 
             message=retarget_approval_message(),
         )
 
+    mark_step(ledger_path, ledger, "retarget_research", "running")
     refresh_payload = run_retarget_linkedin_refresh(args, ledger_path, ledger, refresh_estimate)
 
     estimate_payload = estimate_retarget_parallel(args, ledger_path, ledger, step_id="retarget_parallel_estimate_after_refresh")
@@ -1985,7 +2123,12 @@ def retarget_research_after_review(args: argparse.Namespace, ledger_path: Path, 
         "--output-dir", str(args.retarget_research_dir),
     ]
     mark_step(ledger_path, ledger, "retarget_research", "running", command=run_cmd)
-    run_result = run_command(run_cmd, timeout=args.parallel_timeout, env=pipeline_env(args))
+    run_result = run_command(
+        run_cmd,
+        timeout=args.parallel_timeout,
+        env=pipeline_env(args),
+        heartbeat_message=heartbeat_message_for_step("retarget_research"),
+    )
     payloads = run_result.get("json_objects") or []
     final_payload = payloads[-1] if payloads else None
     if run_result["returncode"] != 0:
@@ -2030,10 +2173,7 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
             step_id="upload_research_review",
             kind="upload",
             payload=payload,
-            message=(
-                "Upload approved contacts to Powerset? "
-                f"uploading {payload['approved_count']}."
-            ),
+            message=f"Please approve upload of {payload['approved_count']} approved contacts to Powerset.",
         )
 
     cmd = [
@@ -2054,7 +2194,7 @@ def upload_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
     )
     if upload_count is not None:
         upload_payload["approved_count"] = int(upload_count)
-        upload_payload["user_message"] = f"Uploaded {int(upload_count)} approved contacts"
+        upload_payload["user_message"] = f"Uploaded {int(upload_count)} contacts"
     ledger.setdefault("artifacts", {})["uploaded_artifact_id"] = response.get("artifact_id")
     mark_step(ledger_path, ledger, "upload_research_review", "completed", summary=upload_payload, command=cmd)
 

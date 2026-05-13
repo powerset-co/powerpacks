@@ -92,8 +92,21 @@ Never upload automatically.
 
 ## Execution
 
-Use a worker sub-agent for the long-running orchestrator loop when available.
-After consent, the main-chat handoff line should be exactly:
+In Codex CLI, use the main shell for `$import-contacts` when the user expects
+live progress updates. Sub-agents do not stream intermediate messages back to
+the parent; the parent only sees running/completed state unless it polls the
+ledger, which creates noisy tool-call blocks.
+
+For live progress, run the orchestrator command directly, not through a Python
+wrapper or here-doc. Poll the running shell session frequently, about every
+5-10 seconds during active work. After each poll, copy any new
+`[import-contacts] ...` lines into the main chat as assistant messages, with the
+prefix removed. Do not rely on the Codex tool transcript as the user-facing
+status surface, because it may be collapsed.
+
+Use a worker sub-agent only when the user explicitly wants a quiet/background
+run. After consent, the main-chat handoff line for that background mode should
+be exactly:
 
 `Starting work through sub-agent.`
 
@@ -107,25 +120,35 @@ The worker handoff must explicitly say consent was already granted in the main
 thread, and that the worker must not ask for consent again. Give it the exact
 orchestrator command to run.
 
+Tell the worker to relay only user-facing orchestrator status lines that begin
+with `[import-contacts]`. These are progress broadcasts, not reasoning. The
+worker must not share chain-of-thought, planning, speculation, raw logs, JSON
+payloads, contact data, phone numbers, or message data.
+
+Do not poll `.powerpacks/messages/import-run.json` just to simulate live
+sub-agent status unless the user asks for that tradeoff; it creates visible
+tool-call noise in Codex CLI. For live status, run the orchestrator in the main
+shell and relay `[import-contacts] ...` lines.
+
 The main chat should show only:
 
+- user-facing orchestrator status broadcasts
 - QR / permission actions
 - spend prompts, with cost only
 - upload prompts, with approved contact count only
-- final result, exactly `Uploaded X approved contacts`
+- final result, exactly `Uploaded X contacts`
 
 Do not stream primitive JSON, terminal transcripts, progress logs, local file
 paths, row counts, matched/unmatched counts, or implementation details unless a
 failure needs diagnosis or the user asks.
 
-The terminal may show terse primitive progress lines while long steps run. That
-is expected; do not paste every line into chat. Use those lines only to confirm
-the process is alive or diagnose a real stall.
+The terminal may show terse primitive progress lines while long steps run, but
+only `[import-contacts] ...` lines should be relayed as normal progress. Use
+other lines only to diagnose a real stall or failure.
 
 For WhatsApp, use plain user-facing status:
 
-- `We're syncing WhatsApp.`
-- `WhatsApp is taking a bit longer.`
+- `Syncing WhatsApp Messages and Contacts.`
 - `WhatsApp needs a QR scan.`
 - `WhatsApp sync finished.`
 
@@ -169,5 +192,5 @@ Be terse.
 
 - Retarget: `Feedback found; approve another re-research pass? Completion time is up to 10-15 min.`
 - Review: `Review opened: <url>. When done, say: done with review, upload`
-- Upload: `Upload approved contacts? uploading X.`
-- Done: `Uploaded X approved contacts`
+- Upload: `Please approve upload of X approved contacts to Powerset.`
+- Done: `Uploaded X contacts`

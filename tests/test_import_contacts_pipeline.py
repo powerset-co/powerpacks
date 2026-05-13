@@ -1,9 +1,10 @@
 import csv
 import hashlib
+import io
 import importlib.util
 import json
 import os
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stderr
 import tempfile
 import unittest
 from unittest import mock
@@ -19,6 +20,13 @@ spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
 
 class ImportContactsPipelineTests(unittest.TestCase):
+    def setUp(self):
+        self._status_env = mock.patch.dict(os.environ, {"POWERPACKS_IMPORT_CONTACTS_STATUS": "0"})
+        self._status_env.start()
+
+    def tearDown(self):
+        self._status_env.stop()
+
     def patch_pipeline_steps(self, calls: list[str], **overrides):
         stack = ExitStack()
 
@@ -65,9 +73,70 @@ class ImportContactsPipelineTests(unittest.TestCase):
             mod.mark_step(ledger_path, ledger, "extract_whatsapp", "running")
             saved = mod.read_json(ledger_path)
             step = saved["steps"]["extract_whatsapp"]
-            self.assertIn("We're syncing WhatsApp", step["user_message"])
-            self.assertIn("taking a bit longer", step["user_message"])
+            self.assertEqual(step["user_message"], "Syncing WhatsApp Messages and Contacts.")
             self.assertNotIn("WAHA", step["user_message"])
+
+    def test_mark_step_emits_user_facing_status_broadcast(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, {"POWERPACKS_IMPORT_CONTACTS_STATUS": "1"}), redirect_stderr(stderr):
+                mod.mark_step(ledger_path, ledger, "llm_review", "running")
+                mod.mark_step(ledger_path, ledger, "llm_review", "running")
+            lines = [line for line in stderr.getvalue().splitlines() if line.strip()]
+            self.assertEqual(lines, ["[import-contacts] Reviewing contacts for enrichment."])
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(
+                saved["steps"]["llm_review"]["status_message"],
+                "Reviewing contacts for enrichment.",
+            )
+            self.assertEqual(
+                saved["status_events"],
+                [{
+                    "event_id": 1,
+                    "message": "Reviewing contacts for enrichment.",
+                    "recorded_at": saved["status_events"][0]["recorded_at"],
+                    "status": "running",
+                    "step_id": "llm_review",
+                }],
+            )
+
+    def test_imessage_import_status_is_collapsed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, {"POWERPACKS_IMPORT_CONTACTS_STATUS": "1"}), redirect_stderr(stderr):
+                mod.mark_step(ledger_path, ledger, "check_imessage", "running")
+                mod.mark_step(ledger_path, ledger, "check_imessage", "completed")
+                mod.mark_step(ledger_path, ledger, "extract_imessage", "running")
+                mod.mark_step(ledger_path, ledger, "extract_imessage", "completed")
+                mod.mark_step(ledger_path, ledger, "normalize_imessage", "running")
+                mod.mark_step(ledger_path, ledger, "normalize_imessage", "completed")
+            self.assertEqual(
+                [line.strip() for line in stderr.getvalue().splitlines()],
+                ["[import-contacts] Imported iMessage contacts."],
+            )
+
+    def test_run_command_emits_heartbeat_status_broadcast(self):
+        cmd = [
+            mod.sys.executable,
+            "-c",
+            "import json, time; time.sleep(0.16); print(json.dumps({'status': 'ok'}))",
+        ]
+        stderr = io.StringIO()
+        with mock.patch.dict(os.environ, {"POWERPACKS_IMPORT_CONTACTS_STATUS": "1"}), redirect_stderr(stderr):
+            result = mod.run_command(
+                cmd,
+                timeout=2,
+                env=os.environ.copy(),
+                heartbeat_message="Still working.",
+                heartbeat_interval=0.05,
+            )
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(result["json"]["status"], "ok")
+        self.assertIn("[import-contacts] Still working.", stderr.getvalue())
 
     def test_approve_current_block_records_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -196,7 +265,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 with self.assertRaises(mod.PipelineBlocked) as cm:
                     mod.upload_review(args, ledger_path, ledger)
             block = cm.exception.payload
-            self.assertIn("uploading 10", block["message"])
+            self.assertEqual(block["message"], "Please approve upload of 10 approved contacts to Powerset.")
             self.assertNotIn("artifact", block["message"].lower())
             self.assertNotIn("maybe", block["message"])
             self.assertNotIn("no=", block["message"])
@@ -227,7 +296,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                     mod.upload_review(args, ledger_path, ledger)
             saved = mod.read_json(ledger_path)
             upload_summary = saved["steps"]["upload_research_review"]["summary"]
-            self.assertEqual(upload_summary["user_message"], "Uploaded 10 approved contacts")
+            self.assertEqual(upload_summary["user_message"], "Uploaded 10 contacts")
             self.assertNotIn("artifact-1", upload_summary["user_message"])
             self.assertNotIn("artifact", upload_summary["user_message"].lower())
 
@@ -700,6 +769,9 @@ class ImportContactsPipelineTests(unittest.TestCase):
             summary = saved["steps"]["retarget_research"]["summary"]
             self.assertEqual(summary["mode"], "harness")
             self.assertEqual(summary["estimate"]["would_submit"], 1)
+            messages = [event["message"] for event in saved.get("status_events", [])]
+            self.assertEqual(messages.count("Researching again on review feedback."), 1)
+            self.assertEqual(messages[-1], "Review completed.")
 
     def test_cached_retarget_results_are_merged_without_rerunning_research(self):
         with tempfile.TemporaryDirectory() as tmp:
