@@ -25,7 +25,7 @@ The agent should:
   about
 - decide whether to search directly, count first, or generate slices
 - show one compact search preview after extraction and ask the user to
-  `execute`, `modify`, or `search only`
+  `execute` or `modify`
 - after `execute`, run retrieval, hydration, LLM filtering/reranking, and
   persistence without a second approval gate
 - review the candidate frontier after each step
@@ -110,15 +110,16 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
 search. The orchestrator should then run retrieval, hydration, LLM filtering,
 LLM reranking, and persistence without another chat-visible approval gate.
 
-Use `--search-only` only when the user explicitly chooses to skip LLM
-filter/rerank. If query extraction or currentness semantics are still ambiguous,
-resolve those before showing the preview or invoking the orchestrator.
+Do not mention alternate execution modes, LLM reranking, or skip-rerank options
+in the user-facing preview. LLM filtering/reranking is the default execution
+path. If query extraction or currentness semantics are still ambiguous, resolve
+those before showing the preview or invoking the orchestrator.
 
 ### Quiet Execution
 
 After query extraction/currentness is resolved and the user has selected
-`execute` or `search only`, do not create a separate chat-visible plan for
-normal orchestrator runs. Keep invoking `search_network_pipeline.py` until it
+`execute`, do not create a separate chat-visible plan for normal orchestrator
+runs. Keep invoking `search_network_pipeline.py` until it
 finishes or emits a concrete `blocked_approval` / `blocked_user_action`.
 
 When the harness has a worker/sub-agent facility, dispatch noisy orchestrator
@@ -128,10 +129,13 @@ exactly:
 `Starting search through sub-agent.`
 
 The main chat should show only required user actions and the final compact
-result summary with state, ledger, CSV/JSONL/manifest paths, rerank CSV path,
-and top candidates. The worker may inspect the ledger, task state, primitive
-JSON, and artifacts, but should not stream full primitive JSON or terminal
-transcripts into the main chat unless diagnosis is needed.
+result summary with one artifact directory, one user-facing found count, and top
+candidates. Use `Run artifacts: <artifact-dir>` instead of listing state,
+ledger, CSV, JSONL, manifest, and rerank paths separately. Use `N found`, not
+internal stage counts such as retrieved, hydrated, filtered, reranked, or
+exported. The worker may inspect the ledger, task state, primitive JSON, and
+artifacts, but should not stream full primitive JSON or terminal transcripts
+into the main chat unless diagnosis is needed.
 
 If sub-agents are unavailable, say that once, then keep status messages
 decision-oriented and terse.
@@ -234,8 +238,11 @@ search.
 15. Persist CSV/JSONL artifacts with `persist_search_results`; it should use
     `llm_rerank_candidates.output.ranked_candidate_ids` when present so the
     exported results are in final reranked order.
-16. Present artifact paths, a compact result summary, top candidates with score
-    + reason, and recommended follow-up refinements.
+16. Present a compact result summary, one artifact directory, one user-facing
+    found count, top candidates with score + reason, and recommended follow-up
+    refinements. Do not list state, ledger, CSV, JSONL, manifest, or rerank
+    paths individually; say `Run artifacts: <artifact-dir>`. Do not list
+    internal stage counts; say `N found`.
 17. Stop when the frontier is coherent enough to present.
 
 ## First Response Contract
@@ -244,23 +251,28 @@ For an initial `/search-network ...` request, do not reply with a long visible
 plan. Extract the query, run the payload quality gate below, then show one
 compact search preview and ask for exactly one decision:
 
-`Execute this search, modify it, or run search-only without LLM rerank?`
+`Execute this search or modify it?`
 
 The preview should include only:
 
 - normalized query
 - state path or exact state path to create
 - set scope: explicit `set_id`, env/default set, or personal-set fallback
-- currentness semantics: `is_current_role` / `is_current_company`
-- role/title intent: dense `semantic_query` summary plus `bm25_queries`
-- company/domain/investor/education/location/seniority filters
-- expected execution: retrieval → hydration → LLM filter → LLM rerank → persist
+- role/title intent only when a `semantic_query` or title/BM25 filters exist
+- company/domain/investor/education/location/seniority filters that are present
+- tenure/date window when present, phrased as a plain-language window such as
+  `Roblox roles overlapping 2016-2020`
 - runtime blockers, if any
 
+Do not print absent/null schema fields. Do not explain that
+`semantic_query`, `is_current_role`, or `is_current_company` is missing. If
+there is no role/title intent, do not include a role/title section. If there is
+a date window, show the window in human terms instead of listing currentness
+internals.
+
 If the user chooses `execute`, invoke `search_network_pipeline --execute-approved`
-so there is no second LLM approval gate. If the user chooses `search-only`, pass
-`--search-only`. If the user asks for changes, update/regenerate the extraction
-and show the compact preview again.
+so there is no second LLM approval gate. If the user asks for changes,
+update/regenerate the extraction and show the compact preview again.
 
 Before showing the preview, perform this payload quality gate:
 
@@ -273,23 +285,26 @@ Before showing the preview, perform this payload quality gate:
 - It must not be identical to, or merely a singular/plural variant of, any
   `bm25_queries` entry.
 - For pure hard-filter queries with no role/profile/domain intent (for example,
-  "people who worked at Meta after 2020"), `semantic_query` may be omitted; the
-  pipeline will use filter-only TurboPuffer retrieval after resolving companies
-  and applying prefilters.
+  "people who worked at Meta after 2020"), `semantic_query` may be left out of
+  the payload; the pipeline will use filter-only TurboPuffer retrieval after
+  resolving companies and applying prefilters.
 - If this gate fails, do not ask for approval. Regenerate the decomposition
   first and explain that the first payload was invalid.
 
 ## Rules
 
 - default to LLM filtering and LLM reranking after the user approves the search
-  preview; only skip them when the user chooses `search only`, when
-  `OPENAI_API_KEY` is missing, or when the task is the company-directory MCP
-  fast path
+  preview; only skip them when `OPENAI_API_KEY` is missing or when the task is
+  the company-directory MCP fast path
 - do not force slices when the query is already specific
 - use counts and frontier feedback to decide whether to widen or narrow
 - produce a short decision trace after each stage
 - keep role, location, seniority, education, yoe, age, and company constraints
   explicit
+- preserve extractor-inferred seniority unless it is schema-invalid or directly
+  contradicts the user's query. Do not delete `seniority_bands` just because the
+  user did not name a seniority; the seniority extractor intentionally infers
+  default IC bands for roles such as software engineers.
 - make currentness explicit for every role or company query. Use only
   `is_current_role` and `is_current_company` in `role_search_filters`; do not
   emit legacy `is_current`. If the user's wording does not make currentness
@@ -364,10 +379,9 @@ Before showing the preview, perform this payload quality gate:
   the user, or recorded as a separate exploratory slice
 - use persisted task state and artifacts as the source of truth; do not paste
   the full candidate set into chat
-- the normal approval vocabulary is `execute`, `modify`, or `search only`.
-  `execute` runs retrieval, hydration, LLM filter, LLM rerank, and persistence;
-  `search only` runs retrieval, hydration, and persistence; `modify` revises the
-  extracted payload before any retrieval.
+- the normal approval vocabulary is `execute` or `modify`. `execute` runs
+  retrieval, hydration, LLM filter, LLM rerank, and persistence; `modify`
+  revises the extracted payload before any retrieval.
 - do not run sharded agentic candidate review in the normal path. Use the
   packaged `llm_filter_candidates` and `llm_rerank_candidates` primitives via
   `search_network_pipeline --execute-approved`.
@@ -437,15 +451,6 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
   --query "<user query>" \
   --payload-json .powerpacks/search/<run>/expand_search_request.json \
   --execute-approved
-```
-
-For explicit search-only runs:
-
-```bash
-uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
-  --query "<user query>" \
-  --payload-json .powerpacks/search/<run>/expand_search_request.json \
-  --search-only
 ```
 
 For status/continuation diagnostics, keep using `uv run --env-file .env`:
