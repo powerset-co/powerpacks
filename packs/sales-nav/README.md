@@ -32,10 +32,10 @@ If those are not in place, the skill routes the user through
 ## Skill Surface
 
 - `sales-nav-search` — Run a Sales Navigator search through the MCP.
-  Resolves company / title filters, runs a paginated lead search with
-  server-side artifact persistence on by default, stores local `leads.jsonl` /
-  `mutuals.jsonl` handoff files, and offers paginated retrieval via
-  `get_artifact`. See
+  Resolves company / title filters, runs a resumable multi-query lead search
+  with server-side artifact persistence on by default, enriches loaded leads,
+  resolves mutual URLs locally, stores local `leads.jsonl` / `mutuals.jsonl`
+  handoff files, and offers paginated retrieval via `get_artifact`. See
   [`skills/sales-nav-search/SKILL.md`](skills/sales-nav-search/SKILL.md).
 
 ## MCP Tools Used
@@ -47,6 +47,7 @@ The skill orchestrates these tools served by the remote MCP:
 | `sales_nav_resolve` | Translate human company / title strings to LinkedIn IDs. |
 | `sales_nav_search` | Paginated lead search; persists an artifact when `persist_artifact=true`. |
 | `get_artifact` | Page back through a persisted result set without re-running the search. |
+| `enrich_extended_profiles` | Enrich selected lead member IDs with full profile fields and update the latest artifact. |
 | `sales_nav_resolve_member_ids` | Resolve lead/mutual member IDs to LinkedIn URLs from cache/free layers by default. |
 
 Tool descriptions, input schemas, and return shapes are owned by the
@@ -57,6 +58,7 @@ agent-facing orchestration layer; it does not duplicate those contracts.
 
 | Primitive | Purpose |
 | --- | --- |
+| `sales_nav_pipeline` | Resumable orchestrator. Emits MCP `blocked_tool_call`s, ingests artifacts, enriches leads, resolves mutual URLs, exports CSVs, and approval-gates optional local scoring. |
 | `sales_nav_artifacts` | Initialize a local run, ingest MCP page responses into `leads.jsonl` / `mutuals.jsonl`, merge member URL resolutions, export CSVs, and answer lookup queries against the files. |
 | `score_sales_nav_leads` | Fan-out LLM scoring over a run's `leads.jsonl` + mutual context, writing matching leads to `scores/<criteria>/matches.csv`. |
 
@@ -66,7 +68,11 @@ agent-facing orchestration layer; it does not duplicate those contracts.
   is cheap and lets the agent page large result sets via `get_artifact`
   in a later turn.
 - `count: 25` per page (LinkedIn cap).
-- Loop on `next_start_offset` until `has_more` is false.
+- Do not loop unbounded. Use explicit multi-query search plans for known
+  recall gaps (strict search + fallback search, one deliberate extra broad page,
+  etc.); otherwise surface `next_start_offset` and ask before loading more.
+- Prefer structured fallbacks before free text: current company, relaxed
+  structured filters, past company, then keyword-only search last.
 
 ## Tasks
 

@@ -81,6 +81,32 @@
     "notes": "Qualitative refinement over an existing Sales Nav run should score local leads, not run a fresh upstream Sales Nav search."
   },
   {
+    "id": "endowment-multi-query-orchestrator",
+    "query": "Who is on the investment team or an investor in Dartmouth endowment?",
+    "must_include": [
+      "sales_nav_pipeline",
+      "search_plan.json",
+      "multiple queries",
+      "function_ids",
+      "company-only",
+      "past_company_ids",
+      "enrich_extended_profiles",
+      "sales_nav_resolve_member_ids",
+      "score_sales_nav_leads"
+    ],
+    "must_not_include": [
+      "single Sales Nav query only",
+      "manual MCP chain without the orchestrator"
+    ],
+    "expected_tools": [
+      "sales_nav_search",
+      "get_artifact",
+      "enrich_extended_profiles",
+      "sales_nav_resolve_member_ids"
+    ],
+    "notes": "Robust recall path. Resolve Dartmouth to the parent company, run finance/investment, company-only, and past-company search plan items through the orchestrator before any keyword-only fallback, enrich lead artifacts, resolve mutual URLs locally, then score locally against the investment/endowment criteria."
+  },
+  {
     "id": "resolve-mutuals-to-urls",
     "query": "Lead 12345 has mutual_member_ids [67890, 11111, 22222] from a previous search. Show me their LinkedIn URLs.",
     "must_include": [

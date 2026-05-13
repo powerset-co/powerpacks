@@ -38,6 +38,7 @@ LEAD_FIELDS = [
     "source_account_ids",
     "mutual_count",
     "total_mutual_count",
+    "total_interactions",
     "mutual_member_ids",
     "operators",
     "enriched",
@@ -61,6 +62,7 @@ MUTUAL_FIELDS = [
     "mutual_name",
     "mutual_person_id",
     "mutual_linkedin_url",
+    "total_interactions",
     "source_account_ids",
     "operators",
     "first_seen_at",
@@ -223,6 +225,13 @@ def list_ints(value: Any) -> list[int]:
     return list(dict.fromkeys(out))
 
 
+def int_or_zero(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def source_account_ids_from_lead(lead: dict[str, Any]) -> list[str]:
     ids = [str(x) for x in (lead.get("source_account_ids") or []) if x]
     for op in lead.get("operators") or []:
@@ -273,8 +282,9 @@ def normalize_lead(
         "linkedin_url": lead.get("linkedin_url") or row.get("linkedin_url"),
         "profile_picture_url": lead.get("profile_picture_url") or lead.get("profile_pic_url") or row.get("profile_picture_url"),
         "source_account_ids": list(dict.fromkeys((row.get("source_account_ids") or []) + source_ids)),
-        "mutual_count": max(int(row.get("mutual_count") or 0), int(lead.get("mutual_count") or 0), len(mutual_ids)),
-        "total_mutual_count": max(int(row.get("total_mutual_count") or 0), int(lead.get("total_mutual_count") or 0), len(mutual_ids)),
+        "mutual_count": max(int_or_zero(row.get("mutual_count")), int_or_zero(lead.get("mutual_count")), len(mutual_ids)),
+        "total_mutual_count": max(int_or_zero(row.get("total_mutual_count")), int_or_zero(lead.get("total_mutual_count")), len(mutual_ids)),
+        "total_interactions": max(int_or_zero(row.get("total_interactions")), int_or_zero(lead.get("total_interactions"))),
         "mutual_member_ids": list(dict.fromkeys((row.get("mutual_member_ids") or []) + mutual_ids)),
         "operators": merge_operator_lists(row.get("operators") or [], lead.get("operators") or []),
         "enriched": bool(lead.get("enriched") or row.get("enriched") or lead.get("experiences") or lead.get("education")),
@@ -334,6 +344,7 @@ def mutual_rows_for_lead(
             "mutual_name": mutual.get("name") or mutual.get("first_name"),
             "mutual_person_id": mutual.get("person_id"),
             "mutual_linkedin_url": mutual.get("linkedin_url"),
+            "total_interactions": int_or_zero(mutual.get("total_interactions")),
             "source_account_ids": source_ids,
             "operators": operators,
             "first_seen_at": now,
@@ -356,6 +367,8 @@ def upsert_by_key(rows: list[dict[str, Any]], incoming: list[dict[str, Any]], ke
                     continue
                 if field == "times_seen":
                     existing[field] = int(existing.get(field) or 0) + int(value or 0)
+                elif field == "total_interactions":
+                    existing[field] = max(int_or_zero(existing.get(field)), int_or_zero(value))
                 elif field in {"source_account_ids", "operators", "mutual_member_ids"}:
                     if field == "operators":
                         existing[field] = merge_operator_lists(existing.get(field) or [], value or [])
@@ -533,13 +546,17 @@ def cmd_pending_mutual_ids(args: argparse.Namespace) -> None:
     state = load_state(Path(args.state))
     paths = state_paths(state)
     mutuals = read_jsonl(paths["mutuals_jsonl"])
-    urls = read_json(paths["member_urls_json"]) if paths["member_urls_json"].exists() else {"resolved": {}}
+    urls = read_json(paths["member_urls_json"]) if paths["member_urls_json"].exists() else {"resolved": {}, "unresolved": []}
     resolved = set(str(k) for k in (urls.get("resolved") or {}))
+    known_unresolved = set(str(x) for x in (urls.get("unresolved") or []))
     ids = []
     for row in mutuals:
         mid = str(row.get("mutual_member_id") or "")
-        if mid and mid not in resolved and not row.get("mutual_linkedin_url"):
-            ids.append(mid)
+        if not mid or mid in resolved or row.get("mutual_linkedin_url"):
+            continue
+        if mid in known_unresolved and not args.include_unresolved:
+            continue
+        ids.append(mid)
     ids = list(dict.fromkeys(ids))
     if args.limit:
         ids = ids[: args.limit]
@@ -580,11 +597,13 @@ def cmd_lookup(args: argparse.Namespace) -> None:
             "linkedin_url": lead.get("linkedin_url"),
             "source_account_ids": lead.get("source_account_ids") or [],
             "mutual_count": lead.get("mutual_count"),
+            "total_interactions": lead.get("total_interactions"),
             "mutuals": [
                 {
                     "member_id": m.get("mutual_member_id"),
                     "name": m.get("mutual_name"),
                     "linkedin_url": m.get("mutual_linkedin_url"),
+                    "total_interactions": m.get("total_interactions"),
                     "operators": m.get("operators") or [],
                     "source_account_ids": m.get("source_account_ids") or [],
                 }
@@ -625,6 +644,7 @@ def main() -> None:
     pending = sub.add_parser("pending-mutual-ids")
     pending.add_argument("--state", required=True)
     pending.add_argument("--limit", type=int)
+    pending.add_argument("--include-unresolved", action="store_true", help="Retry member IDs that a previous cache-only resolution marked unresolved")
     pending.set_defaults(func=cmd_pending_mutual_ids)
 
     export = sub.add_parser("export")

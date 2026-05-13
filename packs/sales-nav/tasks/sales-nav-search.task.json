@@ -1,7 +1,7 @@
 {
   "task": "sales_nav_search",
   "version": 1,
-  "description": "Run a Sales Navigator search through the powerset-search MCP, with server-side artifact persistence, local file handoffs, and paginated retrieval.",
+  "description": "Run a Sales Navigator search through the powerset-search MCP, with server-side artifact persistence, resumable multi-query plans, lead enrichment, local mutual URL resolution, file handoffs, and paginated retrieval.",
   "default_constraints": {
     "requires_powerset_auth": true,
     "requires_powerset_mcp": true,
@@ -49,6 +49,14 @@
       "command": "init"
     },
     {
+      "id": "run_search_plan",
+      "kind": "orchestrator",
+      "pack": "sales-nav",
+      "primitive": "sales_nav_pipeline",
+      "command": "run",
+      "description": "Normal path: create a one-or-more-query search_plan.json, then follow blocked_tool_call responses until completion. Structured fallbacks come before keyword-only fallback: current company, relaxed structured filters, past_company_ids, then keywords last. The orchestrator calls sales_nav_search, get_artifact, enrich_extended_profiles, sales_nav_resolve_member_ids, export, and optional scoring in order."
+    },
+    {
       "id": "run_search",
       "kind": "mcp_tool",
       "tool": "sales_nav_search",
@@ -57,7 +65,7 @@
         "count": 25
       },
       "loop": {
-        "while": "result.has_more",
+        "while": "explicit_plan_requests_next_page_or_user_asks",
         "next_arg": "start_offset",
         "next_arg_from": "result.next_start_offset"
       }
@@ -84,6 +92,13 @@
       "tool": "enrich_extended_profiles",
       "optional": true,
       "when": "visible Sales Nav leads should be enriched with full profile data"
+    },
+    {
+      "id": "resolve_mutual_urls",
+      "kind": "mcp_tool",
+      "tool": "sales_nav_resolve_member_ids",
+      "optional": true,
+      "when": "local mutuals.jsonl has mutual_member_ids without mutual_linkedin_url; orchestrator runs this cache-only by default"
     },
     {
       "id": "score_local_leads",

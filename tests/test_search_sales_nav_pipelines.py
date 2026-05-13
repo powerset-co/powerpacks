@@ -1,5 +1,6 @@
 import importlib.util
 import inspect
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -96,6 +97,43 @@ class SalesNavPipelineTests(unittest.TestCase):
             saved = sales.read_json(lp)
         self.assertEqual(rc, 0)
         self.assertTrue(saved["approvals"]["llm_abc"]["confirmed"])
+
+    def test_sales_plan_normalization_supports_multi_query_and_strips_metadata(self):
+        raw = {
+            "score_criteria": "investment team",
+            "queries": [
+                {"id": "finance", "args": {"company_ids": [123], "company_names": {"123": "Acme"}, "function_ids": ["10"]}},
+                {"id": "past_company", "label": "past company", "past_company_ids": [123], "past_company_names": {"123": "Acme"}},
+                {"id": "keyword_last", "label": "keyword", "args": {"keywords": "Acme"}},
+            ],
+        }
+        plan, criteria = sales.normalize_search_plan(raw, set_id="set-123", conversation_id="conv-123", default_count=25)
+        self.assertEqual(criteria, "investment team")
+        self.assertEqual(len(plan), 3)
+        self.assertEqual(plan[0]["args"]["function_ids"], ["10"])
+        self.assertEqual(plan[0]["args"]["company_names"], {"123": "Acme"})
+        self.assertEqual(plan[1]["args"]["past_company_ids"], [123])
+        self.assertEqual(plan[1]["args"]["past_company_names"], {"123": "Acme"})
+        self.assertEqual(plan[2]["args"]["keywords"], "Acme")
+        self.assertEqual(plan[0]["args"]["set_id"], "set-123")
+        self.assertEqual(plan[0]["args"]["conversation_id"], "conv-123")
+        self.assertTrue(plan[0]["args"]["persist_artifact"])
+        self.assertNotIn("label", plan[1]["args"])
+
+    def test_sales_member_ids_for_enrichment_filters_current_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            leads = root / "leads.jsonl"
+            rows = [
+                {"member_id": "1", "artifact_id": "art-a", "mutual_count": 1, "enriched": False},
+                {"member_id": "2", "artifact_id": "art-a", "mutual_count": 5, "enriched": False},
+                {"member_id": "3", "artifact_id": "art-b", "mutual_count": 9, "enriched": False},
+                {"member_id": "4", "artifact_id": "art-a", "mutual_count": 10, "enriched": True},
+            ]
+            leads.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            state = root / "state.json"
+            sales.write_json(state, {"files": {"leads_jsonl": str(leads)}})
+            self.assertEqual(sales.member_ids_for_enrichment(state, artifact_id="art-a", limit=10), [2, 1])
 
 if __name__ == "__main__":
     unittest.main()

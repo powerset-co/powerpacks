@@ -13,7 +13,7 @@ The skill is in its own pack (`packs/sales-nav`) but **depends on
 `packs/powerset`** for Auth0 login and MCP install. If those aren't ready,
 route the user to `$powerset login` first.
 
-It calls three MCP tools served by the remote `powerset-search` MCP at
+It calls these MCP tools served by the remote `powerset-search` MCP at
 `https://search-api-7wk4uhe77q-uw.a.run.app/mcp`:
 
 - `sales_nav_resolve` — turn company names + titles into LinkedIn
@@ -22,6 +22,10 @@ It calls three MCP tools served by the remote `powerset-search` MCP at
   with `conversation_id` + `persist_artifact: true` the server writes a
   Supabase artifact row and returns an `artifact_id`
 - `get_artifact` — paginated retrieval of a persisted artifact
+- `enrich_extended_profiles` — enrich selected lead member IDs with profile
+  fields, then persist them back to the latest Sales Nav artifact
+- `sales_nav_resolve_member_ids` — resolve mutual member IDs to LinkedIn URLs
+  through cache/free layers by default
 
 The skill itself does not call HTTP — Claude Code / Codex invoke the MCP
 tools directly once `mcp_install` (in `packs/powerset`) has registered the
@@ -53,14 +57,26 @@ server.
   Save each MCP page response to a small JSON file, then run
   `sales_nav_artifacts ingest-page --response <path>` so later steps pass only
   paths/state.
+- **Default to the orchestrator.** For normal runs, do not hand-compose a long
+  MCP/tool sequence in chat. Create a search args/plan JSON, run
+  `sales_nav_pipeline`, execute only the `blocked_tool_call` it emits, save the
+  response to the requested path, then continue until completed or blocked.
+  Use primitives directly only for narrow debugging or power-user requested
+  edits.
 - For clear, unambiguous searches, do not ask approval/clarifying questions.
-  Resolve filters, search, ingest full artifact content, enrich the visible leads,
-  ingest enriched full artifact content, export CSVs, and present a compact
-  summary. Ask only when a filter is genuinely ambiguous (for example multiple
-  plausible "Cisco" companies) or when the user asks to page/enrich far beyond
-  the visible result set.
-- Do not auto-page beyond what the user requested. `sales_nav_search`
-  returns `has_more` and `next_start_offset`; surface them, don't loop.
+  Resolve filters, build a one-or-more-query search plan, let the orchestrator
+  search, ingest full artifact content, enrich the visible leads, resolve mutual
+  URLs locally, export CSVs, and present a compact summary. Ask only when a
+  filter is genuinely ambiguous (for example multiple plausible "Cisco"
+  companies) or when the user asks to page/enrich far beyond the visible result
+  set.
+- Do not auto-page endlessly. It is OK for the orchestrator search plan to
+  include deliberate same-turn fallback queries/pages for robustness (for
+  example strict role + company-only fallback), but otherwise surface
+  `has_more` / `next_start_offset` and ask before loading more.
+- Keep fallback searches structured before falling back to free text. If an
+  exact current-company query returns 0, retry with the same org ID in
+  `past_company_ids` before using `keywords`. Keywords are the last fallback.
 
 ## Prereqs
 
@@ -104,20 +120,46 @@ Prefer the resumable Sales Nav orchestrator for normal runs:
 uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py run \
   --query "<user query>" \
   --set-id "<set_id>" \
-  --search-args-json .powerpacks/sales-nav/<run>/search_args.json
+  --search-plan-json .powerpacks/sales-nav/<run>/search_plan.json
 ```
+
+For a single simple pass, `--search-args-json` is still accepted. Prefer
+`--search-plan-json` because robust Sales Nav recall often needs multiple
+queries.
 
 The runner owns local state and exits with `status: blocked_tool_call` whenever
 the harness should call a `powerset-search` MCP tool. The block includes the
 `tool_name`, `tool_args`, `save_response_to`, and `continue_command`. The
 harness/agent should call the MCP tool natively, write the JSON response to the
-specified path, then run the continue command. Local ingest, export, scoring
-approvals, and the ledger are handled by the runner.
+specified path, then run the continue command. Local ingest, lead enrichment,
+mutual URL resolution, export, scoring approvals, and the ledger are handled by
+the runner.
 
 For follow-up qualitative scoring, pass `--criteria`; the runner blocks for
 `approve llm --confirm` before calling `score_sales_nav_leads`.
 
+Search plan shape:
+
+```json
+{
+  "score_criteria": "investment/endowment team",
+  "queries": [
+    {"id": "finance", "label": "parent company + finance", "args": {"company_ids": [163348], "function_ids": ["10"]}},
+    {"id": "company_only", "label": "parent company only", "args": {"company_ids": [163348]}}
+  ]
+}
+```
+
+The MCP `sales_nav_search` schema accepts current-company IDs via
+`company_ids`, past-company IDs via `past_company_ids`, optional display-name
+maps for both, and text filters. Keep unrelated agent-only annotations in plan
+metadata; the orchestrator strips unsupported fields from tool args.
+
 ## Local file handoff
+
+Normally `sales_nav_pipeline` performs these local handoffs. Use the primitives
+below directly only when debugging a failed block, resuming from a hand-edited
+state file, or honoring a power-user request to operate at the primitive level.
 
 Use `packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py` as
 the durable local store for each skill invocation. It normalizes MCP page output
@@ -125,12 +167,13 @@ into these files:
 
 - `leads.jsonl` — internal handoff, one row per lead with `member_id`,
   `profile_id`, `source_account_ids`, `operators`, `mutual_member_ids`,
-  `linkedin_url`, title/company/location, enriched profile fields (`summary`,
-  `experiences`, `education`, `enriched`) when available, artifact/source
-  metadata, and seen counts.
+  `total_interactions` when present, `linkedin_url`, title/company/location,
+  enriched profile fields (`summary`, `experiences`, `education`, `enriched`)
+  when available, artifact/source metadata, and seen counts.
 - `mutuals.jsonl` — internal handoff, one row per lead↔mutual edge with
   `lead_member_id`, `mutual_member_id`, mutual LinkedIn URL if resolved,
-  operator/source metadata, and artifact/source metadata.
+  `total_interactions` when present, operator/source metadata, and
+  artifact/source metadata.
 - `member_urls.json` — `member_id -> LinkedIn URL` results from
   `sales_nav_resolve_member_ids`.
 - `manifest.json` / `state.json` — paths, counts, artifact ids, pages.
@@ -211,7 +254,11 @@ It fans out over `leads.jsonl`, includes joined mutual context, writes only
 matching leads to `scores/<criteria>/matches.jsonl`, and writes the user-facing
 `matches.csv`. Non-matches are not written unless `--dump-debug` is passed.
 
-## Workflow
+## Manual workflow / debugging reference
+
+The normal workflow is the orchestrator loop above. The lower-level sequence
+below documents what the orchestrator is doing and is useful when a block fails
+or a power user wants to call primitives directly.
 
 ### Step 0 — Confirm prereqs
 
@@ -256,6 +303,22 @@ Args: {
 If the user already gave you a `company_id` or `function_id`, skip this
 and go straight to step 2.
 
+Resolution robustness:
+
+- LinkedIn company URLs should be passed directly to `sales_nav_resolve`; the
+  server can resolve vanity slugs such as `linkedin.com/company/genies-inc`.
+- Endowment / investment office / foundation phrases often name a team rather
+  than a LinkedIn company. Resolve the parent institution too. Example:
+  `"Dartmouth endowment"` should be tried with `"Dartmouth"` /
+  `"Dartmouth College"`, then the search plan should use the parent org ID plus
+  finance/investment keywords and a parent company-only fallback.
+- If the first resolve call returns no company matches, do not stop. Retry once
+  in the same turn with cleaned parent/name variants before telling the user it
+  cannot be resolved.
+- If a current-company search returns 0 for a resolved org, keep the same org
+  ID and run a past-company query next. Only use keyword fallback after the
+  structured current/past company paths are empty or unavailable.
+
 Mode defaults:
 
 - "who works at Brookfield" / "who's in my extended network at Cisco" → company
@@ -283,6 +346,9 @@ Args: {
   "conversation_id":"<UUID — see conversation_id playbook>",
   "persist_artifact": true,
   "company_ids":    [...],         // from sales_nav_resolve
+  "company_names":  {"<org_id>": "<display name>"},
+  "past_company_ids": [...],       // alumni / worked-at searches
+  "past_company_names": {"<org_id>": "<display name>"},
   "title":          "staff engineer",
   "function_ids":   [...],
   "seniority_ids":  [...],

@@ -59,14 +59,22 @@ class SalesNavArtifactsTests(unittest.TestCase):
                         "source_account_ids": ["acct-a"],
                         "mutual_count": 2,
                         "total_mutual_count": 2,
+                        "total_interactions": 4,
                         "mutual_member_ids": [201, 202],
                         "mutuals": [
                             {
                                 "member_id": 201,
                                 "name": "Mallory Mutual",
                                 "person_id": "person-201",
+                                "total_interactions": 12,
                                 "operators": [
-                                    {"operator_id": "op-1", "operator_name": "Op One", "source_channels": ["sales_nav"]}
+                                    {
+                                        "operator_id": "op-1",
+                                        "operator_name": "Op One",
+                                        "source_channels": ["sales_nav"],
+                                        "total_interactions": 12,
+                                        "gmail_accounts": ["op-one@example.com"],
+                                    }
                                 ],
                             },
                             {"member_id": 202, "first_name": "Pat"},
@@ -110,11 +118,17 @@ class SalesNavArtifactsTests(unittest.TestCase):
                             "title": "VP Engineering",
                             "company": "Stripe",
                             "location": "San Francisco",
+                            "total_interactions": 9,
                             "operators": [
                                 {"operator_id": "op-2", "operator_name": "Op Two", "source_channels": ["sales_nav"]}
                             ],
                             "mutuals": [
-                                {"member_id": 203, "name": "Quinn Mutual", "linkedin_url": "https://www.linkedin.com/in/quinn"}
+                                {
+                                    "member_id": 203,
+                                    "name": "Quinn Mutual",
+                                    "linkedin_url": "https://www.linkedin.com/in/quinn",
+                                    "total_interactions": 3,
+                                }
                             ],
                         },
                         {
@@ -142,6 +156,10 @@ class SalesNavArtifactsTests(unittest.TestCase):
             urls_path.write_text(json.dumps(urls))
             url_out = self.run_json(["ingest-member-urls", "--state", str(state_path), "--response", str(urls_path)])
             self.assertEqual(url_out["resolved_count"], 2)
+            pending_after_cache_only = self.run_json(["pending-mutual-ids", "--state", str(state_path)])
+            self.assertEqual(pending_after_cache_only["member_ids"], [])
+            pending_retry = self.run_json(["pending-mutual-ids", "--state", str(state_path), "--include-unresolved"])
+            self.assertEqual(pending_retry["member_ids"], [204])
 
             enriched_artifact = {
                 "id": "artifact-1",
@@ -190,6 +208,7 @@ class SalesNavArtifactsTests(unittest.TestCase):
             ada = next(row for row in lead_rows if row["member_id"] == "101")
             self.assertNotIn("source_account_id", ada)
             self.assertEqual(json.loads(ada["source_account_ids"]), ["acct-a"])
+            self.assertEqual(ada["total_interactions"], "9")
             self.assertEqual(ada["enriched"], "True")
             self.assertIn("real estate finance", ada["summary"])
             self.assertIn("Brookfield", ada["experiences"])
@@ -197,11 +216,15 @@ class SalesNavArtifactsTests(unittest.TestCase):
             self.assertIn("203", ada["mutual_member_ids"])
             mallory = next(row for row in mutual_rows if row["mutual_member_id"] == "201")
             self.assertEqual(mallory["mutual_linkedin_url"], "https://www.linkedin.com/in/mallory")
+            self.assertEqual(mallory["total_interactions"], "12")
+            self.assertEqual(json.loads(mallory["operators"])[0]["gmail_accounts"], ["op-one@example.com"])
 
             lookup = self.run_json(["lookup", "--state", str(state_path), "--query", "ada"])
             self.assertEqual(lookup["count"], 1)
             self.assertEqual(lookup["results"][0]["member_id"], "101")
+            self.assertEqual(lookup["results"][0]["total_interactions"], 9)
             self.assertEqual(len(lookup["results"][0]["mutuals"]), 3)
+            self.assertEqual(lookup["results"][0]["mutuals"][0]["total_interactions"], 12)
             profile_lookup = self.run_json(["lookup", "--state", str(state_path), "--query", "real estate"])
             self.assertEqual(profile_lookup["count"], 1)
             self.assertEqual(profile_lookup["results"][0]["member_id"], "101")
