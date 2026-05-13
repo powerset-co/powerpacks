@@ -1,0 +1,12 @@
+# Powerpacks Console
+
+Local Vite app for browsing Powerpacks artifacts from `.powerpacks/`.
+
+```bash
+cd .. # powerpacks repo root
+scripts/run-powerpacks-console.sh start
+```
+
+Open the URL printed by the script, usually `http://localhost:5177/`.
+
+The console is read-only and currently supports network search/rerank artifacts.

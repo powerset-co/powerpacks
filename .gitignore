@@ -7,3 +7,6 @@ install-manifest.json
 *.log
 .powerpacks/
 .codex/AGENTS.md
+# Powerpacks Console
+app/node_modules/
+app/dist/
