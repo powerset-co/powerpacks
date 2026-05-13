@@ -682,6 +682,33 @@ def resolve_mutual_urls(args: argparse.Namespace, ledger_path_: Path, ledger: di
     )
 
 
+def enrich_mutual_attribution_step(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> None:
+    """Enrich mutuals with operator attribution. Runs discover if --discover-mutuals."""
+    if done(ledger, "enrich_mutual_attribution") and not args.force:
+        return
+    mode = "discover" if getattr(args, "discover_mutuals", False) else "attribution"
+    cmd = [
+        sys.executable,
+        str(ROOT / "packs/sales-nav/primitives/enrich_mutual_attribution/enrich_mutual_attribution.py"),
+        "--state", str(state),
+        "--mode", mode,
+        "--env-file", args.env_file,
+    ]
+    if getattr(args, "discover_stagger", None):
+        cmd.extend(["--stagger", str(args.discover_stagger)])
+    if getattr(args, "discover_max_leads", None):
+        cmd.extend(["--max-leads", str(args.discover_max_leads)])
+    timeout = 600 if mode == "discover" else 60
+    result = run(cmd, timeout=timeout)
+    if result.get("returncode") != 0:
+        mark(ledger_path_, ledger, "enrich_mutual_attribution", "completed",
+             summary={"reason": "failed", "error": (result.get("stderr") or "")[-200:]})
+        return
+    payload = result.get("json") or {}
+    mark(ledger_path_, ledger, "enrich_mutual_attribution", "completed",
+         summary=payload, command=" ".join(map(shlex.quote, cmd)))
+
+
 def export_state(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> None:
     if done(ledger, "export") and not args.force:
         return
@@ -737,6 +764,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         blocked = resolve_mutual_urls(args, ledger_path_, ledger, state)
         if blocked is not None:
             return blocked
+        enrich_mutual_attribution_step(args, ledger_path_, ledger, state)
         export_state(args, ledger_path_, ledger, state)
         blocked = score_if_requested(args, ledger_path_, ledger, state)
         if blocked is not None:
@@ -816,6 +844,9 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-mutual-url-resolution", action="store_true")
     parser.add_argument("--mutual-url-limit", type=int, default=DEFAULT_MUTUAL_URL_LIMIT)
     parser.add_argument("--resolve-mutuals-external", action="store_true")
+    parser.add_argument("--discover-mutuals", action="store_true", help="Run full mutual discovery (Phase 2) instead of attribution-only")
+    parser.add_argument("--discover-stagger", type=float, default=2.0, help="Seconds between discover API batches")
+    parser.add_argument("--discover-max-leads", type=int, default=25, help="Max leads for mutual discovery")
     parser.add_argument("--count", type=int, default=DEFAULT_COUNT)
     parser.add_argument("--criteria")
     parser.add_argument("--threshold", type=float, default=0.7)
