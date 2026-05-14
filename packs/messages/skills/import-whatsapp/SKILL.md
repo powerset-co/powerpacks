@@ -25,7 +25,7 @@ This flow:
 - installs `wacli` with Homebrew if it is missing
 - uses `.powerpacks/messages/wacli` as an isolated local store
 - authenticates with a WhatsApp QR scan if needed
-- runs one bounded WhatsApp sync
+- runs one WhatsApp sync
 - exports `.powerpacks/messages/wacli.contacts.csv`
 
 The Powerpacks export reads metadata only: phone, name, source, group metadata,

@@ -2491,7 +2491,7 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--force-imessage", action="store_true")
     add_hidden_arg(parser, "--force-whatsapp", action="store_true")
     add_hidden_arg(parser, "--whatsapp-provider", default=DEFAULT_WHATSAPP_PROVIDER, choices=("wacli", "waha"))
-    add_hidden_arg(parser, "--wacli-max-messages", type=int, default=10000)
+    add_hidden_arg(parser, "--wacli-max-messages", type=int, default=0)
     add_hidden_arg(parser, "--wacli-max-group-participants", type=int, default=30)
     add_hidden_arg(parser, "--force-sync-candidates", action="store_true")
     add_hidden_arg(parser, "--force-match", action="store_true")

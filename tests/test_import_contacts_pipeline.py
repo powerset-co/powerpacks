@@ -516,7 +516,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
             args = SimpleNamespace(
                 force_whatsapp=True,
                 whatsapp_provider="wacli",
-                wacli_max_messages=10000,
+                wacli_max_messages=0,
                 wacli_max_group_participants=30,
                 timeout=30,
                 parallel_timeout=60,
@@ -538,7 +538,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertIn("--output-csv", cmd)
             self.assertIn(str(whatsapp_csv), cmd)
             self.assertIn("--max-messages", cmd)
-            self.assertIn("10000", cmd)
+            self.assertEqual(cmd[cmd.index("--max-messages") + 1], "0")
             self.assertIn("--max-group-participants", cmd)
             self.assertIn("30", cmd)
             saved = mod.read_json(ledger_path)

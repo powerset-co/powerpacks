@@ -23,7 +23,7 @@ iMessage:
 
 WhatsApp (all stdlib-only, all gated on explicit user consent):
 
-- `import_whatsapp_wacli`: install/find wacli, QR auth, bounded sync, metadata export
+- `import_whatsapp_wacli`: install/find wacli, QR auth, WhatsApp sync, metadata export
 - `waha_runtime`: Docker check + WAHA NOWEB container lifecycle
 - `waha_session`: WAHA session start/stop + QR PNG/text artifacts + auth poll
 - `extract_whatsapp_contacts`: pull contacts from an authenticated WAHA

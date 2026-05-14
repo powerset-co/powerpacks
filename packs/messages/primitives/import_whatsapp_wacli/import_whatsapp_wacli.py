@@ -35,7 +35,7 @@ DEFAULT_OUTPUT_JSONL = DEFAULT_OUT_DIR / "wacli.contacts.jsonl"
 DEFAULT_MANIFEST = DEFAULT_OUTPUT_CSV.with_suffix(DEFAULT_OUTPUT_CSV.suffix + ".manifest.json")
 DEFAULT_PROGRESS_JSONL = DEFAULT_MANIFEST.with_suffix(DEFAULT_MANIFEST.suffix + ".progress.jsonl")
 DEFAULT_NAME_FALLBACK_CSV = DEFAULT_OUT_DIR / "contacts.csv"
-DEFAULT_MAX_MESSAGES = int(os.environ.get("POWERPACKS_WACLI_MAX_MESSAGES", "10000"))
+DEFAULT_MAX_MESSAGES = int(os.environ.get("POWERPACKS_WACLI_MAX_MESSAGES", "0"))
 DEFAULT_QR_PNG = DEFAULT_OUT_DIR / "wacli-login-qr.png"
 DEFAULT_QR_HTML = DEFAULT_OUT_DIR / "wacli-login-qr.html"
 DEFAULT_MAX_GROUP_PARTICIPANTS = int(os.environ.get("POWERPACKS_WACLI_MAX_GROUP_PARTICIPANTS", "30"))
@@ -430,6 +430,12 @@ def store_message_count(stats: dict[str, Any]) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def effective_max_messages(requested: int, existing: int) -> int:
+    if requested <= 0:
+        return 0
+    return max(requested, existing + max(1000, requested // 10))
 
 
 def run_sync(store: Path, *, timeout: int, idle_exit: str, max_messages: int) -> dict[str, Any]:
@@ -1190,12 +1196,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         stats_before_sync = store_stats(store)
         existing_messages = store_message_count(stats_before_sync) or 0
-        effective_max_messages = max(args.max_messages, existing_messages + max(1000, args.max_messages // 10))
+        effective_max_messages_value = effective_max_messages(args.max_messages, existing_messages)
         sync_summary = run_sync(
             store,
             timeout=args.sync_timeout,
             idle_exit=args.idle_exit,
-            max_messages=effective_max_messages,
+            max_messages=effective_max_messages_value,
         )
         sync_summary["requested_max_messages"] = args.max_messages
         sync_summary["existing_messages_before_sync"] = existing_messages

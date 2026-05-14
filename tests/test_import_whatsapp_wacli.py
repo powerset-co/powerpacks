@@ -151,6 +151,11 @@ def create_wacli_db(store: Path) -> None:
 
 
 class ImportWhatsAppWacliTests(unittest.TestCase):
+    def test_default_max_messages_is_unlimited(self) -> None:
+        self.assertEqual(mod.DEFAULT_MAX_MESSAGES, 0)
+        self.assertEqual(mod.effective_max_messages(0, 25000), 0)
+        self.assertEqual(mod.effective_max_messages(10000, 25000), 26000)
+
     def test_export_reads_metadata_without_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

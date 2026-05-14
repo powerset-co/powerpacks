@@ -4,7 +4,7 @@ WhatsApp import flow using `openclaw/wacli` instead of WAHA.
 
 It installs/finds `wacli`, uses an isolated store at
 `.powerpacks/messages/wacli`, authenticates with WhatsApp if needed, runs one
-bounded sync, and exports a Powerpacks-compatible contacts CSV.
+WhatsApp sync, and exports a Powerpacks-compatible contacts CSV.
 
 ## Privacy contract
 
