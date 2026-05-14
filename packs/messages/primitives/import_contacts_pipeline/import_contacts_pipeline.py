@@ -48,6 +48,7 @@ DEFAULT_WHATSAPP_NORMALIZED = Path(".powerpacks/messages/whatsapp.contacts.norma
 DEFAULT_WHATSAPP_MANIFEST = Path(".powerpacks/messages/whatsapp.contacts.csv.manifest.json")
 DEFAULT_WHATSAPP_NORMALIZED_MANIFEST = Path(".powerpacks/messages/whatsapp.contacts.normalized.jsonl.manifest.json")
 DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE = Path(".powerpacks/messages/whatsapp.message-count-cache.json")
+DEFAULT_WHATSAPP_PROVIDER = os.environ.get("POWERPACKS_WHATSAPP_PROVIDER", "wacli").strip().lower() or "wacli"
 DEFAULT_CANDIDATES = Path(".powerpacks/messages/powerset_contacts.csv")
 DEFAULT_RESEARCH_QUEUE = Path(".powerpacks/messages/research_queue.csv")
 DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
@@ -1101,6 +1102,31 @@ def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
             "completed",
             summary={"reused": str(DEFAULT_WHATSAPP_CONTACTS), "reason": "active_run_completed"},
         )
+        return
+
+    if args.whatsapp_provider == "wacli":
+        cmd = [
+            sys.executable,
+            primitive_path("packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py"),
+            "run",
+            "--output-csv", str(DEFAULT_WHATSAPP_CONTACTS),
+            "--output-jsonl", str(DEFAULT_WHATSAPP_JSONL),
+            "--manifest", str(DEFAULT_WHATSAPP_MANIFEST),
+            "--max-messages", str(args.wacli_max_messages),
+            "--max-group-participants", str(args.wacli_max_group_participants),
+            "--sync-timeout", str(args.parallel_timeout),
+        ]
+        mark_step(ledger_path, ledger, "extract_whatsapp", "running", command=cmd)
+        result = run_command(
+            cmd,
+            timeout=args.parallel_timeout,
+            env=pipeline_env(args),
+            heartbeat_message=heartbeat_message_for_step("extract_whatsapp"),
+        )
+        payload = require_ok(result, "extract_whatsapp")
+        ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
+        ledger.setdefault("artifacts", {})["whatsapp_provider"] = "wacli"
+        mark_step(ledger_path, ledger, "extract_whatsapp", "completed", summary=payload, command=cmd)
         return
 
     check_cmd = [
@@ -2464,6 +2490,9 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--stop-before-upload", action="store_true")
     add_hidden_arg(parser, "--force-imessage", action="store_true")
     add_hidden_arg(parser, "--force-whatsapp", action="store_true")
+    add_hidden_arg(parser, "--whatsapp-provider", default=DEFAULT_WHATSAPP_PROVIDER, choices=("wacli", "waha"))
+    add_hidden_arg(parser, "--wacli-max-messages", type=int, default=10000)
+    add_hidden_arg(parser, "--wacli-max-group-participants", type=int, default=30)
     add_hidden_arg(parser, "--force-sync-candidates", action="store_true")
     add_hidden_arg(parser, "--force-match", action="store_true")
     add_hidden_arg(parser, "--force-prepare-queue", action="store_true")

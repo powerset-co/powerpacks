@@ -62,6 +62,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 | Skill | Trigger | What it does |
 | --- | --- | --- |
 | [`import-contacts`](packs/messages/skills/import-contacts/SKILL.md) | `$import-contacts` | One-command guided harness for iMessage + WhatsApp import, merge, Powerset candidate sync, local matching, browser review, and queue prep. No bodies. |
+| [`import-whatsapp`](packs/messages/skills/import-whatsapp/SKILL.md) | `$import-whatsapp` | Isolated WhatsApp metadata import flow using `wacli` instead of WAHA. |
 
 ## Goal
 
@@ -161,6 +162,7 @@ $search-network senior infra eng at fintech
 $search-company stripe-like fintech infra companies
 $powerset login                   # provisions .env from GCP Secret Manager
 $import-contacts                  # guided iMessage + WhatsApp import harness
+$import-whatsapp                  # isolated WhatsApp sync test via wacli
 ```
 
 ### Prereqs by skill family
@@ -321,6 +323,7 @@ Then, **inside the agent host**, sanity-check each skill family:
 | `search-network` | `$search-network senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
 | `import-contacts` | `$import-contacts` — should show a task checklist, ask once for local metadata import consent, then run until permissions/QR/cost approval are needed. |
+| `import-whatsapp` | `$import-whatsapp` — should install/find wacli, show QR if needed, sync once, and export WhatsApp metadata. |
 
 If the agent host doesn't see a skill at all: re-run `./install.sh <host>`
 and restart the host (skills are loaded once at startup).

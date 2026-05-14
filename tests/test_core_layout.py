@@ -25,7 +25,7 @@ class CoreLayoutTests(unittest.TestCase):
         messages_pack = sorted(
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(messages_pack, ["import-contacts"])
+        self.assertEqual(messages_pack, ["import-contacts", "import-whatsapp"])
 
     def test_pack_skills_have_codex_frontmatter(self) -> None:
         for path in sorted((ROOT / "packs").glob("*/skills/*/SKILL.md")):

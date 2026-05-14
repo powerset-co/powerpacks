@@ -505,6 +505,46 @@ class ImportContactsPipelineTests(unittest.TestCase):
             summary = saved["steps"]["extract_whatsapp"]["summary"]
             self.assertEqual(summary["reason"], "active_run_completed")
 
+    def test_extract_whatsapp_uses_wacli_provider_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            whatsapp_csv = tmp_path / "whatsapp.contacts.csv"
+            whatsapp_jsonl = tmp_path / "whatsapp.contacts.jsonl"
+            whatsapp_manifest = tmp_path / "whatsapp.contacts.csv.manifest.json"
+            args = SimpleNamespace(
+                force_whatsapp=True,
+                whatsapp_provider="wacli",
+                wacli_max_messages=10000,
+                wacli_max_group_participants=30,
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+            )
+            payload = {
+                "primitive": "import_whatsapp_wacli",
+                "status": "completed",
+                "counts": {"contacts": 2},
+            }
+            with mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", whatsapp_csv), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_JSONL", whatsapp_jsonl), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_MANIFEST", whatsapp_manifest), \
+                    mock.patch.object(mod, "run_command", return_value={"returncode": 0, "json": payload}) as run_command:
+                mod.extract_whatsapp(args, ledger_path, ledger)
+
+            cmd = run_command.call_args.args[0]
+            self.assertIn("import_whatsapp_wacli.py", cmd[1])
+            self.assertIn("--output-csv", cmd)
+            self.assertIn(str(whatsapp_csv), cmd)
+            self.assertIn("--max-messages", cmd)
+            self.assertIn("10000", cmd)
+            self.assertIn("--max-group-participants", cmd)
+            self.assertIn("30", cmd)
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["artifacts"]["whatsapp_provider"], "wacli")
+            self.assertEqual(saved["steps"]["extract_whatsapp"]["summary"], payload)
+
     def test_existing_contacts_with_legacy_queue_schema_fails_actionably(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"

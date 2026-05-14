@@ -62,6 +62,7 @@ install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill import-contacts "$REPO_ROOT/packs/messages/skills/import-contacts/SKILL.md"
+install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 if uv run --project "$REPO_ROOT" python "$REPO_ROOT/bin/agent-bootstrap"; then
@@ -70,5 +71,5 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search import-contacts"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search import-contacts import-whatsapp"
 echo "restart Codex to pick up the skill list"

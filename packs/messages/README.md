@@ -7,8 +7,8 @@ The pack uses bare, inspectable, stdlib-only primitives. The current boundary
 is:
 
 - iMessage: local SQLite reads only, single primitive
-- WhatsApp: small primitives that own Docker lifecycle, WAHA session/QR auth,
-  and contact extraction independently
+- WhatsApp: wacli-based metadata import by default, plus older WAHA primitives
+  for Docker-based fallback/testing
 - Powerpacks owns task state, primitive contracts, schemas, normalization,
   manifests, and agent-facing workflow instructions
 - the harness captures local failures as repair artifacts so an agent can
@@ -23,6 +23,7 @@ iMessage:
 
 WhatsApp (all stdlib-only, all gated on explicit user consent):
 
+- `import_whatsapp_wacli`: install/find wacli, QR auth, bounded sync, metadata export
 - `waha_runtime`: Docker check + WAHA NOWEB container lifecycle
 - `waha_session`: WAHA session start/stop + QR PNG/text artifacts + auth poll
 - `extract_whatsapp_contacts`: pull contacts from an authenticated WAHA
@@ -71,6 +72,8 @@ Cross-channel:
 - `import-contacts`: one-command guided iMessage + WhatsApp import, merge,
   candidate sync, local matching, web review, queue prep, and optional
   Parallel deep research after cost approval
+- `import-whatsapp`: isolated WhatsApp metadata import test flow using wacli
+  instead of WAHA
 
 ## Harness Stance
 

@@ -150,7 +150,11 @@ For WhatsApp, use plain user-facing status:
 
 - `Syncing WhatsApp Messages and Contacts.`
 - `WhatsApp needs a QR scan.`
+- `Refreshed WhatsApp QR page.`
 - `WhatsApp sync finished.`
+
+The default WhatsApp provider is wacli. Use WAHA only when explicitly requested
+or when running with `POWERPACKS_WHATSAPP_PROVIDER=waha`.
 
 ## Timing
 
