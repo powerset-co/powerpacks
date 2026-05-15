@@ -157,10 +157,10 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(mod.effective_max_messages(10000, 25000), 26000)
 
     def test_qr_payloads_are_redacted_from_diagnostics(self) -> None:
-        text = "before\n2@secret-whatsapp-pairing-payload\nafter"
+        text = 'before\n2@secret-whatsapp-pairing-payload\n{"event":"qr_code","data":{"code":"2@secret"}}\nafter'
         self.assertEqual(
             mod.redact_qr_payloads(text),
-            f"before\n{mod.QR_REDACTION}\nafter",
+            f"before\n{mod.QR_REDACTION}\n{mod.QR_REDACTION}\nafter",
         )
 
     def test_auth_requires_qrencode_for_browser_qr(self) -> None:
@@ -170,6 +170,41 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.payload["install_command"], "brew install qrencode")
         self.assertIn("qrencode is required", ctx.exception.payload["message"])
+
+    def test_auth_interrupts_wacli_bootstrap_sync_after_connected_event(self) -> None:
+        class FakeProc:
+            def __init__(self) -> None:
+                self.stdout = io.StringIO("2@qr-payload\n")
+                self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
+                self.returncode = None
+                self.signals: list[int] = []
+
+            def poll(self):
+                return self.returncode
+
+            def send_signal(self, sig: int) -> None:
+                self.signals.append(sig)
+                self.returncode = 0
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+            def wait(self) -> int:
+                if self.returncode is None:
+                    self.returncode = 0
+                return self.returncode
+
+        fake = FakeProc()
+        with mock.patch.object(mod.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
+                mock.patch.object(mod.subprocess, "Popen", return_value=fake), \
+                mock.patch.object(mod, "update_qr_page") as update_qr_page:
+            result = mod.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s")
+
+        self.assertEqual(fake.signals, [mod.signal.SIGINT])
+        self.assertTrue(result["connected_event"])
+        self.assertTrue(result["auth_bootstrap_sync_interrupted"])
+        self.assertIn("--events", result["command"])
+        update_qr_page.assert_called()
 
     def test_export_reads_metadata_without_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as td:

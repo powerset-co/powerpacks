@@ -15,8 +15,10 @@ import csv
 import html
 import json
 import os
+import queue
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -328,7 +330,8 @@ def write_qr_html(path: Path, png_path: Path) -> None:
 def redact_qr_payloads(text: str) -> str:
     lines = []
     for line in text.splitlines():
-        if line.strip().startswith("2@"):
+        stripped = line.strip()
+        if stripped.startswith("2@") or '"event":"qr_code"' in stripped or '"event": "qr_code"' in stripped:
             lines.append(QR_REDACTION)
         else:
             lines.append(line)
@@ -373,37 +376,83 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str) -> dict[
     cmd = [
         "wacli",
         "--store", str(store),
+        "--events",
         "auth",
         "--qr-format", "text",
         "--follow=false",
         "--idle-exit", idle_exit,
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     output: list[str] = []
     opened = False
+    connected = False
+    interrupted_bootstrap_sync = False
     started = time.time()
+
+    lines: queue.Queue[tuple[str, str]] = queue.Queue()
+
+    def read_stream(name: str, stream: Any) -> None:
+        for line in stream:
+            lines.put((name, line))
+
+    stdout_thread = threading.Thread(target=read_stream, args=("stdout", proc.stdout), daemon=True)
+    stderr_thread = threading.Thread(target=read_stream, args=("stderr", proc.stderr), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+
+    def handle_line(source: str, text: str) -> None:
+        nonlocal opened, connected, interrupted_bootstrap_sync
+        output.append(text)
+        event = None
+        if source == "stderr" and text.startswith("{"):
+            try:
+                event = json.loads(text)
+            except json.JSONDecodeError:
+                event = None
+        if isinstance(event, dict):
+            event_name = event.get("event")
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            code = data.get("code")
+            if event_name == "qr_code" and isinstance(code, str) and code.startswith("2@"):
+                update_qr_page(code, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=not opened)
+                opened = True
+                emit_status("Refreshed WhatsApp QR page.")
+            elif event_name == "connected":
+                connected = True
+                if not interrupted_bootstrap_sync:
+                    proc.send_signal(signal.SIGINT)
+                    interrupted_bootstrap_sync = True
+            return
+        if source == "stdout" and text.startswith("2@"):
+            update_qr_page(text, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=not opened)
+            opened = True
+            emit_status("Refreshed WhatsApp QR page.")
+
     try:
-        assert proc.stdout is not None
         while proc.poll() is None:
             if time.time() - started > timeout:
                 proc.kill()
                 output.append(f"command timed out after {timeout}s")
                 break
-            line = proc.stdout.readline()
-            if not line:
-                time.sleep(0.1)
+            try:
+                source, line = lines.get(timeout=0.1)
+            except queue.Empty:
                 continue
             text = line.strip()
-            output.append(text)
-            if text.startswith("2@"):
-                update_qr_page(text, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=not opened)
-                opened = True
-                emit_status("Refreshed WhatsApp QR page.")
-        for line in proc.stdout:
-            if line.strip():
-                output.append(line.strip())
+            if text:
+                handle_line(source, text)
     finally:
         returncode = proc.wait()
+        stdout_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
+    while True:
+        try:
+            source, line = lines.get_nowait()
+        except queue.Empty:
+            break
+        text = line.strip()
+        if text:
+            handle_line(source, text)
     joined = redact_qr_payloads("\n".join(output))
     if linked_device_blocked(joined):
         raise PrimitiveBlocked({
@@ -411,7 +460,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str) -> dict[
             "message": "WhatsApp cannot link new devices right now. Try again later in WhatsApp, then rerun $import-whatsapp.",
             "command": command_text(cmd),
         })
-    if returncode != 0:
+    if returncode != 0 and not connected:
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
             "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-whatsapp.",
@@ -419,7 +468,13 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str) -> dict[
             "qr_page": str(DEFAULT_QR_HTML),
             "detail": joined[-2000:],
         })
-    return {"command": command_text(cmd), "returncode": returncode, "qr_page": str(DEFAULT_QR_HTML)}
+    return {
+        "command": command_text(cmd),
+        "returncode": returncode,
+        "qr_page": str(DEFAULT_QR_HTML),
+        "connected_event": connected,
+        "auth_bootstrap_sync_interrupted": interrupted_bootstrap_sync,
+    }
 
 
 def run_auth(store: Path, *, timeout: int, idle_exit: str) -> dict[str, Any]:
