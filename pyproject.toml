@@ -5,6 +5,7 @@ description = "Portable recruiting-search skills, primitives, schemas, and contr
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "duckdb>=1.4.0",
     "openai>=1.0.0",
     "psycopg2-binary>=2.9.10",
     "pyyaml>=6.0.2",

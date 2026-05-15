@@ -7,6 +7,7 @@ loaded through uv when needed.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 import re
@@ -35,6 +36,7 @@ ADJACENCY_LIMIT = int(os.getenv("POWERPACKS_COMPANY_ADJACENCY_LIMIT", "1000"))
 ADJACENCY_EXCLUDE_SENIORITY = ["entry", "trainee"]
 ROLE_ADJACENCY_MAP_PATH = Path(__file__).resolve().parents[3] / "data" / "roles" / "role_adjacency.opus.json"
 _ROLE_ADJACENCY_MAP: dict[str, list[str]] | None = None
+LOCAL_BACKEND_NAMESPACES = {"people", "summaries", "education", "schools"}
 
 
 ADJACENCY_QUERIES: dict[tuple[str | None, str | None], list[str]] = {
@@ -256,7 +258,30 @@ def client() -> Any:
     return turbopuffer.Turbopuffer(api_key=api_key, region=os.getenv("TURBOPUFFER_REGION", DEFAULT_REGION))
 
 
+def is_local_backend() -> bool:
+    return os.getenv("POWERPACKS_SEARCH_BACKEND", "").strip().lower() == "local"
+
+
+@functools.lru_cache(maxsize=None)
+def _local_store_for_path(path: str) -> Any:
+    from local_duckdb_store import LocalDuckDBSearchStore
+
+    return LocalDuckDBSearchStore(path)
+
+
+def local_store() -> Any:
+    db_path = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
+    if not db_path:
+        raise RuntimeError("POWERPACKS_LOCAL_SEARCH_DB is required when POWERPACKS_SEARCH_BACKEND=local")
+    return _local_store_for_path(db_path)
+
+
 def namespace(logical_name: str = "people") -> Any:
+    if is_local_backend() and logical_name in LOCAL_BACKEND_NAMESPACES:
+        return local_store().namespace(logical_name)
+    # Companies and investors remain TurboPuffer-backed in local mode unless the
+    # caller provides resolved IDs; local DuckDB covers people, summaries,
+    # education, and schools only.
     return client().namespace(namespace_name(logical_name))
 
 
@@ -433,7 +458,7 @@ def detect_csuite_shortcut(payload: dict[str, Any], query: str | None = None) ->
     text = _payload_text(payload, query).lower()
     words = set(TOKEN_RE.findall(text))
     for abbrev, spec in CSUITE_SHORTCUTS.items():
-        if abbrev in words or str(spec["display"]).lower() in text:
+        if abbrev in words or f"{abbrev}s" in words or str(spec["display"]).lower() in text:
             return spec
     role_ids = {str(value).lower() for value in payload.get("role_ids") or []}
     for spec in CSUITE_SHORTCUTS.values():
@@ -690,14 +715,16 @@ def search_mode_for_payload(payload: dict[str, Any]) -> str:
         return SEARCH_ONLY
     if is_founder_payload(payload):
         return COMPANY_INTERSECTION
+    if has_role_constraint(payload) and has_company_domain_intent(payload):
+        return COMPANY_UNION
+    if not has_role_constraint(payload):
+        if payload.get("company_ids") and len([key for key in ["company_ids", "company_names", "current_company_names"] if payload.get(key)]) == 1:
+            return COMPANY_UNION
+        return COMPANY_UNION
     if is_filter_only_payload(payload):
         # Pure company + hard-filter queries (e.g. "who worked at Meta after 2020")
         # should intersect directly, not union with an empty semantic search.
         return COMPANY_INTERSECTION
-    if has_role_constraint(payload) and has_company_domain_intent(payload):
-        return COMPANY_UNION
-    if not has_role_constraint(payload):
-        return COMPANY_UNION
     return COMPANY_INTERSECTION
 
 
@@ -822,6 +849,16 @@ async def filter_only_rows_for_namespace(
     page_size: int = 10000,
     max_results: int = 0,
 ) -> list[dict[str, Any]]:
+    if is_local_backend() and logical_name in LOCAL_BACKEND_NAMESPACES:
+        return await asyncio.to_thread(
+            local_store().filter_only_rows_for_namespace,
+            logical_name,
+            filters,
+            include_attributes,
+            page_size,
+            max_results,
+        )
+
     ns = namespace(logical_name)
     page_size = min(page_size, 10000)
     max_batches = int(os.getenv("TURBOPUFFER_FILTER_ONLY_MAX_BATCHES", "100"))
@@ -951,7 +988,17 @@ def is_filter_only_payload(payload: dict[str, Any]) -> bool:
 async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
     if filters is None:
         raise ValueError("filter-only search requires at least one TurboPuffer filter")
-    rows = await filter_only_rows(filters, include_attributes, max_results=0)
+    if is_local_backend():
+        rows = await asyncio.to_thread(
+            local_store().filter_only_rows_for_namespace,
+            "people",
+            filters,
+            include_attributes,
+            10000,
+            0,
+        )
+    else:
+        rows = await filter_only_rows(filters, include_attributes, max_results=0)
     out: list[dict[str, Any]] = []
     for index, row in enumerate(rows, start=1):
         doc_id = str(row.get("id") or "")
@@ -975,6 +1022,15 @@ async def bm25_adjacency_rows(
     include_attributes: list[str],
 ) -> list[dict[str, Any]]:
     """BM25-only title adjacency retrieval for company-domain UNION mode."""
+    if is_local_backend():
+        return await asyncio.to_thread(
+            local_store().bm25_adjacency_rows,
+            queries,
+            filters,
+            top_k,
+            include_attributes,
+        )
+
     prepared: list[tuple[str, list[str]]] = []
     for query in queries:
         tokens = phrase_query_tokenize(str(query))
@@ -1029,6 +1085,21 @@ async def _hybrid_role_rows_single(
     include_attributes: list[str],
     query_embedding: list[float] | None = None,
 ) -> list[dict[str, Any]]:
+    if is_local_backend():
+        local_payload = dict(payload)
+        if query_embedding is not None:
+            local_payload["query_embedding"] = query_embedding
+            embedding_fn = None
+        else:
+            embedding_fn = embedding
+        return await local_store().hybrid_role_rows(
+            local_payload,
+            filters,
+            top_k,
+            include_attributes,
+            embedding_fn=embedding_fn,
+        )
+
     semantic_query = str(payload.get("semantic_query") or "").strip()
     bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
     query_embedding = query_embedding or await embedding(semantic_query)
