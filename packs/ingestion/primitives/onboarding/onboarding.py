@@ -12,6 +12,7 @@ import argparse
 import json
 import subprocess
 import sys
+import webbrowser
 from pathlib import Path
 from typing import Any
 
@@ -67,9 +68,10 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
         {
             "channel": "linkedin_csv",
             "linked": acct.get("linkedin_csv", {}).get("linked", False),
-            "what_it_needs": "LinkedIn Connections.csv export from LinkedIn settings.",
-            "next_action": "Export Connections.csv, then run linkedin_network_import run --csv <path> --source-user <label>.",
-            "command": "uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run --csv <Connections.csv> --source-user <label>",
+            "what_it_needs": "LinkedIn larger data archive from LinkedIn settings; Connections.csv is inside the archive.",
+            "next_action": "Open LinkedIn data archive settings, choose the larger archive, request it, then import Connections.csv after LinkedIn emails the archive.",
+            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py open-linkedin-archive",
+            "url": LINKEDIN_DATA_ARCHIVE_URL,
         },
         {
             "channel": "linkedin_mcp",
@@ -137,6 +139,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 DEFAULT_ONBOARDING_LEDGER = Path(".powerpacks/ingestion/onboarding-run.json")
+LINKEDIN_DATA_ARCHIVE_URL = "https://www.linkedin.com/mypreferences/d/download-my-data"
+LINKEDIN_LARGER_ARCHIVE_LABEL = (
+    "Download larger data archive, including connections, verifications, contacts, "
+    "account history, and information LinkedIn infers based on your profile and activity."
+)
 ONBOARDING_FLOW = ["messages", "gmail", "linkedin_csv", "linkedin_mcp", "twitter", "merge", "enrich"]
 YES = {"y", "yes", "true", "1", "ok", "sure"}
 NO = {"n", "no", "false", "0", "skip", "s"}
@@ -219,7 +226,7 @@ def prompt_for(step: str, registry: dict[str, Any]) -> dict[str, Any]:
             "status": "needs_user_input",
             "step": step,
             "linked": linked,
-            "message": "Import a LinkedIn Connections.csv export? Reply yes if you have the file path ready.",
+            "message": "Import LinkedIn connections? Reply yes to open LinkedIn's data archive page, then paste Connections.csv after the archive is ready.",
             "choices": ["yes", "no", "skip"],
         }
     if step == "linkedin_mcp":
@@ -315,9 +322,12 @@ def action_for_yes(step: str, state: dict[str, Any], accounts_path: Path, ledger
     if step == "linkedin_csv":
         state["phase"] = "awaiting_csv_path"
         return {
-            "status": "needs_user_input",
+            "status": "needs_user_action",
             "step": step,
-            "message": "Paste the path to your LinkedIn Connections.csv export.",
+            "message": "LinkedIn will open in your browser. Select the larger data archive option, click Request archive, then paste the Connections.csv path after LinkedIn emails the archive.",
+            "url": LINKEDIN_DATA_ARCHIVE_URL,
+            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py open-linkedin-archive",
+            "archive_option": LINKEDIN_LARGER_ARCHIVE_LABEL,
             "example": "~/Downloads/Connections.csv",
         }
     if step == "linkedin_mcp":
@@ -485,6 +495,19 @@ def cmd_run_status(args: argparse.Namespace) -> int:
     emit(payload)
     return 0
 
+
+def cmd_open_linkedin_archive(args: argparse.Namespace) -> int:
+    opened = webbrowser.open(LINKEDIN_DATA_ARCHIVE_URL)
+    emit({
+        "status": "ok" if opened else "failed",
+        "opened": opened,
+        "url": LINKEDIN_DATA_ARCHIVE_URL,
+        "message": "Opened LinkedIn data archive settings." if opened else "Could not open LinkedIn data archive settings.",
+        "archive_option": LINKEDIN_LARGER_ARCHIVE_LABEL,
+    })
+    return 0 if opened else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Guided onboarding for local network ingestion sources")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -507,6 +530,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_status = sub.add_parser("run-status", parents=[run_common], help="Show current conversational onboarding prompt")
     run_status.set_defaults(func=cmd_run_status)
+
+    open_linkedin = sub.add_parser("open-linkedin-archive", help="Open LinkedIn data archive settings in the default browser")
+    open_linkedin.set_defaults(func=cmd_open_linkedin_archive)
 
     status = sub.add_parser("status", parents=[common])
     status.set_defaults(func=cmd_status)

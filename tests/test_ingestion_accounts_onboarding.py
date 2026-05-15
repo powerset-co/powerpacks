@@ -111,6 +111,37 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["step"], "messages")
             self.assertIn("import_contacts_pipeline.py run", payload["command"])
 
+    def test_linkedin_csv_yes_opens_archive_page_before_csv_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            accounts_path = Path(tmp) / "accounts.json"
+            ledger = Path(tmp) / "onboarding-run.json"
+            code, payload = self.invoke(onboarding, ["run", "--accounts", str(accounts_path), "--ledger", str(ledger), "--force"])
+            self.assertEqual(code, 0)
+            code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "skip"])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["step"], "gmail")
+            code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "skip"])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["step"], "linkedin_csv")
+            code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "yes"])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "needs_user_action")
+            self.assertEqual(payload["step"], "linkedin_csv")
+            self.assertEqual(payload["url"], onboarding.LINKEDIN_DATA_ARCHIVE_URL)
+            self.assertIn("open-linkedin-archive", payload["command"])
+            self.assertIn("larger data archive", payload["archive_option"])
+            state = onboarding.load_run(ledger)
+            self.assertEqual(state["phase"], "awaiting_csv_path")
+
+    def test_open_linkedin_archive_command(self):
+        with mock.patch.object(onboarding.webbrowser, "open", return_value=True) as open_mock:
+            code, payload = self.invoke(onboarding, ["open-linkedin-archive"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["opened"])
+        self.assertEqual(payload["url"], onboarding.LINKEDIN_DATA_ARCHIVE_URL)
+        open_mock.assert_called_once_with(onboarding.LINKEDIN_DATA_ARCHIVE_URL)
+
     def test_linkedin_mcp_instructions_and_mark(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "accounts.json"
