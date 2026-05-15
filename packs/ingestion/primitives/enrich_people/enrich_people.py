@@ -17,6 +17,7 @@ import csv
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -590,11 +591,16 @@ def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
         merged = merge_provider_profile(row, rapid, rapid_raw)
         key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or sha(json.dumps(row, sort_keys=True))
         by_key[key] = merged
-    output = Path(ledger["run_dir"]) / "people_enriched.csv"
+    output = Path(ledger["run_dir"]) / "people.csv"
+    legacy_output = Path(ledger["run_dir"]) / "people_enriched.csv"
     rows = list(by_key.values())
     write_csv(output, PEOPLE_SCHEMA_COLUMNS, rows)
-    ledger["artifacts"]["people_enriched_csv"] = str(output)
-    return {"rows": len(rows), "output_file": str(output)}
+    if legacy_output != output:
+        shutil.copyfile(output, legacy_output)
+    ledger["artifacts"]["people_csv"] = str(output)
+    # Compatibility for callers/tests that still read the pre-canonical artifact key.
+    ledger["artifacts"]["people_enriched_csv"] = str(legacy_output)
+    return {"rows": len(rows), "output_file": str(output), "legacy_output_file": str(legacy_output)}
 
 
 def execute_step(ledger: dict[str, Any], step_id: str) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 ---
 name: import-linkedin-network
-description: Import a LinkedIn Connections.csv export into Powerpacks-local provider enrichment artifacts and provider-neutral people.csv shape using run/continue/approve.
+description: Import a LinkedIn Connections.csv export into Powerpacks-local people.csv artifacts using shared enrich_people delegation and run/continue/approve.
 ---
 
 # Import LinkedIn Network
@@ -8,8 +8,7 @@ description: Import a LinkedIn Connections.csv export into Powerpacks-local prov
 Use this skill when the user wants to import LinkedIn connections.
 
 Do not depend on `../aleph-mvp`. All code and artifacts live in Powerpacks.
-External API enrichment via Harmonic/RapidAPI is spend-bearing and must be
-approved after the local CSV conversion step. A hidden row cap exists only for tiny local smoke tests; do not use caps in real workflows.
+External API enrichment via the shared RapidAPI-only `enrich_people` primitive is spend-bearing only for cache misses and must be approved after the local CSV conversion step. Seed `--profile-cache-dir` to avoid paid calls when possible. A hidden row cap exists only for tiny local smoke tests; do not use caps in real workflows.
 
 ## Main loop
 
@@ -35,6 +34,7 @@ Report only:
 - run directory
 - parsed connection count
 - whether enrichment is blocked/completed
-- `people.csv` path when produced
+- canonical `people.csv` path when produced
+- cache hit / paid call counts from the delegated enrichment summary
 
 Do not paste CSV contents or raw provider JSON into chat.

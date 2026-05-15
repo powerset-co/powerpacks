@@ -37,7 +37,7 @@ class TwitterNetworkImportTests(unittest.TestCase):
                 "rest_id": "123",
                 "is_blue_verified": True,
                 "core": {"screen_name": "Example", "name": "Example Person", "created_at": "now"},
-                "old": {
+                "legacy": {
                     "description": "Founder building AI",
                     "followers_count": 12000,
                     "friends_count": 100,
@@ -102,6 +102,9 @@ class TwitterNetworkImportTests(unittest.TestCase):
                         self.assertEqual(self.call_main(["continue", "--ledger", str(ledger)]), 0)
                 saved = self.mod.read_json(ledger)
                 people_path = Path(saved["artifacts"]["people_csv"])
+                legacy_path = Path(saved["artifacts"]["people_harmonic_all_csv"])
+                self.assertEqual(people_path.name, "people.csv")
+                self.assertTrue(legacy_path.exists())
                 with people_path.open(newline="", encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))
                 self.assertEqual(len(rows), 1)

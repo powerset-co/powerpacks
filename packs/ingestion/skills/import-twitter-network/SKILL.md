@@ -17,7 +17,7 @@ packs/ingestion/primitives/twitter_network_import/twitter_network_import.py
 
 The source crawl is RapidAPI-backed only; do not ask for or use a local Twitter CSV as the production source. All artifacts must remain under `.powerpacks/network-import/twitter/`.
 
-Pipeline stages: RapidAPI Twitter crawl → local heuristic score → OpenAI MOE expert evaluation → free parallel LinkedIn pre-resolution → parallel RapidAPI LinkedIn validation → provider-neutral `people.csv` formatting.
+Pipeline stages: RapidAPI Twitter crawl → local heuristic score → OpenAI MOE expert evaluation → free parallel LinkedIn pre-resolution → parallel RapidAPI LinkedIn validation → canonical `people.csv` formatting with temporary legacy alias.
 
 ## Commands
 
@@ -60,3 +60,4 @@ Summarize only counts and paths, not full datasets:
 - `linkedin_resolution_queue.csv`
 - `linkedin_validated.csv`
 - `people.csv`
+- `people_harmonic_all.csv` temporary compatibility alias

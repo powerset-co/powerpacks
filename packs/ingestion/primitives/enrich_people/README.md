@@ -22,7 +22,7 @@ The primitive is self-contained in Powerpacks. It does not import
    - Saves raw RapidAPI responses locally.
 3. `merge_people`
    - Merges RapidAPI profile data back into the original people rows.
-   - Writes `people_enriched.csv`.
+   - Writes canonical `people.csv` plus a temporary compatibility alias `people_enriched.csv`.
 
 ## Commands
 
@@ -56,6 +56,31 @@ RapidAPI work experiences preserve explicit provider/company identity fields:
 `current_company_urn` is a legacy shared-schema field and is not populated from
 RapidAPI-only enrichment.
 
+## Cache seeding
+
+To avoid paid RapidAPI calls, seed `--profile-cache-dir` before running. The
+cache filename is the sanitized LinkedIn public identifier, for example:
+
+```txt
+.powerpacks/network-import/profile_cache_v2/jane-example.json
+```
+
+Each cache file must contain:
+
+```json
+{
+  "fetched_at": "2026-01-01T00:00:00Z",
+  "public_identifier": "jane-example",
+  "linkedin_url": "https://www.linkedin.com/in/jane-example",
+  "raw_response": {"...": "RapidAPI profile payload"},
+  "normalized_profile": {"success": true}
+}
+```
+
+Rows with usable cache entries are written to `rapidapi_cache_hits.csv` and do
+not require `RAPIDAPI_*` keys or approval. Cache misses are listed in
+`rapidapi_cache_misses.csv` and are approval-gated before any external call.
+
 ## Outputs
 
 - `linkedin_enrichment_queue.csv`
@@ -65,4 +90,5 @@ RapidAPI-only enrichment.
 - `skipped_enrichment.csv`
 - `provider_enriched.csv`
 - `raw_provider_responses/*.json`
-- `people_enriched.csv`
+- `people.csv` — canonical enriched people schema
+- `people_enriched.csv` — temporary compatibility alias for older callers

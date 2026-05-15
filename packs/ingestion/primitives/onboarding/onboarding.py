@@ -114,13 +114,17 @@ def cmd_check(args: argparse.Namespace) -> int:
         update_channel("messages", path=path, success=True, artifact=".powerpacks/messages/contacts.csv")
         updates.append("messages:contacts.csv")
 
-    # LinkedIn CSV / Twitter: infer from provider-neutral local import artifacts.
-    for channel_dir, registry_channel in (("linkedin", "linkedin_csv"), ("twitter", "twitter")):
-        for run_dir in Path(f".powerpacks/network-import/{channel_dir}").glob("*"):
-            p = run_dir / "people.csv"
-            if p.exists():
-                update_channel(registry_channel, path=path, success=True, artifact=str(p))
-                updates.append(f"{registry_channel}:{p}")
+    # LinkedIn CSV / Twitter: infer from local import artifacts. Prefer canonical
+    # people.csv, but accept legacy aliases for older runs.
+    for source, channel in [("linkedin", "linkedin_csv"), ("twitter", "twitter")]:
+        seen_dirs: set[Path] = set()
+        for pattern in ["*/people.csv", "*/people_harmonic_all.csv", "*/people_enriched.csv"]:
+            for p in Path(f".powerpacks/network-import/{source}").glob(pattern):
+                if p.parent in seen_dirs:
+                    continue
+                seen_dirs.add(p.parent)
+                update_channel(channel, path=path, success=True, artifact=str(p))
+                updates.append(f"{channel}:{p}")
 
     registry = load_registry(path)
     emit({"status": "checked", "accounts_path": args.accounts, "updates": updates, "registry": registry, "steps": build_steps(registry)})

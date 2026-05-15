@@ -16,6 +16,7 @@ import difflib
 import hashlib
 import json
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,10 +82,15 @@ def row_name(row: dict[str, str]) -> str:
 
 
 def discover_inputs(base: Path) -> list[Path]:
-    """Discover canonical provider-neutral people inputs under .powerpacks."""
-
-    paths = list(base.glob("network-import/*/*/people.csv"))
+    paths_by_dir: dict[Path, Path] = {}
+    for p in base.glob("network-import/*/*/people.csv"):
+        paths_by_dir[p.parent] = p
+    for p in base.glob("network-import/*/*/people_harmonic_all.csv"):
+        paths_by_dir.setdefault(p.parent, p)
+    for p in base.glob("network-import/*/*/people_enriched.csv"):
+        paths_by_dir.setdefault(p.parent, p)
     msg = base / "messages" / "contacts.csv"
+    paths = list(paths_by_dir.values())
     if msg.exists():
         paths.append(msg)
     return sorted(set(paths))
@@ -239,7 +245,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     review = similar_pairs(merged_rows, args.name_threshold)
     output_dir = Path(args.output_dir)
     output = output_dir / "people.csv"
+    legacy_output = output_dir / "people_harmonic_all.merged.csv"
+    review_path = output_dir / "possible_duplicates_review.csv"
+    manifest = output_dir / "merge_manifest.json"
     write_csv(output, MERGED_COLUMNS, merged_rows)
+    shutil.copyfile(output, legacy_output)
+    write_csv(review_path, REVIEW_COLUMNS, review)
     manifest_payload = {
         "created_at": now_iso(),
         "inputs": per_file,
@@ -248,8 +259,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         "linkedin_groups": len(groups),
         "review_pairs": len(review),
         "output": str(output),
+        "people_csv": str(output),
+        "legacy_output": str(legacy_output),
     }
-    emit({"status": "completed", **manifest_payload})
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    emit({"status": "completed", **manifest_payload, "manifest": str(manifest)})
     return 0
 
 
@@ -257,7 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Merge/dedupe local network import people artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
-    run.add_argument("--input", action="append", help="Input provider-neutral people.csv or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
+    run.add_argument("--input", action="append", help="Input people.csv, legacy people_harmonic_all.csv/people_enriched.csv, or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
     run.add_argument("--base-dir", default=".powerpacks")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     run.add_argument("--name-threshold", type=float, default=0.92)
