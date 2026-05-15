@@ -328,10 +328,7 @@ def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
 
 
 def merge_enrichment(local: dict[str, Any], enriched: dict[str, Any]) -> dict[str, Any]:
-    # Validate the effective Aleph-shaped row. Some real providers omit fields
-    # already present on the source corpus (for example funding_stage). The
-    # merged row must still satisfy the contract before checkpointing.
-    validate_provider_output({**local, **enriched})
+    validate_provider_output(enriched)
     merged = dict(local)
     normalized = normalize_classification_output(enriched)
     for key in CLASSIFICATION_FIELDS:
