@@ -322,6 +322,7 @@ def load_by_ids(path: Path, ids: set[str], key: str) -> tuple[dict[str, dict[str
 
 
 def load_csv_by_ids(path: Path, ids: set[str]) -> tuple[dict[str, dict[str, Any]], int]:
+    csv.field_size_limit(sys.maxsize)
     out: dict[str, dict[str, Any]] = {}
     scanned = 0
     with path.open(newline="", encoding="utf-8") as handle:
