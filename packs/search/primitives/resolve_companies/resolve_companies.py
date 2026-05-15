@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -22,7 +23,9 @@ from turbopuffer_client import (  # noqa: E402
     comparison,
     embedding,
     filter_only_rows_for_namespace,
+    is_local_backend,
     load_env_file,
+    local_namespace_has_vectors,
     namespace,
     namespace_name,
     reciprocal_rank_fusion,
@@ -199,6 +202,34 @@ def sector_min_results(payload: dict[str, Any], default: int) -> int:
     return max(parsed, 0)
 
 
+COMPANY_INCLUDE_ATTRIBUTES = [
+    "company_urn",
+    "company_name",
+    "name_aliases_text",
+    "semantic_text",
+    "doc2query_text",
+    "entity_sector_text",
+    "headcount",
+    "funding_stage",
+    "funding_total",
+    "sector_types",
+    "entity_types",
+    "city",
+    "state",
+    "country",
+    "metro_area",
+    "macro_region",
+    "website_domain",
+    "linkedin_url",
+    "logo_url",
+    "description",
+]
+
+
+def company_attrs(row: Any) -> dict[str, Any]:
+    return row_attrs(row, COMPANY_INCLUDE_ATTRIBUTES)
+
+
 async def exact_name_lookup(names: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     ns = namespace("companies")
@@ -211,12 +242,12 @@ async def exact_name_lookup(names: list[str], filters: tuple | None, *, top_k: i
                 filters=query_filter,
                 rank_by=["id", "asc"],
                 top_k=top_k,
-                include_attributes=["company_name", "headcount", "funding_stage", "sector_types"],
+                include_attributes=COMPANY_INCLUDE_ATTRIBUTES,
                 consistency=STRONG_CONSISTENCY,
             )
 
         response = await asyncio.to_thread(run_query)
-        rows.extend(row_attrs(row, ["company_name", "headcount", "funding_stage", "sector_types"]) for row in (response.rows or []))
+        rows.extend(company_attrs(row) for row in (response.rows or []))
     return rows
 
 
@@ -229,12 +260,12 @@ async def name_bm25_lookup(names: list[str], filters: tuple | None, *, top_k: in
                 rank_by=("name_aliases_text", "BM25", name),
                 filters=filters,
                 top_k=top_k,
-                include_attributes=["company_name", "headcount", "funding_stage", "sector_types"],
+                include_attributes=COMPANY_INCLUDE_ATTRIBUTES,
                 consistency=STRONG_CONSISTENCY,
             )
 
         response = await asyncio.to_thread(run_query)
-        rows.extend(row_attrs(row, ["company_name", "headcount", "funding_stage", "sector_types"]) for row in (response.rows or []))
+        rows.extend(company_attrs(row) for row in (response.rows or []))
     return rows
 
 
@@ -256,34 +287,62 @@ async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: i
         return []
 
     ns = namespace("companies")
-    query_embedding = await embedding(query)
-    include_attributes = ["company_name", "headcount", "funding_stage", "sector_types", "entity_types", "description"]
-    subqueries = [
-        {
-            "rank_by": ("semantic_text", "BM25", query),
-            "top_k": top_k,
-            "include_attributes": include_attributes,
-            "filters": filters,
-        },
-        {
-            "rank_by": ("doc2query_text", "BM25", query),
-            "top_k": top_k,
-            "include_attributes": include_attributes,
-            "filters": filters,
-        },
-        {
-            "rank_by": ("entity_sector_text", "BM25", query),
-            "top_k": top_k,
-            "include_attributes": include_attributes,
-            "filters": filters,
-        },
-        {
-            "rank_by": ("vector", "kNN", query_embedding),
-            "top_k": top_k,
-            "include_attributes": include_attributes,
-            "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
-        },
-    ]
+    include_attributes = COMPANY_INCLUDE_ATTRIBUTES
+    subqueries = []
+    weights = []
+    if is_local_backend():
+        for field, weight in [
+            ("name_aliases_text", 0.25),
+            ("semantic_text", 0.45),
+            ("doc2query_text", 0.35),
+            ("entity_sector_text", 0.25),
+            ("word_text", 0.25),
+        ]:
+            subqueries.append({
+                "rank_by": (field, "BM25", query),
+                "top_k": top_k,
+                "include_attributes": include_attributes,
+                "filters": filters,
+            })
+            weights.append(weight)
+        if local_namespace_has_vectors("companies") and os.getenv("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH") == "1":
+            query_embedding = await embedding(query)
+            subqueries.append({
+                "rank_by": ("vector", "kNN", query_embedding),
+                "top_k": top_k,
+                "include_attributes": include_attributes,
+                "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
+            })
+            weights.append(0.6)
+    else:
+        query_embedding = await embedding(query)
+        subqueries = [
+            {
+                "rank_by": ("semantic_text", "BM25", query),
+                "top_k": top_k,
+                "include_attributes": include_attributes,
+                "filters": filters,
+            },
+            {
+                "rank_by": ("doc2query_text", "BM25", query),
+                "top_k": top_k,
+                "include_attributes": include_attributes,
+                "filters": filters,
+            },
+            {
+                "rank_by": ("entity_sector_text", "BM25", query),
+                "top_k": top_k,
+                "include_attributes": include_attributes,
+                "filters": filters,
+            },
+            {
+                "rank_by": ("vector", "kNN", query_embedding),
+                "top_k": top_k,
+                "include_attributes": include_attributes,
+                "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
+            },
+        ]
+        weights = [0.45, 0.35, 0.25, 0.6]
 
     def run_query() -> Any:
         return ns.multi_query(queries=subqueries, consistency=STRONG_CONSISTENCY)
@@ -291,12 +350,12 @@ async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: i
     response = await asyncio.to_thread(run_query)
     result_sets = response.results or []
     result_lists = [result_set.rows or [] for result_set in result_sets]
-    fused = reciprocal_rank_fusion(result_lists, [0.45, 0.35, 0.25, 0.6][: len(result_lists)])
+    fused = reciprocal_rank_fusion(result_lists, weights[: len(result_lists)])
 
     attrs: dict[str, dict[str, Any]] = {}
     for result_set in result_sets:
         for row in result_set.rows or []:
-            attrs.setdefault(str(row.id), row_attrs(row, include_attributes))
+            attrs.setdefault(str(row.id), company_attrs(row))
 
     rows: list[dict[str, Any]] = []
     for cid, score in fused[:top_k]:
@@ -313,7 +372,7 @@ async def filter_only_company_rows(filters: tuple | None, *, page_size: int, max
     return await filter_only_rows_for_namespace(
         "companies",
         filters,
-        ["company_name", "headcount", "funding_stage", "sector_types", "entity_types"],
+        COMPANY_INCLUDE_ATTRIBUTES,
         page_size=page_size,
         max_results=max_results,
     )

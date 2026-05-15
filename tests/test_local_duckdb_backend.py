@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -27,6 +28,8 @@ local_filter_eval = load_module("local_filter_eval", LIB / "local_filter_eval.py
 apply_prefilters = load_module("apply_prefilters", ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py")
 resolve_education = load_module("resolve_education", ROOT / "packs/search/primitives/resolve_education" / "resolve_education.py")
 execute_role_search = load_module("execute_role_search", ROOT / "packs/search/primitives/execute_role_search" / "execute_role_search.py")
+resolve_companies = load_module("resolve_companies", ROOT / "packs/search/primitives/resolve_companies" / "resolve_companies.py")
+build_local_duckdb_shim = load_module("build_local_duckdb_shim", ROOT / "scripts" / "build-local-duckdb-shim.py")
 
 
 LONG_FOUNDER_QUERY = (
@@ -39,13 +42,33 @@ LONG_BACKEND_QUERY = (
 )
 
 
+def write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+
+
+def run_shim_json(*args: str) -> dict:
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/build-local-duckdb-shim.py"), *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"shim failed: {proc.stderr}\nstdout={proc.stdout}")
+    return json.loads(proc.stdout)
+
+
 class LocalDuckDBFixtureMixin:
     def setUp(self) -> None:
-        self._old_env = {key: os.environ.get(key) for key in ["POWERPACKS_LOCAL_SEARCH_DB"]}
+        self._old_env = {key: os.environ.get(key) for key in ["POWERPACKS_LOCAL_SEARCH_DB", "POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH"]}
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = str(Path(self.tmpdir.name) / "local-search.duckdb")
         self._create_fixture(self.db_path)
         os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = self.db_path
+        os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
         turbopuffer_client._local_store_for_path.cache_clear()
 
     def tearDown(self) -> None:
@@ -82,6 +105,7 @@ class LocalDuckDBFixtureMixin:
                     role_ids varchar[],
                     is_current boolean,
                     total_years_experience integer,
+                    tenure_years double,
                     allowed_operator_ids varchar[],
                     start_date_epoch integer,
                     end_date_epoch integer,
@@ -92,6 +116,8 @@ class LocalDuckDBFixtureMixin:
                     ig_followers integer,
                     phrase_tokens varchar[],
                     word_tokens varchar[],
+                    char_tokens varchar[],
+                    d2q_tokens varchar[],
                     vector double[]
                 )
                 """
@@ -101,27 +127,30 @@ class LocalDuckDBFixtureMixin:
                     "person-founder-0", "pos-founder-current", "person-founder", "person-founder",
                     "Founder and CEO", "company-startup", "Acme AI", "San Francisco", "California", "United States",
                     "North America", ["San Francisco Bay Area"], "founder", "c_suite", ["founder", "chief_executive_officer"], True,
-                    12, ["op1", "op-founder"], 1577836800, 0, 1988, 1000, 5000, 3000, 100,
+                    12, 5.0, ["op1", "op-founder"], 1577836800, 0, 1988, 1000, 5000, 3000, 100,
                     ["founder", "founder ceo", "co founder", "startup founder"],
-                    ["founder", "ceo", "startup", "company", "builder", "product"], [1.0, 0.0, 0.0],
+                    ["founder", "ceo", "startup", "company", "builder", "product"],
+                    [" fo", "fou", "oun"], ["founder", "ceo", "startup"], [1.0, 0.0, 0.0],
                 ),
                 (
                     "person-founder-1", "pos-founder-past-product", "person-founder", "person-founder",
                     "Product Manager", "company-product", "Box", "San Francisco", "California", "United States",
                     "North America", ["San Francisco Bay Area"], "product", "manager", ["product_manager"], False,
-                    12, ["op1", "op-founder"], 1420070400, 1546300800, 1988, 1000, 5000, 3000, 100,
-                    ["product manag", "product"], ["product", "manager", "roadmap", "experiments"], [0.4, 0.4, 0.0],
+                    12, 4.0, ["op1", "op-founder"], 1420070400, 1546300800, 1988, 1000, 5000, 3000, 100,
+                    ["product manag", "product"], ["product", "manager", "roadmap", "experiments"],
+                    [" pr", "pro", "rod"], ["product", "roadmap"], [0.4, 0.4, 0.0],
                 ),
                 (
                     "person-engineer-0", "pos-engineer-current", "person-engineer", "person-engineer",
                     "Backend Engineer", "company-infra", "InfraDB", "New York", "New York", "United States",
                     "North America", ["New York City Metropolitan Area"], "engineering", "senior", ["software_engineer", "backend_engineer"], True,
-                    8, ["op1", "op-eng"], 1609459200, 0, 1992, 120, 1500, 1200, 40,
+                    8, 4.0, ["op1", "op-eng"], 1609459200, 0, 1992, 120, 1500, 1200, 40,
                     ["backend engin", "softwar engin", "distribut system"],
-                    ["backend", "engineer", "python", "distributed", "systems", "api", "services"], [0.0, 1.0, 0.0],
+                    ["backend", "engineer", "python", "distributed", "systems", "api", "services"],
+                    [" ba", "bac", "ack"], ["backend", "distributed systems", "python"], [0.0, 1.0, 0.0],
                 ),
             ]
-            con.executemany("insert into local_people_positions values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", people_rows)
+            con.executemany("insert into local_people_positions values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", people_rows)
 
             con.execute(
                 """
@@ -132,6 +161,7 @@ class LocalDuckDBFixtureMixin:
                     summary varchar,
                     tech_skills varchar[],
                     allowed_operator_ids varchar[],
+                    summary_tokens varchar[],
                     phrase_tokens varchar[],
                     word_tokens varchar[],
                     vector double[]
@@ -139,10 +169,10 @@ class LocalDuckDBFixtureMixin:
                 """
             )
             con.executemany(
-                "insert into local_summaries values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "insert into local_summaries values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ("person-founder", "person-founder", "person-founder", "Founder with product leadership background", ["Product", "Go"], ["op1"], ["founder product"], ["founder", "product", "startup"], [1.0, 0.0, 0.0]),
-                    ("person-engineer", "person-engineer", "person-engineer", "Backend engineer building Python services", ["Python", "DuckDB", "Kubernetes"], ["op1"], ["backend engin"], ["backend", "engineer", "python", "duckdb"], [0.0, 1.0, 0.0]),
+                    ("person-founder", "person-founder", "person-founder", "Founder with product leadership background", ["Product", "Go"], ["op1"], ["founder", "product"], ["founder product"], ["founder", "product", "startup"], [1.0, 0.0, 0.0]),
+                    ("person-engineer", "person-engineer", "person-engineer", "Backend engineer building Python services", ["Python", "DuckDB", "Kubernetes"], ["op1"], ["backend", "engineer", "python"], ["backend engin"], ["backend", "engineer", "python", "duckdb"], [0.0, 1.0, 0.0]),
                 ],
             )
 
@@ -152,20 +182,24 @@ class LocalDuckDBFixtureMixin:
                     id varchar,
                     person_id varchar,
                     base_id varchar,
+                    education_id varchar,
                     canonical_education_id varchar,
                     school_name varchar,
+                    degree varchar,
                     degree_normalized varchar,
                     field_of_study varchar,
+                    start_year integer,
+                    end_year integer,
                     graduation_year integer,
                     allowed_operator_ids varchar[]
                 )
                 """
             )
             con.executemany(
-                "insert into local_people_education values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "insert into local_people_education values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ("edu-founder-stanford", "person-founder", "person-founder", "school-stanford", "Stanford University", "Bachelors", "Computer Science", 2010, ["op1"]),
-                    ("edu-engineer-mit", "person-engineer", "person-engineer", "school-mit", "Massachusetts Institute of Technology", "Masters", "Electrical Engineering and Computer Science", 2014, ["op1"]),
+                    ("edu-founder-stanford", "person-founder", "person-founder", "edu-stanford", "school-stanford", "Stanford University", "BS", "Bachelors", "Computer Science", 2006, 2010, 2010, ["op1"]),
+                    ("edu-engineer-mit", "person-engineer", "person-engineer", "edu-mit", "school-mit", "Massachusetts Institute of Technology", "MS", "Masters", "Electrical Engineering and Computer Science", 2012, 2014, 2014, ["op1"]),
                 ],
             )
 
@@ -188,11 +222,302 @@ class LocalDuckDBFixtureMixin:
                     ("school-mit", "school-mit", ["massachusetts", "institute", "of", "technology", "mit"], "Massachusetts Institute of Technology", "MIT", 150000),
                 ],
             )
+
+            con.execute(
+                """
+                create table local_companies (
+                    id varchar,
+                    company_urn varchar,
+                    company_name varchar,
+                    aliases varchar,
+                    name_aliases_text varchar,
+                    semantic_text varchar,
+                    doc2query varchar,
+                    d2q_text varchar,
+                    doc2query_text varchar,
+                    entity_sector_text varchar,
+                    word_text varchar,
+                    entity_types varchar[],
+                    sector_types varchar[],
+                    technology_types varchar[],
+                    customer_type varchar[],
+                    investor_urns varchar[],
+                    yc_batches varchar[],
+                    headcount integer,
+                    funding_stage integer,
+                    funding_total integer,
+                    last_funding_at integer,
+                    valuation integer,
+                    founded_year integer,
+                    city varchar,
+                    state varchar,
+                    country varchar,
+                    metro_area varchar,
+                    macro_region varchar,
+                    website_domain varchar,
+                    linkedin_url varchar,
+                    logo_url varchar,
+                    description varchar,
+                    allowed_operator_ids varchar[],
+                    vector double[]
+                )
+                """
+            )
+            con.executemany(
+                "insert into local_companies values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        "company-infra", "company-infra", "InfraDB", "InfraDB database infrastructure",
+                        "InfraDB database infrastructure", "Database infrastructure and developer tooling for application data.",
+                        "developer database tools", "developer database tools", "developer database tools", "data infrastructure developer tools",
+                        "database infrastructure developer tools", ["company", "developer_tool"], ["data", "developer_tools"],
+                        ["database", "infrastructure"], ["B2B"], ["investor-openai"], ["YC S20"],
+                        120, 3, 25_000_000, 20240315, 100_000_000, 2020, "New York", "New York", "United States",
+                        "New York City Metropolitan Area", "North America", "infradb.example",
+                        "https://www.linkedin.com/company/infradb", "https://img.example/infradb.png",
+                        "Builds hosted database infrastructure for software teams.", ["op1"], [0.0, 1.0, 0.0],
+                    ),
+                    (
+                        "company-startup", "company-startup", "Acme AI", "Acme AI artificial intelligence",
+                        "Acme AI artificial intelligence", "AI startup building productivity software.",
+                        "ai productivity software", "ai productivity software", "ai productivity software", "artificial intelligence software",
+                        "ai artificial intelligence productivity", ["company"], ["ai"],
+                        ["ai"], ["B2B"], [], [],
+                        40, 2, 5_000_000, 20230115, 20_000_000, 2021, "San Francisco", "California", "United States",
+                        "San Francisco Bay Area", "North America", "acme.example",
+                        "https://www.linkedin.com/company/acme-ai", "https://img.example/acme.png",
+                        "Builds AI products for teams.", ["op1"], [1.0, 0.0, 0.0],
+                    ),
+                ],
+            )
         finally:
             con.close()
 
 
 class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
+    def test_local_table_contract_fields_and_vectors(self) -> None:
+        import duckdb
+
+        con = duckdb.connect(self.db_path, read_only=True)
+        try:
+            for table, contract in build_local_duckdb_shim.LOCAL_TABLE_CONTRACT.items():
+                columns = {str(row[1]) for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+                self.assertTrue(set(contract).issubset(columns), f"{table} missing {sorted(set(contract) - columns)}")
+        finally:
+            con.close()
+
+        self.assertTrue(turbopuffer_client.local_namespace_has_vectors("people"))
+        self.assertTrue(turbopuffer_client.local_namespace_has_vectors("summaries"))
+        self.assertTrue(turbopuffer_client.local_namespace_has_vectors("companies"))
+
+    def test_local_rich_fields_are_filterable_and_projectable(self) -> None:
+        people = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+            "people",
+            ("role_ids", "ContainsAny", ["backend_engineer"]),
+            ["base_id", "role_ids", "position_title"],
+            page_size=1000,
+            max_results=10,
+        ))
+        self.assertEqual([row["base_id"] for row in people], ["person-engineer"])
+        self.assertIn("backend_engineer", people[0]["role_ids"])
+
+        summaries = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+            "summaries",
+            ("tech_skills", "ContainsAny", ["DuckDB"]),
+            ["base_id", "tech_skills"],
+            page_size=1000,
+            max_results=10,
+        ))
+        self.assertEqual([row["base_id"] for row in summaries], ["person-engineer"])
+        self.assertIn("DuckDB", summaries[0]["tech_skills"])
+
+        companies = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+            "companies",
+            ("And", [
+                ("entity_types", "ContainsAny", ["developer_tool"]),
+                ("sector_types", "ContainsAny", ["developer_tools"]),
+                ("technology_types", "ContainsAny", ["database"]),
+            ]),
+            ["company_name", "entity_types", "sector_types", "technology_types", "customer_type", "metro_area", "macro_region"],
+            page_size=1000,
+            max_results=10,
+        ))
+        self.assertEqual([row["id"] for row in companies], ["company-infra"])
+        self.assertEqual(companies[0]["company_name"], "InfraDB")
+        self.assertEqual(companies[0]["customer_type"], ["B2B"])
+
+    def test_build_duckdb_from_records_artifacts_and_resolve_company_locally(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            records = tmp / "normal-pipeline" / "records"
+            write_jsonl(records / "people.records.jsonl", [
+                {
+                    "id": "pos-artifact-engineer",
+                    "position_id": "pos-artifact-engineer",
+                    "person_id": "person-artifact",
+                    "base_id": "person-artifact",
+                    "vector": [0.0, 1.0, 0.0],
+                    "word_tokens": ["backend", "engineer", "backend engineer"],
+                    "char_tokens": [" ba", "bac", "ack"],
+                    "d2q_tokens": ["database", "infrastructure"],
+                    "phrase_tokens": ["backend engin"],
+                    "position_title": "Backend Engineer",
+                    "seniority_band": "senior",
+                    "company_id": "company-artifact-infra",
+                    "company_name": "ArtifactDB",
+                    "city": "New York",
+                    "state": "New York",
+                    "country": "United States",
+                    "macro_region": "North America",
+                    "is_current": True,
+                    "total_years_experience": 7,
+                    "start_date_epoch": 1609459200,
+                    "end_date_epoch": 0,
+                    "tenure_years": 3.5,
+                    "role_track": "engineering",
+                    "metro_areas": ["New York City Metropolitan Area"],
+                    "allowed_operator_ids": ["op-artifact"],
+                    "role_ids": ["software_engineer", "backend_engineer"],
+                }
+            ])
+            write_jsonl(records / "summaries.records.jsonl", [
+                {
+                    "id": "person-artifact",
+                    "person_id": "person-artifact",
+                    "base_id": "person-artifact",
+                    "summary": "Backend engineer using DuckDB and Python",
+                    "summary_tokens": ["backend", "engineer", "duckdb"],
+                    "tech_skills": ["DuckDB", "Python"],
+                    "allowed_operator_ids": ["op-artifact"],
+                    "word_tokens": ["backend", "duckdb"],
+                    "phrase_tokens": ["backend engin"],
+                    "vector": [0.0, 1.0, 0.0],
+                }
+            ])
+            write_jsonl(records / "companies.records.jsonl", [
+                {
+                    "id": "company-artifact-infra",
+                    "company_urn": "company-artifact-infra",
+                    "vector": [0.0, 1.0, 0.0],
+                    "company_name": "ArtifactDB",
+                    "name_aliases_text": "ArtifactDB database infrastructure developer tools",
+                    "semantic_text": "Database infrastructure and developer tools for software teams.",
+                    "doc2query_text": "database infrastructure developer tools backend data platform",
+                    "entity_sector_text": "database infrastructure developer tools",
+                    "description": "Builds local-first database tooling.",
+                    "headcount": 42,
+                    "funding_stage": 2,
+                    "funding_total": 5000000,
+                    "city": "New York",
+                    "state": "New York",
+                    "country": "United States",
+                    "metro_area": "New York City Metropolitan Area",
+                    "macro_region": "North America",
+                    "entity_types": ["developer_tool"],
+                    "sector_types": ["developer_tools"],
+                    "technology_types": ["database"],
+                    "customer_type": ["B2B"],
+                    "investor_urns": ["investor-artifact"],
+                    "yc_batches": [],
+                    "founded_year": 2022,
+                    "last_funding_at": 20240115,
+                    "valuation": 20000000,
+                    "allowed_operator_ids": ["op-artifact"],
+                }
+            ])
+            write_jsonl(records / "education.records.jsonl", [
+                {
+                    "id": "edu-artifact",
+                    "person_id": "person-artifact",
+                    "base_id": "person-artifact",
+                    "education_id": "school-artifact",
+                    "canonical_education_id": "school-artifact",
+                    "school_name": "Artifact University",
+                    "degree": "BS",
+                    "degree_normalized": "Bachelors",
+                    "field_of_study": "Computer Science",
+                    "start_year": 2010,
+                    "end_year": 2014,
+                    "graduation_year": 2014,
+                    "allowed_operator_ids": ["op-artifact"],
+                }
+            ])
+            write_jsonl(records / "schools.records.jsonl", [
+                {"id": "school-artifact", "canonical_education_id": "school-artifact", "school_name": "Artifact University", "display_value": "Artifact University", "person_count": 1}
+            ])
+
+            payload = run_shim_json(
+                "--records-dir", str(records),
+                "--output-dir", str(tmp / ".powerpacks/search-index"),
+                "--flavor", "candidate",
+                "--operator-id", "op-artifact",
+                "--operator-email", "artifact@example.com",
+                "--force",
+            )
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["tables"]["local_companies"], 1)
+            self.assertEqual(payload["tables"]["local_people_positions"], 1)
+
+            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
+            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
+            os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
+            turbopuffer_client._local_store_for_path.cache_clear()
+            original_embedding = resolve_companies.embedding
+
+            async def fail_embedding(text: str):
+                raise AssertionError("artifact-backed local company lookup should not call OpenAI by default")
+
+            resolve_companies.embedding = fail_embedding
+            try:
+                people_knn = turbopuffer_client.namespace("people").query(
+                    rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
+                    top_k=1,
+                    include_attributes=["base_id", "position_title", "role_ids"],
+                )
+                company_knn = turbopuffer_client.namespace("companies").query(
+                    rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
+                    top_k=1,
+                    include_attributes=["company_name", "entity_types", "sector_types"],
+                )
+                out = asyncio.run(resolve_companies.run(SimpleNamespace(
+                    state=None,
+                    payload_json=json.dumps({
+                        "company_semantic_queries": ["database infrastructure developer tools"],
+                        "company_sector_strategy": "semantic_only",
+                        "operator_ids": ["op-artifact"],
+                    }),
+                    env_file=None,
+                    name_top_k=10,
+                    semantic_top_k=10,
+                    company_sector_strategy="semantic_only",
+                    company_sector_min_results=1,
+                    page_size=1000,
+                    max_soft_companies=0,
+                    max_companies=0,
+                    no_ce=True,
+                    ce_all=False,
+                    ce_threshold=500,
+                    ce_top_n=0,
+                    ce_model=None,
+                    ce_batch_size=20,
+                    ce_concurrency=10,
+                )))
+            finally:
+                resolve_companies.embedding = original_embedding
+                turbopuffer_client._local_store_for_path.cache_clear()
+                if old_db is None:
+                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
+                else:
+                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
+
+            self.assertEqual(people_knn.rows[0].id, "pos-artifact-engineer")
+            self.assertEqual(people_knn.rows[0].position_title, "Backend Engineer")
+            self.assertEqual(company_knn.rows[0].id, "company-artifact-infra")
+            self.assertEqual(company_knn.rows[0].company_name, "ArtifactDB")
+            self.assertEqual(out["namespace"], "local_companies")
+            self.assertEqual(out["company_ids"], ["company-artifact-infra"])
+            self.assertEqual(out["sample_companies"][0]["entity_types"], ["developer_tool"])
+
     def test_hard_filters_distinguish_founder_and_engineer(self) -> None:
         founder_payload = {
             "cities": ["San Francisco"],
@@ -253,6 +578,114 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             max_rows_per_name=10,
         )))
         self.assertEqual(out["education_ids"], ["school-stanford"])
+
+    def test_local_company_namespace_and_resolver_use_duckdb(self) -> None:
+        response = turbopuffer_client.namespace("companies").query(
+            rank_by=("name_aliases_text", "BM25", "InfraDB"),
+            top_k=5,
+            include_attributes=["company_name", "headcount", "sector_types"],
+        )
+        self.assertEqual(response.rows[0].id, "company-infra")
+        self.assertEqual(response.rows[0].company_name, "InfraDB")
+
+        exact = asyncio.run(resolve_companies.run(SimpleNamespace(
+            state=None,
+            payload_json=json.dumps({"company_names": ["InfraDB"]}),
+            env_file=None,
+            name_top_k=10,
+            semantic_top_k=10,
+            company_sector_strategy="soft_union",
+            company_sector_min_results=500,
+            page_size=1000,
+            max_soft_companies=0,
+            max_companies=0,
+            no_ce=True,
+            ce_all=False,
+            ce_threshold=500,
+            ce_top_n=0,
+            ce_model=None,
+            ce_batch_size=20,
+            ce_concurrency=10,
+        )))
+        self.assertEqual(exact["company_ids"], ["company-infra"])
+
+    def test_local_company_semantic_lookup_uses_bm25_without_embedding(self) -> None:
+        original_embedding = resolve_companies.embedding
+
+        async def fail_embedding(text: str):
+            raise AssertionError("local company semantic lookup should not require OpenAI embeddings without vectors")
+
+        resolve_companies.embedding = fail_embedding
+        try:
+            out = asyncio.run(resolve_companies.run(SimpleNamespace(
+                state=None,
+                payload_json=json.dumps({
+                    "company_semantic_queries": ["database infrastructure developer tools"],
+                    "sector_types": ["data"],
+                    "company_sector_strategy": "staged",
+                }),
+                env_file=None,
+                name_top_k=10,
+                semantic_top_k=10,
+                company_sector_strategy="soft_union",
+                company_sector_min_results=1,
+                page_size=1000,
+                max_soft_companies=0,
+                max_companies=0,
+                no_ce=True,
+                ce_all=False,
+                ce_threshold=500,
+                ce_top_n=0,
+                ce_model=None,
+                ce_batch_size=20,
+                ce_concurrency=10,
+            )))
+        finally:
+            resolve_companies.embedding = original_embedding
+
+        self.assertEqual(out["company_ids"][0], "company-infra")
+        self.assertTrue(out["used_semantic_search"])
+        self.assertEqual(out["sample_companies"][0]["company_name"], "InfraDB")
+
+    def test_local_company_vector_search_requires_explicit_opt_in(self) -> None:
+        calls: list[str] = []
+        original_embedding = resolve_companies.embedding
+
+        async def fake_embedding(text: str):
+            calls.append(text)
+            return [0.0, 1.0, 0.0]
+
+        resolve_companies.embedding = fake_embedding
+        os.environ["POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH"] = "1"
+        try:
+            out = asyncio.run(resolve_companies.run(SimpleNamespace(
+                state=None,
+                payload_json=json.dumps({
+                    "company_semantic_queries": ["database infrastructure developer tools"],
+                    "company_sector_strategy": "semantic_only",
+                }),
+                env_file=None,
+                name_top_k=10,
+                semantic_top_k=10,
+                company_sector_strategy="semantic_only",
+                company_sector_min_results=1,
+                page_size=1000,
+                max_soft_companies=0,
+                max_companies=0,
+                no_ce=True,
+                ce_all=False,
+                ce_threshold=500,
+                ce_top_n=0,
+                ce_model=None,
+                ce_batch_size=20,
+                ce_concurrency=10,
+            )))
+        finally:
+            resolve_companies.embedding = original_embedding
+            os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
+
+        self.assertEqual(calls, ["database infrastructure developer tools"])
+        self.assertEqual(out["company_ids"][0], "company-infra")
 
     def test_namespace_rank_by_includes_score(self) -> None:
         response = turbopuffer_client.namespace("people").query(

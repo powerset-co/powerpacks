@@ -15,6 +15,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
+from uuid import UUID
 
 from local_filter_eval import filter_rows
 
@@ -76,6 +77,17 @@ class LocalDuckDBSearchStore:
         "summaries": "local_summaries",
         "education": "local_people_education",
         "schools": "local_education",
+        "companies": "local_companies",
+    }
+
+    FIELD_ALIASES = {
+        "company_urn": ["company_urn", "id"],
+        "name_aliases_text": ["name_aliases_text", "aliases", "name_aliases", "company_name"],
+        "doc2query_text": ["doc2query_text", "doc2query", "d2q_text"],
+        "entity_sector_text": ["entity_sector_text", "word_text"],
+        "website_domain": ["website_domain", "domain"],
+        "linkedin_url": ["linkedin_url", "url", "company_url"],
+        "logo_url": ["logo_url", "logo"],
     }
 
     def __init__(self, db_path: str, *, read_only: bool = True):
@@ -117,6 +129,17 @@ class LocalDuckDBSearchStore:
             raise LocalDuckDBError(f"failed reading local DuckDB table {table!r} for namespace {logical_name!r}: {exc}") from exc
         return [self._normalize_row(dict(zip(columns, row))) for row in rows]
 
+    def has_nonempty_vectors(self, logical_name: str, field: str = "vector") -> bool:
+        table = self._table_for_namespace(logical_name)
+        columns = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if field not in {str(row[1]) for row in columns}:
+            return False
+        try:
+            row = self.conn.execute(f"select count(*) from {table} where {field} is not null and len({field}) > 0").fetchone()
+        except Exception:
+            return False
+        return bool(row and row[0])
+
     def _normalize_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {key: self._normalize_value(value) for key, value in row.items()}
 
@@ -132,6 +155,8 @@ class LocalDuckDBSearchStore:
             return [self._normalize_value(item) for item in value]
         if isinstance(value, dict):
             return {str(key): self._normalize_value(item) for key, item in value.items()}
+        if isinstance(value, UUID):
+            return str(value)
         if isinstance(value, str):
             text = value.strip()
             if text and text[0] in "[{" and text[-1] in "]}":
@@ -142,14 +167,22 @@ class LocalDuckDBSearchStore:
         return value
 
     def _row_id(self, row: dict[str, Any]) -> str:
-        for field in ("id", "position_id", "person_id", "canonical_education_id", "base_id"):
+        for field in ("id", "company_urn", "position_id", "person_id", "canonical_education_id", "base_id"):
             if row.get(field) is not None:
                 return str(row[field])
-        raise LocalDuckDBError("local DuckDB row is missing id/position_id/person_id/canonical_education_id/base_id")
+        raise LocalDuckDBError("local DuckDB row is missing id/company_urn/position_id/person_id/canonical_education_id/base_id")
+
+    def _field_value(self, row: dict[str, Any], field: str) -> Any:
+        if field in row:
+            return row[field]
+        for alias in self.FIELD_ALIASES.get(field, []):
+            if alias in row:
+                return row[alias]
+        return None
 
     def _project_row_object(self, row: dict[str, Any], include_attributes: list[str]) -> LocalQueryRow:
         row_id = self._row_id(row)
-        attrs = {key: row.get(key) for key in include_attributes if key in row}
+        attrs = {key: self._field_value(row, key) for key in include_attributes if self._field_value(row, key) is not None}
         if "score" in row:
             attrs["score"] = row.get("score")
         return LocalQueryRow(row_id, attrs)
@@ -157,8 +190,9 @@ class LocalDuckDBSearchStore:
     def _project_dict(self, row: dict[str, Any], include_attributes: list[str]) -> dict[str, Any]:
         out = {"id": self._row_id(row)}
         for key in include_attributes:
-            if key in row:
-                out[key] = row[key]
+            value = self._field_value(row, key)
+            if value is not None:
+                out[key] = value
         return out
 
     def _filtered_rows(self, logical_name: str, filters: Any) -> list[dict[str, Any]]:
@@ -205,7 +239,7 @@ class LocalDuckDBSearchStore:
         if isinstance(rank_by, (list, tuple)) and len(rank_by) == 2:
             field, direction = str(rank_by[0]), str(rank_by[1]).lower()
             reverse = direction == "desc"
-            return sorted(rows, key=lambda row: (row.get(field) is None, row.get(field), self._row_id(row)), reverse=reverse)
+            return sorted(rows, key=lambda row: (self._field_value(row, field) is None, self._field_value(row, field), self._row_id(row)), reverse=reverse)
 
         if isinstance(rank_by, (list, tuple)) and len(rank_by) >= 3:
             field, operator, value = str(rank_by[0]), str(rank_by[1]), rank_by[2]
@@ -245,7 +279,7 @@ class LocalDuckDBSearchStore:
         if value is None:
             return []
         if isinstance(value, str):
-            return [value.lower()] if " " in value.strip() else TOKEN_RE.findall(value.lower())
+            return TOKEN_RE.findall(value.lower())
         if isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray, dict)):
             tokens: list[str] = []
             for item in value:
@@ -261,7 +295,7 @@ class LocalDuckDBSearchStore:
         query_tokens = self._tokens_for_value(query)
         if not query_tokens or not rows:
             return []
-        docs = [self._tokens_for_value(row.get(field)) for row in rows]
+        docs = [self._tokens_for_value(self._field_value(row, field)) for row in rows]
         avgdl = sum(len(doc) for doc in docs) / max(1, len(docs))
         df: Counter[str] = Counter()
         for doc in docs:
@@ -322,7 +356,7 @@ class LocalDuckDBSearchStore:
             return []
         scored = []
         for row in rows:
-            score = self._cosine(self._vector_values(row.get(field)), query)
+            score = self._cosine(self._vector_values(self._field_value(row, field)), query)
             if score > 0.0:
                 scored.append((row, score))
         return sorted(scored, key=lambda item: (-item[1], self._row_id(item[0])))
