@@ -23,6 +23,7 @@ Then test local search with:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import shutil
@@ -32,6 +33,14 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+_limit = sys.maxsize
+while True:
+    try:
+        csv.field_size_limit(_limit)
+        break
+    except OverflowError:
+        _limit //= 10
 
 DEFAULT_OPERATOR_ID = "e33a648a-ae5f-432e-83ce-b90d75546ada"
 DEFAULT_OPERATOR_EMAIL = "thearthurchen@gmail.com"
@@ -182,6 +191,30 @@ def run(cmd: list[str]) -> None:
         raise SystemExit(completed.returncode)
 
 
+def read_jsonl(path: Path, limit: int | None = None):
+    if not path.exists():
+        return
+    count = 0
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            yield json.loads(line)
+            count += 1
+            if limit is not None and count >= limit:
+                return
+
+
+def write_jsonl(path: Path, rows) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+            count += 1
+    return count
+
+
 def has_records(path: Path) -> bool:
     if not path.exists() or path.stat().st_size == 0:
         return False
@@ -266,6 +299,233 @@ def materialize_records_dir(records_dir: Path, run_dir: Path, flavor: str, *, fo
     if not copied:
         raise SystemExit(f"no records artifacts found under {records_dir}")
     return copied
+
+
+FUNDING_STAGE_MAP = {
+    "PRE_SEED": 1,
+    "SEED": 2,
+    "SERIES_A": 3,
+    "SERIES_B": 4,
+    "SERIES_C": 5,
+    "SERIES_D": 6,
+    "SERIES_E": 7,
+    "SERIES_F": 8,
+    "SERIES_G": 9,
+    "SERIES_H": 10,
+    "SERIES_I": 11,
+    "LATE_STAGE": 50,
+    "IPO": 90,
+    "PUBLIC": 91,
+    "EXITED": 99,
+    "VENTURE_UNKNOWN": 0,
+}
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _date_to_int(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if len(text) >= 10 and text[0:4].isdigit() and text[5:7].isdigit() and text[8:10].isdigit():
+        return int(text[0:4] + text[5:7] + text[8:10])
+    return None
+
+
+def _customer_type(value: Any) -> list[str]:
+    text = str(value or "")
+    return [token for token in ("B2B", "B2C", "B2G") if token in text]
+
+
+def _word_tokens(text: str) -> list[str]:
+    import re
+
+    words = re.findall(r"[a-z0-9]+", str(text).lower())
+    return words + [f"{words[i]} {words[i + 1]}" for i in range(len(words) - 1)]
+
+
+def _load_csv_by_id(path: Path) -> dict[str, dict[str, str]]:
+    if not path.exists():
+        return {}
+    csv.field_size_limit(sys.maxsize)
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        return {row.get("id", ""): row for row in reader if row.get("id")}
+
+
+def materialize_aleph_output_dir(aleph_dir: Path, run_dir: Path, operator_id: str, *, limit: int | None = None, force: bool = False) -> dict[str, str]:
+    """Convert copied Aleph pipeline_output artifacts to local records JSONL.
+
+    This follows the checked-in Aleph upload scripts' artifact names and field
+    shapes: companies_corpus_v3 + company_embeddings_v3, summary_embeddings +
+    person_tech_skills + unified_person.csv, people_education, schools_corpus.
+    No network calls, uploads, or paid providers are used.
+    """
+    if not aleph_dir.exists():
+        raise SystemExit(f"missing Aleph output directory: {aleph_dir}")
+    if force and run_dir.exists():
+        shutil.rmtree(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    records: dict[str, str] = {}
+
+    # Companies: data_pipeline_v2/pipelines/company/upload_companies_to_turbopuffer.py
+    # For limited canaries, pick the first embedding rows and then join corpus
+    # metadata to avoid scanning the huge 1536-dim embeddings file looking for
+    # arbitrary early corpus IDs.
+    company_embeddings: dict[str, dict[str, Any]] = {}
+    for row in read_jsonl(aleph_dir / "company/company_embeddings_v3.jsonl", limit):
+        urn = str(row.get("company_urn") or "")
+        if urn and row.get("embedding"):
+            company_embeddings[urn] = row
+    wanted_company_urns = set(company_embeddings)
+    company_candidates_by_urn: dict[str, dict[str, Any]] = {}
+    for row in read_jsonl(aleph_dir / "company/companies_corpus_v3.jsonl"):
+        urn = str(row.get("company_urn") or "")
+        if urn in wanted_company_urns:
+            company_candidates_by_urn[urn] = row
+            if len(company_candidates_by_urn) >= len(wanted_company_urns):
+                break
+    company_candidates = [company_candidates_by_urn.get(urn, {"company_urn": urn, **emb}) for urn, emb in company_embeddings.items()]
+
+    def company_rows():
+        emitted = 0
+        for row in company_candidates:
+            urn = str(row.get("company_urn") or "")
+            emb = company_embeddings.get(urn)
+            if not urn or not emb:
+                continue
+            company_name = row.get("company_name") or emb.get("company_name") or ""
+            aliases = row.get("name_aliases") or []
+            yield {
+                "id": urn,
+                "company_urn": urn,
+                "vector": emb.get("embedding") or [],
+                "entity_sector_text": row.get("word_text") or "",
+                "word_text": row.get("word_text") or "",
+                "name_aliases_text": " ".join([company_name] + [str(v) for v in aliases]),
+                "doc2query_text": row.get("d2q_text") or "",
+                "d2q_text": row.get("d2q_text") or "",
+                "semantic_text": row.get("semantic_text") or emb.get("semantic_text") or "",
+                "company_name": company_name,
+                "city": row.get("city") or None,
+                "state": row.get("state") or None,
+                "country": row.get("country") or None,
+                "metro_area": row.get("metro_area") or None,
+                "macro_region": row.get("macro_region") or None,
+                "funding_stage": FUNDING_STAGE_MAP.get(str(row.get("funding_stage") or "").upper(), 0),
+                "funding_total": row.get("funding_total") or 0,
+                "headcount": row.get("headcount") or 0,
+                "entity_types": row.get("entity_types") or [],
+                "sector_types": row.get("sector_types") or [],
+                "technology_types": _as_list(row.get("technology_types")),
+                "customer_type": _customer_type(row.get("customer_type")),
+                "investor_urns": row.get("investor_urns") or [],
+                "yc_batches": _as_list(row.get("yc_batches")),
+                "founded_year": int(row.get("founded_year") or 0),
+                "last_funding_at": _date_to_int(row.get("last_funding_at")) or 0,
+                "valuation": float(row.get("valuation") or 0),
+                "description": row.get("description") or "",
+                "linkedin_url": row.get("linkedin_url") or "",
+                "logo_url": row.get("logo_url") or "",
+                "website_domain": row.get("website_domain") or "",
+                "allowed_operator_ids": [operator_id],
+            }
+            emitted += 1
+            if limit is not None and emitted >= limit:
+                return
+
+    records["records/companies.records.jsonl"] = str(run_dir / "records/companies.records.jsonl")
+    write_jsonl(run_dir / "records/companies.records.jsonl", company_rows())
+
+    # Summaries: data_pipeline_v2/pipelines/people/indexing/upload_summaries_turbopuffer.py
+    unified = _load_csv_by_id(aleph_dir / "unified/unified_person.csv")
+    skills = {str(row.get("person_id")): row.get("tech_skills") or [] for row in read_jsonl(aleph_dir / "unified/person_tech_skills.jsonl") if row.get("person_id")}
+
+    def summary_rows():
+        for row in read_jsonl(aleph_dir / "unified/summary_embeddings.jsonl", limit):
+            pid = str(row.get("person_id") or "")
+            if not pid:
+                continue
+            summary = (unified.get(pid) or {}).get("summary") or ""
+            yield {
+                "id": pid,
+                "person_id": pid,
+                "base_id": pid,
+                "summary": summary,
+                "summary_tokens": _word_tokens(summary),
+                "tech_skills": skills.get(pid, []),
+                "allowed_operator_ids": [operator_id],
+                "phrase_tokens": [],
+                "word_tokens": _word_tokens(summary),
+                "vector": row.get("embedding") or [],
+            }
+
+    records["records/summaries.records.jsonl"] = str(run_dir / "records/summaries.records.jsonl")
+    write_jsonl(run_dir / "records/summaries.records.jsonl", summary_rows())
+
+    # Education: data_pipeline_v2/pipelines/education upload scripts.
+    schools_by_id = {str(row.get("entity_urn")): row for row in read_jsonl(aleph_dir / "education/schools_corpus.jsonl") if row.get("entity_urn")}
+
+    def education_rows():
+        import uuid
+
+        namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        for row in read_jsonl(aleph_dir / "education/people_education.jsonl", limit):
+            person_id = str(row.get("person_id") or "")
+            education_id = str(row.get("education_id") or "")
+            school = schools_by_id.get(education_id) or {}
+            yield {
+                "id": str(uuid.uuid5(namespace, f"pe:{person_id}:{education_id}")),
+                "person_id": person_id,
+                "base_id": person_id,
+                "education_id": education_id,
+                "canonical_education_id": education_id,
+                "school_name": school.get("school_name") or "",
+                "degree": row.get("degree") or "",
+                "degree_normalized": row.get("degree_normalized") or "",
+                "field_of_study": row.get("field_of_study") or "",
+                "start_year": row.get("start_year") or 0,
+                "end_year": row.get("end_year") or 0,
+                "graduation_year": row.get("graduation_year") or 0,
+                "allowed_operator_ids": [operator_id],
+            }
+
+    records["records/education.records.jsonl"] = str(run_dir / "records/education.records.jsonl")
+    write_jsonl(run_dir / "records/education.records.jsonl", education_rows())
+
+    def school_rows():
+        for row in read_jsonl(aleph_dir / "education/schools_corpus.jsonl", limit):
+            urn = str(row.get("entity_urn") or "")
+            school_name = row.get("school_name") or ""
+            yield {
+                "id": urn,
+                "canonical_education_id": urn,
+                "school_name": school_name,
+                "display_value": school_name,
+                "school_name_tokens": _word_tokens(school_name),
+                "person_count": int(row.get("person_count") or 0),
+            }
+
+    records["records/schools.records.jsonl"] = str(run_dir / "records/schools.records.jsonl")
+    write_jsonl(run_dir / "records/schools.records.jsonl", school_rows())
+
+    # People vectors require roles_with_embeddings + flattened_people.  The copied
+    # seed bundle used by local tests does not include roles_with_embeddings, so
+    # emit an empty Aleph-shaped people records file rather than inventing shape.
+    records["records/people.records.jsonl"] = str(run_dir / "records/people.records.jsonl")
+    write_jsonl(run_dir / "records/people.records.jsonl", [])
+    return records
 
 
 def qident(identifier: str) -> str:
@@ -429,7 +689,7 @@ def build_pipeline(args: argparse.Namespace, run_dir: Path) -> None:
 
 
 def write_manifest(run_dir: Path, flavor: str, args: argparse.Namespace, aliases: dict[str, str], db_path: Path, table_counts: dict[str, int]) -> Path:
-    source_value = str(Path(args.records_dir)) if args.records_dir else str(Path(args.source))
+    source_value = str(Path(args.aleph_output_dir)) if args.aleph_output_dir else str(Path(args.records_dir)) if args.records_dir else str(Path(args.source))
     manifest = {
         "status": "ok",
         "flavor": flavor,
@@ -437,6 +697,7 @@ def write_manifest(run_dir: Path, flavor: str, args: argparse.Namespace, aliases
         "operator_email": args.operator_email,
         "source": source_value,
         "records_dir": str(Path(args.records_dir)) if args.records_dir else None,
+        "aleph_output_dir": str(Path(args.aleph_output_dir)) if args.aleph_output_dir else None,
         "run_dir": str(run_dir),
         "duckdb": str(db_path),
         "powerpacks_local_search_db": str(db_path),
@@ -458,6 +719,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=str(DEFAULT_SOURCE), help="Input people CSV; defaults to people_harmonic_all.csv")
     parser.add_argument("--records-dir", help="Existing normal pipeline run root or records/ directory containing *.records.jsonl; skips people.csv pipeline build")
+    parser.add_argument("--aleph-output-dir", help="Copied Aleph pipeline_output directory; converts Aleph upload artifacts to local records without API calls")
     parser.add_argument("--operator-id", default=DEFAULT_OPERATOR_ID)
     parser.add_argument("--operator-email", default=DEFAULT_OPERATOR_EMAIL)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Parent output dir; run is created under <output-dir>/<flavor>/")
@@ -472,7 +734,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     run_dir = Path(args.output_dir) / args.flavor
-    if args.records_dir:
+    if args.aleph_output_dir:
+        aleph_dir = ROOT / args.aleph_output_dir if not Path(args.aleph_output_dir).is_absolute() else Path(args.aleph_output_dir)
+        args.aleph_output_dir = str(aleph_dir)
+        materialize_aleph_output_dir(aleph_dir, run_dir, args.operator_id, limit=args.limit, force=args.force)
+    elif args.records_dir:
         records_dir = ROOT / args.records_dir if not Path(args.records_dir).is_absolute() else Path(args.records_dir)
         args.records_dir = str(records_dir)
         materialize_records_dir(records_dir, run_dir, args.flavor, force=args.force)
