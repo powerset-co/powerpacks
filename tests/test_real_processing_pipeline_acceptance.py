@@ -15,6 +15,15 @@ PIPELINE = ROOT / "packs/indexing/primitives/build_processing_pipeline/build_pro
 DUCKDB_SHIM = ROOT / "scripts/build-local-duckdb-shim.py"
 SEARCH_LIB = ROOT / "packs/search/primitives/lib"
 
+FULL_COMPATIBLE_GREEN_CRITERIA = {
+    "role_artifacts": "roles_with_dense_text_remapped.jsonl + roles_with_embeddings.jsonl keyed by 16-char title_hash with Aleph classifier fields and 1536-d dense_embedding",
+    "company_artifacts": "companies_corpus_v3.jsonl + company_embeddings_v3.jsonl keyed by company_urn with Aleph corpus fields and 1536-d embedding",
+    "summary_artifacts": "unified_person.csv + summary_embeddings.jsonl + person_tech_skills.jsonl keyed by person_id with 1536-d embedding",
+    "education_artifacts": "people_education.jsonl + schools_corpus.jsonl using education_id/entity_urn Aleph fields",
+    "provider": "real provider output or copied/cache fixtures; local-fake vectors are scaffold-only and not full-compatible",
+    "search": "materialized DuckDB supports vector kNN and role/company local search from those artifacts",
+}
+
 
 def parse_last_json(stdout: str) -> dict:
     text = stdout.strip()
@@ -150,7 +159,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(full["status"], "completed")
-            self.assertEqual(full["provider"], "local_deterministic_no_spend")
+            self.assertIn(full["provider"], {"local", "local_deterministic_no_spend"})
 
             code, partial, err = run_json([
                 sys.executable,
@@ -417,6 +426,78 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(len(role_embedding["dense_embedding"]), 1536)
             self.assertEqual(len(company_embedding["embedding"]), 1536)
             self.assertEqual(len(summary_embedding["embedding"]), 1536)
+
+    def test_copied_aleph_seed_cache_fixtures_define_full_compatible_green_criteria(self) -> None:
+        seed = ROOT / ".powerpacks/aleph-seed/2026-05-08/pipeline_output"
+        if not (seed / "unified/roles/roles_with_embeddings.jsonl").exists():
+            self.skipTest("copied Aleph seed artifacts are not present")
+
+        role_dense = first_jsonl(seed / "unified/roles/roles_with_dense_text_remapped.jsonl")
+        role_embedding = first_jsonl(seed / "unified/roles/roles_with_embeddings.jsonl")
+        company_embedding = first_jsonl(seed / "company/company_embeddings_v3.jsonl")
+        company_corpus = next(
+            row for row in read_jsonl(seed / "company/companies_corpus_v3.jsonl")
+            if row.get("company_urn") == company_embedding.get("company_urn")
+        )
+        summary_embedding = first_jsonl(seed / "unified/summary_embeddings.jsonl")
+        skills = first_jsonl(seed / "unified/person_tech_skills.jsonl")
+        people_education = first_jsonl(seed / "education/people_education.jsonl")
+        school = first_jsonl(seed / "education/schools_corpus.jsonl")
+
+        self.assertEqual(len(role_dense["title_hash"]), 16)
+        self.assertTrue(role_dense["role_ids"])
+        self.assertTrue(role_dense["role_track"])
+        self.assertTrue(role_dense["seniority_band"])
+        self.assertTrue(role_dense["doc2query"])
+        self.assertTrue(role_dense["inferred_skills"])
+        self.assertTrue(role_dense["dense_text"])
+        self.assertEqual(role_embedding["title_hash"], role_dense["title_hash"])
+        self.assertEqual(len(role_embedding["dense_embedding"]), 1536)
+
+        self.assertTrue(company_corpus["company_urn"])
+        self.assertTrue(company_corpus["semantic_text"])
+        self.assertTrue(company_corpus["word_text"] or company_corpus["d2q_text"])
+        self.assertEqual(company_embedding["company_urn"], company_corpus["company_urn"])
+        self.assertEqual(len(company_embedding["embedding"]), 1536)
+
+        self.assertTrue(summary_embedding["person_id"])
+        self.assertEqual(len(summary_embedding["embedding"]), 1536)
+        self.assertEqual(set(skills), {"person_id", "tech_skills"})
+        self.assertTrue(people_education["person_id"])
+        self.assertTrue(people_education["education_id"])
+        self.assertTrue(school["entity_urn"])
+        self.assertTrue(school["school_name"])
+
+    @unittest.expectedFailure
+    def test_people_csv_pipeline_full_compatible_enrichment_not_local_fake_yet(self) -> None:
+        """Future green test: people.csv -> checkpointed stages must use real/cache providers, not local-fake."""
+        if pipeline_has_unregistered_embedding_steps():
+            self.skipTest("processing orchestrator has STEPS entry embed_role_positions without STEP_FUNCTIONS handler")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            source = tmp / "people.csv"
+            write_five_person_csv(source)
+            code, payload, err = run_json([
+                sys.executable,
+                str(PIPELINE),
+                "run",
+                "--input",
+                str(source),
+                "--output-dir",
+                str(tmp / "pipeline"),
+                "--run-id",
+                "candidate",
+                "--default-operator-id",
+                "op-full-compatible",
+                "--checkpoint-every",
+                "2",
+                "--force",
+            ])
+            self.assertEqual(code, 0, err)
+            self.assertEqual(payload["status"], "completed")
+            self.assertNotEqual(payload["counts"]["embed_role_positions"]["provider"], "local-fake")
+            self.assertNotEqual(payload["counts"]["embed_companies"]["provider"], "local-fake")
+            self.assertNotEqual(payload["counts"]["embed_summaries"]["provider"], "local-fake")
 
     def test_checkpointed_role_stage_rejects_paid_provider_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -108,11 +108,26 @@ smoke = json.load(open(f'{base}/smoke.json'))
 role_stats = json.load(open(f'{base}/search-index/candidate/stats/embed_role_positions.json'))
 company_stats = json.load(open(f'{base}/search-index/candidate/stats/embed_companies.json'))
 summary_stats = json.load(open(f'{base}/search-index/candidate/stats/embed_summaries.json'))
+fake_providers = [
+  role_stats.get('provider') == 'local-fake',
+  company_stats.get('provider') == 'local-fake',
+  summary_stats.get('provider') == 'local-fake',
+]
 print(json.dumps({
   'status': 'ok',
   'base': base,
   'limit': int('$LIMIT'),
   'pipeline_status': resumed['status'],
+  'full_compatible': not any(fake_providers),
+  'mode': 'checkpoint_scaffold_with_local_fake_vectors' if any(fake_providers) else 'full_compatible_real_or_cache_enrichment',
+  'green_criteria': {
+    'roles': 'Aleph-shaped roles_with_dense_text_remapped.jsonl and roles_with_embeddings.jsonl with real/cache classifications and dense_embedding',
+    'companies': 'Aleph-shaped companies_corpus_v3.jsonl and company_embeddings_v3.jsonl with real/cache embedding',
+    'summaries': 'Aleph-shaped unified_person.csv, summary_embeddings.jsonl, person_tech_skills.jsonl with real/cache embedding',
+    'education': 'Aleph-shaped people_education.jsonl and schools_corpus.jsonl',
+    'search': 'DuckDB kNN self-match and local hybrid role/company search from produced artifacts',
+  },
+  'remaining_gaps': ['local-fake providers are scaffold-only'] if any(fake_providers) else [],
   'vector_stats': {'roles': role_stats, 'companies': company_stats, 'summaries': summary_stats},
   'duckdb': duckdb['duckdb'],
   'tables': duckdb['tables'],
