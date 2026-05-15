@@ -384,9 +384,12 @@ def _role_hashes_for_flattened(people: list[dict[str, Any]]) -> list[str]:
         for exp in person.get("work_experiences") or []:
             if not isinstance(exp, dict):
                 continue
+            upstream_title_hash = str(exp.get("title_hash") or person.get("title_hash") or "").strip()
             title = str(exp.get("title") or exp.get("position_title") or exp.get("role") or "").strip()
             description = str(exp.get("description") or exp.get("summary") or "").strip()
-            if title:
+            if upstream_title_hash:
+                hashes.append(upstream_title_hash)
+            elif title:
                 hashes.append(enrich_roles_checkpointed.title_hash(title, description))
     return hashes
 

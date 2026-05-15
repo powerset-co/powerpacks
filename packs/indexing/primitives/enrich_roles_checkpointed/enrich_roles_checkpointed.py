@@ -104,8 +104,9 @@ def role_input(person: dict[str, Any], position: dict[str, Any]) -> dict[str, An
         return None
     description = description_from_position(position)
     company = company_from_position(position)
+    upstream_title_hash = clean(position.get("title_hash") or person.get("title_hash"))
     return {
-        "title_hash": title_hash(title, description),
+        "title_hash": upstream_title_hash or title_hash(title, description),
         "raw_title": title,
         "description": description,
         "company_name": company,
