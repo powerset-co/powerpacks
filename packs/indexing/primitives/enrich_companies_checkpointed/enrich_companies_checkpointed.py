@@ -128,6 +128,24 @@ OBSERVED_OWNERSHIP_STATUSES = {
     "PRIVATE", "ACQUIRED_OR_MERGED", "PUBLIC", "ACTIVE", "OUT_OF_BUSINESS", "INACTIVE",
     "IPO_REGISTRATION", "MANAGING",
 }
+REQUIRED_PROVIDER_OUTPUT_FIELDS = {
+    "entity_types",
+    "sector_types",
+    "technology_types",
+    "customer_type",
+    "funding_stage",
+    "company_type",
+    "ownership_status",
+    "stage",
+    "accelerators",
+    "yc_batches",
+    "confidence_score",
+    "doc2query",
+    "d2q_text",
+    "word_text",
+    "semantic_text",
+}
+
 COMPANY_CLASSIFICATION_SCHEMA = {
     "entity_types": {"type": "string[]", "observed_values": sorted(OBSERVED_ENTITY_TYPES)},
     "sector_types": {"type": "string[]", "observed_values": sorted(OBSERVED_SECTOR_TYPES)},
@@ -233,6 +251,12 @@ def normalize_customer_type(value: Any) -> str:
     return text if text in OBSERVED_CUSTOMER_TYPES else text
 
 
+def validate_provider_output(payload: dict[str, Any]) -> None:
+    missing = sorted(field for field in REQUIRED_PROVIDER_OUTPUT_FIELDS if field not in payload)
+    if missing:
+        raise RuntimeError(f"company classification provider output missing required fields: {', '.join(missing)}")
+
+
 def normalize_classification_output(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize real provider/artifact output while preserving unknown taxonomy values."""
 
@@ -304,6 +328,10 @@ def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
 
 
 def merge_enrichment(local: dict[str, Any], enriched: dict[str, Any]) -> dict[str, Any]:
+    # Validate the effective Aleph-shaped row. Some real providers omit fields
+    # already present on the source corpus (for example funding_stage). The
+    # merged row must still satisfy the contract before checkpointing.
+    validate_provider_output({**local, **enriched})
     merged = dict(local)
     normalized = normalize_classification_output(enriched)
     for key in CLASSIFICATION_FIELDS:
@@ -334,8 +362,9 @@ def openai_classification_payload(local: dict[str, Any]) -> dict[str, Any]:
                 "role": "system",
                 "content": (
                     "Classify a company for Aleph company search. Return only JSON with keys: "
-                    "entity_types, sector_types, technology_types, customer_type, stage, accelerators, "
-                    "yc_batches, word_text, d2q_text, doc2query, semantic_text, confidence_score. "
+                    "entity_types, sector_types, technology_types, customer_type, funding_stage, "
+                    "company_type, ownership_status, stage, accelerators, yc_batches, word_text, "
+                    "d2q_text, doc2query, semantic_text, confidence_score. "
                     f"Prefer observed entity_types={sorted(OBSERVED_ENTITY_TYPES)} and sector_types={sorted(OBSERVED_SECTOR_TYPES)}. "
                     f"customer_type must be one of {sorted(OBSERVED_CUSTOMER_TYPES)} when known. "
                     "Use arrays for *_types, accelerators, yc_batches, and doc2query."

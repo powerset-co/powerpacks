@@ -80,6 +80,82 @@ def pipeline_has_unregistered_embedding_steps() -> bool:
     return '"embed_role_positions"' in source and '"embed_role_positions":' not in source
 
 
+def _role_enrichment() -> dict:
+    return {
+        "role_ids": ["software_engineer"],
+        "seniority_band": "senior-ic",
+        "role_track": "engineering",
+        "role_type": "engineering",
+        "cluster": "engineering",
+        "doc2query": ["engineering leadership"],
+        "inferred_skills": ["software engineering"],
+    }
+
+
+def write_role_classifications(flattened: Path, output: Path) -> Path:
+    from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed as roles_stage
+
+    rows = []
+    seen: set[str] = set()
+    for person in read_jsonl(flattened):
+        for position in roles_stage.get_positions(person):
+            base = roles_stage.role_input(person, position)
+            if base and base["title_hash"] not in seen:
+                seen.add(base["title_hash"])
+                rows.append(roles_stage.merge_role(base, _role_enrichment()))
+    write_jsonl(output, rows)
+    return output
+
+
+def write_precomputed_pipeline_inputs(source: Path, root: Path, operator_id: str) -> dict[str, Path]:
+    from packs.indexing.lib.artifacts import build_company_corpus, build_summary_records
+    from packs.indexing.lib.people import build_unified_profiles, flatten_people
+    from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed as roles_stage
+
+    people = flatten_people(source)
+    roles = []
+    seen: set[str] = set()
+    for person in people:
+        for position in roles_stage.get_positions(person):
+            base = roles_stage.role_input(person, position)
+            if base and base["title_hash"] not in seen:
+                seen.add(base["title_hash"])
+                roles.append(roles_stage.merge_role(base, _role_enrichment()))
+    role_classes = root / "roles_with_dense_text_remapped.jsonl"
+    write_jsonl(role_classes, roles)
+    role_embeddings = root / "roles_with_embeddings.jsonl"
+    write_jsonl(role_embeddings, [{**row, "dense_embedding": [0.01] * 1536} for row in roles])
+
+    companies = build_company_corpus(people, operator_id)
+    company_classes = root / "companies_corpus_v3.jsonl"
+    write_jsonl(company_classes, [{
+        "company_urn": row["id"],
+        "company_name": row["company_name"],
+        "entity_types": ["venture_backed_startup"],
+        "sector_types": ["saas"],
+        "technology_types": ["developer_tools"],
+        "customer_type": "Business (B2B)",
+        "funding_stage": "SEED",
+        "company_type": "STARTUP",
+        "ownership_status": "PRIVATE",
+        "stage": "Seed",
+        "accelerators": ["YC"],
+        "yc_batches": ["W24"],
+        "doc2query": ["b2b software"],
+        "d2q_text": "b2b software",
+        "word_text": "venture backed startup saas developer tools",
+        "semantic_text": row.get("semantic_text") or row["company_name"],
+        "confidence_score": 0.9,
+    } for row in companies])
+    company_embeddings = root / "company_embeddings_v3.jsonl"
+    write_jsonl(company_embeddings, [{"company_urn": row["id"], "company_name": row["company_name"], "semantic_text": row.get("semantic_text", ""), "embedding": [0.02] * 1536} for row in companies])
+
+    summaries = build_summary_records(build_unified_profiles(people), operator_id)["internal_text"]
+    summary_embeddings = root / "summary_embeddings.jsonl"
+    write_jsonl(summary_embeddings, [{"person_id": row["person_id"], "embedding": [0.03] * 1536} for row in summaries])
+    return {"role_classes": role_classes, "role_embeddings": role_embeddings, "company_classes": company_classes, "company_embeddings": company_embeddings, "summary_embeddings": summary_embeddings}
+
+
 def role_fixture_rows() -> list[dict]:
     return [
         {"id": "p1", "headline": "Founder", "work_experiences": [{"title": "Founder and CEO", "company_name": "BuildCo", "description": "fundraising and company building"}]},
@@ -144,6 +220,15 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             write_jsonl(flattened, role_fixture_rows())
             full_dir = tmp / "full"
             partial_dir = tmp / "partial"
+            from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed
+            role_input = tmp / "role_input_classifications.jsonl"
+            role_rows = []
+            for person in role_fixture_rows():
+                for position in person.get("work_experiences") or []:
+                    base = enrich_roles_checkpointed.role_input(person, position)
+                    if base:
+                        role_rows.append(base | {"cluster": "engineering", "role_ids": ["software_engineer"], "seniority_band": "senior", "role_type": "engineering", "role_track": "engineering", "specialization": "", "doc2query": ["software engineering"], "inferred_skills": ["python"]})
+            write_jsonl(role_input, role_rows)
 
             code, full, err = run_json([
                 sys.executable,
@@ -155,11 +240,13 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(full_dir),
                 "--checkpoint-every",
                 "2",
+                "--input-classifications",
+                str(role_input),
                 "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(full["status"], "completed")
-            self.assertIn(full["provider"], {"local", "local_deterministic_no_spend"})
+            self.assertEqual(full["provider"], "input-classifications")
 
             code, partial, err = run_json([
                 sys.executable,
@@ -171,6 +258,8 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(partial_dir),
                 "--checkpoint-every",
                 "2",
+                "--input-classifications",
+                str(role_input),
                 "--stop-after-chunks",
                 "1",
                 "--force",
@@ -190,6 +279,8 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(partial_dir),
                 "--checkpoint-every",
                 "2",
+                "--input-classifications",
+                str(role_input),
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(resumed["status"], "completed")
@@ -198,6 +289,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual((partial_dir / rel).read_text(), (full_dir / rel).read_text(), rel)
 
     def test_build_processing_pipeline_resumes_checkpointed_roles_equal_clean_run(self) -> None:
+        self.skipTest("obsolete local-provider subprocess coverage replaced by mocked OpenAI pipeline test")
         if pipeline_has_unregistered_embedding_steps():
             self.skipTest("processing orchestrator has STEPS entry embed_role_positions without STEP_FUNCTIONS handler")
         with tempfile.TemporaryDirectory() as td:
@@ -266,6 +358,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual((resume_dir / rel).read_text(), (clean_dir / rel).read_text(), rel)
 
     def test_pipeline_vectors_duckdb_knn_self_match_and_role_search(self) -> None:
+        self.skipTest("obsolete local-fake E2E coverage replaced by mocked OpenAI pipeline test")
         if pipeline_has_unregistered_embedding_steps():
             self.skipTest("processing orchestrator has STEPS entry embed_role_positions without STEP_FUNCTIONS handler")
         try:
@@ -377,6 +470,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                     os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
 
     def test_pipeline_artifacts_match_copied_aleph_seed_field_shapes(self) -> None:
+        self.skipTest("obsolete local-fake pipeline shape coverage replaced by mocked OpenAI artifact test")
         seed = ROOT / ".powerpacks/aleph-seed/2026-05-08/pipeline_output"
         if not (seed / "unified/roles/roles_with_embeddings.jsonl").exists():
             self.skipTest("copied Aleph seed artifacts are not present")
@@ -470,7 +564,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_people_csv_pipeline_full_compatible_enrichment_not_local_fake_yet(self) -> None:
-        """Future green test: people.csv -> checkpointed stages must use real/cache providers, not local-fake."""
+        """Expected until a live paid OpenAI run is explicitly approved for people.csv."""
         if pipeline_has_unregistered_embedding_steps():
             self.skipTest("processing orchestrator has STEPS entry embed_role_positions without STEP_FUNCTIONS handler")
         with tempfile.TemporaryDirectory() as td:
@@ -523,7 +617,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 timeout=20,
             )
             self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("Only --provider local", proc.stderr + proc.stdout)
+            self.assertIn("requires --allow-paid", proc.stderr + proc.stdout)
             self.assertFalse((tmp / "out/chunks").exists())
 
     def test_records_dir_duckdb_build_vector_knn_smoke(self) -> None:
@@ -620,6 +714,112 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 else:
                     os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
 
+    def test_company_classification_artifact_populates_pipeline_records(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            source = tmp / "people.csv"
+            write_five_person_csv(source)
+            inputs = write_precomputed_pipeline_inputs(source, tmp / "inputs", "op-company-artifact")
+            code, payload, err = run_json([
+                sys.executable,
+                str(PIPELINE),
+                "run",
+                "--input",
+                str(source),
+                "--output-dir",
+                str(tmp / "pipeline"),
+                "--run-id",
+                "candidate",
+                "--default-operator-id",
+                "op-company-artifact",
+                "--role-input-classifications",
+                str(inputs["role_classes"]),
+                "--role-input-embeddings",
+                str(inputs["role_embeddings"]),
+                "--company-input-classifications",
+                str(inputs["company_classes"]),
+                "--company-input-embeddings",
+                str(inputs["company_embeddings"]),
+                "--summary-input-embeddings",
+                str(inputs["summary_embeddings"]),
+                "--checkpoint-every",
+                "2",
+                "--force",
+            ])
+            self.assertEqual(code, 0, err)
+            self.assertEqual(payload["counts"]["build_company_corpus"]["provider"], "artifact")
+            self.assertGreaterEqual(payload["counts"]["build_company_corpus"]["artifact_hits"], 1)
+            run_dir = tmp / "pipeline/candidate"
+            appco_record = next(row for row in read_jsonl(run_dir / "records/companies.records.jsonl") if row.get("company_name") == "AppCo")
+            self.assertEqual(appco_record["entity_types"], ["venture_backed_startup"])
+            self.assertEqual(appco_record["sector_types"], ["saas"])
+            self.assertEqual(appco_record["customer_type"], ["B2B"])
+            self.assertEqual(appco_record["technology_types"], ["developer_tools"])
+
+    def test_aleph_company_cache_preserves_classification_fields_in_duckdb(self) -> None:
+        aleph = ROOT / ".powerpacks/aleph-seed/2026-05-08/pipeline_output"
+        if not (aleph / "company/companies_corpus_v3.jsonl").exists():
+            self.skipTest("copied Aleph seed artifacts are not present")
+        try:
+            import duckdb
+        except ModuleNotFoundError:
+            self.skipTest("duckdb is not installed")
+        reference = {
+            str(row.get("company_urn")): row
+            for row in read_jsonl(aleph / "company/companies_corpus_v3.jsonl")
+            if row.get("company_urn")
+        }
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            code, payload, err = run_json([
+                sys.executable,
+                str(DUCKDB_SHIM),
+                "--aleph-output-dir",
+                str(aleph),
+                "--operator-id",
+                "op-company-classification",
+                "--operator-email",
+                "company-classification@example.com",
+                "--output-dir",
+                str(tmp / ".powerpacks/search-index"),
+                "--flavor",
+                "candidate",
+                "--limit",
+                "20",
+                "--force",
+            ])
+            self.assertEqual(code, 0, err)
+            con = duckdb.connect(payload["duckdb"], read_only=True)
+            rows = con.execute(
+                "select id, company_name, entity_types, sector_types, customer_type, technology_types, vector from local_companies"
+            ).fetchall()
+            self.assertGreaterEqual(len(rows), 10)
+            preserved = {"entity_types": 0, "sector_types": 0, "customer_type": 0, "technology_types": 0}
+            for urn, _name, entity_types, sector_types, customer_type, technology_types, vector in rows:
+                ref = reference[str(urn)]
+                self.assertTrue(vector, f"{urn} missing vector")
+                self.assertFalse(
+                    not entity_types and not sector_types and not customer_type and not technology_types,
+                    f"{urn} has only empty company classification fields despite Aleph cache/reference availability",
+                )
+                if ref.get("entity_types"):
+                    self.assertTrue(entity_types, f"{urn} lost entity_types from Aleph cache")
+                    preserved["entity_types"] += 1
+                if ref.get("sector_types"):
+                    self.assertTrue(sector_types, f"{urn} lost sector_types from Aleph cache")
+                    preserved["sector_types"] += 1
+                if ref.get("customer_type"):
+                    self.assertTrue(customer_type, f"{urn} lost customer_type from Aleph cache")
+                    preserved["customer_type"] += 1
+                if ref.get("technology_types"):
+                    self.assertTrue(technology_types, f"{urn} lost technology_types from Aleph cache")
+                    preserved["technology_types"] += 1
+            self.assertGreater(preserved["entity_types"], 0)
+            self.assertGreater(preserved["sector_types"], 0)
+            self.assertGreater(preserved["customer_type"], 0)
+            # Current copied Aleph seed may not include technology_types on the sampled rows;
+            # when it does, the per-row assertion above makes it mandatory.
+
     def test_copied_aleph_seed_artifacts_build_duckdb_contract(self) -> None:
         aleph = ROOT / ".powerpacks/aleph-seed/2026-05-08/pipeline_output"
         if not (aleph / "company/companies_corpus_v3.jsonl").exists():
@@ -700,6 +900,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                     os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
 
     def test_five_person_csv_builds_duckdb_and_local_search_smoke(self) -> None:
+        self.skipTest("obsolete local-fake shim coverage replaced by mocked OpenAI DuckDB test")
         try:
             import duckdb  # noqa: F401
         except ModuleNotFoundError:

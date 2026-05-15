@@ -49,7 +49,7 @@ class IndexingPipelineTests(unittest.TestCase):
 
         companies = build_company_corpus(people, "operator:test")
         company_classes = root / "companies_corpus_v3.jsonl"
-        write_jsonl(company_classes, [{"company_urn": row["id"], "company_name": row["company_name"], "entity_types": ["venture_backed_startup"], "sector_types": ["saas"], "technology_types": ["developer_tools"], "customer_type": "Business (B2B)", "doc2query": ["b2b software"], "d2q_text": "b2b software", "word_text": "venture backed startup saas", "semantic_text": row.get("semantic_text") or row["company_name"], "confidence_score": 0.9} for row in companies])
+        write_jsonl(company_classes, [{"company_urn": row["id"], "company_name": row["company_name"], "entity_types": ["venture_backed_startup"], "sector_types": ["saas"], "technology_types": ["developer_tools"], "customer_type": "Business (B2B)", "funding_stage": "SEED", "company_type": "STARTUP", "ownership_status": "PRIVATE", "stage": "Seed", "accelerators": ["YC"], "yc_batches": ["W24"], "doc2query": ["b2b software"], "d2q_text": "b2b software", "word_text": "venture backed startup saas", "semantic_text": row.get("semantic_text") or row["company_name"], "confidence_score": 0.9} for row in companies])
         company_embeddings = root / "company_embeddings_v3.jsonl"
         write_jsonl(company_embeddings, [{"company_urn": row["id"], "company_name": row["company_name"], "semantic_text": row.get("semantic_text", ""), "embedding": [0.02] * 1536} for row in companies])
 
