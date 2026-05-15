@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -34,6 +35,17 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             code = module.main(argv)
         payload = json.loads(buf.getvalue()) if buf.getvalue().strip() else {}
         return code, payload
+
+    def advance_to_linkedin_csv(self, accounts_path, ledger):
+        code, payload = self.invoke(onboarding, ["run", "--accounts", str(accounts_path), "--ledger", str(ledger), "--force"])
+        self.assertEqual(code, 0)
+        code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "skip"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["step"], "gmail")
+        code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "skip"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["step"], "linkedin_csv")
+        return payload
 
     def test_account_registry_init_and_mark(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -115,14 +127,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             accounts_path = Path(tmp) / "accounts.json"
             ledger = Path(tmp) / "onboarding-run.json"
-            code, payload = self.invoke(onboarding, ["run", "--accounts", str(accounts_path), "--ledger", str(ledger), "--force"])
-            self.assertEqual(code, 0)
-            code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "skip"])
-            self.assertEqual(code, 0)
-            self.assertEqual(payload["step"], "gmail")
-            code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "skip"])
-            self.assertEqual(code, 0)
-            self.assertEqual(payload["step"], "linkedin_csv")
+            self.advance_to_linkedin_csv(accounts_path, ledger)
             code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "yes"])
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "needs_user_action")
@@ -130,8 +135,35 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["url"], onboarding.LINKEDIN_DATA_ARCHIVE_URL)
             self.assertIn("open-linkedin-archive", payload["command"])
             self.assertIn("larger data archive", payload["archive_option"])
+            self.assertEqual(payload["drop_path"], str(accounts_path.parent / "linkedin" / "Connections.csv"))
+            self.assertEqual(payload["scan_reply"], "scan")
+            self.assertIn("open-downloads", payload["open_downloads_command"])
+            self.assertIn("open-linkedin-drop-folder", payload["open_drop_folder_command"])
             state = onboarding.load_run(ledger)
             self.assertEqual(state["phase"], "awaiting_csv_path")
+
+    def test_linkedin_csv_scan_downloads_copies_and_advances(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            accounts_path = Path(tmp) / "accounts.json"
+            ledger = Path(tmp) / "onboarding-run.json"
+            downloads = Path(tmp) / "Downloads"
+            downloads.mkdir()
+            (downloads / "Connections.csv").write_text("First Name,Last Name\nAda,Lovelace\n", encoding="utf-8")
+            self.advance_to_linkedin_csv(accounts_path, ledger)
+            code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "yes"])
+            self.assertEqual(code, 0)
+            with mock.patch.object(onboarding, "default_downloads_dir", return_value=downloads):
+                code, payload = self.invoke(onboarding, [
+                    "continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "scan",
+                ])
+            self.assertEqual(code, 0)
+            copied_to = accounts_path.parent / "linkedin" / "Connections.csv"
+            self.assertTrue(copied_to.exists())
+            self.assertEqual(payload["completed_action"]["artifact"], str(copied_to))
+            self.assertEqual(payload["scan"]["status"], "copied")
+            self.assertEqual(payload["step"], "linkedin_mcp")
+            registry = accounts.load_registry(accounts_path)
+            self.assertTrue(registry["accounts"]["linkedin_csv"]["linked"])
 
     def test_open_linkedin_archive_command(self):
         with mock.patch.object(onboarding.webbrowser, "open", return_value=True) as open_mock:
@@ -141,6 +173,36 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
         self.assertTrue(payload["opened"])
         self.assertEqual(payload["url"], onboarding.LINKEDIN_DATA_ARCHIVE_URL)
         open_mock.assert_called_once_with(onboarding.LINKEDIN_DATA_ARCHIVE_URL)
+
+    def test_find_linkedin_connections_extracts_zip_to_repo_drop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            accounts_path = Path(tmp) / "accounts.json"
+            downloads = Path(tmp) / "Downloads"
+            downloads.mkdir()
+            with zipfile.ZipFile(downloads / "Basic_LinkedInDataExport.zip", "w") as archive:
+                archive.writestr("Complete/Connections.csv", "First Name,Last Name\nGrace,Hopper\n")
+            code, payload = self.invoke(onboarding, [
+                "find-linkedin-connections",
+                "--accounts", str(accounts_path),
+                "--downloads", str(downloads),
+                "--copy-to-repo",
+            ])
+            self.assertEqual(code, 0)
+            copied_to = accounts_path.parent / "linkedin" / "Connections.csv"
+            self.assertEqual(payload["status"], "copied")
+            self.assertEqual(payload["copied_to"], str(copied_to))
+            self.assertTrue(copied_to.exists())
+
+    def test_open_linkedin_drop_folder_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            accounts_path = Path(tmp) / "accounts.json"
+            with mock.patch.object(onboarding.subprocess, "run") as run_mock:
+                code, payload = self.invoke(onboarding, ["open-linkedin-drop-folder", "--accounts", str(accounts_path)])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertTrue(payload["opened"])
+            self.assertEqual(payload["drop_path"], str(accounts_path.parent / "linkedin" / "Connections.csv"))
+            run_mock.assert_called_once()
 
     def test_linkedin_mcp_instructions_and_mark(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shlex
+import shutil
 import subprocess
 import sys
 import webbrowser
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +50,119 @@ def run_json(cmd: list[str]) -> dict[str, Any] | None:
 
 def artifact_exists(path: str) -> bool:
     return bool(path and Path(path).exists())
+
+
+def default_downloads_dir() -> Path:
+    return Path.home() / "Downloads"
+
+
+def linkedin_drop_dir(accounts_path: Path) -> Path:
+    return accounts_path.expanduser().parent / "linkedin"
+
+
+def linkedin_drop_file(accounts_path: Path) -> Path:
+    return linkedin_drop_dir(accounts_path) / LINKEDIN_CONNECTIONS_FILENAME
+
+
+def open_directory(path: Path) -> dict[str, Any]:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["open", str(path)], check=True, capture_output=True, text=True)
+    except Exception as exc:
+        return {"opened": False, "path": str(path), "error": str(exc)}
+    return {"opened": True, "path": str(path)}
+
+
+def candidate_payload(candidate: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "kind": candidate["kind"],
+        "path": str(candidate["path"]),
+        "mtime": candidate.get("mtime", 0.0),
+    }
+    if candidate.get("member"):
+        payload["member"] = candidate["member"]
+    return payload
+
+
+def add_linkedin_zip_candidates(path: Path, candidates: list[dict[str, Any]], errors: list[str]) -> None:
+    try:
+        mtime = path.stat().st_mtime
+        with zipfile.ZipFile(path) as archive:
+            for member in archive.infolist():
+                if Path(member.filename).name == LINKEDIN_CONNECTIONS_FILENAME:
+                    candidates.append({"kind": "zip", "path": path, "member": member.filename, "mtime": mtime})
+    except (OSError, zipfile.BadZipFile) as exc:
+        errors.append(f"{path}: {exc}")
+
+
+def find_linkedin_connections_candidates(downloads_dir: Path) -> dict[str, Any]:
+    downloads_dir = downloads_dir.expanduser()
+    candidates: list[dict[str, Any]] = []
+    errors: list[str] = []
+    if not downloads_dir.exists():
+        return {"status": "not_found", "downloads": str(downloads_dir), "candidates": [], "errors": ["downloads_missing"]}
+
+    def onerror(exc: OSError) -> None:
+        errors.append(str(exc))
+
+    for root, dirs, files in os.walk(downloads_dir, onerror=onerror):
+        dirs[:] = [name for name in dirs if not name.startswith(".")]
+        root_path = Path(root)
+        for name in files:
+            path = root_path / name
+            if name == LINKEDIN_CONNECTIONS_FILENAME:
+                try:
+                    candidates.append({"kind": "file", "path": path, "mtime": path.stat().st_mtime})
+                except OSError as exc:
+                    errors.append(f"{path}: {exc}")
+            elif name.lower().endswith(".zip") and "linkedin" in name.lower():
+                add_linkedin_zip_candidates(path, candidates, errors)
+
+    candidates.sort(key=lambda item: item.get("mtime", 0.0), reverse=True)
+    return {
+        "status": "found" if candidates else "not_found",
+        "downloads": str(downloads_dir),
+        "candidates": [candidate_payload(candidate) for candidate in candidates[:10]],
+        "errors": errors[:10],
+    }
+
+
+def copy_linkedin_candidate(candidate: dict[str, Any], destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if candidate["kind"] == "file":
+        shutil.copy2(candidate["path"], destination)
+        return
+    with zipfile.ZipFile(candidate["path"]) as archive:
+        with archive.open(candidate["member"]) as src, destination.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+
+def scan_and_copy_linkedin_connections(downloads_dir: Path, accounts_path: Path) -> dict[str, Any]:
+    downloads_dir = downloads_dir.expanduser()
+    result = find_linkedin_connections_candidates(downloads_dir)
+    if result["status"] != "found":
+        result["message"] = "No LinkedIn Connections.csv found in Downloads."
+        result["drop_path"] = str(linkedin_drop_file(accounts_path))
+        return result
+
+    selected = result["candidates"][0]
+    candidate = {"kind": selected["kind"], "path": Path(selected["path"]), "mtime": selected["mtime"]}
+    if selected.get("member"):
+        candidate["member"] = selected["member"]
+    destination = linkedin_drop_file(accounts_path)
+    try:
+        copy_linkedin_candidate(candidate, destination)
+    except (OSError, zipfile.BadZipFile, KeyError) as exc:
+        result["status"] = "failed"
+        result["message"] = f"Found a LinkedIn export but could not copy {LINKEDIN_CONNECTIONS_FILENAME}: {exc}"
+        result["drop_path"] = str(destination)
+        return result
+
+    result["status"] = "copied"
+    result["selected"] = selected
+    result["copied_to"] = str(destination)
+    result["message"] = f"Copied {LINKEDIN_CONNECTIONS_FILENAME} from Downloads."
+    return result
 
 
 def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -144,6 +261,18 @@ LINKEDIN_LARGER_ARCHIVE_LABEL = (
     "Download larger data archive, including connections, verifications, contacts, "
     "account history, and information LinkedIn infers based on your profile and activity."
 )
+LINKEDIN_CONNECTIONS_FILENAME = "Connections.csv"
+LINKEDIN_SCAN_REPLIES = {
+    "scan",
+    "scan downloads",
+    "scan ~/downloads",
+    "find",
+    "find downloads",
+    "find ~/downloads",
+}
+LINKEDIN_OPEN_DOWNLOADS_REPLIES = {"open downloads", "open ~/downloads", "downloads"}
+LINKEDIN_OPEN_DROP_REPLIES = {"open folder", "open drop folder", "open repo folder", "drop folder", "folder"}
+LINKEDIN_DROP_DONE_REPLIES = {"done", "ready", "ok"}
 ONBOARDING_FLOW = ["messages", "gmail", "linkedin_csv", "linkedin_mcp", "twitter", "merge", "enrich"]
 YES = {"y", "yes", "true", "1", "ok", "sure"}
 NO = {"n", "no", "false", "0", "skip", "s"}
@@ -321,14 +450,23 @@ def action_for_yes(step: str, state: dict[str, Any], accounts_path: Path, ledger
         }
     if step == "linkedin_csv":
         state["phase"] = "awaiting_csv_path"
+        drop_path = linkedin_drop_file(accounts_path)
         return {
             "status": "needs_user_action",
             "step": step,
-            "message": "LinkedIn will open in your browser. Select the larger data archive option, click Request archive, then paste the Connections.csv path after LinkedIn emails the archive.",
+            "message": "LinkedIn will open in your browser. Select the larger data archive option, click Request archive, then reply scan after the archive downloads, or copy Connections.csv into the repo drop folder and reply done.",
             "url": LINKEDIN_DATA_ARCHIVE_URL,
             "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py open-linkedin-archive",
             "archive_option": LINKEDIN_LARGER_ARCHIVE_LABEL,
+            "drop_path": str(drop_path),
             "example": "~/Downloads/Connections.csv",
+            "scan_reply": "scan",
+            "done_reply": "done",
+            "open_downloads_command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py open-downloads",
+            "open_drop_folder_command": (
+                "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py "
+                f"open-linkedin-drop-folder --accounts {shlex.quote(str(accounts_path))}"
+            ),
         }
     if step == "linkedin_mcp":
         state["phase"] = "awaiting_linkedin_mcp_username"
@@ -359,6 +497,37 @@ def action_for_yes(step: str, state: dict[str, Any], accounts_path: Path, ledger
             "message": "Paste the people CSV to enrich, usually .powerpacks/network-import/merged/people_harmonic_all.merged.csv",
         }
     raise ValueError(f"unknown step: {step}")
+
+
+def complete_linkedin_csv_path(
+    state: dict[str, Any],
+    accounts_path: Path,
+    ledger_path: Path,
+    csv_path: Path,
+    message: str = "Recorded CSV path. Run this import command when ready.",
+) -> dict[str, Any]:
+    state["context"]["linkedin_csv_path"] = str(csv_path)
+    update_channel(
+        "linkedin_csv",
+        path=accounts_path,
+        username=csv_path.stem,
+        artifact=str(csv_path),
+        linked=True,
+        notes="CSV path recorded; run import command to ingest.",
+    )
+    advance(state)
+    payload = next_prompt(state, accounts_path, ledger_path)
+    payload["completed_action"] = {
+        "step": "linkedin_csv",
+        "message": message,
+        "command": (
+            "uv run --project . python "
+            "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py "
+            f"run --csv {shlex.quote(str(csv_path))} --source-user {shlex.quote(csv_path.stem)}"
+        ),
+        "artifact": str(csv_path),
+    }
+    return payload
 
 
 def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path, ledger_path: Path) -> dict[str, Any]:
@@ -404,19 +573,72 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
         return next_prompt(state, accounts_path, ledger_path)
 
     if phase == "awaiting_csv_path":
+        if low in LINKEDIN_SCAN_REPLIES:
+            scan = scan_and_copy_linkedin_connections(default_downloads_dir(), accounts_path)
+            if scan["status"] == "copied":
+                payload = complete_linkedin_csv_path(
+                    state,
+                    accounts_path,
+                    ledger_path,
+                    Path(scan["copied_to"]),
+                    message="Found and copied LinkedIn Connections.csv from Downloads. Run this import command when ready.",
+                )
+                payload["scan"] = scan
+                return payload
+            return {
+                "status": "needs_user_input",
+                "step": step,
+                "message": "I could not find Connections.csv in Downloads. Paste the CSV path, reply open downloads, or copy it into the repo drop folder and reply done.",
+                "ledger": str(ledger_path),
+                "scan": scan,
+                "drop_path": str(linkedin_drop_file(accounts_path)),
+                "open_downloads_command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py open-downloads",
+                "open_drop_folder_command": (
+                    "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py "
+                    f"open-linkedin-drop-folder --accounts {shlex.quote(str(accounts_path))}"
+                ),
+            }
+        if low in LINKEDIN_OPEN_DOWNLOADS_REPLIES:
+            opened = open_directory(default_downloads_dir())
+            return {
+                "status": "needs_user_input",
+                "step": step,
+                "message": "Opened Downloads. Paste the Connections.csv path, reply scan, or copy it into the repo drop folder and reply done.",
+                "ledger": str(ledger_path),
+                "opened": opened,
+                "drop_path": str(linkedin_drop_file(accounts_path)),
+            }
+        if low in LINKEDIN_OPEN_DROP_REPLIES:
+            opened = open_directory(linkedin_drop_dir(accounts_path))
+            return {
+                "status": "needs_user_input",
+                "step": step,
+                "message": "Opened the repo drop folder. Copy Connections.csv there, then reply done.",
+                "ledger": str(ledger_path),
+                "opened": opened,
+                "drop_path": str(linkedin_drop_file(accounts_path)),
+            }
+        if low in LINKEDIN_DROP_DONE_REPLIES:
+            csv_path = linkedin_drop_file(accounts_path)
+            if csv_path.exists():
+                return complete_linkedin_csv_path(state, accounts_path, ledger_path, csv_path)
+            return {
+                "status": "needs_user_input",
+                "step": step,
+                "message": "I do not see Connections.csv in the repo drop folder yet. Paste a CSV path, reply scan, or copy it there and reply done.",
+                "ledger": str(ledger_path),
+                "drop_path": str(csv_path),
+            }
         csv_path = Path(reply).expanduser()
         if not csv_path.exists():
-            return {"status": "needs_user_input", "step": step, "message": "That file does not exist. Paste a valid Connections.csv path or skip.", "ledger": str(ledger_path)}
-        state["context"]["linkedin_csv_path"] = str(csv_path)
-        update_channel("linkedin_csv", path=accounts_path, username=csv_path.stem, artifact=str(csv_path), linked=True, notes="CSV path recorded; run import command to ingest.")
-        advance(state)
-        payload = next_prompt(state, accounts_path, ledger_path)
-        payload["completed_action"] = {
-            "step": "linkedin_csv",
-            "message": "Recorded CSV path. Run this import command when ready.",
-            "command": f"uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run --csv {csv_path} --source-user {csv_path.stem}",
-        }
-        return payload
+            return {
+                "status": "needs_user_input",
+                "step": step,
+                "message": "That file does not exist. Paste a valid Connections.csv path, reply scan, reply open downloads, or skip.",
+                "ledger": str(ledger_path),
+                "drop_path": str(linkedin_drop_file(accounts_path)),
+            }
+        return complete_linkedin_csv_path(state, accounts_path, ledger_path, csv_path)
 
     if phase == "awaiting_linkedin_mcp_username":
         if not reply:
@@ -508,6 +730,35 @@ def cmd_open_linkedin_archive(args: argparse.Namespace) -> int:
     return 0 if opened else 1
 
 
+def cmd_open_downloads(args: argparse.Namespace) -> int:
+    payload = open_directory(Path(args.downloads))
+    payload["status"] = "ok" if payload["opened"] else "failed"
+    payload["message"] = "Opened Downloads." if payload["opened"] else "Could not open Downloads."
+    emit(payload)
+    return 0 if payload["opened"] else 1
+
+
+def cmd_open_linkedin_drop_folder(args: argparse.Namespace) -> int:
+    path = linkedin_drop_dir(Path(args.accounts))
+    payload = open_directory(path)
+    payload["status"] = "ok" if payload["opened"] else "failed"
+    payload["message"] = "Opened LinkedIn CSV drop folder." if payload["opened"] else "Could not open LinkedIn CSV drop folder."
+    payload["drop_path"] = str(linkedin_drop_file(Path(args.accounts)))
+    emit(payload)
+    return 0 if payload["opened"] else 1
+
+
+def cmd_find_linkedin_connections(args: argparse.Namespace) -> int:
+    downloads = Path(args.downloads)
+    if args.copy_to_repo:
+        payload = scan_and_copy_linkedin_connections(downloads, Path(args.accounts))
+    else:
+        payload = find_linkedin_connections_candidates(downloads)
+    payload["drop_path"] = str(linkedin_drop_file(Path(args.accounts)))
+    emit(payload)
+    return 0 if payload["status"] in {"found", "copied"} else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Guided onboarding for local network ingestion sources")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -533,6 +784,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     open_linkedin = sub.add_parser("open-linkedin-archive", help="Open LinkedIn data archive settings in the default browser")
     open_linkedin.set_defaults(func=cmd_open_linkedin_archive)
+
+    open_downloads = sub.add_parser("open-downloads", help="Open Downloads in Finder")
+    open_downloads.add_argument("--downloads", default=str(default_downloads_dir()))
+    open_downloads.set_defaults(func=cmd_open_downloads)
+
+    open_linkedin_drop = sub.add_parser("open-linkedin-drop-folder", parents=[common], help="Open the repo LinkedIn CSV drop folder in Finder")
+    open_linkedin_drop.set_defaults(func=cmd_open_linkedin_drop_folder)
+
+    find_linkedin = sub.add_parser("find-linkedin-connections", parents=[common], help="Find LinkedIn Connections.csv in Downloads")
+    find_linkedin.add_argument("--downloads", default=str(default_downloads_dir()))
+    find_linkedin.add_argument("--copy-to-repo", action="store_true")
+    find_linkedin.set_defaults(func=cmd_find_linkedin_connections)
 
     status = sub.add_parser("status", parents=[common])
     status.set_defaults(func=cmd_status)
