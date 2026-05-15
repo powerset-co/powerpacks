@@ -14,7 +14,7 @@ class EnrichRolesCheckpointedTests(unittest.TestCase):
         titles = ["Founder", "Staff Software Engineer", "Product Manager"]
         with path.open("w", encoding="utf-8") as handle:
             for idx in range(count):
-                handle.write(json.dumps({"id": f"person-{idx}", "headline": "Canary", "summary": "Builds software", "work_experiences": [{"id": f"pos-{idx}", "title": titles[idx], "company_name": f"Company {idx}", "description": f"Role description {idx}"}]}) + "\n")
+                handle.write(json.dumps({"id": f"person-{idx}", "headline": "Canary", "summary": "Builds software", "work_experiences": [{"id": f"pos-{idx}", "title_hash": f"upstream-title-hash-{idx}", "title": titles[idx], "company_name": f"Company {idx}", "description": f"Role description {idx}"}]}) + "\n")
 
     def _args(self, flattened: Path, out: Path, **kwargs):
         defaults = dict(flattened=str(flattened), output_dir=str(out), checkpoint_every=1, provider="openai", input_classifications=None, api_key="test", base_url="https://example.invalid/v1", model="gpt-test", allow_paid=True, dry_run=False, force=True, stop_after_chunks=None)

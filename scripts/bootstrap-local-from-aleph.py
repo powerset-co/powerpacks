@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import os
 import re
@@ -131,16 +130,11 @@ def epoch(value: Any) -> int:
             return 0
 
 
-def title_hash(raw_title: str, description: str) -> str:
-    normalized = re.sub(r"\s+", " ", f"{clean(raw_title).lower()}::{clean(description).lower()}")
-    return hashlib.md5(normalized.encode("utf-8")).hexdigest()
-
-
 def resolve_title_hash(row: dict[str, Any]) -> str:
     direct = clean(row.get("title_hash"))
-    if direct:
-        return direct
-    return title_hash(clean(row.get("raw_title")), clean(row.get("description")))
+    if not direct:
+        raise RuntimeError(f"missing upstream title_hash for position {clean(row.get('id')) or '<unknown>'}; bootstrap must copy existing DVC/Aleph checkpoints, not recompute hashes")
+    return direct
 
 
 def parse_customer_type(value: Any) -> list[str]:
@@ -360,7 +354,7 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     started = time.time()
     flattened, flattened_scanned = select_flattened(seed / "unified/flattened_people.jsonl", person_ids, args.limit if mode == "smoke" else None)
     selected_person_ids = {clean(row.get("base_person_id")) for row in flattened if clean(row.get("base_person_id"))}
-    title_hashes = {resolve_title_hash(row) for row in flattened if resolve_title_hash(row)}
+    title_hashes = {resolve_title_hash(row) for row in flattened}
     company_ids = {clean(row.get("company_id")) for row in flattened if clean(row.get("company_id"))}
     position_ids = {clean(row.get("id")) for row in flattened if clean(row.get("id"))}
 

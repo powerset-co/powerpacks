@@ -7,7 +7,6 @@ explicit --input-classifications, or calls OpenAI with --allow-paid.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -81,13 +80,8 @@ def company_from_position(position: dict[str, Any]) -> str:
     return ""
 
 
-def normalize_hash_text(value: str) -> str:
-    return re.sub(r"\s+", " ", clean(value).lower()).strip()
-
-
 def title_hash(title: str, description: str) -> str:
-    payload = f"{normalize_hash_text(title)}::{normalize_hash_text(description)}"
-    return hashlib.md5(payload.encode("utf-8")).hexdigest()[:16]
+    raise RuntimeError("title_hash must come from upstream Aleph/DVC checkpoint data; no local fallback hash is allowed")
 
 
 def shape_role(row: dict[str, Any]) -> dict[str, Any]:
@@ -105,8 +99,10 @@ def role_input(person: dict[str, Any], position: dict[str, Any]) -> dict[str, An
     description = description_from_position(position)
     company = company_from_position(position)
     upstream_title_hash = clean(position.get("title_hash") or person.get("title_hash"))
+    if not upstream_title_hash:
+        raise RuntimeError(f"missing upstream title_hash for role {title!r}; run one-time Aleph bootstrap or copy the exact DVC hash stage first")
     return {
-        "title_hash": upstream_title_hash or title_hash(title, description),
+        "title_hash": upstream_title_hash,
         "raw_title": title,
         "description": description,
         "company_name": company,

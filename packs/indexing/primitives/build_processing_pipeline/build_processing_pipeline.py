@@ -386,11 +386,10 @@ def _role_hashes_for_flattened(people: list[dict[str, Any]]) -> list[str]:
                 continue
             upstream_title_hash = str(exp.get("title_hash") or person.get("title_hash") or "").strip()
             title = str(exp.get("title") or exp.get("position_title") or exp.get("role") or "").strip()
-            description = str(exp.get("description") or exp.get("summary") or "").strip()
+            if not upstream_title_hash and title:
+                raise RuntimeError(f"missing upstream title_hash for role {title!r}; run one-time Aleph bootstrap or copy the exact DVC hash stage first")
             if upstream_title_hash:
                 hashes.append(upstream_title_hash)
-            elif title:
-                hashes.append(enrich_roles_checkpointed.title_hash(title, description))
     return hashes
 
 
@@ -1018,7 +1017,18 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
     people = flatten_people(input_path)
     if getattr(args, "limit", None) is not None:
         people = people[: int(args.limit)]
-    role_hashes = set(_role_hashes_for_flattened(people))
+    role_hashes: set[str] = set()
+    missing_title_hashes = 0
+    for person in people:
+        for exp in person.get("work_experiences") or []:
+            if not isinstance(exp, dict):
+                continue
+            th = str(exp.get("title_hash") or person.get("title_hash") or "").strip()
+            title = str(exp.get("title") or exp.get("position_title") or exp.get("role") or "").strip()
+            if th:
+                role_hashes.add(th)
+            elif title:
+                missing_title_hashes += 1
     companies = build_company_corpus(people, getattr(args, "default_operator_id", None))
     checkpoint_every = max(1, int(getattr(args, "checkpoint_every", 1000) or 1000))
     role_input = _arg_artifact(args, "role_input_classifications", "unified/roles/roles_with_dense_text_remapped.jsonl")
@@ -1038,6 +1048,7 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
             "summaries": len(people),
             "checkpoint_every": checkpoint_every,
             "role_chunks": (len(role_hashes) + checkpoint_every - 1) // checkpoint_every,
+            "positions_missing_upstream_title_hash": missing_title_hashes,
             "company_chunks": (len(companies) + checkpoint_every - 1) // checkpoint_every,
             "summary_embedding_chunks": (len(people) + checkpoint_every - 1) // checkpoint_every,
         },

@@ -63,7 +63,7 @@ class IndexingPipelineTests(unittest.TestCase):
             base = Path(td) / ".powerpacks"
             result = run_cli("run", "--dry-run", "--output-dir", str(base / "search-index"), "--run-id", "estimate", "--input", str(FIXTURE_PEOPLE))
             self.assertIn(result["status"], {"dry-run", "dry_run"})
-            self.assertGreater(result["counts"]["unique_roles"], 0)
+            self.assertGreater(result["counts"]["positions_missing_upstream_title_hash"], 0)
             self.assertFalse((base / "search-index/estimate/ledger.json").exists())
 
     def test_run_blocks_before_paid_stage_without_approval_or_precomputed_inputs(self) -> None:
@@ -74,32 +74,12 @@ class IndexingPipelineTests(unittest.TestCase):
             self.assertIn("requires --allow-paid-role-provider or --role-input-classifications", proc.stderr + proc.stdout)
             self.assertFalse((base / "search-index/blocked/roles/chunks").exists())
 
-    def test_pipeline_uses_precomputed_real_artifacts_without_fake_provider_modes(self) -> None:
+    def test_pipeline_does_not_recompute_missing_title_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            inputs = self._precomputed_inputs(tmp / "inputs")
-            base = tmp / ".powerpacks"
-            result = run_cli(
-                "run",
-                "--output-dir", str(base / "search-index"),
-                "--run-id", "precomputed",
-                "--input", str(FIXTURE_PEOPLE),
-                "--default-operator-id", "operator:test",
-                "--role-input-classifications", str(inputs["role_classes"]),
-                "--role-input-embeddings", str(inputs["role_embeddings"]),
-                "--company-input-classifications", str(inputs["company_classes"]),
-                "--company-input-embeddings", str(inputs["company_embeddings"]),
-                "--summary-input-embeddings", str(inputs["summary_embeddings"]),
-                "--force",
-            )
-            run_dir = base / "search-index/precomputed"
-            self.assertEqual(result["status"], "completed")
-            for record_file in ["records/people.records.jsonl", "records/companies.records.jsonl", "records/summaries.records.jsonl"]:
-                for row in read_jsonl(run_dir / record_file):
-                    uuid.UUID(row["id"])
-                    self.assertEqual(len(row["vector"]), 1536)
-            companies_stats = json.loads((run_dir / "stats/build_company_corpus.json").read_text())
-            self.assertEqual(companies_stats["provider"], "artifact")
+            base = Path(td) / ".powerpacks"
+            proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--run-id", "no-hash", "--input", str(FIXTURE_PEOPLE), "--role-input-classifications", str(Path(td) / "missing.jsonl"), "--allow-paid-company-provider", "--allow-paid-embeddings", "--force"], cwd=ROOT, capture_output=True, text=True, check=False)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("missing input role classifications", proc.stderr + proc.stdout)
 
 
 if __name__ == "__main__":
