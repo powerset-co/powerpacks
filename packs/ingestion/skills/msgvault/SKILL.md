@@ -18,6 +18,7 @@ uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_set
 uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py setup --email <gmail>
 uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py setup --client-secret <client_secret.json> --email <gmail>
 uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py create-oauth-app --email <gmail>
+uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-test-users <gmail>
 uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <gmail>
 uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py mcp-install
 ```
@@ -38,6 +39,8 @@ From an installed skill bundle, replace `packs/...` with
 - User provides a downloaded `client_secret*.json`: run `setup --client-secret
   <path>` and add `--email` if known.
 - Workspace org needs its own app: add `--oauth-app <short-name>`.
+- Add OAuth test users: run `add-test-users <gmail>`; add `--project <id>`
+  or `--oauth-app <short-name>` when targeting a non-default app.
 - Headless machine: add `--headless` when authorizing the account.
 - Reruns: `browser-setup` skips Google Console automation when a valid local
   client secret is already configured. Use `--force-browser-setup` only when

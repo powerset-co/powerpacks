@@ -41,6 +41,7 @@ GMAIL_SCOPES = [
 INSTALL_COMMAND = "curl -fsSL https://msgvault.io/install.sh | bash"
 OAUTH_APP_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -519,6 +520,24 @@ def validate_oauth_app(app_name: str | None) -> str:
     return app_name
 
 
+def normalize_email_list(values: list[str]) -> list[str]:
+    emails: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for item in re.split(r"[,\s]+", value or ""):
+            email = item.strip()
+            if not email:
+                continue
+            key = email.lower()
+            if key in seen:
+                continue
+            if not EMAIL_RE.match(email):
+                raise ValueError(f"invalid email address: {email}")
+            seen.add(key)
+            emails.append(email)
+    return emails
+
+
 def validate_client_secret(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -811,6 +830,65 @@ def run_browser_automation(
         progress("Google OAuth client secret downloaded.")
     else:
         progress("Chrome is waiting for Google OAuth setup to finish.")
+    return payload
+
+
+def run_browser_add_test_users(
+    *,
+    project: str,
+    email: str,
+    test_users: list[str],
+    profile_dir: Path,
+    download_dir: Path,
+    timeout_seconds: int,
+    oauth_client_name: str = DEFAULT_OAUTH_CLIENT_NAME,
+) -> dict[str, Any]:
+    progress("Opening Chrome to add Google OAuth test users...")
+    deps = ensure_playwright_core()
+    if deps["status"] != "ok":
+        return deps
+    script = Path(__file__).with_name("google_oauth_browser.js")
+    download_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "node",
+        str(script),
+        "--mode",
+        "add-test-users",
+        "--project",
+        project,
+        "--email",
+        email,
+        "--client-name",
+        oauth_client_name,
+        "--profile-dir",
+        str(profile_dir),
+        "--download-dir",
+        str(download_dir),
+        "--timeout-seconds",
+        str(timeout_seconds),
+        "--test-users",
+        ",".join(test_users),
+    ]
+    env = {**os.environ, "NODE_PATH": deps["node_path"]}
+    result = run_streaming_command(cmd, timeout=timeout_seconds + 180, env=env)
+    try:
+        payload: dict[str, Any] = parse_json_fragment(result.get("stdout", ""))
+    except json.JSONDecodeError:
+        payload = {
+            "status": "error",
+            "message": tail(result.get("stderr") or result.get("stdout") or ""),
+        }
+    if not result["ok"] and payload.get("status") == "ok":
+        payload["status"] = "error"
+    payload.setdefault("returncode", result["returncode"])
+    if result.get("stderr"):
+        payload.setdefault("log", tail(result["stderr"]))
+    payload.setdefault("browser_deps", deps)
+    if payload.get("status") == "ok":
+        progress("Google OAuth test users updated.")
+    else:
+        progress("Chrome is waiting for Google OAuth test user setup to finish.")
     return payload
 
 
@@ -1248,6 +1326,74 @@ def cmd_add_account(args: argparse.Namespace) -> int:
     return 0 if account["status"] == "ok" else 1
 
 
+def cmd_add_test_users(args: argparse.Namespace) -> int:
+    home = expand(args.home)
+    app_name = validate_oauth_app(args.oauth_app)
+    requested_project = validate_project_id(args.project) if args.project else ""
+    profile_dir = expand(args.profile_dir)
+    download_dir = expand(args.download_dir)
+    test_users = normalize_email_list([*(args.test_user or []), *(args.emails or [])])
+    if not test_users:
+        emit({"status": "error", "message": "Provide at least one OAuth test user email."})
+        return 1
+
+    auth = ensure_gcloud_auth(open_browser=not args.no_open_browser)
+    if auth["status"] != "ok":
+        emit({"status": "error", "message": "Google login failed.", "gcloud_auth": auth})
+        return 1
+
+    login_email = args.login_email or str(auth.get("account") or "")
+    project_id, project_choice = choose_project_id(home, requested_project, login_email, login_email, app_name)
+    progress(f"Using Google Cloud project {project_id} ({project_choice.get('source')}).")
+
+    browser = run_browser_add_test_users(
+        project=project_id,
+        email=login_email,
+        test_users=test_users,
+        profile_dir=profile_dir,
+        download_dir=download_dir,
+        timeout_seconds=args.timeout_seconds,
+        oauth_client_name=args.oauth_client_name,
+    )
+    browser_users = browser.get("test_users") if isinstance(browser.get("test_users"), dict) else {}
+    missing = browser_users.get("missing") if isinstance(browser_users.get("missing"), list) else []
+    status = "ok" if browser.get("status") == "ok" and not missing else browser.get("status", "error")
+    if status == "ok":
+        state = load_setup_state(home)
+        app_state: dict[str, Any] = state
+        if app_name:
+            apps = state.get("oauth_apps") if isinstance(state.get("oauth_apps"), dict) else {}
+            app_state = apps.get(app_name) if isinstance(apps.get(app_name), dict) else {}
+        existing_users = normalize_email_list([*(app_state.get("test_users") or [])])
+        saved_users = normalize_email_list([*existing_users, *test_users])
+        save_oauth_app_state(
+            home,
+            app_name,
+            {
+                "project_id": project_id,
+                "email": login_email,
+                "oauth_client_name": args.oauth_client_name,
+                "test_users": saved_users,
+            },
+        )
+    emit(
+        {
+            "status": status,
+            "message": "Google OAuth test users updated." if status == "ok" else "Google OAuth test user setup needs attention.",
+            "home": str(home),
+            "oauth_app": app_name or "default",
+            "project": project_id,
+            "project_choice": project_choice,
+            "login_email": login_email,
+            "test_users": test_users,
+            "browser": browser,
+        }
+    )
+    if status == "ok":
+        return 0
+    return 20 if browser.get("status") == "needs_user_action" else 1
+
+
 def cmd_mcp_install(args: argparse.Namespace) -> int:
     emit(install_mcp())
     return 0
@@ -1333,6 +1479,20 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--headless", action="store_true")
     add.add_argument("--force-auth", action="store_true")
     add.set_defaults(func=cmd_add_account)
+
+    test_users = sub.add_parser("add-test-users", help="Add OAuth test users through Google Console automation")
+    add_common(test_users)
+    test_users.add_argument("emails", nargs="*", help="OAuth test user email addresses")
+    test_users.add_argument("--test-user", action="append", default=[], help="OAuth test user email address")
+    test_users.add_argument("--login-email", default="", help="Google Console account to use")
+    test_users.add_argument("--project", default="", help="Google Cloud project ID")
+    test_users.add_argument("--oauth-app", default="", help="Named msgvault OAuth app")
+    test_users.add_argument("--oauth-client-name", default=DEFAULT_OAUTH_CLIENT_NAME, help="Google OAuth Desktop client name")
+    test_users.add_argument("--profile-dir", default=str(DEFAULT_BROWSER_PROFILE), help="Persistent Chrome profile for Google Console automation")
+    test_users.add_argument("--download-dir", default=str(DEFAULT_DOWNLOAD_DIR), help="Directory for browser debug output")
+    test_users.add_argument("--timeout-seconds", type=int, default=300, help="Browser automation timeout")
+    test_users.add_argument("--no-open-browser", action="store_true", help="Do not open a browser for gcloud login")
+    test_users.set_defaults(func=cmd_add_test_users)
 
     mcp = sub.add_parser("mcp-install", help="Install the msgvault MCP server in Codex")
     mcp.set_defaults(func=cmd_mcp_install)

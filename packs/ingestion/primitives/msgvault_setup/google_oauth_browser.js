@@ -40,6 +40,14 @@ function parseArgs(argv) {
   return args;
 }
 
+function parseList(value) {
+  if (Array.isArray(value)) return value.flatMap(parseList);
+  return String(value || "")
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function result(payload) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -438,6 +446,89 @@ async function addScopes(page, project) {
   return verified;
 }
 
+async function addTestUsers(page, project, email, testUsers, timeoutMs) {
+  const audienceUrl = `https://console.cloud.google.com/auth/audience?project=${encodeURIComponent(project)}`;
+  await gotoPage(page, audienceUrl, "OAuth audience");
+  await waitForHumanLogin(page, email, timeoutMs);
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await requireGoogleAuthConfigured(page);
+
+  let body = await page.locator("body").innerText({ timeout: 10000 }).catch(() => "");
+  let present = testUsers.filter((user) => body.toLowerCase().includes(user.toLowerCase()));
+  let missing = testUsers.filter((user) => !present.includes(user));
+  if (missing.length === 0) {
+    log("OAuth test users already present");
+    return { ok: true, expected: testUsers, added: [], already_present: present, present, missing: [] };
+  }
+  const toAdd = missing.slice();
+
+  const opened = await clickButton(page, [/Add users/i, /Add test users/i], 5000);
+  if (!opened) {
+    throw new StepError("test_users.open", "Add users was not visible on the OAuth audience page.");
+  }
+  const root = await modalRoot(page);
+  const emailInput = root.locator('input[aria-label="Text field for emails"], textarea').last();
+  let filled = false;
+  if (await visible(emailInput, 3000)) {
+    for (const user of missing) {
+      log(`entering OAuth test user ${user}`);
+      await emailInput.click({ timeout: 2500 });
+      await page.keyboard.type(user, { delay: 15 });
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(400);
+    }
+    filled = true;
+  } else {
+    filled = await fillScoped(root, [/Text field for emails/i, /Email addresses/i, /^Emails?$/i], missing.join("\n"), 3000);
+  }
+  if (!filled) {
+    throw new StepError("test_users.fill", "Could not find the OAuth test user email field.");
+  }
+
+  if (await visible(emailInput, 1000)) {
+    await emailInput.press("Enter", { timeout: 1500 }).catch(() => {});
+    await page.waitForTimeout(500);
+  }
+
+  const dialog = page.getByRole("dialog").last();
+  const saveButton = root.getByRole("button", { name: /^Save$/i });
+  let saved = await clickLocator(saveButton, "Save", 5000);
+  if (saved) {
+    await page.waitForTimeout(1500);
+  }
+  if (saved && (await visible(dialog, 1000))) {
+    log("Save did not close the panel; forcing Save click");
+    await saveButton.first().click({ timeout: 5000, force: true }).catch(() => {
+      saved = false;
+    });
+  }
+  if (!saved) {
+    throw new StepError("test_users.save", "Save was not visible after entering OAuth test users.");
+  }
+  await page.waitForTimeout(3500);
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+
+  await gotoPage(page, audienceUrl, "OAuth audience verification");
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  for (const user of testUsers) {
+    await page.getByText(user, { exact: false }).first().waitFor({ state: "visible", timeout: 6000 }).catch(() => {});
+  }
+  body = await page.locator("body").innerText({ timeout: 10000 }).catch(() => "");
+  present = testUsers.filter((user) => body.toLowerCase().includes(user.toLowerCase()));
+  missing = testUsers.filter((user) => !present.includes(user));
+  if (missing.length) {
+    throw new StepError("test_users.verify", `Missing OAuth test users after save: ${missing.join(", ")}`);
+  }
+  return {
+    ok: true,
+    expected: testUsers,
+    added: toAdd,
+    already_present: testUsers.filter((user) => !toAdd.includes(user)),
+    present,
+    missing,
+  };
+}
+
 async function verifyScopesOnCurrentPage(page) {
   const body = await page.locator("body").innerText({ timeout: 8000 }).catch(() => "");
   const normalized = compactText(body);
@@ -598,6 +689,7 @@ async function failurePayload(error, page, downloadDir, project, clientName) {
 
 async function main() {
   const args = parseArgs(process.argv);
+  const mode = args.mode || "setup";
   const project = args.project;
   const email = args.email;
   const clientName = args.clientName || "local-msg-vault";
@@ -606,9 +698,14 @@ async function main() {
   const timeoutSeconds = Number(args.timeoutSeconds || "900");
   const timeoutMs = timeoutSeconds * 1000;
   const audience = args.audience || "external";
+  const testUsers = parseList(args.testUsers);
 
   if (!project || !email || !profileDir || !downloadDir) {
     result({ status: "error", message: "missing required browser automation arguments" });
+    process.exit(1);
+  }
+  if (mode === "add-test-users" && testUsers.length === 0) {
+    result({ status: "error", message: "missing OAuth test users" });
     process.exit(1);
   }
 
@@ -627,37 +724,48 @@ async function main() {
 
   let payload;
   try {
-    await setupConsent(page, project, email, clientName, audience, timeoutMs);
-    const scopes = await addScopes(page, project);
-    const client = await createClient(page, project, email, clientName, downloadDir, timeoutMs);
-    if (client && client.client_secret_path) {
+    if (mode === "add-test-users") {
+      const added = await addTestUsers(page, project, email, testUsers, timeoutMs);
       payload = {
         status: "ok",
         project,
         oauth_client_name: clientName,
-        client_secret_path: client.client_secret_path,
-        client_id: client.client_id,
-        redirect_uris: client.redirect_uris || [],
-        reused_existing_client: Boolean(client.reused_existing_client),
-        checks: {
-          branding_configured: true,
-          gmail_scopes: scopes,
-          desktop_client: {
-            exists: true,
-            client_id: client.client_id,
-            client_secret_json: "installed",
-          },
-        },
+        test_users: added,
         current_url: page.url(),
       };
     } else {
-      payload = await failurePayload(
-        new StepError("clients.download", "The browser is open. Finish creating the Desktop OAuth client and download the JSON."),
-        page,
-        downloadDir,
-        project,
-        clientName,
-      );
+      await setupConsent(page, project, email, clientName, audience, timeoutMs);
+      const scopes = await addScopes(page, project);
+      const client = await createClient(page, project, email, clientName, downloadDir, timeoutMs);
+      if (client && client.client_secret_path) {
+        payload = {
+          status: "ok",
+          project,
+          oauth_client_name: clientName,
+          client_secret_path: client.client_secret_path,
+          client_id: client.client_id,
+          redirect_uris: client.redirect_uris || [],
+          reused_existing_client: Boolean(client.reused_existing_client),
+          checks: {
+            branding_configured: true,
+            gmail_scopes: scopes,
+            desktop_client: {
+              exists: true,
+              client_id: client.client_id,
+              client_secret_json: "installed",
+            },
+          },
+          current_url: page.url(),
+        };
+      } else {
+        payload = await failurePayload(
+          new StepError("clients.download", "The browser is open. Finish creating the Desktop OAuth client and download the JSON."),
+          page,
+          downloadDir,
+          project,
+          clientName,
+        );
+      }
     }
   } catch (error) {
     payload = await failurePayload(error, page, downloadDir, project, clientName);
