@@ -5,8 +5,11 @@
   "namespace": "aleph_summaries_v1",
   "document_grain": "person_summary",
   "description": "Optional person summary namespace. Public V1 search should not depend on summary/company-signal generation.",
+  "vector": {"dimension": 1536, "distance_metric": "cosine_distance"},
   "attributes": [
     {"name": "id", "type": "string", "notes": "Base person id."},
+    {"name": "summary", "type": "string"},
+    {"name": "summary_tokens", "type": "string[]"},
     {"name": "tech_skills", "type": "string[]"},
     {"name": "allowed_operator_ids", "type": "string[]"}
   ],

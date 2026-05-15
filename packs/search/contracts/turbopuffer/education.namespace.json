@@ -8,6 +8,7 @@
   "attributes": [
     {"name": "person_id", "type": "string", "notes": "Base person id."},
     {"name": "base_id", "type": "string", "notes": "Base person id on some uploads."},
+    {"name": "education_id", "type": "string", "notes": "Original school/education id before parent canonicalization."},
     {"name": "canonical_education_id", "type": "string", "notes": "Parent/canonical school id."},
     {"name": "school_name", "type": "string"},
     {"name": "degree", "type": "string"},
