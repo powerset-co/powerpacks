@@ -32,7 +32,9 @@ The agent should:
 - hydrate the full candidate frontier through Postgres into local JSONL handoff
   files; do not pass large profile blobs through chat or command arguments
 - run conservative LLM filtering by default after hydration using the handoff path
+  and the cheaper filter model (`POWERPACKS_LLM_FILTER_MODEL`, default mini)
 - run the async `llm_rerank_candidates` primitive by default after filtering,
+  using the stronger configured rerank model (`--model`, default `gpt-5.4`) and
   producing `query_results.csv` with reasoning, confidence, and trait scores
 - expect LLM filtering + reranking to legitimately take about 2-3 minutes for
   large searches; do not kill the run just because this step is quiet
@@ -234,8 +236,8 @@ search.
     full hydrated profile. Do not dump filter scores/prompts unless debugging; then
     pass `--dump-debug`. Use `--allow-partial-hydration` only when the user
     explicitly accepts partial review.
-14. Run async LLM reranking by default:
-    `llm_rerank_candidates --state "$STATE" --concurrency 200 --write-state`.
+14. Run async LLM reranking by default with the stronger configured model:
+    `llm_rerank_candidates --state "$STATE" --concurrency 200 --model gpt-5.4 --write-state`.
     Rerank is the final ordering pass and reads the full hydrated profile from
     `profiles_path`. The primary output is `llm_rerank_candidates/query_results.csv`; columns must match the app
     query-results schema: `conversation_id`, `query`, `person_id`,

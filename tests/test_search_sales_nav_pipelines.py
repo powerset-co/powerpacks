@@ -73,6 +73,12 @@ class SearchNetworkPipelineTests(unittest.TestCase):
 
         self.assertIn("usually takes 2-3 minutes", src)
 
+    def test_orchestrator_passes_model_to_reranker(self):
+        src = inspect.getsource(search.run_pipeline)
+
+        self.assertIn('"--model",args.model', src)
+        self.assertLess(src.index('"llm_filter_candidates"'), src.index('"llm_rerank_candidates"'))
+
 class SalesNavPipelineTests(unittest.TestCase):
     def test_sales_block_tool_call_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
