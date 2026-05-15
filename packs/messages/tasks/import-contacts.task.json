@@ -34,37 +34,13 @@
       "command": "normalize"
     },
     {
-      "id": "check_docker_and_waha",
-      "display": "Get WhatsApp sync ready",
-      "kind": "primitive",
-      "primitive": "waha_runtime",
-      "command": "check"
-    },
-    {
-      "id": "start_waha_container",
-      "display": "Start WhatsApp sync",
-      "kind": "primitive",
-      "primitive": "waha_runtime",
-      "command": "up",
-      "requires_initial_workflow_consent": true,
-      "docker_install_requires_explicit_user_request": true
-    },
-    {
-      "id": "authenticate_whatsapp",
-      "display": "Connect WhatsApp",
-      "kind": "primitive",
-      "primitive": "waha_session",
-      "command": "start",
-      "args": {"open": true, "wait": true},
-      "user_action": "Scan the QR with WhatsApp > Settings > Linked Devices when needed."
-    },
-    {
       "id": "extract_whatsapp",
       "display": "Sync WhatsApp",
       "kind": "primitive",
-      "primitive": "extract_whatsapp_contacts",
-      "command": "extract",
-      "requires_initial_workflow_consent": true
+      "primitive": "import_whatsapp_wacli",
+      "command": "run",
+      "requires_initial_workflow_consent": true,
+      "user_action": "Scan the browser QR page with WhatsApp > Settings > Linked Devices when needed."
     },
     {
       "id": "normalize_whatsapp",

@@ -48,7 +48,8 @@ DEFAULT_WHATSAPP_NORMALIZED = Path(".powerpacks/messages/whatsapp.contacts.norma
 DEFAULT_WHATSAPP_MANIFEST = Path(".powerpacks/messages/whatsapp.contacts.csv.manifest.json")
 DEFAULT_WHATSAPP_NORMALIZED_MANIFEST = Path(".powerpacks/messages/whatsapp.contacts.normalized.jsonl.manifest.json")
 DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE = Path(".powerpacks/messages/whatsapp.message-count-cache.json")
-DEFAULT_WHATSAPP_PROVIDER = os.environ.get("POWERPACKS_WHATSAPP_PROVIDER", "wacli").strip().lower() or "wacli"
+DEFAULT_WHATSAPP_PROVIDER = "wacli"
+DEFAULT_WACLI_QR_HTML = Path(".powerpacks/messages/wacli-login-qr.html")
 DEFAULT_CANDIDATES = Path(".powerpacks/messages/powerset_contacts.csv")
 DEFAULT_RESEARCH_QUEUE = Path(".powerpacks/messages/research_queue.csv")
 DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
@@ -279,14 +280,9 @@ STEP_HEARTBEAT_MESSAGES = {
 
 
 WHATSAPP_STEP_MESSAGES = {
-    "check_docker_and_waha": {
-        "blocked_user_action": "WhatsApp sync needs the local helper app running before it can continue.",
-    },
-    "authenticate_whatsapp": {
-        "blocked_user_action": "WhatsApp needs a QR scan.",
-    },
     "extract_whatsapp": {
         "running": "Syncing WhatsApp Messages and Contacts.",
+        "blocked_user_action": "WhatsApp needs a QR scan.",
         "completed": "WhatsApp sync finished.",
     },
 }
@@ -498,6 +494,27 @@ def require_ok(result: dict[str, Any], step_id: str) -> dict[str, Any]:
         stdout = (result.get("stdout") or "").strip()
         raise PipelineFailed(f"{step_id} failed rc={result['returncode']}: {(stderr or stdout)[-1000:]}")
     return result.get("json") or {}
+
+
+def block_from_wacli_auth_result(
+    result: dict[str, Any],
+    ledger_path: Path,
+) -> dict[str, Any] | None:
+    payload = result.get("json") or {}
+    if result.get("returncode") == 0 or payload.get("status") != "blocked_user_action":
+        return None
+    if payload.get("primitive") != "import_whatsapp_wacli":
+        return None
+    block = {
+        "primitive": "import_contacts_pipeline",
+        "status": "blocked_user_action",
+        "message": payload.get("message") or "WhatsApp needs a QR scan.",
+        "whatsapp_provider": "wacli",
+        "qr_page": payload.get("qr_page") or str(DEFAULT_WACLI_QR_HTML),
+        "continue_command": f"uv run --project . python {rel(Path(__file__).resolve())} continue",
+        "ledger": str(ledger_path),
+    }
+    return {key: value for key, value in block.items() if value}
 
 
 def approval_id(kind: str, payload: dict[str, Any]) -> str:
@@ -1092,9 +1109,15 @@ def normalize_channel(
 
 
 def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    if completed(ledger, "extract_whatsapp") and DEFAULT_WHATSAPP_CONTACTS.exists() and not args.force_whatsapp:
+    completed_provider = (ledger.get("artifacts") or {}).get("whatsapp_provider")
+    if (
+        completed(ledger, "extract_whatsapp")
+        and completed_provider == "wacli"
+        and DEFAULT_WHATSAPP_CONTACTS.exists()
+        and not args.force_whatsapp
+    ):
         ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
-        ledger.setdefault("artifacts", {})["whatsapp_message_count_cache"] = str(DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE)
+        ledger.setdefault("artifacts", {})["whatsapp_provider"] = "wacli"
         mark_step(
             ledger_path,
             ledger,
@@ -1104,101 +1127,18 @@ def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
         )
         return
 
-    if args.whatsapp_provider == "wacli":
-        cmd = [
-            sys.executable,
-            primitive_path("packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py"),
-            "run",
-            "--output-csv", str(DEFAULT_WHATSAPP_CONTACTS),
-            "--output-jsonl", str(DEFAULT_WHATSAPP_JSONL),
-            "--manifest", str(DEFAULT_WHATSAPP_MANIFEST),
-            "--max-messages", str(args.wacli_max_messages),
-            "--max-group-participants", str(args.wacli_max_group_participants),
-            "--sync-timeout", str(args.parallel_timeout),
-        ]
-        mark_step(ledger_path, ledger, "extract_whatsapp", "running", command=cmd)
-        result = run_command(
-            cmd,
-            timeout=args.parallel_timeout,
-            env=pipeline_env(args),
-            heartbeat_message=heartbeat_message_for_step("extract_whatsapp"),
-        )
-        payload = require_ok(result, "extract_whatsapp")
-        ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
-        ledger.setdefault("artifacts", {})["whatsapp_provider"] = "wacli"
-        mark_step(ledger_path, ledger, "extract_whatsapp", "completed", summary=payload, command=cmd)
-        return
-
-    check_cmd = [
-        sys.executable,
-        primitive_path("packs/messages/primitives/waha_runtime/waha_runtime.py"),
-        "check",
-    ]
-    mark_step(ledger_path, ledger, "check_docker_and_waha", "running", command=check_cmd)
-    check_result = run_command(check_cmd, timeout=args.timeout, env=pipeline_env(args))
-    check_payload = check_result.get("json") or {}
-    if check_result["returncode"] != 0:
-        payload = {
-            "primitive": "import_contacts_pipeline",
-            "status": "blocked_user_action",
-            "message": "Start Docker Desktop or Colima so WhatsApp sync can run, then continue the import.",
-            "detail": check_payload or (check_result.get("stderr") or check_result.get("stdout") or "")[-1000:],
-            "ledger": str(ledger_path),
-        }
-        ledger["current_block"] = payload
-        mark_step(ledger_path, ledger, "check_docker_and_waha", "blocked_user_action", summary=payload, command=check_cmd)
-        raise PipelineBlocked(payload, code=21)
-    mark_step(ledger_path, ledger, "check_docker_and_waha", "completed", summary=check_payload, command=check_cmd)
-
-    up_cmd = [
-        sys.executable,
-        primitive_path("packs/messages/primitives/waha_runtime/waha_runtime.py"),
-        "up",
-    ]
-    mark_step(ledger_path, ledger, "start_waha_container", "running", command=up_cmd)
-    up_result = run_command(up_cmd, timeout=max(args.timeout, 600), env=pipeline_env(args))
-    up_payload = require_ok(up_result, "start_waha_container")
-    mark_step(ledger_path, ledger, "start_waha_container", "completed", summary=up_payload, command=up_cmd)
-
-    session_cmd = [
-        sys.executable,
-        primitive_path("packs/messages/primitives/waha_session/waha_session.py"),
-        "start",
-        "--open",
-        "--wait",
-    ]
-    mark_step(ledger_path, ledger, "authenticate_whatsapp", "running", command=session_cmd)
-    session_result = run_command(
-        session_cmd,
-        timeout=max(args.timeout, 600),
-        env=pipeline_env(args),
-        heartbeat_message=heartbeat_message_for_step("authenticate_whatsapp"),
-    )
-    session_payload = session_result.get("json") or {}
-    if session_result["returncode"] != 0:
-        if session_payload.get("status") == "timeout":
-            payload = {
-                "primitive": "import_contacts_pipeline",
-                "status": "blocked_user_action",
-                "message": "WhatsApp needs you to scan the QR, then continue the import.",
-                "qr_path": str(Path(".powerpacks/messages/whatsapp/qr.png")),
-                "continue_command": f"uv run --project . python {rel(Path(__file__).resolve())} continue",
-                "ledger": str(ledger_path),
-            }
-            ledger["current_block"] = payload
-            mark_step(ledger_path, ledger, "authenticate_whatsapp", "blocked_user_action", summary=payload, command=session_cmd)
-            raise PipelineBlocked(payload, code=21)
-        raise PipelineFailed(f"authenticate_whatsapp failed rc={session_result['returncode']}: {((session_result.get('stderr') or session_result.get('stdout') or '').strip())[-1000:]}")
-    mark_step(ledger_path, ledger, "authenticate_whatsapp", "completed", summary=session_payload, command=session_cmd)
-
+    if args.whatsapp_provider != "wacli":
+        raise PipelineFailed(f"unsupported WhatsApp provider {args.whatsapp_provider!r}; wacli is the only supported provider")
     cmd = [
         sys.executable,
-        primitive_path("packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py"),
-        "extract",
+        primitive_path("packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py"),
+        "run",
         "--output-csv", str(DEFAULT_WHATSAPP_CONTACTS),
         "--output-jsonl", str(DEFAULT_WHATSAPP_JSONL),
         "--manifest", str(DEFAULT_WHATSAPP_MANIFEST),
-        "--message-count-cache", str(DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE),
+        "--max-messages", str(args.wacli_max_messages),
+        "--max-group-participants", str(args.wacli_max_group_participants),
+        "--sync-timeout", str(args.parallel_timeout),
     ]
     mark_step(ledger_path, ledger, "extract_whatsapp", "running", command=cmd)
     result = run_command(
@@ -1207,9 +1147,14 @@ def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
         env=pipeline_env(args),
         heartbeat_message=heartbeat_message_for_step("extract_whatsapp"),
     )
+    block = block_from_wacli_auth_result(result, ledger_path)
+    if block:
+        ledger["current_block"] = block
+        mark_step(ledger_path, ledger, "extract_whatsapp", "blocked_user_action", summary=block, command=cmd)
+        raise PipelineBlocked(block, code=21)
     payload = require_ok(result, "extract_whatsapp")
     ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
-    ledger.setdefault("artifacts", {})["whatsapp_message_count_cache"] = str(DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE)
+    ledger.setdefault("artifacts", {})["whatsapp_provider"] = "wacli"
     mark_step(ledger_path, ledger, "extract_whatsapp", "completed", summary=payload, command=cmd)
 
 
@@ -2490,7 +2435,7 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--stop-before-upload", action="store_true")
     add_hidden_arg(parser, "--force-imessage", action="store_true")
     add_hidden_arg(parser, "--force-whatsapp", action="store_true")
-    add_hidden_arg(parser, "--whatsapp-provider", default=DEFAULT_WHATSAPP_PROVIDER, choices=("wacli", "waha"))
+    add_hidden_arg(parser, "--whatsapp-provider", default=DEFAULT_WHATSAPP_PROVIDER, choices=("wacli",))
     add_hidden_arg(parser, "--wacli-max-messages", type=int, default=0)
     add_hidden_arg(parser, "--wacli-max-group-participants", type=int, default=30)
     add_hidden_arg(parser, "--force-sync-candidates", action="store_true")

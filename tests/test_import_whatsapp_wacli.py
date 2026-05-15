@@ -156,6 +156,21 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(mod.effective_max_messages(0, 25000), 0)
         self.assertEqual(mod.effective_max_messages(10000, 25000), 26000)
 
+    def test_qr_payloads_are_redacted_from_diagnostics(self) -> None:
+        text = "before\n2@secret-whatsapp-pairing-payload\nafter"
+        self.assertEqual(
+            mod.redact_qr_payloads(text),
+            f"before\n{mod.QR_REDACTION}\nafter",
+        )
+
+    def test_auth_requires_qrencode_for_browser_qr(self) -> None:
+        with mock.patch.object(mod.shutil, "which", return_value=None), \
+                self.assertRaises(mod.PrimitiveBlocked) as ctx:
+            mod.run_auth(Path("/tmp/wacli-store"), timeout=1, idle_exit="1s")
+
+        self.assertEqual(ctx.exception.payload["install_command"], "brew install qrencode")
+        self.assertIn("qrencode is required", ctx.exception.payload["message"])
+
     def test_export_reads_metadata_without_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
