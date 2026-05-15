@@ -262,6 +262,12 @@ LINKEDIN_LARGER_ARCHIVE_LABEL = (
     "account history, and information LinkedIn infers based on your profile and activity."
 )
 LINKEDIN_CONNECTIONS_FILENAME = "Connections.csv"
+LINKEDIN_CSV_CONTINUE_ACTIONS = {
+    "scan-linkedin-downloads",
+    "open-downloads",
+    "open-linkedin-drop-folder",
+    "check-linkedin-drop-folder",
+}
 LINKEDIN_SCAN_REPLIES = {
     "scan",
     "scan downloads",
@@ -273,6 +279,7 @@ LINKEDIN_SCAN_REPLIES = {
 LINKEDIN_OPEN_DOWNLOADS_REPLIES = {"open downloads", "open ~/downloads", "downloads"}
 LINKEDIN_OPEN_DROP_REPLIES = {"open folder", "open drop folder", "open repo folder", "drop folder", "folder"}
 LINKEDIN_DROP_DONE_REPLIES = {"done", "ready", "ok"}
+SIMPLE_CONTINUE_ACTIONS = {"yes", "no", "skip", "done"}
 ONBOARDING_FLOW = ["messages", "gmail", "linkedin_csv", "linkedin_mcp", "twitter", "merge", "enrich"]
 YES = {"y", "yes", "true", "1", "ok", "sure"}
 NO = {"n", "no", "false", "0", "skip", "s"}
@@ -460,13 +467,7 @@ def action_for_yes(step: str, state: dict[str, Any], accounts_path: Path, ledger
             "archive_option": LINKEDIN_LARGER_ARCHIVE_LABEL,
             "drop_path": str(drop_path),
             "example": "~/Downloads/Connections.csv",
-            "scan_reply": "scan",
-            "done_reply": "done",
-            "open_downloads_command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py open-downloads",
-            "open_drop_folder_command": (
-                "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py "
-                f"open-linkedin-drop-folder --accounts {shlex.quote(str(accounts_path))}"
-            ),
+            "harness_actions": linkedin_harness_actions(accounts_path, ledger_path),
         }
     if step == "linkedin_mcp":
         state["phase"] = "awaiting_linkedin_mcp_username"
@@ -497,6 +498,24 @@ def action_for_yes(step: str, state: dict[str, Any], accounts_path: Path, ledger
             "message": "Paste the people CSV to enrich, usually .powerpacks/network-import/merged/people_harmonic_all.merged.csv",
         }
     raise ValueError(f"unknown step: {step}")
+
+
+def continue_command_base(accounts_path: Path, ledger_path: Path) -> str:
+    return (
+        "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue "
+        f"--accounts {shlex.quote(str(accounts_path))} --ledger {shlex.quote(str(ledger_path))}"
+    )
+
+
+def linkedin_harness_actions(accounts_path: Path, ledger_path: Path) -> dict[str, str]:
+    base = continue_command_base(accounts_path, ledger_path)
+    return {
+        "scan_downloads": f"{base} --action scan-linkedin-downloads",
+        "open_downloads": f"{base} --action open-downloads",
+        "open_drop_folder": f"{base} --action open-linkedin-drop-folder",
+        "check_drop_folder": f"{base} --action check-linkedin-drop-folder",
+        "set_csv": f"{base} --csv PATH_TO_CONNECTIONS_CSV",
+    }
 
 
 def complete_linkedin_csv_path(
@@ -530,13 +549,30 @@ def complete_linkedin_csv_path(
     return payload
 
 
-def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path, ledger_path: Path) -> dict[str, Any]:
+def handle_continue(
+    state: dict[str, Any],
+    user_input: str,
+    accounts_path: Path,
+    ledger_path: Path,
+    action: str | None = None,
+    downloads_dir: Path | None = None,
+) -> dict[str, Any]:
     step = current_step(state)
     if not step:
         return complete_payload(state, load_registry(accounts_path), ledger_path)
     phase = state.get("phase", "ask")
     reply = normalize_reply(user_input)
     low = reply.lower()
+    downloads_dir = downloads_dir or default_downloads_dir()
+
+    if action in LINKEDIN_CSV_CONTINUE_ACTIONS and phase != "awaiting_csv_path":
+        return {
+            "status": "failed",
+            "error": f"--action {action} is only valid while waiting for the LinkedIn CSV.",
+            "step": step,
+            "phase": phase,
+            "ledger": str(ledger_path),
+        }
 
     if phase == "ask":
         if low in NO:
@@ -573,8 +609,19 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
         return next_prompt(state, accounts_path, ledger_path)
 
     if phase == "awaiting_csv_path":
-        if low in LINKEDIN_SCAN_REPLIES:
-            scan = scan_and_copy_linkedin_connections(default_downloads_dir(), accounts_path)
+        csv_action = action
+        if not csv_action:
+            if low in LINKEDIN_SCAN_REPLIES:
+                csv_action = "scan-linkedin-downloads"
+            elif low in LINKEDIN_OPEN_DOWNLOADS_REPLIES:
+                csv_action = "open-downloads"
+            elif low in LINKEDIN_OPEN_DROP_REPLIES:
+                csv_action = "open-linkedin-drop-folder"
+            elif low in LINKEDIN_DROP_DONE_REPLIES:
+                csv_action = "check-linkedin-drop-folder"
+
+        if csv_action == "scan-linkedin-downloads":
+            scan = scan_and_copy_linkedin_connections(downloads_dir, accounts_path)
             if scan["status"] == "copied":
                 payload = complete_linkedin_csv_path(
                     state,
@@ -592,14 +639,10 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
                 "ledger": str(ledger_path),
                 "scan": scan,
                 "drop_path": str(linkedin_drop_file(accounts_path)),
-                "open_downloads_command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py open-downloads",
-                "open_drop_folder_command": (
-                    "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py "
-                    f"open-linkedin-drop-folder --accounts {shlex.quote(str(accounts_path))}"
-                ),
+                "harness_actions": linkedin_harness_actions(accounts_path, ledger_path),
             }
-        if low in LINKEDIN_OPEN_DOWNLOADS_REPLIES:
-            opened = open_directory(default_downloads_dir())
+        if csv_action == "open-downloads":
+            opened = open_directory(downloads_dir)
             return {
                 "status": "needs_user_input",
                 "step": step,
@@ -607,8 +650,9 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
                 "ledger": str(ledger_path),
                 "opened": opened,
                 "drop_path": str(linkedin_drop_file(accounts_path)),
+                "harness_actions": linkedin_harness_actions(accounts_path, ledger_path),
             }
-        if low in LINKEDIN_OPEN_DROP_REPLIES:
+        if csv_action == "open-linkedin-drop-folder":
             opened = open_directory(linkedin_drop_dir(accounts_path))
             return {
                 "status": "needs_user_input",
@@ -617,8 +661,9 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
                 "ledger": str(ledger_path),
                 "opened": opened,
                 "drop_path": str(linkedin_drop_file(accounts_path)),
+                "harness_actions": linkedin_harness_actions(accounts_path, ledger_path),
             }
-        if low in LINKEDIN_DROP_DONE_REPLIES:
+        if csv_action == "check-linkedin-drop-folder":
             csv_path = linkedin_drop_file(accounts_path)
             if csv_path.exists():
                 return complete_linkedin_csv_path(state, accounts_path, ledger_path, csv_path)
@@ -628,6 +673,7 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
                 "message": "I do not see Connections.csv in the repo drop folder yet. Paste a CSV path, reply scan, or copy it there and reply done.",
                 "ledger": str(ledger_path),
                 "drop_path": str(csv_path),
+                "harness_actions": linkedin_harness_actions(accounts_path, ledger_path),
             }
         csv_path = Path(reply).expanduser()
         if not csv_path.exists():
@@ -637,6 +683,7 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
                 "message": "That file does not exist. Paste a valid Connections.csv path, reply scan, reply open downloads, or skip.",
                 "ledger": str(ledger_path),
                 "drop_path": str(linkedin_drop_file(accounts_path)),
+                "harness_actions": linkedin_harness_actions(accounts_path, ledger_path),
             }
         return complete_linkedin_csv_path(state, accounts_path, ledger_path, csv_path)
 
@@ -689,12 +736,36 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_continue(args: argparse.Namespace) -> int:
+    provided = [args.input is not None, args.action is not None, args.csv is not None]
+    if sum(provided) != 1:
+        emit({
+            "status": "failed",
+            "error": "Provide exactly one of --input, --action, or --csv.",
+            "allowed_actions": sorted(SIMPLE_CONTINUE_ACTIONS | LINKEDIN_CSV_CONTINUE_ACTIONS),
+        })
+        return 2
+    user_input = args.input or ""
+    action = args.action
+    if args.csv is not None:
+        user_input = str(args.csv)
+        action = None
+    elif action in SIMPLE_CONTINUE_ACTIONS:
+        user_input = action
+        action = None
+
     ledger_path = Path(args.ledger)
     state = load_run(ledger_path)
-    payload = handle_continue(state, args.input, Path(args.accounts), ledger_path)
+    payload = handle_continue(
+        state,
+        user_input,
+        Path(args.accounts),
+        ledger_path,
+        action=action,
+        downloads_dir=Path(args.downloads),
+    )
     save_run(ledger_path, state)
     emit(payload)
-    return 0
+    return 0 if payload.get("status") != "failed" else 1
 
 
 def cmd_skip(args: argparse.Namespace) -> int:
@@ -772,8 +843,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--force", action="store_true")
     run.set_defaults(func=cmd_run)
 
-    cont = sub.add_parser("continue", parents=[run_common], help="Continue onboarding with the user's latest reply")
-    cont.add_argument("--input", required=True)
+    cont = sub.add_parser("continue", parents=[run_common], help="Continue onboarding with the user's latest reply or a harness action")
+    cont.add_argument("--input", help="Raw user reply")
+    cont.add_argument("--action", choices=sorted(SIMPLE_CONTINUE_ACTIONS | LINKEDIN_CSV_CONTINUE_ACTIONS), help="Structured harness action")
+    cont.add_argument("--csv", help="LinkedIn Connections.csv path to record")
+    cont.add_argument("--downloads", default=str(default_downloads_dir()), help="Downloads directory for LinkedIn scan/open actions")
     cont.set_defaults(func=cmd_continue)
 
     skip = sub.add_parser("skip", parents=[run_common], help="Skip the current onboarding step")
