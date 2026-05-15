@@ -144,6 +144,10 @@ exist unless explicitly asked.
     on demand, not on every bootup.
   - Powerset login: required for `sync_powerset_candidates`, `upload`. Check
     via `uv run --project . python packs/powerset/primitives/auth/auth.py whoami`.
+- **Indexing pack** (build-local-search-index): local files only. It consumes
+  `.powerpacks/network-import/merged/people.csv` and writes
+  `.powerpacks/search-index/<run-id>/`; do not run LLM, network, Supabase,
+  Postgres, or TurboPuffer calls for this workflow.
 - **Search pack** (search-network, search-company): requires `.env` with
   TurboPuffer + Postgres credentials. If `.env` is present, run the search
   primitive directly and use its error to diagnose; use the doctor only if env
@@ -169,6 +173,9 @@ Routes:
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
 - `$search-contacts`, my contacts, set contacts, contact field filtering →
   `packs/contacts/skills/search-contacts/SKILL.md`
+- `$build-local-search-index`, local indexing, build local search index,
+  prepare `.powerpacks/search-index` artifacts →
+  `packs/indexing/skills/build-local-search-index/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
 - `$powerset`, Powerset login/status/whoami/sets/MCP/env credentials →
@@ -214,6 +221,7 @@ powerpacks/
 │   │   ├── tasks/              # task JSON specs
 │   │   ├── docs/
 │   │   └── README.md
+│   ├── indexing/               # build-local-search-index local artifacts
 │   ├── search/                 # search-network, search-company
 │   └── powerset/               # cross-pack tooling (doctor, auth, ...)
 ├── skills/                     # core skills (search-network, search-company)

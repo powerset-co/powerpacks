@@ -7,7 +7,7 @@ Ports the Twitter/X discovery pipeline into Powerpacks-local artifacts:
 - optional OpenAI MOE expert evaluation (approval-gated)
 - free parallel LinkedIn URL pre-resolution from bio/website/link aggregators
 - optional parallel RapidAPI LinkedIn validation (approval-gated)
-- people_harmonic_all-compatible skeleton output
+- provider-neutral people.csv skeleton output
 
 Stdlib-only. No DB writes. No external API calls before approval.
 """
@@ -21,7 +21,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import unicodedata
@@ -34,10 +33,10 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, normalize_people_row
+    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, normalize_people_row
+    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/twitter/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
@@ -213,7 +212,8 @@ def parse_twitter_user(data: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(user_obj, dict):
         return None
     core = user_obj.get("core") if isinstance(user_obj.get("core"), dict) else {}
-    legacy = user_obj.get("legacy") if isinstance(user_obj.get("legacy"), dict) else {}
+    legacy_obj = user_obj.get("legacy") or user_obj.get("old")
+    legacy = legacy_obj if isinstance(legacy_obj, dict) else {}
     avatar = user_obj.get("avatar") if isinstance(user_obj.get("avatar"), dict) else {}
     location_obj = user_obj.get("location")
     user_id = str(user_obj.get("rest_id") or legacy.get("id_str") or "")
@@ -919,9 +919,9 @@ def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
             "twitter_response": "",
             "rapidapi_response": row.get("rapidapi_response", ""),
         })
-    out = Path(ledger["run_dir"]) / "people_harmonic_all.csv"
+    out = Path(ledger["run_dir"]) / "people.csv"
     write_csv(out, PEOPLE_COLUMNS, people)
-    ledger["artifacts"]["people_harmonic_all_csv"] = str(out)
+    ledger["artifacts"]["people_csv"] = str(out)
     return {"rows": len(people), "output_file": str(out)}
 
 

@@ -81,9 +81,9 @@ def row_name(row: dict[str, str]) -> str:
 
 
 def discover_inputs(base: Path) -> list[Path]:
-    paths: list[Path] = []
-    for p in base.glob("network-import/*/*/people_harmonic_all.csv"):
-        paths.append(p)
+    """Discover canonical provider-neutral people inputs under .powerpacks."""
+
+    paths = list(base.glob("network-import/*/*/people.csv"))
     msg = base / "messages" / "contacts.csv"
     if msg.exists():
         paths.append(msg)
@@ -238,11 +238,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         merged_rows.append(normalized)
     review = similar_pairs(merged_rows, args.name_threshold)
     output_dir = Path(args.output_dir)
-    output = output_dir / "people_harmonic_all.merged.csv"
-    review_path = output_dir / "possible_duplicates_review.csv"
-    manifest = output_dir / "merge_manifest.json"
+    output = output_dir / "people.csv"
     write_csv(output, MERGED_COLUMNS, merged_rows)
-    write_csv(review_path, REVIEW_COLUMNS, review)
     manifest_payload = {
         "created_at": now_iso(),
         "inputs": per_file,
@@ -251,11 +248,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "linkedin_groups": len(groups),
         "review_pairs": len(review),
         "output": str(output),
-        "review_output": str(review_path),
     }
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    emit({"status": "completed", **manifest_payload, "manifest": str(manifest)})
+    emit({"status": "completed", **manifest_payload})
     return 0
 
 
@@ -263,7 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Merge/dedupe local network import people artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
-    run.add_argument("--input", action="append", help="Input people_harmonic_all.csv or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
+    run.add_argument("--input", action="append", help="Input provider-neutral people.csv or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
     run.add_argument("--base-dir", default=".powerpacks")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     run.add_argument("--name-threshold", type=float, default=0.92)

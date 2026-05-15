@@ -1,0 +1,151 @@
+import csv
+import json
+import tempfile
+import unittest
+from datetime import datetime, timezone
+
+from packs.indexing.lib.identity import position_uuid, person_uuid
+from pathlib import Path
+
+from packs.indexing.lib.people import (
+    PEOPLE_CSV_COLUMNS,
+    build_people_records,
+    build_roles,
+    build_unified_profiles,
+    epoch_seconds,
+    flatten_people,
+)
+
+
+class IndexingTransformTests(unittest.TestCase):
+    def _people_csv(self, root: Path) -> Path:
+        path = root / "people.csv"
+        row = {column: "" for column in PEOPLE_CSV_COLUMNS}
+        row.update(
+            {
+                "public_identifier": "jane-example",
+                "linkedin_url": "https://www.linkedin.com/in/jane-example/?trk=people",
+                "first_name": "Jane",
+                "last_name": "Example",
+                "full_name": "Jane Example",
+                "headline": "Founder and CTO at Acme AI",
+                "summary": "Builds developer tools.",
+                "city": "San Francisco",
+                "state": "CA",
+                "country": "US",
+                "location_raw": "San Francisco, CA",
+                "profile_picture_url": "https://img.example/jane.jpg",
+                "entity_urn": "urn:li:fsd_profile:abc",
+                "source_channels": "linkedin_csv,gmail",
+                "work_experiences": json.dumps(
+                    [
+                        {
+                            "title": "Founder and CTO",
+                            "company_name": "Acme AI",
+                            "company_public_identifier": "acme-ai",
+                            "company_linkedin_url": "https://www.linkedin.com/company/acme-ai",
+                            "description": "Started the company.",
+                            "starts_at": {"year": 2020, "month": 5, "day": 2},
+                            "ends_at": None,
+                            "is_current_position": True,
+                        },
+                        {
+                            "title": "Senior Software Engineer",
+                            "company_name": "OldCo",
+                            "company_key": "rapidapi:oldco-1",
+                            "start_date": "2016-01",
+                            "end_date": "2019-12",
+                            "is_current_position": False,
+                        },
+                    ]
+                ),
+                "education": json.dumps(
+                    [
+                        {
+                            "school_name": "Stanford University",
+                            "degree": "BS",
+                            "field_of_study": "Computer Science",
+                            "start_year": 2012,
+                            "end_year": 2016,
+                        }
+                    ]
+                ),
+                "rapidapi_response": json.dumps(
+                    {"follower_count": 1234, "connection_count": 500, "skills": ["python", "ml"]}
+                ),
+                "twitter_handle": "jane",
+                "twitter_response": json.dumps({"followers_count": 77}),
+            }
+        )
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=PEOPLE_CSV_COLUMNS)
+            writer.writeheader()
+            writer.writerow(row)
+        return path
+
+    def test_flatten_people_uses_final_people_schema_and_stable_uuid5(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            people = flatten_people(self._people_csv(Path(td)))
+        self.assertEqual(len(people), 1)
+        person = people[0]
+        self.assertEqual(person["id"], person_uuid("linkedin:jane-example"))
+        explicit = [{**people[0]["raw"], "id": "person-legacy", "public_identifier": "", "linkedin_url": ""}]
+        self.assertEqual(flatten_people(explicit)[0]["id"], person_uuid("id:person-legacy"))
+        self.assertEqual(person["linkedin_url"], "https://www.linkedin.com/in/jane-example")
+        self.assertEqual(person["public_profile_url"], "https://www.linkedin.com/in/jane-example")
+        self.assertEqual(person["full_name"], "Jane Example")
+        self.assertEqual(len(person["work_experiences"]), 2)
+        self.assertEqual(person["education"][0]["school_name"], "Stanford University")
+
+    def test_build_roles_emits_position_records_with_epoch_seconds_and_role_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            people = flatten_people(self._people_csv(Path(td)))
+        roles = build_roles(people)
+        self.assertEqual(len(roles), 2)
+        founder = roles[0]
+        self.assertEqual(founder["base_id"], people[0]["id"])
+        self.assertEqual(founder["id"], position_uuid(people[0]["id"], 0))
+        self.assertEqual(founder["position_title"], "Founder and CTO")
+        self.assertEqual(founder["start_date_epoch"], int(datetime(2020, 5, 2, tzinfo=timezone.utc).timestamp()))
+        self.assertEqual(founder["end_date_epoch"], 0)
+        self.assertTrue(founder["is_current"])
+        self.assertIn("founder", founder["role_ids"])
+        self.assertIn("chief_technology_officer", founder["role_ids"])
+        self.assertEqual(founder["seniority_band"], "owner")
+        self.assertTrue(founder["company_id"])
+        old = roles[1]
+        self.assertEqual(old["end_date_epoch"], int(datetime(2019, 12, 1, tzinfo=timezone.utc).timestamp()))
+        self.assertFalse(old["is_current"])
+        self.assertEqual(epoch_seconds("present", current_as_zero=True), 0)
+
+    def test_build_people_records_matches_contract_without_profile_only_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            people = flatten_people(self._people_csv(Path(td)))
+        records = build_people_records(people)
+        self.assertEqual(len(records), 2)
+        record = records[0]
+        from packs.indexing.lib.people import PEOPLE_NAMESPACE_COLUMNS
+        self.assertEqual(set(record), set(PEOPLE_NAMESPACE_COLUMNS))
+        self.assertNotIn("is_profile_only", record)
+        self.assertEqual(record["position_title"], "Founder and CTO")
+        self.assertEqual(record["base_id"], people[0]["id"])
+
+    def test_build_unified_profiles_hydrates_contract_profile_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            people = flatten_people(self._people_csv(Path(td)))
+        profiles = build_unified_profiles(people)
+        self.assertEqual(len(profiles), 1)
+        profile = profiles[0]
+        self.assertEqual(profile["person_id"], people[0]["id"])
+        self.assertEqual(profile["name"], "Jane Example")
+        self.assertEqual(profile["location"], "San Francisco, CA")
+        self.assertEqual(profile["linkedin_url"], "https://www.linkedin.com/in/jane-example")
+        self.assertEqual(profile["positions"][0]["role_track"], "engineering")
+        self.assertEqual(profile["education"][0]["school_name"], "Stanford University")
+        self.assertEqual(profile["tech_skills"], ["python", "ml"])
+        self.assertGreater(profile["years_of_experience"], 4)
+        self.assertIn("linkedin_csv", profile["vertical_sources"])
+
+
+if __name__ == "__main__":
+    unittest.main()

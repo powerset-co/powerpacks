@@ -16,10 +16,10 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, save_registry, update_channel
+    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, update_channel
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, save_registry, update_channel
+    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, update_channel
 
 
 def emit(payload: Any) -> None:
@@ -114,13 +114,13 @@ def cmd_check(args: argparse.Namespace) -> int:
         update_channel("messages", path=path, success=True, artifact=".powerpacks/messages/contacts.csv")
         updates.append("messages:contacts.csv")
 
-    # LinkedIn CSV / Twitter: infer from local import artifacts.
-    for p in Path(".powerpacks/network-import/linkedin").glob("*/people_harmonic_all.csv"):
-        update_channel("linkedin_csv", path=path, success=True, artifact=str(p))
-        updates.append(f"linkedin_csv:{p}")
-    for p in Path(".powerpacks/network-import/twitter").glob("*/people_harmonic_all.csv"):
-        update_channel("twitter", path=path, success=True, artifact=str(p))
-        updates.append(f"twitter:{p}")
+    # LinkedIn CSV / Twitter: infer from provider-neutral local import artifacts.
+    for channel_dir, registry_channel in (("linkedin", "linkedin_csv"), ("twitter", "twitter")):
+        for run_dir in Path(f".powerpacks/network-import/{channel_dir}").glob("*"):
+            p = run_dir / "people.csv"
+            if p.exists():
+                update_channel(registry_channel, path=path, success=True, artifact=str(p))
+                updates.append(f"{registry_channel}:{p}")
 
     registry = load_registry(path)
     emit({"status": "checked", "accounts_path": args.accounts, "updates": updates, "registry": registry, "steps": build_steps(registry)})
