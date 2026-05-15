@@ -135,11 +135,379 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+
+DEFAULT_ONBOARDING_LEDGER = Path(".powerpacks/ingestion/onboarding-run.json")
+ONBOARDING_FLOW = ["messages", "gmail", "linkedin_csv", "linkedin_mcp", "twitter", "merge", "enrich"]
+YES = {"y", "yes", "true", "1", "ok", "sure"}
+NO = {"n", "no", "false", "0", "skip", "s"}
+
+
+def now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def read_json(path: Path, default: Any = None) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def normalize_reply(value: str) -> str:
+    return (value or "").strip()
+
+
+def load_run(path: Path) -> dict[str, Any]:
+    state = read_json(path, {}) or {}
+    state.setdefault("version", 1)
+    state.setdefault("created_at", now_iso())
+    state.setdefault("updated_at", now_iso())
+    state.setdefault("index", 0)
+    state.setdefault("phase", "ask")
+    state.setdefault("answers", {})
+    state.setdefault("skipped", [])
+    state.setdefault("context", {})
+    return state
+
+
+def save_run(path: Path, state: dict[str, Any]) -> None:
+    state["updated_at"] = now_iso()
+    write_json(path, state)
+
+
+def current_step(state: dict[str, Any]) -> str | None:
+    idx = int(state.get("index") or 0)
+    if idx >= len(ONBOARDING_FLOW):
+        return None
+    return ONBOARDING_FLOW[idx]
+
+
+def advance(state: dict[str, Any]) -> None:
+    state["index"] = int(state.get("index") or 0) + 1
+    state["phase"] = "ask"
+
+
+def prompt_for(step: str, registry: dict[str, Any]) -> dict[str, Any]:
+    acct = registry.get("accounts", {})
+    linked = bool(acct.get(step, {}).get("linked", False)) if step in acct else False
+    if step == "messages":
+        return {
+            "status": "needs_user_input",
+            "step": step,
+            "linked": linked,
+            "message": "Import local message contacts? This reads contact metadata only, not message bodies.",
+            "choices": ["yes", "no", "skip"],
+        }
+    if step == "gmail":
+        return {
+            "status": "needs_user_input",
+            "step": step,
+            "linked": linked,
+            "message": "Connect Gmail? OAuth opens in your browser; Powerpacks does not scan Gmail locally.",
+            "choices": ["yes", "no", "skip"],
+        }
+    if step == "linkedin_csv":
+        return {
+            "status": "needs_user_input",
+            "step": step,
+            "linked": linked,
+            "message": "Import a LinkedIn Connections.csv export? Reply yes if you have the file path ready.",
+            "choices": ["yes", "no", "skip"],
+        }
+    if step == "linkedin_mcp":
+        return {
+            "status": "needs_user_input",
+            "step": step,
+            "linked": linked,
+            "message": "Set up LinkedIn MCP browser access? This is optional and connection export is still WIP upstream.",
+            "choices": ["yes", "no", "skip"],
+        }
+    if step == "twitter":
+        return {
+            "status": "needs_user_input",
+            "step": step,
+            "linked": linked,
+            "message": "Configure Twitter/X follower import for an operator handle? This uses RapidAPI only after approval.",
+            "choices": ["yes", "no", "skip"],
+        }
+    if step == "merge":
+        return {
+            "status": "needs_user_input",
+            "step": step,
+            "linked": False,
+            "message": "Merge imported sources locally now? This dedupes by LinkedIn and flags similar names for review.",
+            "choices": ["yes", "no", "skip"],
+        }
+    if step == "enrich":
+        return {
+            "status": "needs_user_input",
+            "step": step,
+            "linked": False,
+            "message": "Prepare profile enrichment now? Provider calls pause for approval.",
+            "choices": ["yes", "no", "skip"],
+        }
+    raise ValueError(f"unknown step: {step}")
+
+
+def complete_payload(state: dict[str, Any], registry: dict[str, Any], ledger_path: Path) -> dict[str, Any]:
+    return {
+        "status": "completed",
+        "message": "Onboarding flow complete.",
+        "ledger": str(ledger_path),
+        "accounts": registry,
+        "answers": state.get("answers", {}),
+        "skipped": state.get("skipped", []),
+    }
+
+
+def next_prompt(state: dict[str, Any], accounts_path: Path, ledger_path: Path) -> dict[str, Any]:
+    registry = load_registry(accounts_path)
+    step = current_step(state)
+    if not step:
+        state["status"] = "completed"
+        save_run(ledger_path, state)
+        return complete_payload(state, registry, ledger_path)
+    payload = prompt_for(step, registry)
+    payload.update({"ledger": str(ledger_path), "accounts_path": str(accounts_path), "phase": state.get("phase", "ask")})
+    save_run(ledger_path, state)
+    return payload
+
+
+def action_for_yes(step: str, state: dict[str, Any], accounts_path: Path, ledger_path: Path) -> dict[str, Any]:
+    state["answers"][step] = "yes"
+    if step == "messages":
+        if artifact_exists(".powerpacks/messages/contacts.csv"):
+            update_channel("messages", path=accounts_path, success=True, artifact=".powerpacks/messages/contacts.csv")
+            advance(state)
+            payload = next_prompt(state, accounts_path, ledger_path)
+            payload["completed_action"] = {
+                "step": "messages",
+                "message": "Messages contacts already imported.",
+                "artifact": ".powerpacks/messages/contacts.csv",
+            }
+            return payload
+        state["phase"] = "awaiting_done"
+        return {
+            "status": "needs_agent_action",
+            "step": step,
+            "message": "Starting messages import workflow. It reads contact metadata only, not message bodies.",
+            "command": "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run",
+            "continue_command": f"uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --ledger {ledger_path} --input done",
+        }
+    if step == "gmail":
+        state["phase"] = "awaiting_done"
+        return {
+            "status": "needs_user_action",
+            "step": step,
+            "message": "Finish Gmail OAuth in the browser; this terminal will detect the linked account.",
+            "url": "https://search.powerset.dev/gmail/connect",
+            "command": "uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py connect --timeout-seconds 600",
+            "continue_command": f"uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --ledger {ledger_path} --input done",
+        }
+    if step == "linkedin_csv":
+        state["phase"] = "awaiting_csv_path"
+        return {
+            "status": "needs_user_input",
+            "step": step,
+            "message": "Paste the path to your LinkedIn Connections.csv export.",
+            "example": "~/Downloads/Connections.csv",
+        }
+    if step == "linkedin_mcp":
+        state["phase"] = "awaiting_linkedin_mcp_username"
+        return {
+            "status": "needs_user_action",
+            "step": step,
+            "message": "Install/login to the LinkedIn MCP, then reply with your LinkedIn profile URL or username.",
+            "command": "uv run --project . python packs/ingestion/primitives/linkedin_mcp_import/linkedin_mcp_import.py instructions",
+            "login_command": "uvx linkedin-scraper-mcp@latest --login",
+        }
+    if step == "twitter":
+        state["phase"] = "awaiting_twitter_handle"
+        return {"status": "needs_user_input", "step": step, "message": "Reply with the Twitter/X operator handle to import."}
+    if step == "merge":
+        state["phase"] = "awaiting_done"
+        return {
+            "status": "needs_agent_action",
+            "step": step,
+            "message": "Starting local merge.",
+            "command": "uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run",
+            "continue_command": f"uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --ledger {ledger_path} --input done",
+        }
+    if step == "enrich":
+        state["phase"] = "awaiting_enrich_input"
+        return {
+            "status": "needs_user_input",
+            "step": step,
+            "message": "Paste the people CSV to enrich, usually .powerpacks/network-import/merged/people_harmonic_all.merged.csv",
+        }
+    raise ValueError(f"unknown step: {step}")
+
+
+def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path, ledger_path: Path) -> dict[str, Any]:
+    step = current_step(state)
+    if not step:
+        return complete_payload(state, load_registry(accounts_path), ledger_path)
+    phase = state.get("phase", "ask")
+    reply = normalize_reply(user_input)
+    low = reply.lower()
+
+    if phase == "ask":
+        if low in NO:
+            state["answers"][step] = "skip"
+            state.setdefault("skipped", []).append(step)
+            advance(state)
+            return next_prompt(state, accounts_path, ledger_path)
+        if low not in YES:
+            payload = prompt_for(step, load_registry(accounts_path))
+            payload.update({"status": "needs_user_input", "error": "Please reply yes, no, or skip.", "ledger": str(ledger_path)})
+            return payload
+        payload = action_for_yes(step, state, accounts_path, ledger_path)
+        save_run(ledger_path, state)
+        payload["ledger"] = str(ledger_path)
+        return payload
+
+    if phase == "awaiting_done":
+        if low not in {"done", "yes", "y", "ok"}:
+            return {"status": "needs_user_input", "step": step, "message": "Reply done when finished, or skip.", "ledger": str(ledger_path)}
+        if step == "messages" and artifact_exists(".powerpacks/messages/contacts.csv"):
+            update_channel("messages", path=accounts_path, success=True, artifact=".powerpacks/messages/contacts.csv")
+        elif step == "gmail":
+            gmail = run_json(["uv", "run", "--project", ".", "python", "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py", "accounts"])
+            if gmail and gmail.get("status") == "ok":
+                for account in (gmail.get("accounts") or gmail.get("connected_accounts") or []):
+                    email = account.get("email") or account.get("account_email") if isinstance(account, dict) else ""
+                    if email:
+                        update_channel("gmail", path=accounts_path, username=email, success=True, artifact="gmail-stats")
+            else:
+                update_channel("gmail", path=accounts_path, linked=True, notes="User reported Gmail OAuth completed; account check did not confirm.")
+        elif step == "merge":
+            update_channel("messages", path=accounts_path, artifact=".powerpacks/network-import/merged/people_harmonic_all.merged.csv", notes="Merge step run/requested.")
+        advance(state)
+        return next_prompt(state, accounts_path, ledger_path)
+
+    if phase == "awaiting_csv_path":
+        csv_path = Path(reply).expanduser()
+        if not csv_path.exists():
+            return {"status": "needs_user_input", "step": step, "message": "That file does not exist. Paste a valid Connections.csv path or skip.", "ledger": str(ledger_path)}
+        state["context"]["linkedin_csv_path"] = str(csv_path)
+        update_channel("linkedin_csv", path=accounts_path, username=csv_path.stem, artifact=str(csv_path), linked=True, notes="CSV path recorded; run import command to ingest.")
+        advance(state)
+        payload = next_prompt(state, accounts_path, ledger_path)
+        payload["completed_action"] = {
+            "step": "linkedin_csv",
+            "message": "Recorded CSV path. Run this import command when ready.",
+            "command": f"uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run --csv {csv_path} --source-user {csv_path.stem}",
+        }
+        return payload
+
+    if phase == "awaiting_linkedin_mcp_username":
+        if not reply:
+            return {"status": "needs_user_input", "step": step, "message": "Reply with your LinkedIn profile URL or username, or skip.", "ledger": str(ledger_path)}
+        update_channel("linkedin_mcp", path=accounts_path, username=reply, success=True, notes="User reported LinkedIn MCP login/setup completed.")
+        advance(state)
+        return next_prompt(state, accounts_path, ledger_path)
+
+    if phase == "awaiting_twitter_handle":
+        handle = reply.lstrip("@")
+        if not handle:
+            return {"status": "needs_user_input", "step": step, "message": "Reply with a Twitter/X handle, or skip.", "ledger": str(ledger_path)}
+        update_channel("twitter", path=accounts_path, username=handle, linked=True, notes="Handle recorded; crawl requires RapidAPI approval.")
+        advance(state)
+        payload = next_prompt(state, accounts_path, ledger_path)
+        payload["completed_action"] = {
+            "step": "twitter",
+            "message": "Recorded Twitter/X handle. Run this import command when ready.",
+            "command": f"uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run --handle {handle}",
+        }
+        return payload
+
+    if phase == "awaiting_enrich_input":
+        csv_path = Path(reply).expanduser()
+        if not csv_path.exists():
+            return {"status": "needs_user_input", "step": step, "message": "That file does not exist. Paste a valid people CSV path or skip.", "ledger": str(ledger_path)}
+        advance(state)
+        payload = next_prompt(state, accounts_path, ledger_path)
+        payload["completed_action"] = {
+            "step": "enrich",
+            "message": "Run this enrichment command when ready. Provider calls pause for approval.",
+            "command": f"uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run --input {csv_path}",
+        }
+        return payload
+
+    return {"status": "failed", "error": f"unknown phase {phase}", "ledger": str(ledger_path)}
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.ledger)
+    if ledger_path.exists() and not args.force:
+        state = load_run(ledger_path)
+    else:
+        state = {"version": 1, "created_at": now_iso(), "updated_at": now_iso(), "index": 0, "phase": "ask", "answers": {}, "skipped": [], "context": {}}
+    save_run(ledger_path, state)
+    emit(next_prompt(state, Path(args.accounts), ledger_path))
+    return 0
+
+
+def cmd_continue(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.ledger)
+    state = load_run(ledger_path)
+    payload = handle_continue(state, args.input, Path(args.accounts), ledger_path)
+    save_run(ledger_path, state)
+    emit(payload)
+    return 0
+
+
+def cmd_skip(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.ledger)
+    state = load_run(ledger_path)
+    step = current_step(state)
+    if step:
+        state["answers"][step] = "skip"
+        state.setdefault("skipped", []).append(step)
+        advance(state)
+    emit(next_prompt(state, Path(args.accounts), ledger_path))
+    return 0
+
+
+def cmd_run_status(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.ledger)
+    state = load_run(ledger_path)
+    payload = next_prompt(state, Path(args.accounts), ledger_path)
+    payload["run_state"] = state
+    emit(payload)
+    return 0
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Guided onboarding for local network ingestion sources")
     sub = parser.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--accounts", default=str(DEFAULT_ACCOUNTS_PATH))
+    run_common = argparse.ArgumentParser(add_help=False)
+    run_common.add_argument("--accounts", default=str(DEFAULT_ACCOUNTS_PATH))
+    run_common.add_argument("--ledger", default=str(DEFAULT_ONBOARDING_LEDGER))
+
+    run = sub.add_parser("run", parents=[run_common], help="Start/resume the conversational onboarding flow")
+    run.add_argument("--force", action="store_true")
+    run.set_defaults(func=cmd_run)
+
+    cont = sub.add_parser("continue", parents=[run_common], help="Continue onboarding with the user's latest reply")
+    cont.add_argument("--input", required=True)
+    cont.set_defaults(func=cmd_continue)
+
+    skip = sub.add_parser("skip", parents=[run_common], help="Skip the current onboarding step")
+    skip.set_defaults(func=cmd_skip)
+
+    run_status = sub.add_parser("run-status", parents=[run_common], help="Show current conversational onboarding prompt")
+    run_status.set_defaults(func=cmd_run_status)
+
     status = sub.add_parser("status", parents=[common])
     status.set_defaults(func=cmd_status)
     check = sub.add_parser("check", parents=[common])

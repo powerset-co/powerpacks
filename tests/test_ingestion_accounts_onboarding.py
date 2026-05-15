@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -58,6 +59,57 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("todo", payload)
             self.assertNotIn("gmail", [item["channel"] for item in payload["todo"]])
+
+    def test_conversational_run_and_continue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            accounts_path = Path(tmp) / "accounts.json"
+            ledger = Path(tmp) / "onboarding-run.json"
+            code, payload = self.invoke(onboarding, ["run", "--accounts", str(accounts_path), "--ledger", str(ledger), "--force"])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "needs_user_input")
+            self.assertEqual(payload["step"], "messages")
+            code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "skip"])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["step"], "gmail")
+            code, payload = self.invoke(onboarding, ["continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "yes"])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "needs_user_action")
+            self.assertEqual(payload["step"], "gmail")
+            self.assertEqual(payload["url"], "https://search.powerset.dev/gmail/connect")
+            self.assertIn("--timeout-seconds 600", payload["command"])
+            self.assertNotIn("--no-wait", payload["command"])
+
+    def test_messages_yes_advances_when_contacts_already_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            accounts_path = Path(tmp) / "accounts.json"
+            ledger = Path(tmp) / "onboarding-run.json"
+            code, payload = self.invoke(onboarding, ["run", "--accounts", str(accounts_path), "--ledger", str(ledger), "--force"])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["step"], "messages")
+            with mock.patch.object(onboarding, "artifact_exists", return_value=True):
+                code, payload = self.invoke(onboarding, [
+                    "continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "yes",
+                ])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["step"], "gmail")
+            self.assertEqual(payload["completed_action"]["message"], "Messages contacts already imported.")
+            registry = accounts.load_registry(accounts_path)
+            self.assertTrue(registry["accounts"]["messages"]["linked"])
+
+    def test_messages_yes_returns_agent_action_when_import_needed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            accounts_path = Path(tmp) / "accounts.json"
+            ledger = Path(tmp) / "onboarding-run.json"
+            code, payload = self.invoke(onboarding, ["run", "--accounts", str(accounts_path), "--ledger", str(ledger), "--force"])
+            self.assertEqual(code, 0)
+            with mock.patch.object(onboarding, "artifact_exists", return_value=False):
+                code, payload = self.invoke(onboarding, [
+                    "continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "yes",
+                ])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "needs_agent_action")
+            self.assertEqual(payload["step"], "messages")
+            self.assertIn("import_contacts_pipeline.py run", payload["command"])
 
     def test_linkedin_mcp_instructions_and_mark(self):
         with tempfile.TemporaryDirectory() as tmp:

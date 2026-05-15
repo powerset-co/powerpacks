@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -82,11 +83,44 @@ class GmailNetworkImportTests(unittest.TestCase):
         self.assertEqual(parsed, [("Jane Example", "jane@example.com"), ("", "john@example.org")])
 
     def test_connect_no_open_prints_web_oauth_route(self):
-        code, payload = self.invoke(["connect", "--no-open"])
+        code, payload = self.invoke(["connect", "--no-open", "--no-wait"])
         self.assertEqual(code, 0)
-        self.assertEqual(payload["app_url"], "https://search.powerset.dev/gmail")
+        self.assertEqual(payload["app_url"], "https://search.powerset.dev/gmail/connect")
         self.assertFalse(payload["opened_browser"])
         self.assertIn("does not put the local bearer token", payload["auth_model"])
+
+    def test_connect_waits_by_default(self):
+        stats_before = {"connected_accounts": []}
+        stats_after = {"connected_accounts": [{"email": "default@example.com"}]}
+        with mock.patch.object(gmail_network_import, "powerset_token", return_value="token"), \
+             mock.patch.object(gmail_network_import, "fetch_gmail_stats", side_effect=[stats_before, stats_after]), \
+             mock.patch.object(gmail_network_import.time, "sleep"):
+            code, payload = self.invoke([
+                "connect",
+                "--no-open",
+                "--timeout-seconds", "1",
+                "--poll-seconds", "0.5",
+            ])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "linked")
+        self.assertEqual(payload["email"], "default@example.com")
+
+    def test_connect_wait_polls_until_new_account_is_linked(self):
+        stats_before = {"connected_accounts": []}
+        stats_after = {"connected_accounts": [{"email": "new@example.com"}]}
+        with mock.patch.object(gmail_network_import, "powerset_token", return_value="token"), \
+             mock.patch.object(gmail_network_import, "fetch_gmail_stats", side_effect=[stats_before, stats_after]), \
+             mock.patch.object(gmail_network_import.time, "sleep"):
+            code, payload = self.invoke([
+                "connect",
+                "--no-open",
+                "--wait",
+                "--timeout-seconds", "1",
+                "--poll-seconds", "0.5",
+            ])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "linked")
+        self.assertEqual(payload["email"], "new@example.com")
 
 
 if __name__ == "__main__":
