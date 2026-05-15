@@ -26,6 +26,10 @@ class CoreLayoutTests(unittest.TestCase):
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
         )
         self.assertEqual(messages_pack, ["import-contacts", "import-whatsapp"])
+        indexing_pack = sorted(
+            path.name for path in (ROOT / "packs/indexing/skills").iterdir() if path.is_dir()
+        )
+        self.assertEqual(indexing_pack, ["build-local-search-index"])
 
     def test_pack_skills_have_codex_frontmatter(self) -> None:
         for path in sorted((ROOT / "packs").glob("*/skills/*/SKILL.md")):
@@ -128,6 +132,7 @@ class CoreLayoutTests(unittest.TestCase):
             ROOT / "packs/search/evals",
             ROOT / "packs/messages/schemas",
             ROOT / "packs/messages/tasks",
+            ROOT / "packs/indexing/tasks",
         ]
         for root in roots:
             with self.subTest(root=root):

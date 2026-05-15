@@ -26,7 +26,7 @@ uv run --project . python packs/ingestion/primitives/linkedin_network_import/lin
 - `connections_for_enrichment.csv` — parsed LinkedIn export rows
 - `provider_enriched.csv` — Harmonic + RapidAPI status/raw response columns
 - `raw_provider_responses/*.json` — per-profile raw API payloads
-- `people_harmonic_all.csv` — pipeline-compatible merged output
+- `people.csv` — provider-neutral pipeline-compatible merged output
 
 ## Merge rule
 

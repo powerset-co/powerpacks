@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resumable local LinkedIn network import orchestrator.
 
-Ports the LinkedIn Connections.csv -> provider enrichment -> people_harmonic_all
+Ports the LinkedIn Connections.csv -> provider enrichment -> people.csv
 shape into Powerpacks. Stdlib-only. All artifacts stay under .powerpacks/.
 Paid external APIs are approval-gated.
 """
@@ -14,22 +14,21 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 try:
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, normalize_people_row
+    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, normalize_people_row
+    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/linkedin/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
@@ -530,9 +529,9 @@ def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
         harmonic = normalize_harmonic(harmonic_raw, row["public_identifier"], row["linkedin_url"])
         rapid = normalize_rapidapi(rapid_raw, row["public_identifier"], row["linkedin_url"])
         people.append(merge_provider_profile(row, harmonic, rapid, harmonic_raw, rapid_raw))
-    out = Path(ledger["run_dir"]) / "people_harmonic_all.csv"
+    out = Path(ledger["run_dir"]) / "people.csv"
     write_csv(out, PEOPLE_COLUMNS, people)
-    ledger["artifacts"]["people_harmonic_all_csv"] = str(out)
+    ledger["artifacts"]["people_csv"] = str(out)
     return {"rows": len(people), "output_file": str(out)}
 
 

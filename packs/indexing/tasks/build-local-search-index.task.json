@@ -1,0 +1,30 @@
+{
+  "task": "build_local_search_index",
+  "version": 1,
+  "description": "Build deterministic local search-index artifacts from canonical merged people.csv without uploads or remote services.",
+  "default_constraints": {
+    "local_files_only": true,
+    "no_uploads": true,
+    "no_embeddings": true,
+    "no_llm": true,
+    "no_network": true,
+    "no_postgres": true,
+    "no_supabase": true,
+    "no_turbopuffer": true
+  },
+  "inputs": {
+    "people_csv": ".powerpacks/network-import/merged/people.csv"
+  },
+  "artifact_root": ".powerpacks/search-index/<run-id>",
+  "steps": [
+    {"id": "flatten_people", "kind": "local_transform"},
+    {"id": "build_roles", "kind": "local_transform"},
+    {"id": "build_company_corpus", "kind": "local_transform"},
+    {"id": "build_education_corpus", "kind": "local_transform"},
+    {"id": "build_location_corpus", "kind": "local_transform"},
+    {"id": "build_people_records", "kind": "local_transform"},
+    {"id": "build_unified_profiles", "kind": "local_transform"},
+    {"id": "build_summary_records", "kind": "local_transform"},
+    {"id": "validate_contracts", "kind": "local_validation"}
+  ]
+}

@@ -44,6 +44,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 | [`search-network`](packs/search/skills/search-network/SKILL.md) | `$search-network <query>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. |
 | [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
 | [`extract-search-query`](packs/search/skills/extract-search-query/SKILL.md) | called by `search-network` | Sub-skill for headless query decomposition. |
+| [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds deterministic local indexing artifacts from `.powerpacks/network-import/merged/people.csv` under `.powerpacks/search-index/<run-id>/` with no remote calls. |
 
 ### Setup
 
@@ -97,6 +98,11 @@ powerpacks/
 │   │   └── templates/      env.example
 │   ├── sales-nav/          Sales Navigator search via the powerset-search MCP
 │   │   └── skills/         sales-nav-search
+│   ├── indexing/           local people.csv → search-index artifact pipeline
+│   │   ├── skills/         build-local-search-index
+│   │   ├── primitives/     build_processing_pipeline + transform CLIs
+│   │   ├── lib/            contracts, identity, people/artifact builders
+│   │   └── tasks/          build-local-search-index.task.json
 │   ├── search/             recruiting people / company search
 │   │   ├── skills/         search-network, search-company,
 │   │   │                   extract-search-query

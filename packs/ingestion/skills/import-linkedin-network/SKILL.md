@@ -1,6 +1,6 @@
 ---
 name: import-linkedin-network
-description: Import a LinkedIn Connections.csv export into Powerpacks-local provider enrichment artifacts and people_harmonic_all.csv shape using run/continue/approve.
+description: Import a LinkedIn Connections.csv export into Powerpacks-local provider enrichment artifacts and provider-neutral people.csv shape using run/continue/approve.
 ---
 
 # Import LinkedIn Network
@@ -35,6 +35,6 @@ Report only:
 - run directory
 - parsed connection count
 - whether enrichment is blocked/completed
-- `people_harmonic_all.csv` path when produced
+- `people.csv` path when produced
 
 Do not paste CSV contents or raw provider JSON into chat.
