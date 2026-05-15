@@ -82,7 +82,7 @@ class LocalDuckDBSearchStore:
         try:
             import duckdb  # type: ignore
         except ModuleNotFoundError as exc:
-            raise RuntimeError("duckdb is required for POWERPACKS_SEARCH_BACKEND=local") from exc
+            raise RuntimeError("duckdb is required for local DuckDB search") from exc
 
         self.db_path = str(db_path)
         self.read_only = read_only

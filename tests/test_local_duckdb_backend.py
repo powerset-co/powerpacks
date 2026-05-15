@@ -41,8 +41,7 @@ LONG_BACKEND_QUERY = (
 
 class LocalDuckDBFixtureMixin:
     def setUp(self) -> None:
-        self._old_env = {key: os.environ.get(key) for key in ["POWERPACKS_SEARCH_BACKEND", "POWERPACKS_LOCAL_SEARCH_DB"]}
-        os.environ["POWERPACKS_SEARCH_BACKEND"] = "local"
+        self._old_env = {key: os.environ.get(key) for key in ["POWERPACKS_LOCAL_SEARCH_DB"]}
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = str(Path(self.tmpdir.name) / "local-search.duckdb")
         self._create_fixture(self.db_path)
@@ -368,7 +367,6 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual([row["base_id"] for row in rows], ["person-engineer", "person-founder"])
 
     def test_default_mode_safety(self) -> None:
-        os.environ.pop("POWERPACKS_SEARCH_BACKEND", None)
         os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
         turbopuffer_client._local_store_for_path.cache_clear()
         self.assertFalse(turbopuffer_client.is_local_backend())

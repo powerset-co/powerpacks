@@ -259,7 +259,7 @@ def client() -> Any:
 
 
 def is_local_backend() -> bool:
-    return os.getenv("POWERPACKS_SEARCH_BACKEND", "").strip().lower() == "local"
+    return bool(os.getenv("POWERPACKS_LOCAL_SEARCH_DB"))
 
 
 @functools.lru_cache(maxsize=None)
@@ -272,7 +272,7 @@ def _local_store_for_path(path: str) -> Any:
 def local_store() -> Any:
     db_path = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
     if not db_path:
-        raise RuntimeError("POWERPACKS_LOCAL_SEARCH_DB is required when POWERPACKS_SEARCH_BACKEND=local")
+        raise RuntimeError("POWERPACKS_LOCAL_SEARCH_DB is required for local DuckDB search")
     return _local_store_for_path(db_path)
 
 
