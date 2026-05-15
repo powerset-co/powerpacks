@@ -242,7 +242,9 @@ class LocalDuckDBFixtureMixin:
                     technology_types varchar[],
                     customer_type varchar[],
                     investor_urns varchar[],
+                    accelerators varchar[],
                     yc_batches varchar[],
+                    stage varchar,
                     headcount integer,
                     funding_stage integer,
                     funding_total integer,
@@ -264,14 +266,14 @@ class LocalDuckDBFixtureMixin:
                 """
             )
             con.executemany(
-                "insert into local_companies values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "insert into local_companies values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         "company-infra", "company-infra", "InfraDB", "InfraDB database infrastructure",
                         "InfraDB database infrastructure", "Database infrastructure and developer tooling for application data.",
                         "developer database tools", "developer database tools", "developer database tools", "data infrastructure developer tools",
                         "database infrastructure developer tools", ["company", "developer_tool"], ["data", "developer_tools"],
-                        ["database", "infrastructure"], ["B2B"], ["investor-openai"], ["YC S20"],
+                        ["database", "infrastructure"], ["B2B"], ["investor-openai"], ["Techstars"], ["YC S20"], "growth",
                         120, 3, 25_000_000, 20240315, 100_000_000, 2020, "New York", "New York", "United States",
                         "New York City Metropolitan Area", "North America", "infradb.example",
                         "https://www.linkedin.com/company/infradb", "https://img.example/infradb.png",
@@ -282,7 +284,7 @@ class LocalDuckDBFixtureMixin:
                         "Acme AI artificial intelligence", "AI startup building productivity software.",
                         "ai productivity software", "ai productivity software", "ai productivity software", "artificial intelligence software",
                         "ai artificial intelligence productivity", ["company"], ["ai"],
-                        ["ai"], ["B2B"], [], [],
+                        ["ai"], ["B2B"], [], [], [], "seed",
                         40, 2, 5_000_000, 20230115, 20_000_000, 2021, "San Francisco", "California", "United States",
                         "San Francisco Bay Area", "North America", "acme.example",
                         "https://www.linkedin.com/company/acme-ai", "https://img.example/acme.png",
@@ -345,6 +347,142 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual([row["id"] for row in companies], ["company-infra"])
         self.assertEqual(companies[0]["company_name"], "InfraDB")
         self.assertEqual(companies[0]["customer_type"], ["B2B"])
+
+    def test_classified_company_fields_filter_bm25_and_vector_search(self) -> None:
+        rich = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+            "companies",
+            ("And", [
+                ("entity_types", "ContainsAny", ["developer_tool"]),
+                ("sector_types", "ContainsAny", ["developer_tools"]),
+                ("technology_types", "ContainsAny", ["infrastructure"]),
+                ("customer_type", "ContainsAny", ["B2B"]),
+                ("investor_urns", "ContainsAny", ["investor-openai"]),
+                ("accelerators", "ContainsAny", ["Techstars"]),
+                ("funding_stage", "Gte", 3),
+                ("funding_total", "Gte", 20_000_000),
+                ("headcount", "Gte", 100),
+                ("stage", "Eq", "growth"),
+            ]),
+            [
+                "company_name", "entity_types", "sector_types", "technology_types", "customer_type",
+                "investor_urns", "accelerators", "yc_batches", "funding_stage", "funding_total",
+                "headcount", "stage", "founded_year", "last_funding_at", "valuation",
+            ],
+            page_size=1000,
+            max_results=10,
+        ))
+        self.assertEqual([row["id"] for row in rich], ["company-infra"])
+        self.assertEqual(rich[0]["technology_types"], ["database", "infrastructure"])
+        self.assertEqual(rich[0]["customer_type"], ["B2B"])
+        self.assertEqual(rich[0]["investor_urns"], ["investor-openai"])
+        self.assertEqual(rich[0]["accelerators"], ["Techstars"])
+        self.assertEqual(rich[0]["yc_batches"], ["YC S20"])
+        self.assertEqual(rich[0]["stage"], "growth")
+        self.assertEqual(rich[0]["funding_stage"], 3)
+        self.assertEqual(rich[0]["headcount"], 120)
+
+        for field, query in [
+            ("name_aliases_text", "InfraDB database"),
+            ("semantic_text", "developer tooling application data"),
+            ("doc2query_text", "developer database tools"),
+            ("entity_sector_text", "data infrastructure"),
+        ]:
+            response = turbopuffer_client.namespace("companies").query(
+                rank_by=(field, "BM25", query),
+                top_k=5,
+                include_attributes=["company_name", field],
+            )
+            self.assertTrue(response.rows, field)
+            self.assertEqual(response.rows[0].id, "company-infra", field)
+            self.assertEqual(response.rows[0].company_name, "InfraDB", field)
+            self.assertGreater(response.rows[0].score, 0.0, field)
+
+        vector_response = turbopuffer_client.namespace("companies").query(
+            rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
+            top_k=2,
+            include_attributes=["company_name", "entity_types", "sector_types", "technology_types"],
+        )
+        self.assertEqual(vector_response.rows[0].id, "company-infra")
+        self.assertEqual(vector_response.rows[0].company_name, "InfraDB")
+        self.assertGreater(vector_response.rows[0].score, 0.99)
+
+        resolved = asyncio.run(resolve_companies.run(SimpleNamespace(
+            state=None,
+            payload_json=json.dumps({
+                "entity_types": ["developer_tool"],
+                "sector_types": ["developer_tools"],
+                "technology_types": ["database"],
+                "customer_types": ["B2B"],
+                "investors": ["investor-openai"],
+                "accelerators": ["Techstars"],
+                "yc_batches": ["YC S20"],
+                "stages": ["growth"],
+                "funding_stage_min": "series_a",
+                "funding_amount_min": 20_000_000,
+                "headcount_min": 100,
+                "operator_ids": ["op1"],
+            }),
+            env_file=None,
+            name_top_k=10,
+            semantic_top_k=10,
+            company_sector_strategy="soft_union",
+            company_sector_min_results=1,
+            page_size=1000,
+            max_soft_companies=0,
+            max_companies=0,
+            no_ce=True,
+            ce_all=False,
+            ce_threshold=500,
+            ce_top_n=0,
+            ce_model=None,
+            ce_batch_size=20,
+            ce_concurrency=10,
+        )))
+        self.assertEqual(resolved["namespace"], "local_companies")
+        self.assertEqual(resolved["company_ids"], ["company-infra"])
+        self.assertEqual(resolved["sample_companies"][0]["technology_types"], ["database", "infrastructure"])
+        self.assertEqual(resolved["sample_companies"][0]["customer_type"], ["B2B"])
+        self.assertEqual(resolved["sample_companies"][0]["funding_stage"], 3)
+        self.assertEqual(resolved["sample_companies"][0]["stage"], "growth")
+
+    def test_local_company_query_vector_does_not_call_embedding_api(self) -> None:
+        original_embedding = resolve_companies.embedding
+
+        async def fail_embedding(text: str):
+            raise AssertionError("supplied company_query_vector must avoid embedding API calls")
+
+        resolve_companies.embedding = fail_embedding
+        os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
+        try:
+            resolved = asyncio.run(resolve_companies.run(SimpleNamespace(
+                state=None,
+                payload_json=json.dumps({
+                    "company_query_vector": [0.0, 1.0, 0.0],
+                    "operator_ids": ["op1"],
+                }),
+                env_file=None,
+                name_top_k=10,
+                semantic_top_k=10,
+                company_sector_strategy="semantic_only",
+                company_sector_min_results=1,
+                page_size=1000,
+                max_soft_companies=0,
+                max_companies=0,
+                no_ce=True,
+                ce_all=False,
+                ce_threshold=500,
+                ce_top_n=0,
+                ce_model=None,
+                ce_batch_size=20,
+                ce_concurrency=10,
+            )))
+        finally:
+            resolve_companies.embedding = original_embedding
+
+        self.assertTrue(resolved["used_semantic_search"])
+        self.assertEqual(resolved["company_ids"][0], "company-infra")
+        self.assertEqual(resolved["sample_companies"][0]["technology_types"], ["database", "infrastructure"])
+        self.assertEqual(resolved["sample_companies"][0]["accelerators"], ["Techstars"])
 
     def test_build_duckdb_from_records_artifacts_and_resolve_company_locally(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -646,46 +784,50 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(out["company_ids"][0], "company-infra")
         self.assertTrue(out["used_semantic_search"])
         self.assertEqual(out["sample_companies"][0]["company_name"], "InfraDB")
+        self.assertEqual(out["sample_companies"][0]["technology_types"], ["database", "infrastructure"])
+        self.assertEqual(out["sample_companies"][0]["customer_type"], ["B2B"])
+        self.assertEqual(out["sample_companies"][0]["investor_urns"], ["investor-openai"])
+        self.assertEqual(out["sample_companies"][0]["yc_batches"], ["YC S20"])
 
     def test_local_company_vector_search_requires_explicit_opt_in(self) -> None:
         calls: list[str] = []
         original_embedding = resolve_companies.embedding
 
-        async def fake_embedding(text: str):
+        async def fail_embedding(text: str):
             calls.append(text)
-            return [0.0, 1.0, 0.0]
+            raise AssertionError("vector company search should only request embeddings after explicit opt-in")
 
-        resolve_companies.embedding = fake_embedding
+        resolve_companies.embedding = fail_embedding
         os.environ["POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH"] = "1"
         try:
-            out = asyncio.run(resolve_companies.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({
-                    "company_semantic_queries": ["database infrastructure developer tools"],
-                    "company_sector_strategy": "semantic_only",
-                }),
-                env_file=None,
-                name_top_k=10,
-                semantic_top_k=10,
-                company_sector_strategy="semantic_only",
-                company_sector_min_results=1,
-                page_size=1000,
-                max_soft_companies=0,
-                max_companies=0,
-                no_ce=True,
-                ce_all=False,
-                ce_threshold=500,
-                ce_top_n=0,
-                ce_model=None,
-                ce_batch_size=20,
-                ce_concurrency=10,
-            )))
+            with self.assertRaises(AssertionError):
+                asyncio.run(resolve_companies.run(SimpleNamespace(
+                    state=None,
+                    payload_json=json.dumps({
+                        "company_semantic_queries": ["database infrastructure developer tools"],
+                        "company_sector_strategy": "semantic_only",
+                    }),
+                    env_file=None,
+                    name_top_k=10,
+                    semantic_top_k=10,
+                    company_sector_strategy="semantic_only",
+                    company_sector_min_results=1,
+                    page_size=1000,
+                    max_soft_companies=0,
+                    max_companies=0,
+                    no_ce=True,
+                    ce_all=False,
+                    ce_threshold=500,
+                    ce_top_n=0,
+                    ce_model=None,
+                    ce_batch_size=20,
+                    ce_concurrency=10,
+                )))
         finally:
             resolve_companies.embedding = original_embedding
             os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
 
         self.assertEqual(calls, ["database infrastructure developer tools"])
-        self.assertEqual(out["company_ids"][0], "company-infra")
 
     def test_namespace_rank_by_includes_score(self) -> None:
         response = turbopuffer_client.namespace("people").query(
