@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Unified local people enrichment flow.
 
-Self-contained Powerpacks implementation copied/adapted from the Aleph ingestion
-provider merge logic. No imports from aleph-mvp or network-search-api.
+Self-contained Powerpacks RapidAPI enrichment implementation. No imports from
+aleph-mvp or network-search-api.
 
 Input: a shared people schema CSV, usually merge_network_sources output.
 Output: enriched people schema CSV plus raw provider responses.
@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
+    from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
@@ -36,6 +38,8 @@ try:
     )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
+    from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
@@ -46,18 +50,16 @@ except ModuleNotFoundError:
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/enrichment/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
-HARMONIC_BASE_URL = "https://api.harmonic.ai"
 RAPIDAPI_BASE_URL = "https://professional-network-data.p.rapidapi.com"
 PIPELINE_STEPS = ["prepare_queue", "enrich_linkedin", "merge_people"]
 
 QUEUE_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["enrichment_route", "enrichment_reason"]
+CACHE_COLUMNS = QUEUE_COLUMNS + ["cache_status", "cache_path", "cache_reason"]
 PROVIDER_COLUMNS = QUEUE_COLUMNS + [
-    "harmonic_status_code",
-    "harmonic_error",
-    "harmonic_response",
     "rapidapi_status_code",
     "rapidapi_error",
     "rapidapi_response_enriched",
+    "rapidapi_from_cache",
     "provider_enriched_at",
 ]
 
@@ -143,24 +145,41 @@ def profile_richness(experiences: Any, education: Any) -> int:
     return count_items(experiences) + count_items(education)
 
 
+def _explicit_current_value(exp: dict[str, Any]) -> bool | None:
+    for key in ("is_current_position", "is_current", "current"):
+        if key not in exp:
+            continue
+        value = exp.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "y"}:
+                return True
+            if lowered in {"false", "0", "no", "n"}:
+                return False
+    return None
+
+
 def current_position(experiences: list[dict[str, Any]]) -> tuple[str, str, str]:
+    first_exp: dict[str, Any] | None = None
     for exp in experiences or []:
         if not isinstance(exp, dict):
             continue
-        if exp.get("is_current_position") or exp.get("is_current") or exp.get("current") or not (exp.get("ends_at") or exp.get("end_date")):
+        first_exp = first_exp or exp
+        explicit_current = _explicit_current_value(exp)
+        if explicit_current is True or (explicit_current is None and not (exp.get("ends_at") or exp.get("end_date"))):
             return (
                 str(exp.get("title") or exp.get("position") or ""),
                 str(exp.get("company_name") or exp.get("company") or exp.get("organization") or ""),
-                str(exp.get("company_urn") or exp.get("company_id") or ""),
+                "",
             )
-    if experiences:
-        exp = experiences[0]
-        if isinstance(exp, dict):
-            return (
-                str(exp.get("title") or exp.get("position") or ""),
-                str(exp.get("company_name") or exp.get("company") or exp.get("organization") or ""),
-                str(exp.get("company_urn") or exp.get("company_id") or ""),
-            )
+    if first_exp:
+        return (
+            str(first_exp.get("title") or first_exp.get("position") or ""),
+            str(first_exp.get("company_name") or first_exp.get("company") or first_exp.get("organization") or ""),
+            "",
+        )
     return "", "", ""
 
 
@@ -183,23 +202,55 @@ def http_json(method: str, url: str, *, headers: dict[str, str] | None = None, p
         return 0, None, str(exc)
 
 
-def harmonic_enrich(linkedin_url: str, api_key: str) -> dict[str, Any]:
-    status, data, error = http_json(
-        "POST",
-        f"{HARMONIC_BASE_URL}/persons",
-        headers={"accept": "application/json", "apikey": api_key},
-        params={"linkedin_url": linkedin_url},
-        timeout=90,
-    )
-    enrichment_id = ""
-    if isinstance(data, dict):
-        enrichment_id = str(data.get("enrichment_id") or data.get("enrichment_urn") or "")
-        detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
-        enrichment_id = enrichment_id or str(detail.get("enrichment_urn") or "")
-    return {"status_code": status, "data": data, "error": error, "enrichment_id": enrichment_id}
+def rapidapi_key() -> str:
+    return os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
 
 
-def rapidapi_profile(public_identifier: str, linkedin_url: str, api_key: str) -> dict[str, Any]:
+def safe_cache_slug(public_identifier: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in public_identifier.lower().strip())
+    return cleaned.strip("._")
+
+
+def profile_cache_path(cache_dir: Path | str | None, public_identifier: str) -> Path | None:
+    slug = safe_cache_slug(public_identifier)
+    if not cache_dir or not slug:
+        return None
+    return Path(cache_dir) / f"{slug}.json"
+
+
+def read_usable_cached_profile(cache_path: Path | None) -> dict[str, Any] | None:
+    if not cache_path or not cache_path.exists():
+        return None
+    cached = read_json(cache_path, None)
+    if not isinstance(cached, dict):
+        return None
+    normalized = cached.get("normalized_profile")
+    raw = cached.get("raw_response")
+    if isinstance(normalized, dict) and normalized.get("success") is True and isinstance(raw, dict):
+        return cached
+    return None
+
+
+def rapidapi_profile(
+    public_identifier: str,
+    linkedin_url: str,
+    api_key: str,
+    *,
+    cache_dir: Path | str | None = None,
+    refresh_cache: bool = False,
+) -> dict[str, Any]:
+    cache_path = profile_cache_path(cache_dir, public_identifier)
+    if not refresh_cache:
+        cached = read_usable_cached_profile(cache_path)
+        if cached:
+            return {
+                "status_code": 200,
+                "data": cached.get("raw_response"),
+                "error": "",
+                "from_cache": True,
+                "normalized_profile": cached.get("normalized_profile"),
+            }
+
     status, data, error = http_json(
         "GET",
         f"{RAPIDAPI_BASE_URL}/get-profile-data-by-url",
@@ -207,80 +258,51 @@ def rapidapi_profile(public_identifier: str, linkedin_url: str, api_key: str) ->
         params={"url": linkedin_url or f"https://www.linkedin.com/in/{public_identifier}"},
         timeout=90,
     )
-    return {"status_code": status, "data": data, "error": error}
+    normalized = normalize_linkedin_profile(data if isinstance(data, dict) else {})
+    if cache_path and status == 200 and isinstance(data, dict) and normalized.get("success") is True:
+        write_json(cache_path, {
+            "fetched_at": now_iso(),
+            "public_identifier": public_identifier,
+            "linkedin_url": linkedin_url,
+            "raw_response": data,
+            "normalized_profile": normalized,
+        })
+    return {"status_code": status, "data": data, "error": error, "from_cache": False, "normalized_profile": normalized}
 
 
-def normalize_rapidapi(data: dict[str, Any] | None, public_identifier: str, linkedin_url: str) -> dict[str, Any]:
+def normalize_rapidapi(
+    data: dict[str, Any] | None,
+    public_identifier: str,
+    linkedin_url: str,
+    company_lookup: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
-    profile = data.get("data") if isinstance(data.get("data"), dict) else data
-    full_name = profile.get("full_name") or profile.get("fullName") or profile.get("name") or ""
-    first = profile.get("first_name") or profile.get("firstName") or ""
-    last = profile.get("last_name") or profile.get("lastName") or ""
-    if full_name and (not first or not last):
-        sf, sl = split_name(full_name)
-        first = first or sf
-        last = last or sl
-    experiences = profile.get("experiences") or profile.get("experience") or profile.get("positions") or []
-    education = profile.get("education") or profile.get("educations") or []
-    location = profile.get("location") if isinstance(profile.get("location"), dict) else {}
-    location_str = profile.get("location_str") or (profile.get("location") if isinstance(profile.get("location"), str) else "")
-    exp_list = experiences if isinstance(experiences, list) else []
-    title, company, company_urn = current_position(exp_list)
+    profile = normalize_linkedin_profile(data)
+    if profile.get("success") is not True:
+        return {}
+
+    experiences = [rapidapi_experience_to_powerpacks(exp, company_lookup) for exp in profile.get("experiences", []) if isinstance(exp, dict)]
+    title, company, _legacy = current_position(experiences)
+    profile_public_id = profile.get("public_identifier") or public_identifier
+    profile_url = profile.get("linkedin_url") or linkedin_url or (f"https://www.linkedin.com/in/{profile_public_id}" if profile_public_id else "")
     return {
-        "public_identifier": profile.get("public_identifier") or profile.get("username") or public_identifier,
-        "linkedin_url": normalize_linkedin_url(profile.get("linkedin_url") or profile.get("profile_url") or profile.get("profileURL") or linkedin_url),
-        "first_name": first or "",
-        "last_name": last or "",
-        "full_name": full_name or f"{first} {last}".strip(),
+        "public_identifier": profile_public_id,
+        "linkedin_url": normalize_linkedin_url(profile_url),
+        "first_name": profile.get("first_name") or "",
+        "last_name": profile.get("last_name") or "",
+        "full_name": profile.get("full_name") or "",
         "headline": profile.get("headline") or "",
-        "summary": profile.get("summary") or profile.get("about") or "",
-        "city": profile.get("city") or location.get("city", ""),
-        "state": profile.get("state") or location.get("state", ""),
-        "country": profile.get("country") or location.get("country", ""),
-        "location_raw": location_str or location.get("location", ""),
-        "profile_picture_url": profile.get("profile_pic_url") or profile.get("profilePicture") or profile.get("profile_picture_url") or "",
-        "work_experiences": exp_list,
-        "education": education if isinstance(education, list) else [],
-        "current_title": title,
-        "current_company": company,
-        "current_company_urn": company_urn,
-        "entity_urn": profile.get("entity_urn") or "",
-    }
-
-
-def normalize_harmonic(data: dict[str, Any] | None, public_identifier: str, linkedin_url: str) -> dict[str, Any]:
-    if not isinstance(data, dict):
-        return {}
-    # Harmonic may return an async token/detail payload instead of a full profile.
-    if "full_name" not in data and "first_name" not in data:
-        return {}
-    location = data.get("location") if isinstance(data.get("location"), dict) else {}
-    socials = data.get("socials") if isinstance(data.get("socials"), dict) else {}
-    linkedin = socials.get("LINKEDIN") if isinstance(socials.get("LINKEDIN"), dict) else {}
-    experiences = data.get("experience") if isinstance(data.get("experience"), list) else []
-    education = data.get("education") if isinstance(data.get("education"), list) else []
-    title, company, company_urn = current_position(experiences)
-    return {
-        "public_identifier": public_identifier,
-        "linkedin_url": normalize_linkedin_url(linkedin.get("url") or data.get("linkedin_url") or linkedin_url),
-        "first_name": data.get("first_name", ""),
-        "last_name": data.get("last_name", ""),
-        "full_name": data.get("full_name", ""),
-        "headline": data.get("linkedin_headline", ""),
-        "summary": data.get("summary", ""),
-        "city": location.get("city", ""),
-        "state": location.get("state", ""),
-        "country": location.get("country", ""),
-        "location_raw": location.get("location", ""),
-        "profile_picture_url": data.get("profile_picture_url", ""),
+        "summary": profile.get("summary") or "",
+        "city": profile.get("city") or "",
+        "state": profile.get("state") or "",
+        "country": profile.get("country") or "",
+        "location_raw": profile.get("location_str") or "",
+        "profile_picture_url": profile.get("profile_pic_url") or "",
         "work_experiences": experiences,
-        "education": education,
+        "education": profile.get("education") if isinstance(profile.get("education"), list) else [],
         "current_title": title,
         "current_company": company,
-        "current_company_urn": company_urn,
-        "entity_urn": data.get("entity_urn", ""),
-        "harmonic_location": json.dumps(location) if location else "",
     }
 
 
@@ -308,40 +330,63 @@ def route_row(row: dict[str, str], force: bool = False) -> tuple[str, str]:
     return "skip_no_identifier", "no usable identifier"
 
 
-def merge_provider_profile(base: dict[str, Any], harmonic: dict[str, Any], rapid: dict[str, Any], harmonic_raw: dict[str, Any] | None, rapid_raw: dict[str, Any] | None) -> dict[str, Any]:
+def merge_provider_profile(base: dict[str, Any], rapid: dict[str, Any], rapid_raw: dict[str, Any] | None) -> dict[str, Any]:
     base = normalize_people_row(base)
-    public_identifier = base.get("public_identifier") or extract_public_identifier(base.get("linkedin_url") or "")
-    h_score = profile_richness(harmonic.get("work_experiences", []), harmonic.get("education", []))
-    r_score = profile_richness(rapid.get("work_experiences", []), rapid.get("education", []))
-    rich = rapid if r_score > h_score else harmonic
-    fallback = harmonic if rich is rapid else rapid
-    provider = "rapidapi" if rich is rapid else "harmonic"
-    if harmonic and rapid:
-        provider = f"{provider}_preferred_harmonic_rapidapi"
-    elif not harmonic and not rapid:
-        provider = base.get("enrichment_provider") or "existing_only"
-
+    public_identifier = base.get("public_identifier") or rapid.get("public_identifier") or extract_public_identifier(base.get("linkedin_url") or rapid.get("linkedin_url") or "")
     row: dict[str, Any] = dict(base)
     row["id"] = row.get("id") or generate_person_id(public_identifier, row.get("full_name") or row.get("primary_email") or row.get("primary_phone") or "")
     row["public_identifier"] = public_identifier
-    row["linkedin_url"] = normalize_linkedin_url(row.get("linkedin_url") or rich.get("linkedin_url") or fallback.get("linkedin_url") or "")
-    row["enriched_at"] = now_iso() if (harmonic or rapid) else row.get("enriched_at", "")
-    row["enrichment_provider"] = provider
-    for key in [
-        "linkedin_url", "first_name", "last_name", "full_name", "headline", "summary",
-        "city", "state", "country", "location_raw", "profile_picture_url",
-        "current_title", "current_company", "current_company_urn", "entity_urn", "harmonic_location",
-    ]:
-        row[key] = rich.get(key) or fallback.get(key) or row.get(key, "")
-    if not row.get("full_name"):
-        row["full_name"] = f"{row.get('first_name','')} {row.get('last_name','')}".strip()
-    row["work_experiences"] = json.dumps(rich.get("work_experiences") or fallback.get("work_experiences") or parse_jsonish(row.get("work_experiences"), []))
-    row["education"] = json.dumps(rich.get("education") or fallback.get("education") or parse_jsonish(row.get("education"), []))
-    if harmonic_raw:
-        row["harmonic_response"] = json.dumps(harmonic_raw)
-    if rapid_raw:
-        row["rapidapi_response"] = json.dumps(rapid_raw)
+
+    if rapid:
+        for key in [
+            "linkedin_url", "first_name", "last_name", "full_name", "headline", "summary",
+            "city", "state", "country", "location_raw", "profile_picture_url",
+            "current_title", "current_company",
+        ]:
+            value = rapid.get(key)
+            if value not in (None, ""):
+                row[key] = value
+        row["linkedin_url"] = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
+        if not row.get("full_name"):
+            row["full_name"] = f"{row.get('first_name','')} {row.get('last_name','')}".strip()
+        row["work_experiences"] = json.dumps(rapid.get("work_experiences") or parse_jsonish(row.get("work_experiences"), []))
+        row["education"] = json.dumps(rapid.get("education") or parse_jsonish(row.get("education"), []))
+        row["enriched_at"] = now_iso()
+        row["enrichment_provider"] = "rapidapi"
+        if rapid_raw:
+            row["rapidapi_response"] = json.dumps(rapid_raw)
+    else:
+        row["linkedin_url"] = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
+        row["enrichment_provider"] = row.get("enrichment_provider") or "existing_only"
     return normalize_people_row(row)
+
+
+def cached_profile_from_row(row: dict[str, Any], public_identifier: str, linkedin_url: str) -> dict[str, Any] | None:
+    for col in ("rapidapi_response_enriched", "rapidapi_response"):
+        parsed = parse_jsonish(row.get(col), None)
+        if isinstance(parsed, dict) and normalize_linkedin_profile(parsed).get("success") is True:
+            return parsed
+    return None
+
+
+def classify_rapidapi_cache_status(row: dict[str, str], profile_cache_dir: Path, refresh_cache: bool) -> tuple[str, str, Path | None]:
+    public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
+    cache_path = profile_cache_path(profile_cache_dir, public_identifier)
+    if refresh_cache:
+        return "miss", "refresh requested", cache_path
+    if cached_profile_from_row(row, public_identifier, row.get("linkedin_url") or "") is not None:
+        return "hit", "input rapidapi_response", cache_path
+    if read_usable_cached_profile(cache_path):
+        return "hit", "profile cache", cache_path
+    if cache_path and cache_path.exists():
+        return "miss", "cache entry unusable", cache_path
+    return "miss", "no usable cache", cache_path
+
+
+def count_rapidapi_cache_misses(cache_misses_csv: Path) -> int:
+    if not cache_misses_csv.exists():
+        return 0
+    return len(read_csv(cache_misses_csv))
 
 
 def load_ledger(path: Path) -> dict[str, Any]:
@@ -408,9 +453,13 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
     if limit:
         rows = rows[: int(limit)]
     queue: list[dict[str, Any]] = []
+    cache_hits: list[dict[str, Any]] = []
+    cache_misses: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
     route_counts: dict[str, int] = {}
+    profile_cache_dir = Path(ledger["input"].get("profile_cache_dir") or DEFAULT_BASE_DIR / "profile_cache_v2")
+    refresh_cache = bool(ledger["input"].get("refresh_cache"))
     for row in rows:
         route, reason = route_row(row, force=bool(ledger["input"].get("force")))
         row["enrichment_route"] = route
@@ -418,77 +467,111 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
         route_counts[route] = route_counts.get(route, 0) + 1
         if route == "linkedin_provider":
             queue.append(row)
+            status, cache_reason, cache_path = classify_rapidapi_cache_status(row, profile_cache_dir, refresh_cache)
+            cache_row = dict(row)
+            cache_row.update({"cache_status": status, "cache_path": str(cache_path or ""), "cache_reason": cache_reason})
+            if status == "hit":
+                cache_hits.append(cache_row)
+            else:
+                cache_misses.append(cache_row)
         elif route == "needs_resolution":
             unresolved.append(row)
         else:
             skipped.append(row)
     run_dir = Path(ledger["run_dir"])
     queue_path = run_dir / "linkedin_enrichment_queue.csv"
+    cache_hits_path = run_dir / "rapidapi_cache_hits.csv"
+    cache_misses_path = run_dir / "rapidapi_cache_misses.csv"
     unresolved_path = run_dir / "needs_resolution_queue.csv"
     skipped_path = run_dir / "skipped_enrichment.csv"
     write_csv(queue_path, QUEUE_COLUMNS, queue)
+    write_csv(cache_hits_path, CACHE_COLUMNS, cache_hits)
+    write_csv(cache_misses_path, CACHE_COLUMNS, cache_misses)
     write_csv(unresolved_path, QUEUE_COLUMNS, unresolved)
     write_csv(skipped_path, QUEUE_COLUMNS, skipped)
     ledger["artifacts"].update({
         "linkedin_enrichment_queue_csv": str(queue_path),
+        "rapidapi_cache_hits_csv": str(cache_hits_path),
+        "rapidapi_cache_misses_csv": str(cache_misses_path),
         "needs_resolution_queue_csv": str(unresolved_path),
         "skipped_enrichment_csv": str(skipped_path),
     })
     ledger["queue_count"] = len(queue)
-    return {"input_rows": len(rows), "queue_rows": len(queue), "unresolved_rows": len(unresolved), "skipped_rows": len(skipped), "route_counts": route_counts}
+    ledger["cache_hit_count"] = len(cache_hits)
+    ledger["paid_call_count"] = len(cache_misses)
+    return {
+        "input_rows": len(rows),
+        "queue_rows": len(queue),
+        "cache_hit_rows": len(cache_hits),
+        "paid_call_rows": len(cache_misses),
+        "unresolved_rows": len(unresolved),
+        "skipped_rows": len(skipped),
+        "route_counts": route_counts,
+    }
 
 
 def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
-    rows = read_csv(Path(ledger["artifacts"]["linkedin_enrichment_queue_csv"]))
+    hit_path = Path(ledger["artifacts"].get("rapidapi_cache_hits_csv") or "")
+    miss_path = Path(ledger["artifacts"].get("rapidapi_cache_misses_csv") or "")
+    rows = []
+    if hit_path.exists():
+        rows.extend(read_csv(hit_path))
+    if miss_path.exists():
+        rows.extend(read_csv(miss_path))
     if not rows:
         out_path = Path(ledger["run_dir"]) / "provider_enriched.csv"
         write_csv(out_path, PROVIDER_COLUMNS, [])
         ledger["artifacts"]["provider_enriched_csv"] = str(out_path)
-        return {"processed": 0, "output_file": str(out_path), "providers": {"harmonic": False, "rapidapi": False}}
-    harmonic_key = os.getenv("HARMONIC_API_KEY", "").strip()
-    rapid_key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
-    use_harmonic = ledger["input"].get("use_harmonic", True)
-    use_rapidapi = ledger["input"].get("use_rapidapi", True)
-    if not use_harmonic and not use_rapidapi:
-        raise PipelineFailed("At least one LinkedIn enrichment provider must be enabled")
-    if use_harmonic and not harmonic_key:
-        raise PipelineFailed("HARMONIC_API_KEY is not set")
-    if use_rapidapi and not rapid_key:
+        return {"processed": 0, "cached": 0, "fetched": 0, "output_file": str(out_path), "providers": {"rapidapi": False}}
+
+    paid_call_count = int(ledger.get("paid_call_count") or 0)
+    rapid_key = rapidapi_key()
+    if paid_call_count > 0 and not rapid_key:
         raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
+
+    profile_cache_dir = Path(ledger["input"].get("profile_cache_dir") or DEFAULT_BASE_DIR / "profile_cache_v2")
+    refresh_cache = bool(ledger["input"].get("refresh_cache"))
     raw_dir = Path(ledger["run_dir"]) / "raw_provider_responses"
     raw_dir.mkdir(parents=True, exist_ok=True)
     enriched: list[dict[str, Any]] = []
+    cached_count = 0
+    fetched_count = 0
     for row in rows:
         public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
         linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
         if not public_identifier and linkedin_url:
             public_identifier = extract_public_identifier(linkedin_url)
-        harmonic = {"status_code": "", "data": None, "error": ""}
-        rapid = {"status_code": "", "data": None, "error": ""}
-        if use_harmonic:
-            harmonic = harmonic_enrich(linkedin_url, harmonic_key)
+        is_cache_hit = row.get("cache_status") == "hit"
+        if is_cache_hit:
+            cached_payload = cached_profile_from_row(row, public_identifier, linkedin_url)
+            normalized = normalize_linkedin_profile(cached_payload) if cached_payload else None
+            if cached_payload and normalized and normalized.get("success") is True:
+                rapid = {"status_code": 200, "data": cached_payload, "error": "", "from_cache": True, "normalized_profile": normalized}
+            else:
+                rapid = rapidapi_profile(public_identifier, linkedin_url, "", cache_dir=profile_cache_dir, refresh_cache=False)
+            if not rapid.get("from_cache"):
+                raise PipelineFailed(f"usable RapidAPI cache was expected for {public_identifier or linkedin_url}")
+            cached_count += 1
+        else:
+            rapid = rapidapi_profile(public_identifier, linkedin_url, rapid_key, cache_dir=profile_cache_dir, refresh_cache=refresh_cache)
+            fetched_count += 1
             time.sleep(float(ledger["input"].get("sleep_seconds") or 0.0))
-        if use_rapidapi:
-            rapid = rapidapi_profile(public_identifier, linkedin_url, rapid_key)
-            time.sleep(float(ledger["input"].get("sleep_seconds") or 0.0))
-        write_json(raw_dir / f"{public_identifier or sha(linkedin_url or row.get('id',''))}.json", {"input": row, "harmonic": harmonic, "rapidapi": rapid})
+        write_json(raw_dir / f"{public_identifier or sha(linkedin_url or row.get('id',''))}.json", {"input": row, "rapidapi": rapid, "cache_hit": bool(rapid.get("from_cache"))})
         out = dict(row)
         out.update({
             "public_identifier": public_identifier,
             "linkedin_url": linkedin_url,
-            "harmonic_status_code": harmonic.get("status_code", ""),
-            "harmonic_error": harmonic.get("error", ""),
-            "harmonic_response": json.dumps(harmonic.get("data")) if harmonic.get("data") else row.get("harmonic_response", ""),
             "rapidapi_status_code": rapid.get("status_code", ""),
             "rapidapi_error": rapid.get("error", ""),
             "rapidapi_response_enriched": json.dumps(rapid.get("data")) if rapid.get("data") else "",
+            "rapidapi_from_cache": "true" if rapid.get("from_cache") else "false",
             "provider_enriched_at": now_iso(),
         })
         enriched.append(out)
     out_path = Path(ledger["run_dir"]) / "provider_enriched.csv"
     write_csv(out_path, PROVIDER_COLUMNS, enriched)
     ledger["artifacts"].update({"provider_enriched_csv": str(out_path), "raw_provider_responses_dir": str(raw_dir)})
-    return {"processed": len(enriched), "output_file": str(out_path), "providers": {"harmonic": use_harmonic, "rapidapi": use_rapidapi}}
+    return {"processed": len(enriched), "cached": cached_count, "fetched": fetched_count, "output_file": str(out_path), "providers": {"rapidapi": True}}
 
 
 def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
@@ -499,13 +582,12 @@ def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
         by_key[key] = row
     provider_path = Path(ledger["artifacts"].get("provider_enriched_csv") or ledger["artifacts"].get("linkedin_enrichment_queue_csv"))
     enriched_rows = read_csv(provider_path) if provider_path and provider_path.exists() else []
+    company_lookup = build_company_identity_lookup([Path(p) for p in ledger["input"].get("company_corpus_jsonl", [])])
     for row in enriched_rows:
-        harmonic_raw = json.loads(row["harmonic_response"]) if row.get("harmonic_response") else None
         rapid_raw = json.loads(row["rapidapi_response_enriched"]) if row.get("rapidapi_response_enriched") else (json.loads(row["rapidapi_response"]) if row.get("rapidapi_response") else None)
         public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
-        harmonic = normalize_harmonic(harmonic_raw, public_identifier, row.get("linkedin_url", ""))
-        rapid = normalize_rapidapi(rapid_raw, public_identifier, row.get("linkedin_url", ""))
-        merged = merge_provider_profile(row, harmonic, rapid, harmonic_raw, rapid_raw)
+        rapid = normalize_rapidapi(rapid_raw, public_identifier, row.get("linkedin_url", ""), company_lookup)
+        merged = merge_provider_profile(row, rapid, rapid_raw)
         key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or sha(json.dumps(row, sort_keys=True))
         by_key[key] = merged
     output = Path(ledger["run_dir"]) / "people_enriched.csv"
@@ -526,13 +608,7 @@ def execute_step(ledger: dict[str, Any], step_id: str) -> dict[str, Any]:
 
 
 def ensure_keys(ledger: dict[str, Any]) -> None:
-    use_harmonic = ledger["input"].get("use_harmonic", True)
-    use_rapidapi = ledger["input"].get("use_rapidapi", True)
-    if not use_harmonic and not use_rapidapi:
-        raise PipelineFailed("At least one LinkedIn enrichment provider must be enabled")
-    if use_harmonic and not os.getenv("HARMONIC_API_KEY"):
-        raise PipelineFailed("HARMONIC_API_KEY is not set")
-    if use_rapidapi and not (os.getenv("RAPIDAPI_LINKEDIN_KEY") or os.getenv("RAPIDAPI_KEY")):
+    if int(ledger.get("paid_call_count") or 0) > 0 and not rapidapi_key():
         raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
 
 
@@ -547,10 +623,13 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
             emit({"status": "completed", "ledger": str(ledger_path), "run_dir": ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})})
             return 0
         try:
-            if step_id == "enrich_linkedin" and int(ledger.get("queue_count") or 0) > 0 and not is_approved(ledger, step_id):
+            paid_call_count = int(ledger.get("paid_call_count") or 0)
+            if step_id == "enrich_linkedin" and paid_call_count > 0 and ledger.get("input", {}).get("use_rapidapi") is False:
+                raise PipelineFailed("RapidAPI provider is required for enrich_people")
+            if step_id == "enrich_linkedin" and paid_call_count > 0 and not is_approved(ledger, step_id):
                 ensure_keys(ledger)
-                block_for_approval(ledger_path, ledger, step_id, f"Run paid LinkedIn provider enrichment for {ledger.get('queue_count')} people?")
-            if step_id == "enrich_linkedin" and int(ledger.get("queue_count") or 0) > 0:
+                block_for_approval(ledger_path, ledger, step_id, f"Run paid RapidAPI LinkedIn enrichment for {paid_call_count} people?")
+            if step_id == "enrich_linkedin" and paid_call_count > 0:
                 ensure_keys(ledger)
             mark_step(ledger, step_id, "running")
             save_ledger(ledger_path, ledger)
@@ -590,8 +669,9 @@ def command_run(args: argparse.Namespace) -> int:
             "input_csv": str(Path(args.input)),
             "limit": args.limit,
             "force": args.force,
-            "use_harmonic": not args.no_harmonic,
-            "use_rapidapi": not args.no_rapidapi,
+            "profile_cache_dir": str(Path(args.profile_cache_dir)),
+            "refresh_cache": args.refresh_cache,
+            "company_corpus_jsonl": [str(Path(p)) for p in (args.company_corpus_jsonl or [])],
             "sleep_seconds": args.sleep_seconds,
         },
         "steps": {},
@@ -636,15 +716,15 @@ def command_approve(args: argparse.Namespace) -> int:
 
 def command_status(args: argparse.Namespace) -> int:
     ledger = load_ledger(Path(args.ledger))
-    emit({"status": ledger.get("status", "unknown"), "blocked": ledger.get("blocked"), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {}), "queue_count": ledger.get("queue_count")})
+    emit({"status": ledger.get("status", "unknown"), "blocked": ledger.get("blocked"), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {}), "queue_count": ledger.get("queue_count"), "cache_hit_count": ledger.get("cache_hit_count"), "paid_call_count": ledger.get("paid_call_count")})
     return 0
 
 
 def command_check_keys(_: argparse.Namespace) -> int:
     emit({
         "status": "ok",
+        "provider": "rapidapi",
         "keys_present": {
-            "HARMONIC_API_KEY": bool(os.getenv("HARMONIC_API_KEY", "").strip()),
             "RAPIDAPI_KEY": bool(os.getenv("RAPIDAPI_KEY", "").strip()),
             "RAPIDAPI_LINKEDIN_KEY": bool(os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip()),
         },
@@ -662,8 +742,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--run-id")
     run.add_argument("--force", action="store_true", help="Re-enrich rows even if they appear complete")
     run.add_argument("--force-ledger", action="store_true", help="Overwrite an active ledger")
-    run.add_argument("--no-harmonic", action="store_true")
-    run.add_argument("--no-rapidapi", action="store_true")
+    run.add_argument("--profile-cache-dir", default=str(DEFAULT_BASE_DIR / "profile_cache_v2"))
+    run.add_argument("--refresh-cache", action="store_true", help="Force RapidAPI calls even when a successful local cache entry exists")
+    run.add_argument("--company-corpus-jsonl", action="append", default=[])
     run.add_argument("--sleep-seconds", type=float, default=0.0)
     run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
     run.set_defaults(func=command_run)
