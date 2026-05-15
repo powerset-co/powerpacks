@@ -3,8 +3,8 @@
 
 Calls an OpenAI-compatible chat completion endpoint once per input item,
 in parallel under a configurable concurrency limit. Same shape as the
-production `SEARCH_V2_RERANK_MAX_CONCURRENT=400` path in network-search-api,
-but Powerpacks-local and stdlib-only.
+production configurable fan-out path in network-search-api, but
+Powerpacks-local and stdlib-only.
 
 Differences from `llm_filter_candidates`:
 - Generic per-item prompts (not tied to task_state shape)
@@ -66,7 +66,8 @@ from typing import Any, Optional
 
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-4o-mini")
-DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", "50"))
+DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", "200"))
+DEFAULT_ESTIMATE_SECONDS = int(os.environ.get("LLM_RERANK_ESTIMATE_SECONDS", "180"))
 
 
 SYSTEM_PROMPT = """You are an expert recruiter reranking people-search results.
@@ -392,6 +393,15 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+
+def estimate_rerank_seconds(item_count: int, concurrency: int) -> int:
+    """Return a conservative user-facing runtime estimate for LLM reranking."""
+    if item_count <= 0:
+        return 0
+    concurrency = max(1, concurrency)
+    waves = (item_count + concurrency - 1) // concurrency
+    return max(DEFAULT_ESTIMATE_SECONDS, waves * 30)
+
 def append_event(state_path: Path, event: dict[str, Any]) -> None:
     event_path = state_path.with_suffix(state_path.suffix + ".events.jsonl")
     event_path.parent.mkdir(parents=True, exist_ok=True)
@@ -705,12 +715,15 @@ def main() -> int:
         print("error: no input items", file=sys.stderr)
         return 2
 
+    estimate_seconds = estimate_rerank_seconds(len(items), args.concurrency)
+
     if args.dry_run:
         for item in items:
             prompt = build_user_prompt(args.query, args.traits, item)
             sys.stderr.write(f"--- {item.id} ---\n{prompt}\n\n")
         sys.stderr.write(
-            f"rerank: dry-run items={len(items)} concurrency={args.concurrency} profile_scope=full\n"
+            f"rerank: dry-run items={len(items)} concurrency={args.concurrency} "
+            f"estimated={estimate_seconds}s profile_scope=full\n"
         )
         return 0
 
@@ -718,6 +731,10 @@ def main() -> int:
         print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
         return 2
 
+    sys.stderr.write(
+        f"rerank: starting items={len(items)} concurrency={args.concurrency} "
+        f"estimated={estimate_seconds}s note=LLM filtering+reranking can take 2-3 minutes; do not cancel while this step is running\n"
+    )
     started = time.monotonic()
     results = asyncio.run(
         rerank_all(
@@ -759,6 +776,7 @@ def main() -> int:
         output = {
             "model": args.model,
             "concurrency": args.concurrency,
+            "estimated_seconds": estimate_seconds,
             "ranked_count": len(results),
             "ranked_candidate_ids": ordered_ids,
             "profile_scope": "full",
@@ -774,7 +792,7 @@ def main() -> int:
     failed = len(results) - ok
     sys.stderr.write(
         f"rerank: items={len(results)} concurrency={args.concurrency} "
-        f"ok={ok} failed={failed} elapsed={elapsed:.2f}s\n"
+        f"ok={ok} failed={failed} elapsed={elapsed:.2f}s estimated={estimate_seconds}s\n"
     )
     return 0 if failed == 0 else 1
 

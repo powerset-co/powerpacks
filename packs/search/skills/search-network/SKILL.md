@@ -25,7 +25,7 @@ The agent should:
   about
 - decide whether to search directly, count first, or generate slices
 - show one compact search preview after extraction and ask the user to
-  `execute` or `modify`
+  `execute`, `modify`, or `search only`
 - after `execute`, run retrieval, hydration, LLM filtering/reranking, and
   persistence without a second approval gate
 - review the candidate frontier after each step
@@ -34,6 +34,8 @@ The agent should:
 - run conservative LLM filtering by default after hydration using the handoff path
 - run the async `llm_rerank_candidates` primitive by default after filtering,
   producing `query_results.csv` with reasoning, confidence, and trait scores
+- expect LLM filtering + reranking to legitimately take about 2-3 minutes for
+  large searches; do not kill the run just because this step is quiet
 - persist result artifacts in reranked order for refinement and interoperability
 
 ## Skill Composition
@@ -127,6 +129,11 @@ execution to a worker sub-agent. The only chat-visible handoff line should be
 exactly:
 
 `Starting search through sub-agent.`
+
+LLM filtering + reranking can legitimately take about 2-3 minutes. Treat the
+primitive's starting/estimate line as progress, keep the worker alive, and do
+not restart or cancel solely because no candidates are printed while the LLM
+fan-out is running.
 
 The main chat should show only required user actions and the final compact
 result summary with one artifact directory, one user-facing found count, and top

@@ -462,3 +462,41 @@ class DryRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RerankEstimateTests(unittest.TestCase):
+    def test_estimate_has_minimum_and_scales_by_waves(self):
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_est", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_est"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        self.assertEqual(mod.estimate_rerank_seconds(0, 200), 0)
+        self.assertEqual(mod.estimate_rerank_seconds(100, 200), 180)
+        self.assertEqual(mod.estimate_rerank_seconds(1400, 200), 210)
+
+    def test_dry_run_prints_estimate_and_concurrency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "candidates.jsonl"
+            path.write_text('{"id":"p1","title":"Engineer"}\n')
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(RERANK_PY),
+                    "--in",
+                    str(path),
+                    "--query",
+                    "engineers",
+                    "--dry-run",
+                    "--concurrency",
+                    "25",
+                ],
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("rerank: dry-run items=1 concurrency=25 estimated=180s", proc.stderr)
