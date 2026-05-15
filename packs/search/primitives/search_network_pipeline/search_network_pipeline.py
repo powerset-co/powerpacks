@@ -15,6 +15,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", "200"))
 
 class Blocked(Exception):
     def __init__(self, payload: dict[str, Any], code: int = 20):
@@ -218,10 +219,18 @@ def run_pipeline(args) -> dict[str, Any]:
     if not args.search_only:
         payload={"state":str(state),"model":args.model,"mode":"filter_rerank"}; aid=approval_id("llm",payload)
         if not is_approved(l,aid) and not args.confirm_llm and not args.execute_approved:
-            block(lp,l,args,"llm","llm_filter_rerank",payload,"Run LLM filter + rerank for this search? This may spend OpenAI credits.")
+            block(
+                lp,
+                l,
+                args,
+                "llm",
+                "llm_filter_rerank",
+                payload,
+                "Run LLM filter + rerank for this search? This may spend OpenAI credits and usually takes 2-3 minutes.",
+            )
         for step,cmd in [
             ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--write-state"]),
-            ("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--write-state"]),
+            ("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--write-state"]),
         ]:
             if done(l,step) and not args.force: continue
             mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
@@ -250,7 +259,7 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_run(p):
-    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--rerank-concurrency",type=int,default=200); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
+    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; tune lower for lower OpenAI tiers (tier 5 usually supports 100-200)"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
 
 def main():
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)

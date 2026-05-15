@@ -25,15 +25,19 @@ The agent should:
   about
 - decide whether to search directly, count first, or generate slices
 - show one compact search preview after extraction and ask the user to
-  `execute` or `modify`
+  `execute`, `modify`, or `search only`
 - after `execute`, run retrieval, hydration, LLM filtering/reranking, and
   persistence without a second approval gate
 - review the candidate frontier after each step
 - hydrate the full candidate frontier through Postgres into local JSONL handoff
   files; do not pass large profile blobs through chat or command arguments
 - run conservative LLM filtering by default after hydration using the handoff path
+  and the cheaper filter model (`POWERPACKS_LLM_FILTER_MODEL`, default mini)
 - run the async `llm_rerank_candidates` primitive by default after filtering,
+  using the stronger configured rerank model (`--model`, default `gpt-5.4`) and
   producing `query_results.csv` with reasoning, confidence, and trait scores
+- expect LLM filtering + reranking to legitimately take about 2-3 minutes for
+  large searches; do not kill the run just because this step is quiet
 - persist result artifacts in reranked order for refinement and interoperability
 
 ## Skill Composition
@@ -127,6 +131,11 @@ execution to a worker sub-agent. The only chat-visible handoff line should be
 exactly:
 
 `Starting search through sub-agent.`
+
+LLM filtering + reranking can legitimately take about 2-3 minutes. Treat the
+primitive's starting/estimate line as progress, keep the worker alive, and do
+not restart or cancel solely because no candidates are printed while the LLM
+fan-out is running.
 
 The main chat should show only required user actions and the final compact
 result summary with one artifact directory, one user-facing found count, and top
@@ -227,8 +236,8 @@ search.
     full hydrated profile. Do not dump filter scores/prompts unless debugging; then
     pass `--dump-debug`. Use `--allow-partial-hydration` only when the user
     explicitly accepts partial review.
-14. Run async LLM reranking by default:
-    `llm_rerank_candidates --state "$STATE" --concurrency 200 --write-state`.
+14. Run async LLM reranking by default with the stronger configured model:
+    `llm_rerank_candidates --state "$STATE" --concurrency 200 --model gpt-5.4 --write-state`.
     Rerank is the final ordering pass and reads the full hydrated profile from
     `profiles_path`. The primary output is `llm_rerank_candidates/query_results.csv`; columns must match the app
     query-results schema: `conversation_id`, `query`, `person_id`,

@@ -61,6 +61,24 @@ class SearchNetworkPipelineTests(unittest.TestCase):
 
         self.assertEqual(rc, 0)
 
+    def test_rerank_concurrency_default_comes_from_module_default(self):
+        parser = search.argparse.ArgumentParser()
+        search.add_run(parser)
+        args = parser.parse_args([])
+
+        self.assertEqual(search.DEFAULT_RERANK_CONCURRENCY, args.rerank_concurrency)
+
+    def test_llm_approval_message_sets_time_expectation(self):
+        src = inspect.getsource(search.run_pipeline)
+
+        self.assertIn("usually takes 2-3 minutes", src)
+
+    def test_orchestrator_passes_model_to_reranker(self):
+        src = inspect.getsource(search.run_pipeline)
+
+        self.assertIn('"--model",args.model', src)
+        self.assertLess(src.index('"llm_filter_candidates"'), src.index('"llm_rerank_candidates"'))
+
 class SalesNavPipelineTests(unittest.TestCase):
     def test_sales_block_tool_call_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
