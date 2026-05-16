@@ -111,6 +111,9 @@ class TwitterNetworkImportTests(unittest.TestCase):
                 self.assertEqual(rows[0]["twitter_handle"], "founder")
                 self.assertEqual(rows[0]["public_identifier"], "ada-lovelace")
                 self.assertEqual(rows[0]["current_company"], "Analytical Engines")
+                self.assertEqual(rows[0]["source_channels"], "twitter")
+                self.assertIn("linkedin_validated.csv", rows[0]["source_artifacts"])
+                self.assertIn("moe_verdict", rows[0]["twitter_response"])
             finally:
                 os.chdir(cwd)
 
