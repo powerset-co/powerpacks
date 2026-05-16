@@ -151,6 +151,38 @@ def stage_int(value: Any) -> int:
     return FUNDING_STAGE_MAP.get(clean(value).upper(), 0)
 
 
+def slugify(value: Any) -> str:
+    text = clean(value).lower()
+    text = re.sub(r"^https?://(www\.)?", "", text)
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text or "unknown"
+
+
+def linkedin_slug(url: Any, kind: str) -> str:
+    text = clean(url).lower().rstrip("/")
+    match = re.search(rf"linkedin\.com/(?:[^/]+/)?{kind}/([^/?#]+)", text)
+    if not match:
+        match = re.search(rf"linkedin\.com/{kind}/([^/?#]+)", text)
+    return match.group(1) if match else ""
+
+
+def company_local_id(row: dict[str, Any]) -> str:
+    slug = linkedin_slug(row.get("linkedin_url"), "company")
+    if slug:
+        return f"linkedin:company:{slug}"
+    domain = slugify(row.get("website_domain"))
+    if domain != "unknown":
+        return f"domain:{domain}"
+    return f"company-name:{slugify(row.get('company_name'))}"
+
+
+def school_local_id(row: dict[str, Any]) -> str:
+    slug = linkedin_slug(row.get("linkedin_url"), "school")
+    if slug:
+        return f"linkedin:school:{slug}"
+    return f"school-name:{slugify(row.get('school_name'))}"
+
+
 def load_birth_years(path: Path, person_ids: set[str]) -> tuple[dict[str, int], int]:
     out: dict[str, int] = {}; scanned = 0
     for row in read_jsonl(path):
@@ -382,8 +414,20 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
 
     company_corpus, company_scanned = load_by_ids(seed / "company/companies_corpus_v3.jsonl", company_ids, "company_urn")
     company_embeddings, company_emb_scanned = load_by_ids(seed / "company/company_embeddings_v3.jsonl", company_ids, "company_urn")
-    company_rows_seed = [company_corpus[cid] for cid in sorted(company_corpus)]
-    company_embedding_rows = [company_embeddings[cid] for cid in sorted(company_embeddings)]
+    company_id_map = {old_id: company_local_id(row) for old_id, row in company_corpus.items()}
+    company_rows_seed = []
+    for old_id in sorted(company_corpus):
+        row = dict(company_corpus[old_id])
+        row["company_urn"] = company_id_map[old_id]
+        row["investor_urns"] = [company_id_map[v] for v in (clean(item) for item in listify(row.get("investor_urns"))) if v in company_id_map]
+        company_rows_seed.append(row)
+    company_embedding_rows = []
+    for old_id in sorted(company_embeddings):
+        if old_id not in company_id_map:
+            continue
+        row = dict(company_embeddings[old_id])
+        row["company_urn"] = company_id_map[old_id]
+        company_embedding_rows.append(row)
     write_jsonl(run_dir / "company/companies_corpus_v3.jsonl", company_rows_seed)
     write_jsonl(run_dir / "company/company_embeddings_v3.jsonl", company_embedding_rows)
     write_stage_chunks(run_dir / "company/enrichment_checkpoints", "companies", company_rows_seed, args.checkpoint_every, "company_urn", "input-classifications", run_dir / "company/companies_corpus_v3.jsonl")
@@ -426,7 +470,7 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
                 "id": clean(row.get("id")), "position_id": clean(row.get("id")), "person_id": base_id, "base_id": base_id,
                 "vector": emb.get("dense_embedding"), "position_title": raw_title,
                 "word_tokens": word_tokenize(word_text), "char_tokens": char_tokenize(word_text), "d2q_tokens": word_tokenize(" ".join(d2q_parts)), "phrase_tokens": phrase_tokenize(word_text),
-                "seniority_band": clean(dense.get("seniority_band") or row.get("seniority_band")), "company_id": clean(row.get("company_id")),
+                "seniority_band": clean(dense.get("seniority_band") or row.get("seniority_band")), "company_id": company_id_map.get(clean(row.get("company_id")), ""),
                 "city": clean(row.get("city")), "state": clean(row.get("state")), "country": clean(row.get("country")), "macro_region": clean(row.get("macro_region")),
                 "is_current": bool(row.get("is_current")), "total_years_experience": float(row.get("total_years_experience") or 0),
                 "start_date_epoch": epoch(row.get("start_date")), "end_date_epoch": epoch(row.get("end_date")), "tenure_years": float(row.get("tenure_years") or 0),
@@ -446,21 +490,26 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     summaries_count = write_jsonl(records_dir / "summaries.records.jsonl", summary_records())
 
     def company_records() -> Iterable[dict[str, Any]]:
-        for urn in sorted(company_ids):
-            row = company_corpus.get(urn); emb = company_embeddings.get(urn, {}).get("embedding")
-            if not row or emb is None:
+        for old_urn in sorted(company_ids):
+            row = company_corpus.get(old_urn); emb = company_embeddings.get(old_urn, {}).get("embedding")
+            local_urn = company_id_map.get(old_urn, "")
+            if not row or emb is None or not local_urn:
                 continue
             name = clean(row.get("company_name")); aliases = [clean(v) for v in listify(row.get("name_aliases")) if clean(v)]
             d2q = clean(row.get("d2q_text")) or " ".join(clean(v) for v in listify(row.get("doc2query")) if clean(v))
-            yield {"id": urn, "company_urn": urn, "vector": emb, "company_name": name, "aliases": aliases, "name_aliases_text": " ".join([name, *aliases]).strip(), "semantic_text": clean(row.get("semantic_text")), "entity_sector_text": clean(row.get("word_text")), "word_text": clean(row.get("word_text")), "doc2query_text": d2q, "doc2query": listify(row.get("doc2query")), "description": clean(row.get("description")), "city": clean(row.get("city")), "state": clean(row.get("state")), "country": clean(row.get("country")), "metro_area": clean(row.get("metro_area")), "macro_region": clean(row.get("macro_region")), "headcount": int(row.get("headcount") or 0), "funding_stage": stage_int(row.get("funding_stage")), "funding_total": float(row.get("funding_total") or 0), "last_funding_at": parse_date_int(row.get("last_funding_at")), "valuation": float(row.get("valuation") or 0), "founded_year": int(row.get("founded_year") or 0), "investor_urns": listify(row.get("investor_urns")), "customer_type": parse_customer_type(row.get("customer_type")), "entity_types": listify(row.get("entity_types")), "sector_types": listify(row.get("sector_types")), "technology_types": listify(row.get("technology_types")), "accelerators": listify(row.get("accelerators")), "yc_batches": listify(row.get("yc_batches")), "linkedin_url": clean(row.get("linkedin_url")), "logo_url": clean(row.get("logo_url")), "website_domain": clean(row.get("website_domain")), "allowed_operator_ids": [operator_id]}
+            yield {"id": local_urn, "company_urn": local_urn, "vector": emb, "company_name": name, "aliases": aliases, "name_aliases_text": " ".join([name, *aliases]).strip(), "semantic_text": clean(row.get("semantic_text")), "entity_sector_text": clean(row.get("word_text")), "word_text": clean(row.get("word_text")), "doc2query_text": d2q, "doc2query": listify(row.get("doc2query")), "description": clean(row.get("description")), "city": clean(row.get("city")), "state": clean(row.get("state")), "country": clean(row.get("country")), "metro_area": clean(row.get("metro_area")), "macro_region": clean(row.get("macro_region")), "headcount": int(row.get("headcount") or 0), "funding_stage": stage_int(row.get("funding_stage")), "funding_total": float(row.get("funding_total") or 0), "last_funding_at": parse_date_int(row.get("last_funding_at")), "valuation": float(row.get("valuation") or 0), "founded_year": int(row.get("founded_year") or 0), "investor_urns": [company_id_map[v] for v in (clean(item) for item in listify(row.get("investor_urns"))) if v in company_id_map], "customer_type": parse_customer_type(row.get("customer_type")), "entity_types": listify(row.get("entity_types")), "sector_types": listify(row.get("sector_types")), "technology_types": listify(row.get("technology_types")), "accelerators": listify(row.get("accelerators")), "yc_batches": listify(row.get("yc_batches")), "linkedin_url": clean(row.get("linkedin_url")), "logo_url": clean(row.get("logo_url")), "website_domain": clean(row.get("website_domain")), "allowed_operator_ids": [operator_id]}
 
     companies_count = write_jsonl(records_dir / "companies.records.jsonl", company_records())
 
     people_education, people_education_scanned = load_people_education(seed / "education/people_education.jsonl", selected_person_ids, args.education_limit)
     school_ids = {clean(row.get("education_id")) for row in people_education if clean(row.get("education_id"))}
     schools, parent, schools_scanned = load_schools(seed / "education/schools_corpus.jsonl", school_ids)
-    schools_count = write_jsonl(records_dir / "schools.records.jsonl", _school_rows(schools, parent, school_ids, operator_id))
-    education_count = write_jsonl(records_dir / "education.records.jsonl", _education_rows(people_education, schools, parent, operator_id))
+    school_id_map = {old_id: school_local_id(row) for old_id, row in schools.items()}
+    for child, canonical in parent.items():
+        if canonical in school_id_map:
+            school_id_map[child] = school_id_map[canonical]
+    schools_count = write_jsonl(records_dir / "schools.records.jsonl", _school_rows(schools, parent, school_ids, school_id_map, operator_id))
+    education_count = write_jsonl(records_dir / "education.records.jsonl", _education_rows(people_education, schools, parent, school_id_map, operator_id))
 
     for name in ["people", "summaries", "companies", "education", "schools"]:
         src = records_dir / f"{name}.records.jsonl"
@@ -471,21 +520,24 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     vector_counts = {"people": people_count, "summaries": summaries_count, "companies": companies_count}
     write_json(run_dir / "vectors/checkpoint.json", {"status": "completed", "provider": "input-embeddings", "dimension": 1536, "counts": vector_counts, "updated_at": now_iso()})
 
-    stats = {"status": "ok", "mode": mode, "operator_id": operator_id, "operator_email": operator_email, "run_dir": str(run_dir), "counts": {"people_records": people_count, "summaries_records": summaries_count, "companies_records": companies_count, "education_records": education_count, "schools_records": schools_count, "selected_people": len(selected_person_ids), "selected_positions": len(flattened), "roles": len(role_dense_rows), "role_embeddings": len(role_embedding_rows)}, "scanned_rows": {"flattened_people": flattened_scanned, "roles_dense": role_dense_scanned, "role_embeddings": role_emb_scanned, "companies_corpus": company_scanned, "company_embeddings": company_emb_scanned, "unified_person_csv": unified_scanned, "summary_embeddings": summary_emb_scanned, "tech_skills": tech_scanned, "people_education": people_education_scanned, "schools": schools_scanned}, "duckdb": duckdb_payload.get("duckdb"), "duckdb_tables": duckdb_payload.get("tables", {}), "elapsed_seconds": round(time.time() - started, 3)}
+    stats = {"status": "ok", "mode": mode, "operator_id": operator_id, "operator_email": operator_email, "run_dir": str(run_dir), "id_scheme": "linkedin_url_first_no_harmonic_ids", "counts": {"people_records": people_count, "summaries_records": summaries_count, "companies_records": companies_count, "education_records": education_count, "schools_records": schools_count, "selected_people": len(selected_person_ids), "selected_positions": len(flattened), "roles": len(role_dense_rows), "role_embeddings": len(role_embedding_rows)}, "id_backfill_needed": {"companies_without_linkedin_url": sum(1 for row in company_corpus.values() if not clean(row.get("linkedin_url"))), "schools_without_linkedin_url": sum(1 for row in schools.values() if not clean(row.get("linkedin_url")))}, "scanned_rows": {"flattened_people": flattened_scanned, "roles_dense": role_dense_scanned, "role_embeddings": role_emb_scanned, "companies_corpus": company_scanned, "company_embeddings": company_emb_scanned, "unified_person_csv": unified_scanned, "summary_embeddings": summary_emb_scanned, "tech_skills": tech_scanned, "people_education": people_education_scanned, "schools": schools_scanned}, "duckdb": duckdb_payload.get("duckdb"), "duckdb_tables": duckdb_payload.get("tables", {}), "elapsed_seconds": round(time.time() - started, 3)}
     write_json(stats_dir / "bootstrap_from_aleph.json", stats)
     return stats
 
 
-def _school_rows(schools: dict[str, dict[str, Any]], parent: dict[str, str], school_ids: set[str], operator_id: str) -> Iterable[dict[str, Any]]:
-    for sid in sorted({parent.get(sid, sid) for sid in school_ids}):
-        row = schools.get(sid)
-        if not row:
+def _school_rows(schools: dict[str, dict[str, Any]], parent: dict[str, str], school_ids: set[str], school_id_map: dict[str, str], operator_id: str) -> Iterable[dict[str, Any]]:
+    emitted: set[str] = set()
+    for old_sid in sorted({parent.get(sid, sid) for sid in school_ids}):
+        row = schools.get(old_sid)
+        new_sid = school_id_map.get(old_sid, "")
+        if not row or not new_sid or new_sid in emitted:
             continue
+        emitted.add(new_sid)
         name = clean(row.get("school_name"))
-        yield {"id": sid, "canonical_education_id": sid, "school_name": name, "school_name_tokens": word_tokenize(name), "display_value": name, "person_count": int(row.get("person_count") or 0), "linkedin_url": clean(row.get("linkedin_url")), "logo_url": clean(row.get("logo_url")), "allowed_operator_ids": [operator_id]}
+        yield {"id": new_sid, "canonical_education_id": new_sid, "school_name": name, "school_name_tokens": word_tokenize(name), "display_value": name, "person_count": int(row.get("person_count") or 0), "linkedin_url": clean(row.get("linkedin_url")), "logo_url": clean(row.get("logo_url")), "allowed_operator_ids": [operator_id]}
 
 
-def _education_rows(people_education: list[dict[str, Any]], schools: dict[str, dict[str, Any]], parent: dict[str, str], operator_id: str) -> Iterable[dict[str, Any]]:
+def _education_rows(people_education: list[dict[str, Any]], schools: dict[str, dict[str, Any]], parent: dict[str, str], school_id_map: dict[str, str], operator_id: str) -> Iterable[dict[str, Any]]:
     seen: set[tuple[str, str]] = set()
     for row in people_education:
         person_id = clean(row.get("person_id")); education_id = clean(row.get("education_id"))
@@ -494,7 +546,9 @@ def _education_rows(people_education: list[dict[str, Any]], schools: dict[str, d
         seen.add((person_id, education_id))
         canonical = parent.get(education_id, education_id)
         school = schools.get(canonical) or schools.get(education_id) or {}
-        yield {"id": str(uuid.uuid5(EDU_NAMESPACE, f"pe:{person_id}:{education_id}")), "person_id": person_id, "base_id": person_id, "education_id": education_id, "canonical_education_id": canonical, "school_name": clean(school.get("school_name")), "degree": clean(row.get("degree")), "degree_normalized": clean(row.get("degree_normalized")), "field_of_study": clean(row.get("field_of_study")), "start_year": int(row.get("start_year") or 0), "end_year": int(row.get("end_year") or 0), "graduation_year": int(row.get("graduation_year") or 0), "allowed_operator_ids": [operator_id]}
+        local_education_id = school_id_map.get(education_id) or school_id_map.get(canonical) or f"school-name:{slugify(row.get('school_name'))}"
+        local_canonical_id = school_id_map.get(canonical) or local_education_id
+        yield {"id": str(uuid.uuid5(EDU_NAMESPACE, f"pe:{person_id}:{local_education_id}")), "person_id": person_id, "base_id": person_id, "education_id": local_education_id, "canonical_education_id": local_canonical_id, "school_name": clean(school.get("school_name") or row.get("school_name")), "degree": clean(row.get("degree")), "degree_normalized": clean(row.get("degree_normalized")), "field_of_study": clean(row.get("field_of_study")), "start_year": int(row.get("start_year") or 0), "end_year": int(row.get("end_year") or 0), "graduation_year": int(row.get("graduation_year") or 0), "allowed_operator_ids": [operator_id]}
 
 
 def run_duckdb_loader(run_dir: Path, flavor: str, operator_id: str, operator_email: str) -> dict[str, Any]:
