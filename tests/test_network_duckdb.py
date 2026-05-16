@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts/build-network-duckdb.py"
+SCRIPT = ROOT / "packs/ingestion/primitives/build_network_duckdb/build_network_duckdb.py"
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
