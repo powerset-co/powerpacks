@@ -12,22 +12,6 @@ only local SQLite metadata (`sources`, `participants`, `messages`,
 MIME, or attachments. No Gmail API, DVC, paid APIs, uploads, Harmonic
 enrichment, or production source seeding run locally.
 
-## Main loop
-
-```bash
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py run \
-  --email jane@example.com \
-  --name "Jane Example" \
-  --account-email me@gmail.com \
-  --account-id gmail-account-1
-
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py status
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py continue
-```
-
-The command contract is still `run` / `continue` / `approve` so future paid or
-OAuth-backed stages can gate cleanly, but current V1 has no approval gates.
-
 ## msgvault metadata import
 
 After syncing Gmail with [msgvault](https://github.com/wesm/msgvault), import
@@ -45,24 +29,15 @@ include both legacy Gmail CSV artifacts and canonical `people.csv` with
 Automated/noreply addresses are filtered by default; pass `--include-automated`
 to keep them.
 
-## Server-linked Gmail accounts
+Powerpacks no longer exposes the old Powerset-hosted Gmail OAuth/sync commands
+(`accounts`, `connect`, or backend gmail-sync). Use msgvault for Gmail sync and
+then import from the local msgvault DB.
 
-Use the local Powerset token to list Gmail accounts already connected in the
-Powerset app:
+## Legacy one-person seed
 
-```bash
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py accounts
-```
-
-Open the existing browser OAuth flow:
-
-```bash
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py connect
-```
-
-`connect` opens `https://search.powerset.dev/gmail`. It does not put the local
-Powerpacks bearer token in the URL. The browser app handles Auth0, starts Google
-OAuth, and stores Google tokens server-side in encrypted Supabase tables.
+The `run` / `continue` / `approve` command contract remains only as a local
+one-person seed for deterministic tests/manual fixtures. Do not use it for real
+Gmail sync.
 
 ## Artifacts
 
@@ -81,11 +56,9 @@ Run artifacts live under `.powerpacks/network-import/gmail/<run-id>/`:
 
 ## Notes
 
-- Multiple Gmail accounts are modeled as separate local runs with different
-  `--account-email` / `--account-id`; merging is a future local stage.
-- OpenAI domain parse is not needed for this one-person V1; the local heuristic
-  derives `example.com -> Example`.
+- Multiple Gmail accounts are modeled as separate msgvault source accounts;
+  pass `--account-email` to filter one account.
+- OpenAI domain parse is not needed; the local heuristic derives
+  `example.com -> Example` only for the legacy one-person seed.
 - EnrichLayer/RapidAPI/Parallel/Harmonic are intentionally not assumed present.
-- Future Gmail sync should be implemented inside this pack, likely via Powerset
-  OAuth + scoped metadata exports; agents should not rely on raw refresh tokens
-  being available locally.
+- Future Gmail sync should remain msgvault-backed unless explicitly redesigned.

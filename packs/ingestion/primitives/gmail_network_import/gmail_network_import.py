@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Resumable local Gmail network-import orchestrator.
+"""Local Gmail network import from msgvault metadata.
 
-V1 is intentionally small and safe: one person, local `.powerpacks/` artifacts,
-no Gmail API, no paid APIs, no DVC, no uploads, no production writes.
+The supported sync path is msgvault's local SQLite archive. This primitive reads
+only msgvault metadata tables and writes Powerpacks-local artifacts. It never
+reads Gmail message bodies, subjects, snippets, raw MIME, or attachments, and it
+does not use Powerset-hosted Gmail OAuth/sync endpoints.
 
-The agent-facing contract mirrors messages/import_contacts_pipeline:
-
-    run       start a fresh run and proceed until done or a future gate
-    continue  resume from the ledger
-    approve   approve the currently blocked future gate
-
-Stdlib-only. No Gmail message bodies or subjects are read or written.
+The legacy one-person local seed remains for deterministic tests/manual seeds;
+real Gmail imports should use the `msgvault` subcommand.
 """
 
 from __future__ import annotations
@@ -22,11 +19,7 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 import sys
-import urllib.error
-import urllib.request
-import webbrowser
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,8 +27,6 @@ from typing import Any, Iterable
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/gmail/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
-DEFAULT_APP_GMAIL_URL = "https://search.powerset.dev/gmail"
-DEFAULT_API_URL = "https://search-api-7wk4uhe77q-uw.a.run.app"
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 
 PERSONAL_DOMAINS = {
@@ -212,42 +203,6 @@ def short_hash(value: str, length: int = 10) -> str:
 
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
-
-
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[4]
-
-
-def powerset_token() -> str:
-    cmd = [
-        "uv",
-        "run",
-        "--project",
-        str(repo_root()),
-        "python",
-        str(repo_root() / "packs/powerset/primitives/auth/auth.py"),
-        "token",
-        "--bearer-only",
-    ]
-    completed = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if completed.returncode != 0:
-        raise PipelineFailed((completed.stderr or completed.stdout or "Powerset login required").strip())
-    token = completed.stdout.strip()
-    if not token:
-        raise PipelineFailed("Powerset login required: no access token returned")
-    return token
-
-
-def api_get_json(url: str, token: str) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:1000]
-        raise PipelineFailed(f"API request failed HTTP {exc.code}: {body}") from exc
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise PipelineFailed(f"API request failed: {exc}") from exc
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -1044,45 +999,6 @@ def command_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_accounts(args: argparse.Namespace) -> int:
-    try:
-        stats = api_get_json(f"{args.api_url.rstrip('/')}/v2/integrations/gmail-stats", powerset_token())
-    except PipelineFailed as exc:
-        emit({"status": "failed", "error": str(exc)})
-        return 1
-    emit({
-        "status": "ok",
-        "api_url": args.api_url,
-        "connected_accounts": stats.get("connected_accounts", []),
-        "counts": {
-            "total_contacts": stats.get("total_contacts", 0),
-            "confirmed_linkedin": stats.get("confirmed_linkedin", 0),
-            "needs_review": stats.get("needs_review", 0),
-            "unmatched": stats.get("unmatched", 0),
-            "google_contacts_count": stats.get("google_contacts_count", 0),
-            "calendar_events_count": stats.get("calendar_events_count", 0),
-        },
-        "last_sync_at": stats.get("last_sync_at"),
-        "tokens_stored": "server_side_encrypted_supabase",
-    })
-    return 0
-
-
-def command_connect(args: argparse.Namespace) -> int:
-    opened = False
-    if not args.no_open:
-        opened = webbrowser.open(args.app_url)
-    emit({
-        "status": "ok",
-        "app_url": args.app_url,
-        "opened_browser": opened,
-        "auth_model": "Browser app performs Auth0 login if needed, then Google OAuth. Powerpacks does not put the local bearer token in the URL.",
-        "token_storage": "Google tokens are stored server-side in encrypted Supabase gmail_oauth_tokens and mapped via user_gmail_mappings.",
-        "after_connect": "Run `... gmail_network_import.py accounts` to verify linked accounts via the local Powerset token.",
-    })
-    return 0
-
-
 def command_msgvault(args: argparse.Namespace) -> int:
     con = connect_msgvault(Path(args.db))
     try:
@@ -1149,15 +1065,6 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="Show ledger status")
     status.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     status.set_defaults(func=command_status)
-
-    accounts = sub.add_parser("accounts", help="List server-linked Gmail accounts via the local Powerset token")
-    accounts.add_argument("--api-url", default=DEFAULT_API_URL)
-    accounts.set_defaults(func=command_accounts)
-
-    connect = sub.add_parser("connect", help="Open the Powerset Gmail connection page")
-    connect.add_argument("--app-url", default=DEFAULT_APP_GMAIL_URL)
-    connect.add_argument("--no-open", action="store_true", help="Print the URL without opening a browser")
-    connect.set_defaults(func=command_connect)
 
     msgvault = sub.add_parser("msgvault", aliases=["import-msgvault"], help="Import Gmail contact metadata from a local msgvault SQLite archive")
     msgvault.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")

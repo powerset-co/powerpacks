@@ -5,7 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
@@ -147,12 +147,13 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(people_rows[0]["primary_email"], "jane@example.com")
             self.assertEqual(people_rows[0]["source_channels"], "gmail_msgvault")
 
-    def test_connect_no_open_prints_web_oauth_route(self):
-        code, payload = self.invoke(["connect", "--no-open"])
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["app_url"], "https://search.powerset.dev/gmail")
-        self.assertFalse(payload["opened_browser"])
-        self.assertIn("does not put the local bearer token", payload["auth_model"])
+    def test_powerset_gmail_oauth_commands_are_not_exposed(self):
+        parser = gmail_network_import.build_parser()
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["connect", "--no-open"])
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["accounts"])
 
 
 if __name__ == "__main__":
