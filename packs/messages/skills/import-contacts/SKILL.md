@@ -70,10 +70,11 @@ Import contacts
 - Imports only local iMessage and WhatsApp message/contact metadata; message bodies are never read.
 - Reads contact names for matching.
 - WhatsApp may require a QR scan to link your device.
-- Uses Powerset Contacts to match your iMessage/WhatsApp contacts.
-- Runs paid research only after you approve it.
+- Downloads Powerset Contacts and matches locally.
+- Sends contact names only to OpenRouter for enrichment triage.
+- Runs Parallel/RapidAPI research only after you approve it.
 
-**Your explicit permission will be required to share data after completing import and reviews.**
+**Your explicit permission will be required before retarget research or uploading/syncing approved contacts.**
 
 Continue?
 ```
