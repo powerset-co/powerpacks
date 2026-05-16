@@ -8,9 +8,10 @@ description: Incremental Gmail network import orchestrator. V1 runs one person l
 Use this skill when the user wants to import Gmail/network contacts into
 Powerpacks.
 
-V1 scope is intentionally narrow: **one person only**, `.powerpacks/` artifacts
-only, and a resumable `run` / `continue` / `approve` primitive contract. Do not
-use task JSON. Do not call `../aleph-mvp`; code must live inside Powerpacks.
+V1 scope is intentionally narrow: `.powerpacks/` artifacts only. Prefer the
+local msgvault metadata import when the user has synced Gmail with msgvault;
+otherwise use the one-person seed or server-linked account helpers. Do not use
+task JSON. Do not call `../aleph-mvp`; code must live inside Powerpacks.
 
 ## Consent / approval model
 
@@ -42,6 +43,23 @@ uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_
 Do not put local bearer tokens in browser URLs. The browser app handles Auth0;
 Google tokens are stored server-side in encrypted Supabase `gmail_oauth_tokens`
 and mapped via `user_gmail_mappings`.
+
+## msgvault metadata import
+
+msgvault by Wes McKinney stores Gmail metadata in a local SQLite database,
+usually `~/.msgvault/msgvault.db`. Powerpacks reads only `sources`,
+`participants`, `messages`, and `message_recipients` to derive email/name/count
+metadata; it never reads message bodies, subjects, snippets, raw MIME, or
+attachments.
+
+```bash
+uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault \
+  --db ~/.msgvault/msgvault.db \
+  --account-email <gmail-account-email>
+```
+
+This writes legacy Gmail CSV artifacts plus canonical
+`.powerpacks/network-import/gmail/<run-id>/people.csv`.
 
 ## Main command loop
 

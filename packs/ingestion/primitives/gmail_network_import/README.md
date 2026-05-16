@@ -2,12 +2,15 @@
 
 Resumable local Gmail network-import orchestrator.
 
-V1 is **one person only** and **Powerpacks-local only**. It ports the legacy
-Gmail contact CSV contracts and header parsing/normalization logic into
-Powerpacks, with no runtime dependency on `../aleph-mvp`.
+V1 supports both a one-person local seed and a local msgvault metadata import.
+It ports the legacy Gmail contact CSV contracts and header parsing/normalization
+logic into Powerpacks, with no runtime dependency on `../aleph-mvp`.
 
-It writes `.powerpacks/` artifacts and exits complete. No Gmail API, DVC, paid
-APIs, uploads, Harmonic enrichment, or production source seeding run in V1.
+It writes `.powerpacks/` artifacts and exits complete. The msgvault import reads
+only local SQLite metadata (`sources`, `participants`, `messages`,
+`message_recipients`) and never reads message bodies, subjects, snippets, raw
+MIME, or attachments. No Gmail API, DVC, paid APIs, uploads, Harmonic
+enrichment, or production source seeding run locally.
 
 ## Main loop
 
@@ -24,6 +27,23 @@ uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_
 
 The command contract is still `run` / `continue` / `approve` so future paid or
 OAuth-backed stages can gate cleanly, but current V1 has no approval gates.
+
+## msgvault metadata import
+
+After syncing Gmail with [msgvault](https://github.com/wesm/msgvault), import
+email/name interaction metadata from its local SQLite archive:
+
+```bash
+uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault \
+  --db ~/.msgvault/msgvault.db \
+  --account-email me@gmail.com
+```
+
+Outputs are written under `.powerpacks/network-import/gmail/<run-id>/` and
+include both legacy Gmail CSV artifacts and canonical `people.csv` with
+`primary_email`, `all_emails`, `full_name`, and `source_channels=gmail_msgvault`.
+Automated/noreply addresses are filtered by default; pass `--include-automated`
+to keep them.
 
 ## Server-linked Gmail accounts
 
@@ -53,6 +73,7 @@ Run artifacts live under `.powerpacks/network-import/gmail/<run-id>/`:
 - `gmail_threads_<account>_<op>.csv`
 - `gmail_contacts_aggregated_<account>_<op>.csv`
 - `targeted_emails_<account>_<op>.csv`
+- `people.csv` — canonical Powerpacks people artifact for msgvault imports
 - `domain_context.json` — local domain/company heuristic, not OpenAI
 - `manifest.json`
 - `workspace.json`
