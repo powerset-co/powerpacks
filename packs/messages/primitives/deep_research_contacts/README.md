@@ -21,11 +21,12 @@ synthetic deep-research path. The queue builder applies the same
 The primitive only sends the explicit input shape:
 
 - `handle`, `display_name`, `bio` (empty for phone)
-- `known_info` (built from email/domain/website/follower/phone/area-code/
-  message-source/last-message-timestamp/group flags)
-- `source_channel`, `phone_number`, `area_code`
+- `known_info` (built from email/domain/website/follower signals and explicit
+  reviewer retarget hints when present)
+- `phone_number`, `area_code`
 
-It does not read or send message content. Inputs are already filtered by
+It does not read or send source labels, message counts, timestamps, group
+metadata, or message content. Inputs are already filtered by
 `llm_review_contacts` and `prepare_research_queue`.
 
 ## Usage

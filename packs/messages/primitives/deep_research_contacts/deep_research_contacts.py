@@ -20,8 +20,9 @@ Artifacts produced under --output-dir (matching aleph-mvp's layout):
 
 Privacy contract:
 - The primitive sends only the fields explicitly built into the input shape
-  (`handle, display_name, bio, known_info, source_channel, phone_number,
-   area_code`). It does not read or send message content.
+  (`handle, display_name, bio, known_info, phone_number, area_code`). It does
+  not send source labels, message counts, timestamps, group metadata, or
+  message content.
 - Inputs already filtered by `prepare_research_queue` and `llm_review_contacts`.
 """
 
@@ -105,7 +106,7 @@ RESEARCH_INSTRUCTIONS = """You are a professional investigator building a compre
 The input contains identifying information about a person. This may include:
 - A Twitter/X handle + bio (social media discovery)
 - A name + email + company domain (email contact discovery)
-- A name + phone number + area code + message context (phone contact discovery)
+- A name + phone number + area code (phone contact discovery)
 - Or any combination of the above
 
 ## Research Objectives (in priority order)
@@ -121,11 +122,11 @@ Find their full legal name and LinkedIn profile URL:
 - Read their Substack/blog posts for author bios
 - Check conference speaker lists, podcast appearances
 
-When the source is a phone contact:
-- Treat the phone number, area code, messaging app context, and recency/volume clues as supporting evidence only,
+When a phone number is provided:
+- Treat the phone number and area code as supporting evidence only,
   not as proof that a public-profile person with the same or similar name is the right match
 - Use the phone mostly as a geography / network-context prior:
-  country code, area code, and app context can help determine whether a candidate is directionally plausible,
+  country code and area code can help determine whether a candidate is directionally plausible,
   even when the exact phone number is not publicly attributable
 - If `known_info` includes `User retarget hint`, treat that hint as the strongest clue from the user:
   - If it contains a LinkedIn URL, research that exact LinkedIn/person first and enrich that profile
@@ -188,7 +189,6 @@ PERSON_RESEARCH_INPUT_SCHEMA: dict[str, Any] = {
         "display_name": {"type": "string", "description": "Display name / full name"},
         "bio": {"type": "string", "description": "Bio text, job title, or role description"},
         "known_info": {"type": "string", "description": "Any additional known information"},
-        "source_channel": {"type": ["string", "null"], "description": "twitter | email | phone"},
         "phone_number": {"type": ["string", "null"], "description": "E.164 phone number if available"},
         "area_code": {"type": ["string", "null"], "description": "Area code if available"},
     },
@@ -350,34 +350,6 @@ def build_known_info(row: dict[str, str]) -> str:
         parts.append(f"Profile assessment: {row['moe_top_reasoning'][:200]}")
     if (row.get("retarget_hint") or "").strip():
         parts.append(f"User retarget hint: {row['retarget_hint']}")
-    if (row.get("total_messages") or "").strip():
-        parts.append(f"Message count: {row['total_messages']}")
-    channel_counts = []
-    if (row.get("imessage_message_count") or "").strip():
-        channel_counts.append(f"iMessage: {row['imessage_message_count']}")
-    if (row.get("whatsapp_message_count") or "").strip():
-        channel_counts.append(f"WhatsApp: {row['whatsapp_message_count']}")
-    if channel_counts:
-        parts.append("Message counts by source: " + "; ".join(channel_counts))
-    if (row.get("phone_e164") or "").strip():
-        parts.append(f"Phone: {row['phone_e164']}")
-    if (row.get("area_code") or "").strip():
-        parts.append(f"Area code: {row['area_code']}")
-    if (row.get("message_source") or "").strip():
-        parts.append(f"Message source: {row['message_source']}")
-    if (row.get("last_message") or "").strip():
-        parts.append(f"Last message timestamp: {row['last_message']}")
-    channel_last_messages = []
-    if (row.get("imessage_last_message") or "").strip():
-        channel_last_messages.append(f"iMessage: {row['imessage_last_message']}")
-    if (row.get("whatsapp_last_message") or "").strip():
-        channel_last_messages.append(f"WhatsApp: {row['whatsapp_last_message']}")
-    if channel_last_messages:
-        parts.append("Last message by source: " + "; ".join(channel_last_messages))
-    if (row.get("is_in_group_chats") or "").strip():
-        parts.append(f"In group chats: {row['is_in_group_chats']}")
-    if (row.get("group_names") or "").strip():
-        parts.append(f"Group names: {row['group_names']}")
     return "\n".join(parts)
 
 
@@ -410,7 +382,6 @@ def build_input(row: dict[str, str], handle: str) -> dict[str, Any]:
         "display_name": name or handle,
         "bio": (row.get("bio") or "").strip(),
         "known_info": build_known_info(row),
-        "source_channel": (row.get("source_channel") or "phone") or None,
         "phone_number": (row.get("phone_e164") or None) or None,
         "area_code": (row.get("area_code") or None) or None,
     }

@@ -15,13 +15,10 @@ reason; merging and deduplication happen later.
 The primitive sends only:
 
 - `name`
-- `source` (`imessage` / `whatsapp`)
-- `message_count`
-- recency (`today`, `12 days ago`, …) — derived from `last_message`
-- `is_in_group_chats`
 
-It does **not** send phone numbers, group names, message text, or any other
-identifier.
+It also sends a batch-local `idx` so results can be mapped back to the local
+batch. It does **not** send phone numbers, source labels, message counts,
+timestamps, group names, group flags, message text, or any other identifier.
 
 The only field updated in the CSV is `skip`. `SKIP` writes `skip=yes`; `ENRICH`
 clears stale skip values. A JSONL of per-contact verdicts is written next to
