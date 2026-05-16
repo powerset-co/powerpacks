@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -83,14 +84,26 @@ CONTRACT_PERSON_COLUMNS = [
 PEOPLE_NAMESPACE_COLUMNS = [
     "id", "base_id", "position_title", "word_tokens", "char_tokens", "d2q_tokens", "phrase_tokens", "city",
     "state", "country", "macro_region", "metro_areas", "seniority_band", "company_id", "is_current",
-    "total_years_experience", "start_date_epoch", "end_date_epoch", "role_track", "allowed_operator_ids",
-    "role_ids", "inferred_birth_year", "x_twitter_followers", "linkedin_followers", "linkedin_connections",
-    "ig_followers",
+    "total_years_experience", "start_date_epoch", "end_date_epoch", "tenure_years", "role_track", "allowed_operator_ids",
+    "role_ids", "inferred_birth_year",
 ]
 
 _ZERO_EPOCH = 0
 _DATE_RE = re.compile(r"^(\d{4})(?:[-/](\d{1,2}))?(?:[-/](\d{1,2}))?")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _raise_csv_field_limit() -> None:
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 10
+
+
+_raise_csv_field_limit()
 
 
 def _string(value: Any) -> str:
@@ -479,7 +492,9 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             title = _title(exp)
             company_key = _company_key(exp)
             company_id = stable_company_id(company_key) if company_key else ""
-            word_tokens = _tokens(title, _company_name(exp), exp.get("description"), person.get("headline"))
+            company_name = _company_name(exp)
+            description = _first(exp, ("description", "summary"))
+            word_tokens = _tokens(title, company_name, description, person.get("headline"))
             row = {
                 "id": position_uuid(person["id"], _string(exp.get("id") or exp.get("position_id") or exp.get("urn")) or idx),
                 "base_id": person["id"],
@@ -487,7 +502,7 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "word_tokens": word_tokens,
                 "char_tokens": _ngrams(title, 3),
                 "d2q_tokens": word_tokens,
-                "phrase_tokens": [phrase for phrase in [title.lower().strip(), _company_name(exp).lower().strip()] if phrase],
+                "phrase_tokens": [phrase for phrase in [title.lower().strip(), company_name.lower().strip()] if phrase],
                 "city": person.get("city", ""),
                 "state": person.get("state", ""),
                 "country": person.get("country", ""),
@@ -497,16 +512,13 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "company_id": company_id,
                 "is_current": _is_current(exp),
                 "total_years_experience": total_years,
+                "tenure_years": calculate_duration_years(_exp_start(exp), _exp_end(exp), _is_current(exp)) or 0.0,
                 "start_date_epoch": epoch_seconds(_exp_start(exp)),
                 "end_date_epoch": epoch_seconds(_exp_end(exp), current_as_zero=True),
                 "role_track": _role_track(title),
                 "allowed_operator_ids": [],
                 "role_ids": _role_ids(title),
                 "inferred_birth_year": _int_or_zero(person.get("inferred_birth_year")),
-                "x_twitter_followers": _int_or_zero(person.get("x_twitter_followers")),
-                "linkedin_followers": _int_or_zero(person.get("linkedin_followers")),
-                "linkedin_connections": _int_or_zero(person.get("linkedin_connections")),
-                "ig_followers": _int_or_zero(person.get("ig_followers")),
             }
             records.append(row)
     return records

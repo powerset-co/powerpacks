@@ -43,9 +43,24 @@ def _attrs(contract: dict[str, Any]) -> list[dict[str, Any]]:
     return list(contract.get("attributes") or [])
 
 
-def required_attribute_names(contract: dict[str, Any]) -> set[str]:
-    # TurboPuffer namespace attributes are effectively required for local records.
+def attribute_names(contract: dict[str, Any]) -> set[str]:
     return {str(attr.get("name")) for attr in _attrs(contract) if attr.get("name")}
+
+
+def required_attribute_names(contract: dict[str, Any]) -> set[str]:
+    return {str(attr.get("name")) for attr in _attrs(contract) if attr.get("name") and attr.get("required") is True}
+
+
+def vector_metadata(contract: dict[str, Any]) -> dict[str, Any] | None:
+    meta = contract.get("vector")
+    return meta if isinstance(meta, dict) else None
+
+
+def allowed_record_names(contract: dict[str, Any]) -> set[str]:
+    allowed = attribute_names(contract) | {"id"}
+    if vector_metadata(contract) is not None:
+        allowed.add("vector")
+    return allowed
 
 
 def _default_for_type(type_name: str) -> Any:
@@ -82,13 +97,16 @@ def _coerce(value: Any, type_name: str) -> Any:
 
 def normalize_record_for_contract(record: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
+    required = required_attribute_names(contract)
     for attr in _attrs(contract):
-        name = attr["name"]
-        normalized[name] = _coerce(record.get(name), str(attr.get("type", "string")))
+        name = str(attr["name"])
+        if name in record or name in required:
+            normalized[name] = _coerce(record.get(name), str(attr.get("type", "string")))
     if "id" in record and "id" not in normalized:
         normalized["id"] = str(record["id"])
+    if vector_metadata(contract) is not None and "vector" in record:
+        normalized["vector"] = record["vector"]
     return normalized
-
 
 
 def count_defaulted_numeric(records: list[dict[str, Any]], contract: dict[str, Any]) -> dict[str, int]:
@@ -99,12 +117,26 @@ def count_defaulted_numeric(records: list[dict[str, Any]], contract: dict[str, A
             counts[name] = sum(1 for row in records if row.get(name) in (None, ""))
     return {key: value for key, value in counts.items() if value}
 
+def _validate_vector(record: dict[str, Any], contract: dict[str, Any]) -> list[str]:
+    meta = vector_metadata(contract)
+    if meta is None or "vector" not in record:
+        return []
+    vector = record.get("vector")
+    if not isinstance(vector, list):
+        return ["vector must be a list"]
+    dimension = meta.get("dimension")
+    if dimension is not None and len(vector) != int(dimension):
+        return [f"vector dimension {len(vector)} != {dimension}"]
+    return []
+
+
 def validate_record(record: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
-    allowed = required_attribute_names(contract) | {"id"}
+    allowed = allowed_record_names(contract)
     required = required_attribute_names(contract)
     missing = sorted(name for name in required if name not in record)
     extra = sorted(name for name in record if name not in allowed)
-    return {"ok": not missing and not extra, "missing": missing, "extra": extra}
+    errors = _validate_vector(record, contract)
+    return {"ok": not missing and not extra and not errors, "missing": missing, "extra": extra, "errors": errors}
 
 
 def validate_jsonl(path: str | Path, contract_path: str | Path) -> dict[str, Any]:

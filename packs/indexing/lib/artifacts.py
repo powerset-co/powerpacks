@@ -18,6 +18,7 @@ from packs.indexing.lib.identity import (
     stable_location_id_from_key,
     summary_uuid,
 )
+from packs.indexing.lib.text import word_tokens
 
 
 def _clean(value: Any) -> str:
@@ -130,13 +131,28 @@ def _company_from_experience(exp: dict[str, Any]) -> dict[str, Any]:
     key_data = identity if (identity.get("rapidapi_company_id") or identity.get("company_public_identifier")) else exp
     name = identity.get("company_name") or _first(exp, "company_name", "company", "organization", "name")
     description = _first(exp, "description", "summary")
+    semantic_text = " ".join(part for part in [name, description, _first(exp, "industry", "sector")] if part)
+    company_urn = stable_company_uuid(key_data)
+    aliases = [name] if name else []
+    entity_sector = _first(exp, "industry", "sector", "entity_sector_text")
+    doc2query = []
+    if name:
+        doc2query.append(f"{name} company")
+    if entity_sector:
+        doc2query.append(f"{entity_sector} company")
     return {
-        "id": stable_company_uuid(key_data),
+        "id": company_urn,
+        "company_urn": company_urn,
         "company_name": name,
-        "name_aliases_text": name,
-        "semantic_text": " ".join(part for part in [name, description, _first(exp, "industry", "sector")] if part),
-        "entity_sector_text": _first(exp, "industry", "sector", "entity_sector_text"),
-        "doc2query_text": "",
+        "original_name": name,
+        "name_aliases": aliases,
+        "name_aliases_text": " ".join(aliases),
+        "semantic_text": semantic_text,
+        "entity_sector_text": entity_sector,
+        "word_text": entity_sector,
+        "char_text": " ".join(aliases),
+        "d2q_text": " ".join(doc2query),
+        "doc2query": doc2query,
         "website_domain": _first(exp, "website_domain", "domain"),
         "linkedin_url": identity.get("company_linkedin_url") or _first(exp, "company_linkedin_url", "linkedin_url"),
         "description": description,
@@ -150,7 +166,11 @@ def _company_from_experience(exp: dict[str, Any]) -> dict[str, Any]:
         "technology_types": [],
         "customer_type": [],
         "investor_urns": [],
+        "accelerators": [],
         "yc_batches": [],
+        "ownership_status": "",
+        "company_type": "",
+        "confidence_score": 0.0,
         "allowed_operator_ids": [],
         "rapidapi_company_id": identity.get("rapidapi_company_id", ""),
         "company_public_identifier": identity.get("company_public_identifier", ""),
@@ -225,6 +245,7 @@ def _education_record(row: dict[str, Any], edu: dict[str, Any], default_operator
         "id": stable_education_edge_uuid(person_uuid, school_uuid, degree, field, start_year or "", end_year or ""),
         "person_id": person_uuid,
         "base_id": person_uuid,
+        "education_id": school_uuid,
         "canonical_education_id": school_uuid,
         "school_name": school_name,
         "degree": degree,
@@ -317,7 +338,13 @@ def build_summary_records(people_rows: list[dict[str, Any]], default_operator_id
         pid = _first(row, "base_id", "person_id", "id") or stable_person_uuid(row)
         text = _summary_text(row)
         internal.append({"id": stable_summary_uuid(pid), "person_id": pid, "base_id": pid, "text": text})
-        summaries.append({"id": pid, "tech_skills": _tech_skills(row, text), "allowed_operator_ids": _allowed_operator_ids(row, default_operator_id)})
+        summaries.append({
+            "id": pid,
+            "summary": text,
+            "summary_tokens": word_tokens(text),
+            "tech_skills": _tech_skills(row, text),
+            "allowed_operator_ids": _allowed_operator_ids(row, default_operator_id),
+        })
     return {"internal_text": sorted(internal, key=lambda r: r["id"]), "summaries": sorted(summaries, key=lambda r: r["id"])}
 
 
