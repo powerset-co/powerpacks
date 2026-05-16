@@ -147,6 +147,20 @@ def parse_date_int(value: Any) -> int:
     return int(match.group(1)) * 10000 + int(match.group(2)) * 100 + int(match.group(3)) if match else 0
 
 
+def to_int(value: Any) -> int:
+    try:
+        return int(float(clean(value) or 0))
+    except Exception:
+        return 0
+
+
+def to_float(value: Any) -> float:
+    try:
+        return float(clean(value) or 0)
+    except Exception:
+        return 0.0
+
+
 def stage_int(value: Any) -> int:
     return FUNDING_STAGE_MAP.get(clean(value).upper(), 0)
 
@@ -353,19 +367,97 @@ def load_by_ids(path: Path, ids: set[str], key: str) -> tuple[dict[str, dict[str
     return out, scanned
 
 
-def load_csv_by_ids(path: Path, ids: set[str]) -> tuple[dict[str, dict[str, Any]], int]:
+def iter_csv_dicts(path: Path) -> Iterable[dict[str, str]]:
     csv.field_size_limit(sys.maxsize)
+    with path.open("rb") as raw:
+        text = (line.decode("utf-8-sig", "replace").replace("\x00", "") for line in raw)
+        for row in csv.DictReader(text):
+            yield {str(k): (v or "") for k, v in row.items() if k is not None}
+
+
+def load_csv_by_ids(path: Path, ids: set[str]) -> tuple[dict[str, dict[str, Any]], int]:
     out: dict[str, dict[str, Any]] = {}
     scanned = 0
-    with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            scanned += 1
-            rid = clean(row.get("id") or row.get("person_id") or row.get("base_person_id"))
-            if rid in ids:
-                out[rid] = row
-                if set(out) >= ids:
-                    break
+    for row in iter_csv_dicts(path):
+        scanned += 1
+        rid = clean(row.get("id") or row.get("person_id") or row.get("base_person_id"))
+        if rid in ids:
+            out[rid] = row
+            if set(out) >= ids:
+                break
     return out, scanned
+
+
+def parse_json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(clean(value))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def parse_website_domain(value: Any) -> str:
+    website = parse_json_object(value)
+    if website:
+        return clean(website.get("domain") or website.get("url"))
+    return clean(value)
+
+
+def load_company_harmonic_csv(path: Path, ids: set[str]) -> tuple[dict[str, dict[str, Any]], int]:
+    out: dict[str, dict[str, Any]] = {}
+    linkedin_by_name: dict[str, str] = {}
+    domain_by_name: dict[str, str] = {}
+    scanned = 0
+    if not path.exists() or not ids:
+        return out, scanned
+    for row in iter_csv_dicts(path):
+        scanned += 1
+        name_key = slugify(row.get("company_name"))
+        if clean(row.get("linkedin_url")) and name_key != "unknown":
+            linkedin_by_name.setdefault(name_key, clean(row.get("linkedin_url")))
+        domain = parse_website_domain(row.get("website"))
+        if domain and name_key != "unknown":
+            domain_by_name.setdefault(name_key, domain)
+        urn = clean(row.get("company_urn"))
+        if urn not in ids:
+            continue
+        out[urn] = {
+            "company_urn": urn,
+            "company_name": clean(row.get("company_name")),
+            "original_name": clean(row.get("company_name")),
+            "name_aliases": listify(row.get("name_aliases")),
+            "description": clean(row.get("description") or row.get("short_description")),
+            "city": clean(row.get("city")),
+            "state": clean(row.get("state")),
+            "country": clean(row.get("country")),
+            "metro_area": " ".join(clean(v) for v in listify(row.get("metro_areas")) if clean(v)),
+            "headcount": row.get("headcount"),
+            "founded_year": row.get("founded_year"),
+            "linkedin_url": clean(row.get("linkedin_url")),
+            "logo_url": clean(row.get("logo_url")),
+            "website_domain": domain,
+            "customer_type": clean(row.get("customer_type")),
+            "ownership_status": clean(row.get("ownership_status")),
+            "company_type": clean(row.get("company_type")),
+            "investor_urns": [clean(v) for v in listify(row.get("investor_urn")) if clean(v)],
+        }
+    for row in out.values():
+        name_key = slugify(row.get("company_name"))
+        if not clean(row.get("linkedin_url")) and name_key in linkedin_by_name:
+            row["linkedin_url"] = linkedin_by_name[name_key]
+        if not clean(row.get("website_domain")) and name_key in domain_by_name:
+            row["website_domain"] = domain_by_name[name_key]
+    return out, scanned
+
+
+def merge_company_identity(identity: dict[str, Any], enrichment: dict[str, Any] | None) -> dict[str, Any]:
+    row = dict(enrichment or {})
+    for key, value in identity.items():
+        if value not in (None, "", []):
+            row[key] = value
+    return row
 
 
 def role_dense_from_embedding_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -373,7 +465,9 @@ def role_dense_from_embedding_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[str], operator_email: str | None, mode: str) -> dict[str, Any]:
-    seed = Path(args.seed) / "pipeline_output"
+    seed_root = Path(args.seed)
+    seed = seed_root / "pipeline_output"
+    company_csv_path = Path(args.company_csv) if args.company_csv else seed_root / "data/company_harmonic_all.csv"
     run_dir = Path(args.output_dir) / f"operator-{operator_id[:8]}" / args.flavor
     if run_dir.exists() and args.force:
         shutil.rmtree(run_dir)
@@ -413,21 +507,28 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     write_stage_chunks(run_dir / "roles/embedding_checkpoints", "embeddings", [{"id": r.get("title_hash"), "embedding": r.get("dense_embedding"), **{k: v for k, v in r.items() if k != "dense_embedding"}} for r in role_embedding_rows], args.checkpoint_every, "id", "input-embeddings", run_dir / "roles/roles_with_embeddings.jsonl")
 
     company_corpus, company_scanned = load_by_ids(seed / "company/companies_corpus_v3.jsonl", company_ids, "company_urn")
+    company_harmonic, company_harmonic_scanned = load_company_harmonic_csv(company_csv_path, company_ids)
     company_embeddings, company_emb_scanned = load_by_ids(seed / "company/company_embeddings_v3.jsonl", company_ids, "company_urn")
-    company_id_map = {old_id: company_local_id(row) for old_id, row in company_corpus.items()}
-    company_rows_seed = []
-    for old_id in sorted(company_corpus):
-        row = dict(company_corpus[old_id])
-        row["company_urn"] = company_id_map[old_id]
+    company_source = {old_id: merge_company_identity(company_harmonic.get(old_id, {}), company_corpus.get(old_id)) for old_id in sorted(company_ids) if company_harmonic.get(old_id) or company_corpus.get(old_id)}
+    company_id_map = {old_id: company_local_id(row) for old_id, row in company_source.items()}
+    company_rows_by_local: dict[str, dict[str, Any]] = {}
+    for old_id in sorted(company_source):
+        local_id = company_id_map[old_id]
+        row = dict(company_source[old_id])
+        row["company_urn"] = local_id
         row["investor_urns"] = [company_id_map[v] for v in (clean(item) for item in listify(row.get("investor_urns"))) if v in company_id_map]
-        company_rows_seed.append(row)
-    company_embedding_rows = []
+        if local_id not in company_rows_by_local or (clean(row.get("linkedin_url")) and not clean(company_rows_by_local[local_id].get("linkedin_url"))):
+            company_rows_by_local[local_id] = row
+    company_rows_seed = [company_rows_by_local[key] for key in sorted(company_rows_by_local)]
+    company_embedding_by_local: dict[str, dict[str, Any]] = {}
     for old_id in sorted(company_embeddings):
         if old_id not in company_id_map:
             continue
+        local_id = company_id_map[old_id]
         row = dict(company_embeddings[old_id])
-        row["company_urn"] = company_id_map[old_id]
-        company_embedding_rows.append(row)
+        row["company_urn"] = local_id
+        company_embedding_by_local[local_id] = row
+    company_embedding_rows = [company_embedding_by_local[key] for key in sorted(company_embedding_by_local)]
     write_jsonl(run_dir / "company/companies_corpus_v3.jsonl", company_rows_seed)
     write_jsonl(run_dir / "company/company_embeddings_v3.jsonl", company_embedding_rows)
     write_stage_chunks(run_dir / "company/enrichment_checkpoints", "companies", company_rows_seed, args.checkpoint_every, "company_urn", "input-classifications", run_dir / "company/companies_corpus_v3.jsonl")
@@ -490,14 +591,13 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     summaries_count = write_jsonl(records_dir / "summaries.records.jsonl", summary_records())
 
     def company_records() -> Iterable[dict[str, Any]]:
-        for old_urn in sorted(company_ids):
-            row = company_corpus.get(old_urn); emb = company_embeddings.get(old_urn, {}).get("embedding")
-            local_urn = company_id_map.get(old_urn, "")
-            if not row or emb is None or not local_urn:
+        for local_urn in sorted(company_rows_by_local):
+            row = company_rows_by_local.get(local_urn); emb = company_embedding_by_local.get(local_urn, {}).get("embedding")
+            if not row or emb is None:
                 continue
             name = clean(row.get("company_name")); aliases = [clean(v) for v in listify(row.get("name_aliases")) if clean(v)]
             d2q = clean(row.get("d2q_text")) or " ".join(clean(v) for v in listify(row.get("doc2query")) if clean(v))
-            yield {"id": local_urn, "company_urn": local_urn, "vector": emb, "company_name": name, "aliases": aliases, "name_aliases_text": " ".join([name, *aliases]).strip(), "semantic_text": clean(row.get("semantic_text")), "entity_sector_text": clean(row.get("word_text")), "word_text": clean(row.get("word_text")), "doc2query_text": d2q, "doc2query": listify(row.get("doc2query")), "description": clean(row.get("description")), "city": clean(row.get("city")), "state": clean(row.get("state")), "country": clean(row.get("country")), "metro_area": clean(row.get("metro_area")), "macro_region": clean(row.get("macro_region")), "headcount": int(row.get("headcount") or 0), "funding_stage": stage_int(row.get("funding_stage")), "funding_total": float(row.get("funding_total") or 0), "last_funding_at": parse_date_int(row.get("last_funding_at")), "valuation": float(row.get("valuation") or 0), "founded_year": int(row.get("founded_year") or 0), "investor_urns": [company_id_map[v] for v in (clean(item) for item in listify(row.get("investor_urns"))) if v in company_id_map], "customer_type": parse_customer_type(row.get("customer_type")), "entity_types": listify(row.get("entity_types")), "sector_types": listify(row.get("sector_types")), "technology_types": listify(row.get("technology_types")), "accelerators": listify(row.get("accelerators")), "yc_batches": listify(row.get("yc_batches")), "linkedin_url": clean(row.get("linkedin_url")), "logo_url": clean(row.get("logo_url")), "website_domain": clean(row.get("website_domain")), "allowed_operator_ids": [operator_id]}
+            yield {"id": local_urn, "company_urn": local_urn, "vector": emb, "company_name": name, "aliases": aliases, "name_aliases_text": " ".join([name, *aliases]).strip(), "semantic_text": clean(row.get("semantic_text")), "entity_sector_text": clean(row.get("word_text")), "word_text": clean(row.get("word_text")), "doc2query_text": d2q, "doc2query": listify(row.get("doc2query")), "description": clean(row.get("description")), "city": clean(row.get("city")), "state": clean(row.get("state")), "country": clean(row.get("country")), "metro_area": clean(row.get("metro_area")), "macro_region": clean(row.get("macro_region")), "headcount": to_int(row.get("headcount")), "funding_stage": stage_int(row.get("funding_stage")), "funding_total": to_float(row.get("funding_total")), "last_funding_at": parse_date_int(row.get("last_funding_at")), "valuation": to_float(row.get("valuation")), "founded_year": to_int(row.get("founded_year")), "investor_urns": [company_id_map[v] for v in (clean(item) for item in listify(row.get("investor_urns"))) if v in company_id_map], "customer_type": parse_customer_type(row.get("customer_type")), "entity_types": listify(row.get("entity_types")), "sector_types": listify(row.get("sector_types")), "technology_types": listify(row.get("technology_types")), "accelerators": listify(row.get("accelerators")), "yc_batches": listify(row.get("yc_batches")), "linkedin_url": clean(row.get("linkedin_url")), "logo_url": clean(row.get("logo_url")), "website_domain": clean(row.get("website_domain")), "allowed_operator_ids": [operator_id]}
 
     companies_count = write_jsonl(records_dir / "companies.records.jsonl", company_records())
 
@@ -520,7 +620,7 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     vector_counts = {"people": people_count, "summaries": summaries_count, "companies": companies_count}
     write_json(run_dir / "vectors/checkpoint.json", {"status": "completed", "provider": "input-embeddings", "dimension": 1536, "counts": vector_counts, "updated_at": now_iso()})
 
-    stats = {"status": "ok", "mode": mode, "operator_id": operator_id, "operator_email": operator_email, "run_dir": str(run_dir), "id_scheme": "linkedin_url_first_no_harmonic_ids", "counts": {"people_records": people_count, "summaries_records": summaries_count, "companies_records": companies_count, "education_records": education_count, "schools_records": schools_count, "selected_people": len(selected_person_ids), "selected_positions": len(flattened), "roles": len(role_dense_rows), "role_embeddings": len(role_embedding_rows)}, "id_backfill_needed": {"companies_without_linkedin_url": sum(1 for row in company_corpus.values() if not clean(row.get("linkedin_url"))), "schools_without_linkedin_url": sum(1 for row in schools.values() if not clean(row.get("linkedin_url")))}, "scanned_rows": {"flattened_people": flattened_scanned, "roles_dense": role_dense_scanned, "role_embeddings": role_emb_scanned, "companies_corpus": company_scanned, "company_embeddings": company_emb_scanned, "unified_person_csv": unified_scanned, "summary_embeddings": summary_emb_scanned, "tech_skills": tech_scanned, "people_education": people_education_scanned, "schools": schools_scanned}, "duckdb": duckdb_payload.get("duckdb"), "duckdb_tables": duckdb_payload.get("tables", {}), "elapsed_seconds": round(time.time() - started, 3)}
+    stats = {"status": "ok", "mode": mode, "operator_id": operator_id, "operator_email": operator_email, "run_dir": str(run_dir), "id_scheme": "company_harmonic_csv_linkedin_first_no_harmonic_ids", "company_source": str(company_csv_path), "counts": {"people_records": people_count, "summaries_records": summaries_count, "companies_records": companies_count, "education_records": education_count, "schools_records": schools_count, "selected_people": len(selected_person_ids), "selected_positions": len(flattened), "roles": len(role_dense_rows), "role_embeddings": len(role_embedding_rows), "companies_from_company_harmonic_csv": len(company_harmonic), "companies_with_enrichment_cache": len(company_corpus)}, "id_backfill_needed": {"companies_without_linkedin_url": sum(1 for row in company_source.values() if not clean(row.get("linkedin_url"))), "schools_without_linkedin_url": sum(1 for row in schools.values() if not clean(row.get("linkedin_url")))}, "scanned_rows": {"flattened_people": flattened_scanned, "roles_dense": role_dense_scanned, "role_embeddings": role_emb_scanned, "companies_corpus_enrichment_cache": company_scanned, "company_harmonic_all_csv": company_harmonic_scanned, "company_embeddings": company_emb_scanned, "unified_person_csv": unified_scanned, "summary_embeddings": summary_emb_scanned, "tech_skills": tech_scanned, "people_education": people_education_scanned, "schools": schools_scanned}, "duckdb": duckdb_payload.get("duckdb"), "duckdb_tables": duckdb_payload.get("tables", {}), "elapsed_seconds": round(time.time() - started, 3)}
     write_json(stats_dir / "bootstrap_from_aleph.json", stats)
     return stats
 
@@ -565,7 +665,8 @@ def run_duckdb_loader(run_dir: Path, flavor: str, operator_id: str, operator_ema
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seed", default=str(SEED_DEFAULT), help="Aleph seed root containing pipeline_output/")
+    parser.add_argument("--seed", default=str(SEED_DEFAULT), help="Aleph seed root containing pipeline_output/ and data/")
+    parser.add_argument("--company-csv", help="Primary collected company_harmonic_all.csv source; defaults to <seed>/data/company_harmonic_all.csv")
     parser.add_argument("--operator-access", help="CSV/JSONL operator_id/person_id mapping for real per-operator scoping")
     parser.add_argument("--operator-id", help="Single operator id. With --operator-access, filters to this operator. Without access, smoke-selects --limit people.")
     parser.add_argument("--operator-email")
