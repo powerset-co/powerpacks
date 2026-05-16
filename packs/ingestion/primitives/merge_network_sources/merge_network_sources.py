@@ -41,6 +41,30 @@ except ModuleNotFoundError:
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
 MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources", "merged_row_count", "needs_review"]
 REVIEW_COLUMNS = ["left_id", "right_id", "left_name", "right_name", "similarity", "left_sources", "right_sources", "reason"]
+NETWORK_CONTACT_COLUMNS = [
+    "contact_id",
+    "merge_key",
+    "display_name",
+    "linkedin_url",
+    "public_identifier",
+    "primary_email",
+    "primary_phone",
+    "source_channels",
+    "source_count",
+    "needs_review",
+]
+NETWORK_CONTACT_SOURCE_COLUMNS = [
+    "contact_id",
+    "merge_key",
+    "source_channel",
+    "source_identifier",
+    "source_artifact",
+    "display_name",
+    "linkedin_url",
+    "public_identifier",
+    "primary_email",
+    "primary_phone",
+]
 
 
 def now_iso() -> str:
@@ -153,6 +177,69 @@ def choose(current: str, incoming: str) -> str:
     return current
 
 
+def row_source_channels(row: dict[str, str]) -> list[str]:
+    channels: list[str] = []
+    for src in (row.get("source_channels") or "").split(","):
+        src = src.strip()
+        if src and src not in channels:
+            channels.append(src)
+    return channels or ["unknown"]
+
+
+def source_identifier(row: dict[str, str], channel: str = "") -> str:
+    linkedin_key = stable_linkedin_key(row)
+    if linkedin_key:
+        return row.get("linkedin_url") or linkedin_key
+    if channel.startswith("gmail") or row.get("primary_email"):
+        return row.get("primary_email") or row.get("all_emails", "")
+    if channel in {"imessage", "whatsapp", "messages"} or row.get("primary_phone"):
+        return row.get("primary_phone") or row.get("all_phones", "")
+    if channel == "twitter" or row.get("twitter_handle"):
+        return row.get("twitter_handle", "")
+    return row.get("id") or row_name(row)
+
+
+def network_contact_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contact_id": row.get("id", ""),
+        "merge_key": row.get("merge_key", ""),
+        "display_name": row_name(row),
+        "linkedin_url": row.get("linkedin_url", ""),
+        "public_identifier": row.get("public_identifier", ""),
+        "primary_email": row.get("primary_email", ""),
+        "primary_phone": row.get("primary_phone", ""),
+        "source_channels": row.get("source_channels", ""),
+        "source_count": len([s for s in (row.get("source_channels") or "").split(",") if s.strip()]),
+        "needs_review": row.get("needs_review", "false"),
+    }
+
+
+def source_fact_rows(contact: dict[str, Any], source_rows: list[dict[str, str]]) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in source_rows:
+        for channel in row_source_channels(row):
+            identifier = source_identifier(row, channel)
+            artifact = row.get("source_artifacts", "")
+            key = (channel, identifier, artifact)
+            if key in seen:
+                continue
+            seen.add(key)
+            facts.append({
+                "contact_id": contact.get("id", ""),
+                "merge_key": contact.get("merge_key", ""),
+                "source_channel": channel,
+                "source_identifier": identifier,
+                "source_artifact": artifact,
+                "display_name": row_name(row),
+                "linkedin_url": row.get("linkedin_url", ""),
+                "public_identifier": row.get("public_identifier", ""),
+                "primary_email": row.get("primary_email", ""),
+                "primary_phone": row.get("primary_phone", ""),
+            })
+    return facts
+
+
 def merge_group(key: str, rows: list[dict[str, str]]) -> dict[str, Any]:
     merged = {col: "" for col in PEOPLE_SCHEMA_COLUMNS}
     sources: set[str] = set()
@@ -229,7 +316,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         all_rows.extend(rows)
         per_file[str(path)] = len(rows)
     groups, singletons = build_groups(all_rows)
-    merged_rows = [merge_group(key, rows) for key, rows in sorted(groups.items())]
+    merged_rows: list[dict[str, Any]] = []
+    source_rows: list[dict[str, Any]] = []
+    for key, rows in sorted(groups.items()):
+        merged = merge_group(key, rows)
+        merged_rows.append(merged)
+        source_rows.extend(source_fact_rows(merged, rows))
     for row in singletons:
         normalized = normalize_people_row(row)
         normalized.update({
@@ -242,15 +334,20 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not normalized.get("id"):
             normalized["id"] = f"merged:{sha(normalized['merge_key'])}"
         merged_rows.append(normalized)
+        source_rows.extend(source_fact_rows(normalized, [normalized]))
     review = similar_pairs(merged_rows, args.name_threshold)
     output_dir = Path(args.output_dir)
     output = output_dir / "people.csv"
     legacy_output = output_dir / "people_harmonic_all.merged.csv"
     review_path = output_dir / "possible_duplicates_review.csv"
+    network_contacts_path = output_dir / "network_contacts.csv"
+    network_contact_sources_path = output_dir / "network_contact_sources.csv"
     manifest = output_dir / "merge_manifest.json"
     write_csv(output, MERGED_COLUMNS, merged_rows)
     shutil.copyfile(output, legacy_output)
     write_csv(review_path, REVIEW_COLUMNS, review)
+    write_csv(network_contacts_path, NETWORK_CONTACT_COLUMNS, [network_contact_row(row) for row in merged_rows])
+    write_csv(network_contact_sources_path, NETWORK_CONTACT_SOURCE_COLUMNS, source_rows)
     manifest_payload = {
         "created_at": now_iso(),
         "inputs": per_file,
@@ -258,8 +355,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         "merged_rows": len(merged_rows),
         "linkedin_groups": len(groups),
         "review_pairs": len(review),
+        "source_rows": len(source_rows),
         "output": str(output),
         "people_csv": str(output),
+        "network_contacts_csv": str(network_contacts_path),
+        "network_contact_sources_csv": str(network_contact_sources_path),
         "legacy_output": str(legacy_output),
     }
     manifest.parent.mkdir(parents=True, exist_ok=True)

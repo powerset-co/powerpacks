@@ -55,10 +55,19 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(Path(payload["people_csv"]).name, "people.csv")
                 self.assertTrue(Path(payload["people_csv"]).exists())
                 self.assertTrue(Path(payload["legacy_output"]).exists())
+                self.assertTrue(Path(payload["network_contacts_csv"]).exists())
+                self.assertTrue(Path(payload["network_contact_sources_csv"]).exists())
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["full_name"], "Jane Canonical")
+                with Path(payload["network_contacts_csv"]).open(newline="", encoding="utf-8") as handle:
+                    contacts = list(csv.DictReader(handle))
+                self.assertEqual(contacts[0]["source_channels"], "linkedin")
+                with Path(payload["network_contact_sources_csv"]).open(newline="", encoding="utf-8") as handle:
+                    sources = list(csv.DictReader(handle))
+                self.assertEqual(sources[0]["source_channel"], "linkedin")
+                self.assertEqual(sources[0]["source_identifier"], "https://www.linkedin.com/in/jane-example")
             finally:
                 os.chdir(old_cwd)
 
