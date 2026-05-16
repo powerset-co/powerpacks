@@ -196,3 +196,144 @@ export function toDatabaseRecord(row: RawPowerpackResult, profile?: RawPowerpack
     vertical_sources: verticalSources,
   };
 }
+
+export interface CompanyPositionSummary {
+  position_title?: string | null;
+  position_description?: string | null;
+  is_current?: boolean | null;
+  years?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+}
+
+export interface CompanyPerson {
+  id: string;
+  name: string;
+  public_identifier?: string | null;
+  position_title?: string | null;
+  position_description?: string | null;
+  seniority_band?: string | null;
+  headline?: string | null;
+  is_current?: boolean | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  tenure_years?: number | null;
+  positions_count?: number | null;
+  all_positions?: CompanyPositionSummary[];
+}
+
+export type PeopleSortField = "current" | "name" | "tenure";
+export type PeopleSortDir = "asc" | "desc";
+
+export interface Company {
+  id: string;
+  name: string;
+  description?: string | null;
+  sector_types?: string[];
+  entity_types?: string[];
+  stage?: string | null;
+  headcount?: number | null;
+  funding_total?: number | null;
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  logo_url?: string | null;
+  linkedin_url?: string | null;
+  people_count?: number | null;
+  people?: CompanyPerson[];
+  people_offset?: number;
+  people_limit?: number;
+  people_has_more?: boolean;
+  people_sort?: PeopleSortField;
+  people_dir?: PeopleSortDir;
+}
+
+export interface CompanySearchParams {
+  name?: string;
+  sector_types?: string[];
+  entity_types?: string[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface CompanySearchResponse {
+  companies: Company[];
+  total: number;
+  limit: number;
+  offset: number;
+  source?: string;
+  warnings?: string[];
+}
+
+export interface CompanyDetailParams {
+  include_people?: boolean;
+  people_limit?: number;
+  people_offset?: number;
+  people_sort?: PeopleSortField;
+  people_dir?: PeopleSortDir;
+  people_search?: string;
+}
+
+export interface CompanyDetailResponse {
+  company: Company;
+  source?: string;
+  warnings?: string[];
+}
+
+
+export type ContactsSortField = "first_name" | "last_name" | "headline" | "location_raw" | "total_interactions";
+export type ContactsSortDir = "asc" | "desc";
+
+export interface UnifiedContact {
+  id: string;
+  operator_id?: string | null;
+  gmail_token_id?: string | null;
+  primary_email?: string | null;
+  display_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  all_emails?: string[];
+  emails?: string[];
+  domain?: string | null;
+  headline?: string | null;
+  current_title?: string | null;
+  location_raw?: string | null;
+  linkedin_url?: string | null;
+  public_profile_url?: string | null;
+  public_identifier?: string | null;
+  x_url?: string | null;
+  x_twitter_handle?: string | null;
+  phone_numbers?: string[];
+  phone_number?: string | null;
+  total_messages: number;
+  total_interactions?: number;
+  pass1_status?: string | null;
+  pass1_linkedin_url?: string | null;
+  potential_linkedins?: unknown[];
+  candidate_count?: number;
+  sources_searched?: unknown[];
+  llm_selected_linkedin?: string | null;
+  llm_confidence?: number | null;
+  llm_reasoning?: string | null;
+  confirmed_linkedin_url?: string | null;
+  confirmation_source?: string | null;
+  verification_notes?: string | null;
+  profile_picture_url?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ContactsV2Params {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  sortField?: ContactsSortField;
+  sortDir?: ContactsSortDir;
+}
+
+export interface ContactsV2Result {
+  data: UnifiedContact[];
+  total_count: number;
+  source?: string;
+  warnings?: string[];
+}

@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { fetchRunResults, fetchRuns } from "./powerpacksApi";
+import LocalCompanyDirectoryPage from "./LocalCompanyDirectoryPage";
+import { LocalContactsPage } from "./LocalContactsPage";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalResultsTable } from "./LocalResultsTable";
 import { LocalRunSidebar } from "./LocalRunSidebar";
@@ -14,16 +16,24 @@ import { toDatabaseRecord } from "./types";
 
 const PAGE_SIZE = 50;
 
-function taskIdFromPath(): string | null {
+type LocalRoute = { kind: "results"; taskId: string | null } | { kind: "contacts" } | { kind: "companies" };
+
+function routeFromPath(): LocalRoute {
+  if (window.location.pathname === "/contacts") return { kind: "contacts" };
+  if (window.location.pathname === "/companies") return { kind: "companies" };
   const match = window.location.pathname.match(/^\/conversation\/([^/]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
+  return { kind: "results", taskId: match ? decodeURIComponent(match[1]) : null };
 }
 
-function setConversationPath(taskId: string) {
-  const nextPath = `/conversation/${encodeURIComponent(taskId)}`;
+function pushPath(nextPath: string) {
   if (window.location.pathname !== nextPath) {
     window.history.pushState({}, "", nextPath);
   }
+}
+
+function defaultResultsTaskId(runs: LocalRunSummary[]): string | null {
+  const preferred = runs.find((run) => run.hasArtifacts) || runs[0];
+  return preferred?.conversationId || preferred?.taskId || null;
 }
 
 function mergeResults(
@@ -52,34 +62,44 @@ export function LocalPowerpacksApp() {
   const [runs, setRuns] = useState<LocalRunSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => taskIdFromPath());
+  const [route, setRoute] = useState<LocalRoute>(() => routeFromPath());
   const [resultResponse, setResultResponse] = useState<LocalRunResultsResponse | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  const refreshRuns = async () => {
+  const activeTaskId = route.kind === "results" ? route.taskId : null;
+
+  const navigate = useCallback((nextRoute: LocalRoute, path: string) => {
+    setRoute(nextRoute);
+    pushPath(path);
+  }, []);
+
+  const refreshRuns = useCallback(async () => {
     setRunsLoading(true);
     setError(null);
     try {
       const nextRuns = await fetchRuns();
       setRuns(nextRuns);
-      setSelectedTaskId((current) => current || nextRuns.find((run) => run.hasArtifacts)?.conversationId || nextRuns.find((run) => run.hasArtifacts)?.taskId || nextRuns[0]?.conversationId || nextRuns[0]?.taskId || null);
+      setRoute((current) => {
+        if (current.kind !== "results" || current.taskId !== null) return current;
+        return { kind: "results", taskId: defaultResultsTaskId(nextRuns) };
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load runs");
     } finally {
       setRunsLoading(false);
     }
-  };
+  }, []);
 
   const loadResultsPage = useCallback(async (offset: number, append: boolean) => {
-    if (!selectedTaskId) return;
+    if (!activeTaskId) return;
     if (append) setIsLoadingMore(true);
     else setResultsLoading(true);
     setError(null);
     try {
-      const response = await fetchRunResults(selectedTaskId, { offset, limit: PAGE_SIZE });
+      const response = await fetchRunResults(activeTaskId, { offset, limit: PAGE_SIZE });
       setResultResponse((previous) => mergeResults(previous, response, append));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load results");
@@ -87,21 +107,21 @@ export function LocalPowerpacksApp() {
       if (append) setIsLoadingMore(false);
       else setResultsLoading(false);
     }
-  }, [selectedTaskId]);
+  }, [activeTaskId]);
 
   useEffect(() => {
     refreshRuns();
 
-    const handlePopState = () => setSelectedTaskId(taskIdFromPath());
+    const handlePopState = () => setRoute(routeFromPath());
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   useEffect(() => {
-    if (!selectedTaskId) return;
+    if (route.kind !== "results" || !route.taskId) return;
     setResultResponse(null);
     loadResultsPage(0, false);
-  }, [selectedTaskId, loadResultsPage]);
+  }, [route, loadResultsPage]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -131,7 +151,7 @@ export function LocalPowerpacksApp() {
     });
   }, [resultResponse]);
 
-  const selectedRun = resultResponse?.run || runs.find((run) => run.taskId === selectedTaskId || run.conversationId === selectedTaskId);
+  const selectedRun = resultResponse?.run || runs.find((run) => run.taskId === activeTaskId || run.conversationId === activeTaskId);
   const totalResults = selectedRun?.rowCount ?? resultResponse?.totalRows ?? records.length;
   const loadedCount = resultResponse?.rows.length ?? 0;
 
@@ -140,19 +160,25 @@ export function LocalPowerpacksApp() {
       <div className="flex min-h-dvh bg-background text-foreground">
         <LocalRunSidebar
           runs={filteredRuns}
-          selectedTaskId={selectedTaskId}
+          selectedTaskId={activeTaskId}
+          activeRoute={route.kind}
           isLoading={runsLoading}
           search={search}
           onSearchChange={setSearch}
+          onNavigateResults={() => {
+            const taskId = activeTaskId || defaultResultsTaskId(runs);
+            navigate({ kind: "results", taskId }, taskId ? `/conversation/${encodeURIComponent(taskId)}` : "/");
+          }}
+          onNavigateContacts={() => navigate({ kind: "contacts" }, "/contacts")}
+          onNavigateCompanies={() => navigate({ kind: "companies" }, "/companies")}
           onSelect={(run) => {
             const id = run.conversationId || run.taskId;
-            setSelectedTaskId(id);
-            setConversationPath(id);
+            navigate({ kind: "results", taskId: id }, `/conversation/${encodeURIComponent(id)}`);
           }}
         />
 
         <main className="min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-7xl space-y-4 p-6">
+          {route.kind === "contacts" ? <LocalContactsPage /> : route.kind === "companies" ? <LocalCompanyDirectoryPage /> : <div className="mx-auto max-w-7xl space-y-4 p-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
                 <h2 className="truncate text-2xl font-semibold">{selectedRun?.query || "Select a search run"}</h2>
@@ -184,7 +210,7 @@ export function LocalPowerpacksApp() {
                 <LocalResultsTable
                   records={records}
                   query={selectedRun?.query}
-                  conversationId={selectedRun?.conversationId || selectedTaskId}
+                  conversationId={selectedRun?.conversationId || activeTaskId}
                   totalCount={totalResults}
                 />
                 <div ref={sentinelRef} className="flex min-h-16 items-center justify-center py-4 text-sm text-muted-foreground">
@@ -212,7 +238,7 @@ export function LocalPowerpacksApp() {
                 </CardContent>
               </Card>
             )}
-          </div>
+          </div>}
         </main>
       </div>
     </TooltipProvider>

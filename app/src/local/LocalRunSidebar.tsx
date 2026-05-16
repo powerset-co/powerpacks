@@ -1,5 +1,5 @@
 import { format, isSameYear, isToday, isYesterday } from "date-fns";
-import { Search, Database, Loader2 } from "lucide-react";
+import { Search, Database, Loader2, Users, Building2, ListFilter } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -9,9 +9,13 @@ import type { LocalRunSummary } from "./types";
 interface LocalRunSidebarProps {
   runs: LocalRunSummary[];
   selectedTaskId?: string | null;
+  activeRoute?: "results" | "contacts" | "companies";
   isLoading?: boolean;
   search: string;
   onSearchChange: (value: string) => void;
+  onNavigateResults?: () => void;
+  onNavigateContacts?: () => void;
+  onNavigateCompanies?: () => void;
   onSelect: (run: LocalRunSummary) => void;
 }
 
@@ -29,9 +33,13 @@ function groupLabel(date: Date): string {
 export function LocalRunSidebar({
   runs,
   selectedTaskId,
+  activeRoute = "results",
   isLoading,
   search,
   onSearchChange,
+  onNavigateResults,
+  onNavigateContacts,
+  onNavigateCompanies,
   onSelect,
 }: LocalRunSidebarProps) {
   const grouped = runs.reduce<Record<string, LocalRunSummary[]>>((acc, run) => {
@@ -61,6 +69,38 @@ export function LocalRunSidebar({
             placeholder="Search runs..."
             className="pl-8"
           />
+        </div>
+        <div className="mt-3 grid gap-1">
+          <button
+            onClick={onNavigateResults}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent",
+              activeRoute === "results" ? "border-primary bg-primary/5 text-primary" : "border-transparent"
+            )}
+          >
+            <ListFilter className="h-4 w-4" />
+            Search Results
+          </button>
+          <button
+            onClick={onNavigateContacts}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent",
+              activeRoute === "contacts" ? "border-primary bg-primary/5 text-primary" : "border-transparent"
+            )}
+          >
+            <Users className="h-4 w-4" />
+            My Contacts
+          </button>
+          <button
+            onClick={onNavigateCompanies}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent",
+              activeRoute === "companies" ? "border-primary bg-primary/5 text-primary" : "border-transparent"
+            )}
+          >
+            <Building2 className="h-4 w-4" />
+            Company Directory
+          </button>
         </div>
       </div>
 

@@ -7,7 +7,8 @@
     "dev": "vite --host 0.0.0.0",
     "dev:local": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "test:local-api": "node scripts/test-local-api.mjs"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.0",
@@ -21,6 +22,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "duckdb": "^1.4.4",
     "lucide-react": "^0.462.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
