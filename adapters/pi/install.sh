@@ -71,9 +71,12 @@ install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SK
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill import-contacts "$REPO_ROOT/packs/messages/skills/import-contacts/SKILL.md"
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
+install_skill import-email "$REPO_ROOT/packs/ingestion/skills/import-email/SKILL.md"
+install_skill import-network "$REPO_ROOT/packs/ingestion/skills/import-network/SKILL.md"
+install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
 printf '  search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search\n'
-printf '  import-contacts import-whatsapp\n'
+printf '  import-contacts import-whatsapp import-email import-network import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

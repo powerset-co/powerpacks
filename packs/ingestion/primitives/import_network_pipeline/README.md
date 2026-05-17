@@ -2,6 +2,19 @@
 
 One local orchestration command for network ingestion inputs.
 
+Skills are user-facing handlers; this primitive is the deterministic runtime
+handler they call. In other words: `$import-email` / `$import-network` route the
+agent to a `SKILL.md`, and that skill calls this script.
+
+## Routing table
+
+| User command / skill | This orchestrator role | Source primitive/script |
+| --- | --- | --- |
+| `$import-email` | Calls this script with `--gmail-account-email`; this script imports msgvault, merges, loads DuckDB | `gmail_network_import.py msgvault` |
+| `$import-network` | Calls this script for end-to-end local network ingestion | `linkedin_network_import.py`, `gmail_network_import.py msgvault`, `merge_network_sources.py`, `build_network_duckdb.py` |
+| `$import-twitter` | Runs Twitter primitive first, then use this script with `--include-existing-artifacts` to merge/load DuckDB | `twitter_network_import.py` |
+| `$import-contacts` | Produces message artifacts first, then use this script with `--include-existing-artifacts` | messages pack primitives |
+
 ## Inputs
 
 - LinkedIn CSV: LinkedIn `Connections.csv`, handled by `linkedin_network_import`.
