@@ -116,12 +116,13 @@ enrichment primitive for rows that already have LinkedIn identity.
 | Shared people enrichment | LinkedIn profile enrichment for rows with `linkedin_url` / `public_identifier` | `enrich_people.py` | Approval-gated for RapidAPI cache misses. |
 | Twitter/X import | Twitter follower crawl | `twitter_network_import.py` step `load_or_crawl` | Approval-gated. |
 | Twitter/X import | LinkedIn validation/enrichment for pre-resolved LinkedIn URLs | `twitter_network_import.py` step `validate_linkedin` | Approval-gated. |
-| Gmail/msgvault | None today | `gmail_network_import.py msgvault` is metadata-only | Local-only; no RapidAPI. |
+| Gmail/msgvault | Optional email/name/company-guess -> LinkedIn URL resolution; no profile hydration inside msgvault import | `gmail_network_import.py msgvault` emits `linkedin_resolution_queue.csv`; `resolve_linkedin_queue.py` runs harness or approval-gated Parallel; `gmail_network_import.py apply-resolutions` attaches URLs | msgvault import local-only; Parallel resolution spend-gated; RapidAPI only later through `enrich_people.py`. |
 | Messages/iMessage/WhatsApp | None in local import today | messages primitives | Local metadata/review only unless later resolver/enrichment is explicitly added. |
 
 Target direction: source verticals should emit canonical `people.csv` or
-resolution queues, then share `enrich_people.py` for LinkedIn profile hydration
-instead of each vertical owning a separate LinkedIn enrichment implementation.
+resolution queues, then share `resolve_linkedin_queue.py` for LinkedIn URL
+resolution and `enrich_people.py` for LinkedIn profile hydration instead of each
+vertical owning separate enrichment implementations.
 
 ## Regression checks
 

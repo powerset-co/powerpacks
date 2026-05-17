@@ -65,6 +65,40 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows[0]["source_channel"], "gmail_msgvault")
 
+    def test_msgvault_can_prepare_gmail_linkedin_harness(self) -> None:
+        try:
+            import duckdb  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("duckdb is not installed")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            db = tmp / "msgvault.db"
+            write_msgvault_db(db)
+            ledger = tmp / "ledger.json"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "run",
+                    "--ledger", str(ledger),
+                    "--run-id", "network-harness-test",
+                    "--msgvault-db", str(db),
+                    "--gmail-account-email", "me@example.com",
+                    "--gmail-linkedin-provider", "harness",
+                    "--force",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = json.loads(proc.stdout)
+            artifacts = payload["artifacts"]
+            self.assertTrue(Path(artifacts["gmail_linkedin_resolution_queue_csv"]).exists())
+            self.assertTrue(Path(artifacts["gmail_linkedin_harness_prompts_jsonl"]).exists())
+            self.assertIn("gmail_apply_enrich", json.loads(ledger.read_text())["steps"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ import os
 import re
 import sqlite3
 import sys
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,6 +145,21 @@ TARGETED_COLUMNS = [
     "sample_subjects",
     "sample_calendar_titles",
 ]
+LINKEDIN_RESOLUTION_QUEUE_COLUMNS = [
+    "handle",
+    "id",
+    "display_name",
+    "full_name",
+    "primary_email",
+    "company_guess",
+    "primary_email_type",
+    "total_messages",
+    "thread_count",
+    "last_interaction",
+    "source",
+    "source_channels",
+]
+LINKEDIN_RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
 ACCOUNT_COLUMNS = ["account_id", "account_email", "provider", "source", "added_at"]
 PEOPLE_COLUMNS = [
     "id",
@@ -199,6 +215,28 @@ def now_iso() -> str:
 
 def short_hash(value: str, length: int = 10) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+
+
+def extract_public_identifier(linkedin_url: str) -> str:
+    match = re.search(r"linkedin\.com/in/([^/?#]+)", linkedin_url or "", re.IGNORECASE)
+    return match.group(1).strip().rstrip("/").lower() if match else ""
+
+
+def normalize_linkedin_url(value: str) -> str:
+    url = (value or "").strip()
+    if not url:
+        return ""
+    if url.startswith("linkedin.com/"):
+        url = "https://www." + url
+    elif url.startswith("www.linkedin.com/"):
+        url = "https://" + url
+    url = url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    public_id = extract_public_identifier(url)
+    return f"https://www.linkedin.com/in/{public_id}" if public_id else url
+
+
+def generate_linkedin_person_id(public_identifier: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"linkedin:{public_identifier.lower().strip()}"))
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -378,6 +416,11 @@ def build_one_person(args: argparse.Namespace) -> OnePersonInput:
 def run_dir(base_dir: Path, contact: OnePersonInput, run_id: str | None) -> Path:
     rid = run_id or f"gmail-one-{short_hash(contact.email + ':' + now_iso(), 12)}"
     return base_dir / "gmail" / rid
+
+
+def read_csv(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        return list(csv.DictReader(handle))
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
@@ -578,6 +621,103 @@ def people_rows_from_msgvault(rows: list[dict[str, Any]], source_artifacts: list
     return people
 
 
+def linkedin_resolution_queue_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    queue: list[dict[str, Any]] = []
+    for row in rows:
+        email = str(row.get("email") or "").strip().lower()
+        if not email:
+            continue
+        guess = domain_guess(email)
+        queue.append({
+            "handle": email,
+            "id": f"gmail:{short_hash(email, 16)}",
+            "display_name": row.get("display_name") or "",
+            "full_name": row.get("display_name") or "",
+            "primary_email": email,
+            "company_guess": guess.get("company_guess", ""),
+            "primary_email_type": row.get("primary_email_type") or classify_email(email),
+            "total_messages": row.get("total_messages", ""),
+            "thread_count": row.get("thread_count", ""),
+            "last_interaction": row.get("last_interaction", ""),
+            "source": "gmail_msgvault",
+            "source_channels": "gmail_msgvault",
+        })
+    return queue
+
+
+def load_resolution_map(path: Path, min_confidence: float) -> dict[str, dict[str, str]]:
+    resolutions: dict[str, dict[str, str]] = {}
+    for row in read_csv(path):
+        status = (row.get("status") or "").strip().lower()
+        linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or "")
+        try:
+            confidence = float(row.get("confidence") or 0)
+        except ValueError:
+            confidence = 0.0
+        handle = (row.get("handle") or "").strip().lower()
+        if status == "found" and linkedin_url and handle and confidence >= min_confidence:
+            row = dict(row)
+            row["linkedin_url"] = linkedin_url
+            row["confidence"] = str(confidence)
+            resolutions[handle] = row
+    return resolutions
+
+
+def apply_linkedin_resolutions_to_people(people_csv: Path, resolutions_csv: Path, output_dir: Path, *, min_confidence: float = 0.75) -> dict[str, Any]:
+    people_rows = read_csv(people_csv)
+    resolutions = load_resolution_map(resolutions_csv, min_confidence)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / "people.csv"
+    applied_path = output_dir / "linkedin_resolutions_applied.csv"
+    applied: list[dict[str, Any]] = []
+    output_rows: list[dict[str, Any]] = []
+    for row in people_rows:
+        normalized = {col: row.get(col, "") for col in PEOPLE_COLUMNS}
+        email = (normalized.get("primary_email") or "").strip().lower()
+        resolution = resolutions.get(email) or resolutions.get((normalized.get("id") or "").strip().lower())
+        if resolution:
+            linkedin_url = normalize_linkedin_url(resolution.get("linkedin_url") or "")
+            public_id = extract_public_identifier(linkedin_url)
+            if public_id:
+                normalized["id"] = generate_linkedin_person_id(public_id)
+                normalized["public_identifier"] = public_id
+                normalized["linkedin_url"] = linkedin_url
+                if resolution.get("matched_name") and not normalized.get("full_name"):
+                    normalized["full_name"] = resolution["matched_name"]
+                if resolution.get("matched_headline"):
+                    normalized["headline"] = resolution["matched_headline"]
+                normalized["enrichment_provider"] = "parallel_linkedin_resolution"
+                normalized["enriched_at"] = now_iso()
+                artifacts = [str(people_csv), str(resolutions_csv)]
+                try:
+                    existing = json.loads(normalized.get("source_artifacts") or "[]")
+                    if isinstance(existing, list):
+                        artifacts = [str(x) for x in existing] + [str(resolutions_csv)]
+                except json.JSONDecodeError:
+                    pass
+                normalized["source_artifacts"] = json.dumps(sorted(set(artifacts)), ensure_ascii=False)
+                applied.append({
+                    "primary_email": email,
+                    "linkedin_url": linkedin_url,
+                    "public_identifier": public_id,
+                    "confidence": resolution.get("confidence", ""),
+                    "matched_name": resolution.get("matched_name", ""),
+                })
+        output_rows.append(normalized)
+    write_csv(out_path, PEOPLE_COLUMNS, output_rows)
+    write_csv(applied_path, ["primary_email", "linkedin_url", "public_identifier", "confidence", "matched_name"], applied)
+    return {
+        "status": "completed",
+        "input_people_csv": str(people_csv),
+        "resolutions_csv": str(resolutions_csv),
+        "people_csv": str(out_path),
+        "applied_csv": str(applied_path),
+        "rows": len(output_rows),
+        "resolved": len(applied),
+        "min_confidence": min_confidence,
+    }
+
+
 def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_email: str = "", operator_id: str = "local", *, include_automated: bool = False, limit: int | None = None) -> dict[str, Any]:
     filtered = [row for row in rows if include_automated or not row.get("automated_filtered")]
     if limit is not None:
@@ -588,6 +728,7 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     threads_path = out_dir / f"gmail_threads_{account_short}_{op_short}.csv"
     aggregated_path = out_dir / f"gmail_contacts_aggregated_{account_short}_{op_short}.csv"
     targeted_path = out_dir / f"targeted_emails_{account_short}_{op_short}.csv"
+    resolution_queue_path = out_dir / "linkedin_resolution_queue.csv"
     people_path = out_dir / "people.csv"
     accounts_path = out_dir / "accounts.csv"
     manifest_path = out_dir / "manifest.json"
@@ -644,7 +785,8 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "sample_subjects": "[]",
         "sample_calendar_titles": "[]",
     } for row in filtered])
-    write_csv(people_path, PEOPLE_COLUMNS, people_rows_from_msgvault(filtered, [str(targeted_path), str(aggregated_path)]))
+    write_csv(resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, linkedin_resolution_queue_rows(filtered))
+    write_csv(people_path, PEOPLE_COLUMNS, people_rows_from_msgvault(filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)]))
 
     manifest = {
         "task": "import_gmail_network_msgvault",
@@ -670,6 +812,7 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
             "gmail_threads_csv": str(threads_path),
             "gmail_contacts_aggregated_csv": str(aggregated_path),
             "targeted_emails_csv": str(targeted_path),
+            "linkedin_resolution_queue_csv": str(resolution_queue_path),
             "people_csv": str(people_path),
             "manifest_json": str(manifest_path),
         },
@@ -1074,8 +1217,21 @@ def command_msgvault(args: argparse.Namespace) -> int:
         "artifacts": manifest["artifacts"],
         "counts": manifest["counts"],
         "privacy": manifest["privacy"],
-        "summary": "Imported Gmail contact metadata from msgvault. No message bodies, subjects, raw MIME, external APIs, uploads, or prod writes were used.",
+        "summary": "Imported Gmail contact metadata from msgvault and wrote a LinkedIn resolution queue. No message bodies, subjects, raw MIME, external APIs, uploads, or prod writes were used.",
     })
+    return 0
+
+
+def command_apply_resolutions(args: argparse.Namespace) -> int:
+    run_id = args.run_id or f"gmail-resolved-{short_hash(str(args.people_csv) + ':' + str(args.resolutions_csv) + ':' + now_iso(), 12)}"
+    output_dir = Path(args.output_dir) / "gmail-resolved" / run_id
+    payload = apply_linkedin_resolutions_to_people(
+        Path(args.people_csv),
+        Path(args.resolutions_csv),
+        output_dir,
+        min_confidence=args.min_confidence,
+    )
+    emit(payload)
     return 0
 
 
@@ -1131,6 +1287,14 @@ def build_parser() -> argparse.ArgumentParser:
     msgvault.add_argument("--limit", type=int)
     msgvault.add_argument("--include-automated", action="store_true", help="Include noreply/automated service addresses")
     msgvault.set_defaults(func=command_msgvault)
+
+    apply = sub.add_parser("apply-resolutions", help="Apply LinkedIn resolution results to a Gmail/msgvault people.csv")
+    apply.add_argument("--people-csv", required=True)
+    apply.add_argument("--resolutions-csv", required=True)
+    apply.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
+    apply.add_argument("--run-id")
+    apply.add_argument("--min-confidence", type=float, default=0.75)
+    apply.set_defaults(func=command_apply_resolutions)
 
     return parser
 

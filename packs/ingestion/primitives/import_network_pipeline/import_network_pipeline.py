@@ -178,6 +178,105 @@ def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     return True
 
 
+def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> bool:
+    input_cfg = ledger.get("input", {})
+    provider = input_cfg.get("gmail_linkedin_provider") or "off"
+    queue = ledger.get("artifacts", {}).get("gmail_linkedin_resolution_queue_csv")
+    if provider == "off" or not queue:
+        mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="provider off or no queue")
+        return True
+    child_ledger = Path(ledger["run_dir"]) / "gmail-linkedin-resolution.ledger.json"
+    out_dir = Path(ledger["run_dir"]) / "gmail-linkedin-resolution"
+    cmd = py_cmd(
+        "packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py",
+        "run",
+        "--provider", provider,
+        "--input", str(queue),
+        "--output-dir", str(out_dir),
+        "--ledger", str(child_ledger),
+    )
+    if input_cfg.get("gmail_linkedin_limit") is not None:
+        cmd.extend(["--limit", str(input_cfg["gmail_linkedin_limit"])])
+    code, payload, stderr = run_cmd(cmd)
+    ledger.setdefault("artifacts", {})["gmail_linkedin_resolution_ledger"] = str(child_ledger)
+    if code == 20 or payload.get("status") == "blocked_approval":
+        ledger["blocked"] = {"step_id": "gmail_linkedin_resolution", "child_ledger": str(child_ledger), "child": payload}
+        mark_step(ledger, "gmail_linkedin_resolution", "blocked", payload=payload)
+        save_ledger(ledger_path, ledger)
+        emit({"status": "blocked_approval", "step_id": "gmail_linkedin_resolution", "ledger": str(ledger_path), "child": payload})
+        return False
+    if code != 0:
+        mark_step(ledger, "gmail_linkedin_resolution", "failed", error=stderr or payload)
+        ledger["status"] = "failed"
+        save_ledger(ledger_path, ledger)
+        emit({"status": "failed", "step_id": "gmail_linkedin_resolution", "error": stderr or payload})
+        return False
+    mark_step(ledger, "gmail_linkedin_resolution", "completed", payload=payload)
+    if payload.get("output"):
+        ledger.setdefault("artifacts", {})["gmail_linkedin_resolutions_csv"] = payload.get("output")
+    if payload.get("prompts_jsonl"):
+        ledger.setdefault("artifacts", {})["gmail_linkedin_harness_prompts_jsonl"] = payload.get("prompts_jsonl")
+    if payload.get("instructions"):
+        ledger.setdefault("artifacts", {})["gmail_linkedin_harness_instructions"] = payload.get("instructions")
+    return True
+
+
+def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> bool:
+    input_cfg = ledger.get("input", {})
+    resolutions = input_cfg.get("gmail_resolutions_csv") or ledger.get("artifacts", {}).get("gmail_linkedin_resolutions_csv")
+    people = ledger.get("artifacts", {}).get("gmail_people_csv")
+    if not resolutions or not people:
+        mark_step(ledger, "gmail_apply_enrich", "skipped", reason="no gmail resolutions")
+        return True
+    apply_cmd = py_cmd(
+        "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
+        "apply-resolutions",
+        "--people-csv", str(people),
+        "--resolutions-csv", str(resolutions),
+        "--output-dir", str(DEFAULT_BASE_DIR),
+        "--run-id", f"{ledger['run_id']}-gmail-resolved",
+    )
+    code, payload, stderr = run_cmd(apply_cmd)
+    if code != 0:
+        mark_step(ledger, "gmail_apply_enrich", "failed", error=stderr or payload)
+        ledger["status"] = "failed"
+        save_ledger(ledger_path, ledger)
+        emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": stderr or payload})
+        return False
+    ledger.setdefault("artifacts", {})["gmail_resolved_people_csv"] = payload.get("people_csv")
+    if int(payload.get("resolved") or 0) <= 0:
+        mark_step(ledger, "gmail_apply_enrich", "completed", payload=payload, reason="no resolved LinkedIns")
+        return True
+    child_ledger = Path(ledger["run_dir"]) / "gmail-enrich-people.ledger.json"
+    enrich_cmd = py_cmd(
+        "packs/ingestion/primitives/enrich_people/enrich_people.py",
+        "run",
+        "--input", str(payload.get("people_csv")),
+        "--ledger", str(child_ledger),
+        "--run-id", f"{ledger['run_id']}-gmail-enrich",
+    )
+    code, enrich_payload, stderr = run_cmd(enrich_cmd)
+    ledger.setdefault("artifacts", {})["gmail_enrich_people_ledger"] = str(child_ledger)
+    if code == 20 or enrich_payload.get("status") == "blocked_approval":
+        ledger["blocked"] = {"step_id": "gmail_apply_enrich", "child_ledger": str(child_ledger), "child": enrich_payload}
+        mark_step(ledger, "gmail_apply_enrich", "blocked", payload=enrich_payload)
+        save_ledger(ledger_path, ledger)
+        emit({"status": "blocked_approval", "step_id": "gmail_apply_enrich", "ledger": str(ledger_path), "child": enrich_payload})
+        return False
+    if code != 0:
+        mark_step(ledger, "gmail_apply_enrich", "failed", error=stderr or enrich_payload)
+        ledger["status"] = "failed"
+        save_ledger(ledger_path, ledger)
+        emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": stderr or enrich_payload})
+        return False
+    for key, value in (enrich_payload.get("artifacts") or {}).items():
+        ledger.setdefault("artifacts", {})[f"gmail_enriched_{key}"] = value
+    if enrich_payload.get("artifacts", {}).get("people_csv"):
+        ledger.setdefault("artifacts", {})["gmail_people_csv"] = enrich_payload["artifacts"]["people_csv"]
+    mark_step(ledger, "gmail_apply_enrich", "completed", payload={"apply": payload, "enrich": enrich_payload})
+    return True
+
+
 def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     merge_dir = Path(ledger["run_dir"]) / "merged"
     cmd = py_cmd(
@@ -243,6 +342,14 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
         if not run_gmail_msgvault(ledger_path, ledger):
             return 1
         save_ledger(ledger_path, ledger)
+    if ledger.get("steps", {}).get("gmail_linkedin_resolution", {}).get("status") not in {"completed", "skipped"}:
+        if not run_gmail_linkedin_resolution(ledger_path, ledger):
+            return 20 if ledger.get("blocked") else 1
+        save_ledger(ledger_path, ledger)
+    if ledger.get("steps", {}).get("gmail_apply_enrich", {}).get("status") not in {"completed", "skipped"}:
+        if not run_gmail_apply_and_enrich(ledger_path, ledger):
+            return 20 if ledger.get("blocked") else 1
+        save_ledger(ledger_path, ledger)
     if not run_merge(ledger_path, ledger):
         return 1
     save_ledger(ledger_path, ledger)
@@ -282,6 +389,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             "gmail_account_email": args.gmail_account_email,
             "gmail_limit": args.gmail_limit,
             "include_automated_gmail": args.include_automated_gmail,
+            "gmail_linkedin_provider": args.gmail_linkedin_provider,
+            "gmail_linkedin_limit": args.gmail_linkedin_limit,
+            "gmail_resolutions_csv": args.gmail_resolutions_csv,
             "include_existing_artifacts": args.include_existing_artifacts,
         },
         "steps": {},
@@ -304,6 +414,24 @@ def cmd_approve(args: argparse.Namespace) -> int:
     blocked = ledger.get("blocked") or {}
     if blocked.get("step_id") == "linkedin" and blocked.get("child_ledger"):
         code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py", "approve", "--ledger", blocked["child_ledger"]))
+        if code != 0:
+            emit({"status": "failed", "step_id": "approve", "error": stderr or payload})
+            return 1
+        ledger.pop("blocked", None)
+        save_ledger(ledger_path, ledger)
+        emit({"status": "approved", "ledger": str(ledger_path), "child": payload})
+        return 0
+    if blocked.get("step_id") == "gmail_linkedin_resolution" and blocked.get("child_ledger"):
+        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py", "approve", "--ledger", blocked["child_ledger"]))
+        if code != 0:
+            emit({"status": "failed", "step_id": "approve", "error": stderr or payload})
+            return 1
+        ledger.pop("blocked", None)
+        save_ledger(ledger_path, ledger)
+        emit({"status": "approved", "ledger": str(ledger_path), "child": payload})
+        return 0
+    if blocked.get("step_id") == "gmail_apply_enrich" and blocked.get("child_ledger"):
+        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/enrich_people/enrich_people.py", "approve", "--ledger", blocked["child_ledger"]))
         if code != 0:
             emit({"status": "failed", "step_id": "approve", "error": stderr or payload})
             return 1
@@ -342,6 +470,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--gmail-account-email", default="")
     run.add_argument("--gmail-limit", type=int)
     run.add_argument("--include-automated-gmail", action="store_true")
+    run.add_argument("--gmail-linkedin-provider", choices=["off", "harness", "parallel"], default="off", help="Prepare/run Gmail email-to-LinkedIn resolution before merge. harness is local prompt prep; parallel is spend-bearing and approval-gated.")
+    run.add_argument("--gmail-linkedin-limit", type=int, help=argparse.SUPPRESS)
+    run.add_argument("--gmail-resolutions-csv", default="", help="Existing linkedin_resolutions.csv to apply to Gmail people before shared enrich_people")
     run.add_argument("--include-existing-artifacts", action="store_true", help="Merge all discovered existing LinkedIn/Gmail/Twitter/message artifacts instead of only artifacts produced by this run")
     run.add_argument("--force", action="store_true")
     run.set_defaults(func=cmd_run)

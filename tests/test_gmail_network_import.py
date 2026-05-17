@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -134,6 +135,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             artifacts = payload["artifacts"]
             targeted = Path(artifacts["targeted_emails_csv"])
             people = Path(artifacts["people_csv"])
+            queue = Path(artifacts["linkedin_resolution_queue_csv"])
             with targeted.open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
@@ -146,6 +148,56 @@ class GmailNetworkImportTests(unittest.TestCase):
                 people_rows = list(csv.DictReader(handle))
             self.assertEqual(people_rows[0]["primary_email"], "jane@example.com")
             self.assertEqual(people_rows[0]["source_channels"], "gmail_msgvault")
+            with queue.open(newline="", encoding="utf-8") as handle:
+                queue_rows = list(csv.DictReader(handle))
+            self.assertEqual(queue_rows[0]["handle"], "jane@example.com")
+            self.assertEqual(queue_rows[0]["source"], "gmail_msgvault")
+
+    def test_apply_linkedin_resolutions_to_msgvault_people(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            resolutions = Path(tmp) / "linkedin_resolutions.csv"
+            with people.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=gmail_network_import.PEOPLE_COLUMNS)
+                writer.writeheader()
+                row = {col: "" for col in gmail_network_import.PEOPLE_COLUMNS}
+                row.update({
+                    "id": "gmail:abc",
+                    "full_name": "Jane Example",
+                    "primary_email": "jane@example.com",
+                    "all_emails": json.dumps(["jane@example.com"]),
+                    "source_channels": "gmail_msgvault",
+                    "source_artifacts": json.dumps(["gmail/people.csv"]),
+                })
+                writer.writerow(row)
+            with resolutions.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=gmail_network_import.LINKEDIN_RESOLUTION_COLUMNS)
+                writer.writeheader()
+                writer.writerow({
+                    "handle": "jane@example.com",
+                    "status": "found",
+                    "linkedin_url": "https://www.linkedin.com/in/jane-example?trk=test",
+                    "confidence": "0.92",
+                    "matched_name": "Jane Example",
+                    "matched_headline": "Founder at Example",
+                    "evidence": "[]",
+                    "reasoning": "fixture",
+                })
+            code, payload = self.invoke([
+                "apply-resolutions",
+                "--people-csv", str(people),
+                "--resolutions-csv", str(resolutions),
+                "--output-dir", str(Path(tmp) / "out"),
+                "--run-id", "resolved-test",
+            ])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["resolved"], 1)
+            with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[0]["public_identifier"], "jane-example")
+            self.assertEqual(rows[0]["linkedin_url"], "https://www.linkedin.com/in/jane-example")
+            self.assertEqual(rows[0]["headline"], "Founder at Example")
+            self.assertEqual(rows[0]["id"], str(uuid.uuid5(uuid.NAMESPACE_URL, "linkedin:jane-example")))
 
     def test_msgvault_accounts_lists_local_sources(self):
         with tempfile.TemporaryDirectory() as tmp:

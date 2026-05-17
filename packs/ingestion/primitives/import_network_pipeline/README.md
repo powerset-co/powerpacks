@@ -31,6 +31,20 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
   --gmail-account-email arthur@powerset.co
 ```
 
+Optional email LinkedIn resolution/enrichment bridge:
+
+```bash
+# prepare local harness prompts, no spend/network
+uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run \
+  --gmail-account-email arthur@powerset.co \
+  --gmail-linkedin-provider harness
+
+# or use an existing linkedin_resolutions.csv and feed resolved rows into shared enrich_people
+uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run \
+  --gmail-account-email arthur@powerset.co \
+  --gmail-resolutions-csv .powerpacks/network-import/gmail/<run-id>/linkedin-resolution/linkedin_resolutions.csv
+```
+
 The pipeline writes:
 
 - per-source artifacts under `.powerpacks/network-import/{linkedin,gmail,...}`
@@ -47,4 +61,9 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
 uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue
 ```
 
-Gmail msgvault import, merge, and DuckDB loading are local-only.
+Gmail msgvault import, merge, and DuckDB loading are local-only. Gmail
+email-to-LinkedIn resolution is optional: `--gmail-linkedin-provider harness`
+only prepares prompts; `--gmail-linkedin-provider parallel` is spend-bearing and
+approval-gated. RapidAPI profile hydration only happens after resolutions are
+applied and is delegated to `enrich_people.py` with its normal approval/cache
+behavior.
