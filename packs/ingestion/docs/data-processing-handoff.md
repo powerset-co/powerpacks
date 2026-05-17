@@ -1,0 +1,137 @@
+# Data processing handoff: ingestion outputs, schemas, and enrichment boundary
+
+This handoff is for the data-processing worker. It describes the artifacts now
+emitted by local network ingestion and where RapidAPI enrichment happens.
+
+## End-to-end phases
+
+```txt
+account linking / local source setup
+  -> ingestion/source import
+  -> enrichment / identity resolution
+  -> merge + local materialization
+  -> processing / indexing / search
+```
+
+| Phase | Owner surface | Current scripts | Notes |
+| --- | --- | --- | --- |
+| Account linking / local source setup | source-specific onboarding | msgvault CLI, LinkedIn export UI, `$import-contacts`, Twitter RapidAPI key checks | Establish source access; avoid provider/API work unless explicitly approved. |
+| Ingestion/source import | ingestion skills + primitives | `gmail_network_import.py msgvault`, `linkedin_network_import.py`, `twitter_network_import.py`, messages primitives | Produces source-local normalized `people.csv` or message contacts artifacts. |
+| Enrichment / resolution | data processing + source-specific gates | `enrich_people.py`, Twitter `pre_resolve_linkedin`/`validate_linkedin`, future resolver queues | RapidAPI LinkedIn profile enrichment is centralized in `enrich_people` for LinkedIn-identified rows; Twitter still has source-specific validation. |
+| Merge + materialization | ingestion orchestration | `import_network_pipeline.py`, `merge_network_sources.py`, `build_network_duckdb.py` | Produces merged CSV contracts and local DuckDB. |
+| Processing / indexing / search | data processing / indexing/search packs | indexing primitives consume merged artifacts | Should consume canonical CSVs/views, not source-specific raw dumps. |
+
+## User-facing skills and runtime handlers
+
+Skills are harness-facing handlers/instructions. Runtime work is done by Python
+primitives so runs are deterministic, ledgered, testable, and resumable.
+
+| User command / skill | Skill file | Runtime script(s) | Result |
+| --- | --- | --- | --- |
+| `$import-email` | `packs/ingestion/skills/import-email/SKILL.md` | `import_network_pipeline.py run --gmail-account-email ...` -> `gmail_network_import.py msgvault` -> merge -> DuckDB | msgvault email metadata imported into local network artifacts. |
+| `$import-network` | `packs/ingestion/skills/import-network/SKILL.md` | `import_network_pipeline.py run ...` | End-to-end orchestrator for LinkedIn CSV + Gmail and optional existing messages/Twitter artifacts. |
+| `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter_network_import.py run/approve/continue`; then `$import-network --include-existing-artifacts` | Twitter/X `people.csv`, then merged local network artifacts. |
+| `$import-contacts` | `packs/messages/skills/import-contacts/SKILL.md` | messages pack primitives; then `$import-network --include-existing-artifacts` | iMessage/WhatsApp metadata, then merged local network artifacts. |
+| LinkedIn CSV path | `$import-network` or `import-linkedin-network` | `linkedin_network_import.py` -> `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
+
+## Canonical CSV contracts
+
+### `people.csv`
+
+Canonical provider-neutral local person interchange artifact. Columns come from
+`packs/ingestion/schemas/people_schema.py::PEOPLE_SCHEMA_COLUMNS`.
+
+```txt
+id, public_identifier, linkedin_url, first_name, last_name, full_name,
+headline, summary, city, state, country, location_raw, profile_picture_url,
+work_experiences, education, current_title, current_company,
+current_company_urn, entity_urn, enrichment_provider, enriched_at,
+harmonic_response, harmonic_location, rapidapi_response, twitter_handle,
+twitter_response, primary_email, all_emails, primary_phone, all_phones,
+source_channels, source_artifacts
+```
+
+Merge adds these columns to merged `people.csv`:
+
+```txt
+merge_key, merge_confidence, merge_sources, merged_row_count, needs_review
+```
+
+### `network_contacts.csv`
+
+One row per merged local contact/network entity.
+
+```txt
+contact_id, merge_key, display_name, linkedin_url, public_identifier,
+primary_email, primary_phone, source_channels, source_count, needs_review
+```
+
+### `network_contact_sources.csv`
+
+Source/provenance facts for contacts. This mirrors the local equivalent of an
+`operator_person_sources` style table and should be used for UI attribution.
+
+```txt
+contact_id, merge_key, source_channel, source_identifier, source_artifact,
+display_name, linkedin_url, public_identifier, primary_email, primary_phone
+```
+
+Known `source_channel` values include:
+
+```txt
+linkedin_csv, gmail_msgvault, imessage, whatsapp, twitter
+```
+
+### `network_companies.csv`
+
+Contact-derived company summary for local company search/navigation. This is not
+a fully enriched company corpus; it is derived from current person company
+fields, primarily `current_company` and `current_company_urn`.
+
+```txt
+company_id, company_key, company_name, company_urn, source_channels,
+contact_count, contact_ids, contact_names
+```
+
+## DuckDB materialization
+
+`packs/ingestion/primitives/build_network_duckdb/build_network_duckdb.py` loads
+the merged CSVs into local DuckDB.
+
+| CSV | Table | View |
+| --- | --- | --- |
+| `people.csv` | `local_network_people` | `network_people` |
+| `network_contacts.csv` | `local_network_contacts` | `network_contacts` |
+| `network_contact_sources.csv` | `local_network_contact_sources` | `network_contact_sources` |
+| `network_companies.csv` | `local_network_companies` | `network_companies` |
+
+## RapidAPI enrichment boundary
+
+Current RapidAPI behavior is per vertical/source, with a shared LinkedIn profile
+enrichment primitive for rows that already have LinkedIn identity.
+
+| Surface | RapidAPI usage | Where it happens | Gate |
+| --- | --- | --- | --- |
+| LinkedIn CSV import | LinkedIn profile enrichment for cache misses | `linkedin_network_import.py` delegates to `enrich_people.py` | Approval-gated by `enrich_people`; cache hits are local-only. |
+| Shared people enrichment | LinkedIn profile enrichment for rows with `linkedin_url` / `public_identifier` | `enrich_people.py` | Approval-gated for RapidAPI cache misses. |
+| Twitter/X import | Twitter follower crawl | `twitter_network_import.py` step `load_or_crawl` | Approval-gated. |
+| Twitter/X import | LinkedIn validation/enrichment for pre-resolved LinkedIn URLs | `twitter_network_import.py` step `validate_linkedin` | Approval-gated. |
+| Gmail/msgvault | None today | `gmail_network_import.py msgvault` is metadata-only | Local-only; no RapidAPI. |
+| Messages/iMessage/WhatsApp | None in local import today | messages primitives | Local metadata/review only unless later resolver/enrichment is explicitly added. |
+
+Target direction: source verticals should emit canonical `people.csv` or
+resolution queues, then share `enrich_people.py` for LinkedIn profile hydration
+instead of each vertical owning a separate LinkedIn enrichment implementation.
+
+## Regression checks
+
+```bash
+uv run --project . python -m unittest \
+  tests/test_import_network_pipeline.py \
+  tests/test_merge_network_sources.py \
+  tests/test_network_duckdb.py \
+  tests/test_enrich_people.py \
+  tests/test_linkedin_network_import.py \
+  tests/test_twitter_network_import.py \
+  tests/test_gmail_network_import.py
+```
