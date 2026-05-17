@@ -1,5 +1,5 @@
 ---
-name: ingestion-onboarding
+name: onboard
 description: Walk a user through linking/exporting all local network ingestion sources and persist non-secret status in .powerpacks/ingestion/accounts.json.
 ---
 

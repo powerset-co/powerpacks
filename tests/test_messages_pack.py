@@ -1611,6 +1611,16 @@ class DeepResearchContactsTests(unittest.TestCase):
                 self.assertEqual(manifest["counts"]["results_fetched"], 2)
                 self.assertEqual(manifest["counts"]["real_name_found"], 2)
                 self.assertEqual(manifest["counts"]["linkedin_found"], 2)
+                submitted_inputs = [run["input"] for run in state["runs"].values()]
+                self.assertEqual(len(submitted_inputs), 2)
+                for sent in submitted_inputs:
+                    self.assertEqual(set(sent), {"handle", "display_name", "bio", "known_info", "phone_number", "area_code"})
+                    self.assertEqual(sent["known_info"], "")
+                    self.assertNotIn("source_channel", sent)
+                    self.assertNotIn("Message count", json.dumps(sent))
+                    self.assertNotIn("Last message", json.dumps(sent))
+                    self.assertNotIn("Message source", json.dumps(sent))
+                    self.assertNotIn("group", json.dumps(sent).lower())
                 # Per-handle artifacts written
                 for handle in ("phone-4155550101", "phone-4155550202"):
                     raw = output_dir / handle / "00_parallel_raw.json"

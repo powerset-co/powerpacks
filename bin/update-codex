@@ -14,8 +14,23 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if ! git diff --quiet || ! git diff --cached --quiet; then
     echo "warning: working tree has local changes; git pull may stop if files overlap." >&2
   fi
-  if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-    git pull --ff-only
+  if upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
+    if git fetch --quiet; then
+      local_head="$(git rev-parse @)"
+      upstream_head="$(git rev-parse "$upstream")"
+      merge_base="$(git merge-base @ "$upstream")"
+      if [[ "$local_head" == "$upstream_head" ]]; then
+        :
+      elif [[ "$merge_base" == "$local_head" ]]; then
+        git pull --ff-only
+      elif [[ "$merge_base" == "$upstream_head" ]]; then
+        echo "warning: local branch is ahead of $upstream; skipping git pull." >&2
+      else
+        echo "warning: local branch has diverged from $upstream; skipping git pull." >&2
+      fi
+    else
+      echo "warning: git fetch failed; continuing with the current checkout." >&2
+    fi
   else
     echo "warning: no upstream branch configured; skipping git pull." >&2
   fi

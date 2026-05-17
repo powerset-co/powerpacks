@@ -8,8 +8,8 @@ Subcommands:
 
 Privacy contract:
 
-- Only `name`, `source`, message counts, last-contact recency, and whether
-  the row appears in group chats are sent. No phone numbers, group names, or
+- Only `name` plus a batch-local `idx` are sent to OpenRouter. No phone
+  numbers, source labels, message counts, timestamps, group metadata, or
   message content.
 - The `skip` column is the only field updated in the contacts CSV.
 - A reviews JSONL artifact is written so verdicts can be audited.
@@ -105,7 +105,7 @@ For each contact, decide: ENRICH or SKIP.
 
 Use a deterministic rubric. The same input should receive the same verdict.
 
-Consider these factors (in priority order):
+Consider these factors:
 - **Name quality & notability**: Use your training data and world knowledge \
 to actively identify whether a name matches or resembles known public figures, \
 business leaders, prominent families, or well-known professionals. If you \
@@ -114,24 +114,18 @@ finance, or any professional domain — say so in the reason and ENRICH. Even \
 partial recognition counts — if the name *could* belong to someone notable, \
 ENRICH and explain the possible association. The user's phone contacts are \
 already filtered to people they actually know.
-- **Message volume**: Higher message counts suggest a real relationship.
-- **Recency**: Recently contacted people are more valuable, but a recognizable \
-full name can override low recency.
-	- **Skip patterns**: Skip entries that are service providers, businesses, \
+- **Skip patterns**: Skip entries that are service providers, businesses, \
 roles rather than people, placeholders, coded labels, nicknames, private aliases, \
-identifiers, or single first names with no last name and zero message count.
-  - Personal notes appended to a name should usually SKIP when the note is the \
+identifiers, or single first names with no last name.
+- Personal notes appended to a name should usually SKIP when the note is the \
 reason the entry is identifiable rather than the person's real name. Examples \
 include dating-app/source notes, location shorthand, event/context tags, or \
 relationship labels. If the remaining name is still a clear normal full name, \
 ENRICH; if it is just a first name plus a personal note, SKIP.
-- **Group chat only**: If someone ONLY appears in group chats with low \
-individual message count, they're less valuable.
 
 Be optimistic — these are real phone contacts, not random leads. Normal human \
-full names should be ENRICH, even with zero message count. When in doubt about \
-a full name, ALWAYS lean ENRICH. Only SKIP names that clearly cannot map to a \
-LinkedIn profile.
+full names should be ENRICH. When in doubt about a full name, ALWAYS lean \
+ENRICH. Only SKIP names that clearly cannot map to a LinkedIn profile.
 
 Do not use duplicates as a SKIP reason. If multiple rows appear to be the same \
 person or have the same name, give each row the verdict its name quality \
@@ -212,15 +206,6 @@ def load_contacts_for_review(
             out.append({
                 "phone": row.get("phone", ""),
                 "name": name,
-                "source": row.get("source", ""),
-                "is_in_group_chats": row.get("is_in_group_chats", "false"),
-                "group_names": row.get("group_names", ""),
-                "message_count": row.get("message_count", "") or "0",
-                "imessage_message_count": row.get("imessage_message_count", ""),
-                "whatsapp_message_count": row.get("whatsapp_message_count", ""),
-                "last_message": row.get("last_message", ""),
-                "imessage_last_message": row.get("imessage_last_message", ""),
-                "whatsapp_last_message": row.get("whatsapp_last_message", ""),
                 "match_status": effective or "unmatched",
                 "matched_person_id": matched_person_id,
             })
@@ -230,22 +215,7 @@ def load_contacts_for_review(
 def build_batch_payload(batch: list[dict[str, str]]) -> list[dict[str, Any]]:
     payload = []
     for idx, c in enumerate(batch):
-        try:
-            msg_count = int(c.get("message_count") or 0)
-        except ValueError:
-            msg_count = 0
-        payload.append({
-            "idx": idx,
-            "name": c["name"],
-            "source": c.get("source", ""),
-            "message_count": msg_count,
-            "imessage_message_count": c.get("imessage_message_count", ""),
-            "whatsapp_message_count": c.get("whatsapp_message_count", ""),
-            "last_contacted": format_recency(c.get("last_message", "")),
-            "imessage_last_contacted": format_recency(c.get("imessage_last_message", "")),
-            "whatsapp_last_contacted": format_recency(c.get("whatsapp_last_message", "")),
-            "in_group_chats": c.get("is_in_group_chats", "false"),
-        })
+        payload.append({"idx": idx, "name": c["name"]})
     return payload
 
 

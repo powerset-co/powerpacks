@@ -182,6 +182,8 @@ Routes:
   `packs/powerset/skills/powerset/SKILL.md`
 - `$import-contacts`, iMessage, WhatsApp, contact import/review/upload/retarget →
   `packs/messages/skills/import-contacts/SKILL.md`
+- `$msgvault`, `$local-msg-vault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
+  `packs/ingestion/skills/msgvault/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Ask a brief
 clarifying question only when the same wording could mean multiple surfaces,

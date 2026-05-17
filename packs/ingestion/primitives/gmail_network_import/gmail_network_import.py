@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import webbrowser
@@ -33,7 +34,7 @@ from typing import Any
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/gmail/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
-DEFAULT_APP_GMAIL_URL = "https://search.powerset.dev/gmail"
+DEFAULT_APP_GMAIL_URL = "https://search.powerset.dev/gmail/connect"
 DEFAULT_API_URL = "https://search-api-7wk4uhe77q-uw.a.run.app"
 
 PERSONAL_DOMAINS = {
@@ -212,6 +213,24 @@ def api_get_json(url: str, token: str) -> dict[str, Any]:
         raise PipelineFailed(f"API request failed HTTP {exc.code}: {body}") from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise PipelineFailed(f"API request failed: {exc}") from exc
+
+
+def gmail_stats_url(api_url: str) -> str:
+    return f"{api_url.rstrip('/')}/v2/integrations/gmail-stats"
+
+
+def fetch_gmail_stats(api_url: str, token: str) -> dict[str, Any]:
+    return api_get_json(gmail_stats_url(api_url), token)
+
+
+def account_email(account: Any) -> str:
+    if not isinstance(account, dict):
+        return ""
+    return str(account.get("email") or account.get("account_email") or "").strip().lower()
+
+
+def connected_account_emails(stats: dict[str, Any]) -> set[str]:
+    return {email for email in (account_email(account) for account in stats.get("connected_accounts", [])) if email}
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -735,7 +754,7 @@ def command_status(args: argparse.Namespace) -> int:
 
 def command_accounts(args: argparse.Namespace) -> int:
     try:
-        stats = api_get_json(f"{args.api_url.rstrip('/')}/v2/integrations/gmail-stats", powerset_token())
+        stats = fetch_gmail_stats(args.api_url, powerset_token())
     except PipelineFailed as exc:
         emit({"status": "failed", "error": str(exc)})
         return 1
@@ -757,10 +776,70 @@ def command_accounts(args: argparse.Namespace) -> int:
     return 0
 
 
+def poll_for_linked_account(api_url: str, token: str, before: set[str], timeout_seconds: int, poll_seconds: float) -> dict[str, Any]:
+    deadline = time.monotonic() + max(timeout_seconds, 1)
+    last_stats: dict[str, Any] = {}
+    last_error = ""
+
+    while time.monotonic() <= deadline:
+        try:
+            last_stats = fetch_gmail_stats(api_url, token)
+            emails = connected_account_emails(last_stats)
+            new_emails = sorted(emails - before)
+            if new_emails:
+                return {"status": "linked", "email": new_emails[0], "stats": last_stats}
+            if emails and not before:
+                return {"status": "linked", "email": sorted(emails)[0], "stats": last_stats}
+        except PipelineFailed as exc:
+            last_error = str(exc)
+        time.sleep(max(poll_seconds, 0.5))
+
+    return {
+        "status": "timeout",
+        "known_accounts": sorted(connected_account_emails(last_stats)) if last_stats else sorted(before),
+        "last_error": last_error,
+    }
+
+
 def command_connect(args: argparse.Namespace) -> int:
+    token = ""
+    before: set[str] = set()
+    if args.wait:
+        try:
+            token = powerset_token()
+            before = connected_account_emails(fetch_gmail_stats(args.api_url, token))
+        except PipelineFailed as exc:
+            emit({"status": "failed", "error": str(exc)})
+            return 1
+
     opened = False
     if not args.no_open:
         opened = webbrowser.open(args.app_url)
+
+    if args.wait:
+        print("Waiting for Gmail OAuth to finish in the browser...", file=sys.stderr)
+        poll = poll_for_linked_account(args.api_url, token, before, args.timeout_seconds, args.poll_seconds)
+        if poll.get("status") == "linked":
+            emit({
+                "status": "linked",
+                "app_url": args.app_url,
+                "opened_browser": opened,
+                "email": poll.get("email"),
+                "previous_accounts": sorted(before),
+                "message": "Gmail account linked. You can close the browser tab and return to Codex.",
+            })
+            return 0
+        emit({
+            "status": "needs_user_action",
+            "app_url": args.app_url,
+            "opened_browser": opened,
+            "previous_accounts": sorted(before),
+            "known_accounts": poll.get("known_accounts", []),
+            "last_error": poll.get("last_error", ""),
+            "message": "Finish Gmail OAuth in the browser, then rerun accounts or continue onboarding with done.",
+        })
+        return 20
+
     emit({
         "status": "ok",
         "app_url": args.app_url,
@@ -817,7 +896,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     connect = sub.add_parser("connect", help="Open the Powerset Gmail connection page")
     connect.add_argument("--app-url", default=DEFAULT_APP_GMAIL_URL)
+    connect.add_argument("--api-url", default=DEFAULT_API_URL)
     connect.add_argument("--no-open", action="store_true", help="Print the URL without opening a browser")
+    connect.add_argument("--wait", dest="wait", action="store_true", default=True, help="Poll until the linked Gmail account appears (default)")
+    connect.add_argument("--no-wait", dest="wait", action="store_false", help="Open or print the URL without polling")
+    connect.add_argument("--timeout-seconds", type=int, default=600)
+    connect.add_argument("--poll-seconds", type=float, default=5.0)
     connect.set_defaults(func=command_connect)
 
     return parser

@@ -110,6 +110,7 @@ class _Handler(BaseHTTPRequestHandler):
                 contacts = json.loads(json_part)
             except Exception:
                 contacts = []
+            self.routes.setdefault("openrouter_contacts", []).append(contacts)
             results = []
             for c in contacts:
                 idx = c.get("idx")
@@ -526,6 +527,10 @@ class LlmReviewTests(unittest.TestCase):
                 self.assertEqual(payload["counts"]["verdicts"], 4)
                 self.assertEqual(payload["counts"]["enrich"], 2)
                 self.assertEqual(payload["counts"]["skip"], 2)
+                sent_contacts = _Handler.routes.get("openrouter_contacts") or []
+                self.assertTrue(sent_contacts)
+                for contact in sent_contacts[0]:
+                    self.assertEqual(set(contact), {"idx", "name"})
 
                 with contacts.open(newline="") as h:
                     rows = list(csv.DictReader(h))

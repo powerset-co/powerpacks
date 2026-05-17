@@ -1,6 +1,6 @@
 ---
 name: powerset
-description: Unified Powerset command surface. Use for `$powerset login`, `$powerset status`, `$powerset whoami`, `$powerset sets list`, `$powerset sets use <id|name>`, `$powerset mcp install`, `$powerset env pull`, and `$powerset help`.
+description: Unified Powerset command surface. Use for `$powerset login`, `$powerset status`, `$powerset whoami`, `$powerset sets list`, `$powerset sets use <id|name>`, `$powerset mcp install`, `$powerset env pull`, `$powerset create oauth app`, and `$powerset help`.
 ---
 
 # Powerset
@@ -21,6 +21,7 @@ selection.
 | `$powerset sets use <id|name>` | Resolve a set via MCP and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
 | `$powerset mcp install` | Register/refresh the `powerset-search` MCP for local hosts. |
 | `$powerset env pull [--profile <profile>]` | Pull allowlisted runtime keys into `.env`. The explicit command is consent to write `.env`. Default `search-core` is the standard setup. |
+| `$powerset create oauth app` | Route to the msgvault setup primitive for Gmail OAuth Desktop app guidance. |
 
 Aliases remain valid for backcompat: `$powerset-login` means `$powerset login`;
 `$powerset-set` means `$powerset sets` / `$powerset sets use`.
@@ -37,6 +38,7 @@ $powerset sets list             list visible Powerset sets
 $powerset sets use <id|name>    set local default set in .env
 $powerset mcp install           install/refresh powerset-search MCP
 $powerset env pull              pull profile keys into .env
+$powerset create oauth app      guide Gmail OAuth app setup for msgvault
 $powerset help                  show this help
 ```
 
@@ -175,6 +177,24 @@ gcloud auth login --no-launch-browser
 ```
 
 Relay the URL/code prompt tersely, then rerun the env pull command.
+
+## `$powerset create oauth app`
+
+This alias is for msgvault/Gmail OAuth setup. Prefer browser automation:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup
+```
+
+If the user only wants instructions, run:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/ingestion/primitives/msgvault_setup/msgvault_setup.py create-oauth-app
+```
+
+If the user provided an email, add `--email <gmail>`. If they provided a Google
+Cloud project, add `--project <project>`. Report the browser action and the
+continuation command with `--client-secret`.
 
 ## `$powerset sets list` / `$powerset sets use <id|name>`
 

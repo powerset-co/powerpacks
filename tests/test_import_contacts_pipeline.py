@@ -486,6 +486,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
             ledger_path = tmp_path / "import-run.json"
             ledger = mod.load_ledger(ledger_path)
             ledger["steps"]["extract_whatsapp"] = {"id": "extract_whatsapp", "status": "completed"}
+            ledger.setdefault("artifacts", {})["whatsapp_provider"] = "wacli"
             whatsapp_csv = tmp_path / "whatsapp.contacts.csv"
             whatsapp_count_cache = tmp_path / "whatsapp.message-count-cache.json"
             whatsapp_csv.write_text(
@@ -504,6 +505,45 @@ class ImportContactsPipelineTests(unittest.TestCase):
             saved = mod.read_json(ledger_path)
             summary = saved["steps"]["extract_whatsapp"]["summary"]
             self.assertEqual(summary["reason"], "active_run_completed")
+
+    def test_extract_whatsapp_does_not_reuse_legacy_provider_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            ledger["steps"]["extract_whatsapp"] = {"id": "extract_whatsapp", "status": "completed"}
+            whatsapp_csv = tmp_path / "whatsapp.contacts.csv"
+            whatsapp_jsonl = tmp_path / "whatsapp.contacts.jsonl"
+            whatsapp_manifest = tmp_path / "whatsapp.contacts.csv.manifest.json"
+            whatsapp_csv.write_text(
+                ",".join(mod.CONTACT_CSV_HEADERS) + "\n"
+                "+15550000001,Ada,whatsapp,false,,3,2026-01-01,,,,,,,,\n",
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                force_whatsapp=False,
+                whatsapp_provider="wacli",
+                wacli_max_messages=0,
+                wacli_max_group_participants=30,
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+            )
+            payload = {
+                "primitive": "import_whatsapp_wacli",
+                "status": "completed",
+                "counts": {"contacts": 2},
+            }
+            with mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", whatsapp_csv), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_JSONL", whatsapp_jsonl), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_MANIFEST", whatsapp_manifest), \
+                    mock.patch.object(mod, "run_command", return_value={"returncode": 0, "json": payload}) as run_command:
+                mod.extract_whatsapp(args, ledger_path, ledger)
+
+            run_command.assert_called_once()
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["artifacts"]["whatsapp_provider"], "wacli")
+            self.assertEqual(saved["steps"]["extract_whatsapp"]["summary"], payload)
 
     def test_extract_whatsapp_uses_wacli_provider_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -544,6 +584,66 @@ class ImportContactsPipelineTests(unittest.TestCase):
             saved = mod.read_json(ledger_path)
             self.assertEqual(saved["artifacts"]["whatsapp_provider"], "wacli")
             self.assertEqual(saved["steps"]["extract_whatsapp"]["summary"], payload)
+
+    def test_extract_whatsapp_preserves_wacli_qr_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            args = SimpleNamespace(
+                force_whatsapp=True,
+                whatsapp_provider="wacli",
+                wacli_max_messages=0,
+                wacli_max_group_participants=30,
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+            )
+            payload = {
+                "primitive": "import_whatsapp_wacli",
+                "status": "blocked_user_action",
+                "message": "WhatsApp needs a QR scan.",
+                "qr_page": ".powerpacks/messages/wacli-login-qr.html",
+            }
+            with mock.patch.object(mod, "run_command", return_value={"returncode": 21, "json": payload}):
+                with self.assertRaises(mod.PipelineBlocked):
+                    mod.extract_whatsapp(args, ledger_path, ledger)
+
+            saved = mod.read_json(ledger_path)
+            block = saved["current_block"]
+            self.assertEqual(block["whatsapp_provider"], "wacli")
+            self.assertEqual(block["qr_page"], ".powerpacks/messages/wacli-login-qr.html")
+            self.assertNotIn("qr_path", block)
+            self.assertEqual(saved["steps"]["extract_whatsapp"]["status"], "blocked_user_action")
+
+    def test_extract_whatsapp_rejects_non_wacli_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            args = SimpleNamespace(
+                force_whatsapp=True,
+                whatsapp_provider="waha",
+                wacli_max_messages=0,
+                wacli_max_group_participants=30,
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+            )
+            with mock.patch.object(mod, "run_command") as run_command:
+                with self.assertRaises(mod.PipelineFailed) as ctx:
+                    mod.extract_whatsapp(args, ledger_path, ledger)
+
+            run_command.assert_not_called()
+            self.assertIn("wacli is the only supported provider", str(ctx.exception))
+
+    def test_import_contacts_task_uses_wacli_browser_qr_flow(self):
+        task = json.loads((ROOT / "packs/messages/tasks/import-contacts.task.json").read_text(encoding="utf-8"))
+        steps = task["steps"]
+        whatsapp_step = next(step for step in steps if step["id"] == "extract_whatsapp")
+        self.assertEqual(whatsapp_step["primitive"], "import_whatsapp_wacli")
+        self.assertIn("browser QR page", whatsapp_step["user_action"])
+        self.assertFalse(any(str(step.get("primitive", "")).startswith("waha") for step in steps))
 
     def test_existing_contacts_with_legacy_queue_schema_fails_actionably(self):
         with tempfile.TemporaryDirectory() as tmp:

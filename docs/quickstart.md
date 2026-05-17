@@ -71,17 +71,12 @@ the skill from:
 
 The primitive is stdlib-only; no new Python packages required.
 
-WhatsApp needs Docker so we can run a local
-[WAHA](https://github.com/devlikeapro/waha) container. Two options:
+WhatsApp uses the local
+[`wacli`](https://github.com/openclaw/wacli) helper by default. It will be
+installed through Homebrew if it is missing:
 
 ```bash
-# Option A: Docker Desktop (GUI, requires accepting EULA on macOS)
-brew install --cask docker
-open -a Docker
-
-# Option B: Colima (lightweight, no EULA, recommended for Apple Silicon)
-brew install colima docker
-colima start --memory 2 --vm-type vz --vz-rosetta
+brew install steipete/tap/wacli
 ```
 
 You'll also need WhatsApp on your phone to scan the QR code that pops up
@@ -219,7 +214,7 @@ Artifacts land under `.powerpacks/messages/`:
 ├── contacts.csv                  unified, dedup'd by phone
 ├── powerset_contacts.csv         your candidate catalog (after sync)
 ├── *.manifest.json               per-step counts + diagnostics
-└── whatsapp/qr.png               most-recent QR for WAHA auth
+└── wacli-login-qr.html           browser QR page for WhatsApp auth
 ```
 
 The pack is privacy-first:
@@ -236,7 +231,7 @@ The pack is privacy-first:
 | Symptom | Fix |
 | --- | --- |
 | `extract_imessage_contacts check` reports `chat_db.readable: false` | Grant Full Disk Access to the terminal app and restart it. |
-| `waha_runtime check` says `docker.daemon_ok: false` | Start Docker Desktop (`open -a Docker`) or Colima (`colima start`). |
+| `import_whatsapp_wacli run` says `wacli is not installed` | Install it with `brew install steipete/tap/wacli`, then rerun the import. |
 | `provision_runtime_env pull` says "no active gcloud account" | `gcloud auth login` with your `@powerset.co` account. |
 | `provision_runtime_env pull` rejects your account | Switch active accounts: `gcloud config set account you@powerset.co`. |
 | `auth login` browser callback never returns | Make sure nothing else is listening on `127.0.0.1:9876`. |
