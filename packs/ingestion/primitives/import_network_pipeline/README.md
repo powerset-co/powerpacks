@@ -21,7 +21,7 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
 The pipeline writes:
 
 - per-source artifacts under `.powerpacks/network-import/{linkedin,gmail,...}`
-- merged CSVs under `.powerpacks/network-import/network-runs/<run-id>/merged/`
+- merged CSVs under `.powerpacks/network-import/network-runs/<run-id>/merged/` (`people.csv`, `network_contacts.csv`, `network_contact_sources.csv`, `network_companies.csv`)
 - DuckDB under `.powerpacks/network-import/network-runs/<run-id>/duckdb/`
 
 ## Approval behavior

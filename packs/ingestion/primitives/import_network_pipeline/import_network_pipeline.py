@@ -205,6 +205,7 @@ def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
         "merged_people_csv": payload.get("people_csv"),
         "network_contacts_csv": payload.get("network_contacts_csv"),
         "network_contact_sources_csv": payload.get("network_contact_sources_csv"),
+        "network_companies_csv": payload.get("network_companies_csv"),
         "merge_manifest": payload.get("manifest"),
     })
     return True

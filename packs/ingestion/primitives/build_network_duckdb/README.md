@@ -7,6 +7,7 @@ Inputs are produced by `merge_network_sources`:
 - `people.csv`
 - `network_contacts.csv`
 - `network_contact_sources.csv`
+- `network_companies.csv`
 
 Run:
 
@@ -28,11 +29,13 @@ DuckDB tables:
 - `local_network_people`
 - `local_network_contacts`
 - `local_network_contact_sources`
+- `local_network_companies`
 
 Views:
 
 - `network_people`
 - `network_contacts`
 - `network_contact_sources`
+- `network_companies`
 
 This primitive is local-only and does not call APIs or upload data.

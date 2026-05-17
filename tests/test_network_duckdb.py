@@ -37,6 +37,9 @@ class NetworkDuckDBTests(unittest.TestCase):
                 {"contact_id": "person-1", "merge_key": "linkedin:jane-example", "source_channel": "linkedin", "source_identifier": "https://www.linkedin.com/in/jane-example", "source_artifact": "linkedin/people.csv", "display_name": "Jane Example", "linkedin_url": "https://www.linkedin.com/in/jane-example", "public_identifier": "jane-example", "primary_email": "", "primary_phone": ""},
                 {"contact_id": "person-1", "merge_key": "linkedin:jane-example", "source_channel": "gmail_msgvault", "source_identifier": "jane@example.com", "source_artifact": "gmail/people.csv", "display_name": "Jane Example", "linkedin_url": "", "public_identifier": "", "primary_email": "jane@example.com", "primary_phone": ""},
             ])
+            write_csv(network / "network_companies.csv", ["company_id", "company_key", "company_name", "company_urn", "source_channels", "contact_count", "contact_ids", "contact_names"], [
+                {"company_id": "company-1", "company_key": "name:acme-ai", "company_name": "Acme AI", "company_urn": "", "source_channels": "linkedin", "contact_count": "1", "contact_ids": "[\"person-1\"]", "contact_names": "[\"Jane Example\"]"},
+            ])
 
             proc = subprocess.run(
                 [sys.executable, str(SCRIPT), "--network-dir", str(network), "--output-dir", str(tmp / "duckdb"), "--force"],
@@ -49,6 +52,7 @@ class NetworkDuckDBTests(unittest.TestCase):
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["tables"]["local_network_contacts"], 1)
             self.assertEqual(payload["tables"]["local_network_contact_sources"], 2)
+            self.assertEqual(payload["tables"]["local_network_companies"], 1)
 
             import duckdb
             con = duckdb.connect(payload["duckdb"], read_only=True)
@@ -57,6 +61,8 @@ class NetworkDuckDBTests(unittest.TestCase):
                 self.assertEqual(count, 1)
                 sources = con.execute("SELECT source_channels FROM network_contacts WHERE contact_id = 'person-1'").fetchone()[0]
                 self.assertEqual(sources, "linkedin,gmail_msgvault")
+                company = con.execute("SELECT company_name FROM network_companies WHERE company_key = 'name:acme-ai'").fetchone()[0]
+                self.assertEqual(company, "Acme AI")
             finally:
                 con.close()
 

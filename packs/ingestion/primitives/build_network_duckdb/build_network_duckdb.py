@@ -5,6 +5,7 @@ Inputs are produced by ``merge_network_sources.py``:
 - people.csv
 - network_contacts.csv
 - network_contact_sources.csv
+- network_companies.csv
 
 The resulting DuckDB is intended for local "My Contacts / Network" UI and
 inspection flows. It keeps the profile/search shape (people) separate from the
@@ -27,6 +28,7 @@ TABLE_INPUTS = {
     "local_network_people": "people.csv",
     "local_network_contacts": "network_contacts.csv",
     "local_network_contact_sources": "network_contact_sources.csv",
+    "local_network_companies": "network_companies.csv",
 }
 
 
@@ -53,6 +55,7 @@ def create_views_and_indexes(con: Any) -> None:
     con.execute("CREATE OR REPLACE VIEW network_people AS SELECT * FROM local_network_people")
     con.execute("CREATE OR REPLACE VIEW network_contacts AS SELECT * FROM local_network_contacts")
     con.execute("CREATE OR REPLACE VIEW network_contact_sources AS SELECT * FROM local_network_contact_sources")
+    con.execute("CREATE OR REPLACE VIEW network_companies AS SELECT * FROM local_network_companies")
     # DuckDB indexes are opportunistic here: useful for local UI lookups, harmless
     # for tiny artifacts, and not part of the external contract.
     for sql in [
@@ -60,6 +63,8 @@ def create_views_and_indexes(con: Any) -> None:
         "CREATE INDEX IF NOT EXISTS idx_network_contacts_public_identifier ON local_network_contacts(public_identifier)",
         "CREATE INDEX IF NOT EXISTS idx_network_contact_sources_contact ON local_network_contact_sources(contact_id)",
         "CREATE INDEX IF NOT EXISTS idx_network_contact_sources_channel ON local_network_contact_sources(source_channel)",
+        "CREATE INDEX IF NOT EXISTS idx_network_companies_key ON local_network_companies(company_key)",
+        "CREATE INDEX IF NOT EXISTS idx_network_companies_name ON local_network_companies(company_name)",
     ]:
         try:
             con.execute(sql)
@@ -100,11 +105,12 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "output_dir": str(output_dir),
         "duckdb": str(db_path),
         "tables": counts,
-        "views": ["network_people", "network_contacts", "network_contact_sources"],
+        "views": ["network_people", "network_contacts", "network_contact_sources", "network_companies"],
         "source_contract": {
             "people": str(network_dir / "people.csv"),
             "contacts": str(network_dir / "network_contacts.csv"),
             "contact_sources": str(network_dir / "network_contact_sources.csv"),
+            "companies": str(network_dir / "network_companies.csv"),
         },
     }
     manifest_path = output_dir / f"manifest.{args.flavor}.json"
