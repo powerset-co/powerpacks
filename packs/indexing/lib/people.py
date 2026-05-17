@@ -346,14 +346,21 @@ def _role_ids(title: str) -> list[str]:
 
 
 def _tokens(*values: Any) -> list[str]:
-    return list(dict.fromkeys(token for value in values for token in _TOKEN_RE.findall(_string(value).lower())))
+    tokens = [token for value in values for token in _TOKEN_RE.findall(_string(value).lower())]
+    bigrams = [f"{tokens[idx]} {tokens[idx + 1]}" for idx in range(len(tokens) - 1)]
+    return list(dict.fromkeys([*tokens, *bigrams]))
 
 
-def _ngrams(text: str, size: int) -> list[str]:
-    compact = re.sub(r"\s+", " ", text.lower()).strip()
-    if len(compact) < size:
-        return [compact] if compact else []
-    return list(dict.fromkeys(compact[idx : idx + size] for idx in range(0, len(compact) - size + 1)))
+def _ngrams(text: str, size: int = 3) -> list[str]:
+    # Match Aleph upload char_wb tokenization for ngram_range=(3,5).
+    del size  # retained for backwards-compatible call sites
+    result: list[str] = []
+    for word in _string(text).lower().split():
+        padded = f" {word} "
+        for n in range(3, 6):
+            for idx in range(0, len(padded) - n + 1):
+                result.append(padded[idx : idx + n])
+    return list(dict.fromkeys(result))
 
 
 def _position_to_profile(exp: dict[str, Any], index: int) -> dict[str, Any]:

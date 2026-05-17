@@ -134,6 +134,7 @@ class IndexingContractTest(unittest.TestCase):
         self.assertEqual(result["summaries"][0]["id"], stable_person_uuid(self.people[0]))
         self.assertIn("Python", result["summaries"][0]["summary"])
         self.assertIn("python", result["summaries"][0]["summary_tokens"])
+        self.assertIn("python security", result["summaries"][0]["summary_tokens"])
         self.assertIn("text", result["internal_text"][0])
 
     def test_location_records_are_local_artifacts_not_turbopuffer_contract_uploads(self):
