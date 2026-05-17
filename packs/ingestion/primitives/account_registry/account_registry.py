@@ -47,6 +47,7 @@ def cmd_mark(args: argparse.Namespace) -> int:
         args.channel,
         path=Path(args.path),
         linked=args.linked,
+        skipped=args.skipped,
         username=args.username,
         artifact=args.artifact,
         notes=args.notes,
@@ -73,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     mark.add_argument("--channel", required=True, choices=CHANNELS)
     mark.add_argument("--linked", action=argparse.BooleanOptionalAction, default=None)
     mark.add_argument("--success", action="store_true", help="Mark linked and record last_success_at")
+    mark.add_argument("--skipped", action=argparse.BooleanOptionalAction, default=None, help="Mark source skipped/not skipped for onboarding")
     mark.add_argument("--username", default="")
     mark.add_argument("--artifact", default="")
     mark.add_argument("--notes", default=None)

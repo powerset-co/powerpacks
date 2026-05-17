@@ -18,6 +18,9 @@ After syncing Gmail with [msgvault](https://github.com/wesm/msgvault), import
 email/name interaction metadata from its local SQLite archive:
 
 ```bash
+uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault-accounts \
+  --db ~/.msgvault/msgvault.db
+
 uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault \
   --db ~/.msgvault/msgvault.db \
   --account-email me@gmail.com
@@ -57,7 +60,9 @@ Run artifacts live under `.powerpacks/network-import/gmail/<run-id>/`:
 ## Notes
 
 - Multiple Gmail accounts are modeled as separate msgvault source accounts;
-  pass `--account-email` to filter one account.
+  use `msgvault-accounts` to list them, then pass `--account-email` once per
+  selected account (or let the onboarding `step` loop do this with repeated
+  `--gmail-account`).
 - OpenAI domain parse is not needed; the local heuristic derives
   `example.com -> Example` only for the legacy one-person seed.
 - EnrichLayer/RapidAPI/Parallel/Harmonic are intentionally not assumed present.

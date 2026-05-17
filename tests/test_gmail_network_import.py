@@ -147,6 +147,28 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(people_rows[0]["primary_email"], "jane@example.com")
             self.assertEqual(people_rows[0]["source_channels"], "gmail_msgvault")
 
+    def test_msgvault_accounts_lists_local_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgvault.db"
+            con = sqlite3.connect(db)
+            con.executescript("""
+                CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+                CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+                CREATE TABLE messages (id INTEGER PRIMARY KEY, source_id INTEGER, message_type TEXT, deleted_at TEXT, deleted_from_source_at TEXT);
+                CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
+                INSERT INTO sources (id, source_type, identifier, display_name) VALUES
+                    (1, 'gmail', 'me@gmail.com', 'Me'),
+                    (2, 'gmail', 'work@example.com', 'Work');
+                INSERT INTO messages (id, source_id, message_type) VALUES (10, 1, 'email'), (11, 1, 'email'), (12, 2, 'email');
+            """)
+            con.commit()
+            con.close()
+            code, payload = self.invoke(["msgvault-accounts", "--db", str(db)])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual([row["account_email"] for row in payload["accounts"]], ["me@gmail.com", "work@example.com"])
+            self.assertEqual([row["message_count"] for row in payload["accounts"]], [2, 1])
+
     def test_powerset_gmail_oauth_commands_are_not_exposed(self):
         parser = gmail_network_import.build_parser()
         with redirect_stderr(StringIO()):

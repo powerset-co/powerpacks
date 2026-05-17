@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -23,7 +25,6 @@ def load_module(name, rel):
 accounts = load_module("accounts_helper", "packs/ingestion/accounts.py")
 account_registry = load_module("account_registry", "packs/ingestion/primitives/account_registry/account_registry.py")
 onboarding = load_module("onboarding", "packs/ingestion/primitives/onboarding/onboarding.py")
-linkedin_mcp_import = load_module("linkedin_mcp_import", "packs/ingestion/primitives/linkedin_mcp_import/linkedin_mcp_import.py")
 
 
 class IngestionAccountsOnboardingTests(unittest.TestCase):
@@ -59,16 +60,116 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertIn("todo", payload)
             self.assertNotIn("gmail", [item["channel"] for item in payload["todo"]])
 
-    def test_linkedin_mcp_instructions_and_mark(self):
+    def create_msgvault_db(self, path: Path):
+        con = sqlite3.connect(path)
+        con.executescript("""
+            CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+            CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                source_id INTEGER,
+                conversation_id INTEGER,
+                message_type TEXT,
+                sent_at TEXT,
+                received_at TEXT,
+                internal_date TEXT,
+                deleted_at TEXT,
+                deleted_from_source_at TEXT
+            );
+            CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
+            INSERT INTO sources (id, source_type, identifier, display_name) VALUES
+                (1, 'gmail', 'me@gmail.com', 'Me'),
+                (2, 'gmail', 'work@example.com', 'Work');
+            INSERT INTO participants (id, email_address, display_name, domain) VALUES
+                (1, 'jane@example.com', 'Jane Example', 'example.com'),
+                (2, 'me@gmail.com', 'Me', 'gmail.com'),
+                (3, 'pat@example.org', 'Pat Example', 'example.org'),
+                (4, 'work@example.com', 'Work', 'example.com');
+            INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at) VALUES
+                (10, 1, 100, 'email', '2026-01-01T00:00:00Z'),
+                (11, 2, 101, 'email', '2026-01-02T00:00:00Z');
+            INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
+                (10, 1, 'from', 'Jane Example'),
+                (10, 2, 'to', 'Me'),
+                (11, 3, 'from', 'Pat Example'),
+                (11, 4, 'to', 'Work');
+        """)
+        con.commit()
+        con.close()
+
+    def test_onboarding_step_prompts_for_linkedin_csv(self):
+        old_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "accounts.json"
-            code, payload = self.invoke(linkedin_mcp_import, ["instructions", "--accounts", str(path)])
-            self.assertEqual(code, 0)
-            self.assertEqual(payload["mcp_config"]["mcpServers"]["linkedin"]["command"], "uvx")
-            code, _ = self.invoke(linkedin_mcp_import, ["mark-linked", "--accounts", str(path), "--username", "https://www.linkedin.com/in/me"])
-            self.assertEqual(code, 0)
+            os.chdir(tmp)
+            try:
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                accounts.update_channel("gmail", path=path, skipped=True)
+                code, payload = self.invoke(onboarding, ["step", "--accounts", str(path)])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 20)
+            self.assertEqual(payload["status"], "needs_input")
+            self.assertEqual(payload["channel"], "linkedin_csv")
+            self.assertIn("--linkedin-csv", payload["next_command"])
+
+    def test_onboarding_step_detects_linkedin_artifact(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                artifact = Path(".powerpacks/network-import/linkedin/run-1/people_harmonic_all.csv")
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_text("id\n", encoding="utf-8")
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                accounts.update_channel("gmail", path=path, skipped=True)
+                code, payload = self.invoke(onboarding, ["step", "--accounts", str(path)])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 20)
             registry = accounts.load_registry(path)
-            self.assertTrue(registry["accounts"]["linkedin_mcp"]["linked"])
+            self.assertTrue(registry["accounts"]["linkedin_csv"]["linked"])
+            self.assertEqual(payload["status"], "next_action")
+
+    def test_onboarding_step_discovers_gmail_msgvault_accounts(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                db = Path(tmp) / "msgvault.db"
+                self.create_msgvault_db(db)
+                path = Path(tmp) / "accounts.json"
+                code, payload = self.invoke(onboarding, ["step", "--accounts", str(path), "--gmail-db", str(db)])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 20)
+            self.assertEqual(payload["status"], "needs_input")
+            self.assertEqual(payload["channel"], "gmail")
+            self.assertEqual([row["account_email"] for row in payload["discovered_accounts"]], ["me@gmail.com", "work@example.com"])
+            self.assertIn("--gmail-all", payload["all_command"])
+
+    def test_onboarding_step_imports_multiple_gmail_accounts(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                db = Path(tmp) / "msgvault.db"
+                self.create_msgvault_db(db)
+                path = Path(tmp) / "accounts.json"
+                code, payload = self.invoke(onboarding, [
+                    "step", "--accounts", str(path), "--gmail-db", str(db),
+                    "--gmail-output-dir", str(Path(tmp) / "out"), "--gmail-all",
+                ])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "progressed")
+            self.assertEqual(payload["channel"], "gmail")
+            self.assertEqual([row["account_email"] for row in payload["imported_accounts"]], ["me@gmail.com", "work@example.com"])
+            registry = accounts.load_registry(path)
+            self.assertTrue(registry["accounts"]["gmail"]["linked"])
+            self.assertEqual(registry["accounts"]["gmail"]["usernames"], ["me@gmail.com", "work@example.com"])
 
 
 if __name__ == "__main__":

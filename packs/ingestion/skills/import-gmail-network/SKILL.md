@@ -29,6 +29,16 @@ usually `~/.msgvault/msgvault.db`. Powerpacks reads only `sources`,
 metadata; it never reads message bodies, subjects, snippets, raw MIME, or
 attachments.
 
+First list local msgvault Gmail source accounts so the harness can echo them
+back and ask the operator which ones to add:
+
+```bash
+uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault-accounts \
+  --db ~/.msgvault/msgvault.db
+```
+
+Then import one selected account at a time:
+
 ```bash
 uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault \
   --db ~/.msgvault/msgvault.db \

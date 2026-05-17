@@ -999,6 +999,58 @@ def command_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def list_msgvault_accounts(con: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = con.execute("""
+        SELECT
+            s.id AS source_id,
+            s.identifier AS account_email,
+            s.display_name AS display_name,
+            COUNT(DISTINCT m.id) AS message_count
+        FROM sources s
+        LEFT JOIN messages m ON m.source_id = s.id
+        WHERE (s.source_type IS NULL OR LOWER(s.source_type) = 'gmail')
+          AND s.identifier IS NOT NULL
+          AND TRIM(s.identifier) != ''
+        GROUP BY s.id, s.identifier, s.display_name
+        ORDER BY LOWER(s.identifier)
+    """).fetchall()
+    accounts: list[dict[str, Any]] = []
+    for row in rows:
+        email = str(row["account_email"] or "").strip().lower()
+        if not email:
+            continue
+        accounts.append({
+            "source_id": str(row["source_id"]),
+            "account_email": email,
+            "display_name": str(row["display_name"] or ""),
+            "message_count": int(row["message_count"] or 0),
+        })
+    return accounts
+
+
+def command_msgvault_accounts(args: argparse.Namespace) -> int:
+    con = connect_msgvault(Path(args.db))
+    try:
+        require_msgvault_schema(con)
+        accounts = list_msgvault_accounts(con)
+    finally:
+        con.close()
+    emit({
+        "status": "ok",
+        "source": "msgvault",
+        "db": str(Path(args.db).expanduser()),
+        "accounts": accounts,
+        "count": len(accounts),
+        "privacy": {
+            "message_bodies_read": False,
+            "message_subjects_included": False,
+            "raw_mime_read": False,
+            "local_artifacts_only": True,
+        },
+    })
+    return 0
+
+
 def command_msgvault(args: argparse.Namespace) -> int:
     con = connect_msgvault(Path(args.db))
     try:
@@ -1065,6 +1117,10 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="Show ledger status")
     status.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     status.set_defaults(func=command_status)
+
+    sources = sub.add_parser("msgvault-accounts", aliases=["msgvault-sources"], help="List Gmail source accounts in a local msgvault SQLite archive")
+    sources.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
+    sources.set_defaults(func=command_msgvault_accounts)
 
     msgvault = sub.add_parser("msgvault", aliases=["import-msgvault"], help="Import Gmail contact metadata from a local msgvault SQLite archive")
     msgvault.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
