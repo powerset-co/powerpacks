@@ -184,6 +184,16 @@ Routes:
   `packs/messages/skills/import-contacts/SKILL.md`
 - `$msgvault`, `$local-msg-vault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
   `packs/ingestion/skills/msgvault/SKILL.md`
+- `$onboard`, `$ingestion-onboarding`, local ingestion onboarding, link/export
+  local network sources →
+  `packs/ingestion/skills/onboard/SKILL.md`
+- `$import-email`, Gmail, email, msgvault metadata import →
+  `packs/ingestion/skills/import-email/SKILL.md`
+- `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
+  `packs/ingestion/skills/import-twitter/SKILL.md`
+- `$import-network`, local network ingestion orchestration, LinkedIn CSV plus
+  msgvault/messages/Twitter merge, DuckDB materialization →
+  `packs/ingestion/skills/import-network/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Ask a brief
 clarifying question only when the same wording could mean multiple surfaces,

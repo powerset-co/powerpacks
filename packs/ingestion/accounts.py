@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_ACCOUNTS_PATH = Path(".powerpacks/ingestion/accounts.json")
-CHANNELS = ["messages", "gmail", "linkedin_csv", "linkedin_mcp", "twitter"]
+CHANNELS = ["messages", "gmail", "linkedin_csv", "twitter"]
 
 
 def now_iso() -> str:
@@ -26,6 +26,7 @@ def now_iso() -> str:
 def empty_channel() -> dict[str, Any]:
     return {
         "linked": False,
+        "skipped": False,
         "usernames": [],
         "artifacts": [],
         "last_checked_at": "",
@@ -78,6 +79,7 @@ def update_channel(
     *,
     path: Path = DEFAULT_ACCOUNTS_PATH,
     linked: bool | None = None,
+    skipped: bool | None = None,
     username: str | None = None,
     artifact: str | None = None,
     notes: str | None = None,
@@ -89,6 +91,8 @@ def update_channel(
     rec = registry["accounts"][channel]
     if linked is not None:
         rec["linked"] = linked
+    if skipped is not None:
+        rec["skipped"] = skipped
     if username:
         if username not in rec["usernames"]:
             rec["usernames"].append(username)
@@ -101,5 +105,6 @@ def update_channel(
     if success:
         rec["last_success_at"] = now_iso()
         rec["linked"] = True
+        rec["skipped"] = False
     save_registry(registry, path)
     return registry

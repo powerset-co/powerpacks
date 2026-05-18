@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import subprocess
@@ -16,6 +17,38 @@ from packs.indexing.primitives.build_processing_pipeline import build_processing
 from packs.indexing.primitives.embed_records_checkpointed import embed_records_checkpointed
 from packs.indexing.primitives.enrich_companies_checkpointed import enrich_companies_checkpointed
 from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed
+
+
+def fixture_title_hash(title: str) -> str:
+    normalized = "".join(ch for ch in title.lower() if ch.isalnum())
+    return (f"fixture{normalized}")[:16].ljust(16, "0")
+
+
+def write_fixture_with_title_hashes(source: Path, dest: Path) -> Path:
+    with source.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames or []
+        rows = list(reader)
+    for row in rows:
+        try:
+            experiences = json.loads(row.get("work_experiences") or "[]")
+        except json.JSONDecodeError:
+            experiences = []
+        if not isinstance(experiences, list):
+            continue
+        changed = False
+        for exp in experiences:
+            if isinstance(exp, dict) and exp.get("title") and not exp.get("title_hash"):
+                exp["title_hash"] = fixture_title_hash(str(exp["title"]))
+                changed = True
+        if changed:
+            row["work_experiences"] = json.dumps(experiences)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return dest
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -72,6 +105,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
 
     def test_pipeline_dry_run_estimates_without_provider_calls_or_writes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
+            input_csv = write_fixture_with_title_hashes(FIXTURE_PEOPLE, Path(td) / "people_with_hashes.csv")
             output = Path(td) / "pipeline"
             proc = subprocess.run(
                 [
@@ -79,7 +113,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                     str(ROOT / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"),
                     "run",
                     "--input",
-                    str(FIXTURE_PEOPLE),
+                    str(input_csv),
                     "--output-dir",
                     str(output),
                     "--run-id",
@@ -228,9 +262,10 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as td:
                 tmp = Path(td)
+                input_csv = write_fixture_with_title_hashes(FIXTURE_PEOPLE, tmp / "people_with_hashes.csv")
                 run_dir = tmp / "pipeline" / "candidate"
                 ledger = pipeline.default_ledger(
-                    FIXTURE_PEOPLE,
+                    input_csv,
                     run_dir,
                     "candidate",
                     "op-openai-test",

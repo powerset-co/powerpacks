@@ -92,6 +92,21 @@ def _role_enrichment() -> dict:
     }
 
 
+def fixture_title_hash(title: str) -> str:
+    normalized = "".join(ch for ch in title.lower() if ch.isalnum())
+    return (f"fixture{normalized}")[:16].ljust(16, "0")
+
+
+def add_title_hashes(experiences: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for exp in experiences:
+        item = dict(exp)
+        if item.get("title") and not item.get("title_hash"):
+            item["title_hash"] = fixture_title_hash(str(item["title"]))
+        out.append(item)
+    return out
+
+
 def write_role_classifications(flattened: Path, output: Path) -> Path:
     from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed as roles_stage
 
@@ -158,11 +173,11 @@ def write_precomputed_pipeline_inputs(source: Path, root: Path, operator_id: str
 
 def role_fixture_rows() -> list[dict]:
     return [
-        {"id": "p1", "headline": "Founder", "work_experiences": [{"title": "Founder and CEO", "company_name": "BuildCo", "description": "fundraising and company building"}]},
-        {"id": "p2", "headline": "Engineer", "work_experiences": [{"title": "Staff Software Engineer", "company_name": "ScaleCo", "description": "python kubernetes backend systems"}]},
-        {"id": "p3", "headline": "Product", "work_experiences": [{"title": "Product Manager", "company_name": "AppCo", "description": "roadmaps and user research"}]},
-        {"id": "p4", "headline": "Revenue", "work_experiences": [{"title": "VP Sales", "company_name": "SalesCo", "description": "go to market and customer development"}]},
-        {"id": "p5", "headline": "Data", "work_experiences": [{"title": "Data Scientist", "company_name": "DataCo", "description": "machine learning analytics"}]},
+        {"id": "p1", "headline": "Founder", "work_experiences": add_title_hashes([{"title": "Founder and CEO", "company_name": "BuildCo", "description": "fundraising and company building"}])},
+        {"id": "p2", "headline": "Engineer", "work_experiences": add_title_hashes([{"title": "Staff Software Engineer", "company_name": "ScaleCo", "description": "python kubernetes backend systems"}])},
+        {"id": "p3", "headline": "Product", "work_experiences": add_title_hashes([{"title": "Product Manager", "company_name": "AppCo", "description": "roadmaps and user research"}])},
+        {"id": "p4", "headline": "Revenue", "work_experiences": add_title_hashes([{"title": "VP Sales", "company_name": "SalesCo", "description": "go to market and customer development"}])},
+        {"id": "p5", "headline": "Data", "work_experiences": add_title_hashes([{"title": "Data Scientist", "company_name": "DataCo", "description": "machine learning analytics"}])},
     ]
 
 
@@ -171,6 +186,13 @@ def write_five_person_csv(path: Path) -> None:
         reader = csv.DictReader(handle)
         fieldnames = reader.fieldnames or []
         rows = list(reader)
+    for row in rows:
+        try:
+            experiences = json.loads(row.get("work_experiences") or "[]")
+        except json.JSONDecodeError:
+            experiences = []
+        if isinstance(experiences, list):
+            row["work_experiences"] = json.dumps(add_title_hashes([item for item in experiences if isinstance(item, dict)]))
     extra = {field: "" for field in fieldnames}
     extra.update(
         {
@@ -186,6 +208,7 @@ def write_five_person_csv(path: Path) -> None:
             "country": "US",
             "work_experiences": json.dumps([
                 {
+                    "title_hash": fixture_title_hash("Product Manager"),
                     "title": "Product Manager",
                     "company_name": "AppCo",
                     "company_public_identifier": "appco",

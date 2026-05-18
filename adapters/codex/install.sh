@@ -67,6 +67,9 @@ install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-
 install_skill onboard "$REPO_ROOT/packs/ingestion/skills/onboard/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
+install_skill import-email "$REPO_ROOT/packs/ingestion/skills/import-email/SKILL.md"
+install_skill import-network "$REPO_ROOT/packs/ingestion/skills/import-network/SKILL.md"
+install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 if uv run --project "$REPO_ROOT" python "$REPO_ROOT/bin/agent-bootstrap"; then
@@ -75,5 +78,5 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter"
 echo "restart Codex to pick up the skill list"

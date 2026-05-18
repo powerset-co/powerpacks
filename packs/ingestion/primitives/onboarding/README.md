@@ -2,28 +2,39 @@
 
 Guided local onboarding for network ingestion sources.
 
-It reads/writes `.powerpacks/ingestion/accounts.json`, checks local artifacts
-where possible, and gives next actions for each channel.
+It reads/writes `.powerpacks/ingestion/accounts.json`, refreshes local artifact
+state where possible, and gives the next action for each missing channel.
 
-Non-blocking conversational flow:
+## Step Loop
+
+Use the idempotent `step` command for harnesses and agents:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py run
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --input yes
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action yes
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py skip
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py run-status
+uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step
 ```
 
-Harnesses should prefer `continue --action ...` or `continue --csv ...` over
-free-form `--input` replies. LinkedIn CSV actions:
+Rerun the same command until it returns one of:
+
+- `completed`
+- `needs_input`
+- `waiting`
+- `blocked_approval`
+
+Gmail uses local msgvault metadata only. There is no hosted Powerset Gmail
+connect flow in onboarding.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action scan-linkedin-downloads
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action open-downloads
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action open-linkedin-drop-folder
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action check-linkedin-drop-folder
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --csv <Connections.csv>
+uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+  --gmail-db ~/.msgvault/msgvault.db \
+  --gmail-all
+```
+
+LinkedIn CSV can be provided when available:
+
+```bash
+uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+  --linkedin-csv ~/Downloads/Connections.csv \
+  --linkedin-source-user <label>
 ```
 
 Status/planning helpers:
@@ -39,5 +50,4 @@ Channels:
 - messages
 - gmail
 - linkedin_csv
-- linkedin_mcp
 - twitter

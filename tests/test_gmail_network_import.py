@@ -1,11 +1,12 @@
 import csv
 import importlib.util
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
-from unittest import mock
-from contextlib import redirect_stdout
+import uuid
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
@@ -82,45 +83,151 @@ class GmailNetworkImportTests(unittest.TestCase):
         parsed = gmail_network_import.parse_email_header('"Jane Example" <jane@example.com>, john@example.org')
         self.assertEqual(parsed, [("Jane Example", "jane@example.com"), ("", "john@example.org")])
 
-    def test_connect_no_open_prints_web_oauth_route(self):
-        code, payload = self.invoke(["connect", "--no-open", "--no-wait"])
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["app_url"], "https://search.powerset.dev/gmail/connect")
-        self.assertFalse(payload["opened_browser"])
-        self.assertIn("does not put the local bearer token", payload["auth_model"])
+    def test_msgvault_import_reads_metadata_without_subjects_or_bodies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgvault.db"
+            con = sqlite3.connect(db)
+            con.executescript("""
+                CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+                CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY,
+                    source_id INTEGER,
+                    conversation_id INTEGER,
+                    message_type TEXT,
+                    sent_at TEXT,
+                    received_at TEXT,
+                    internal_date TEXT,
+                    deleted_at TEXT,
+                    deleted_from_source_at TEXT,
+                    subject TEXT,
+                    snippet TEXT
+                );
+                CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
+                INSERT INTO sources (id, source_type, identifier, display_name) VALUES (1, 'gmail', 'me@gmail.com', 'Me');
+                INSERT INTO participants (id, email_address, display_name, domain) VALUES
+                    (1, 'jane@example.com', 'Jane Participant', 'example.com'),
+                    (2, 'me@gmail.com', 'Me', 'gmail.com'),
+                    (3, 'noreply@example.com', 'No Reply', 'example.com');
+                INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at, subject, snippet) VALUES
+                    (10, 1, 100, 'email', '2026-01-01T00:00:00Z', 'private subject', 'private snippet'),
+                    (11, 1, 101, 'email', '2026-01-02T00:00:00Z', 'private subject 2', 'private snippet 2'),
+                    (12, 1, 102, 'email', '2026-01-03T00:00:00Z', 'automated', 'automated');
+                INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
+                    (10, 1, 'from', 'Jane Example'),
+                    (11, 1, 'to', 'Jane Example'),
+                    (11, 2, 'from', 'Me'),
+                    (12, 3, 'from', 'No Reply');
+            """)
+            con.commit()
+            con.close()
 
-    def test_connect_waits_by_default(self):
-        stats_before = {"connected_accounts": []}
-        stats_after = {"connected_accounts": [{"email": "default@example.com"}]}
-        with mock.patch.object(gmail_network_import, "powerset_token", return_value="token"), \
-             mock.patch.object(gmail_network_import, "fetch_gmail_stats", side_effect=[stats_before, stats_after]), \
-             mock.patch.object(gmail_network_import.time, "sleep"):
             code, payload = self.invoke([
-                "connect",
-                "--no-open",
-                "--timeout-seconds", "1",
-                "--poll-seconds", "0.5",
+                "msgvault",
+                "--db", str(db),
+                "--account-email", "me@gmail.com",
+                "--output-dir", str(Path(tmp) / "out"),
+                "--run-id", "msgvault-test",
             ])
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["status"], "linked")
-        self.assertEqual(payload["email"], "default@example.com")
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            self.assertFalse(payload["privacy"]["message_subjects_included"])
+            artifacts = payload["artifacts"]
+            targeted = Path(artifacts["targeted_emails_csv"])
+            people = Path(artifacts["people_csv"])
+            queue = Path(artifacts["linkedin_resolution_queue_csv"])
+            with targeted.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["primary_email"], "jane@example.com")
+            self.assertEqual(rows[0]["display_name"], "Jane Example")
+            self.assertEqual(rows[0]["total_sent"], "1")
+            self.assertEqual(rows[0]["total_received"], "1")
+            self.assertNotIn("private subject", targeted.read_text(encoding="utf-8"))
+            with people.open(newline="", encoding="utf-8") as handle:
+                people_rows = list(csv.DictReader(handle))
+            self.assertEqual(people_rows[0]["primary_email"], "jane@example.com")
+            self.assertEqual(people_rows[0]["source_channels"], "gmail_msgvault")
+            with queue.open(newline="", encoding="utf-8") as handle:
+                queue_rows = list(csv.DictReader(handle))
+            self.assertEqual(queue_rows[0]["handle"], "jane@example.com")
+            self.assertEqual(queue_rows[0]["source"], "gmail_msgvault")
 
-    def test_connect_wait_polls_until_new_account_is_linked(self):
-        stats_before = {"connected_accounts": []}
-        stats_after = {"connected_accounts": [{"email": "new@example.com"}]}
-        with mock.patch.object(gmail_network_import, "powerset_token", return_value="token"), \
-             mock.patch.object(gmail_network_import, "fetch_gmail_stats", side_effect=[stats_before, stats_after]), \
-             mock.patch.object(gmail_network_import.time, "sleep"):
+    def test_apply_linkedin_resolutions_to_msgvault_people(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            resolutions = Path(tmp) / "linkedin_resolutions.csv"
+            with people.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=gmail_network_import.PEOPLE_COLUMNS)
+                writer.writeheader()
+                row = {col: "" for col in gmail_network_import.PEOPLE_COLUMNS}
+                row.update({
+                    "id": "gmail:abc",
+                    "full_name": "Jane Example",
+                    "primary_email": "jane@example.com",
+                    "all_emails": json.dumps(["jane@example.com"]),
+                    "source_channels": "gmail_msgvault",
+                    "source_artifacts": json.dumps(["gmail/people.csv"]),
+                })
+                writer.writerow(row)
+            with resolutions.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=gmail_network_import.LINKEDIN_RESOLUTION_COLUMNS)
+                writer.writeheader()
+                writer.writerow({
+                    "handle": "jane@example.com",
+                    "status": "found",
+                    "linkedin_url": "https://www.linkedin.com/in/jane-example?trk=test",
+                    "confidence": "0.92",
+                    "matched_name": "Jane Example",
+                    "matched_headline": "Founder at Example",
+                    "evidence": "[]",
+                    "reasoning": "fixture",
+                })
             code, payload = self.invoke([
-                "connect",
-                "--no-open",
-                "--wait",
-                "--timeout-seconds", "1",
-                "--poll-seconds", "0.5",
+                "apply-resolutions",
+                "--people-csv", str(people),
+                "--resolutions-csv", str(resolutions),
+                "--output-dir", str(Path(tmp) / "out"),
+                "--run-id", "resolved-test",
             ])
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["status"], "linked")
-        self.assertEqual(payload["email"], "new@example.com")
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["resolved"], 1)
+            with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[0]["public_identifier"], "jane-example")
+            self.assertEqual(rows[0]["linkedin_url"], "https://www.linkedin.com/in/jane-example")
+            self.assertEqual(rows[0]["headline"], "Founder at Example")
+            self.assertEqual(rows[0]["id"], str(uuid.uuid5(uuid.NAMESPACE_URL, "linkedin:jane-example")))
+
+    def test_msgvault_accounts_lists_local_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgvault.db"
+            con = sqlite3.connect(db)
+            con.executescript("""
+                CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+                CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+                CREATE TABLE messages (id INTEGER PRIMARY KEY, source_id INTEGER, message_type TEXT, deleted_at TEXT, deleted_from_source_at TEXT);
+                CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
+                INSERT INTO sources (id, source_type, identifier, display_name) VALUES
+                    (1, 'gmail', 'me@gmail.com', 'Me'),
+                    (2, 'gmail', 'work@example.com', 'Work');
+                INSERT INTO messages (id, source_id, message_type) VALUES (10, 1, 'email'), (11, 1, 'email'), (12, 2, 'email');
+            """)
+            con.commit()
+            con.close()
+            code, payload = self.invoke(["msgvault-accounts", "--db", str(db)])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual([row["account_email"] for row in payload["accounts"]], ["me@gmail.com", "work@example.com"])
+            self.assertEqual([row["message_count"] for row in payload["accounts"]], [2, 1])
+
+    def test_powerset_gmail_oauth_commands_are_not_exposed(self):
+        parser = gmail_network_import.build_parser()
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["connect", "--no-open"])
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["accounts"])
 
 
 if __name__ == "__main__":
