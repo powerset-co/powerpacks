@@ -21,10 +21,12 @@ add/confirm/skip, and rerun `step`.
 uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step
 ```
 
-Gmail is msgvault-backed. If `step` discovers local msgvault Gmail accounts, ask
-which source accounts to add. Multiple Gmail source accounts are supported by
-repeating `--gmail-account`; `--gmail-all` imports every discovered source
-account; `--skip-source gmail` records an explicit skip.
+Gmail is msgvault-backed. The Gmail step should be dead simple for the user:
+ask which discovered accounts to import and what other Gmail addresses they want
+to add. Multiple discovered source accounts are supported by repeating
+`--gmail-account`; `--gmail-all` imports every discovered source account;
+`--gmail-add-email` starts the add-account flow for new addresses;
+`--skip-source gmail` records an explicit skip.
 
 ```bash
 uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
@@ -32,6 +34,13 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
   --gmail-account me@gmail.com \
   --gmail-account work@example.com
 ```
+
+If `step` returns `status: needs_agent_action` with `commands`, Codex must run
+the returned commands in order. Do not tell the user to run them. For extra
+Gmail addresses this means Codex runs the Google OAuth test-user browser
+automation, authorizes each Gmail account in msgvault, syncs msgvault, and
+reruns onboarding. Only ask the user to complete browser login/consent when
+Google requires human action.
 
 LinkedIn CSV remains the primary LinkedIn path:
 

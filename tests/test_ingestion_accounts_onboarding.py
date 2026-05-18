@@ -196,8 +196,32 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(code, 20)
             self.assertEqual(payload["status"], "needs_input")
             self.assertEqual(payload["channel"], "gmail")
+            self.assertIn("other Gmail addresses", payload["prompt"])
             self.assertEqual([row["account_email"] for row in payload["discovered_accounts"]], ["me@gmail.com", "work@example.com"])
             self.assertIn("--gmail-all", payload["all_command"])
+            self.assertIn("--gmail-add-email EMAIL", payload["add_other_email_command"])
+
+    def test_onboarding_step_returns_agent_actions_for_extra_gmail_email(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                path = Path(tmp) / "accounts.json"
+                code, payload = self.invoke(onboarding, [
+                    "step", "--accounts", str(path), "--gmail-add-email", "Other@Example.com",
+                ])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 20)
+            self.assertEqual(payload["status"], "needs_agent_action")
+            self.assertEqual(payload["channel"], "gmail")
+            self.assertEqual(payload["emails"], ["other@example.com"])
+            commands = payload["commands"]
+            self.assertEqual(commands[0]["label"], "add_oauth_test_users")
+            self.assertIn("msgvault_setup.py add-test-users other@example.com", commands[0]["command"])
+            self.assertIn("msgvault_setup.py add-account --email other@example.com", commands[1]["command"])
+            self.assertEqual(commands[2]["command"], "msgvault sync-full")
+            self.assertEqual(commands[3]["label"], "rerun_onboarding")
 
     def test_onboarding_step_imports_multiple_gmail_accounts(self):
         old_cwd = Path.cwd()

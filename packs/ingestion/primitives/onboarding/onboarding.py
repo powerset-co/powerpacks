@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -279,6 +280,10 @@ def gmail_import_py() -> str:
     return "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
 
 
+def msgvault_setup_py() -> str:
+    return "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py"
+
+
 def linkedin_import_py() -> str:
     return "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py"
 
@@ -313,6 +318,44 @@ def run_gmail_import_command(args: argparse.Namespace, account_email: str) -> st
         "--operator-id", args.operator_id,
         "--output-dir", args.gmail_output_dir,
     ])
+
+
+def normalize_email(value: str) -> str:
+    email = (value or "").strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise ValueError(f"invalid email: {value}")
+    return email
+
+
+def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> list[dict[str, str]]:
+    add_users = [
+        "uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-test-users",
+        *emails,
+    ]
+    commands = [{
+        "label": "add_oauth_test_users",
+        "command": shell_join(add_users),
+        "description": "Add the Gmail addresses as Google OAuth test users with browser automation.",
+    }]
+    for email in emails:
+        commands.append({
+            "label": f"authorize_{email}",
+            "command": shell_join(["uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-account", "--email", email]),
+            "description": f"Authorize {email} in msgvault.",
+        })
+    commands.extend([
+        {
+            "label": "sync_msgvault",
+            "command": "msgvault sync-full",
+            "description": "Sync local Gmail metadata into msgvault.",
+        },
+        {
+            "label": "rerun_onboarding",
+            "command": onboarding_step_command(args),
+            "description": "Rerun onboarding after the new Gmail accounts are synced.",
+        },
+    ])
+    return commands
 
 
 def run_linkedin_import(args: argparse.Namespace, mode: str) -> tuple[int, dict[str, Any] | None, str]:
@@ -375,17 +418,41 @@ def cmd_step(args: argparse.Namespace) -> int:
             return 0
 
     gmail_record = accounts.get("gmail", {})
-    gmail_action_requested = bool(args.gmail_account or args.gmail_all)
+    gmail_action_requested = bool(args.gmail_account or args.gmail_all or args.gmail_add_email)
     if (not gmail_record.get("linked", False) and not gmail_record.get("skipped", False)) or gmail_action_requested:
+        try:
+            extra_emails = list(dict.fromkeys(normalize_email(email) for email in (args.gmail_add_email or [])))
+        except ValueError as exc:
+            emit({
+                "status": "needs_input",
+                "channel": "gmail",
+                "message": str(exc),
+                "repeat_command": onboarding_step_command(args),
+            })
+            return 20
+        if extra_emails:
+            emit({
+                "status": "needs_agent_action",
+                "channel": "gmail",
+                "message": "Adding these Gmail accounts requires browser automation and msgvault authorization. Codex should run the commands in order; the user only needs to complete browser login or consent if Google asks.",
+                "emails": extra_emails,
+                "commands": gmail_add_email_commands(args, extra_emails),
+                "repeat_command_after_sync": onboarding_step_command(args),
+                "accounts_path": args.accounts,
+                "updates": updates,
+            })
+            return 20
+
         db_path = Path(args.gmail_db).expanduser()
         if not db_path.exists():
             emit({
                 "status": "needs_input",
                 "channel": "gmail",
-                "prompt": "Sync Gmail with msgvault, then rerun with --gmail-db <path>. To skip Gmail, rerun with --skip-gmail.",
+                "prompt": "Link a Gmail account for local msgvault sync, then rerun with --gmail-db <path>. Tell me any other Gmail addresses you want to add; use --gmail-add-email <email>. To skip Gmail, rerun with --skip-gmail.",
                 "msgvault_db": str(db_path),
                 "example_sync": "msgvault sync-full",
                 "next_command": onboarding_step_command(args),
+                "add_other_email_command": onboarding_step_command(args) + " --gmail-add-email EMAIL",
                 "skip_command": onboarding_step_command(args) + " --skip-gmail",
                 "accounts_path": args.accounts,
                 "updates": updates,
@@ -420,10 +487,11 @@ def cmd_step(args: argparse.Namespace) -> int:
             emit({
                 "status": "needs_input",
                 "channel": "gmail",
-                "prompt": "Confirm Gmail source accounts to import: add one or more --gmail-account <email>, use --gmail-all, or --skip-gmail.",
+                "prompt": "Link a Gmail account for local msgvault sync. Confirm discovered Gmail accounts to import with --gmail-account <email> or --gmail-all. Tell me any other Gmail addresses you want to add; use --gmail-add-email <email> so onboarding can add OAuth test users and authorize them.",
                 "discovered_accounts": discovered.get("accounts", []),
                 "add_commands": [onboarding_step_command(args) + f" --gmail-account {shlex.quote(email)}" for email in discovered_accounts],
                 "all_command": onboarding_step_command(args) + " --gmail-all",
+                "add_other_email_command": onboarding_step_command(args) + " --gmail-add-email EMAIL",
                 "skip_command": onboarding_step_command(args) + " --skip-gmail",
                 "accounts_path": args.accounts,
                 "updates": updates,
@@ -602,6 +670,7 @@ def build_parser() -> argparse.ArgumentParser:
     step = sub.add_parser("step", parents=[common], help="Idempotent CLI onboarding loop; rerun until completed or blocked for approval/input")
     step.add_argument("--gmail-db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db for Gmail metadata onboarding")
     step.add_argument("--gmail-account", action="append", default=[], help="Gmail source account email to import from msgvault; repeat for multiple accounts")
+    step.add_argument("--gmail-add-email", action="append", default=[], help="Additional Gmail address to add as an OAuth test user and authorize in msgvault")
     step.add_argument("--gmail-all", action="store_true", help="Import all Gmail source accounts discovered in msgvault")
     step.add_argument("--skip-gmail", action="store_true", help="Skip Gmail/msgvault onboarding (alias for --skip-source gmail)")
     step.add_argument("--skip-source", action="append", choices=["messages", "gmail", "linkedin_csv", "twitter"], default=[], help="Mark an onboarding source skipped; repeat as needed")
