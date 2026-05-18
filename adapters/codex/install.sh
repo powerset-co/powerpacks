@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 SKILLS_DIR="${1:-$CODEX_HOME/skills}"
+BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 mkdir -p "$SKILLS_DIR"
 rm -rf "$SKILLS_DIR/import-messages" \
@@ -12,22 +13,39 @@ rm -rf "$SKILLS_DIR/import-messages" \
   "$SKILLS_DIR/import-contacts-review"
 "$REPO_ROOT/bin/setup-python"
 
-copy_powerpacks_bundle() {
-  local dest="$1"
-  cp "$REPO_ROOT/pyproject.toml" "$dest/powerpacks/pyproject.toml"
+install_powerpacks_bundle() {
+  local tmp="$BUNDLE_DIR.tmp"
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  cp "$REPO_ROOT/pyproject.toml" "$tmp/pyproject.toml"
   if [[ -f "$REPO_ROOT/uv.lock" ]]; then
-    cp "$REPO_ROOT/uv.lock" "$dest/powerpacks/uv.lock"
+    cp "$REPO_ROOT/uv.lock" "$tmp/uv.lock"
   fi
   # Cross-pack docs + host-install templates (no top-level primitives/skills/
   # schemas anymore — every domain lives in packs/).
-  cp -R "$REPO_ROOT/docs" "$dest/powerpacks/docs"
-  cp -R "$REPO_ROOT/templates" "$dest/powerpacks/templates"
+  cp -R "$REPO_ROOT/docs" "$tmp/docs"
+  cp -R "$REPO_ROOT/templates" "$tmp/templates"
   # Domain packs (powerset, search, messages, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
-  cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
+  cp -R "$REPO_ROOT/packs" "$tmp/packs"
   # Keep only the top-level skill entrypoint; avoid nested skill duplication
   # from copied packs during discovery.
-  find "$dest/powerpacks/packs" -type f -path "*/SKILL.md" -delete
+  find "$tmp/packs" -type f -path "*/SKILL.md" -delete
+
+  cat > "$tmp/README.codex-install.md" <<EOF
+# Codex Powerpacks Bundle
+
+This shared directory is copied by:
+
+\`\`\`bash
+$REPO_ROOT/adapters/codex/install.sh
+\`\`\`
+
+Installed Powerpacks skills link their local \`powerpacks/\` directory here.
+EOF
+
+  rm -rf "$BUNDLE_DIR"
+  mv "$tmp" "$BUNDLE_DIR"
 }
 
 install_skill() {
@@ -35,24 +53,13 @@ install_skill() {
   local source_skill="$2"
   local dest="$SKILLS_DIR/$skill_name"
   rm -rf "$dest"
-  mkdir -p "$dest/powerpacks"
+  mkdir -p "$dest"
 
   cp -R "$source_skill" "$dest/SKILL.md"
-  copy_powerpacks_bundle "$dest"
-
-  cat > "$dest/powerpacks/README.codex-install.md" <<EOF
-# Codex Powerpacks Bundle
-
-This directory is copied by:
-
-\`\`\`bash
-$REPO_ROOT/adapters/codex/install.sh
-\`\`\`
-
-The installed \`$skill_name\` skill resolves \`powerpacks/...\` references
-relative to this skill directory.
-EOF
+  ln -s "$BUNDLE_DIR" "$dest/powerpacks"
 }
+
+install_powerpacks_bundle
 
 install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKILL.md"
 install_skill extract-search-query "$REPO_ROOT/packs/search/skills/extract-search-query/SKILL.md"

@@ -217,6 +217,11 @@ bin/update-codex                           # pull, sync agent files, reinstall C
 ./install.sh codex /custom/skills/dir       # explicit target
 ```
 
+The Codex adapter installs each skill entrypoint under `~/.codex/skills/<skill>/`
+and stores one shared support bundle at `~/.codex/powerpacks`. Each installed
+skill links `powerpacks/` to that shared bundle, so adding a skill does not copy
+the full pack tree again.
+
 ### Claude Code
 
 ```bash
