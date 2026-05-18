@@ -97,6 +97,56 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
         con.commit()
         con.close()
 
+    def write_gmail_artifact_run(self, run_dir: Path, *, email: str = "me@gmail.com") -> None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        people = run_dir / "people.csv"
+        accounts_csv = run_dir / "accounts.csv"
+        manifest = run_dir / "manifest.json"
+        people.write_text("id,primary_email,source_channels\np1,jane@example.com,gmail_msgvault\n", encoding="utf-8")
+        accounts_csv.write_text(
+            "account_id,account_email,provider,source,added_at\n"
+            f"msgvault:abc,{email},gmail,msgvault,2026-01-01T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        manifest.write_text(json.dumps({
+            "status": "completed",
+            "source": "msgvault",
+            "task": "import_gmail_network_msgvault",
+            "artifacts": {"people_csv": str(people)},
+        }), encoding="utf-8")
+
+    def test_check_ignores_non_default_gmail_test_artifacts(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                self.write_gmail_artifact_run(Path(".powerpacks/network-import/gmail/network-test-gmail"))
+                path = Path(tmp) / "accounts.json"
+                code, payload = self.invoke(onboarding, ["check", "--accounts", str(path)])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 0)
+            registry = accounts.load_registry(path)
+            self.assertFalse(registry["accounts"]["gmail"]["linked"])
+            self.assertEqual(registry["accounts"]["gmail"]["artifacts"], [])
+            self.assertNotIn("gmail", [item["channel"] for item in payload["steps"] if item["linked"]])
+
+    def test_check_detects_default_msgvault_gmail_artifact(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                self.write_gmail_artifact_run(Path(".powerpacks/network-import/gmail/msgvault-realrun"), email="me@gmail.com")
+                path = Path(tmp) / "accounts.json"
+                code, _payload = self.invoke(onboarding, ["check", "--accounts", str(path)])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 0)
+            registry = accounts.load_registry(path)
+            self.assertTrue(registry["accounts"]["gmail"]["linked"])
+            self.assertEqual(registry["accounts"]["gmail"]["usernames"], ["me@gmail.com"])
+            self.assertEqual(registry["accounts"]["gmail"]["artifacts"], [".powerpacks/network-import/gmail/msgvault-realrun/people.csv"])
+
     def test_onboarding_step_prompts_for_linkedin_csv(self):
         old_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:

@@ -19,10 +19,10 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, update_channel
+    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, now_iso, save_registry, update_channel
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, update_channel
+    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, now_iso, save_registry, update_channel
 
 
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
@@ -68,30 +68,99 @@ def csv_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def json_object(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def set_channel_from_artifacts(
+    channel: str,
+    *,
+    path: Path,
+    linked: bool,
+    usernames: list[str] | None = None,
+    artifacts: list[str] | None = None,
+    notes: str = "",
+) -> dict[str, Any]:
+    registry = load_registry(path)
+    rec = registry["accounts"][channel]
+    rec["linked"] = linked
+    if linked:
+        rec["skipped"] = False
+    rec["usernames"] = list(dict.fromkeys(usernames or []))
+    rec["artifacts"] = list(dict.fromkeys(artifacts or []))
+    rec["notes"] = notes
+    rec["last_checked_at"] = now_iso()
+    rec["last_success_at"] = rec["last_checked_at"] if linked else ""
+    save_registry(registry, path)
+    return registry
+
+
+def msgvault_gmail_run(run_dir: Path) -> tuple[bool, list[str], str]:
+    """Return whether run_dir is an active Gmail msgvault import for onboarding.
+
+    Auto-detection is intentionally narrower than "any Gmail artifact": the
+    onboarding step imports Gmail with the default `msgvault-*` run id. Test,
+    smoke, and harness runs may have valid-looking manifests but should not
+    mark a user's Gmail onboarding as complete.
+    """
+
+    if not run_dir.is_dir() or not run_dir.name.startswith("msgvault-"):
+        return False, [], ""
+    manifest = json_object(run_dir / "manifest.json")
+    if (
+        manifest.get("status") != "completed"
+        or manifest.get("source") != "msgvault"
+        or manifest.get("task") != "import_gmail_network_msgvault"
+    ):
+        return False, [], ""
+    artifact = run_dir / "people.csv"
+    artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
+    if artifacts.get("people_csv"):
+        artifact = Path(str(artifacts["people_csv"]))
+        if not artifact.is_absolute() and not artifact.exists():
+            artifact = run_dir / artifact
+    if not artifact.exists():
+        return False, [], ""
+
+    emails: list[str] = []
+    for row in csv_rows(run_dir / "accounts.csv"):
+        email = (row.get("account_email") or "").strip().lower()
+        source = (row.get("source") or "").strip().lower()
+        if email and source == "msgvault":
+            emails.append(email)
+    if not emails:
+        return False, [], ""
+    return True, list(dict.fromkeys(emails)), str(artifact)
+
+
 def refresh_registry(path: Path) -> tuple[dict[str, Any], list[str]]:
     registry = load_registry(path)
     updates: list[str] = []
 
     # Gmail: infer linked state from local msgvault import artifacts.
-    seen_gmail_dirs: set[Path] = set()
-    for pattern in ["*/people.csv", "*/manifest.json"]:
-        for p in Path(".powerpacks/network-import/gmail").glob(pattern):
-            run_dir = p.parent
-            if run_dir in seen_gmail_dirs:
+    gmail_usernames: list[str] = []
+    gmail_artifacts: list[str] = []
+    gmail_root = Path(".powerpacks/network-import/gmail")
+    if gmail_root.exists():
+        for run_dir in sorted(gmail_root.iterdir()):
+            ok, account_emails, artifact = msgvault_gmail_run(run_dir)
+            if not ok:
                 continue
-            seen_gmail_dirs.add(run_dir)
-            account_emails: list[str] = []
-            for row in csv_rows(run_dir / "accounts.csv"):
-                email = (row.get("account_email") or "").strip().lower()
-                source = (row.get("source") or "").strip().lower()
-                if email and source == "msgvault":
-                    account_emails.append(email)
-            artifact = run_dir / "people.csv" if (run_dir / "people.csv").exists() else p
-            update_channel("gmail", path=path, success=True, artifact=str(artifact))
+            gmail_usernames.extend(account_emails)
+            gmail_artifacts.append(artifact)
             updates.append(f"gmail:{artifact}")
-            for email in account_emails:
-                update_channel("gmail", path=path, username=email, success=True, artifact=str(artifact))
-                updates.append(f"gmail:{email}")
+            updates.extend(f"gmail:{email}" for email in account_emails)
+    gmail_record = registry.get("accounts", {}).get("gmail", {})
+    if gmail_artifacts:
+        registry = set_channel_from_artifacts("gmail", path=path, linked=True, usernames=gmail_usernames, artifacts=gmail_artifacts)
+    elif not gmail_record.get("skipped", False):
+        registry = set_channel_from_artifacts("gmail", path=path, linked=False)
 
     # Messages: mark linked if local contacts artifact exists.
     if artifact_exists(".powerpacks/messages/contacts.csv"):
