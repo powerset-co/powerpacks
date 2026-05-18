@@ -20,7 +20,7 @@ selection.
 | `$powerset sets`, `$powerset sets list` | List sets via the Powerset Search MCP. |
 | `$powerset sets use <id|name>` | Resolve a set via MCP and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
 | `$powerset mcp install` | Register/refresh the `powerset-search` MCP for local hosts. |
-| `$powerset env pull [--profile <profile>]` | Pull allowlisted runtime keys into `.env`. The explicit command is consent to write `.env`. Default `search-core` is the standard setup. |
+| `$powerset env pull [--profile <profile>]` | Pull allowlisted runtime keys into `.env`. The explicit command is consent to write `.env`. Default `search-core` is the standard setup; use `search-network` or `import-contacts` for minimal per-user provisioning. |
 | `$powerset create oauth app` | Route to the msgvault setup primitive for Gmail OAuth Desktop app guidance. |
 
 Aliases remain valid for backcompat: `$powerset-login` means `$powerset login`;
@@ -177,6 +177,16 @@ gcloud auth login --no-launch-browser
 ```
 
 Relay the URL/code prompt tersely, then rerun the env pull command.
+
+For non-`@powerset.co` users, do not block on the email domain. Secret Manager
+is the source of truth: if the matching per-user secrets are missing or IAM does
+not grant access, the pull reports `not_provisioned` / `not_privileged`.
+Useful minimal profiles:
+
+- `search-network`: local search execution (`TURBOPUFFER_API_KEY`,
+  `DATABASE_URL`, `OPENAI_API_KEY`)
+- `import-contacts`: LLM review + Parallel research
+  (`OPENROUTER_API_KEY`, `PARALLEL_API_KEY`)
 
 ## `$powerset create oauth app`
 

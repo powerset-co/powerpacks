@@ -29,14 +29,14 @@
     "query": "I have a personal @gmail.com account, no @powerset.co. What can I still set up?",
     "must_include": [
       "auth",
-      "OPENROUTER_API_KEY"
+      "OPENROUTER_API_KEY",
+      "per-user"
     ],
     "must_not_include": [
-      "provision_runtime_env pull",
-      "GCP Secret Manager",
-      "TURBOPUFFER_API_KEY"
+      "fake credentials",
+      "paste your password"
     ],
-    "notes": "Non-Powerset users can still use OSS-friendly skills (messages pack with their own LLM key) but must NOT be told to provision GCP secrets they cannot access."
+    "notes": "Non-Powerset users can use OSS-friendly skills with their own keys, or use per-user GCP Secret Manager env pull when a maintainer has explicitly provisioned that email."
   },
   {
     "id": "already-logged-in-verify",

@@ -185,8 +185,10 @@ $import-whatsapp                  # isolated WhatsApp sync test via wacli
 ### Secrets / env vars
 
 `$powerset login` and `$powerset env pull` populate `.env` from GCP Secret
-Manager for internal Powerset users. The default `search-core` profile is the
-normal one-shot setup and pulls what is available on a best-effort basis.
+Manager for provisioned users. The default `search-core` profile is the normal
+one-shot setup and pulls what is available on a best-effort basis. For narrower
+access, use `search-network` for local search or `import-contacts` for contact
+review/research.
 
 | Key | Used by |
 | --- | --- |
@@ -358,8 +360,8 @@ contracts.
 
 ## Runtime Provisioning
 
-Internal Powerset users can provision a local `.env` from GCP Secret Manager
-without pasting raw secrets into chat:
+Provisioned users can populate a local `.env` from GCP Secret Manager without
+pasting raw secrets into chat:
 
 ```bash
 gcloud auth login

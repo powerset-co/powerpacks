@@ -32,7 +32,7 @@ secrets.
 | `python` | Python 3.12 runtime for Powerpacks |
 | `uv_installed` | `uv` on PATH for Python dependency setup and primitive execution |
 | `gcloud_installed` | `gcloud` CLI on PATH |
-| `gcloud_account` | active `@powerset.co` gcloud account |
+| `gcloud_account` | active gcloud account |
 | `gcloud_adc` | application-default credentials are present (opt-in via `--check-adc`; not needed for normal Powerpacks workflows) |
 | `auth0_login` | a valid Auth0 JWT is cached at `~/.powerpacks/credentials.json` |
 | `auth0_role` | the JWT carries a `user` or `admin` role (warn if neither) |

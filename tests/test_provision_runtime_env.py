@@ -39,6 +39,36 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertIn("OPENROUTER_API_KEY", payload["missing"])
             self.assertIn("PARALLEL_API_KEY", payload["missing"])
 
+    def test_minimal_profiles_keep_search_and_import_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            env_file = Path(td) / ".env"
+            search_proc = subprocess.run(
+                [
+                    sys.executable, str(PROVISION),
+                    "plan",
+                    "--profile", "search-network",
+                    "--env-file", str(env_file),
+                ],
+                cwd=ROOT, text=True, capture_output=True, check=True,
+            )
+            import_proc = subprocess.run(
+                [
+                    sys.executable, str(PROVISION),
+                    "plan",
+                    "--profile", "import-contacts",
+                    "--env-file", str(env_file),
+                ],
+                cwd=ROOT, text=True, capture_output=True, check=True,
+            )
+
+            search_payload = json.loads(search_proc.stdout)
+            import_payload = json.loads(import_proc.stdout)
+            self.assertEqual(
+                search_payload["requested_keys"],
+                ["TURBOPUFFER_API_KEY", "DATABASE_URL", "OPENAI_API_KEY"],
+            )
+            self.assertEqual(import_payload["requested_keys"], ["OPENROUTER_API_KEY", "PARALLEL_API_KEY"])
+
     def test_check_redacts_existing_values(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             env_file = Path(td) / ".env"
@@ -198,9 +228,10 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             self.assertIn("PARALLEL_API_KEY=value-for-powerpacks-users-alice-parallel-api-key", text)
             self.assertNotIn("OPENROUTER_API_KEY=", text)
 
-    def test_pull_rejects_non_powerset_email(self) -> None:
+    def test_pull_allows_non_powerset_email_when_secret_manager_allows_it(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
+            env_file = tmp / ".env"
             bin_dir = tmp / "bin"
             bin_dir.mkdir()
             fake_gcloud = bin_dir / "gcloud"
@@ -210,7 +241,8 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
                 "if sys.argv[1:4] == ['auth', 'list', '--filter=status:ACTIVE']:\n"
                 "    print('alice@example.com')\n"
                 "    raise SystemExit(0)\n"
-                "raise SystemExit('unexpected command')\n"
+                "secret = sys.argv[sys.argv.index('--secret') + 1]\n"
+                "print('value-for-' + secret)\n"
             )
             fake_gcloud.chmod(0o755)
             env = os.environ.copy()
@@ -221,9 +253,9 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
                     str(PROVISION),
                     "pull",
                     "--profile",
-                    "search-core",
+                    "search-network",
                     "--env-file",
-                    str(tmp / ".env"),
+                    str(env_file),
                     "--confirm",
                 ],
                 cwd=ROOT,
@@ -233,13 +265,16 @@ class ProvisionRuntimeEnvTests(unittest.TestCase):
             )
 
             payload = json.loads(proc.stdout)
-            # Non-powerset.co users now get a structured `not_privileged`
-            # response instead of a hard error, so the $powerset login flow
-            # can surface a friendly contact-us message.
-            self.assertEqual(proc.returncode, 1)
-            self.assertEqual(payload["status"], "not_privileged")
-            self.assertIn("non-powerset.co", payload["error"])
-            self.assertIn("Contact a Powerpacks maintainer", payload["message"])
+            text = env_file.read_text()
+            self.assertEqual(proc.returncode, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["gcloud_account"], "alice@example.com")
+            self.assertEqual(payload["scope"], {"mode": "per_user", "email": "alice@example.com", "slug": "alice"})
+            self.assertIn("TURBOPUFFER_API_KEY=value-for-powerpacks-users-alice-turbopuffer-api-key", text)
+            self.assertIn("DATABASE_URL=value-for-powerpacks-users-alice-database-url", text)
+            self.assertIn("OPENAI_API_KEY=value-for-powerpacks-users-alice-openai-api-key", text)
+            self.assertNotIn("OPENROUTER_API_KEY=", text)
+            self.assertNotIn("PARALLEL_API_KEY=", text)
 
 
 if __name__ == "__main__":

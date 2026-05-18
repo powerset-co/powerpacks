@@ -46,6 +46,15 @@ PROFILES = {
         "PARALLEL_API_KEY",
         "RAPIDAPI_LINKEDIN_KEY",
     ],
+    "search-network": [
+        "TURBOPUFFER_API_KEY",
+        "DATABASE_URL",
+        "OPENAI_API_KEY",
+    ],
+    "import-contacts": [
+        "OPENROUTER_API_KEY",
+        "PARALLEL_API_KEY",
+    ],
     "messages": [
         "OPENROUTER_API_KEY",
         "PARALLEL_API_KEY",
@@ -81,12 +90,10 @@ def gcloud_account() -> str:
     return run_text(["gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"])
 
 
-def assert_powerset_gcloud_account() -> str:
+def active_gcloud_account() -> str:
     account = gcloud_account().splitlines()[0].strip()
     if not account:
         raise RuntimeError("no active gcloud account; run gcloud auth login")
-    if not account.endswith("@powerset.co"):
-        raise PermissionError(f"refusing to provision secrets for non-powerset.co gcloud account: {account}")
     return account
 
 
@@ -304,7 +311,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         "missing": missing,
         "source": "gcp",
         "gcp_project": args.gcp_project,
-        "note": "pull requires active @powerset.co gcloud auth and --confirm",
+        "note": "pull requires active gcloud auth, matching per-user Secret Manager access, and --confirm",
     })
     return 0
 
@@ -407,9 +414,10 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 _CONTACT_MESSAGE = (
-    "You are signed in but do not have access to Powerset's shared runtime"
-    " secrets. Contact a Powerpacks maintainer (#powerpacks on Slack) to be"
-    " added, or bring your own keys via .env."
+    "You are signed in but do not have access to the requested Powerpacks"
+    " runtime secrets. Contact a Powerpacks maintainer (#powerpacks on Slack)"
+    " to provision per-user secrets for this email, or bring your own keys via"
+    " .env."
 )
 
 
@@ -423,11 +431,11 @@ def cmd_pull(args: argparse.Namespace) -> int:
     # fall back to the legacy flat mapping (for emergency / shared-key debug).
     use_per_user = not args.shared
 
-    # Best-effort: if gcloud is missing or the active account is not allowed,
-    # don't error — emit a structured "not_privileged" status so the skill can
+    # Best-effort: if gcloud is missing or Secret Manager denies access, don't
+    # error before IAM gets a say. Emit a structured status so the skill can
     # tell the user what to do without dropping them out of the flow.
     try:
-        account = assert_powerset_gcloud_account()
+        account = active_gcloud_account()
     except RuntimeError as exc:  # gcloud not signed in
         emit({
             "primitive": "provision_runtime_env",
@@ -442,18 +450,6 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 " Powerset's shared runtime keys, or skip this step and bring"
                 " your own keys in .env."
             ),
-        })
-        return 0 if args.best_effort else 1
-    except PermissionError as exc:
-        emit({
-            "primitive": "provision_runtime_env",
-            "command": "pull",
-            "status": "not_privileged",
-            "profile": args.profile,
-            "env_file": str(args.env_file),
-            "requested_keys": keys,
-            "error": str(exc),
-            "message": _CONTACT_MESSAGE,
         })
         return 0 if args.best_effort else 1
 
