@@ -319,6 +319,9 @@ def ensure_delegate_ledger(ledger: dict[str, Any]) -> Path:
             "refresh_cache": bool(ledger.get("input", {}).get("refresh_cache")),
             "company_corpus_jsonl": ledger.get("input", {}).get("company_corpus_jsonl") or [],
             "sleep_seconds": ledger.get("input", {}).get("sleep_seconds") or 0.0,
+            "max_workers": ledger.get("input", {}).get("max_workers"),
+            "max_rpm": ledger.get("input", {}).get("max_rpm"),
+            "failure_retry_hours": ledger.get("input", {}).get("failure_retry_hours"),
         },
         "steps": {},
         "approvals": {},
@@ -348,7 +351,6 @@ def step_enrich_people(ledger: dict[str, Any], ledger_path: Path) -> dict[str, A
     ledger["artifacts"].update({f"enrich_people_{key}": value for key, value in artifacts.items()})
     for key in [
         "people_csv",
-        "people_enriched_csv",
         "provider_enriched_csv",
         "linkedin_enrichment_queue_csv",
         "rapidapi_cache_hits_csv",
@@ -435,6 +437,9 @@ def command_run(args: argparse.Namespace) -> int:
             "company_corpus_jsonl": [str(Path(p)) for p in (args.company_corpus_jsonl or [])],
             "sleep_seconds": args.sleep_seconds,
             "force_enrich": args.force_enrich,
+            "max_workers": args.max_workers,
+            "max_rpm": args.max_rpm,
+            "failure_retry_hours": args.failure_retry_hours,
         },
         "steps": {},
         "approvals": {},
@@ -512,6 +517,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--refresh-cache", action="store_true", help="Force RapidAPI calls even when cache entries exist")
     run.add_argument("--company-corpus-jsonl", action="append", default=[])
     run.add_argument("--sleep-seconds", type=float, default=0.0)
+    run.add_argument("--max-workers", type=int, default=people_enrichment.DEFAULT_RAPIDAPI_MAX_WORKERS)
+    run.add_argument("--max-rpm", type=float, default=people_enrichment.DEFAULT_RAPIDAPI_MAX_RPM)
+    run.add_argument("--failure-retry-hours", type=float, default=people_enrichment.DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
     run.add_argument("--no-harmonic", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--no-rapidapi", action="store_true", help=argparse.SUPPRESS)
     run.set_defaults(func=command_run)

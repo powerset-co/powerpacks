@@ -37,11 +37,11 @@ Canonical run-level artifacts:
 - `linkedin_enrichment_queue.csv` — rows with LinkedIn identifiers that need enrichment.
 - `rapidapi_cache_hits.csv` — rows hydrated from local cache; no spend.
 - `rapidapi_cache_misses.csv` — rows that require approved RapidAPI calls.
+- `rapidapi_recent_failures.csv` — recently failed provider lookups skipped until retry TTL.
 - `needs_resolution_queue.csv` — rows without LinkedIn identifiers, if any.
 - `provider_enriched.csv` — RapidAPI profile payload/status columns from `enrich_people`.
 - `raw_provider_responses/*.json` — local audit/debug payloads.
 - `people.csv` — canonical enriched people-schema output.
-- `people_enriched.csv` — temporary compatibility alias from `enrich_people`.
 - `enrich_people.ledger.json` — delegated enrichment ledger.
 
 The top-level LinkedIn ledger exposes these paths in `artifacts`, including
@@ -73,6 +73,8 @@ with:
 
 Usable cache entries are counted in `cache_hit_count`; cache misses are counted
 in `paid_call_count` and block for operator approval before network calls.
+Failed provider lookups are cached with `last_checked_at`; recent failures are
+not retried until `--failure-retry-hours` elapses.
 
 ## Keys
 

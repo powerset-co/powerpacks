@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,7 @@ from typing import Any
 DEFAULT_LEDGER = Path(".powerpacks/network-import/import-network-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_MSGVAULT_DB = Path.home() / ".msgvault" / "msgvault.db"
+DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS", str(6 * 60 * 60)))
 
 
 def now_iso() -> str:
@@ -31,6 +34,10 @@ def now_iso() -> str:
 
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def emit_progress(message: str) -> None:
+    print(f"[import-network] {message}", file=sys.stderr, flush=True)
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -69,9 +76,49 @@ def parse_last_json(stdout: str) -> dict[str, Any]:
     return last
 
 
-def run_cmd(cmd: list[str], *, timeout: int = 300) -> tuple[int, dict[str, Any], str]:
-    proc = subprocess.run(cmd, cwd=Path(__file__).resolve().parents[4], capture_output=True, text=True, timeout=timeout, check=False)
-    return proc.returncode, parse_last_json(proc.stdout), proc.stderr
+def run_cmd(cmd: list[str], *, timeout: int | None = None) -> tuple[int, dict[str, Any], str]:
+    effective_timeout = DEFAULT_CHILD_TIMEOUT_SECONDS if timeout is None else timeout
+    proc = subprocess.Popen(
+        cmd,
+        cwd=Path(__file__).resolve().parents[4],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def read_stdout() -> None:
+        if proc.stdout is None:
+            return
+        for line in proc.stdout:
+            stdout_chunks.append(line)
+
+    def read_stderr() -> None:
+        if proc.stderr is None:
+            return
+        for line in proc.stderr:
+            stderr_chunks.append(line)
+            sys.stderr.write(line)
+            sys.stderr.flush()
+
+    threads = [
+        threading.Thread(target=read_stdout, daemon=True),
+        threading.Thread(target=read_stderr, daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        code = proc.wait(timeout=effective_timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        code = proc.wait()
+        timeout_message = f"child command timed out after {effective_timeout} seconds: {' '.join(cmd)}"
+        stderr_chunks.append(timeout_message + "\n")
+        emit_progress(timeout_message)
+    for thread in threads:
+        thread.join(timeout=1)
+    return code, parse_last_json("".join(stdout_chunks)), "".join(stderr_chunks)
 
 
 def py_cmd(script: str, *args: str) -> list[str]:
@@ -104,11 +151,18 @@ def mark_step(ledger: dict[str, Any], step: str, status: str, **extra: Any) -> N
     rec.update({k: v for k, v in extra.items() if v is not None})
 
 
+def begin_step(ledger_path: Path, ledger: dict[str, Any], step: str, message: str) -> None:
+    mark_step(ledger, step, "running")
+    save_ledger(ledger_path, ledger)
+    emit_progress(message)
+
+
 def run_linkedin(ledger_path: Path, ledger: dict[str, Any], mode: str) -> bool:
     input_cfg = ledger.get("input", {})
     if not input_cfg.get("linkedin_csv"):
         mark_step(ledger, "linkedin", "skipped", reason="no --linkedin-csv")
         return True
+    begin_step(ledger_path, ledger, "linkedin", "Importing LinkedIn CSV and enriching profiles.")
     child_ledger = Path(ledger["run_dir"]) / "linkedin.ledger.json"
     if mode == "run":
         cmd = py_cmd(
@@ -143,6 +197,7 @@ def run_linkedin(ledger_path: Path, ledger: dict[str, Any], mode: str) -> bool:
     mark_step(ledger, "linkedin", "completed", payload=payload)
     for key, value in (payload.get("artifacts") or {}).items():
         ledger.setdefault("artifacts", {})[f"linkedin_{key}"] = value
+    emit_progress("LinkedIn import completed.")
     return True
 
 
@@ -151,6 +206,7 @@ def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     if not input_cfg.get("gmail_account_email") and not input_cfg.get("msgvault_db"):
         mark_step(ledger, "gmail_msgvault", "skipped", reason="no --gmail-account-email/--msgvault-db")
         return True
+    begin_step(ledger_path, ledger, "gmail_msgvault", "Importing Gmail metadata from msgvault.")
     db = input_cfg.get("msgvault_db") or str(DEFAULT_MSGVAULT_DB)
     cmd = py_cmd(
         "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
@@ -175,6 +231,11 @@ def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     mark_step(ledger, "gmail_msgvault", "completed", payload=payload)
     for key, value in (payload.get("artifacts") or {}).items():
         ledger.setdefault("artifacts", {})[f"gmail_{key}"] = value
+    counts = payload.get("counts") or {}
+    if counts:
+        emit_progress(f"Gmail metadata import completed: {counts.get('contacts_written', 0)} contacts from {counts.get('contacts_seen', 0)} seen.")
+    else:
+        emit_progress("Gmail metadata import completed.")
     return True
 
 
@@ -185,6 +246,7 @@ def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> 
     if provider == "off" or not queue:
         mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="provider off or no queue")
         return True
+    begin_step(ledger_path, ledger, "gmail_linkedin_resolution", "Resolving Gmail contacts to LinkedIn.")
     child_ledger = Path(ledger["run_dir"]) / "gmail-linkedin-resolution.ledger.json"
     out_dir = Path(ledger["run_dir"]) / "gmail-linkedin-resolution"
     cmd = py_cmd(
@@ -218,6 +280,7 @@ def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> 
         ledger.setdefault("artifacts", {})["gmail_linkedin_harness_prompts_jsonl"] = payload.get("prompts_jsonl")
     if payload.get("instructions"):
         ledger.setdefault("artifacts", {})["gmail_linkedin_harness_instructions"] = payload.get("instructions")
+    emit_progress("Gmail LinkedIn resolution completed.")
     return True
 
 
@@ -228,6 +291,7 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     if not resolutions or not people:
         mark_step(ledger, "gmail_apply_enrich", "skipped", reason="no gmail resolutions")
         return True
+    begin_step(ledger_path, ledger, "gmail_apply_enrich", "Applying Gmail LinkedIn matches.")
     apply_cmd = py_cmd(
         "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
         "apply-resolutions",
@@ -246,7 +310,9 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     ledger.setdefault("artifacts", {})["gmail_resolved_people_csv"] = payload.get("people_csv")
     if int(payload.get("resolved") or 0) <= 0:
         mark_step(ledger, "gmail_apply_enrich", "completed", payload=payload, reason="no resolved LinkedIns")
+        emit_progress("Gmail LinkedIn matches applied; no profile enrichment needed.")
         return True
+    emit_progress(f"Enriching {payload.get('resolved')} resolved Gmail LinkedIn profiles.")
     child_ledger = Path(ledger["run_dir"]) / "gmail-enrich-people.ledger.json"
     enrich_cmd = py_cmd(
         "packs/ingestion/primitives/enrich_people/enrich_people.py",
@@ -274,10 +340,12 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     if enrich_payload.get("artifacts", {}).get("people_csv"):
         ledger.setdefault("artifacts", {})["gmail_people_csv"] = enrich_payload["artifacts"]["people_csv"]
     mark_step(ledger, "gmail_apply_enrich", "completed", payload={"apply": payload, "enrich": enrich_payload})
+    emit_progress("Gmail LinkedIn enrichment completed.")
     return True
 
 
 def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
+    begin_step(ledger_path, ledger, "merge", "Merging network sources.")
     merge_dir = Path(ledger["run_dir"]) / "merged"
     cmd = py_cmd(
         "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py",
@@ -307,10 +375,12 @@ def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
         "network_companies_csv": payload.get("network_companies_csv"),
         "merge_manifest": payload.get("manifest"),
     })
+    emit_progress(f"Merged network sources: {payload.get('merged_rows', 0)} people.")
     return True
 
 
 def run_duckdb(ledger_path: Path, ledger: dict[str, Any]) -> bool:
+    begin_step(ledger_path, ledger, "duckdb", "Building local network DuckDB.")
     merge_dir = Path(ledger["run_dir"]) / "merged"
     duckdb_dir = Path(ledger["run_dir"]) / "duckdb"
     cmd = py_cmd(
@@ -329,6 +399,7 @@ def run_duckdb(ledger_path: Path, ledger: dict[str, Any]) -> bool:
         return False
     mark_step(ledger, "duckdb", "completed", payload=payload)
     ledger.setdefault("artifacts", {}).update({"duckdb": payload.get("duckdb"), "duckdb_manifest": payload.get("manifest")})
+    emit_progress("Local network DuckDB is ready.")
     return True
 
 

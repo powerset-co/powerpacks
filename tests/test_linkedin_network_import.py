@@ -118,7 +118,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             self.assertEqual(rows[0]["enrichment_provider"], "rapidapi")
             experiences = json.loads(rows[0]["work_experiences"])
             self.assertEqual(experiences[0]["company_key"], "rapidapi:123")
-            self.assertTrue(Path(state["artifacts"]["people_enriched_csv"]).exists())
+            self.assertTrue(Path(state["artifacts"]["people_csv"]).exists())
 
     def test_check_keys_delegates_to_rapidapi_only_enrichment(self):
         code, payload = self.invoke(["check-keys"])

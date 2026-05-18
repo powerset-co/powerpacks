@@ -20,7 +20,7 @@ Current split:
   - reads seeded RapidAPI profile cache before any network call
   - approval-gates RapidAPI cache misses
   - normalizes/merges provider payloads locally
-  - writes canonical `people.csv` and temporary `people_enriched.csv` alias
+  - writes canonical `people.csv`
 
 The desired direction remains one shared LinkedIn enrichment primitive that all
 network verticals feed into after they resolve or collect LinkedIn URLs.

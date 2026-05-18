@@ -9,32 +9,35 @@ Build local indexing artifacts from canonical Powerpacks people data.
 
 ## Canonical input
 
-Use only:
+Prefer the merged people CSV from the latest `$import-network` run:
 
 ```text
-.powerpacks/network-import/merged/people.csv
+.powerpacks/network-import/network-runs/<run-id>/merged/people.csv
 ```
 
-If the file is missing, create it with the ingestion merge primitive:
+If the user explicitly wants the aggregate merge output, use
+`.powerpacks/network-import/merged/people.csv` only when it exists and is known
+to be current. Do not use legacy merged filenames for indexing.
+
+If the file is missing, create it with `$import-network` or the ingestion merge
+primitive:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run
 ```
-
-Do not use legacy merged filenames for indexing.
 
 ## Run locally
 
 Plan:
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --run-id local-run
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/network-runs/<run-id>/merged/people.csv --output-dir .powerpacks/search-index --run-id local-run
 ```
 
 Run:
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --run-id local-run
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/network-runs/<run-id>/merged/people.csv --output-dir .powerpacks/search-index --run-id local-run
 ```
 
 Continue a partial run:

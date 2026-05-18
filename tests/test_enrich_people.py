@@ -116,7 +116,7 @@ class EnrichPeopleTests(unittest.TestCase):
             code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger)])
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "completed")
-            output = Path(payload["artifacts"]["people_enriched_csv"])
+            output = Path(payload["artifacts"]["people_csv"])
             with output.open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
@@ -149,7 +149,7 @@ class EnrichPeopleTests(unittest.TestCase):
                     code, payload = self.invoke(["continue", "--ledger", str(ledger)])
             self.assertEqual(code, 0)
             self.assertFalse(any(name.endswith("_enrich") and name != "rapidapi_profile" for name in dir(enrich_people)))
-            output = Path(payload["artifacts"]["people_enriched_csv"])
+            output = Path(payload["artifacts"]["people_csv"])
             with output.open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows[0]["enrichment_provider"], "rapidapi")
@@ -174,7 +174,7 @@ class EnrichPeopleTests(unittest.TestCase):
             with Path(state["artifacts"]["provider_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
                 provider_rows = list(csv.DictReader(handle))
             self.assertEqual(provider_rows[0]["rapidapi_from_cache"], "true")
-            with Path(payload["artifacts"]["people_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
                 output_rows = list(csv.DictReader(handle))
             self.assertEqual(output_rows[0]["current_company"], "Acme")
 
@@ -203,14 +203,14 @@ class EnrichPeopleTests(unittest.TestCase):
             self.write_people(people, rapidapi_response=self.profile(), row_id="")
             code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(Path(tmp) / "ledger.json")])
             self.assertEqual(code, 0)
-            with Path(payload["artifacts"]["people_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows[0]["id"], str(uuid.uuid5(uuid.NAMESPACE_URL, "linkedin:jane-example")))
             people2 = Path(tmp) / "people2.csv"
             self.write_people(people2, rapidapi_response=self.profile(), row_id="existing")
             code, payload = self.invoke(["run", "--input", str(people2), "--output-dir", str(Path(tmp) / "out2"), "--ledger", str(Path(tmp) / "ledger2.json")])
             self.assertEqual(code, 0)
-            with Path(payload["artifacts"]["people_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows[0]["id"], "existing")
 
@@ -235,7 +235,7 @@ class EnrichPeopleTests(unittest.TestCase):
             with Path(state["artifacts"]["provider_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
                 provider_rows = list(csv.DictReader(handle))
             self.assertEqual(provider_rows[0]["rapidapi_from_cache"], "true")
-            with Path(payload["artifacts"]["people_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
                 output_rows = list(csv.DictReader(handle))
             self.assertEqual(output_rows[0]["current_company"], "Acme")
 
@@ -292,7 +292,7 @@ class EnrichPeopleTests(unittest.TestCase):
                     code, payload = self.invoke(["continue", "--ledger", str(ledger)])
             self.assertEqual(code, 0)
             self.assertEqual(mocked.call_count, 1)
-            with Path(payload["artifacts"]["people_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
                 output_rows = list(csv.DictReader(handle))
             self.assertEqual(len(output_rows), 2)
 
@@ -339,7 +339,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 "--ledger", str(ledger), "--company-corpus-jsonl", str(corpus),
             ])
             self.assertEqual(code, 0)
-            with Path(payload["artifacts"]["people_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows[0]["current_company_urn"], "legacy-company-id")
             experiences = json.loads(rows[0]["work_experiences"])
@@ -354,12 +354,66 @@ class EnrichPeopleTests(unittest.TestCase):
         path = enrich_people.profile_cache_path(Path("cache"), "../bad/slug")
         self.assertEqual(path, Path("cache") / "bad_slug.json")
 
-    def test_failed_profile_is_not_written_to_cache(self):
+    def test_failed_profile_is_cached_with_last_checked_at(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(enrich_people, "http_json", return_value=(200, {"success": False, "message": "not found"}, "")):
                 result = enrich_people.rapidapi_profile("jane-example", "https://www.linkedin.com/in/jane-example", "key", cache_dir=Path(tmp))
-            self.assertFalse((Path(tmp) / "jane-example.json").exists())
+            cached = json.loads((Path(tmp) / "jane-example.json").read_text(encoding="utf-8"))
+            self.assertIn("last_checked_at", cached)
+            self.assertEqual(cached["public_identifier"], "jane-example")
+            self.assertFalse(cached["normalized_profile"]["success"])
             self.assertFalse(result["normalized_profile"]["success"])
+
+    def test_recent_failed_cache_skips_retry_until_ttl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            self.write_people(people)
+            cache_dir = Path(tmp) / "cache"
+            cache_dir.mkdir()
+            (cache_dir / "jane-example.json").write_text(json.dumps({
+                "last_checked_at": enrich_people.now_iso(),
+                "public_identifier": "jane-example",
+                "linkedin_url": "https://www.linkedin.com/in/jane-example",
+                "raw_response": {},
+                "normalized_profile": {"success": False, "error": "not found"},
+                "status_code": 404,
+                "error": "not found",
+            }), encoding="utf-8")
+            with patch.object(enrich_people, "http_json", side_effect=AssertionError("network called")):
+                code, payload = self.invoke([
+                    "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
+                    "--ledger", str(Path(tmp) / "ledger.json"), "--profile-cache-dir", str(cache_dir),
+                ])
+            self.assertEqual(code, 0)
+            state = json.loads(Path(tmp, "ledger.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["paid_call_count"], 0)
+            self.assertEqual(state["recent_failure_count"], 1)
+            self.assertTrue(Path(state["artifacts"]["rapidapi_recent_failures_csv"]).exists())
+            self.assertEqual(payload["status"], "completed")
+
+    def test_old_failed_cache_retries_after_ttl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            self.write_people(people)
+            cache_dir = Path(tmp) / "cache"
+            cache_dir.mkdir()
+            (cache_dir / "jane-example.json").write_text(json.dumps({
+                "last_checked_at": "2020-01-01T00:00:00Z",
+                "public_identifier": "jane-example",
+                "linkedin_url": "https://www.linkedin.com/in/jane-example",
+                "raw_response": {},
+                "normalized_profile": {"success": False, "error": "not found"},
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+                code, payload = self.invoke([
+                    "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
+                    "--ledger", str(Path(tmp) / "ledger.json"), "--profile-cache-dir", str(cache_dir),
+                ])
+            self.assertEqual(code, 20)
+            self.assertIn("1 people", payload["message"])
+            state = json.loads(Path(tmp, "ledger.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["paid_call_count"], 1)
+            self.assertEqual(state["recent_failure_count"], 0)
 
     def test_current_position_respects_explicit_false(self):
         title, company, legacy = enrich_people.current_position([

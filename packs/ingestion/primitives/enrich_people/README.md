@@ -13,8 +13,9 @@ The primitive is self-contained in Powerpacks. It does not import
    - Reads a shared people schema CSV.
    - Routes rows with LinkedIn URLs/public identifiers and profile gaps to
      `linkedin_enrichment_queue.csv`.
-   - Splits queued rows into `rapidapi_cache_hits.csv` and
-     `rapidapi_cache_misses.csv` using the local profile cache.
+   - Splits queued rows into `rapidapi_cache_hits.csv`,
+     `rapidapi_cache_misses.csv`, and `rapidapi_recent_failures.csv` using the
+     local profile cache.
    - Routes rows without LinkedIn to `needs_resolution_queue.csv`.
 2. `enrich_linkedin`
    - Approval-gates only RapidAPI cache misses.
@@ -22,7 +23,7 @@ The primitive is self-contained in Powerpacks. It does not import
    - Saves raw RapidAPI responses locally.
 3. `merge_people`
    - Merges RapidAPI profile data back into the original people rows.
-   - Writes canonical `people.csv` plus a temporary compatibility alias `people_enriched.csv`.
+   - Writes canonical `people.csv`.
 
 ## Commands
 
@@ -39,6 +40,8 @@ Options:
 - `--profile-cache-dir` defaults to `.powerpacks/network-import/profile_cache_v2`
 - `--refresh-cache` forces RapidAPI calls even when cache files exist
 - `--company-corpus-jsonl` may be repeated to enrich company metadata by RapidAPI company ID or LinkedIn company slug
+- `--max-workers` and `--max-rpm` bound RapidAPI parallelism; defaults are 10 workers and 300 RPM
+- `--failure-retry-hours` controls how long recent failed lookups are skipped before retry; default is 24h
 - `--force` re-enriches rows that look complete
 - hidden `--limit` is only for tiny local smoke tests
 
@@ -80,15 +83,17 @@ Each cache file must contain:
 Rows with usable cache entries are written to `rapidapi_cache_hits.csv` and do
 not require `RAPIDAPI_*` keys or approval. Cache misses are listed in
 `rapidapi_cache_misses.csv` and are approval-gated before any external call.
+Failed provider lookups are cached with `last_checked_at`; recent failures are
+listed in `rapidapi_recent_failures.csv` and retried only after the TTL.
 
 ## Outputs
 
 - `linkedin_enrichment_queue.csv`
 - `rapidapi_cache_hits.csv`
 - `rapidapi_cache_misses.csv`
+- `rapidapi_recent_failures.csv`
 - `needs_resolution_queue.csv`
 - `skipped_enrichment.csv`
 - `provider_enriched.csv`
 - `raw_provider_responses/*.json`
 - `people.csv` — canonical enriched people schema
-- `people_enriched.csv` — temporary compatibility alias for older callers

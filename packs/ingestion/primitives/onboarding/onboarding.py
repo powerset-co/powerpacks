@@ -169,10 +169,10 @@ def refresh_registry(path: Path) -> tuple[dict[str, Any], list[str]]:
         updates.append("messages:contacts.csv")
 
     # LinkedIn CSV / Twitter: infer from local import artifacts. Prefer canonical
-    # people.csv, but accept legacy aliases for older runs.
+    # people.csv, but accept the older people_harmonic_all.csv alias.
     for source, channel in [("linkedin", "linkedin_csv"), ("twitter", "twitter")]:
         seen_dirs: set[Path] = set()
-        for pattern in ["*/people.csv", "*/people_harmonic_all.csv", "*/people_enriched.csv"]:
+        for pattern in ["*/people.csv", "*/people_harmonic_all.csv"]:
             for p in Path(f".powerpacks/network-import/{source}").glob(pattern):
                 if p.parent in seen_dirs:
                     continue
