@@ -867,6 +867,10 @@ def load_rapidapi_json(row: dict[str, Any]) -> dict[str, Any] | None:
 def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
     src = Path(ledger["artifacts"].get("linkedin_validated_csv") or ledger["artifacts"].get("linkedin_resolved_csv"))
     rows = read_csv(src)
+    source_artifacts = [
+        value for key, value in sorted(ledger.get("artifacts", {}).items())
+        if key.endswith("_csv") and value
+    ]
     people: list[dict[str, Any]] = []
     for row in rows:
         linkedin_url = row.get("linkedin_url", "")
@@ -917,8 +921,18 @@ def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
             "harmonic_response": "",
             "harmonic_location": "",
             "twitter_handle": row.get("handle", ""),
-            "twitter_response": "",
+            "twitter_response": json.dumps({
+                "handle": row.get("handle", ""),
+                "source": row.get("source", ""),
+                "follower_count": row.get("follower_count", ""),
+                "enrichment_score": row.get("enrichment_score", ""),
+                "moe_verdict": row.get("moe_verdict", ""),
+                "linkedin_status": row.get("linkedin_status", ""),
+                "linkedin_validation_status": row.get("linkedin_validation_status", ""),
+            }, ensure_ascii=False),
             "rapidapi_response": row.get("rapidapi_response", ""),
+            "source_channels": "twitter",
+            "source_artifacts": json.dumps(source_artifacts, ensure_ascii=False),
         })
     out = Path(ledger["run_dir"]) / "people.csv"
     legacy = Path(ledger["run_dir"]) / "people_harmonic_all.csv"

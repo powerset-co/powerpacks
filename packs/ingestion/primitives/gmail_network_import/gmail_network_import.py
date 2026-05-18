@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Resumable local Gmail network-import orchestrator.
+"""Local Gmail network import from msgvault metadata.
 
-V1 is intentionally small and safe: one person, local `.powerpacks/` artifacts,
-no Gmail API, no paid APIs, no DVC, no uploads, no production writes.
+The supported sync path is msgvault's local SQLite archive. This primitive reads
+only msgvault metadata tables and writes Powerpacks-local artifacts. It never
+reads Gmail message bodies, subjects, snippets, raw MIME, or attachments, and it
+does not use Powerset-hosted Gmail OAuth/sync endpoints.
 
-The agent-facing contract mirrors messages/import_contacts_pipeline:
-
-    run       start a fresh run and proceed until done or a future gate
-    continue  resume from the ledger
-    approve   approve the currently blocked future gate
-
-Stdlib-only. No Gmail message bodies or subjects are read or written.
+The legacy one-person local seed remains for deterministic tests/manual seeds;
+real Gmail imports should use the `msgvault` subcommand.
 """
 
 from __future__ import annotations
@@ -21,21 +18,17 @@ import hashlib
 import json
 import os
 import re
-import subprocess
+import sqlite3
 import sys
-import time
-import urllib.error
-import urllib.request
-import webbrowser
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/gmail/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
-DEFAULT_APP_GMAIL_URL = "https://search.powerset.dev/gmail/connect"
-DEFAULT_API_URL = "https://search-api-7wk4uhe77q-uw.a.run.app"
+DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 
 PERSONAL_DOMAINS = {
     "gmail.com",
@@ -152,7 +145,56 @@ TARGETED_COLUMNS = [
     "sample_subjects",
     "sample_calendar_titles",
 ]
+LINKEDIN_RESOLUTION_QUEUE_COLUMNS = [
+    "handle",
+    "id",
+    "display_name",
+    "full_name",
+    "primary_email",
+    "company_guess",
+    "primary_email_type",
+    "total_messages",
+    "thread_count",
+    "last_interaction",
+    "source",
+    "source_channels",
+]
+LINKEDIN_RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
 ACCOUNT_COLUMNS = ["account_id", "account_email", "provider", "source", "added_at"]
+PEOPLE_COLUMNS = [
+    "id",
+    "public_identifier",
+    "linkedin_url",
+    "first_name",
+    "last_name",
+    "full_name",
+    "headline",
+    "summary",
+    "city",
+    "state",
+    "country",
+    "location_raw",
+    "profile_picture_url",
+    "work_experiences",
+    "education",
+    "current_title",
+    "current_company",
+    "current_company_urn",
+    "entity_urn",
+    "enrichment_provider",
+    "enriched_at",
+    "harmonic_response",
+    "harmonic_location",
+    "rapidapi_response",
+    "twitter_handle",
+    "twitter_response",
+    "primary_email",
+    "all_emails",
+    "primary_phone",
+    "all_phones",
+    "source_channels",
+    "source_artifacts",
+]
 PIPELINE_STEPS = ["seed_one", "prepare_local_workspace", "write_next_steps"]
 
 
@@ -175,62 +217,30 @@ def short_hash(value: str, length: int = 10) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
 
 
+def extract_public_identifier(linkedin_url: str) -> str:
+    match = re.search(r"linkedin\.com/in/([^/?#]+)", linkedin_url or "", re.IGNORECASE)
+    return match.group(1).strip().rstrip("/").lower() if match else ""
+
+
+def normalize_linkedin_url(value: str) -> str:
+    url = (value or "").strip()
+    if not url:
+        return ""
+    if url.startswith("linkedin.com/"):
+        url = "https://www." + url
+    elif url.startswith("www.linkedin.com/"):
+        url = "https://" + url
+    url = url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    public_id = extract_public_identifier(url)
+    return f"https://www.linkedin.com/in/{public_id}" if public_id else url
+
+
+def generate_linkedin_person_id(public_identifier: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"linkedin:{public_identifier.lower().strip()}"))
+
+
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
-
-
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[4]
-
-
-def powerset_token() -> str:
-    cmd = [
-        "uv",
-        "run",
-        "--project",
-        str(repo_root()),
-        "python",
-        str(repo_root() / "packs/powerset/primitives/auth/auth.py"),
-        "token",
-        "--bearer-only",
-    ]
-    completed = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if completed.returncode != 0:
-        raise PipelineFailed((completed.stderr or completed.stdout or "Powerset login required").strip())
-    token = completed.stdout.strip()
-    if not token:
-        raise PipelineFailed("Powerset login required: no access token returned")
-    return token
-
-
-def api_get_json(url: str, token: str) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:1000]
-        raise PipelineFailed(f"API request failed HTTP {exc.code}: {body}") from exc
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise PipelineFailed(f"API request failed: {exc}") from exc
-
-
-def gmail_stats_url(api_url: str) -> str:
-    return f"{api_url.rstrip('/')}/v2/integrations/gmail-stats"
-
-
-def fetch_gmail_stats(api_url: str, token: str) -> dict[str, Any]:
-    return api_get_json(gmail_stats_url(api_url), token)
-
-
-def account_email(account: Any) -> str:
-    if not isinstance(account, dict):
-        return ""
-    return str(account.get("email") or account.get("account_email") or "").strip().lower()
-
-
-def connected_account_emails(stats: dict[str, Any]) -> set[str]:
-    return {email for email in (account_email(account) for account in stats.get("connected_accounts", [])) if email}
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -408,6 +418,11 @@ def run_dir(base_dir: Path, contact: OnePersonInput, run_id: str | None) -> Path
     return base_dir / "gmail" / rid
 
 
+def read_csv(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        return list(csv.DictReader(handle))
+
+
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -433,6 +448,381 @@ def append_account(contact: OnePersonInput, out_dir: Path) -> Path:
         rows.append(row)
     write_csv(path, ACCOUNT_COLUMNS, rows)
     return path
+
+
+def split_name(full_name: str) -> tuple[str, str]:
+    parts = [part for part in re.split(r"\s+", (full_name or "").strip()) if part]
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], parts[-1]
+
+
+def default_name_for_email(email: str) -> str:
+    local = email.split("@", 1)[0] if "@" in email else email
+    local = re.sub(r"[._+-]+", " ", local)
+    return " ".join(part.capitalize() for part in local.split() if part)
+
+
+def msgvault_db_uri(path: Path) -> str:
+    return f"file:{path.expanduser().resolve()}?mode=ro"
+
+
+def connect_msgvault(path: Path) -> sqlite3.Connection:
+    db_path = path.expanduser()
+    if not db_path.exists():
+        raise SystemExit(f"msgvault database not found: {db_path}. Run msgvault sync-full first or pass --db.")
+    try:
+        con = sqlite3.connect(msgvault_db_uri(db_path), uri=True)
+    except sqlite3.Error as exc:
+        raise SystemExit(f"failed to open msgvault database read-only: {exc}") from exc
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def require_msgvault_schema(con: sqlite3.Connection) -> None:
+    required = {"sources", "participants", "messages", "message_recipients"}
+    rows = con.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").fetchall()
+    present = {str(row[0]) for row in rows}
+    missing = sorted(required - present)
+    if missing:
+        raise SystemExit(f"msgvault schema missing required tables: {', '.join(missing)}")
+
+
+def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "") -> Iterable[sqlite3.Row]:
+    query = """
+        SELECT
+            s.id AS source_id,
+            s.identifier AS account_email,
+            s.display_name AS account_display_name,
+            p.email_address AS email,
+            p.display_name AS participant_display_name,
+            mr.display_name AS recipient_display_name,
+            LOWER(mr.recipient_type) AS recipient_type,
+            m.id AS message_id,
+            m.conversation_id AS conversation_id,
+            COALESCE(m.sent_at, m.received_at, m.internal_date) AS message_at
+        FROM message_recipients mr
+        JOIN participants p ON p.id = mr.participant_id
+        JOIN messages m ON m.id = mr.message_id
+        JOIN sources s ON s.id = m.source_id
+        WHERE p.email_address IS NOT NULL
+          AND TRIM(p.email_address) != ''
+          AND (m.message_type IS NULL OR m.message_type = '' OR m.message_type = 'email')
+          AND (m.deleted_at IS NULL OR m.deleted_at = '')
+          AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
+          AND (? = '' OR LOWER(s.identifier) = LOWER(?))
+        ORDER BY LOWER(p.email_address), m.id
+    """
+    yield from con.execute(query, (account_email, account_email))
+
+
+def best_display_name(email: str, names: dict[str, int]) -> str:
+    cleaned: dict[str, int] = {}
+    email_l = email.lower()
+    for name, count in names.items():
+        value = normalize_name(name, email)
+        if not value or value.lower() == email_l:
+            continue
+        cleaned[value] = cleaned.get(value, 0) + count
+    if cleaned:
+        return sorted(cleaned.items(), key=lambda item: (-item[1], item[0].casefold()))[0][0]
+    return default_name_for_email(email)
+
+
+def aggregate_msgvault_contacts(con: sqlite3.Connection, account_email: str = "") -> list[dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    account_filter = account_email.strip().lower()
+    for row in iter_msgvault_metadata(con, account_filter):
+        try:
+            email = normalize_email(str(row["email"] or ""))
+        except ValueError:
+            continue
+        source_account = str(row["account_email"] or "").strip().lower()
+        if email == source_account or (account_filter and email == account_filter):
+            continue
+        record = records.setdefault(email, {
+            "email": email,
+            "names": {},
+            "sent_messages": set(),
+            "received_messages": set(),
+            "all_messages": set(),
+            "threads": set(),
+            "accounts": set(),
+            "source_ids": set(),
+            "first_interaction": "",
+            "last_interaction": "",
+        })
+        for name_key in ("recipient_display_name", "participant_display_name"):
+            name = str(row[name_key] or "").strip()
+            if name:
+                record["names"][name] = int(record["names"].get(name, 0)) + 1
+        msg_id = str(row["message_id"])
+        record["all_messages"].add(msg_id)
+        if row["conversation_id"] is not None:
+            record["threads"].add(str(row["conversation_id"]))
+        if row["source_id"] is not None:
+            record["source_ids"].add(str(row["source_id"]))
+        if source_account:
+            record["accounts"].add(source_account)
+        recipient_type = str(row["recipient_type"] or "")
+        if recipient_type == "from":
+            record["received_messages"].add(msg_id)
+        elif recipient_type in {"to", "cc", "bcc"}:
+            record["sent_messages"].add(msg_id)
+        message_at = str(row["message_at"] or "").strip()
+        if message_at:
+            if not record["first_interaction"] or message_at < record["first_interaction"]:
+                record["first_interaction"] = message_at
+            if not record["last_interaction"] or message_at > record["last_interaction"]:
+                record["last_interaction"] = message_at
+    out: list[dict[str, Any]] = []
+    for email, record in records.items():
+        display_name = best_display_name(email, record["names"])
+        automated, automated_reason = is_automated_email(email)
+        out.append({
+            "email": email,
+            "display_name": display_name,
+            "total_sent": len(record["sent_messages"]),
+            "total_received": len(record["received_messages"]),
+            "total_messages": len(record["all_messages"]),
+            "thread_count": len(record["threads"]),
+            "first_interaction": record["first_interaction"],
+            "last_interaction": record["last_interaction"],
+            "account_emails": sorted(record["accounts"]),
+            "source_ids": sorted(record["source_ids"]),
+            "primary_email_type": classify_email(email),
+            "automated_filtered": automated,
+            "automated_reason": automated_reason,
+        })
+    out.sort(key=lambda row: (-int(row["total_messages"]), str(row["email"])))
+    return out
+
+
+def people_rows_from_msgvault(rows: list[dict[str, Any]], source_artifacts: list[str]) -> list[dict[str, Any]]:
+    people: list[dict[str, Any]] = []
+    for row in rows:
+        first_name, last_name = split_name(row.get("display_name") or "")
+        person = {col: "" for col in PEOPLE_COLUMNS}
+        person.update({
+            "id": f"gmail:{short_hash(row['email'], 16)}",
+            "first_name": first_name,
+            "last_name": last_name,
+            "full_name": row.get("display_name") or "",
+            "enrichment_provider": "msgvault_metadata",
+            "enriched_at": now_iso(),
+            "primary_email": row["email"],
+            "all_emails": json.dumps([row["email"]]),
+            "source_channels": "gmail_msgvault",
+            "source_artifacts": json.dumps(source_artifacts, ensure_ascii=False),
+        })
+        people.append(person)
+    return people
+
+
+def linkedin_resolution_queue_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    queue: list[dict[str, Any]] = []
+    for row in rows:
+        email = str(row.get("email") or "").strip().lower()
+        if not email:
+            continue
+        guess = domain_guess(email)
+        queue.append({
+            "handle": email,
+            "id": f"gmail:{short_hash(email, 16)}",
+            "display_name": row.get("display_name") or "",
+            "full_name": row.get("display_name") or "",
+            "primary_email": email,
+            "company_guess": guess.get("company_guess", ""),
+            "primary_email_type": row.get("primary_email_type") or classify_email(email),
+            "total_messages": row.get("total_messages", ""),
+            "thread_count": row.get("thread_count", ""),
+            "last_interaction": row.get("last_interaction", ""),
+            "source": "gmail_msgvault",
+            "source_channels": "gmail_msgvault",
+        })
+    return queue
+
+
+def load_resolution_map(path: Path, min_confidence: float) -> dict[str, dict[str, str]]:
+    resolutions: dict[str, dict[str, str]] = {}
+    for row in read_csv(path):
+        status = (row.get("status") or "").strip().lower()
+        linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or "")
+        try:
+            confidence = float(row.get("confidence") or 0)
+        except ValueError:
+            confidence = 0.0
+        handle = (row.get("handle") or "").strip().lower()
+        if status == "found" and linkedin_url and handle and confidence >= min_confidence:
+            row = dict(row)
+            row["linkedin_url"] = linkedin_url
+            row["confidence"] = str(confidence)
+            resolutions[handle] = row
+    return resolutions
+
+
+def apply_linkedin_resolutions_to_people(people_csv: Path, resolutions_csv: Path, output_dir: Path, *, min_confidence: float = 0.75) -> dict[str, Any]:
+    people_rows = read_csv(people_csv)
+    resolutions = load_resolution_map(resolutions_csv, min_confidence)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / "people.csv"
+    applied_path = output_dir / "linkedin_resolutions_applied.csv"
+    applied: list[dict[str, Any]] = []
+    output_rows: list[dict[str, Any]] = []
+    for row in people_rows:
+        normalized = {col: row.get(col, "") for col in PEOPLE_COLUMNS}
+        email = (normalized.get("primary_email") or "").strip().lower()
+        resolution = resolutions.get(email) or resolutions.get((normalized.get("id") or "").strip().lower())
+        if resolution:
+            linkedin_url = normalize_linkedin_url(resolution.get("linkedin_url") or "")
+            public_id = extract_public_identifier(linkedin_url)
+            if public_id:
+                normalized["id"] = generate_linkedin_person_id(public_id)
+                normalized["public_identifier"] = public_id
+                normalized["linkedin_url"] = linkedin_url
+                if resolution.get("matched_name") and not normalized.get("full_name"):
+                    normalized["full_name"] = resolution["matched_name"]
+                if resolution.get("matched_headline"):
+                    normalized["headline"] = resolution["matched_headline"]
+                normalized["enrichment_provider"] = "parallel_linkedin_resolution"
+                normalized["enriched_at"] = now_iso()
+                artifacts = [str(people_csv), str(resolutions_csv)]
+                try:
+                    existing = json.loads(normalized.get("source_artifacts") or "[]")
+                    if isinstance(existing, list):
+                        artifacts = [str(x) for x in existing] + [str(resolutions_csv)]
+                except json.JSONDecodeError:
+                    pass
+                normalized["source_artifacts"] = json.dumps(sorted(set(artifacts)), ensure_ascii=False)
+                applied.append({
+                    "primary_email": email,
+                    "linkedin_url": linkedin_url,
+                    "public_identifier": public_id,
+                    "confidence": resolution.get("confidence", ""),
+                    "matched_name": resolution.get("matched_name", ""),
+                })
+        output_rows.append(normalized)
+    write_csv(out_path, PEOPLE_COLUMNS, output_rows)
+    write_csv(applied_path, ["primary_email", "linkedin_url", "public_identifier", "confidence", "matched_name"], applied)
+    return {
+        "status": "completed",
+        "input_people_csv": str(people_csv),
+        "resolutions_csv": str(resolutions_csv),
+        "people_csv": str(out_path),
+        "applied_csv": str(applied_path),
+        "rows": len(output_rows),
+        "resolved": len(applied),
+        "min_confidence": min_confidence,
+    }
+
+
+def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_email: str = "", operator_id: str = "local", *, include_automated: bool = False, limit: int | None = None) -> dict[str, Any]:
+    filtered = [row for row in rows if include_automated or not row.get("automated_filtered")]
+    if limit is not None:
+        filtered = filtered[: max(0, int(limit))]
+    account_short = short_hash(account_email or "all", 8)
+    op_short = (operator_id or "local")[:8]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    threads_path = out_dir / f"gmail_threads_{account_short}_{op_short}.csv"
+    aggregated_path = out_dir / f"gmail_contacts_aggregated_{account_short}_{op_short}.csv"
+    targeted_path = out_dir / f"targeted_emails_{account_short}_{op_short}.csv"
+    resolution_queue_path = out_dir / "linkedin_resolution_queue.csv"
+    people_path = out_dir / "people.csv"
+    accounts_path = out_dir / "accounts.csv"
+    manifest_path = out_dir / "manifest.json"
+
+    account_rows = []
+    seen_accounts: set[str] = set()
+    for row in filtered:
+        for account in row.get("account_emails") or []:
+            if account in seen_accounts:
+                continue
+            seen_accounts.add(account)
+            account_rows.append({"account_id": f"msgvault:{short_hash(account, 12)}", "account_email": account, "provider": "gmail", "source": "msgvault", "added_at": now_iso()})
+    if account_email and account_email not in seen_accounts:
+        account_rows.append({"account_id": f"msgvault:{short_hash(account_email, 12)}", "account_email": account_email, "provider": "gmail", "source": "msgvault", "added_at": now_iso()})
+    write_csv(accounts_path, ACCOUNT_COLUMNS, account_rows)
+
+    write_csv(threads_path, THREAD_COLUMNS, [{
+        "email": row["email"],
+        "display_name": row["display_name"],
+        "thread_id": "",
+        "received_count": row["total_received"],
+        "sent_count": row["total_sent"],
+        "message_count": row["total_messages"],
+        "first_message_at": row["first_interaction"],
+        "last_message_at": row["last_interaction"],
+        "subject": "",
+        "discovered_at": now_iso(),
+    } for row in filtered])
+    write_csv(aggregated_path, AGGREGATED_COLUMNS, [{
+        "email": row["email"],
+        "display_name": row["display_name"],
+        "total_sent": row["total_sent"],
+        "total_received": row["total_received"],
+        "total_messages": row["total_messages"],
+        "thread_count": row["thread_count"],
+        "first_interaction": row["first_interaction"],
+        "last_interaction": row["last_interaction"],
+        "sample_subjects": "[]",
+    } for row in filtered])
+    write_csv(targeted_path, TARGETED_COLUMNS, [{
+        "display_name": row["display_name"],
+        "primary_email": row["email"],
+        "primary_email_type": row["primary_email_type"],
+        "all_emails": json.dumps([row["email"]]),
+        "email_count": 1,
+        "total_sent": row["total_sent"],
+        "total_received": row["total_received"],
+        "total_messages": row["total_messages"],
+        "thread_count": row["thread_count"],
+        "first_interaction": row["first_interaction"],
+        "last_interaction": row["last_interaction"],
+        "is_duplicate": False,
+        "potential_same_person_emails": "[]",
+        "sample_subjects": "[]",
+        "sample_calendar_titles": "[]",
+    } for row in filtered])
+    write_csv(resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, linkedin_resolution_queue_rows(filtered))
+    write_csv(people_path, PEOPLE_COLUMNS, people_rows_from_msgvault(filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)]))
+
+    manifest = {
+        "task": "import_gmail_network_msgvault",
+        "version": 1,
+        "created_at": now_iso(),
+        "status": "completed",
+        "source": "msgvault",
+        "privacy": {
+            "message_bodies_read": False,
+            "message_subjects_included": False,
+            "raw_mime_read": False,
+            "local_artifacts_only": True,
+        },
+        "account_email": account_email,
+        "counts": {
+            "contacts_seen": len(rows),
+            "contacts_written": len(filtered),
+            "automated_filtered": len([row for row in rows if row.get("automated_filtered") and not include_automated]),
+            "accounts": len(account_rows),
+        },
+        "artifacts": {
+            "accounts_csv": str(accounts_path),
+            "gmail_threads_csv": str(threads_path),
+            "gmail_contacts_aggregated_csv": str(aggregated_path),
+            "targeted_emails_csv": str(targeted_path),
+            "linkedin_resolution_queue_csv": str(resolution_queue_path),
+            "people_csv": str(people_path),
+            "manifest_json": str(manifest_path),
+        },
+        "schema_reference": {
+            "msgvault_tables": ["sources", "participants", "messages", "message_recipients"],
+            "key_fields": ["participants.email_address", "participants.display_name", "message_recipients.display_name", "messages.sent_at", "sources.identifier"],
+        },
+    }
+    write_json(manifest_path, manifest)
+    return manifest
 
 
 def make_artifacts(contact: OnePersonInput, out_dir: Path) -> dict[str, Any]:
@@ -599,7 +989,7 @@ def step_prepare_local_workspace(ledger: dict[str, Any]) -> dict[str, Any]:
         "workspace_root": ledger["run_dir"],
         "contract": "powerpacks.gmail_network_import.v1.local_one_person",
         "multiple_accounts_supported_by": "one run per account_email/account_id, then merge later by email/linkedin/person_id",
-        "oauth_model": "future: user authorizes Gmail through Powerset; local agent receives scoped metadata/export artifacts, not raw refresh tokens",
+        "sync_model": "msgvault local SQLite metadata import is the supported Gmail sync path; this legacy seed does not use OAuth",
     }
     path = Path(ledger["run_dir"]) / "workspace.json"
     write_json(path, workspace)
@@ -616,7 +1006,7 @@ def step_write_next_steps(ledger: dict[str, Any]) -> dict[str, Any]:
             "account metadata for multi-account runs",
         ],
         "not_run_by_v1": [
-            "Gmail OAuth sync",
+            "Gmail sync",
             "Parallel.ai enrichment",
             "EnrichLayer fallback",
             "RapidAPI candidate collection",
@@ -752,102 +1142,96 @@ def command_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_accounts(args: argparse.Namespace) -> int:
+def list_msgvault_accounts(con: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = con.execute("""
+        SELECT
+            s.id AS source_id,
+            s.identifier AS account_email,
+            s.display_name AS display_name,
+            COUNT(DISTINCT m.id) AS message_count
+        FROM sources s
+        LEFT JOIN messages m ON m.source_id = s.id
+        WHERE (s.source_type IS NULL OR LOWER(s.source_type) = 'gmail')
+          AND s.identifier IS NOT NULL
+          AND TRIM(s.identifier) != ''
+        GROUP BY s.id, s.identifier, s.display_name
+        ORDER BY LOWER(s.identifier)
+    """).fetchall()
+    accounts: list[dict[str, Any]] = []
+    for row in rows:
+        email = str(row["account_email"] or "").strip().lower()
+        if not email:
+            continue
+        accounts.append({
+            "source_id": str(row["source_id"]),
+            "account_email": email,
+            "display_name": str(row["display_name"] or ""),
+            "message_count": int(row["message_count"] or 0),
+        })
+    return accounts
+
+
+def command_msgvault_accounts(args: argparse.Namespace) -> int:
+    con = connect_msgvault(Path(args.db))
     try:
-        stats = fetch_gmail_stats(args.api_url, powerset_token())
-    except PipelineFailed as exc:
-        emit({"status": "failed", "error": str(exc)})
-        return 1
+        require_msgvault_schema(con)
+        accounts = list_msgvault_accounts(con)
+    finally:
+        con.close()
     emit({
         "status": "ok",
-        "api_url": args.api_url,
-        "connected_accounts": stats.get("connected_accounts", []),
-        "counts": {
-            "total_contacts": stats.get("total_contacts", 0),
-            "confirmed_linkedin": stats.get("confirmed_linkedin", 0),
-            "needs_review": stats.get("needs_review", 0),
-            "unmatched": stats.get("unmatched", 0),
-            "google_contacts_count": stats.get("google_contacts_count", 0),
-            "calendar_events_count": stats.get("calendar_events_count", 0),
+        "source": "msgvault",
+        "db": str(Path(args.db).expanduser()),
+        "accounts": accounts,
+        "count": len(accounts),
+        "privacy": {
+            "message_bodies_read": False,
+            "message_subjects_included": False,
+            "raw_mime_read": False,
+            "local_artifacts_only": True,
         },
-        "last_sync_at": stats.get("last_sync_at"),
-        "tokens_stored": "server_side_encrypted_supabase",
     })
     return 0
 
 
-def poll_for_linked_account(api_url: str, token: str, before: set[str], timeout_seconds: int, poll_seconds: float) -> dict[str, Any]:
-    deadline = time.monotonic() + max(timeout_seconds, 1)
-    last_stats: dict[str, Any] = {}
-    last_error = ""
-
-    while time.monotonic() <= deadline:
-        try:
-            last_stats = fetch_gmail_stats(api_url, token)
-            emails = connected_account_emails(last_stats)
-            new_emails = sorted(emails - before)
-            if new_emails:
-                return {"status": "linked", "email": new_emails[0], "stats": last_stats}
-            if emails and not before:
-                return {"status": "linked", "email": sorted(emails)[0], "stats": last_stats}
-        except PipelineFailed as exc:
-            last_error = str(exc)
-        time.sleep(max(poll_seconds, 0.5))
-
-    return {
-        "status": "timeout",
-        "known_accounts": sorted(connected_account_emails(last_stats)) if last_stats else sorted(before),
-        "last_error": last_error,
-    }
-
-
-def command_connect(args: argparse.Namespace) -> int:
-    token = ""
-    before: set[str] = set()
-    if args.wait:
-        try:
-            token = powerset_token()
-            before = connected_account_emails(fetch_gmail_stats(args.api_url, token))
-        except PipelineFailed as exc:
-            emit({"status": "failed", "error": str(exc)})
-            return 1
-
-    opened = False
-    if not args.no_open:
-        opened = webbrowser.open(args.app_url)
-
-    if args.wait:
-        print("Waiting for Gmail OAuth to finish in the browser...", file=sys.stderr)
-        poll = poll_for_linked_account(args.api_url, token, before, args.timeout_seconds, args.poll_seconds)
-        if poll.get("status") == "linked":
-            emit({
-                "status": "linked",
-                "app_url": args.app_url,
-                "opened_browser": opened,
-                "email": poll.get("email"),
-                "previous_accounts": sorted(before),
-                "message": "Gmail account linked. You can close the browser tab and return to Codex.",
-            })
-            return 0
-        emit({
-            "status": "needs_user_action",
-            "app_url": args.app_url,
-            "opened_browser": opened,
-            "previous_accounts": sorted(before),
-            "known_accounts": poll.get("known_accounts", []),
-            "last_error": poll.get("last_error", ""),
-            "message": "Finish Gmail OAuth in the browser, then rerun accounts or continue onboarding with done.",
-        })
-        return 20
-
+def command_msgvault(args: argparse.Namespace) -> int:
+    con = connect_msgvault(Path(args.db))
+    try:
+        require_msgvault_schema(con)
+        rows = aggregate_msgvault_contacts(con, args.account_email)
+    finally:
+        con.close()
+    run_id = args.run_id or f"msgvault-{short_hash((args.account_email or 'all') + ':' + now_iso(), 12)}"
+    out_dir = Path(args.output_dir) / "gmail" / run_id
+    manifest = write_msgvault_artifacts(
+        rows,
+        out_dir,
+        account_email=args.account_email,
+        operator_id=args.operator_id,
+        include_automated=bool(args.include_automated),
+        limit=args.limit,
+    )
     emit({
-        "status": "ok",
-        "app_url": args.app_url,
-        "opened_browser": opened,
-        "auth_model": "Browser app performs Auth0 login if needed, then Google OAuth. Powerpacks does not put the local bearer token in the URL.",
-        "token_storage": "Google tokens are stored server-side in encrypted Supabase gmail_oauth_tokens and mapped via user_gmail_mappings.",
-        "after_connect": "Run `... gmail_network_import.py accounts` to verify linked accounts via the local Powerset token.",
+        "status": "completed",
+        "run_dir": str(out_dir),
+        "artifacts": manifest["artifacts"],
+        "counts": manifest["counts"],
+        "privacy": manifest["privacy"],
+        "summary": "Imported Gmail contact metadata from msgvault and wrote a LinkedIn resolution queue. No message bodies, subjects, raw MIME, external APIs, uploads, or prod writes were used.",
     })
+    return 0
+
+
+def command_apply_resolutions(args: argparse.Namespace) -> int:
+    run_id = args.run_id or f"gmail-resolved-{short_hash(str(args.people_csv) + ':' + str(args.resolutions_csv) + ':' + now_iso(), 12)}"
+    output_dir = Path(args.output_dir) / "gmail-resolved" / run_id
+    payload = apply_linkedin_resolutions_to_people(
+        Path(args.people_csv),
+        Path(args.resolutions_csv),
+        output_dir,
+        min_confidence=args.min_confidence,
+    )
+    emit(payload)
     return 0
 
 
@@ -890,19 +1274,27 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     status.set_defaults(func=command_status)
 
-    accounts = sub.add_parser("accounts", help="List server-linked Gmail accounts via the local Powerset token")
-    accounts.add_argument("--api-url", default=DEFAULT_API_URL)
-    accounts.set_defaults(func=command_accounts)
+    sources = sub.add_parser("msgvault-accounts", aliases=["msgvault-sources"], help="List Gmail source accounts in a local msgvault SQLite archive")
+    sources.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
+    sources.set_defaults(func=command_msgvault_accounts)
 
-    connect = sub.add_parser("connect", help="Open the Powerset Gmail connection page")
-    connect.add_argument("--app-url", default=DEFAULT_APP_GMAIL_URL)
-    connect.add_argument("--api-url", default=DEFAULT_API_URL)
-    connect.add_argument("--no-open", action="store_true", help="Print the URL without opening a browser")
-    connect.add_argument("--wait", dest="wait", action="store_true", default=True, help="Poll until the linked Gmail account appears (default)")
-    connect.add_argument("--no-wait", dest="wait", action="store_false", help="Open or print the URL without polling")
-    connect.add_argument("--timeout-seconds", type=int, default=600)
-    connect.add_argument("--poll-seconds", type=float, default=5.0)
-    connect.set_defaults(func=command_connect)
+    msgvault = sub.add_parser("msgvault", aliases=["import-msgvault"], help="Import Gmail contact metadata from a local msgvault SQLite archive")
+    msgvault.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
+    msgvault.add_argument("--account-email", default="", help="Optional Gmail source account filter")
+    msgvault.add_argument("--operator-id", default="local")
+    msgvault.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
+    msgvault.add_argument("--run-id")
+    msgvault.add_argument("--limit", type=int)
+    msgvault.add_argument("--include-automated", action="store_true", help="Include noreply/automated service addresses")
+    msgvault.set_defaults(func=command_msgvault)
+
+    apply = sub.add_parser("apply-resolutions", help="Apply LinkedIn resolution results to a Gmail/msgvault people.csv")
+    apply.add_argument("--people-csv", required=True)
+    apply.add_argument("--resolutions-csv", required=True)
+    apply.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
+    apply.add_argument("--run-id")
+    apply.add_argument("--min-confidence", type=float, default=0.75)
+    apply.set_defaults(func=command_apply_resolutions)
 
     return parser
 

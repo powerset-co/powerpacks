@@ -34,6 +34,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             "public_identifier": "jane-example",
             "linkedin_url": "https://www.linkedin.com/in/jane-example",
             "full_name": name,
+            "current_company": "Acme AI",
             "source_channels": path.parent.parent.name,
         })
         with path.open("w", newline="", encoding="utf-8") as handle:
@@ -55,10 +56,24 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(Path(payload["people_csv"]).name, "people.csv")
                 self.assertTrue(Path(payload["people_csv"]).exists())
                 self.assertTrue(Path(payload["legacy_output"]).exists())
+                self.assertTrue(Path(payload["network_contacts_csv"]).exists())
+                self.assertTrue(Path(payload["network_contact_sources_csv"]).exists())
+                self.assertTrue(Path(payload["network_companies_csv"]).exists())
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["full_name"], "Jane Canonical")
+                with Path(payload["network_contacts_csv"]).open(newline="", encoding="utf-8") as handle:
+                    contacts = list(csv.DictReader(handle))
+                self.assertEqual(contacts[0]["source_channels"], "linkedin")
+                with Path(payload["network_contact_sources_csv"]).open(newline="", encoding="utf-8") as handle:
+                    sources = list(csv.DictReader(handle))
+                self.assertEqual(sources[0]["source_channel"], "linkedin")
+                self.assertEqual(sources[0]["source_identifier"], "https://www.linkedin.com/in/jane-example")
+                with Path(payload["network_companies_csv"]).open(newline="", encoding="utf-8") as handle:
+                    companies = list(csv.DictReader(handle))
+                self.assertEqual(companies[0]["company_name"], "Acme AI")
+                self.assertEqual(companies[0]["contact_count"], "1")
             finally:
                 os.chdir(old_cwd)
 
