@@ -220,7 +220,10 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(commands[0]["label"], "add_oauth_test_users")
             self.assertIn("msgvault_setup.py add-test-users other@example.com", commands[0]["command"])
             self.assertIn("msgvault_setup.py add-account --email other@example.com", commands[1]["command"])
-            self.assertEqual(commands[2]["command"], "msgvault sync-full")
+            self.assertEqual(commands[2]["label"], "start_msgvault_sync_other@example.com")
+            self.assertIn("msgvault sync-full other@example.com", commands[2]["command"])
+            self.assertIn("tmux new-session", commands[2]["command"])
+            self.assertIn(".powerpacks/ingestion/logs/msgvault-sync-other-example-com.log", commands[2]["command"])
             self.assertEqual(commands[3]["label"], "rerun_onboarding")
 
     def test_onboarding_step_imports_multiple_gmail_accounts(self):

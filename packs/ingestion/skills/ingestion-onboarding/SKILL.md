@@ -81,9 +81,12 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
 If `step` returns `status: needs_agent_action` with `commands`, Codex must run
 the returned commands in order. Do not tell the user to run them. For extra
 Gmail addresses this means Codex runs the Google OAuth test-user browser
-automation, authorizes each Gmail account in msgvault, syncs msgvault, and
-reruns onboarding. Only ask the user to complete browser login/consent when
-Google requires human action.
+automation, authorizes each Gmail account in msgvault, starts per-account
+msgvault sync in the background, and reruns onboarding after a local checkpoint
+exists. Large mailboxes can take a few hours to fully sync; tell the user the
+current synced message count and log path instead of blocking the main thread.
+Only ask the user to complete browser login/consent when Google requires human
+action.
 
 LinkedIn CSV remains the primary LinkedIn path:
 
