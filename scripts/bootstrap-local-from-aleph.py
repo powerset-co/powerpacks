@@ -468,7 +468,8 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     seed_root = Path(args.seed)
     seed = seed_root / "pipeline_output"
     company_csv_path = Path(args.company_csv) if args.company_csv else seed_root / "data/company_harmonic_all.csv"
-    run_dir = Path(args.output_dir) / f"operator-{operator_id[:8]}" / args.flavor
+    output_root = Path(args.output_dir)
+    run_dir = output_root if getattr(args, "_single_operator", False) else output_root / f"operator-{operator_id[:8]}"
     if run_dir.exists() and args.force:
         shutil.rmtree(run_dir)
     elif run_dir.exists() and not args.force:
@@ -611,12 +612,7 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     schools_count = write_jsonl(records_dir / "schools.records.jsonl", _school_rows(schools, parent, school_ids, school_id_map, operator_id))
     education_count = write_jsonl(records_dir / "education.records.jsonl", _education_rows(people_education, schools, parent, school_id_map, operator_id))
 
-    for name in ["people", "summaries", "companies", "education", "schools"]:
-        src = records_dir / f"{name}.records.jsonl"
-        if src.exists():
-            shutil.copy2(src, records_dir / f"{name}.records.{args.flavor}.jsonl")
-
-    duckdb_payload = run_duckdb_loader(run_dir, args.flavor, operator_id, operator_email or "") if not args.skip_duckdb else {}
+    duckdb_payload = run_duckdb_loader(run_dir, operator_id, operator_email or "") if not args.skip_duckdb else {}
     vector_counts = {"people": people_count, "summaries": summaries_count, "companies": companies_count}
     write_json(run_dir / "vectors/checkpoint.json", {"status": "completed", "provider": "input-embeddings", "dimension": 1536, "counts": vector_counts, "updated_at": now_iso()})
 
@@ -651,8 +647,8 @@ def _education_rows(people_education: list[dict[str, Any]], schools: dict[str, d
         yield {"id": str(uuid.uuid5(EDU_NAMESPACE, f"pe:{person_id}:{local_education_id}")), "person_id": person_id, "base_id": person_id, "education_id": local_education_id, "canonical_education_id": local_canonical_id, "school_name": clean(school.get("school_name") or row.get("school_name")), "degree": clean(row.get("degree")), "degree_normalized": clean(row.get("degree_normalized")), "field_of_study": clean(row.get("field_of_study")), "start_year": int(row.get("start_year") or 0), "end_year": int(row.get("end_year") or 0), "graduation_year": int(row.get("graduation_year") or 0), "allowed_operator_ids": [operator_id]}
 
 
-def run_duckdb_loader(run_dir: Path, flavor: str, operator_id: str, operator_email: str) -> dict[str, Any]:
-    cmd = [sys.executable, "scripts/build-local-duckdb-shim.py", "--records-dir", str(run_dir / "records"), "--output-dir", str(run_dir / "duckdb"), "--flavor", flavor, "--operator-id", operator_id, "--operator-email", operator_email or f"{operator_id}@local", "--force"]
+def run_duckdb_loader(run_dir: Path, operator_id: str, operator_email: str) -> dict[str, Any]:
+    cmd = [sys.executable, "scripts/build-local-duckdb-shim.py", "--records-dir", str(run_dir / "records"), "--operator-id", operator_id, "--operator-email", operator_email or f"{operator_id}@local", "--force"]
     completed = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, check=False)
     if completed.returncode != 0:
         if completed.stdout:
@@ -670,8 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--operator-access", help="CSV/JSONL operator_id/person_id mapping for real per-operator scoping")
     parser.add_argument("--operator-id", help="Single operator id. With --operator-access, filters to this operator. Without access, smoke-selects --limit people.")
     parser.add_argument("--operator-email")
-    parser.add_argument("--output-dir", default=".powerpacks/search-index/bootstrap-local")
-    parser.add_argument("--flavor", choices=["candidate", "golden"], default="candidate")
+    parser.add_argument("--output-dir", default=".powerpacks/search-index")
     parser.add_argument("--limit", type=int, default=5, help="Smoke row limit when --operator-access is omitted")
     parser.add_argument("--checkpoint-every", type=int, default=1000)
     parser.add_argument("--education-limit", type=int, default=5000)
@@ -691,6 +686,7 @@ def main() -> None:
         operators = [(op, ids, emails.get(op)) for op, ids in sorted(by_operator.items())]
     if not operators:
         raise SystemExit("provide --operator-access or --operator-id for smoke bootstrap")
+    args._single_operator = len(operators) == 1
     results = [build_operator(args, op, ids, email, mode) for op, ids, email in operators]
     emit({"status": "ok", "mode": mode, "operators": len(results), "results": results})
 

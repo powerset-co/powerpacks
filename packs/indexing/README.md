@@ -15,19 +15,20 @@ uv run --project . python packs/ingestion/primitives/merge_network_sources/merge
 ```bash
 uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan \
   --input .powerpacks/network-import/merged/people.csv \
-  --output-dir .powerpacks/search-index \
-  --run-id local-run
+  --output-dir .powerpacks/search-index
 
 uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run \
   --input .powerpacks/network-import/merged/people.csv \
-  --output-dir .powerpacks/search-index \
-  --run-id local-run
+  --output-dir .powerpacks/search-index
 ```
+
+The pipeline has one local index target. A partial `.powerpacks/search-index`
+run resumes from its ledger; a completed run refreshes the same directory.
 
 Artifacts are written under:
 
 ```text
-.powerpacks/search-index/<run-id>/
+.powerpacks/search-index/
 ├── ledger.json
 ├── unified/
 │   ├── flattened_people.jsonl
@@ -52,13 +53,22 @@ Artifacts are written under:
 └── stats/*.json
 ```
 
+Materialize the local DuckDB search backend:
+
+```bash
+uv run --project . python scripts/build-local-duckdb-shim.py \
+  --records-dir .powerpacks/search-index \
+  --force
+export POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb
+```
+
 Resume/status commands use the ledger file:
 
 ```bash
 uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue \
-  --ledger .powerpacks/search-index/local-run/ledger.json
+  --ledger .powerpacks/search-index/ledger.json
 uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py status \
-  --ledger .powerpacks/search-index/local-run/ledger.json
+  --ledger .powerpacks/search-index/ledger.json
 ```
 
 All indexing code is stdlib-only/local-file only: no LLM, network, Supabase, Postgres, or TurboPuffer calls.

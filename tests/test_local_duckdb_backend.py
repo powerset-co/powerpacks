@@ -587,7 +587,6 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             payload = run_shim_json(
                 "--records-dir", str(records),
                 "--output-dir", str(tmp / ".powerpacks/search-index"),
-                "--flavor", "candidate",
                 "--operator-id", "op-artifact",
                 "--operator-email", "artifact@example.com",
                 "--force",

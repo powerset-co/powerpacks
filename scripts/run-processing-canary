@@ -16,7 +16,6 @@ RUN_ID="${POWERPACKS_CANARY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BASE=".powerpacks/processing-canary/$RUN_ID"
 INPUT="$BASE/people.first${LIMIT}.csv"
 OUT="$BASE/search-index"
-FLAVOR="candidate"
 OPERATOR_ID="${POWERPACKS_CANARY_OPERATOR_ID:-local-canary}"
 OPERATOR_EMAIL="${POWERPACKS_CANARY_OPERATOR_EMAIL:-local-canary@example.com}"
 CHECKPOINT_EVERY="${POWERPACKS_CANARY_CHECKPOINT_EVERY:-25}"
@@ -47,24 +46,21 @@ PY
 uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run \
   --input "$INPUT" \
   --output-dir "$OUT" \
-  --run-id "$FLAVOR" \
   --default-operator-id "$OPERATOR_ID" \
   --checkpoint-every "$CHECKPOINT_EVERY" \
   --stop-after-role-chunks 1 \
   --force > "$BASE/pipeline.partial.json"
 
 uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue \
-  --ledger "$OUT/$FLAVOR/ledger.json" > "$BASE/pipeline.resumed.json"
+  --ledger "$OUT/ledger.json" > "$BASE/pipeline.resumed.json"
 
 uv run --project . python scripts/build-local-duckdb-shim.py \
-  --records-dir "$OUT/$FLAVOR" \
+  --records-dir "$OUT" \
   --operator-id "$OPERATOR_ID" \
   --operator-email "$OPERATOR_EMAIL" \
-  --output-dir "$BASE/duckdb" \
-  --flavor "$FLAVOR" \
   --force > "$BASE/duckdb.json"
 
-POWERPACKS_LOCAL_SEARCH_DB="$BASE/duckdb/$FLAVOR/local-search.$FLAVOR.duckdb" uv run --project . python - <<'PY' > "$BASE/smoke.json"
+POWERPACKS_LOCAL_SEARCH_DB="$OUT/local-search.duckdb" uv run --project . python - <<'PY' > "$BASE/smoke.json"
 import asyncio, json, os, sys
 from pathlib import Path
 ROOT = Path.cwd()
@@ -105,9 +101,9 @@ base = '$BASE'
 resumed = json.load(open(f'{base}/pipeline.resumed.json'))
 duckdb = json.load(open(f'{base}/duckdb.json'))
 smoke = json.load(open(f'{base}/smoke.json'))
-role_stats = json.load(open(f'{base}/search-index/candidate/stats/embed_role_positions.json'))
-company_stats = json.load(open(f'{base}/search-index/candidate/stats/embed_companies.json'))
-summary_stats = json.load(open(f'{base}/search-index/candidate/stats/embed_summaries.json'))
+role_stats = json.load(open(f'{base}/search-index/stats/embed_role_positions.json'))
+company_stats = json.load(open(f'{base}/search-index/stats/embed_companies.json'))
+summary_stats = json.load(open(f'{base}/search-index/stats/embed_summaries.json'))
 fake_providers = [
   role_stats.get('provider') == 'local-fake',
   company_stats.get('provider') == 'local-fake',

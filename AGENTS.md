@@ -146,7 +146,7 @@ exist unless explicitly asked.
     via `uv run --project . python packs/powerset/primitives/auth/auth.py whoami`.
 - **Indexing pack** (build-local-search-index): local files only. It consumes
   `.powerpacks/network-import/merged/people.csv` and writes
-  `.powerpacks/search-index/<run-id>/`; do not run LLM, network, Supabase,
+  `.powerpacks/search-index/`; do not run LLM, network, Supabase,
   Postgres, or TurboPuffer calls for this workflow.
 - **Search pack** (search-network, search-company): requires `.env` with
   TurboPuffer + Postgres credentials. If `.env` is present, run the search

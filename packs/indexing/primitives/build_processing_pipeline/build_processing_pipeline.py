@@ -50,8 +50,8 @@ STEPS = [
 ]
 
 
-def run_dir(output_dir: Path, run_id: str) -> Path:
-    return output_dir / run_id
+def run_dir(output_dir: Path) -> Path:
+    return output_dir
 
 
 def paths(rd: Path) -> dict[str, Path]:
@@ -99,7 +99,6 @@ def write_stats(ledger: dict[str, Any], name: str, payload: dict[str, Any]) -> N
 def default_ledger(
     input_path: Path,
     rd: Path,
-    run_id: str,
     default_operator_id: str | None = None,
     limit: int | None = None,
     *,
@@ -132,7 +131,6 @@ def default_ledger(
         "primitive": "build_processing_pipeline",
         "version": 1,
         "status": "pending",
-        "run_id": run_id,
         "run_dir": str(rd),
         "input": str(input_path),
         "default_operator_id": default_operator_id,
@@ -1040,7 +1038,7 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
         "status": "dry_run" if getattr(args, "dry_run", False) else "estimate",
         "stage": "build_processing_pipeline",
         "input": str(input_path),
-        "run_dir": str(run_dir(Path(args.output_dir), args.run_id)),
+        "run_dir": str(run_dir(Path(args.output_dir))),
         "counts": {
             "people": len(people),
             "unique_roles": len(role_hashes),
@@ -1076,11 +1074,9 @@ def build_parser() -> argparse.ArgumentParser:
     plan = sub.add_parser("plan")
     plan.add_argument("--input", required=True)
     plan.add_argument("--output-dir", required=True)
-    plan.add_argument("--run-id", required=True)
     run = sub.add_parser("run")
     run.add_argument("--input", required=True)
     run.add_argument("--output-dir", required=True)
-    run.add_argument("--run-id", required=True)
     run.add_argument("--default-operator-id", default=None)
     run.add_argument("--limit", type=int)
     run.add_argument("--checkpoint-every", type=int, default=1000)
@@ -1123,7 +1119,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     if args.cmd == "plan":
-        rd = run_dir(Path(args.output_dir), args.run_id)
+        rd = run_dir(Path(args.output_dir))
         ps = paths(rd)
         emit_json(
             {
@@ -1139,18 +1135,24 @@ def main() -> None:
         if args.dry_run or args.estimate:
             emit_json(estimate_run(args))
             return
-        rd = run_dir(Path(args.output_dir), args.run_id)
+        rd = run_dir(Path(args.output_dir))
         if rd.exists():
             if args.force:
                 shutil.rmtree(rd)
+            elif paths(rd)["ledger"].exists():
+                ledger = load_ledger(paths(rd)["ledger"])
+                if ledger.get("status") != "completed":
+                    ledger = execute(paths(rd)["ledger"], {"stop_after_role_chunks": args.stop_after_role_chunks, "stop_after_company_chunks": args.stop_after_company_chunks, "stop_after_embedding_chunks": args.stop_after_embedding_chunks})
+                    emit_json({"status": ledger["status"], "run_dir": ledger["run_dir"], "counts": {step["id"]: step.get("stats", {}) for step in ledger.get("steps", [])}})
+                    return
+                shutil.rmtree(rd)
             else:
                 ledger_path = paths(rd)["ledger"]
-                raise SystemExit(f"run directory already exists: {rd}. Use continue --ledger {ledger_path} or rerun with --force.")
+                raise SystemExit(f"search index directory already exists without a ledger: {rd}. Rerun with --force to replace it.")
         rd.mkdir(parents=True, exist_ok=True)
         ledger = default_ledger(
             Path(args.input),
             rd,
-            args.run_id,
             args.default_operator_id,
             args.limit,
             checkpoint_every=args.checkpoint_every,

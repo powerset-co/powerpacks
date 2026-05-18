@@ -328,15 +328,13 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(FIXTURE_PEOPLE),
                 "--output-dir",
                 str(clean_base),
-                "--run-id",
-                "candidate",
                 "--checkpoint-every",
                 "2",
                 "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(clean["status"], "completed")
-            clean_dir = clean_base / "candidate"
+            clean_dir = clean_base
             self.assertTrue((clean_dir / "roles/checkpoint.json").exists())
 
             code, partial, err = run_json([
@@ -347,8 +345,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(FIXTURE_PEOPLE),
                 "--output-dir",
                 str(resume_base),
-                "--run-id",
-                "candidate",
                 "--checkpoint-every",
                 "2",
                 "--stop-after-role-chunks",
@@ -358,7 +354,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertEqual(partial["status"], "partial")
             self.assertEqual(partial["counts"]["build_roles"]["status"], "partial")
-            resume_dir = resume_base / "candidate"
+            resume_dir = resume_base
             self.assertFalse((resume_dir / "records/people.records.jsonl").exists())
 
             code, resumed, err = run_json([
@@ -401,8 +397,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(source),
                 "--output-dir",
                 str(pipeline_out),
-                "--run-id",
-                "candidate",
                 "--default-operator-id",
                 "op-vector",
                 "--checkpoint-every",
@@ -414,7 +408,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(payload["counts"]["embed_role_positions"]["provider"], "local-fake")
             self.assertEqual(payload["counts"]["embed_companies"]["provider"], "local-fake")
             self.assertEqual(payload["counts"]["embed_summaries"]["provider"], "local-fake")
-            run_dir = pipeline_out / "candidate"
+            run_dir = pipeline_out
             self.assertTrue((run_dir / "roles/embedding_checkpoints/checkpoint.json").exists())
             self.assertTrue((run_dir / "company/embedding_checkpoints/checkpoint.json").exists())
             self.assertTrue((run_dir / "summaries/embedding_checkpoints/checkpoint.json").exists())
@@ -448,8 +442,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "vector@example.com",
                 "--output-dir",
                 str(tmp / "duckdb"),
-                "--flavor",
-                "candidate",
                 "--force",
             ])
             self.assertEqual(code, 0, err)
@@ -509,8 +501,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(source),
                 "--output-dir",
                 str(tmp / "pipeline"),
-                "--run-id",
-                "candidate",
                 "--default-operator-id",
                 "op-shape",
                 "--checkpoint-every",
@@ -519,7 +509,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(payload["status"], "completed")
-            run_dir = tmp / "pipeline/candidate"
+            run_dir = tmp / "pipeline"
 
             comparisons = [
                 (run_dir / "unified/roles/roles_with_dense_text_remapped.jsonl", seed / "unified/roles/roles_with_dense_text_remapped.jsonl"),
@@ -602,8 +592,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(source),
                 "--output-dir",
                 str(tmp / "pipeline"),
-                "--run-id",
-                "candidate",
                 "--default-operator-id",
                 "op-full-compatible",
                 "--checkpoint-every",
@@ -701,8 +689,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "vector@example.com",
                 "--output-dir",
                 str(tmp / ".powerpacks/search-index"),
-                "--flavor",
-                "candidate",
                 "--force",
             ])
             self.assertEqual(code, 0, err)
@@ -751,8 +737,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(source),
                 "--output-dir",
                 str(tmp / "pipeline"),
-                "--run-id",
-                "candidate",
                 "--default-operator-id",
                 "op-company-artifact",
                 "--role-input-classifications",
@@ -772,7 +756,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertEqual(payload["counts"]["build_company_corpus"]["provider"], "artifact")
             self.assertGreaterEqual(payload["counts"]["build_company_corpus"]["artifact_hits"], 1)
-            run_dir = tmp / "pipeline/candidate"
+            run_dir = tmp / "pipeline"
             appco_record = next(row for row in read_jsonl(run_dir / "records/companies.records.jsonl") if row.get("company_name") == "AppCo")
             self.assertEqual(appco_record["entity_types"], ["venture_backed_startup"])
             self.assertEqual(appco_record["sector_types"], ["saas"])
@@ -805,8 +789,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "company-classification@example.com",
                 "--output-dir",
                 str(tmp / ".powerpacks/search-index"),
-                "--flavor",
-                "candidate",
                 "--limit",
                 "20",
                 "--force",
@@ -864,8 +846,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "aleph-seed@example.com",
                 "--output-dir",
                 str(tmp / ".powerpacks/search-index"),
-                "--flavor",
-                "candidate",
                 "--limit",
                 "3",
                 "--force",
@@ -944,8 +924,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "acceptance@example.com",
                 "--output-dir",
                 str(output_dir),
-                "--flavor",
-                "candidate",
                 "--force",
             ])
             self.assertEqual(code, 0, err)

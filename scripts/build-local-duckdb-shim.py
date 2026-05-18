@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build local-search golden/candidate artifacts and load a DuckDB search DB.
+"""Build one local-search DuckDB database from local indexing artifacts.
 
 Sidecar helper for pipe-cleaning the local DuckDB search path while the durable
-processing pipeline is still settling. It wraps the checked-in indexing pipeline,
-adds stable flavor-suffixed artifact aliases, and materializes the JSONL records
-into the table names expected by ``packs/search/primitives/lib/local_duckdb_store.py``.
+processing pipeline is still settling. It wraps the checked-in indexing pipeline
+when given a source CSV, or materializes an existing records directory into the
+table names expected by ``packs/search/primitives/lib/local_duckdb_store.py``.
 
 Example:
 
@@ -12,12 +12,11 @@ Example:
     --source people_harmonic_all.csv \
     --operator-id e33a648a-ae5f-432e-83ce-b90d75546ada \
     --operator-email thearthurchen@gmail.com \
-    --flavor golden \
     --force
 
 Then test local search with:
 
-  POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/operator-e33a648a/golden/local-search.golden.duckdb \
+  POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb \
     uv run --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py ...
 """
 from __future__ import annotations
@@ -45,18 +44,7 @@ while True:
 DEFAULT_OPERATOR_ID = "e33a648a-ae5f-432e-83ce-b90d75546ada"
 DEFAULT_OPERATOR_EMAIL = "thearthurchen@gmail.com"
 DEFAULT_SOURCE = Path("people_harmonic_all.csv")
-DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index/operator-e33a648a")
-
-ARTIFACT_ALIASES = {
-    "unified/flattened_people.jsonl": "unified/flattened_people.{flavor}.jsonl",
-    "unified/unified_person.csv": "unified/unified_person.{flavor}.csv",
-    "profiles/hydrated_profiles.jsonl": "profiles/hydrated_profiles.{flavor}.jsonl",
-    "records/people.records.jsonl": "records/people.records.{flavor}.jsonl",
-    "records/companies.records.jsonl": "records/companies.records.{flavor}.jsonl",
-    "records/summaries.records.jsonl": "records/summaries.records.{flavor}.jsonl",
-    "records/education.records.jsonl": "records/education.records.{flavor}.jsonl",
-    "records/schools.records.jsonl": "records/schools.records.{flavor}.jsonl",
-}
+DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 
 LOCAL_TABLES = {
     "local_people_positions": "records/people.records.jsonl",
@@ -243,43 +231,27 @@ def link_or_copy(src: Path, dst: Path, *, force: bool = False) -> None:
         shutil.copy2(src, dst)
 
 
-def create_aliases(run_dir: Path, flavor: str, *, force: bool = False, golden_typo_alias: bool = False) -> dict[str, str]:
-    aliases: dict[str, str] = {}
-    for source_rel, alias_rel_template in ARTIFACT_ALIASES.items():
-        src = run_dir / source_rel
-        alias_rel = alias_rel_template.format(flavor=flavor)
-        dst = run_dir / alias_rel
-        link_or_copy(src, dst, force=force)
-        if dst.exists():
-            aliases[source_rel] = str(dst)
-        if golden_typo_alias and flavor == "golden" and alias_rel.endswith(".golden.jsonl"):
-            typo_dst = run_dir / alias_rel.replace(".golden.jsonl", ".golen.jsonl")
-            link_or_copy(src, typo_dst, force=force)
-            if typo_dst.exists():
-                aliases[source_rel + "#golen_typo"] = str(typo_dst)
-    return aliases
-
-
-def record_source_path(records_dir: Path, rel: str, flavor: str) -> Path | None:
+def record_source_path(records_dir: Path, rel: str) -> Path | None:
     """Resolve a records artifact from either a run root or a records/ dir."""
     candidates = [
         records_dir / rel,
         records_dir / Path(rel).name,
     ]
-    alias_template = ARTIFACT_ALIASES.get(rel)
-    if alias_template:
-        alias_rel = alias_template.format(flavor=flavor)
-        candidates.extend([
-            records_dir / alias_rel,
-            records_dir / Path(alias_rel).name,
-        ])
     for candidate in candidates:
         if candidate.exists():
             return candidate
+    # Read old suffixed record files if an existing bootstrap directory still
+    # contains them, but never create new suffixed outputs.
+    for parent in [records_dir / Path(rel).parent, records_dir]:
+        if parent.exists():
+            matches = sorted(parent.glob(f"{Path(rel).stem}.*{Path(rel).suffix}"))
+            for match in matches:
+                if match.exists():
+                    return match
     return None
 
 
-def materialize_records_dir(records_dir: Path, run_dir: Path, flavor: str, *, force: bool = False) -> dict[str, str]:
+def materialize_records_dir(records_dir: Path, run_dir: Path, *, force: bool = False) -> dict[str, str]:
     """Copy/link normal pipeline records artifacts into a shim run directory.
 
     ``records_dir`` may be either the run root containing ``records/`` or the
@@ -291,7 +263,7 @@ def materialize_records_dir(records_dir: Path, run_dir: Path, flavor: str, *, fo
     run_dir.mkdir(parents=True, exist_ok=True)
     copied: dict[str, str] = {}
     for _table, rel in LOCAL_TABLES.items():
-        src = record_source_path(records_dir, rel, flavor)
+        src = record_source_path(records_dir, rel)
         if not src:
             continue
         dst = run_dir / rel
@@ -630,25 +602,17 @@ def postprocess_table(con: Any, table: str, operator_id: str) -> None:
             )
 
 
-def resolve_artifact_path(run_dir: Path, rel: str, flavor: str) -> Path:
-    standard = run_dir / rel
-    if standard.exists():
-        return standard
-    alias_template = ARTIFACT_ALIASES.get(rel)
-    if alias_template:
-        alias = run_dir / alias_template.format(flavor=flavor)
-        if alias.exists():
-            return alias
-    return standard
+def resolve_artifact_path(run_dir: Path, rel: str) -> Path:
+    return run_dir / rel
 
 
-def load_duckdb(run_dir: Path, flavor: str, operator_id: str, *, force: bool = False) -> tuple[Path, dict[str, int]]:
+def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False) -> tuple[Path, dict[str, int]]:
     try:
         import duckdb  # type: ignore
     except ModuleNotFoundError as exc:
         raise SystemExit("duckdb is required; run through `uv run --project . python ...`") from exc
 
-    db_path = run_dir / f"local-search.{flavor}.duckdb"
+    db_path = run_dir / "local-search.duckdb"
     if db_path.exists():
         if force:
             db_path.unlink()
@@ -659,7 +623,7 @@ def load_duckdb(run_dir: Path, flavor: str, operator_id: str, *, force: bool = F
     counts: dict[str, int] = {}
     try:
         for table, rel in LOCAL_TABLES.items():
-            path = resolve_artifact_path(run_dir, rel, flavor)
+            path = resolve_artifact_path(run_dir, rel)
             counts[table] = load_jsonl_table(con, table, path)
             postprocess_table(con, table, operator_id)
         con.execute("CREATE OR REPLACE VIEW local_people AS SELECT * FROM local_people_positions")
@@ -679,9 +643,7 @@ def build_pipeline(args: argparse.Namespace, run_dir: Path) -> None:
         "--input",
         str(Path(args.source)),
         "--output-dir",
-        str(Path(args.output_dir)),
-        "--run-id",
-        args.flavor,
+        str(run_dir),
         "--default-operator-id",
         args.operator_id,
     ]
@@ -692,11 +654,10 @@ def build_pipeline(args: argparse.Namespace, run_dir: Path) -> None:
     run(cmd)
 
 
-def write_manifest(run_dir: Path, flavor: str, args: argparse.Namespace, aliases: dict[str, str], db_path: Path, table_counts: dict[str, int]) -> Path:
+def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table_counts: dict[str, int]) -> Path:
     source_value = str(Path(args.aleph_output_dir)) if args.aleph_output_dir else str(Path(args.records_dir)) if args.records_dir else str(Path(args.source))
     manifest = {
         "status": "ok",
-        "flavor": flavor,
         "operator_id": args.operator_id,
         "operator_email": args.operator_email,
         "source": source_value,
@@ -705,16 +666,11 @@ def write_manifest(run_dir: Path, flavor: str, args: argparse.Namespace, aliases
         "run_dir": str(run_dir),
         "duckdb": str(db_path),
         "powerpacks_local_search_db": str(db_path),
-        "aliases": aliases,
         "tables": table_counts,
-        "artifact_contract": {
-            "golden_flattened": ".powerpacks/search-index/operator-e33a648a/golden/unified/flattened_people.golden.jsonl",
-            "candidate_flattened": ".powerpacks/search-index/operator-e33a648a/candidate/unified/flattened_people.candidate.jsonl",
-        },
         "local_table_contract": LOCAL_TABLE_CONTRACT,
         "vector_tables": VECTOR_TABLES,
     }
-    path = run_dir / f"manifest.{flavor}.json"
+    path = run_dir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return path
 
@@ -726,27 +682,35 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--aleph-output-dir", help="Copied Aleph pipeline_output directory; converts Aleph upload artifacts to local records without API calls")
     parser.add_argument("--operator-id", default=DEFAULT_OPERATOR_ID)
     parser.add_argument("--operator-email", default=DEFAULT_OPERATOR_EMAIL)
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Parent output dir; run is created under <output-dir>/<flavor>/")
-    parser.add_argument("--flavor", choices=["golden", "candidate"], default="golden")
+    parser.add_argument("--output-dir", help="Canonical output directory for records and local-search.duckdb")
     parser.add_argument("--limit", type=int, help="Optional row limit for smoke tests")
-    parser.add_argument("--force", action="store_true", help="Replace existing run dir / DuckDB / aliases")
+    parser.add_argument("--force", action="store_true", help="Replace existing run dir / DuckDB")
     parser.add_argument("--skip-pipeline", action="store_true", help="Only load DuckDB from existing records in the run dir")
-    parser.add_argument("--golden-typo-alias", action="store_true", help="Also create .golen.jsonl hardlink aliases for the golden typo")
     return parser
+
+
+def infer_run_dir_from_records(records_dir: Path) -> Path:
+    return records_dir.parent if records_dir.name == "records" else records_dir
+
+
+def explicit_output_dir(args: argparse.Namespace, fallback: Path) -> Path:
+    return Path(args.output_dir) if args.output_dir else fallback
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    run_dir = Path(args.output_dir) / args.flavor
     if args.aleph_output_dir:
+        run_dir = explicit_output_dir(args, DEFAULT_OUTPUT_DIR)
         aleph_dir = ROOT / args.aleph_output_dir if not Path(args.aleph_output_dir).is_absolute() else Path(args.aleph_output_dir)
         args.aleph_output_dir = str(aleph_dir)
         materialize_aleph_output_dir(aleph_dir, run_dir, args.operator_id, limit=args.limit, force=args.force)
     elif args.records_dir:
         records_dir = ROOT / args.records_dir if not Path(args.records_dir).is_absolute() else Path(args.records_dir)
         args.records_dir = str(records_dir)
-        materialize_records_dir(records_dir, run_dir, args.flavor, force=args.force)
+        run_dir = explicit_output_dir(args, infer_run_dir_from_records(records_dir))
+        materialize_records_dir(records_dir, run_dir, force=args.force)
     else:
+        run_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT_DIR
         source = ROOT / args.source if not Path(args.source).is_absolute() else Path(args.source)
         if not source.exists() and not args.skip_pipeline:
             raise SystemExit(f"missing source CSV: {source}")
@@ -754,9 +718,8 @@ def main() -> None:
         build_pipeline(args, run_dir)
     if not run_dir.exists():
         raise SystemExit(f"missing run dir after pipeline/artifact materialization: {run_dir}")
-    aliases = create_aliases(run_dir, args.flavor, force=args.force, golden_typo_alias=args.golden_typo_alias)
-    db_path, table_counts = load_duckdb(run_dir, args.flavor, args.operator_id, force=args.force)
-    manifest_path = write_manifest(run_dir, args.flavor, args, aliases, db_path, table_counts)
+    db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force)
+    manifest_path = write_manifest(run_dir, args, db_path, table_counts)
     emit({
         "status": "ok",
         "run_dir": str(run_dir),

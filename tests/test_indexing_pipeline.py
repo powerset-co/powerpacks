@@ -61,23 +61,23 @@ class IndexingPipelineTests(unittest.TestCase):
     def test_dry_run_estimates_paid_stages_without_completed_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td) / ".powerpacks"
-            result = run_cli("run", "--dry-run", "--output-dir", str(base / "search-index"), "--run-id", "estimate", "--input", str(FIXTURE_PEOPLE))
+            result = run_cli("run", "--dry-run", "--output-dir", str(base / "search-index"), "--input", str(FIXTURE_PEOPLE))
             self.assertIn(result["status"], {"dry-run", "dry_run"})
             self.assertGreater(result["counts"]["positions_missing_upstream_title_hash"], 0)
-            self.assertFalse((base / "search-index/estimate/ledger.json").exists())
+            self.assertFalse((base / "search-index/ledger.json").exists())
 
     def test_run_blocks_before_paid_stage_without_approval_or_precomputed_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td) / ".powerpacks"
-            proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--run-id", "blocked", "--input", str(FIXTURE_PEOPLE), "--force"], cwd=ROOT, capture_output=True, text=True, check=False)
+            proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--input", str(FIXTURE_PEOPLE), "--force"], cwd=ROOT, capture_output=True, text=True, check=False)
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("requires --allow-paid-role-provider or --role-input-classifications", proc.stderr + proc.stdout)
-            self.assertFalse((base / "search-index/blocked/roles/chunks").exists())
+            self.assertFalse((base / "search-index/roles/chunks").exists())
 
     def test_pipeline_does_not_recompute_missing_title_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td) / ".powerpacks"
-            proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--run-id", "no-hash", "--input", str(FIXTURE_PEOPLE), "--role-input-classifications", str(Path(td) / "missing.jsonl"), "--allow-paid-company-provider", "--allow-paid-embeddings", "--force"], cwd=ROOT, capture_output=True, text=True, check=False)
+            proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--input", str(FIXTURE_PEOPLE), "--role-input-classifications", str(Path(td) / "missing.jsonl"), "--allow-paid-company-provider", "--allow-paid-embeddings", "--force"], cwd=ROOT, capture_output=True, text=True, check=False)
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("missing input role classifications", proc.stderr + proc.stdout)
 

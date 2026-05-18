@@ -116,8 +116,6 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                     str(input_csv),
                     "--output-dir",
                     str(output),
-                    "--run-id",
-                    "dry",
                     "--dry-run",
                 ],
                 cwd=ROOT,
@@ -263,11 +261,10 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as td:
                 tmp = Path(td)
                 input_csv = write_fixture_with_title_hashes(FIXTURE_PEOPLE, tmp / "people_with_hashes.csv")
-                run_dir = tmp / "pipeline" / "candidate"
+                run_dir = tmp / "pipeline"
                 ledger = pipeline.default_ledger(
                     input_csv,
                     run_dir,
-                    "candidate",
                     "op-openai-test",
                     None,
                     checkpoint_every=2,
@@ -311,8 +308,6 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                         "openai-test@example.com",
                         "--output-dir",
                         str(tmp / "duckdb"),
-                        "--flavor",
-                        "candidate",
                         "--force",
                     ],
                     cwd=ROOT,

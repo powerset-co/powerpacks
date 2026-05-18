@@ -65,6 +65,7 @@ install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKIL
 install_skill extract-search-query "$REPO_ROOT/packs/search/skills/extract-search-query/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
+install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-local-search-index/SKILL.md"
 install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
@@ -85,5 +86,5 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network extract-search-query search-company search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter"
 echo "restart Codex to pick up the skill list"
