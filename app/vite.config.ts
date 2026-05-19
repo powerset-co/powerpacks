@@ -5,6 +5,9 @@ import fs from "fs";
 import fsp from "fs/promises";
 import { createGunzip } from "zlib";
 import { createInterface } from "readline";
+import { handleContactsRequest } from "./local-api/contacts";
+import { getCompanies, getCompanyAutocomplete, getCompanyDetail } from "./local-api/companies";
+import { sendJson } from "./local-api/jsonSafe";
 
 const powerpacksRepoRoot = path.resolve(
   __dirname,
@@ -14,12 +17,6 @@ const powerpacksStateRoot = path.join(powerpacksRepoRoot, ".powerpacks");
 const runsDir = path.join(powerpacksStateRoot, "runs");
 
 type RunState = Record<string, any>;
-
-function sendJson(res: any, data: unknown, status = 200) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(data));
-}
 
 function safeJoinPowerpacks(relativePath: string | undefined | null): string | null {
   if (!relativePath) return null;
@@ -247,6 +244,24 @@ function powerpacksLocalApiPlugin(): Plugin {
           const url = new URL(req.url || "/", "http://localhost");
           if (url.pathname === "/local-api/runs") {
             return sendJson(res, await listRuns());
+          }
+
+          if (url.pathname === "/local-api/contacts") {
+            return handleContactsRequest(req, res, next, { repoRoot: powerpacksRepoRoot });
+          }
+
+          if (url.pathname === "/local-api/companies") {
+            return sendJson(res, await getCompanies(url, powerpacksRepoRoot));
+          }
+
+          if (url.pathname === "/local-api/companies/autocomplete") {
+            return sendJson(res, await getCompanyAutocomplete(url, powerpacksRepoRoot));
+          }
+
+          const companyMatch = url.pathname.match(/^\/local-api\/companies\/([^/]+)$/);
+          if (companyMatch) {
+            const response: any = await getCompanyDetail(url, powerpacksRepoRoot, decodeURIComponent(companyMatch[1]));
+            return sendJson(res, response, response?.error ? 404 : 200);
           }
 
           const match = url.pathname.match(/^\/local-api\/runs\/([^/]+)\/results$/);
