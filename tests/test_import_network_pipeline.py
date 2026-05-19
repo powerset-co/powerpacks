@@ -35,6 +35,20 @@ def write_msgvault_db(path: Path) -> None:
 
 
 class ImportNetworkPipelineTests(unittest.TestCase):
+    def test_msgvault_db_defaults_only_when_gmail_is_requested(self) -> None:
+        self.assertEqual(
+            import_network_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="", gmail_account_email="me@example.com")),
+            str(import_network_pipeline.DEFAULT_MSGVAULT_DB),
+        )
+        self.assertEqual(
+            import_network_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="", gmail_account_email="")),
+            "",
+        )
+        self.assertEqual(
+            import_network_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="/tmp/msgvault.db", gmail_account_email="")),
+            "/tmp/msgvault.db",
+        )
+
     def test_completed_ledger_dry_run_reports_no_work(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

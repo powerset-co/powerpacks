@@ -85,6 +85,15 @@ def check_artifact_paths(ledger: dict[str, Any]) -> dict[str, Any]:
     return {"checked": len(seen), "existing": existing, "missing": missing[:50], "missing_count": len(missing)}
 
 
+def resolve_msgvault_db(args: argparse.Namespace) -> str:
+    explicit = str(getattr(args, "msgvault_db", "") or "").strip()
+    if explicit:
+        return explicit
+    if str(getattr(args, "gmail_account_email", "") or "").strip():
+        return str(DEFAULT_MSGVAULT_DB)
+    return ""
+
+
 def parse_last_json(stdout: str) -> dict[str, Any]:
     text = (stdout or "").strip()
     if not text:
@@ -501,7 +510,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "linkedin_csv": args.linkedin_csv,
             "linkedin_source_user": args.linkedin_source_user,
             "linkedin_limit": args.linkedin_limit,
-            "msgvault_db": args.msgvault_db,
+            "msgvault_db": resolve_msgvault_db(args),
             "gmail_account_email": args.gmail_account_email,
             "gmail_limit": args.gmail_limit,
             "include_automated_gmail": args.include_automated_gmail,
@@ -546,7 +555,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
     would_run = []
     if args.linkedin_csv:
         would_run.append("linkedin")
-    if args.gmail_account_email or args.msgvault_db:
+    if args.gmail_account_email or resolve_msgvault_db(args):
         would_run.append("gmail_msgvault")
     if args.gmail_linkedin_provider != "off":
         would_run.append("gmail_linkedin_resolution")
@@ -630,7 +639,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--linkedin-csv", default="")
     run.add_argument("--linkedin-source-user", default="")
     run.add_argument("--linkedin-limit", type=int)
-    run.add_argument("--msgvault-db", default="")
+    run.add_argument("--msgvault-db", default="", help=f"msgvault SQLite DB; defaults to {DEFAULT_MSGVAULT_DB} when --gmail-account-email is set")
     run.add_argument("--gmail-account-email", default="")
     run.add_argument("--gmail-limit", type=int)
     run.add_argument("--include-automated-gmail", action="store_true")
