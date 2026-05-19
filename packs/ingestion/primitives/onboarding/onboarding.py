@@ -28,6 +28,10 @@ except ModuleNotFoundError:
 
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 DEFAULT_NETWORK_IMPORT_DIR = Path(".powerpacks/network-import")
+ONBOARDING_SOURCE_ORDER = ["gmail", "linkedin_csv", "messages", "twitter"]
+ONBOARDING_IMPORT_RUN_ID = "network-onboarding"
+ONBOARDING_IMPORT_LEDGER = ".powerpacks/network-import/import-network-run.json"
+ONBOARDING_INDEX_DIR = ".powerpacks/search-index"
 
 
 def emit(payload: Any) -> None:
@@ -186,16 +190,8 @@ def refresh_registry(path: Path) -> tuple[dict[str, Any], list[str]]:
 
 def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
     acct = registry.get("accounts", {})
-    return [
-        {
-            "channel": "messages",
-            "linked": acct.get("messages", {}).get("linked", False),
-            "skipped": acct.get("messages", {}).get("skipped", False),
-            "what_it_needs": "Full Disk Access for iMessage and/or wacli for WhatsApp, then messages import.",
-            "next_action": "Run the import-contacts workflow if you want message/contact metadata.",
-            "command": "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py status",
-        },
-        {
+    steps_by_channel = {
+        "gmail": {
             "channel": "gmail",
             "linked": acct.get("gmail", {}).get("linked", False),
             "skipped": acct.get("gmail", {}).get("skipped", False),
@@ -203,7 +199,7 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "next_action": "Run msgvault sync, then choose one or more Gmail source accounts to import.",
             "command": "uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault-accounts --db ~/.msgvault/msgvault.db",
         },
-        {
+        "linkedin_csv": {
             "channel": "linkedin_csv",
             "linked": acct.get("linkedin_csv", {}).get("linked", False),
             "skipped": acct.get("linkedin_csv", {}).get("skipped", False),
@@ -211,7 +207,15 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "next_action": "Export Connections.csv, then run linkedin_network_import run --csv <path> --source-user <label>.",
             "command": "uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run --csv <Connections.csv> --source-user <label>",
         },
-        {
+        "messages": {
+            "channel": "messages",
+            "linked": acct.get("messages", {}).get("linked", False),
+            "skipped": acct.get("messages", {}).get("skipped", False),
+            "what_it_needs": "Full Disk Access for iMessage and/or wacli for WhatsApp, then messages import.",
+            "next_action": "Run the import-contacts workflow if you want message/contact metadata.",
+            "command": "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py status",
+        },
+        "twitter": {
             "channel": "twitter",
             "linked": acct.get("twitter", {}).get("linked", False),
             "skipped": acct.get("twitter", {}).get("skipped", False),
@@ -219,7 +223,8 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "next_action": "Record handle with account_registry mark, then run twitter_network_import when ready.",
             "command": "uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run --handle <handle>",
         },
-    ]
+    }
+    return [steps_by_channel[channel] for channel in ONBOARDING_SOURCE_ORDER]
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -274,6 +279,140 @@ def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = Fa
         if args.linkedin_source_user:
             cmd.extend(["--linkedin-source-user", args.linkedin_source_user])
     return shell_join(cmd)
+
+
+def import_network_command(args: argparse.Namespace, *, dry_run: bool = False) -> str:
+    cmd = [
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "run",
+        "--ledger", ONBOARDING_IMPORT_LEDGER,
+        "--run-id", ONBOARDING_IMPORT_RUN_ID,
+        "--operator-id", args.operator_id,
+        "--include-existing-artifacts",
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    return shell_join(cmd)
+
+
+def import_network_status_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "status",
+        "--ledger", ONBOARDING_IMPORT_LEDGER,
+    ])
+
+
+def import_network_continue_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "continue",
+        "--ledger", ONBOARDING_IMPORT_LEDGER,
+    ])
+
+
+def import_network_approve_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "approve",
+        "--ledger", ONBOARDING_IMPORT_LEDGER,
+    ])
+
+
+def onboarding_merged_people_csv() -> str:
+    return f".powerpacks/network-import/network-runs/{ONBOARDING_IMPORT_RUN_ID}/merged/people.csv"
+
+
+def build_search_index_command(args: argparse.Namespace, *, dry_run: bool = False) -> str:
+    cmd = [
+        "uv", "run", "--project", ".", "python",
+        "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py", "run",
+        "--input", onboarding_merged_people_csv(),
+        "--output-dir", ONBOARDING_INDEX_DIR,
+        "--default-operator-id", args.operator_id,
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    return shell_join(cmd)
+
+
+def build_search_index_status_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py", "status",
+        "--ledger", f"{ONBOARDING_INDEX_DIR}/ledger.json",
+    ])
+
+
+def build_search_index_continue_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py", "continue",
+        "--ledger", f"{ONBOARDING_INDEX_DIR}/ledger.json",
+    ])
+
+
+def build_local_duckdb_command(args: argparse.Namespace) -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "scripts/build-local-duckdb-shim.py",
+        "--records-dir", ONBOARDING_INDEX_DIR,
+        "--operator-id", args.operator_id,
+        "--force",
+    ])
+
+
+def onboarding_handoff(args: argparse.Namespace, registry: dict[str, Any]) -> dict[str, Any]:
+    steps = build_steps(registry)
+    linked = [step["channel"] for step in steps if step["linked"]]
+    skipped = [step["channel"] for step in steps if step.get("skipped")]
+    return {
+        "status": "ready_for_import",
+        "accounts_path": args.accounts,
+        "source_order": ONBOARDING_SOURCE_ORDER,
+        "linked_sources": linked,
+        "skipped_sources": skipped,
+        "confirmation_prompt": (
+            "We can now import linked sources and build your local search index. "
+            "Large mailboxes or networks can take a few hours. Continue?"
+        ),
+        "codex_orchestration": {
+            "main_thread": "Handle account linking, browser/login actions, user confirmations, and worker handoffs.",
+            "worker_policy": "Use worker sub-agents for import-network, then build-local-search-index. Close workers when they finish.",
+        },
+        "worker_phases": [
+            {
+                "name": "import-network",
+                "agent_type": "worker",
+                "depends_on": [],
+                "dry_run_command": import_network_command(args, dry_run=True),
+                "run_command": import_network_command(args),
+                "status_command": import_network_status_command(),
+                "continue_command": import_network_continue_command(),
+                "approve_command": import_network_approve_command(),
+                "expected_output": onboarding_merged_people_csv(),
+                "instructions": (
+                    "Run dry-run first. Then run import-network with existing linked artifacts. "
+                    "If a child primitive blocks on paid enrichment, return the approval gate to the main thread."
+                ),
+            },
+            {
+                "name": "build-local-search-index",
+                "agent_type": "worker",
+                "depends_on": ["import-network"],
+                "dry_run_command": build_search_index_command(args, dry_run=True),
+                "run_command": build_search_index_command(args),
+                "status_command": build_search_index_status_command(),
+                "continue_command": build_search_index_continue_command(),
+                "materialize_duckdb_command": build_local_duckdb_command(args),
+                "expected_output": f"{ONBOARDING_INDEX_DIR}/local-search.duckdb",
+                "instructions": (
+                    "Use the merged people.csv produced by import-network. Run dry-run first; "
+                    "do not approve paid provider work inside the worker."
+                ),
+            },
+        ],
+    }
 
 
 def gmail_import_py() -> str:
@@ -679,6 +818,7 @@ def cmd_step(args: argparse.Namespace) -> int:
         "accounts_path": args.accounts,
         "updates": updates,
         "registry": registry,
+        "handoff": onboarding_handoff(args, registry),
         "message": "Required onboarding sources are linked or skipped.",
     })
     return 0

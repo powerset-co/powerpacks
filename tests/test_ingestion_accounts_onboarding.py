@@ -59,6 +59,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("todo", payload)
             self.assertNotIn("gmail", [item["channel"] for item in payload["todo"]])
+            self.assertEqual([item["channel"] for item in payload["todo"]], ["linkedin_csv", "messages", "twitter"])
 
     def create_msgvault_db(self, path: Path):
         con = sqlite3.connect(path)
@@ -247,6 +248,33 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             registry = accounts.load_registry(path)
             self.assertTrue(registry["accounts"]["gmail"]["linked"])
             self.assertEqual(registry["accounts"]["gmail"]["usernames"], ["me@gmail.com", "work@example.com"])
+
+    def test_onboarding_completed_emits_subagent_handoff(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                for channel in ["gmail", "linkedin_csv", "messages", "twitter"]:
+                    accounts.update_channel(channel, path=path, linked=False, skipped=True)
+                code, payload = self.invoke(onboarding, ["step", "--accounts", str(path), "--operator-id", "operator-1"])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            handoff = payload["handoff"]
+            self.assertEqual(handoff["source_order"], ["gmail", "linkedin_csv", "messages", "twitter"])
+            self.assertEqual(handoff["codex_orchestration"]["main_thread"], "Handle account linking, browser/login actions, user confirmations, and worker handoffs.")
+            phases = handoff["worker_phases"]
+            self.assertEqual([phase["name"] for phase in phases], ["import-network", "build-local-search-index"])
+            self.assertIn("--include-existing-artifacts", phases[0]["run_command"])
+            self.assertIn("--run-id network-onboarding", phases[0]["run_command"])
+            self.assertEqual(phases[0]["expected_output"], ".powerpacks/network-import/network-runs/network-onboarding/merged/people.csv")
+            self.assertIn("build_processing_pipeline.py run", phases[1]["run_command"])
+            self.assertIn("--input .powerpacks/network-import/network-runs/network-onboarding/merged/people.csv", phases[1]["run_command"])
+            self.assertIn("scripts/build-local-duckdb-shim.py", phases[1]["materialize_duckdb_command"])
+            self.assertEqual(phases[1]["expected_output"], ".powerpacks/search-index/local-search.duckdb")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,10 @@ description: Walk a user through linking/exporting all local network ingestion s
 
 # Ingestion Onboarding
 
+Onboarding is the top-level Codex-run state machine. Keep human/browser account
+linking in the main thread, then hand long local import/index work to worker
+sub-agents after the user confirms.
+
 Use the onboarding primitive for status/plan checks:
 
 ```bash
@@ -59,6 +63,25 @@ running the emitted `approval_command`, then rerun `step` until
 Other missing sources can be marked done with `--skip-source <messages|gmail|linkedin_csv|twitter>`.
 
 It tracks non-secret state in `.powerpacks/ingestion/accounts.json`.
+
+## After Linking
+
+When `step` returns `status: completed`, read the emitted `handoff` object.
+Show the `confirmation_prompt` and ask once before long work. After approval:
+
+- Spawn a `worker` sub-agent for `worker_phases[0]` (`import-network`). Tell it
+  it is not alone in the repo, to run `dry_run_command` first, then
+  `run_command`, and to return any approval gate to the main thread.
+- After import-network completes, spawn a `worker` sub-agent for
+  `worker_phases[1]` (`build-local-search-index`). Tell it to use the merged
+  people CSV from the import phase, run `dry_run_command` first, then
+  `run_command`, then `materialize_duckdb_command`.
+- Keep the main thread terse: report approval gates, current counts, final
+  artifact paths, and real failures. Close workers when they finish.
+
+Do not put account-linking browser flows in a worker. The top-level Codex
+orchestrator owns Gmail/msgvault linking, Google browser actions, LinkedIn CSV
+handoff, message/WhatsApp linking, Twitter linking, and user confirmations.
 
 Never store tokens/passwords/cookies there. Only store usernames, linked status,
 artifact paths, and notes.
