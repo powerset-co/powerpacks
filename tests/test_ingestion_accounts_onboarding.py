@@ -202,6 +202,26 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertIn("--gmail-all", payload["all_command"])
             self.assertIn("--gmail-add-email EMAIL", payload["add_other_email_command"])
 
+    def test_onboarding_step_fresh_gmail_asks_for_user_email(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                msgvault_home = Path(tmp) / "msgvault-home"
+                path = Path(tmp) / "accounts.json"
+                code, payload = self.invoke(onboarding, [
+                    "step", "--accounts", str(path), "--gmail-db", str(msgvault_home / "msgvault.db"),
+                ])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 20)
+            self.assertEqual(payload["status"], "needs_input")
+            self.assertEqual(payload["channel"], "gmail")
+            self.assertEqual(payload["question"], "Which Gmail address should we link first?")
+            self.assertEqual(payload["email_source"], "user_provided")
+            self.assertIn("Do not infer it", payload["prompt"])
+            self.assertIn("--gmail-add-email EMAIL", payload["first_gmail_command"])
+
     def test_onboarding_step_returns_agent_actions_for_extra_gmail_email(self):
         old_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:

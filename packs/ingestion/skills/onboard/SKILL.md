@@ -26,11 +26,24 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
 ```
 
 Gmail is msgvault-backed. The Gmail step should be dead simple for the user:
-ask which discovered accounts to import and what other Gmail addresses they want
-to add. Multiple discovered source accounts are supported by repeating
-`--gmail-account`; `--gmail-all` imports every discovered source account;
-`--gmail-add-email` starts the add-account flow for new addresses;
-`--skip-source gmail` records an explicit skip.
+on a first run, ask which Gmail address they want to link first. Do not infer
+the email from gcloud, Powerset login, git config, local status, or old
+artifacts. After the user answers, run `step --gmail-add-email <email>`.
+
+Once msgvault has a local checkpoint, ask which discovered accounts to import
+and what other Gmail addresses they want to add. Multiple discovered source
+accounts are supported by repeating `--gmail-account`; `--gmail-all` imports
+every discovered source account; `--gmail-add-email` starts the add-account
+flow for new addresses; `--skip-source gmail` records an explicit skip.
+
+Fresh Gmail start:
+
+```bash
+uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+  --gmail-add-email me@gmail.com
+```
+
+Import discovered Gmail accounts:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
