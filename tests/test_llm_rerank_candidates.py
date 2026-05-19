@@ -467,7 +467,7 @@ if __name__ == "__main__":
 
 
 class RerankEstimateTests(unittest.TestCase):
-    def test_estimate_has_minimum_and_scales_by_waves(self):
+    def test_estimate_scales_by_async_waves(self):
         import importlib.util
         import sys
         spec = importlib.util.spec_from_file_location("llm_rerank_candidates_est", RERANK_PY)
@@ -476,8 +476,10 @@ class RerankEstimateTests(unittest.TestCase):
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
         self.assertEqual(mod.estimate_rerank_seconds(0, 200), 0)
-        self.assertEqual(mod.estimate_rerank_seconds(100, 200), 180)
+        self.assertEqual(mod.estimate_rerank_seconds(100, 200), 30)
         self.assertEqual(mod.estimate_rerank_seconds(1400, 200), 210)
+        self.assertIn("small runs", mod.rerank_status_note(30))
+        self.assertIn("2-3 minutes", mod.rerank_status_note(180))
 
     def test_dry_run_prints_estimate_and_concurrency(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -501,4 +503,4 @@ class RerankEstimateTests(unittest.TestCase):
             )
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("rerank: dry-run items=1 concurrency=25 estimated=180s", proc.stderr)
+        self.assertIn("rerank: dry-run items=1 concurrency=25 estimated=30s", proc.stderr)

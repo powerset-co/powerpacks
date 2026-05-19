@@ -64,7 +64,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpe
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-4o-mini")
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
-DEFAULT_ESTIMATE_SECONDS = int(os.environ.get("LLM_RERANK_ESTIMATE_SECONDS", "180"))
+DEFAULT_SECONDS_PER_WAVE = int(os.environ.get("LLM_RERANK_SECONDS_PER_WAVE", "30"))
 
 
 SYSTEM_PROMPT = """You are an expert recruiter reranking people-search results.
@@ -388,7 +388,12 @@ def estimate_rerank_seconds(item_count: int, concurrency: int) -> int:
         return 0
     concurrency = max(1, concurrency)
     waves = (item_count + concurrency - 1) // concurrency
-    return max(DEFAULT_ESTIMATE_SECONDS, waves * 30)
+    return waves * DEFAULT_SECONDS_PER_WAVE
+
+def rerank_status_note(estimate_seconds: int) -> str:
+    if estimate_seconds >= 120:
+        return "LLM filtering+reranking can take 2-3 minutes; do not cancel while this step is running"
+    return "async fan-out is running; small runs should complete quickly"
 
 def append_event(state_path: Path, event: dict[str, Any]) -> None:
     event_path = state_path.with_suffix(state_path.suffix + ".events.jsonl")
@@ -721,7 +726,7 @@ def main() -> int:
 
     sys.stderr.write(
         f"rerank: starting items={len(items)} concurrency={args.concurrency} "
-        f"estimated={estimate_seconds}s note=LLM filtering+reranking can take 2-3 minutes; do not cancel while this step is running\n"
+        f"estimated={estimate_seconds}s note={rerank_status_note(estimate_seconds)}\n"
     )
     started = time.monotonic()
     results = asyncio.run(
