@@ -125,13 +125,6 @@ tell the user their selected `@powerset.co` account is fine but gcloud's cached
 token expired. Do not route this to Slack and do not run ADC setup;
 application-default credentials are not needed for normal Powerpacks workflows.
 
-## Workspace state
-
-If `.powerpacks/` exists in the working directory, list its contents (or
-`tree -L 2 .powerpacks/` if available) so the user can see what artifacts
-are already present from prior runs. Don't rebuild artifacts that already
-exist unless explicitly asked.
-
 ## Pack-specific readiness
 
 - **Messages pack** (iMessage / WhatsApp imports, contact review):
