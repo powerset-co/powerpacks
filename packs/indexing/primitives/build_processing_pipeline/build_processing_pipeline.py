@@ -96,6 +96,56 @@ def write_stats(ledger: dict[str, Any], name: str, payload: dict[str, Any]) -> N
     write_json(stats_path(ledger, name), payload)
 
 
+def collect_artifact_paths(value: Any) -> list[str]:
+    paths_out: list[str] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            paths_out.extend(collect_artifact_paths(item))
+    elif isinstance(value, list):
+        for item in value:
+            paths_out.extend(collect_artifact_paths(item))
+    elif isinstance(value, str):
+        text = value.strip()
+        if text.startswith(".powerpacks/") or text.startswith("/"):
+            paths_out.append(text)
+    return paths_out
+
+
+def check_artifact_paths(ledger: dict[str, Any]) -> dict[str, Any]:
+    seen: set[str] = set()
+    existing = 0
+    missing: list[str] = []
+    for path_text in collect_artifact_paths({"artifacts": ledger.get("artifacts", {}), "steps": ledger.get("steps", {})}):
+        if path_text in seen:
+            continue
+        seen.add(path_text)
+        path = Path(path_text)
+        if path.exists():
+            existing += 1
+        else:
+            missing.append(path_text)
+    return {"checked": len(seen), "existing": existing, "missing": missing[:50], "missing_count": len(missing)}
+
+
+def completed_no_work_payload(ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "completed",
+        "cached": True,
+        "ledger": str(ledger_path),
+        "run_dir": ledger.get("run_dir"),
+        "message": "Existing completed search index found; no work was run.",
+        "estimated_paid_calls": {
+            "role_enrichment": 0,
+            "role_embeddings": 0,
+            "company_enrichment": 0,
+            "company_embeddings": 0,
+            "summary_embeddings": 0,
+        },
+        "artifact_check": check_artifact_paths(ledger),
+        "artifacts": ledger.get("artifacts", {}),
+    }
+
+
 def default_ledger(
     input_path: Path,
     rd: Path,
@@ -1132,10 +1182,16 @@ def main() -> None:
         )
         return
     if args.cmd == "run":
+        rd = run_dir(Path(args.output_dir))
+        ledger_path = paths(rd)["ledger"]
+        if (args.dry_run or args.estimate) and ledger_path.exists():
+            ledger = load_ledger(ledger_path)
+            if ledger.get("status") == "completed":
+                emit_json({**completed_no_work_payload(ledger_path, ledger), "status": "dry_run", "would_run_steps": []})
+                return
         if args.dry_run or args.estimate:
             emit_json(estimate_run(args))
             return
-        rd = run_dir(Path(args.output_dir))
         if rd.exists():
             if args.force:
                 shutil.rmtree(rd)
@@ -1145,7 +1201,8 @@ def main() -> None:
                     ledger = execute(paths(rd)["ledger"], {"stop_after_role_chunks": args.stop_after_role_chunks, "stop_after_company_chunks": args.stop_after_company_chunks, "stop_after_embedding_chunks": args.stop_after_embedding_chunks})
                     emit_json({"status": ledger["status"], "run_dir": ledger["run_dir"], "counts": {step["id"]: step.get("stats", {}) for step in ledger.get("steps", [])}})
                     return
-                shutil.rmtree(rd)
+                emit_json(completed_no_work_payload(paths(rd)["ledger"], ledger))
+                return
             else:
                 ledger_path = paths(rd)["ledger"]
                 raise SystemExit(f"search index directory already exists without a ledger: {rd}. Rerun with --force to replace it.")

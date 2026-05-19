@@ -54,6 +54,37 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def collect_artifact_paths(value: Any) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            paths.extend(collect_artifact_paths(item))
+    elif isinstance(value, list):
+        for item in value:
+            paths.extend(collect_artifact_paths(item))
+    elif isinstance(value, str):
+        text = value.strip()
+        if text.startswith(".powerpacks/") or text.startswith("/"):
+            paths.append(text)
+    return paths
+
+
+def check_artifact_paths(ledger: dict[str, Any]) -> dict[str, Any]:
+    seen: set[str] = set()
+    existing = 0
+    missing: list[str] = []
+    for path_text in collect_artifact_paths({"artifacts": ledger.get("artifacts", {}), "steps": ledger.get("steps", {})}):
+        if path_text in seen:
+            continue
+        seen.add(path_text)
+        path = Path(path_text)
+        if path.exists():
+            existing += 1
+        else:
+            missing.append(path_text)
+    return {"checked": len(seen), "existing": existing, "missing": missing[:50], "missing_count": len(missing)}
+
+
 def parse_last_json(stdout: str) -> dict[str, Any]:
     text = (stdout or "").strip()
     if not text:
@@ -437,9 +468,23 @@ def cmd_run(args: argparse.Namespace) -> int:
     run_id = args.run_id or f"network-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     run_dir = DEFAULT_BASE_DIR / "network-runs" / run_id
     ledger_path = Path(args.ledger)
+    if args.dry_run or args.estimate:
+        emit(dry_run_plan(args, ledger_path, run_id, run_dir))
+        return 0
     if ledger_path.exists() and not args.force:
         existing = load_ledger(ledger_path)
-        if existing.get("status") not in {"completed", "failed"}:
+        if existing.get("status") == "completed":
+            emit({
+                "status": "completed",
+                "cached": True,
+                "ledger": str(ledger_path),
+                "run_dir": existing.get("run_dir"),
+                "message": "Existing completed import-network run found; no work was run.",
+                "artifact_check": check_artifact_paths(existing),
+                "artifacts": existing.get("artifacts", {}),
+            })
+            return 0
+        if existing.get("status") not in {"failed"}:
             emit({"status": "active_run_exists", "ledger": str(ledger_path), "message": "Use continue/approve or --force."})
             return 0
     ledger = {
@@ -470,6 +515,54 @@ def cmd_run(args: argparse.Namespace) -> int:
     }
     save_ledger(ledger_path, ledger)
     return run_pipeline(ledger_path, resume=False)
+
+
+def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_dir: Path) -> dict[str, Any]:
+    if ledger_path.exists():
+        ledger = load_ledger(ledger_path)
+        steps = ledger.get("steps", {}) or {}
+        would_run = [
+            step for step in ["linkedin", "gmail_msgvault", "gmail_linkedin_resolution", "gmail_apply_enrich", "merge", "duckdb"]
+            if (steps.get(step) or {}).get("status") not in {"completed", "skipped"}
+        ]
+        child_paid = {}
+        for name, path_text in (ledger.get("artifacts") or {}).items():
+            if not name.endswith("ledger") or not path_text:
+                continue
+            child = read_json(Path(path_text), {}) or {}
+            if "paid_call_count" in child:
+                child_paid[name] = child.get("paid_call_count", 0)
+        return {
+            "status": "dry_run",
+            "ledger": str(ledger_path),
+            "run_id": ledger.get("run_id") or run_id,
+            "run_dir": ledger.get("run_dir") or str(run_dir),
+            "existing_status": ledger.get("status", "unknown"),
+            "would_run_steps": would_run,
+            "estimated_paid_calls": 0 if not would_run else "unknown_without_running_child_stage_plans",
+            "child_paid_call_counts": child_paid,
+            "artifact_check": check_artifact_paths(ledger),
+        }
+    would_run = []
+    if args.linkedin_csv:
+        would_run.append("linkedin")
+    if args.gmail_account_email or args.msgvault_db:
+        would_run.append("gmail_msgvault")
+    if args.gmail_linkedin_provider != "off":
+        would_run.append("gmail_linkedin_resolution")
+    if args.gmail_resolutions_csv:
+        would_run.append("gmail_apply_enrich")
+    would_run.extend(["merge", "duckdb"])
+    return {
+        "status": "dry_run",
+        "ledger": str(ledger_path),
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "existing_status": "missing",
+        "would_run_steps": would_run,
+        "estimated_paid_calls": "unknown_without_existing_stage_outputs",
+        "message": "No existing import-network ledger was found; running would execute the listed stages until any child approval gate.",
+    }
 
 
 def cmd_continue(args: argparse.Namespace) -> int:
@@ -537,7 +630,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--linkedin-csv", default="")
     run.add_argument("--linkedin-source-user", default="")
     run.add_argument("--linkedin-limit", type=int)
-    run.add_argument("--msgvault-db", default=str(DEFAULT_MSGVAULT_DB))
+    run.add_argument("--msgvault-db", default="")
     run.add_argument("--gmail-account-email", default="")
     run.add_argument("--gmail-limit", type=int)
     run.add_argument("--include-automated-gmail", action="store_true")
@@ -545,6 +638,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--gmail-linkedin-limit", type=int, help=argparse.SUPPRESS)
     run.add_argument("--gmail-resolutions-csv", default="", help="Existing linkedin_resolutions.csv to apply to Gmail people before shared enrich_people")
     run.add_argument("--include-existing-artifacts", action="store_true", help="Merge all discovered existing LinkedIn/Gmail/Twitter/message artifacts instead of only artifacts produced by this run")
+    run.add_argument("--dry-run", action="store_true", help="Inspect existing ledger/stage outputs and report work that would run")
+    run.add_argument("--estimate", action="store_true", help="Alias for --dry-run")
     run.add_argument("--force", action="store_true")
     run.set_defaults(func=cmd_run)
 

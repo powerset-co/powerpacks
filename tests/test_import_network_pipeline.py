@@ -1,4 +1,6 @@
+import argparse
 import csv
+import importlib.util
 import json
 import sqlite3
 import subprocess
@@ -9,6 +11,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py"
+SPEC = importlib.util.spec_from_file_location("import_network_pipeline", SCRIPT)
+import_network_pipeline = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+sys.modules[SPEC.name] = import_network_pipeline
+SPEC.loader.exec_module(import_network_pipeline)
 
 
 def write_msgvault_db(path: Path) -> None:
@@ -28,6 +35,52 @@ def write_msgvault_db(path: Path) -> None:
 
 
 class ImportNetworkPipelineTests(unittest.TestCase):
+    def test_completed_ledger_dry_run_reports_no_work(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ledger_path = tmp / "ledger.json"
+            run_dir = tmp / "run"
+            people = run_dir / "merged/people.csv"
+            people.parent.mkdir(parents=True)
+            people.write_text("id\np1\n", encoding="utf-8")
+            ledger_path.write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "run_id": "network-test",
+                        "run_dir": str(run_dir),
+                        "steps": {
+                            "linkedin": {"status": "completed"},
+                            "gmail_msgvault": {"status": "skipped"},
+                            "gmail_linkedin_resolution": {"status": "skipped"},
+                            "gmail_apply_enrich": {"status": "skipped"},
+                            "merge": {"status": "completed"},
+                            "duckdb": {"status": "completed"},
+                        },
+                        "artifacts": {"merged_people_csv": str(people)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            payload = import_network_pipeline.dry_run_plan(
+                argparse.Namespace(
+                    linkedin_csv="",
+                    gmail_account_email="",
+                    msgvault_db="",
+                    gmail_linkedin_provider="off",
+                    gmail_resolutions_csv="",
+                ),
+                ledger_path,
+                "network-test",
+                run_dir,
+            )
+
+            self.assertEqual(payload["existing_status"], "completed")
+            self.assertEqual(payload["would_run_steps"], [])
+            self.assertEqual(payload["estimated_paid_calls"], 0)
+            self.assertEqual(payload["artifact_check"]["missing_count"], 0)
+
     def test_msgvault_to_merge_to_duckdb(self) -> None:
         try:
             import duckdb  # noqa: F401

@@ -140,6 +140,7 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                 manifest["gcs"]["bundle"],
                 "gs://bucket/bootstrap/users/patrick/operators/17d602f7-f073-40b4-97a1-dba00c574442/operator-bootstrap.tar.gz",
             )
+            self.assertIn(".powerpacks/search-index", manifest["restore"]["normal_pipeline_outputs"])
             bundle = Path(manifest["artifacts"]["bundle"])
             with tarfile.open(bundle, "r:gz") as archive:
                 names = set(archive.getnames())
@@ -147,6 +148,8 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
             self.assertIn("patrick/enrich/resolution/linkedin_resolutions_cached.csv", names)
             self.assertIn("patrick/processing/search-index/local-search.duckdb", names)
             self.assertIn("patrick/sync/manifest.json", names)
+            self.assertIn(".powerpacks/search-index/local-search.duckdb", names)
+            self.assertIn(".powerpacks/search-index/ledger.json", names)
             self.assertFalse(any("msgvault" in name.lower() for name in names))
             self.assertEqual(len(uploads), 3)
 

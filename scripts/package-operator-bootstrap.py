@@ -285,6 +285,44 @@ def copy_file(src: Path, dst: Path) -> bool:
     return True
 
 
+def copy_stage_path(src: Path, restore_powerpacks_root: Path) -> str | None:
+    if not src.exists():
+        return None
+    try:
+        rel = src.resolve().relative_to(ROOT.resolve())
+    except ValueError:
+        text = str(src)
+        if text.startswith(".powerpacks/"):
+            rel = Path(text)
+        else:
+            return None
+    if rel.parts and rel.parts[0] == ".powerpacks":
+        rel = Path(*rel.parts[1:])
+    dst = restore_powerpacks_root / rel
+    if src.is_dir():
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+    else:
+        copy_file(src, dst)
+    return str(Path(".powerpacks") / rel)
+
+
+def collect_stage_paths(value: Any) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            paths.extend(collect_stage_paths(item))
+    elif isinstance(value, list):
+        for item in value:
+            paths.extend(collect_stage_paths(item))
+    elif isinstance(value, str):
+        text = value.strip()
+        if text.startswith(".powerpacks/"):
+            paths.append(text)
+    return paths
+
+
 def read_counts(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -368,7 +406,121 @@ def make_readme(operator: dict[str, Any], manifest: dict[str, Any]) -> str:
     ) + "\n"
 
 
-def package_bundle(operator_dir: Path, bundles_dir: Path, slug: str, *, force: bool) -> Path:
+PROCESSING_STEPS = [
+    "flatten_people",
+    "build_roles",
+    "embed_role_positions",
+    "build_company_corpus",
+    "embed_companies",
+    "build_education_corpus",
+    "build_location_corpus",
+    "build_people_records",
+    "build_unified_profiles",
+    "build_summary_records",
+    "embed_summaries",
+    "build_vectors",
+    "validate_contracts",
+]
+
+
+def write_processing_restore_ledger(restore_powerpacks_root: Path, operator: dict[str, Any], source_dir: Path) -> None:
+    ledger_path = restore_powerpacks_root / "search-index/ledger.json"
+    stats_path = source_dir / "stats/bootstrap_from_aleph.json"
+    stats = read_json(stats_path) if stats_path.exists() else {}
+    records_dir = restore_powerpacks_root / "search-index/records"
+    artifacts = {
+        "people": ".powerpacks/search-index/records/people.records.jsonl",
+        "companies": ".powerpacks/search-index/records/companies.records.jsonl",
+        "schools": ".powerpacks/search-index/records/schools.records.jsonl",
+        "education": ".powerpacks/search-index/records/education.records.jsonl",
+        "summaries": ".powerpacks/search-index/records/summaries.records.jsonl",
+        "local_search_db": ".powerpacks/search-index/local-search.duckdb",
+    }
+    for key, path_text in list(artifacts.items()):
+        if not (restore_powerpacks_root / Path(path_text).relative_to(".powerpacks")).exists():
+            artifacts.pop(key, None)
+    write_json(
+        ledger_path,
+        {
+            "primitive": "build_processing_pipeline",
+            "version": 1,
+            "status": "completed",
+            "run_dir": ".powerpacks/search-index",
+            "input": ".powerpacks/network-import/merged/people.csv",
+            "default_operator_id": operator["operator_id"],
+            "restored_from_operator_bootstrap": True,
+            "steps": [{"id": step, "status": "completed"} for step in PROCESSING_STEPS],
+            "artifacts": artifacts,
+            "bootstrap_stats": stats,
+            "records_dir": str(records_dir),
+        },
+    )
+
+
+def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_root: Path, output_root: Path) -> dict[str, Any]:
+    restore_powerpacks_root = output_root / "restores" / operator["slug"] / ".powerpacks"
+    if restore_powerpacks_root.exists():
+        shutil.rmtree(restore_powerpacks_root)
+    restore_powerpacks_root.mkdir(parents=True, exist_ok=True)
+
+    copied: list[str] = []
+    missing: list[str] = []
+    network_operator_dir = network_root / "operators" / operator["slug"]
+    copied_network = copy_stage_path(network_operator_dir, restore_powerpacks_root)
+    if copied_network:
+        copied.append(copied_network)
+
+    import_ledger_path = operator_dir / "import/outputs/import-network.ledger.json"
+    import_ledger = read_json(import_ledger_path) if import_ledger_path.exists() else {}
+    run_dir_text = clean(import_ledger.get("run_dir"))
+    if import_ledger:
+        for path_text in sorted(set(collect_stage_paths(import_ledger))):
+            copied_path = copy_stage_path(ROOT / path_text, restore_powerpacks_root)
+            if copied_path:
+                copied.append(copied_path)
+            else:
+                missing.append(path_text)
+        if run_dir_text:
+            restored_ledger_path = restore_powerpacks_root / Path(run_dir_text).relative_to(".powerpacks") / "import-network.ledger.json"
+            restored_ledger = dict(import_ledger)
+            restored_ledger["ledger"] = str(Path(run_dir_text) / "import-network.ledger.json")
+            write_json(restored_ledger_path, restored_ledger)
+            copied.append(str(Path(run_dir_text) / "import-network.ledger.json"))
+            merged_dir = ROOT / run_dir_text / "merged"
+            if merged_dir.exists():
+                dst = restore_powerpacks_root / "network-import/merged"
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(merged_dir, dst)
+                copied.append(".powerpacks/network-import/merged")
+
+    processing_dir = operator_dir / "processing/search-index"
+    if processing_dir.exists():
+        dst = restore_powerpacks_root / "search-index"
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(processing_dir, dst)
+        write_processing_restore_ledger(restore_powerpacks_root, operator, processing_dir)
+        copied.append(".powerpacks/search-index")
+
+    restore_manifest = {
+        "status": "ok",
+        "operator": operator["slug"],
+        "operator_id": operator["operator_id"],
+        "generated_at": now_iso(),
+        "restore_root": str(restore_powerpacks_root),
+        "normal_pipeline_outputs": copied,
+        "missing_referenced_outputs": missing,
+        "commands": {
+            "import_dry_run": f"uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --ledger {run_dir_text}/import-network.ledger.json --run-id {Path(run_dir_text).name if run_dir_text else 'network-bootstrap'} --dry-run" if run_dir_text else "",
+            "processing_dry_run": "uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --dry-run",
+        },
+    }
+    write_json(restore_powerpacks_root / "operator-bootstrap/restore-manifest.json", restore_manifest)
+    return restore_manifest
+
+
+def package_bundle(operator_dir: Path, restore_powerpacks_root: Path, bundles_dir: Path, slug: str, *, force: bool) -> Path:
     bundles_dir.mkdir(parents=True, exist_ok=True)
     archive_path = bundles_dir / f"{slug}.operator-bootstrap.tar.gz"
     if archive_path.exists():
@@ -376,10 +528,17 @@ def package_bundle(operator_dir: Path, bundles_dir: Path, slug: str, *, force: b
             archive_path.unlink()
         else:
             raise SystemExit(f"bundle exists: {archive_path}. Use --force to replace.")
+    stage_root = bundles_dir.parent / "bundle-staging" / slug
+    if stage_root.exists():
+        shutil.rmtree(stage_root)
+    stage_root.mkdir(parents=True)
+    shutil.copytree(operator_dir, stage_root / operator_dir.name)
+    if restore_powerpacks_root.exists():
+        shutil.copytree(restore_powerpacks_root, stage_root / ".powerpacks")
     env = os.environ.copy()
     env["COPYFILE_DISABLE"] = "1"
     completed = subprocess.run(
-        ["tar", "-C", str(operator_dir.parent), "-czf", str(archive_path), operator_dir.name],
+        ["tar", "-C", str(stage_root), "-czf", str(archive_path), operator_dir.name, ".powerpacks"],
         capture_output=True,
         text=True,
         env=env,
@@ -423,7 +582,15 @@ def assemble_operator(
 ) -> dict[str, Any]:
     operator_dir = output_root / "operators" / operator["slug"]
     if operator_dir.exists() and args.force:
-        shutil.rmtree(operator_dir)
+        if args.skip_processing:
+            for name in ["sync", "import", "enrich", "README.txt", "manifest.json"]:
+                path = operator_dir / name
+                if path.is_dir():
+                    shutil.rmtree(path)
+                elif path.exists():
+                    path.unlink()
+        else:
+            shutil.rmtree(operator_dir)
     operator_dir.mkdir(parents=True, exist_ok=True)
 
     sync_manifest = write_sync_manifest(args, operator, operator_dir)
@@ -508,6 +675,8 @@ def assemble_operator(
             "secrets_copied": False,
         },
     }
+    restore_payload = build_restore_payload(operator, operator_dir, network_root, output_root)
+    manifest["restore"] = restore_payload
     planned_archive_path = output_root / "bundles" / f"{operator['slug']}.operator-bootstrap.tar.gz"
     manifest["artifacts"]["bundle"] = str(planned_archive_path)
     if args.gcs_uri:
@@ -515,7 +684,7 @@ def assemble_operator(
         manifest["gcs"] = {"status": "dry_run" if args.gcs_dry_run else "uploaded", **destinations}
     (operator_dir / "README.txt").write_text(make_readme(operator, manifest), encoding="utf-8")
     write_json(manifest_path, manifest)
-    archive_path = package_bundle(operator_dir, output_root / "bundles", operator["slug"], force=True)
+    archive_path = package_bundle(operator_dir, output_root / "restores" / operator["slug"] / ".powerpacks", output_root / "bundles", operator["slug"], force=True)
     if args.gcs_uri:
         destinations = gcs_destinations(args.gcs_uri, operator)
         manifest["gcs"] = upload_to_gcs(archive_path, manifest_path, destinations, dry_run=args.gcs_dry_run)
