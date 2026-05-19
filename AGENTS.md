@@ -151,7 +151,12 @@ exist unless explicitly asked.
 - **Search pack** (search-network, search-company): requires `.env` with
   TurboPuffer + Postgres credentials. If `.env` is present, run the search
   primitive directly and use its error to diagnose; use the doctor only if env
-  or auth looks broken and the cause is unclear.
+  or auth looks broken and the cause is unclear. For `$search-network`, after
+  loading `packs/search/skills/search-network/SKILL.md`, use its documented
+  company-directory MCP fast path for company-only people lookups; otherwise
+  start with `search_network_pipeline.py prepare --query ...`. Do not
+  grep/search/read search docs, schemas, primitive source, or prior artifacts on
+  the happy path.
 
 Don't run pack-specific checks pre-emptively. Only when the user's request
 implies that pack.
@@ -188,6 +193,10 @@ Routes:
 Do not ask the user to pick a skill when the route is obvious. Ask a brief
 clarifying question only when the same wording could mean multiple surfaces,
 for example "people at OpenAI" versus "contacts at OpenAI".
+
+Once a route is obvious, avoid exploratory repo reads. The skill's executable
+primitive is the source of truth for normal operation; inspect files only when
+the primitive blocks/fails or the user asks for implementation details.
 
 ---
 

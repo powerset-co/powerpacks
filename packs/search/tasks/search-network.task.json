@@ -11,9 +11,9 @@
   "steps": [
     {
       "id": "expand_search_request",
-      "kind": "reasoning",
+      "kind": "primitive",
       "primitive": "expand_search_request",
-      "skill": "extract-search-query",
+      "note": "Use the primitive directly. Do not route through extract-search-query during normal search-network runs.",
       "output_schema": "decomposed-query.schema.json"
     },
     {

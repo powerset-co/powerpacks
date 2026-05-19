@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -78,6 +79,165 @@ class SearchNetworkPipelineTests(unittest.TestCase):
 
         self.assertIn('"--model",args.model', src)
         self.assertLess(src.index('"llm_filter_candidates"'), src.index('"llm_rerank_candidates"'))
+
+    def test_prepare_helpers_strip_expand_metadata_and_build_execute_preview(self):
+        expand = {
+            "primitive": "expand_search_request",
+            "status": "completed",
+            "normalized_query": "software engineers in sf",
+            "intent_type": "role_search",
+            "role_search_filters": {
+                "semantic_query": "Experienced software engineers who build production systems, own backend or full-stack implementation, and show evidence of technical execution in product or infrastructure teams.",
+                "bm25_queries": ["software engineer"],
+                "metro_areas": ["San Francisco Bay Area"],
+            },
+        }
+
+        payload = search.payload_from_expand_output(expand)
+        self.assertNotIn("primitive", payload)
+        self.assertNotIn("status", payload)
+        self.assertEqual(search.payload_quality_issues(payload), [])
+
+        preview = search.compact_preview(payload, Path("payload.json"), [])
+        self.assertEqual(preview["payload_json"], "payload.json")
+        self.assertIn("semantic_query", preview["role_title_intent"])
+        self.assertEqual(preview["filters"]["metro_areas"], ["San Francisco Bay Area"])
+
+    def test_prepare_quality_gate_rejects_short_title_semantic_query(self):
+        payload = {
+            "role_search_filters": {
+                "semantic_query": "software engineer",
+                "bm25_queries": ["software engineer"],
+            }
+        }
+
+        issues = search.payload_quality_issues(payload)
+
+        self.assertTrue(issues)
+        self.assertIn("semantic_query", issues[0])
+
+    def test_prepare_quality_gate_allows_filter_only_search(self):
+        payload = {
+            "role_search_filters": {
+                "company_names": ["Meta"],
+                "position_after_date": "2020-01-01",
+            }
+        }
+
+        self.assertEqual(search.payload_quality_issues(payload), [])
+
+    def test_company_directory_fast_path_detects_company_only_payload(self):
+        payload = {
+            "role_search_filters": {
+                "company_names": ["OpenAI"],
+                "is_current_company": True,
+            }
+        }
+
+        self.assertEqual(
+            search.company_directory_tool_args(payload),
+            {"company_name": "OpenAI", "page": 0, "page_size": 50, "company_limit": 5},
+        )
+
+    def test_company_directory_fast_path_ignores_role_constrained_payload(self):
+        payload = {
+            "role_search_filters": {
+                "company_names": ["OpenAI"],
+                "bm25_queries": ["software engineer"],
+            }
+        }
+
+        self.assertIsNone(search.company_directory_tool_args(payload))
+
+    def test_cmd_prepare_invokes_expand_and_emits_execute_command_without_openai(self):
+        expand = {
+            "primitive": "expand_search_request",
+            "status": "completed",
+            "normalized_query": "software engineers in sf",
+            "intent_type": "role_search",
+            "source_type": "query",
+            "vertical": "people_by_role",
+            "role_search_filters": {
+                "semantic_query": "Experienced software engineers who build production systems, own backend or full-stack implementation, and show evidence of technical execution in product or infrastructure teams.",
+                "bm25_queries": ["software engineer"],
+                "metro_areas": ["San Francisco Bay Area"],
+            },
+            "notes": [],
+        }
+        emitted = []
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(search, "run", return_value={"returncode": 0, "json": expand}) as run_mock, \
+             mock.patch.object(search, "emit", side_effect=emitted.append):
+            args = SimpleNamespace(
+                query="software engineers in sf",
+                output_dir=tmp,
+                env_file=".env",
+                timeout=60,
+                model=None,
+            )
+
+            rc = search.cmd_prepare(args)
+
+            self.assertEqual(rc, 0)
+            run_mock.assert_called_once()
+            self.assertTrue((Path(tmp) / "expand_search_request.json").exists())
+            self.assertTrue((Path(tmp) / "expand_search_request.full.json").exists())
+
+        self.assertEqual(len(emitted), 1)
+        out = emitted[0]
+        self.assertEqual(out["status"], "preview_ready")
+        self.assertEqual(out["quality_issues"], [])
+        self.assertIn("execute_command", out)
+        self.assertIn("--execute-approved", out["execute_command"])
+        self.assertIn("pipeline.ledger.json", out["execute_command"])
+
+    def test_cmd_prepare_emits_company_directory_fast_path_without_execute_command(self):
+        expand = {
+            "primitive": "expand_search_request",
+            "status": "completed",
+            "normalized_query": "people who work at OpenAI",
+            "intent_type": "role_search",
+            "source_type": "query",
+            "vertical": "people_by_role",
+            "role_search_filters": {
+                "company_names": ["OpenAI"],
+                "is_current_company": True,
+            },
+            "notes": [],
+        }
+        emitted = []
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(search, "run", return_value={"returncode": 0, "json": expand}), \
+             mock.patch.object(search, "emit", side_effect=emitted.append):
+            args = SimpleNamespace(
+                query="people who work at OpenAI",
+                output_dir=tmp,
+                env_file=".env",
+                timeout=60,
+                model=None,
+            )
+
+            rc = search.cmd_prepare(args)
+
+        self.assertEqual(rc, 0)
+        out = emitted[0]
+        self.assertEqual(out["status"], "company_directory_fast_path")
+        self.assertEqual(out["tool"], "list_company_people")
+        self.assertEqual(out["tool_args"]["company_name"], "OpenAI")
+        self.assertNotIn("execute_command", out)
+
+    def test_cli_parser_exposes_prepare_and_existing_commands(self):
+        parser = search.build_parser()
+
+        prepare = parser.parse_args(["prepare", "--query", "software engineers in sf"])
+        run = parser.parse_args(["run"])
+        status = parser.parse_args(["status", "--ledger", "x.json"])
+        approve = parser.parse_args(["approve", "llm", "--confirm"])
+
+        self.assertIs(prepare.func, search.cmd_prepare)
+        self.assertIs(run.func, search.cmd_run)
+        self.assertIs(status.func, search.cmd_status)
+        self.assertIs(approve.func, search.cmd_approve)
 
 class SalesNavPipelineTests(unittest.TestCase):
     def test_sales_block_tool_call_contract(self):

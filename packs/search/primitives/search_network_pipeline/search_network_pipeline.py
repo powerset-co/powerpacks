@@ -8,7 +8,7 @@ handoff; everything after that is mechanical.
 """
 from __future__ import annotations
 
-import argparse, hashlib, json, os, shlex, subprocess, sys, time
+import argparse, hashlib, json, os, re, shlex, subprocess, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +16,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = "gpt-5.4"
 DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", "200"))
+PAYLOAD_KEYS = {"intent_type", "source_type", "normalized_query", "vertical", "role_search_filters", "notes"}
 
 class Blocked(Exception):
     def __init__(self, payload: dict[str, Any], code: int = 20):
@@ -94,6 +95,82 @@ def uv_python_command(args, subcommand: str, lp: Path, extra: str = "") -> str:
         f"--ledger {shlex.quote(str(lp))}"
     )
     return base + (" " + extra if extra else "")
+
+def payload_from_expand_output(out: dict[str, Any]) -> dict[str, Any]:
+    return {k:v for k,v in out.items() if k in PAYLOAD_KEYS}
+
+def comparable_text(s: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", s.lower())).strip()
+
+def payload_quality_issues(payload: dict[str, Any]) -> list[str]:
+    f=payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"),dict) else {}
+    sq=f.get("semantic_query")
+    bm25=[x for x in (f.get("bm25_queries") or []) if isinstance(x,str) and x.strip()]
+    has_role_or_profile_intent=bool(sq or bm25 or f.get("role_ids") or f.get("role_names") or f.get("titles"))
+    issues=[]
+    if has_role_or_profile_intent:
+        if not isinstance(sq,str) or len(sq.strip()) < 80:
+            issues.append("role/profile intent needs role_search_filters.semantic_query prose with at least 80 characters")
+        elif any(comparable_text(sq)==comparable_text(x) for x in bm25):
+            issues.append("semantic_query must not duplicate a bm25/title phrase")
+    return issues
+
+def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues: list[str]) -> dict[str, Any]:
+    f=payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"),dict) else {}
+    filters={}
+    for k in [
+        "company_names","company_ids","company_semantic_queries","investor_names",
+        "education_names","education_ids","metro_areas","cities","states","countries",
+        "macro_regions","seniority_bands","years_experience_min","years_experience_max",
+        "position_after_date","position_before_date","is_current_role","is_current_company",
+        "tech_skills","x_followers_min","li_followers_min","operator_interaction_min",
+    ]:
+        v=f.get(k)
+        if v not in (None, [], ""):
+            filters[k]=v
+    role={}
+    for k in ["semantic_query","bm25_queries","role_ids"]:
+        v=f.get(k)
+        if v not in (None, [], ""):
+            role[k]=v
+    return {
+        "normalized_query": payload.get("normalized_query"),
+        "payload_json": str(payload_json),
+        "set_scope": f.get("set_id") or "env/default set or personal-set fallback",
+        "role_title_intent": role or None,
+        "filters": filters,
+        "runtime_blockers": quality_issues,
+    }
+
+def company_directory_tool_args(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Return MCP args for company-only people lookup, else None.
+
+    This protects the company-directory fast path even if a harness calls
+    `prepare` for a simple "people at Company" query.
+    """
+    f=payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"),dict) else {}
+    company_names=[x for x in (f.get("company_names") or f.get("current_company_names") or []) if isinstance(x,str) and x.strip()]
+    company_ids=[x for x in (f.get("company_ids") or []) if str(x).strip()]
+    if not company_names and not company_ids:
+        return None
+    allowed={"company_names","current_company_names","company_ids","is_current_company","set_id"}
+    if any(v not in (None, [], "") and k not in allowed for k,v in f.items()):
+        return None
+    args={"page":0,"page_size":50,"company_limit":5}
+    if company_ids:
+        args["company_id"]=str(company_ids[0])
+    else:
+        args["company_name"]=company_names[0]
+    if f.get("set_id"):
+        args["set_id"]=f["set_id"]
+    return args
+
+def prepare_output_dir(query: str, explicit: str|None) -> Path:
+    if explicit:
+        p=Path(explicit); return p if p.is_absolute() else ROOT/p
+    slug=re.sub(r"[^a-z0-9]+","-",query.lower()).strip("-")[:60] or "query"
+    rid=hashlib.sha1(f"{query}:{time.time()}".encode()).hexdigest()[:10]
+    return ROOT/".powerpacks/search"/f"{rid}-{slug}"
 
 def block(lp: Path, l: dict[str, Any], args, kind: str, step: str, payload: dict[str, Any], msg: str):
     aid=approval_id(kind,payload)
@@ -248,6 +325,48 @@ def cmd_run(args):
     except Blocked as e: emit(e.payload); return e.code
     except Exception as e: emit({"primitive":"search_network_pipeline","status":"failed","error":str(e)}); return 1
 
+def cmd_prepare(args):
+    """Run extraction and emit a compact preview without requiring repo inspection."""
+    try:
+        out_dir=prepare_output_dir(args.query,args.output_dir)
+        payload_json=out_dir/"expand_search_request.json"
+        expand_json=out_dir/"expand_search_request.full.json"
+        ledger=out_dir/"pipeline.ledger.json"
+        cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),"--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout)]
+        if args.model: cmd += ["--model",args.model]
+        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30),"expand_search_request")
+        payload=payload_from_expand_output(expand)
+        write_json(expand_json,expand); write_json(payload_json,payload)
+        company_args=company_directory_tool_args(payload)
+        if company_args:
+            emit({
+                "primitive":"search_network_pipeline",
+                "status":"company_directory_fast_path",
+                "message":"Company-only people lookup: call MCP list_company_people and skip search-network retrieval.",
+                "query":args.query,
+                "payload_json":str(payload_json),
+                "tool":"list_company_people",
+                "tool_args":company_args,
+            })
+            return 0
+        issues=payload_quality_issues(payload)
+        extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
+        emit({
+            "primitive":"search_network_pipeline",
+            "status":"preview_ready" if not issues else "blocked_user_action",
+            "message":"Show preview and ask: Execute this search or modify it?" if not issues else "Regenerate or modify extraction before retrieval.",
+            "query":args.query,
+            "payload_json":str(payload_json),
+            "expand_json":str(expand_json),
+            "ledger":str(ledger),
+            "quality_issues":issues,
+            "preview":compact_preview(payload,payload_json,issues),
+            "execute_command":uv_python_command(args,"run",ledger,extra),
+        })
+        return 0
+    except Exception as e:
+        emit({"primitive":"search_network_pipeline","status":"failed","error":str(e)}); return 1
+
 def cmd_status(args):
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None); l=load_ledger(lp)
     emit({"primitive":"search_network_pipeline","status":"ok","ledger":str(lp),"state":l.get("state"),"current_block":l.get("current_block"),"artifacts":l.get("artifacts",{}),"summary":pipeline_summary(l),"step_counts":{s:sum(1 for r in l.get('steps',{}).values() if r.get('status')==s) for s in sorted({r.get('status') for r in l.get('steps',{}).values()})}}); return 0
@@ -261,11 +380,16 @@ def cmd_approve(args):
 def add_run(p):
     p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; tune lower for lower OpenAI tiers (tier 5 usually supports 100-200)"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
+    p=sub.add_parser("prepare"); p.add_argument("--query",required=True); p.add_argument("--env-file",default=".env"); p.add_argument("--output-dir"); p.add_argument("--model"); p.add_argument("--timeout",type=int,default=60); p.set_defaults(func=cmd_prepare)
     r=sub.add_parser("run"); add_run(r); r.set_defaults(func=cmd_run)
     c=sub.add_parser("continue"); add_run(c); c.set_defaults(func=cmd_run)
     s=sub.add_parser("status"); s.add_argument("--ledger"); s.add_argument("--state"); s.set_defaults(func=cmd_status)
     a=sub.add_parser("approve"); a.add_argument("kind",choices=["llm"]); a.add_argument("--ledger"); a.add_argument("--state"); a.add_argument("--approval-id"); a.add_argument("--confirm",action="store_true"); a.set_defaults(func=cmd_approve)
+    return ap
+
+def main():
+    ap=build_parser()
     args=ap.parse_args(); raise SystemExit(args.func(args))
 if __name__ == "__main__": main()
