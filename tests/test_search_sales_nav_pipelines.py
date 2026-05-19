@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -60,6 +61,40 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             rc = search.cmd_status(args)
 
         self.assertEqual(rc, 0)
+
+    def test_query_payload_starts_fresh_state_even_when_ledger_has_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lp = root / "pipeline.json"
+            old_state = root / "old-state.json"
+            new_state = root / "new-state.json"
+            payload_path = root / "expand_search_request.json"
+            search.write_json(payload_path, {"role_search_filters": {"title_keywords": ["engineer"]}})
+            ledger = search.load_ledger(lp)
+            ledger["state"] = str(old_state)
+            search.save(lp, ledger)
+            args = SimpleNamespace(
+                state=None,
+                query="software engineers",
+                payload_json=str(payload_path),
+                env_file=".env",
+                timeout=30,
+            )
+
+            def fake_run(cmd, **kwargs):
+                if "init" in cmd:
+                    return {"returncode": 0, "json": {"state": str(new_state)}, "stdout": "{}", "stderr": ""}
+                if "record-step" in cmd:
+                    return {"returncode": 0, "json": {"status": "ok"}, "stdout": "{}", "stderr": ""}
+                raise AssertionError(f"unexpected command: {cmd}")
+
+            with mock.patch.object(search, "run", side_effect=fake_run):
+                state = search.init_state(args, lp, search.load_ledger(lp))
+
+            saved = search.read_json(lp)
+            self.assertEqual(state, new_state)
+            self.assertEqual(saved["state"], str(new_state))
+            self.assertNotEqual(saved["state"], str(old_state))
 
     def test_rerank_concurrency_default_comes_from_module_default(self):
         parser = search.argparse.ArgumentParser()

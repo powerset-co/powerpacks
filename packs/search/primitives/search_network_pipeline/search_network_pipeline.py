@@ -192,7 +192,7 @@ def state_has_step(state: Path, step: str) -> bool:
 def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     if args.state:
         state=Path(args.state); l["state"]=str(state); save(lp,l); return state
-    if l.get("state"):
+    if l.get("state") and not (args.query and args.payload_json):
         return Path(l["state"])
     if not args.query or not args.payload_json:
         b={"primitive":"search_network_pipeline","status":"blocked_user_action","message":"Need --state, or --query plus --payload-json from extract-search-query.","ledger":str(lp)}
