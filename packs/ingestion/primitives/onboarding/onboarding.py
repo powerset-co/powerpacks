@@ -423,6 +423,30 @@ def msgvault_setup_py() -> str:
     return "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py"
 
 
+def msgvault_home_from_args(args: argparse.Namespace) -> Path:
+    return Path(args.gmail_db).expanduser().parent
+
+
+def msgvault_config_path(args: argparse.Namespace) -> Path:
+    return msgvault_home_from_args(args) / "config.toml"
+
+
+def msgvault_oauth_configured(args: argparse.Namespace) -> bool:
+    path = msgvault_config_path(args)
+    if not path.exists():
+        return False
+    try:
+        return "client_secrets" in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def msgvault_home_args(args: argparse.Namespace) -> list[str]:
+    home = msgvault_home_from_args(args)
+    default_home = Path("~/.msgvault").expanduser()
+    return ["--home", str(home)] if home != default_home else []
+
+
 def linkedin_import_py() -> str:
     return "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py"
 
@@ -501,10 +525,57 @@ def gmail_background_sync_command(email: str) -> dict[str, str]:
     }
 
 
+def gmail_browser_setup_command(args: argparse.Namespace, email: str) -> dict[str, str]:
+    cmd = [
+        "uv", "run", "--project", ".", "python", msgvault_setup_py(), "browser-setup",
+        "--email", email,
+        "--add-account",
+        *msgvault_home_args(args),
+    ]
+    return {
+        "label": f"create_oauth_app_and_authorize_{email}",
+        "command": shell_join(cmd),
+        "description": f"Create the local-msg-vault Google OAuth app, configure msgvault, and authorize {email}.",
+    }
+
+
 def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> list[dict[str, str]]:
+    if not msgvault_oauth_configured(args):
+        first, rest = emails[0], emails[1:]
+        commands = [gmail_browser_setup_command(args, first)]
+        if rest:
+            commands.append({
+                "label": "add_oauth_test_users",
+                "command": shell_join([
+                    "uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-test-users",
+                    *rest,
+                    *msgvault_home_args(args),
+                ]),
+                "description": "Add remaining Gmail addresses as Google OAuth test users with browser automation.",
+            })
+            for email in rest:
+                commands.append({
+                    "label": f"authorize_{email}",
+                    "command": shell_join([
+                        "uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-account",
+                        "--email", email,
+                        *msgvault_home_args(args),
+                    ]),
+                    "description": f"Authorize {email} in msgvault.",
+                })
+        for email in emails:
+            commands.append(gmail_background_sync_command(email))
+        commands.append({
+            "label": "rerun_onboarding",
+            "command": onboarding_step_command(args),
+            "description": "Rerun onboarding after msgvault has written a Gmail sync checkpoint.",
+        })
+        return commands
+
     add_users = [
         "uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-test-users",
         *emails,
+        *msgvault_home_args(args),
     ]
     commands = [{
         "label": "add_oauth_test_users",
@@ -514,7 +585,11 @@ def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> lis
     for email in emails:
         commands.append({
             "label": f"authorize_{email}",
-            "command": shell_join(["uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-account", "--email", email]),
+            "command": shell_join([
+                "uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-account",
+                "--email", email,
+                *msgvault_home_args(args),
+            ]),
             "description": f"Authorize {email} in msgvault.",
         })
     for email in emails:

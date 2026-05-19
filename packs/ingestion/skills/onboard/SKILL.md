@@ -47,7 +47,9 @@ msgvault sync in the background, and reruns onboarding after a local checkpoint
 exists. Large mailboxes can take a few hours to fully sync; tell the user the
 current synced message count and log path instead of blocking the main thread.
 Only ask the user to complete browser login/consent when Google requires human
-action.
+action. If msgvault has no OAuth client configured yet, the first returned
+command will be `browser-setup --email <gmail> --add-account`; run that before
+test-user or sync commands.
 
 LinkedIn CSV remains the primary LinkedIn path:
 
