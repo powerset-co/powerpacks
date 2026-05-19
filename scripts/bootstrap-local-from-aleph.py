@@ -95,9 +95,9 @@ def char_tokenize(text: str, min_n: int = 3, max_n: int = 5) -> list[str]:
     return result
 
 
-def phrase_tokenize(text: str) -> list[str]:
+def phrase_tokenize(text: str, *, max_source_tokens: int = 256, max_ngram: int = 4) -> list[str]:
     global _STEMMER
-    raw = WORD_RE.findall((text or "").lower())
+    raw = WORD_RE.findall((text or "").lower())[:max_source_tokens]
     try:
         if _STEMMER is None:
             import snowballstemmer  # type: ignore
@@ -106,7 +106,7 @@ def phrase_tokenize(text: str) -> list[str]:
     except Exception:
         stems = raw
     tokens: list[str] = []
-    for n in range(1, len(stems) + 1):
+    for n in range(1, min(max_ngram, len(stems)) + 1):
         for idx in range(len(stems) - n + 1):
             tokens.append(" ".join(stems[idx : idx + n]))
     return list(dict.fromkeys(tokens))
@@ -345,8 +345,6 @@ def select_flattened(flattened_path: Path, person_ids: set[str], limit: int | No
         pid = clean(row.get("base_person_id"))
         if (person_ids and pid in person_ids) or (not person_ids and (limit is None or len(selected) < limit)):
             selected.append(row)
-        if person_ids and person_ids <= {clean(r.get("base_person_id")) for r in selected}:
-            break
         if not person_ids and limit is not None and len(selected) >= limit:
             break
     return selected, scanned
