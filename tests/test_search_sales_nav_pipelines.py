@@ -68,6 +68,14 @@ class SearchNetworkPipelineTests(unittest.TestCase):
 
         self.assertEqual(search.DEFAULT_RERANK_CONCURRENCY, args.rerank_concurrency)
 
+    def test_filter_parallel_defaults_come_from_module_defaults(self):
+        parser = search.argparse.ArgumentParser()
+        search.add_run(parser)
+        args = parser.parse_args([])
+
+        self.assertEqual(search.DEFAULT_FILTER_BATCH_SIZE, args.filter_batch_size)
+        self.assertEqual(search.DEFAULT_FILTER_CONCURRENCY, args.filter_concurrency)
+
     def test_llm_approval_message_sets_time_expectation(self):
         src = inspect.getsource(search.run_pipeline)
 
@@ -77,6 +85,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         src = inspect.getsource(search.run_pipeline)
 
         self.assertIn('"--model",args.model', src)
+        self.assertIn('"--concurrency",str(args.filter_concurrency)', src)
         self.assertLess(src.index('"llm_filter_candidates"'), src.index('"llm_rerank_candidates"'))
 
 class SalesNavPipelineTests(unittest.TestCase):

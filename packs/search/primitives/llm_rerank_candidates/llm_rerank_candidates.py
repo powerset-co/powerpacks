@@ -4,7 +4,7 @@
 Calls an OpenAI-compatible chat completion endpoint once per input item,
 in parallel under a configurable concurrency limit. Same shape as the
 production configurable fan-out path in network-search-api, but
-Powerpacks-local and stdlib-only.
+Powerpacks-local.
 
 Differences from `llm_filter_candidates`:
 - Generic per-item prompts (not tied to task_state shape)
@@ -17,7 +17,7 @@ Inputs:
 - `--in PATH | -` : JSONL of candidates. Each row is a JSON object.
 - `--query STRING` : the search query (for prompt context)
 - `--traits TRAIT` : expected traits (repeatable)
-- `--concurrency N` : asyncio.Semaphore size (default 50)
+- `--concurrency N` : asyncio.Semaphore size (default follows API env; 400)
 - `--model NAME` : chat completion model (default gpt-4o-mini)
 - `--api-base URL` : base URL (default https://api.openai.com)
 - `--api-key KEY` : OpenAI API key (default $OPENAI_API_KEY)
@@ -41,15 +41,12 @@ Outputs (JSONL, one line per input):
 
 A summary is printed to stderr at the end:
     rerank: items=N concurrency=M ok=X failed=Y elapsed=Ts
-
-Stdlib only.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import concurrent.futures
 import csv
 import gzip
 import json
@@ -57,16 +54,16 @@ import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
+
 
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-4o-mini")
-DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", "200"))
+DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_ESTIMATE_SECONDS = int(os.environ.get("LLM_RERANK_ESTIMATE_SECONDS", "180"))
 
 
@@ -74,7 +71,7 @@ SYSTEM_PROMPT = """You are an expert recruiter reranking people-search results.
 
 Given a search query, expected traits, and one candidate profile, evaluate the
 candidate with evidence-based scoring. This prompt mirrors the production app's
-LLM rerank behavior but is Powerpacks-local and stdlib-only.
+LLM rerank behavior but is Powerpacks-local.
 
 Return a strict JSON object:
 
@@ -180,41 +177,39 @@ Return the JSON verdict object only.
 
 
 # ---------------------------------------------------------------------------
-# OpenAI call (sync, run in thread pool from async fan-out)
+# OpenAI call
 # ---------------------------------------------------------------------------
 
 
-def call_chat_completion(
-    api_base: str,
-    api_key: str,
+def openai_base_url(api_base: str) -> str:
+    base = api_base.rstrip("/")
+    return base if base.endswith("/v1") else f"{base}/v1"
+
+
+async def call_chat_completion(
+    client: AsyncOpenAI,
     model: str,
     system_prompt: str,
     user_prompt: str,
-    timeout: int,
 ) -> dict[str, Any]:
-    """Synchronous OpenAI-compatible chat completion. Returns raw JSON."""
-    body = json.dumps(
-        {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-        }
-    ).encode()
-    req = urllib.request.Request(
-        f"{api_base.rstrip('/')}/v1/chat/completions",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0,
+        response_format={"type": "json_object"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode())
+    return {
+        "choices": [
+            {
+                "message": {
+                    "content": response.choices[0].message.content or "{}",
+                }
+            }
+        ]
+    }
 
 
 def parse_verdict(raw_response: dict[str, Any], traits: list[dict[str, str]]) -> tuple[float, str, str, float, dict[str, float]]:
@@ -267,12 +262,9 @@ async def rerank_one(
     *,
     query: str,
     traits: list[dict[str, str]],
-    api_base: str,
-    api_key: str,
+    client: AsyncOpenAI,
     model: str,
     semaphore: asyncio.Semaphore,
-    executor: concurrent.futures.Executor,
-    timeout: int,
     max_retries: int,
     include_prompt: bool,
 ) -> RerankResult:
@@ -287,32 +279,28 @@ async def rerank_one(
     trait_scores: dict[str, float] = {}
 
     async with semaphore:
-        loop = asyncio.get_running_loop()
         attempt = 0
         while True:
             try:
-                raw_response = await loop.run_in_executor(
-                    executor,
-                    call_chat_completion,
-                    api_base,
-                    api_key,
+                raw_response = await call_chat_completion(
+                    client,
                     model,
                     SYSTEM_PROMPT,
                     user_prompt,
-                    timeout,
                 )
                 score, verdict, reason, confidence, trait_scores = parse_verdict(raw_response, traits)
                 error = None
                 break
-            except urllib.error.HTTPError as e:
-                if e.code in (429, 502, 503, 504) and attempt < max_retries:
+            except APIStatusError as e:
+                status_code = int(getattr(e, "status_code", 0) or 0)
+                if status_code in (429, 502, 503, 504) and attempt < max_retries:
                     backoff = 0.5 * (2**attempt)
                     await asyncio.sleep(backoff)
                     attempt += 1
                     continue
-                error = f"http {e.code}: {e.reason}"
+                error = f"http {status_code}: {e.message}"
                 break
-            except (urllib.error.URLError, TimeoutError, asyncio.TimeoutError) as e:
+            except (APIConnectionError, APITimeoutError, TimeoutError, asyncio.TimeoutError) as e:
                 if attempt < max_retries:
                     backoff = 0.5 * (2**attempt)
                     await asyncio.sleep(backoff)
@@ -354,21 +342,21 @@ async def rerank_all(
     include_prompt: bool,
 ) -> list[RerankResult]:
     semaphore = asyncio.Semaphore(concurrency)
-    # Pool of OS threads so urllib calls don't block the event loop.
-    # max_workers >= concurrency so we never bottleneck on the executor.
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=concurrency)
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url=openai_base_url(api_base),
+        timeout=timeout,
+        max_retries=0,
+    )
     try:
         tasks = [
             rerank_one(
                 item,
                 query=query,
                 traits=traits,
-                api_base=api_base,
-                api_key=api_key,
+                client=client,
                 model=model,
                 semaphore=semaphore,
-                executor=executor,
-                timeout=timeout,
                 max_retries=max_retries,
                 include_prompt=include_prompt,
             )
@@ -376,7 +364,7 @@ async def rerank_all(
         ]
         return await asyncio.gather(*tasks)
     finally:
-        executor.shutdown(wait=True, cancel_futures=False)
+        await client.close()
 
 
 # ---------------------------------------------------------------------------

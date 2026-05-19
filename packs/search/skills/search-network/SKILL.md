@@ -230,14 +230,14 @@ search.
     Do not dump full hydrated profiles unless the user explicitly asks to debug
     hydration; then pass `--dump-profiles`.
 13. Run conservative LLM filtering by default:
-    `llm_filter_candidates --state "$STATE" --profile-scope auto --write-state`.
+    `llm_filter_candidates --state "$STATE" --profile-scope auto --batch-size 5 --concurrency 1000 --write-state`.
     Auto uses compact/current-role profiles only when role filters are
     current-scoped (`is_current_role: true`); all-time/past-role queries use the
     full hydrated profile. Do not dump filter scores/prompts unless debugging; then
     pass `--dump-debug`. Use `--allow-partial-hydration` only when the user
     explicitly accepts partial review.
 14. Run async LLM reranking by default with the stronger configured model:
-    `llm_rerank_candidates --state "$STATE" --concurrency 200 --model gpt-5.4 --write-state`.
+    `llm_rerank_candidates --state "$STATE" --concurrency 400 --model gpt-5.4 --write-state`.
     Rerank is the final ordering pass and reads the full hydrated profile from
     `profiles_path`. The primary output is `llm_rerank_candidates/query_results.csv`; columns must match the app
     query-results schema: `conversation_id`, `query`, `person_id`,

@@ -97,6 +97,8 @@ def _make_mock_handler(state: dict[str, Any]):
 
                 response = {
                     "id": "chatcmpl-mock",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
                     "model": body.get("model", "mock"),
                     "choices": [
                         {
