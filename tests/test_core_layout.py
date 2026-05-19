@@ -20,7 +20,7 @@ class CoreLayoutTests(unittest.TestCase):
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
         self.assertEqual(
-            search_pack, ["extract-search-query", "search-company", "search-network"]
+            search_pack, ["search-company", "search-network"]
         )
         messages_pack = sorted(
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
@@ -120,11 +120,10 @@ class CoreLayoutTests(unittest.TestCase):
 
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
         self.assertIn("## Skill Composition", text)
-        self.assertIn("extract-search-query", text)
         self.assertIn("search-company", text)
         self.assertIn("handoff", text.lower())
-        self.assertIn("Do not hide query extraction inside eval or", text)
-        self.assertIn("Do not use the `extract-search-query` skill", text)
+        self.assertIn("harness-only code paths", text)
+        self.assertIn("Use this parallel primitive directly", text)
 
     def test_json_contracts_and_schemas_parse(self) -> None:
         roots = [

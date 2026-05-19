@@ -70,9 +70,9 @@ Default composition:
     --query "<user query>" --env-file .env
   ```
 
-  Do not use the `extract-search-query` skill for extraction — use the
-  primitive directly. Do not hide query extraction inside eval or harness-only
-  code paths. The skill is retained as documentation only.
+  Do not use a separate extraction skill or ask the harness to piece together
+  decomposition. Use this parallel primitive directly. Do not hide query
+  extraction inside eval or harness-only code paths.
 - `search-company`: use when natural-language company criteria, investors,
   sectors, funding, headcount, or company-domain intent must resolve into
   canonical company IDs before people retrieval
@@ -211,7 +211,7 @@ Rules for this fast path:
    the set with `list_sets` using the same tiebreaker as `search-contacts`
    (exact name → non-personal → most members → personal → ask), then pass
    `set_id` to `list_company_people`.
-5. Skip task state, `extract-search-query`, `search-company`, `resolve_companies`,
+5. Skip task state, `expand_search_request`, `search-company`, `resolve_companies`,
    `count_candidates`, `execute_role_search`, `hydrate_people`, approval prompts,
    slicing, LLM filtering, rerank preparation, and result export.
 6. If the user adds a role/title/seniority/domain constraint — e.g. "AI engineers

@@ -250,7 +250,7 @@ def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     if l.get("state"):
         return Path(l["state"])
     if not args.query or not args.payload_json:
-        b={"primitive":"search_network_pipeline","status":"blocked_user_action","message":"Need --state, or --query plus --payload-json from extract-search-query.","ledger":str(lp)}
+        b={"primitive":"search_network_pipeline","status":"blocked_user_action","message":"Need --state, or --query plus --payload-json from expand_search_request.","ledger":str(lp)}
         l["current_block"]=b; mark(lp,l,"init_state","blocked_user_action",summary=b); raise Blocked(b,21)
     cmd=[sys.executable,str(ROOT/"packs/search/primitives/task_state/task_state.py"),"init","--query",args.query]
     res=run(cmd, env_file=args.env_file, timeout=args.timeout); out=require_ok(res,"task_state init")

@@ -43,7 +43,6 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 | --- | --- | --- |
 | [`search-network`](packs/search/skills/search-network/SKILL.md) | `$search-network <query>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. |
 | [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
-| [`extract-search-query`](packs/search/skills/extract-search-query/SKILL.md) | called by `search-network` | Sub-skill for headless query decomposition. |
 | [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds deterministic local indexing artifacts from `.powerpacks/network-import/merged/people.csv` under `.powerpacks/search-index/<run-id>/` with no remote calls. |
 
 ### Setup
@@ -105,8 +104,7 @@ powerpacks/
 │   │   ├── lib/            contracts, identity, people/artifact builders
 │   │   └── tasks/          build-local-search-index.task.json
 │   ├── search/             recruiting people / company search
-│   │   ├── skills/         search-network, search-company,
-│   │   │                   extract-search-query
+│   │   ├── skills/         search-network, search-company
 │   │   ├── primitives/     ~21 search primitives + lib/ + contracts CLI +
 │   │   │                   task_state/
 │   │   ├── schemas/        decomposed-query, role-search-filters,
@@ -260,7 +258,7 @@ adapter installs also work:
 ```
 
 The NanoClaw adapter copies the core Powerpacks directory into the target,
-installs `search-network` and its `extract-search-query` sub-skill, wires the
+installs `search-network`, wires the
 threaded CLI channel, and keeps NanoClaw-specific TUI/runtime code under
 `powerpacks/adapters/nanoclaw`.
 
@@ -373,8 +371,8 @@ grant access on those specific secret resources or groups.
 ## Task Flow
 
 See `packs/search/docs/task-flow.md` for the current search task lifecycle,
-the extraction sub-skill boundary, and the difference between primitive parity
-harnesses and agent extraction harnesses.
+the parallel `expand_search_request` boundary, and the difference between
+primitive parity and pipeline eval harnesses.
 
 ## Development
 
@@ -387,8 +385,8 @@ The lint command runs `ruff` and `flake8` through `uv` using the repo lockfile.
 
 ## Testing
 
-Use `scripts/test-search-network check` for local readiness. For headless Codex
-extraction and recall harness details, see `docs/testing.md`.
+Use `scripts/test-search-network check` for local readiness. For parallel query
+expansion and recall harness details, see `docs/testing.md`.
 
 ## Current Scope
 

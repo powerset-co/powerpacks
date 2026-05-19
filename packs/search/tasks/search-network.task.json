@@ -13,7 +13,7 @@
       "id": "expand_search_request",
       "kind": "primitive",
       "primitive": "expand_search_request",
-      "note": "Use the primitive directly. Do not route through extract-search-query during normal search-network runs.",
+      "note": "Use the parallel expand_search_request primitive directly. Do not route query expansion through a harness-composed skill.",
       "output_schema": "decomposed-query.schema.json"
     },
     {

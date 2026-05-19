@@ -63,7 +63,6 @@ EOF
 }
 
 install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKILL.md"
-install_skill extract-search-query "$REPO_ROOT/packs/search/skills/extract-search-query/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
 install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
@@ -76,6 +75,6 @@ install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
-printf '  search-network extract-search-query search-company search-contacts powerset powerset-login powerset-set sales-nav-search\n'
+printf '  search-network search-company search-contacts powerset powerset-login powerset-set sales-nav-search\n'
 printf '  import-contacts import-whatsapp msgvault local-msg-vault\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'
