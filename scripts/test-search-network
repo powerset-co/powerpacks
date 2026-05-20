@@ -38,10 +38,13 @@ Commands:
   pipeline-eval-list [--bucket BUCKET] [--case-glob REGEX]
       List matching recall cases for pipeline-eval.
 
+  component
+      Run search-network component tests against local mocks/fixtures: mock
+      OpenAI-compatible chat/embeddings, local DuckDB TurboPuffer backend, and
+      JSON-backed Postgres fixture. No live credentials required.
+
   mock-prepare
-      Run search_network_pipeline prepare against a local mock OpenAI-compatible
-      chat API. This validates the parallel expansion/preview path without
-      OpenAI, TurboPuffer, or Postgres credentials.
+      Backward-compatible alias for component.
 
 Environment:
   APP_DIR                           Defaults to /Users/arthur/workspace/aleph-mvp (primitive recall)
@@ -121,7 +124,7 @@ case "$command" in
       --list \
       "$@"
     ;;
-  mock-prepare)
+  component|mock-prepare)
     py="${PYTHON:-}"
     if [[ -z "$py" ]]; then
       if [[ -x "$ROOT/.venv/bin/python" ]]; then

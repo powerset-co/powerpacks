@@ -11,6 +11,28 @@ from typing import Any
 from powerpacks_contracts import POSTGRES_TABLES, assert_columns_in_contract, postgres_required_columns
 
 
+def fixture_path() -> Path | None:
+    configured = os.getenv("POWERPACKS_POSTGRES_FIXTURE_JSON")
+    return Path(configured) if configured else None
+
+
+def fixture_tables() -> dict[str, list[dict[str, Any]]] | None:
+    path = fixture_path()
+    if not path:
+        return None
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Postgres fixture must be a JSON object: {path}")
+    return {str(k): list(v or []) for k, v in data.items()}
+
+
+def fixture_rows(table: str) -> list[dict[str, Any]] | None:
+    tables = fixture_tables()
+    if tables is None:
+        return None
+    return [dict(row) for row in tables.get(table, []) if isinstance(row, dict)]
+
+
 def load_env_file(path: Path | None) -> None:
     if not path or not path.exists():
         return
@@ -119,6 +141,56 @@ def fetch_set_operator_ids(
     credentials_path: Path | None = None,
 ) -> dict[str, Any]:
     load_env_file(env_file)
+    fixture_sets = fixture_rows("sets")
+    if fixture_sets is not None:
+        users = fixture_rows("users") or []
+        members = fixture_rows("set_members") or []
+        source = "argument"
+        resolved_set_id = set_id or os.getenv("POWERPACKS_DEFAULT_SET_ID") or os.getenv("POWERSET_DEFAULT_SET_ID")
+        if not resolved_set_id:
+            active_sets = [row for row in fixture_sets if row.get("is_active", True)]
+            if not active_sets:
+                raise RuntimeError("set_id not provided and fixture contains no active set")
+            active_sets.sort(key=lambda row: (not bool(row.get("is_personal")), str(row.get("created_at") or "")))
+            resolved_set_id = str(active_sets[0].get("id"))
+            source = "fixture_default"
+        set_row = next((row for row in fixture_sets if str(row.get("id")) == str(resolved_set_id) and row.get("is_active", True)), None)
+        if not set_row:
+            raise RuntimeError(f"active set not found in fixture: {resolved_set_id}")
+        user_by_auth0 = {str(row.get("user_id")): row for row in users if row.get("user_id")}
+        scoped_members = [row for row in members if str(row.get("set_id")) == str(resolved_set_id)]
+        out_members: list[dict[str, str]] = []
+        auth0_user_ids: list[str] = []
+        for member in scoped_members:
+            auth0 = str(member.get("user_id") or "")
+            if auth0:
+                auth0_user_ids.append(auth0)
+            user = user_by_auth0.get(auth0, {})
+            operator_id = str(user.get("id") or member.get("operator_id") or "")
+            if not operator_id:
+                continue
+            out_members.append({
+                "operator_id": operator_id,
+                "auth0_user_id": auth0,
+                "email": str(user.get("email") or ""),
+                "name": str(user.get("name") or ""),
+                "role": str(member.get("role") or ""),
+            })
+        created_by = str(set_row.get("created_by") or "")
+        if created_by and created_by not in auth0_user_ids:
+            auth0_user_ids.insert(0, created_by)
+        return {
+            "set_id": str(resolved_set_id),
+            "set_name": set_row.get("name"),
+            "is_personal": bool(set_row.get("is_personal")),
+            "source": source,
+            "default_resolution": {},
+            "operator_ids": list(dict.fromkeys(member["operator_id"] for member in out_members)),
+            "auth0_user_ids": list(dict.fromkeys(auth0_user_ids)),
+            "operator_count": len(out_members),
+            "members": out_members,
+        }
+
     source = "argument"
     resolved_set_id = set_id
     default_info: dict[str, Any] = {}
@@ -204,6 +276,15 @@ def fetch_set_operator_ids(
 
 def fetch_person_rows(person_ids: list[str], env_file: Path | None = None) -> list[dict[str, Any]]:
     load_env_file(env_file)
+    fixture = fixture_rows("persons")
+    if fixture is not None:
+        wanted = {str(pid) for pid in person_ids}
+        order = {str(pid): idx for idx, pid in enumerate(person_ids)}
+        rows = [dict(row) for row in fixture if str(row.get("id")) in wanted and row.get("hydrated_context") is not None]
+        for row in rows:
+            row["hydrated_context"] = json_value(row.get("hydrated_context"))
+        return sorted(rows, key=lambda row: order.get(str(row.get("id")), len(order)))
+
     selected_columns = [
         "id",
         "public_identifier",
@@ -269,6 +350,17 @@ def fetch_person_rows(person_ids: list[str], env_file: Path | None = None) -> li
 
 def fetch_interaction_counts(person_ids: list[str], env_file: Path | None = None) -> dict[str, int]:
     load_env_file(env_file)
+    fixture = fixture_rows("person_source_summary")
+    if fixture is not None:
+        wanted = {str(pid) for pid in person_ids}
+        counts: dict[str, int] = {}
+        for row in fixture:
+            pid = str(row.get("person_id") or "")
+            if pid not in wanted:
+                continue
+            counts[pid] = counts.get(pid, 0) + int(row.get("total_interactions") or 0)
+        return counts
+
     assert_columns_in_contract("person_source_summary", ["person_id", "total_interactions"])
     psycopg2 = ensure_psycopg2()
     query = """

@@ -70,27 +70,35 @@ Pipeline eval answers: can the parallel `expand_search_request` primitive
 produce the right payload before primitives run? This is the same expansion path
 used by `search_network_pipeline.py prepare`.
 
-### CI-safe mocked prepare regression
+### CI-safe component test
 
-Use this when you want to verify the harness-facing happy path without any live
-credentials:
+Use this when you want to verify the harness-facing search-network happy path
+without any live credentials:
 
 ```bash
-scripts/test-search-network mock-prepare
+scripts/test-search-network component
 ```
 
-This starts an in-process OpenAI-compatible Chat Completions HTTP server, points
-`OPENAI_API_BASE` at it, and runs the real command path:
+This runs the real subprocess CLI path against local mocks/fixtures:
+
+- mock OpenAI-compatible Chat Completions for the 8 parallel extractor calls
+- mock OpenAI-compatible Embeddings for local vector ranking
+- local DuckDB search backend via `POWERPACKS_LOCAL_SEARCH_DB`, which exercises
+  TurboPuffer-like filters, BM25/vector ranking, `query`, and `multi_query`
+- JSON-backed Postgres fixture via `POWERPACKS_POSTGRES_FIXTURE_JSON`, covering
+  set/operator resolution, person hydration, and interaction counts
+
+It runs:
 
 ```text
-search_network_pipeline.py prepare -> expand_search_request -> 8 parallel extractor calls
+search_network_pipeline.py prepare
+search_network_pipeline.py run --search-only --execute-approved
 ```
 
-It validates that `prepare` emits `preview_ready`, writes the payload artifact,
-merges fields from multiple extractor responses, and returns an
-`--execute-approved` command. It intentionally stops before retrieval, so it does
-not require or validate TurboPuffer, Postgres hydration, or real LLM reranking.
-Use live `pipeline-eval` for that full integration tier.
+It validates preview generation, set resolution, retrieval, hydration, and
+CSV/JSONL/manifest persistence. It intentionally uses `--search-only`, so it
+does not validate real LLM filter/rerank behavior or production TurboPuffer /
+Postgres credentials. Use live `pipeline-eval` for that final integration tier.
 
 Dry-run selected recall cases:
 
@@ -142,7 +150,7 @@ For a small external test, require:
 - `scripts/test-search-network check` passes.
 - Representative primitive recall buckets pass or have documented known gaps.
 - `scripts/test-search-network company-dry-run` passes.
-- `scripts/test-search-network mock-prepare` passes in CI or locally.
+- `scripts/test-search-network component` passes in CI or locally.
 - At least 5 live `pipeline-eval` cases produce schema-valid JSON when API
   credentials are available.
 - For real searches, every run returns a task state path plus CSV/JSONL/manifest
