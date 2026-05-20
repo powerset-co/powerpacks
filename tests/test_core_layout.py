@@ -26,6 +26,27 @@ class CoreLayoutTests(unittest.TestCase):
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
         )
         self.assertEqual(messages_pack, ["import-contacts", "import-whatsapp"])
+        ingestion_pack = sorted(
+            path.name for path in (ROOT / "packs/ingestion/skills").iterdir() if path.is_dir()
+        )
+        self.assertEqual(
+            ingestion_pack,
+            [
+                "import-email",
+                "import-gmail-network",
+                "import-linkedin-network",
+                "import-network",
+                "import-twitter",
+                "import-twitter-network",
+                "ingestion-onboarding",
+                "linkedin-sync-csv",
+                "linkedin-sync-mcp",
+                "local-msg-vault",
+                "msgvault",
+                "onboard",
+                "setup",
+            ],
+        )
         indexing_pack = sorted(
             path.name for path in (ROOT / "packs/indexing/skills").iterdir() if path.is_dir()
         )
@@ -68,6 +89,7 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-email" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-network" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())
             self.assertTrue((skills_dir / "search-network" / "powerpacks" / "pyproject.toml").exists())
@@ -101,10 +123,13 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((bundle / "pyproject.toml").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-contacts" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "import-contacts" / "powerpacks").is_symlink())
+            self.assertTrue((skills_dir / "setup" / "powerpacks").is_symlink())
             self.assertEqual((skills_dir / "powerset" / "powerpacks").resolve(), bundle.resolve())
             self.assertEqual((skills_dir / "import-contacts" / "powerpacks").resolve(), bundle.resolve())
+            self.assertEqual((skills_dir / "setup" / "powerpacks").resolve(), bundle.resolve())
             nested_skill_files = sorted(path.relative_to(bundle) for path in bundle.glob("packs/*/skills/*/SKILL.md"))
             self.assertEqual(nested_skill_files, [])
 

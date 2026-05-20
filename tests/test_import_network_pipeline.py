@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py"
@@ -40,6 +41,227 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             import_network_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="", gmail_account_email="me@example.com")),
             str(import_network_pipeline.DEFAULT_MSGVAULT_DB),
         )
+
+    def test_from_accounts_populates_sources_and_worker_group(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            db = tmp / "msgvault.db"
+            linkedin = tmp / "Connections.csv"
+            contacts = tmp / "contacts.csv"
+            linkedin.write_text("First Name,Last Name,URL\n", encoding="utf-8")
+            contacts.write_text("name\n", encoding="utf-8")
+            accounts = tmp / "accounts.json"
+            accounts.write_text(json.dumps({
+                "version": 2,
+                "accounts": {
+                    "gmail": {"linked": True, "usernames": ["old@example.com"], "artifacts": [], "config": {"msgvault_db": str(db), "selected_accounts": ["me@example.com", "work@example.com"]}},
+                    "linkedin_csv": {"linked": True, "usernames": ["me"], "artifacts": [], "config": {"csv_path": str(linkedin), "source_label": "me"}},
+                    "twitter": {"linked": True, "usernames": ["arthur"], "artifacts": [], "config": {"handle": "arthur"}},
+                    "messages": {"linked": True, "usernames": [], "artifacts": [str(contacts)], "config": {"contacts_csv": str(contacts)}},
+                },
+            }), encoding="utf-8")
+            args = import_network_pipeline.build_parser().parse_args(["run", "--from-accounts", str(accounts), "--dry-run"])
+            args = import_network_pipeline.apply_account_sources(args)
+            self.assertEqual(args.msgvault_db, str(db))
+            self.assertEqual(args.gmail_account_emails, ["me@example.com", "work@example.com"])
+            self.assertEqual(args.linkedin_csv, str(linkedin))
+            self.assertEqual(args.linkedin_source_user, "me")
+            self.assertEqual(args.twitter_handle, "arthur")
+            self.assertEqual(args.messages_contacts_csv, str(contacts))
+            payload = import_network_pipeline.dry_run_plan(args, tmp / "ledger.json", "network-test", tmp / "run")
+            jobs = payload["worker_groups"]["import"]["jobs"]
+            self.assertEqual({job["source"] for job in jobs}, {"gmail", "linkedin_csv", "twitter", "messages"})
+            self.assertEqual([job["account_email"] for job in jobs if job["source"] == "gmail"], ["me@example.com", "work@example.com"])
+            self.assertTrue(all(job["parallelizable"] for job in jobs))
+
+    def test_from_setup_finds_accounts_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            accounts = tmp / "accounts.json"
+            accounts.write_text(json.dumps({"version": 2, "accounts": {}}), encoding="utf-8")
+            setup_ledger = tmp / "setup.json"
+            setup_ledger.write_text(json.dumps({"handoff": {"commands": {"import_network_run": f"uv run --project . python x.py run --from-accounts {accounts}"}}}), encoding="utf-8")
+            args = import_network_pipeline.build_parser().parse_args(["run", "--from-setup", str(setup_ledger), "--dry-run"])
+            args = import_network_pipeline.apply_account_sources(args)
+            self.assertEqual(args.from_accounts, str(accounts))
+
+    def test_from_accounts_accepts_status_linked_channels_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            linkedin = tmp / "Connections.csv"
+            contacts = tmp / "contacts.csv"
+            linkedin.write_text("First Name,Last Name,URL\n", encoding="utf-8")
+            contacts.write_text("name\n", encoding="utf-8")
+            accounts = tmp / "accounts.json"
+            accounts.write_text(json.dumps({
+                "version": 2,
+                "channels": {
+                    "gmail": {"status": "linked", "config": {"selected_accounts": ["me@example.com"]}},
+                    "linkedin_csv": {"status": "linked", "artifacts": [str(linkedin)], "usernames": ["me"]},
+                    "twitter": {"status": "skipped", "usernames": ["stale"]},
+                    "messages": {"status": "linked", "artifacts": [str(contacts)]},
+                },
+            }), encoding="utf-8")
+            args = import_network_pipeline.build_parser().parse_args(["run", "--from-accounts", str(accounts), "--dry-run"])
+            args = import_network_pipeline.apply_account_sources(args)
+            self.assertEqual(args.gmail_account_emails, ["me@example.com"])
+            self.assertEqual(args.linkedin_csv, str(linkedin))
+            self.assertEqual(args.linkedin_source_user, "me")
+            self.assertEqual(args.messages_contacts_csv, str(contacts))
+            self.assertEqual(args.twitter_handle, "")
+
+    def test_parallel_source_workers_record_child_ledgers_and_wait_for_fan_in(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ledger_path = tmp / "ledger.json"
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {
+                    "operator_id": "local",
+                    "linkedin_csv": str(tmp / "Connections.csv"),
+                    "linkedin_source_user": "me",
+                    "msgvault_db": str(tmp / "msgvault.db"),
+                    "gmail_account_emails": ["me@example.com", "work@example.com"],
+                    "gmail_linkedin_provider": "off",
+                },
+                "steps": {},
+                "artifacts": {},
+            }
+            calls = []
+            def fake_run_cmd(cmd, timeout=None):
+                calls.append(cmd)
+                if any("linkedin_network_import.py" in part for part in cmd):
+                    return 0, {"status": "completed", "artifacts": {"people_csv": str(tmp / "linkedin_people.csv")}}, ""
+                email = cmd[cmd.index("--account-email") + 1]
+                people = tmp / f"gmail-{email}.csv"
+                return 0, {"status": "completed", "artifacts": {"people_csv": str(people), "linkedin_resolution_queue_csv": str(tmp / f"queue-{email}.csv")}, "counts": {"contacts_seen": 1, "contacts_written": 1}}, ""
+            with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                ok = import_network_pipeline.run_source_import_workers(ledger_path, ledger)
+            self.assertTrue(ok)
+            self.assertEqual(ledger["steps"]["source_imports"]["status"], "completed")
+            self.assertEqual(ledger["steps"]["gmail_msgvault"]["status"], "completed")
+            self.assertIn("gmail_msgvault:me-example.com", ledger["steps"])
+            self.assertIn("gmail_msgvault:work-example.com", ledger["steps"])
+            self.assertIn("linkedin_people_csv", ledger["artifacts"])
+            self.assertEqual(len(ledger["artifacts"]["gmail_people_csvs"]), 2)
+            self.assertTrue(ledger["worker_groups"]["import"]["parallel"])
+
+    def test_linkedin_approval_blocks_before_fan_in(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ledger_path = tmp / "ledger.json"
+            ledger = {"run_id": "network-test", "run_dir": str(tmp / "network-test"), "input": {"linkedin_csv": str(tmp / "Connections.csv"), "linkedin_source_user": "me"}, "steps": {}, "artifacts": {}}
+            with mock.patch.object(import_network_pipeline, "run_cmd", return_value=(20, {"status": "blocked_approval"}, "")):
+                ok = import_network_pipeline.run_source_import_workers(ledger_path, ledger)
+            self.assertFalse(ok)
+            self.assertEqual(ledger["steps"]["source_imports"]["status"], "blocked")
+            self.assertEqual(ledger["blocked"]["step_id"], "linkedin")
+
+    def test_merge_includes_all_gmail_people_csvs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ledger_path = tmp / "ledger.json"
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {"include_existing_artifacts": False},
+                "steps": {},
+                "artifacts": {
+                    "gmail_people_csvs": [str(tmp / "gmail-a.csv"), str(tmp / "gmail-b.csv")],
+                    "linkedin_people_csv": str(tmp / "linkedin.csv"),
+                },
+            }
+            seen_cmds = []
+            def fake_run_cmd(cmd, timeout=None):
+                seen_cmds.append(cmd)
+                return 0, {"people_csv": str(tmp / "merged.csv"), "network_contacts_csv": "contacts.csv", "network_contact_sources_csv": "sources.csv", "network_companies_csv": "companies.csv", "manifest": "manifest.json", "merged_rows": 3}, ""
+            with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                self.assertTrue(import_network_pipeline.run_merge(ledger_path, ledger))
+            cmd = seen_cmds[0]
+            input_values = [cmd[i + 1] for i, part in enumerate(cmd) if part == "--input"]
+            self.assertEqual(input_values, [str(tmp / "linkedin.csv"), str(tmp / "gmail-a.csv"), str(tmp / "gmail-b.csv")])
+
+    def test_merge_includes_linked_messages_contacts_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            contacts = tmp / "contacts.csv"
+            contacts.write_text("name,phone,source,message_count,last_message\nJane,+15551234567,imessage,3,2026-01-01\n", encoding="utf-8")
+            ledger_path = tmp / "ledger.json"
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {"include_existing_artifacts": False, "messages_contacts_csv": str(contacts)},
+                "steps": {},
+                "artifacts": {},
+            }
+            seen_cmds = []
+            def fake_run_cmd(cmd, timeout=None):
+                seen_cmds.append(cmd)
+                return 0, {"people_csv": str(tmp / "merged.csv"), "network_contacts_csv": "contacts.csv", "network_contact_sources_csv": "sources.csv", "network_companies_csv": "companies.csv", "manifest": "manifest.json", "merged_rows": 1}, ""
+            with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                self.assertTrue(import_network_pipeline.run_merge(ledger_path, ledger))
+            input_values = [cmd[i + 1] for cmd in seen_cmds for i, part in enumerate(cmd) if part == "--input"]
+            self.assertEqual(len(input_values), 1)
+            self.assertTrue(input_values[0].endswith("source-inputs/messages/contacts.csv"))
+            self.assertTrue(Path(input_values[0]).exists())
+
+    def test_multi_gmail_resolution_and_enrichment_iterates_all_accounts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ledger_path = tmp / "ledger.json"
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {"gmail_linkedin_provider": "harness"},
+                "steps": {},
+                "artifacts": {
+                    "gmail_linkedin_resolution_queue_csvs": [
+                        {"account_email": "me@example.com", "queue_csv": str(tmp / "queue-me.csv"), "people_csv": str(tmp / "people-me.csv")},
+                        {"account_email": "work@example.com", "queue_csv": str(tmp / "queue-work.csv"), "people_csv": str(tmp / "people-work.csv")},
+                    ]
+                },
+            }
+            calls = []
+            def fake_run_cmd(cmd, timeout=None):
+                calls.append(cmd)
+                if any("resolve_linkedin_queue.py" in part for part in cmd):
+                    queue = Path(cmd[cmd.index("--input") + 1]).stem
+                    return 0, {"output": str(tmp / f"resolutions-{queue}.csv")}, ""
+                if any("gmail_network_import.py" in part for part in cmd):
+                    run_id = cmd[cmd.index("--run-id") + 1]
+                    return 0, {"people_csv": str(tmp / f"resolved-{run_id}.csv"), "resolved": 1}, ""
+                if any("enrich_people.py" in part for part in cmd):
+                    run_id = cmd[cmd.index("--run-id") + 1]
+                    return 0, {"artifacts": {"people_csv": str(tmp / f"enriched-{run_id}.csv")}}, ""
+                self.fail(f"unexpected command: {cmd}")
+            with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                self.assertTrue(import_network_pipeline.run_gmail_linkedin_resolution(ledger_path, ledger))
+                self.assertTrue(import_network_pipeline.run_gmail_apply_and_enrich(ledger_path, ledger))
+                self.assertTrue(import_network_pipeline.run_gmail_linkedin_resolution(ledger_path, ledger))
+                self.assertTrue(import_network_pipeline.run_gmail_apply_and_enrich(ledger_path, ledger))
+            self.assertEqual(len(ledger["artifacts"]["gmail_linkedin_resolutions_csvs"]), 2)
+            self.assertEqual(len(ledger["artifacts"]["gmail_enrich_people_ledgers"]), 2)
+            self.assertEqual(len(ledger["artifacts"]["gmail_final_people_csvs"]), 2)
+            self.assertEqual(sum(1 for cmd in calls if any("resolve_linkedin_queue.py" in part for part in cmd)), 2)
+            self.assertEqual(sum(1 for cmd in calls if any("gmail_network_import.py" in part for part in cmd)), 2)
+            self.assertEqual(sum(1 for cmd in calls if any("enrich_people.py" in part for part in cmd)), 2)
+
+    def test_explicit_gmail_resolutions_csv_rejects_multiple_gmail_people_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {"gmail_resolutions_csv": str(tmp / "resolutions.csv")},
+                "steps": {},
+                "artifacts": {"gmail_people_csvs": [str(tmp / "gmail-a.csv"), str(tmp / "gmail-b.csv")], "gmail_people_csv": str(tmp / "gmail-b.csv")},
+            }
+            with mock.patch.object(import_network_pipeline, "run_cmd") as run_cmd:
+                self.assertFalse(import_network_pipeline.run_gmail_apply_and_enrich(tmp / "ledger.json", ledger))
+            run_cmd.assert_not_called()
+            self.assertEqual(ledger["status"], "failed")
+            self.assertIn("ambiguous", ledger["steps"]["gmail_apply_enrich"]["error"])
         self.assertEqual(
             import_network_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="", gmail_account_email="")),
             "",

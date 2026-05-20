@@ -5,7 +5,10 @@ description: Walk a user through linking/exporting all local network ingestion s
 
 # Ingestion Onboarding
 
-Use the onboarding primitive for status/plan checks:
+Use the onboarding primitive for status/plan checks. Current onboarding is
+**link-only**: record source links in `.powerpacks/ingestion/accounts.json` and
+do not run Gmail/LinkedIn network imports, `import_network_pipeline`, Twitter
+crawls, messages import/research, or enrichment until the completed handoff.
 
 Start/resume the conversational setup flow:
 
@@ -65,9 +68,9 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
 ```
 
 Gmail is msgvault-backed. The Gmail step should be dead simple for the user:
-ask which discovered accounts to import and what other Gmail addresses they want
+ask which discovered accounts to link and what other Gmail addresses they want
 to add. Multiple discovered source accounts are supported by repeating
-`--gmail-account`; `--gmail-all` imports every discovered source account;
+`--gmail-account`; `--gmail-all` records every discovered source account;
 `--gmail-add-email` starts the add-account flow for new addresses;
 `--skip-source gmail` records an explicit skip.
 
@@ -81,10 +84,10 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
 If `step` returns `status: needs_agent_action` with `commands`, Codex must run
 the returned commands in order. Do not tell the user to run them. For extra
 Gmail addresses this means Codex runs the Google OAuth test-user browser
-automation, authorizes each Gmail account in msgvault, starts per-account
-msgvault sync in the background, and reruns onboarding after a local checkpoint
-exists. Large mailboxes can take a few hours to fully sync; tell the user the
-current synced message count and log path instead of blocking the main thread.
+automation and authorizes each Gmail account in msgvault as user-action/linking.
+The returned commands route through `msgvault_setup.py add-test-users`,
+`add-account`, or `browser-setup --add-account`; they are not network imports.
+Rerun onboarding after msgvault has source accounts to select.
 Only ask the user to complete browser login/consent when Google requires human
 action.
 
@@ -96,12 +99,17 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
   --linkedin-source-user <label>
 ```
 
-If `blocked_approval` is returned for LinkedIn provider enrichment, ask the
-operator before running the emitted `approval_command`, then rerun `step` until
-`.powerpacks/ingestion/accounts.json` shows `linkedin_csv.linked: true`.
-Other missing sources can be marked done with `--skip-source <messages|gmail|linkedin_csv|twitter>`.
+The LinkedIn step only records `--linkedin-csv` and `--linkedin-source-user`; it
+does not run provider enrichment/import. Messages and Twitter are also
+link-only: use `--messages-contacts-csv <path>` and optional `--twitter-handle
+<handle>`, or skip sources with `--skip-source <messages|gmail|linkedin_csv|twitter>`.
 
-It tracks non-secret state in `.powerpacks/ingestion/accounts.json`.
+It tracks non-secret v2 state in `.powerpacks/ingestion/accounts.json`:
+`gmail.msgvault_db/account_emails/oauth_app/oauth_test_users/available_accounts/selected_accounts`,
+`linkedin_csv.csv_path/source_label`, `twitter.handle`, and
+`messages.contacts_csv`, while preserving v1 `usernames`/`artifacts` mirrors.
+When `step` returns completed, use the emitted handoff; its import phase calls
+`import_network_pipeline.py run --from-accounts ...` after user confirmation.
 
 Never store tokens/passwords/cookies there. Only store usernames, linked status,
 artifact paths, and notes.

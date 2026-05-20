@@ -174,6 +174,9 @@ Routes:
 - `$build-local-search-index`, local indexing, build local search index,
   prepare `.powerpacks/search-index` artifacts →
   `packs/indexing/skills/build-local-search-index/SKILL.md`
+- `$setup`, one-time setup, operator bootstrap restore, end-to-end local
+  ingestion setup, account/source linking plus import/index orchestration →
+  `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
 - `$powerset`, Powerset login/status/whoami/sets/MCP/env credentials →

@@ -22,17 +22,28 @@ approval gate. Do not ask again for routine local metadata import work.
 ## Inputs
 
 - `--linkedin-csv <Connections.csv>` and `--linkedin-source-user <label>` for LinkedIn.
-- `--gmail-account-email <email>` and optional `--msgvault-db <path>` for email/msgvault.
+- `--gmail-account-email <email>` / repeated `--gmail-account-emails <email>` and optional `--msgvault-db <path>` for email/msgvault.
+- `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` to consume link-only state from `$setup` / `$onboard`.
 - `--include-existing-artifacts` to include already-generated messages and Twitter people artifacts.
 
 ## Command
 
 ```bash
 uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run \
-  --linkedin-csv <Connections.csv> \
-  --linkedin-source-user <label> \
-  --gmail-account-email <email>
+  --from-accounts .powerpacks/ingestion/accounts.json
 ```
+
+`run --dry-run --from-accounts ...` reports source worker jobs with
+`parallelizable: true/false`. LinkedIn, Gmail/msgvault accounts, approved
+Twitter imports, and existing messages/iMessage/WhatsApp artifacts have no
+cross-source dependency, so `$setup` may dispatch them in parallel sub-agents.
+The fan-in merge and network DuckDB phases must wait for all selected source
+workers to complete or block on an approval gate.
+
+For manual worker fan-out, run source workers with `--only-source` and isolated
+ledgers/run ids, then run the normal command (or `--fan-in-only`) for merge and
+DuckDB after all source workers finish. Do not approve RapidAPI/Parallel/OpenAI
+gates inside workers; return those gates to the main thread.
 
 ## Bootstrap Prior Checkpoints
 

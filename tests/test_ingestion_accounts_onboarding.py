@@ -132,7 +132,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(registry["accounts"]["gmail"]["artifacts"], [])
             self.assertNotIn("gmail", [item["channel"] for item in payload["steps"] if item["linked"]])
 
-    def test_check_detects_default_msgvault_gmail_artifact(self):
+    def test_check_does_not_link_default_msgvault_gmail_import_artifact(self):
         old_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
             os.chdir(tmp)
@@ -144,9 +144,9 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
                 os.chdir(old_cwd)
             self.assertEqual(code, 0)
             registry = accounts.load_registry(path)
-            self.assertTrue(registry["accounts"]["gmail"]["linked"])
-            self.assertEqual(registry["accounts"]["gmail"]["usernames"], ["me@gmail.com"])
-            self.assertEqual(registry["accounts"]["gmail"]["artifacts"], [".powerpacks/network-import/gmail/msgvault-realrun/people.csv"])
+            self.assertFalse(registry["accounts"]["gmail"]["linked"])
+            self.assertEqual(registry["accounts"]["gmail"]["usernames"], [])
+            self.assertEqual(registry["accounts"]["gmail"]["artifacts"], [])
 
     def test_onboarding_step_prompts_for_linkedin_csv(self):
         old_cwd = Path.cwd()
@@ -164,7 +164,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["channel"], "linkedin_csv")
             self.assertIn("--linkedin-csv", payload["next_command"])
 
-    def test_onboarding_step_detects_linkedin_artifact(self):
+    def test_onboarding_step_ignores_linkedin_import_artifact(self):
         old_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
             os.chdir(tmp)
@@ -180,8 +180,9 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
                 os.chdir(old_cwd)
             self.assertEqual(code, 20)
             registry = accounts.load_registry(path)
-            self.assertTrue(registry["accounts"]["linkedin_csv"]["linked"])
-            self.assertEqual(payload["status"], "next_action")
+            self.assertFalse(registry["accounts"]["linkedin_csv"]["linked"])
+            self.assertEqual(payload["status"], "needs_input")
+            self.assertEqual(payload["channel"], "linkedin_csv")
 
     def test_onboarding_step_discovers_gmail_msgvault_accounts(self):
         old_cwd = Path.cwd()
@@ -273,7 +274,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(commands[1]["label"], "start_msgvault_sync_other@example.com")
             self.assertEqual(commands[2]["label"], "rerun_onboarding")
 
-    def test_onboarding_step_imports_multiple_gmail_accounts(self):
+    def test_onboarding_step_records_multiple_gmail_accounts_without_import(self):
         old_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
             os.chdir(tmp)
@@ -290,10 +291,16 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "progressed")
             self.assertEqual(payload["channel"], "gmail")
-            self.assertEqual([row["account_email"] for row in payload["imported_accounts"]], ["me@gmail.com", "work@example.com"])
+            self.assertEqual(payload["linked_accounts"], ["me@gmail.com", "work@example.com"])
+            self.assertNotIn("imported_accounts", payload)
             registry = accounts.load_registry(path)
             self.assertTrue(registry["accounts"]["gmail"]["linked"])
             self.assertEqual(registry["accounts"]["gmail"]["usernames"], ["me@gmail.com", "work@example.com"])
+            self.assertEqual(registry["accounts"]["gmail"]["artifacts"], [])
+            self.assertEqual(registry["accounts"]["gmail"]["config"]["selected_accounts"], ["me@gmail.com", "work@example.com"])
+            self.assertFalse(Path(tmp, "out").exists())
+            self.assertFalse(Path(tmp, ".powerpacks/network-import/import-network-run.json").exists())
+            self.assertFalse(Path(tmp, ".powerpacks/network-import/linkedin/import-run.json").exists())
 
     def test_onboarding_completed_emits_subagent_handoff(self):
         old_cwd = Path.cwd()
@@ -314,7 +321,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(handoff["codex_orchestration"]["main_thread"], "Handle account linking, browser/login actions, user confirmations, and worker handoffs.")
             phases = handoff["worker_phases"]
             self.assertEqual([phase["name"] for phase in phases], ["import-network", "build-local-search-index"])
-            self.assertIn("--include-existing-artifacts", phases[0]["run_command"])
+            self.assertIn("--from-accounts", phases[0]["run_command"])
             self.assertIn("--run-id network-onboarding", phases[0]["run_command"])
             self.assertEqual(phases[0]["expected_output"], ".powerpacks/network-import/network-runs/network-onboarding/merged/people.csv")
             self.assertIn("build_processing_pipeline.py run", phases[1]["run_command"])

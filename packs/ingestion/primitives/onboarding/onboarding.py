@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -106,86 +107,12 @@ def set_channel_from_artifacts(
     return registry
 
 
-def msgvault_gmail_run(run_dir: Path) -> tuple[bool, list[str], str]:
-    """Return whether run_dir is an active Gmail msgvault import for onboarding.
-
-    Auto-detection is intentionally narrower than "any Gmail artifact": the
-    onboarding step imports Gmail with the default `msgvault-*` run id. Test,
-    smoke, and harness runs may have valid-looking manifests but should not
-    mark a user's Gmail onboarding as complete.
-    """
-
-    if not run_dir.is_dir() or not run_dir.name.startswith("msgvault-"):
-        return False, [], ""
-    manifest = json_object(run_dir / "manifest.json")
-    if (
-        manifest.get("status") != "completed"
-        or manifest.get("source") != "msgvault"
-        or manifest.get("task") != "import_gmail_network_msgvault"
-    ):
-        return False, [], ""
-    artifact = run_dir / "people.csv"
-    artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
-    if artifacts.get("people_csv"):
-        artifact = Path(str(artifacts["people_csv"]))
-        if not artifact.is_absolute() and not artifact.exists():
-            artifact = run_dir / artifact
-    if not artifact.exists():
-        return False, [], ""
-
-    emails: list[str] = []
-    for row in csv_rows(run_dir / "accounts.csv"):
-        email = (row.get("account_email") or "").strip().lower()
-        source = (row.get("source") or "").strip().lower()
-        if email and source == "msgvault":
-            emails.append(email)
-    if not emails:
-        return False, [], ""
-    return True, list(dict.fromkeys(emails)), str(artifact)
-
-
 def refresh_registry(path: Path) -> tuple[dict[str, Any], list[str]]:
     registry = load_registry(path)
-    updates: list[str] = []
-
-    # Gmail: infer linked state from local msgvault import artifacts.
-    gmail_usernames: list[str] = []
-    gmail_artifacts: list[str] = []
-    gmail_root = Path(".powerpacks/network-import/gmail")
-    if gmail_root.exists():
-        for run_dir in sorted(gmail_root.iterdir()):
-            ok, account_emails, artifact = msgvault_gmail_run(run_dir)
-            if not ok:
-                continue
-            gmail_usernames.extend(account_emails)
-            gmail_artifacts.append(artifact)
-            updates.append(f"gmail:{artifact}")
-            updates.extend(f"gmail:{email}" for email in account_emails)
-    gmail_record = registry.get("accounts", {}).get("gmail", {})
-    if gmail_artifacts:
-        registry = set_channel_from_artifacts("gmail", path=path, linked=True, usernames=gmail_usernames, artifacts=gmail_artifacts)
-    elif not gmail_record.get("skipped", False):
-        registry = set_channel_from_artifacts("gmail", path=path, linked=False)
-
-    # Messages: mark linked if local contacts artifact exists.
-    if artifact_exists(".powerpacks/messages/contacts.csv"):
-        update_channel("messages", path=path, success=True, artifact=".powerpacks/messages/contacts.csv")
-        updates.append("messages:contacts.csv")
-
-    # LinkedIn CSV / Twitter: infer from local import artifacts. Prefer canonical
-    # people.csv, but accept the older people_harmonic_all.csv alias.
-    for source, channel in [("linkedin", "linkedin_csv"), ("twitter", "twitter")]:
-        seen_dirs: set[Path] = set()
-        for pattern in ["*/people.csv", "*/people_harmonic_all.csv"]:
-            for p in Path(f".powerpacks/network-import/{source}").glob(pattern):
-                if p.parent in seen_dirs:
-                    continue
-                seen_dirs.add(p.parent)
-                update_channel(channel, path=path, success=True, artifact=str(p))
-                updates.append(f"{channel}:{p}")
-
-    registry = load_registry(path)
-    return registry, updates
+    # Task 2 onboarding is link-only. Do not infer linked state from child import
+    # artifacts or continue child ledgers here; only explicit source-link config
+    # written by this command/account_registry counts.
+    return registry, []
 
 
 def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -196,32 +123,32 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "linked": acct.get("gmail", {}).get("linked", False),
             "skipped": acct.get("gmail", {}).get("skipped", False),
             "what_it_needs": "Local msgvault SQLite archive with Gmail metadata, usually ~/.msgvault/msgvault.db.",
-            "next_action": "Run msgvault sync, then choose one or more Gmail source accounts to import.",
-            "command": "uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault-accounts --db ~/.msgvault/msgvault.db",
+            "next_action": "Link local msgvault.db and choose one or more Gmail source accounts. No Gmail network import runs during onboarding.",
+            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step --gmail-db ~/.msgvault/msgvault.db",
         },
         "linkedin_csv": {
             "channel": "linkedin_csv",
             "linked": acct.get("linkedin_csv", {}).get("linked", False),
             "skipped": acct.get("linkedin_csv", {}).get("skipped", False),
             "what_it_needs": "LinkedIn Connections.csv export from LinkedIn settings.",
-            "next_action": "Export Connections.csv, then run linkedin_network_import run --csv <path> --source-user <label>.",
-            "command": "uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run --csv <Connections.csv> --source-user <label>",
+            "next_action": "Export Connections.csv, then record it with onboarding --linkedin-csv <path> --linkedin-source-user <label>.",
+            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step --linkedin-csv <Connections.csv> --linkedin-source-user <label>",
         },
         "messages": {
             "channel": "messages",
             "linked": acct.get("messages", {}).get("linked", False),
             "skipped": acct.get("messages", {}).get("skipped", False),
-            "what_it_needs": "Full Disk Access for iMessage and/or wacli for WhatsApp, then messages import.",
-            "next_action": "Run the import-contacts workflow if you want message/contact metadata.",
-            "command": "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py status",
+            "what_it_needs": "Existing messages contacts CSV path, if you want message/contact metadata included later.",
+            "next_action": "Record an existing contacts CSV with onboarding --messages-contacts-csv <path>, or skip.",
+            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step --messages-contacts-csv <contacts.csv>",
         },
         "twitter": {
             "channel": "twitter",
             "linked": acct.get("twitter", {}).get("linked", False),
             "skipped": acct.get("twitter", {}).get("skipped", False),
-            "what_it_needs": "Operator Twitter/X handle plus RapidAPI key for crawl.",
-            "next_action": "Record handle with account_registry mark, then run twitter_network_import when ready.",
-            "command": "uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run --handle <handle>",
+            "what_it_needs": "Operator Twitter/X handle.",
+            "next_action": "Record handle with onboarding --twitter-handle <handle>. No crawl runs during onboarding.",
+            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step --twitter-handle <handle>",
         },
     }
     return [steps_by_channel[channel] for channel in ONBOARDING_SOURCE_ORDER]
@@ -278,6 +205,10 @@ def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = Fa
             cmd.extend(["--linkedin-csv", args.linkedin_csv])
         if args.linkedin_source_user:
             cmd.extend(["--linkedin-source-user", args.linkedin_source_user])
+        if getattr(args, "messages_contacts_csv", ""):
+            cmd.extend(["--messages-contacts-csv", args.messages_contacts_csv])
+        if getattr(args, "twitter_handle", ""):
+            cmd.extend(["--twitter-handle", args.twitter_handle])
     return shell_join(cmd)
 
 
@@ -285,10 +216,10 @@ def import_network_command(args: argparse.Namespace, *, dry_run: bool = False) -
     cmd = [
         "uv", "run", "--project", ".", "python",
         "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "run",
+        "--from-accounts", args.accounts,
         "--ledger", ONBOARDING_IMPORT_LEDGER,
         "--run-id", ONBOARDING_IMPORT_RUN_ID,
         "--operator-id", args.operator_id,
-        "--include-existing-artifacts",
     ]
     if dry_run:
         cmd.append("--dry-run")
@@ -392,7 +323,7 @@ def onboarding_handoff(args: argparse.Namespace, registry: dict[str, Any]) -> di
                 "approve_command": import_network_approve_command(),
                 "expected_output": onboarding_merged_people_csv(),
                 "instructions": (
-                    "Run dry-run first. Then run import-network with existing linked artifacts. "
+                    "Run dry-run first. Then run import-network from the account registry. "
                     "If a child primitive blocks on paid enrichment, return the approval gate to the main thread."
                 ),
             },
@@ -413,10 +344,6 @@ def onboarding_handoff(args: argparse.Namespace, registry: dict[str, Any]) -> di
             },
         ],
     }
-
-
-def gmail_import_py() -> str:
-    return "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
 
 
 def msgvault_setup_py() -> str:
@@ -447,40 +374,33 @@ def msgvault_home_args(args: argparse.Namespace) -> list[str]:
     return ["--home", str(home)] if home != default_home else []
 
 
-def linkedin_import_py() -> str:
-    return "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py"
-
-
 def discover_msgvault_accounts(args: argparse.Namespace) -> tuple[int, dict[str, Any] | None, str]:
-    cmd = [sys.executable, gmail_import_py(), "msgvault-accounts", "--db", args.gmail_db]
-    return run_command(cmd, timeout=args.import_timeout)
-
-
-def run_gmail_msgvault_import(args: argparse.Namespace, account_email: str) -> tuple[int, dict[str, Any] | None, str]:
-    cmd = [
-        sys.executable,
-        gmail_import_py(),
-        "msgvault",
-        "--db", args.gmail_db,
-        "--account-email", account_email,
-        "--operator-id", args.operator_id,
-        "--output-dir", args.gmail_output_dir,
-    ]
-    return run_command(cmd, timeout=args.import_timeout)
+    db = Path(args.gmail_db).expanduser()
+    try:
+        with sqlite3.connect(db) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                """
+                SELECT identifier AS account_email, display_name, COUNT(messages.id) AS message_count
+                FROM sources
+                LEFT JOIN messages ON messages.source_id = sources.id
+                WHERE lower(source_type) = 'gmail' AND identifier IS NOT NULL AND identifier != ''
+                GROUP BY sources.id, identifier, display_name
+                ORDER BY identifier
+                """
+            ).fetchall()
+    except Exception as exc:
+        return 1, None, str(exc)
+    accounts = []
+    for row in rows:
+        email = str(row["account_email"]).strip().lower()
+        if email:
+            accounts.append({"account_email": email, "display_name": row["display_name"] or "", "message_count": row["message_count"] or 0})
+    return 0, {"status": "ok", "db": str(db), "accounts": accounts}, ""
 
 
 def run_gmail_accounts_command(args: argparse.Namespace) -> str:
-    return shell_join(["uv", "run", "--project", ".", "python", gmail_import_py(), "msgvault-accounts", "--db", args.gmail_db])
-
-
-def run_gmail_import_command(args: argparse.Namespace, account_email: str) -> str:
-    return shell_join([
-        "uv", "run", "--project", ".", "python", gmail_import_py(), "msgvault",
-        "--db", args.gmail_db,
-        "--account-email", account_email,
-        "--operator-id", args.operator_id,
-        "--output-dir", args.gmail_output_dir,
-    ])
+    return onboarding_step_command(args)
 
 
 def normalize_email(value: str) -> str:
@@ -488,6 +408,23 @@ def normalize_email(value: str) -> str:
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         raise ValueError(f"invalid email: {value}")
     return email
+
+
+def save_link_config(channel: str, path: Path, *, config: dict[str, Any], usernames: list[str] | None = None, artifacts: list[str] | None = None, notes: str = "") -> dict[str, Any]:
+    registry = load_registry(path)
+    rec = registry["accounts"][channel]
+    rec.setdefault("config", {}).update(config)
+    if usernames is not None:
+        rec["usernames"] = list(dict.fromkeys([u for u in usernames if u]))
+    if artifacts is not None:
+        rec["artifacts"] = list(dict.fromkeys([a for a in artifacts if a]))
+    rec["linked"] = True
+    rec["skipped"] = False
+    rec["notes"] = notes
+    rec["last_checked_at"] = now_iso()
+    rec["last_success_at"] = rec["last_checked_at"]
+    save_registry(registry, path)
+    return registry
 
 
 def email_slug(email: str) -> str:
@@ -602,31 +539,6 @@ def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> lis
     return commands
 
 
-def run_linkedin_import(args: argparse.Namespace, mode: str) -> tuple[int, dict[str, Any] | None, str]:
-    cmd = [sys.executable, linkedin_import_py(), mode, "--ledger", args.linkedin_ledger]
-    if mode == "run":
-        cmd = [
-            sys.executable,
-            linkedin_import_py(),
-            "run",
-            "--csv", str(Path(args.linkedin_csv).expanduser()),
-            "--source-user", args.linkedin_source_user,
-            "--operator-id", args.operator_id,
-            "--ledger", args.linkedin_ledger,
-        ]
-    return run_command(cmd, timeout=args.import_timeout)
-
-
-def import_continue_command(args: argparse.Namespace) -> str:
-    return shell_join([
-        "uv", "run", "--project", ".", "python", linkedin_import_py(),
-        "approve", "--ledger", args.linkedin_ledger,
-    ]) + " && " + shell_join([
-        "uv", "run", "--project", ".", "python", linkedin_import_py(),
-        "continue", "--ledger", args.linkedin_ledger,
-    ])
-
-
 def cmd_step(args: argparse.Namespace) -> int:
     """Idempotent one-step onboarding loop for CLI/harness use.
 
@@ -675,15 +587,26 @@ def cmd_step(args: argparse.Namespace) -> int:
             })
             return 20
         if extra_emails:
+            gmail_cfg = gmail_record.get("config", {}) if isinstance(gmail_record.get("config"), dict) else {}
+            registry = load_registry(path)
+            rec = registry["accounts"]["gmail"]
+            rec.setdefault("config", {})["msgvault_db"] = str(Path(args.gmail_db).expanduser())
+            rec["config"]["account_emails"] = list(dict.fromkeys([*(gmail_cfg.get("account_emails") or []), *extra_emails]))
+            rec["config"]["oauth_test_users"] = list(dict.fromkeys([*(gmail_cfg.get("oauth_test_users") or []), *extra_emails]))
+            rec["last_checked_at"] = now_iso()
+            rec["notes"] = "Gmail account linking requested; run user-action setup commands. No Gmail network import was run."
+            save_registry(registry, path)
             emit({
                 "status": "needs_agent_action",
                 "channel": "gmail",
-                "message": "Adding these Gmail accounts requires browser automation and msgvault authorization. Codex should run the commands in order, start Gmail sync in the background, and only ask the user to complete browser login or consent if Google asks. Large mailboxes can take a few hours; onboarding can import from the latest local checkpoint and rerun later.",
+                "message": "Adding these Gmail accounts requires browser automation and msgvault authorization. These are user-action/linking commands only; no Gmail network import is run during onboarding.",
+                "action_type": "user-action/linking",
                 "emails": extra_emails,
                 "commands": gmail_add_email_commands(args, extra_emails),
                 "repeat_command_after_sync": onboarding_step_command(args),
                 "accounts_path": args.accounts,
                 "updates": updates,
+                "registry": registry,
             })
             return 20
 
@@ -734,7 +657,7 @@ def cmd_step(args: argparse.Namespace) -> int:
             emit({
                 "status": "needs_input",
                 "channel": "gmail",
-                "prompt": "Confirm discovered Gmail accounts to import with --gmail-account <email> or --gmail-all. Message counts are local sync checkpoints; large mailboxes can keep syncing in the background for a few hours. Tell me any other Gmail addresses you want to add; use --gmail-add-email <email> so onboarding can add OAuth test users, authorize them, and start background sync.",
+                "prompt": "Confirm discovered Gmail accounts to link with --gmail-account <email> or --gmail-all. Message counts are local sync checkpoints; large mailboxes can keep syncing in the background for a few hours. Tell me any other Gmail addresses you want to add; use --gmail-add-email <email> so onboarding can add OAuth test users and authorize them as user-action/linking.",
                 "discovered_accounts": discovered.get("accounts", []),
                 "add_commands": [onboarding_step_command(args) + f" --gmail-account {shlex.quote(email)}" for email in discovered_accounts],
                 "all_command": onboarding_step_command(args) + " --gmail-all",
@@ -757,34 +680,28 @@ def cmd_step(args: argparse.Namespace) -> int:
             })
             return 20
 
-        imported: list[dict[str, Any]] = []
-        for email in selected:
-            code, payload, stderr = run_gmail_msgvault_import(args, email)
-            if code != 0 or not payload:
-                emit({
-                    "status": "failed",
-                    "channel": "gmail",
-                    "account_email": email,
-                    "stderr": stderr,
-                    "import": payload,
-                    "repeat_command": onboarding_step_command(args),
-                })
-                return code or 1
-            artifacts = payload.get("artifacts", {}) if isinstance(payload, dict) else {}
-            artifact = artifacts.get("people_csv") or artifacts.get("manifest_json") or payload.get("run_dir", "")
-            registry = update_channel("gmail", path=path, username=email, artifact=artifact, success=True, notes="Imported from local msgvault metadata")
-            imported.append({
-                "account_email": email,
-                "run_dir": payload.get("run_dir"),
-                "counts": payload.get("counts"),
-                "artifact": artifact,
-                "command": run_gmail_import_command(args, email),
-            })
+        available = [row.get("account_email", "") for row in discovered.get("accounts", []) if row.get("account_email")]
+        existing = accounts.get("gmail", {}).get("config", {})
+        account_emails = list(dict.fromkeys([*(existing.get("account_emails") or []), *available, *selected]))
+        registry = save_link_config(
+            "gmail",
+            path,
+            config={
+                "msgvault_db": str(db_path),
+                "account_emails": account_emails,
+                "available_accounts": available,
+                "selected_accounts": selected,
+            },
+            usernames=selected,
+            artifacts=[],
+            notes="Linked local msgvault Gmail source accounts; no network import run during onboarding.",
+        )
         emit({
             "status": "progressed",
             "channel": "gmail",
-            "message": "Imported selected Gmail msgvault account metadata and updated accounts.json.",
-            "imported_accounts": imported,
+            "message": "Recorded selected Gmail msgvault source accounts in accounts.json. No Gmail network import was run.",
+            "linked_accounts": selected,
+            "discovered_accounts": discovered.get("accounts", []),
             "accounts_path": args.accounts,
             "registry": registry,
             "next_command": onboarding_step_command(args),
@@ -792,39 +709,6 @@ def cmd_step(args: argparse.Namespace) -> int:
         return 0
 
     if not accounts.get("linkedin_csv", {}).get("linked", False) and not accounts.get("linkedin_csv", {}).get("skipped", False):
-        ledger = read_json(Path(args.linkedin_ledger))
-        if ledger and ledger.get("status") not in {"completed", "failed"}:
-            code, payload, stderr = run_linkedin_import(args, "continue")
-            registry, more_updates = refresh_registry(path)
-            updates.extend(more_updates)
-            if registry.get("accounts", {}).get("linkedin_csv", {}).get("linked", False):
-                emit({
-                    "status": "progressed",
-                    "channel": "linkedin_csv",
-                    "message": "LinkedIn CSV import artifact detected and accounts.json is linked.",
-                    "accounts_path": args.accounts,
-                    "updates": updates,
-                    "registry": registry,
-                    "next_command": onboarding_step_command(args),
-                })
-                return 0
-            if payload and payload.get("status") == "blocked_approval":
-                emit({
-                    "status": "blocked_approval",
-                    "channel": "linkedin_csv",
-                    "message": payload.get("message"),
-                    "approval_type": payload.get("approval_type"),
-                    "approval_command": payload.get("continue_command") or import_continue_command(args),
-                    "repeat_command_after_approval": onboarding_step_command(args),
-                    "import": payload,
-                })
-                return 20
-            if code != 0:
-                emit({"status": "failed", "channel": "linkedin_csv", "import": payload, "stderr": stderr, "repeat_command": onboarding_step_command(args)})
-                return code
-            emit({"status": "waiting", "channel": "linkedin_csv", "import": payload, "updates": updates, "repeat_command": onboarding_step_command(args)})
-            return 20
-
         if not args.linkedin_csv:
             emit({
                 "status": "needs_input",
@@ -857,25 +741,59 @@ def cmd_step(args: argparse.Namespace) -> int:
             })
             return 20
 
-        code, payload, stderr = run_linkedin_import(args, "run")
-        registry, more_updates = refresh_registry(path)
-        updates.extend(more_updates)
-        if payload and payload.get("status") == "blocked_approval":
+        registry = save_link_config(
+            "linkedin_csv",
+            path,
+            config={"csv_path": str(csv_path), "source_label": args.linkedin_source_user},
+            usernames=[args.linkedin_source_user],
+            artifacts=[str(csv_path)],
+            notes="Linked LinkedIn Connections.csv export; no LinkedIn import run during onboarding.",
+        )
+        emit({
+            "status": "progressed",
+            "channel": "linkedin_csv",
+            "message": "Recorded LinkedIn CSV source link in accounts.json. No LinkedIn network import was run.",
+            "updates": updates,
+            "registry": registry,
+            "next_command": onboarding_step_command(args),
+        })
+        return 0
+
+    if not accounts.get("messages", {}).get("linked", False) and not accounts.get("messages", {}).get("skipped", False):
+        if not args.messages_contacts_csv:
             emit({
-                "status": "blocked_approval",
-                "channel": "linkedin_csv",
-                "message": payload.get("message"),
-                "approval_type": payload.get("approval_type"),
-                "approval_command": payload.get("continue_command") or import_continue_command(args),
-                "repeat_command_after_approval": onboarding_step_command(args),
-                "import": payload,
+                "status": "needs_input",
+                "channel": "messages",
+                "prompt": "Provide an existing contacts CSV with --messages-contacts-csv <path>, or skip messages. Onboarding will only record the source link.",
+                "next_command": onboarding_step_command(args) + " --messages-contacts-csv <contacts.csv>",
+                "skip_command": onboarding_step_command(args) + " --skip-source messages",
+                "accounts_path": args.accounts,
                 "updates": updates,
             })
             return 20
-        if code != 0:
-            emit({"status": "failed", "channel": "linkedin_csv", "import": payload, "stderr": stderr, "repeat_command": onboarding_step_command(args)})
-            return code
-        emit({"status": "progressed", "channel": "linkedin_csv", "import": payload, "updates": updates, "next_command": onboarding_step_command(args)})
+        contacts_csv = Path(args.messages_contacts_csv).expanduser()
+        if not contacts_csv.exists():
+            emit({"status": "waiting", "channel": "messages", "message": f"Waiting for contacts CSV at {contacts_csv}.", "repeat_command": onboarding_step_command(args)})
+            return 20
+        registry = save_link_config("messages", path, config={"contacts_csv": str(contacts_csv)}, artifacts=[str(contacts_csv)], notes="Linked messages contacts CSV; no messages import/research run during onboarding.")
+        emit({"status": "progressed", "channel": "messages", "message": "Recorded messages contacts CSV source link. No messages import/research was run.", "registry": registry, "next_command": onboarding_step_command(args)})
+        return 0
+
+    if not accounts.get("twitter", {}).get("linked", False) and not accounts.get("twitter", {}).get("skipped", False):
+        handle = (args.twitter_handle or "").strip().lstrip("@")
+        if not handle:
+            emit({
+                "status": "needs_input",
+                "channel": "twitter",
+                "prompt": "Provide your Twitter/X handle with --twitter-handle <handle>, or skip Twitter. Onboarding will only record the handle.",
+                "next_command": onboarding_step_command(args) + " --twitter-handle <handle>",
+                "skip_command": onboarding_step_command(args) + " --skip-source twitter",
+                "accounts_path": args.accounts,
+                "updates": updates,
+            })
+            return 20
+        registry = save_link_config("twitter", path, config={"handle": handle}, usernames=[handle], notes="Linked Twitter/X handle; no Twitter crawl run during onboarding.")
+        emit({"status": "progressed", "channel": "twitter", "message": "Recorded Twitter/X handle. No Twitter crawl was run.", "registry": registry, "next_command": onboarding_step_command(args)})
         return 0
 
     steps = build_steps(registry)
@@ -925,6 +843,8 @@ def build_parser() -> argparse.ArgumentParser:
     step.add_argument("--gmail-output-dir", default=str(DEFAULT_NETWORK_IMPORT_DIR))
     step.add_argument("--linkedin-csv", default="", help="Path to LinkedIn Connections.csv export when available")
     step.add_argument("--linkedin-source-user", default="", help="Non-secret label for the LinkedIn export owner/source")
+    step.add_argument("--messages-contacts-csv", default="", help="Path to an existing messages contacts CSV to link without importing")
+    step.add_argument("--twitter-handle", default="", help="Twitter/X handle to record without crawling")
     step.add_argument("--operator-id", default="local")
     step.add_argument("--linkedin-ledger", default=".powerpacks/network-import/linkedin/import-run.json")
     step.add_argument("--import-timeout", type=int, default=90)

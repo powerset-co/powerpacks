@@ -23,12 +23,32 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def empty_channel() -> dict[str, Any]:
+def empty_config(channel: str) -> dict[str, Any]:
+    if channel == "gmail":
+        return {
+            "msgvault_db": "",
+            "account_emails": [],
+            "oauth_app": "",
+            "oauth_test_users": [],
+            "available_accounts": [],
+            "selected_accounts": [],
+        }
+    if channel == "linkedin_csv":
+        return {"csv_path": "", "source_label": ""}
+    if channel == "twitter":
+        return {"handle": ""}
+    if channel == "messages":
+        return {"contacts_csv": ""}
+    return {}
+
+
+def empty_channel(channel: str = "") -> dict[str, Any]:
     return {
         "linked": False,
         "skipped": False,
         "usernames": [],
         "artifacts": [],
+        "config": empty_config(channel),
         "last_checked_at": "",
         "last_success_at": "",
         "notes": "",
@@ -37,9 +57,9 @@ def empty_channel() -> dict[str, Any]:
 
 def default_registry() -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "updated_at": now_iso(),
-        "accounts": {channel: empty_channel() for channel in CHANNELS},
+        "accounts": {channel: empty_channel(channel) for channel in CHANNELS},
     }
 
 
@@ -54,16 +74,40 @@ def load_registry(path: Path = DEFAULT_ACCOUNTS_PATH) -> dict[str, Any]:
         raise ValueError(f"{path} must be valid JSON")
     if not isinstance(data, dict):
         data = default_registry()
-    data.setdefault("version", 1)
+    data["version"] = max(int(data.get("version") or 1), 2)
     data.setdefault("updated_at", now_iso())
     accounts = data.setdefault("accounts", {})
     for channel in CHANNELS:
-        base = empty_channel()
+        base = empty_channel(channel)
         base.update(accounts.get(channel) or {})
+        cfg = empty_config(channel)
+        if isinstance(base.get("config"), dict):
+            cfg.update(base["config"])
+        base["config"] = cfg
         if not isinstance(base.get("usernames"), list):
             base["usernames"] = [str(base["usernames"])] if base.get("usernames") else []
         if not isinstance(base.get("artifacts"), list):
             base["artifacts"] = [str(base["artifacts"])] if base.get("artifacts") else []
+        # Preserve v1 mirrors while seeding v2 config for handoffs.
+        if channel == "gmail":
+            for key in ["account_emails", "oauth_test_users", "available_accounts", "selected_accounts"]:
+                if not isinstance(base["config"].get(key), list):
+                    base["config"][key] = [str(base["config"][key])] if base["config"].get(key) else []
+            if base["usernames"] and not base["config"].get("account_emails"):
+                base["config"]["account_emails"] = list(base["usernames"])
+            if base["usernames"] and not base["config"].get("selected_accounts"):
+                base["config"]["selected_accounts"] = list(base["usernames"])
+        elif channel == "linkedin_csv":
+            if base["artifacts"] and not base["config"].get("csv_path"):
+                base["config"]["csv_path"] = base["artifacts"][0]
+            if base["usernames"] and not base["config"].get("source_label"):
+                base["config"]["source_label"] = base["usernames"][0]
+        elif channel == "twitter":
+            if base["usernames"] and not base["config"].get("handle"):
+                base["config"]["handle"] = base["usernames"][0]
+        elif channel == "messages":
+            if base["artifacts"] and not base["config"].get("contacts_csv"):
+                base["config"]["contacts_csv"] = base["artifacts"][0]
         accounts[channel] = base
     return data
 
