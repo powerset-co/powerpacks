@@ -38,6 +38,14 @@ Commands:
   pipeline-eval-list [--bucket BUCKET] [--case-glob REGEX]
       List matching recall cases for pipeline-eval.
 
+  component
+      Run search-network component tests against local mocks/fixtures: mock
+      OpenAI-compatible chat/embeddings, local DuckDB TurboPuffer backend, and
+      JSON-backed Postgres fixture. No live credentials required.
+
+  mock-prepare
+      Backward-compatible alias for component.
+
 Environment:
   APP_DIR                           Defaults to /Users/arthur/workspace/aleph-mvp (primitive recall)
                                     or /Users/arthur/workspace/network-search-api (pipeline-eval).
@@ -115,6 +123,17 @@ case "$command" in
       --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
       --list \
       "$@"
+    ;;
+  component|mock-prepare)
+    py="${PYTHON:-}"
+    if [[ -z "$py" ]]; then
+      if [[ -x "$ROOT/.venv/bin/python" ]]; then
+        py="$ROOT/.venv/bin/python"
+      else
+        py="python"
+      fi
+    fi
+    "$py" -m unittest tests.test_search_network_mock_openai -v "$@"
     ;;
   extractor-eval)
     uv run --env-file "${ENV_FILE:-.env}" python "$SEARCH_EVALS/extractor_eval.py" \

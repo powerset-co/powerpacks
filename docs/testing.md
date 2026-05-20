@@ -70,6 +70,36 @@ Pipeline eval answers: can the parallel `expand_search_request` primitive
 produce the right payload before primitives run? This is the same expansion path
 used by `search_network_pipeline.py prepare`.
 
+### CI-safe component test
+
+Use this when you want to verify the harness-facing search-network happy path
+without any live credentials:
+
+```bash
+scripts/test-search-network component
+```
+
+This runs the real subprocess CLI path against local mocks/fixtures:
+
+- mock OpenAI-compatible Chat Completions for the 8 parallel extractor calls
+- mock OpenAI-compatible Embeddings for local vector ranking
+- local DuckDB search backend via `POWERPACKS_LOCAL_SEARCH_DB`, which exercises
+  TurboPuffer-like filters, BM25/vector ranking, `query`, and `multi_query`
+- JSON-backed Postgres fixture via `POWERPACKS_POSTGRES_FIXTURE_JSON`, covering
+  set/operator resolution, person hydration, and interaction counts
+
+It runs:
+
+```text
+search_network_pipeline.py prepare
+search_network_pipeline.py run --search-only --execute-approved
+```
+
+It validates preview generation, set resolution, retrieval, hydration, and
+CSV/JSONL/manifest persistence. It intentionally uses `--search-only`, so it
+does not validate real LLM filter/rerank behavior or production TurboPuffer /
+Postgres credentials. Use live `pipeline-eval` for that final integration tier.
+
 Dry-run selected recall cases:
 
 ```bash
@@ -120,6 +150,8 @@ For a small external test, require:
 - `scripts/test-search-network check` passes.
 - Representative primitive recall buckets pass or have documented known gaps.
 - `scripts/test-search-network company-dry-run` passes.
-- At least 5 headless extraction cases produce schema-valid JSON.
+- `scripts/test-search-network component` passes in CI or locally.
+- At least 5 live `pipeline-eval` cases produce schema-valid JSON when API
+  credentials are available.
 - For real searches, every run returns a task state path plus CSV/JSONL/manifest
   artifacts.
