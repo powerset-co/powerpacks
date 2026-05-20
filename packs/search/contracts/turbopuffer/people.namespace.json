@@ -5,6 +5,7 @@
   "namespace": "aleph_people_v1",
   "document_grain": "person_position",
   "id_semantics": "Document ids may be base person UUIDs or base person UUID plus a position suffix. Use base_id as the person id when present.",
+  "vector": {"dimension": 1536, "distance_metric": "cosine_distance"},
   "text_query_fields": [
     "position_title",
     "word_tokens",
@@ -29,6 +30,7 @@
     {"name": "company_id", "type": "string"},
     {"name": "is_current", "type": "boolean"},
     {"name": "total_years_experience", "type": "number"},
+    {"name": "tenure_years", "type": "number"},
     {"name": "start_date_epoch", "type": "integer", "notes": "Use with Lte for overlap windows."},
     {"name": "end_date_epoch", "type": "integer", "notes": "Use with Gte or Eq/null-current semantics for overlap windows."},
     {"name": "role_track", "type": "string"},

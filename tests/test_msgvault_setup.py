@@ -137,6 +137,12 @@ class MsgvaultSetupTests(unittest.TestCase):
         self.assertTrue(msgvault_setup.is_gcloud_reauth_error("Reauthentication failed. cannot prompt during non-interactive execution"))
         self.assertFalse(msgvault_setup.is_gcloud_reauth_error("permission denied"))
 
+    def test_normalize_email_list_validates_and_dedupes(self):
+        emails = msgvault_setup.normalize_email_list(["Me@Example.com, other@example.com", "me@example.com"])
+        self.assertEqual(emails, ["Me@Example.com", "other@example.com"])
+        with self.assertRaises(ValueError):
+            msgvault_setup.normalize_email_list(["not-an-email"])
+
     def test_ensure_gcloud_auth_reauths_stale_selected_account(self):
         calls = []
 
@@ -281,6 +287,38 @@ class MsgvaultSetupTests(unittest.TestCase):
                 ])
             self.assertEqual(code, 0)
             self.assertEqual(payload["account"]["status"], "ok")
+
+    def test_add_test_users_uses_saved_project_and_browser_flow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "msgvault"
+            msgvault_setup.save_setup_state(home, {"project_id": "local-msg-vault-test", "email": "admin@example.com"})
+            with mock.patch.object(msgvault_setup, "ensure_gcloud_auth", return_value={"status": "ok", "account": "admin@example.com"}), \
+                mock.patch.object(
+                    msgvault_setup,
+                    "run_browser_add_test_users",
+                    return_value={
+                        "status": "ok",
+                        "test_users": {
+                            "expected": ["test-user@example.com"],
+                            "added": ["test-user@example.com"],
+                            "present": ["test-user@example.com"],
+                            "missing": [],
+                        },
+                    },
+                ) as browser:
+                code, payload = self.invoke([
+                    "add-test-users",
+                    "--home",
+                    str(home),
+                    "--no-open-browser",
+                    "test-user@example.com",
+                ])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["project"], "local-msg-vault-test")
+            self.assertEqual(payload["test_users"], ["test-user@example.com"])
+            browser.assert_called_once()
+            self.assertEqual(msgvault_setup.load_setup_state(home)["test_users"], ["test-user@example.com"])
 
 
 if __name__ == "__main__":

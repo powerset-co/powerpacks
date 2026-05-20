@@ -4,17 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import gzip
 import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 from typing import Any
+
+from openai import AsyncOpenAI
 
 
 LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
@@ -66,8 +67,15 @@ Score each candidate for relevance."""
 
 
 DEFAULT_MODEL = os.getenv("POWERPACKS_LLM_FILTER_MODEL", "gpt-4.1-mini")
+DEFAULT_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com")
 DEFAULT_THRESHOLD = 0.3
 DEFAULT_BATCH_SIZE = 5
+DEFAULT_CONCURRENCY = int(
+    os.getenv(
+        "POWERPACKS_LLM_FILTER_CONCURRENCY",
+        os.getenv("SEARCH_V2_LLM_FILTER_MAX_CONCURRENT", "1000"),
+    )
+)
 
 
 def now_iso() -> str:
@@ -332,19 +340,26 @@ def response_schema() -> dict[str, Any]:
     }
 
 
-def call_openai(model: str, system_prompt: str, human_prompt: str) -> dict[str, Any]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is required unless --dry-run is used")
+def openai_base_url(api_base: str) -> str:
+    base = api_base.rstrip("/")
+    return base if base.endswith("/v1") else f"{base}/v1"
 
-    payload = {
-        "model": model,
-        "messages": [
+
+async def call_openai(
+    model: str,
+    system_prompt: str,
+    human_prompt: str,
+    *,
+    client: AsyncOpenAI,
+) -> dict[str, Any]:
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": human_prompt},
         ],
-        "temperature": 0,
-        "response_format": {
+        temperature=0,
+        response_format={
             "type": "json_schema",
             "json_schema": {
                 "name": "candidate_filter_scores",
@@ -352,24 +367,120 @@ def call_openai(model: str, system_prompt: str, human_prompt: str) -> dict[str, 
                 "schema": response_schema(),
             },
         },
-    }
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI request failed: HTTP {exc.code}: {body}") from exc
-    content = data["choices"][0]["message"]["content"]
+    content = response.choices[0].message.content or "{}"
     return json.loads(content)
+
+
+async def score_batch(
+    *,
+    batch_idx: int,
+    batch: list[str],
+    profiles: dict[str, dict[str, Any]],
+    compact_profiles: bool,
+    query: str,
+    traits: str,
+    args: argparse.Namespace,
+    client: AsyncOpenAI,
+    semaphore: asyncio.Semaphore,
+) -> tuple[int, dict[str, Any], dict[str, dict[str, Any]]]:
+    async with semaphore:
+        candidates_profiles = "\n\n".join(
+            profile_to_xml(profiles[pid], current_and_matched_only=compact_profiles)
+            for pid in batch
+        )
+        human_prompt = RESULT_FILTER_BATCH_HUMAN_PROMPT.format(
+            query=query,
+            traits_list=traits,
+            candidates_profiles=candidates_profiles,
+        )
+        prompt_row = {
+            "batch_index": batch_idx,
+            "candidate_ids": batch,
+            "prompt": human_prompt,
+        }
+        try:
+            parsed = await call_openai(
+                args.model,
+                RESULT_FILTER_BATCH_SYSTEM_PROMPT,
+                human_prompt,
+                client=client,
+            )
+        except Exception:
+            if args.on_error == "fail":
+                raise
+            parsed = {
+                "candidates": [
+                    {"id": pid, "score": 1.0, "reason": "Error during filtering"}
+                    for pid in batch
+                ]
+            }
+
+        batch_scores: dict[str, dict[str, Any]] = {}
+        for item in parsed.get("candidates", []) or []:
+            pid = str(item.get("id") or "")
+            if not pid:
+                continue
+            try:
+                score = float(item.get("score"))
+            except (TypeError, ValueError):
+                score = 1.0
+            batch_scores[pid] = {
+                "person_id": pid,
+                "score": max(0.0, min(1.0, score)),
+                "reason": str(item.get("reason") or "")[:240],
+            }
+        return batch_idx, prompt_row, batch_scores
+
+
+async def score_batches(
+    *,
+    batch_ids: list[list[str]],
+    profiles: dict[str, dict[str, Any]],
+    compact_profiles: bool,
+    query: str,
+    traits: str,
+    args: argparse.Namespace,
+    worker_count: int,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    if not args.api_key:
+        raise RuntimeError("OPENAI_API_KEY is required unless --dry-run is used")
+    client = AsyncOpenAI(api_key=args.api_key, base_url=openai_base_url(args.api_base), timeout=args.timeout)
+    semaphore = asyncio.Semaphore(worker_count)
+    tasks = [
+        asyncio.create_task(
+            score_batch(
+                batch_idx=batch_idx,
+                batch=batch,
+                profiles=profiles,
+                compact_profiles=compact_profiles,
+                query=query,
+                traits=traits,
+                args=args,
+                client=client,
+                semaphore=semaphore,
+            )
+        )
+        for batch_idx, batch in enumerate(batch_ids)
+    ]
+    prompt_rows: list[dict[str, Any]] = []
+    scores: dict[str, dict[str, Any]] = {}
+    completed = 0
+    total_batches = len(batch_ids)
+    progress_step = max(1, total_batches // 10) if total_batches else 1
+    try:
+        for future in asyncio.as_completed(tasks):
+            batch_idx, prompt_row, batch_scores = await future
+            prompt_rows.append(prompt_row)
+            scores.update(batch_scores)
+            completed += 1
+            if completed <= 5 or completed == total_batches or completed % progress_step == 0:
+                sys.stderr.write(f"filter: completed {completed}/{total_batches} batches\n")
+                sys.stderr.flush()
+    finally:
+        await client.close()
+    prompt_rows.sort(key=lambda row: row["batch_index"])
+    return prompt_rows, scores
 
 
 def record_step(state_path: Path, state: dict[str, Any], output: dict[str, Any], elapsed_ms: int) -> None:
@@ -429,53 +540,31 @@ def cmd_filter(args: argparse.Namespace) -> None:
             "batch_size": args.batch_size,
             "model": args.model,
             "threshold": args.threshold,
+            "concurrency": args.concurrency,
             "profile_scope": "current" if compact_profiles else "all",
             "would_write_state": args.write_state,
         }, indent=2, sort_keys=True))
         return
 
-    prompt_rows: list[dict[str, Any]] = []
-
-    scores: dict[str, dict[str, Any]] = {}
-    for batch_idx, batch in enumerate(batch_ids):
-        candidates_profiles = "\n\n".join(
-            profile_to_xml(profiles[pid], current_and_matched_only=compact_profiles)
-            for pid in batch
-        )
-        human_prompt = RESULT_FILTER_BATCH_HUMAN_PROMPT.format(
+    total_batches = len(batch_ids)
+    worker_count = max(1, min(args.concurrency, total_batches or 1))
+    sys.stderr.write(
+        f"filter: starting candidates={len(filter_ids)} batches={total_batches} "
+        f"batch_size={args.batch_size} concurrency={worker_count} model={args.model} "
+        f"profile_scope={'current' if compact_profiles else 'all'}\n"
+    )
+    sys.stderr.flush()
+    prompt_rows, scores = asyncio.run(
+        score_batches(
+            batch_ids=batch_ids,
+            profiles=profiles,
+            compact_profiles=compact_profiles,
             query=query,
-            traits_list=traits,
-            candidates_profiles=candidates_profiles,
+            traits=traits,
+            args=args,
+            worker_count=worker_count,
         )
-        prompt_rows.append({
-            "batch_index": batch_idx,
-            "candidate_ids": batch,
-            "prompt": human_prompt,
-        })
-        try:
-            parsed = call_openai(args.model, RESULT_FILTER_BATCH_SYSTEM_PROMPT, human_prompt)
-        except Exception:
-            if args.on_error == "fail":
-                raise
-            parsed = {
-                "candidates": [
-                    {"id": pid, "score": 1.0, "reason": "Error during filtering"}
-                    for pid in batch
-                ]
-            }
-        for item in parsed.get("candidates", []) or []:
-            pid = str(item.get("id") or "")
-            if not pid:
-                continue
-            try:
-                score = float(item.get("score"))
-            except (TypeError, ValueError):
-                score = 1.0
-            scores[pid] = {
-                "person_id": pid,
-                "score": max(0.0, min(1.0, score)),
-                "reason": str(item.get("reason") or "")[:240],
-            }
+    )
 
     # Missing model outputs pass through. The filter must be conservative.
     for pid in filter_ids:
@@ -504,6 +593,8 @@ def cmd_filter(args: argparse.Namespace) -> None:
         "model": args.model,
         "threshold": args.threshold,
         "batch_size": args.batch_size,
+        "concurrency": worker_count,
+        "batch_count": total_batches,
         "profile_scope": "current" if compact_profiles else "all",
         "candidate_count": len(ids),
         "hydrated_count": len(profiles),
@@ -527,8 +618,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Filter hydrated candidates with a conservative LLM pre-screen")
     parser.add_argument("--state", required=True)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--api-base", default=DEFAULT_API_BASE)
+    parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
+    parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--max-candidates", type=int)
     parser.add_argument("--traits")
     parser.add_argument("--write-state", action="store_true")

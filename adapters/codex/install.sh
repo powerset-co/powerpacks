@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 SKILLS_DIR="${1:-$CODEX_HOME/skills}"
+BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 mkdir -p "$SKILLS_DIR"
 rm -rf "$SKILLS_DIR/import-messages" \
@@ -12,22 +13,39 @@ rm -rf "$SKILLS_DIR/import-messages" \
   "$SKILLS_DIR/import-contacts-review"
 "$REPO_ROOT/bin/setup-python"
 
-copy_powerpacks_bundle() {
-  local dest="$1"
-  cp "$REPO_ROOT/pyproject.toml" "$dest/powerpacks/pyproject.toml"
+install_powerpacks_bundle() {
+  local tmp="$BUNDLE_DIR.tmp"
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  cp "$REPO_ROOT/pyproject.toml" "$tmp/pyproject.toml"
   if [[ -f "$REPO_ROOT/uv.lock" ]]; then
-    cp "$REPO_ROOT/uv.lock" "$dest/powerpacks/uv.lock"
+    cp "$REPO_ROOT/uv.lock" "$tmp/uv.lock"
   fi
   # Cross-pack docs + host-install templates (no top-level primitives/skills/
   # schemas anymore — every domain lives in packs/).
-  cp -R "$REPO_ROOT/docs" "$dest/powerpacks/docs"
-  cp -R "$REPO_ROOT/templates" "$dest/powerpacks/templates"
+  cp -R "$REPO_ROOT/docs" "$tmp/docs"
+  cp -R "$REPO_ROOT/templates" "$tmp/templates"
   # Domain packs (powerset, search, messages, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
-  cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
+  cp -R "$REPO_ROOT/packs" "$tmp/packs"
   # Keep only the top-level skill entrypoint; avoid nested skill duplication
   # from copied packs during discovery.
-  find "$dest/powerpacks/packs" -type f -path "*/SKILL.md" -delete
+  find "$tmp/packs" -type f -path "*/SKILL.md" -delete
+
+  cat > "$tmp/README.codex-install.md" <<EOF
+# Codex Powerpacks Bundle
+
+This shared directory is copied by:
+
+\`\`\`bash
+$REPO_ROOT/adapters/codex/install.sh
+\`\`\`
+
+Installed Powerpacks skills link their local \`powerpacks/\` directory here.
+EOF
+
+  rm -rf "$BUNDLE_DIR"
+  mv "$tmp" "$BUNDLE_DIR"
 }
 
 install_skill() {
@@ -35,28 +53,18 @@ install_skill() {
   local source_skill="$2"
   local dest="$SKILLS_DIR/$skill_name"
   rm -rf "$dest"
-  mkdir -p "$dest/powerpacks"
+  mkdir -p "$dest"
 
   cp -R "$source_skill" "$dest/SKILL.md"
-  copy_powerpacks_bundle "$dest"
-
-  cat > "$dest/powerpacks/README.codex-install.md" <<EOF
-# Codex Powerpacks Bundle
-
-This directory is copied by:
-
-\`\`\`bash
-$REPO_ROOT/adapters/codex/install.sh
-\`\`\`
-
-The installed \`$skill_name\` skill resolves \`powerpacks/...\` references
-relative to this skill directory.
-EOF
+  ln -s "$BUNDLE_DIR" "$dest/powerpacks"
 }
+
+install_powerpacks_bundle
 
 install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
+install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-local-search-index/SKILL.md"
 install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
@@ -66,6 +74,9 @@ install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-
 install_skill onboard "$REPO_ROOT/packs/ingestion/skills/onboard/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
+install_skill import-email "$REPO_ROOT/packs/ingestion/skills/import-email/SKILL.md"
+install_skill import-network "$REPO_ROOT/packs/ingestion/skills/import-network/SKILL.md"
+install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 if uv run --project "$REPO_ROOT" python "$REPO_ROOT/bin/agent-bootstrap"; then
@@ -74,5 +85,5 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-company search-contacts powerset powerset-login powerset-set sales-nav-search import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter"
 echo "restart Codex to pick up the skill list"

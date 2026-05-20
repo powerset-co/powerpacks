@@ -2,47 +2,71 @@
 
 Resumable local Gmail network-import orchestrator.
 
-V1 is **one person only** and **Powerpacks-local only**. It ports the legacy
-Gmail contact CSV contracts and header parsing/normalization logic into
-Powerpacks, with no runtime dependency on `../aleph-mvp`.
+V1 supports both a one-person local seed and a local msgvault metadata import.
+It ports the legacy Gmail contact CSV contracts and header parsing/normalization
+logic into Powerpacks, with no runtime dependency on `../aleph-mvp`.
 
-It writes `.powerpacks/` artifacts and exits complete. No Gmail API, DVC, paid
-APIs, uploads, Harmonic enrichment, or production source seeding run in V1.
+It writes `.powerpacks/` artifacts and exits complete. The msgvault import reads
+only local SQLite metadata (`sources`, `participants`, `messages`,
+`message_recipients`) and never reads message bodies, subjects, snippets, raw
+MIME, or attachments. No Gmail API, DVC, paid APIs, uploads, Harmonic
+enrichment, or production source seeding run locally.
 
-## Main loop
+## msgvault metadata import
 
-```bash
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py run \
-  --email jane@example.com \
-  --name "Jane Example" \
-  --account-email me@gmail.com \
-  --account-id gmail-account-1
-
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py status
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py continue
-```
-
-The command contract is still `run` / `continue` / `approve` so future paid or
-OAuth-backed stages can gate cleanly, but current V1 has no approval gates.
-
-## Server-linked Gmail accounts
-
-Use the local Powerset token to list Gmail accounts already connected in the
-Powerset app:
+After syncing Gmail with [msgvault](https://github.com/wesm/msgvault), import
+email/name interaction metadata from its local SQLite archive:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py accounts
+uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault-accounts \
+  --db ~/.msgvault/msgvault.db
+
+uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault \
+  --db ~/.msgvault/msgvault.db \
+  --account-email me@gmail.com
 ```
 
-Open the existing browser OAuth flow:
+Outputs are written under `.powerpacks/network-import/gmail/<run-id>/` and
+include both legacy Gmail CSV artifacts, `linkedin_resolution_queue.csv`, and
+canonical `people.csv` with `primary_email`, `all_emails`, `full_name`, and
+`source_channels=gmail_msgvault`. Automated/noreply addresses are filtered by
+default; pass `--include-automated` to keep them.
+
+To recover the previous email → LinkedIn → profile-enrichment shape with msgvault
+as the sync source, run LinkedIn resolution over the emitted queue and apply the
+results before shared RapidAPI profile enrichment:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py connect
+# no spend: prepare harness/manual prompts
+uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
+  --provider harness \
+  --input .powerpacks/network-import/gmail/<run-id>/linkedin_resolution_queue.csv \
+  --output-dir .powerpacks/network-import/gmail/<run-id>/linkedin-resolution
+
+# spend-bearing: Parallel.ai, approval-gated
+uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
+  --provider parallel \
+  --input .powerpacks/network-import/gmail/<run-id>/linkedin_resolution_queue.csv
+
+# after linkedin_resolutions.csv exists, attach LinkedIn URLs to Gmail people
+uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py apply-resolutions \
+  --people-csv .powerpacks/network-import/gmail/<run-id>/people.csv \
+  --resolutions-csv .powerpacks/network-import/gmail/<run-id>/linkedin-resolution/linkedin_resolutions.csv
+
+# then hydrate resolved LinkedIn profiles through the shared RapidAPI cache/gate
+uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run \
+  --input .powerpacks/network-import/gmail-resolved/<resolved-run-id>/people.csv
 ```
 
-`connect` opens `https://search.powerset.dev/gmail`. It does not put the local
-Powerpacks bearer token in the URL. The browser app handles Auth0, starts Google
-OAuth, and stores Google tokens server-side in encrypted Supabase tables.
+Powerpacks no longer exposes the old Powerset-hosted Gmail OAuth/sync commands
+(`accounts`, `connect`, or backend gmail-sync). Use msgvault for Gmail sync and
+then import from the local msgvault DB.
+
+## Legacy one-person seed
+
+The `run` / `continue` / `approve` command contract remains only as a local
+one-person seed for deterministic tests/manual fixtures. Do not use it for real
+Gmail sync.
 
 ## Artifacts
 
@@ -53,6 +77,8 @@ Run artifacts live under `.powerpacks/network-import/gmail/<run-id>/`:
 - `gmail_threads_<account>_<op>.csv`
 - `gmail_contacts_aggregated_<account>_<op>.csv`
 - `targeted_emails_<account>_<op>.csv`
+- `linkedin_resolution_queue.csv` — email/name/company-guess queue for LinkedIn resolution
+- `people.csv` — canonical Powerpacks people artifact for msgvault imports
 - `domain_context.json` — local domain/company heuristic, not OpenAI
 - `manifest.json`
 - `workspace.json`
@@ -60,11 +86,14 @@ Run artifacts live under `.powerpacks/network-import/gmail/<run-id>/`:
 
 ## Notes
 
-- Multiple Gmail accounts are modeled as separate local runs with different
-  `--account-email` / `--account-id`; merging is a future local stage.
-- OpenAI domain parse is not needed for this one-person V1; the local heuristic
-  derives `example.com -> Example`.
-- EnrichLayer/RapidAPI/Parallel/Harmonic are intentionally not assumed present.
-- Future Gmail sync should be implemented inside this pack, likely via Powerset
-  OAuth + scoped metadata exports; agents should not rely on raw refresh tokens
-  being available locally.
+- Multiple Gmail accounts are modeled as separate msgvault source accounts;
+  use `msgvault-accounts` to list them, then pass `--account-email` once per
+  selected account (or let the onboarding `step` loop do this with repeated
+  `--gmail-account`).
+- OpenAI domain parse is not needed; the local heuristic derives
+  `example.com -> Example` only for the legacy one-person seed.
+- msgvault import itself does not call EnrichLayer/RapidAPI/Parallel/Harmonic.
+- Optional LinkedIn resolution can use `resolve_linkedin_queue.py` in harness or
+  approval-gated Parallel mode, then shared `enrich_people.py` handles
+  approval-gated RapidAPI LinkedIn profile hydration for resolved rows.
+- Future Gmail sync should remain msgvault-backed unless explicitly redesigned.

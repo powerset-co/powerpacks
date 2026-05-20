@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -22,7 +23,9 @@ from turbopuffer_client import (  # noqa: E402
     comparison,
     embedding,
     filter_only_rows_for_namespace,
+    is_local_backend,
     load_env_file,
+    local_namespace_has_vectors,
     namespace,
     namespace_name,
     reciprocal_rank_fusion,
@@ -125,8 +128,14 @@ def company_attribute_filters(payload: dict[str, Any], *, include_soft: bool = T
         ("entity_types", "entity_types", "ContainsAny"),
         ("technology_types", "technology_types", "ContainsAny"),
         ("customer_types", "customer_type", "ContainsAny"),
+        ("customer_type", "customer_type", "ContainsAny"),
         ("investors", "investor_urns", "ContainsAny"),
+        ("investor_urns", "investor_urns", "ContainsAny"),
+        ("accelerators", "accelerators", "ContainsAny"),
         ("yc_batches", "yc_batches", "ContainsAny"),
+        ("stages", "stage", "In"),
+        ("company_stages", "stage", "In"),
+        ("stage", "stage", "In"),
     ]
     soft_mapping = [
         ("sector_types", "sector_types", "ContainsAny"),
@@ -199,6 +208,43 @@ def sector_min_results(payload: dict[str, Any], default: int) -> int:
     return max(parsed, 0)
 
 
+COMPANY_INCLUDE_ATTRIBUTES = [
+    "company_urn",
+    "company_name",
+    "name_aliases_text",
+    "semantic_text",
+    "doc2query_text",
+    "entity_sector_text",
+    "headcount",
+    "funding_stage",
+    "funding_total",
+    "sector_types",
+    "entity_types",
+    "technology_types",
+    "customer_type",
+    "investor_urns",
+    "yc_batches",
+    "founded_year",
+    "last_funding_at",
+    "valuation",
+    "stage",
+    "accelerators",
+    "city",
+    "state",
+    "country",
+    "metro_area",
+    "macro_region",
+    "website_domain",
+    "linkedin_url",
+    "logo_url",
+    "description",
+]
+
+
+def company_attrs(row: Any) -> dict[str, Any]:
+    return row_attrs(row, COMPANY_INCLUDE_ATTRIBUTES)
+
+
 async def exact_name_lookup(names: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     ns = namespace("companies")
@@ -211,12 +257,12 @@ async def exact_name_lookup(names: list[str], filters: tuple | None, *, top_k: i
                 filters=query_filter,
                 rank_by=["id", "asc"],
                 top_k=top_k,
-                include_attributes=["company_name", "headcount", "funding_stage", "sector_types"],
+                include_attributes=COMPANY_INCLUDE_ATTRIBUTES,
                 consistency=STRONG_CONSISTENCY,
             )
 
         response = await asyncio.to_thread(run_query)
-        rows.extend(row_attrs(row, ["company_name", "headcount", "funding_stage", "sector_types"]) for row in (response.rows or []))
+        rows.extend(company_attrs(row) for row in (response.rows or []))
     return rows
 
 
@@ -229,12 +275,12 @@ async def name_bm25_lookup(names: list[str], filters: tuple | None, *, top_k: in
                 rank_by=("name_aliases_text", "BM25", name),
                 filters=filters,
                 top_k=top_k,
-                include_attributes=["company_name", "headcount", "funding_stage", "sector_types"],
+                include_attributes=COMPANY_INCLUDE_ATTRIBUTES,
                 consistency=STRONG_CONSISTENCY,
             )
 
         response = await asyncio.to_thread(run_query)
-        rows.extend(row_attrs(row, ["company_name", "headcount", "funding_stage", "sector_types"]) for row in (response.rows or []))
+        rows.extend(company_attrs(row) for row in (response.rows or []))
     return rows
 
 
@@ -250,40 +296,87 @@ def dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
+def vector_from_payload(payload: dict[str, Any]) -> list[float] | None:
+    for key in ("company_query_vector", "company_query_embedding", "query_vector", "query_embedding"):
+        value = payload.get(key)
+        if isinstance(value, list) and value:
+            try:
+                return [float(item) for item in value]
+            except (TypeError, ValueError):
+                raise ValueError(f"invalid {key}: expected a numeric vector")
+    return None
+
+
+async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: int, query_vector: list[float] | None = None) -> list[dict[str, Any]]:
     query = " ".join(str(value).strip() for value in queries if str(value).strip())
-    if not query:
+    if not query and query_vector is None:
         return []
 
     ns = namespace("companies")
-    query_embedding = await embedding(query)
-    include_attributes = ["company_name", "headcount", "funding_stage", "sector_types", "entity_types", "description"]
-    subqueries = [
-        {
-            "rank_by": ("semantic_text", "BM25", query),
-            "top_k": top_k,
-            "include_attributes": include_attributes,
-            "filters": filters,
-        },
-        {
-            "rank_by": ("doc2query_text", "BM25", query),
-            "top_k": top_k,
-            "include_attributes": include_attributes,
-            "filters": filters,
-        },
-        {
-            "rank_by": ("entity_sector_text", "BM25", query),
-            "top_k": top_k,
-            "include_attributes": include_attributes,
-            "filters": filters,
-        },
-        {
+    include_attributes = COMPANY_INCLUDE_ATTRIBUTES
+    subqueries = []
+    weights = []
+    if is_local_backend():
+        if query:
+            for field, weight in [
+                ("name_aliases_text", 0.25),
+                ("semantic_text", 0.45),
+                ("doc2query_text", 0.35),
+                ("entity_sector_text", 0.25),
+                ("word_text", 0.25),
+            ]:
+                subqueries.append({
+                    "rank_by": (field, "BM25", query),
+                    "top_k": top_k,
+                    "include_attributes": include_attributes,
+                    "filters": filters,
+                })
+                weights.append(weight)
+        if local_namespace_has_vectors("companies") and (query_vector is not None or os.getenv("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH") == "1"):
+            query_embedding = query_vector if query_vector is not None else await embedding(query)
+            subqueries.append({
+                "rank_by": ("vector", "kNN", query_embedding),
+                "top_k": top_k,
+                "include_attributes": include_attributes,
+                "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
+            })
+            weights.append(0.6)
+    else:
+        query_embedding = query_vector if query_vector is not None else await embedding(query)
+        subqueries = []
+        weights = []
+        if query:
+            subqueries.extend([
+                {
+                    "rank_by": ("semantic_text", "BM25", query),
+                    "top_k": top_k,
+                    "include_attributes": include_attributes,
+                    "filters": filters,
+                },
+                {
+                    "rank_by": ("doc2query_text", "BM25", query),
+                    "top_k": top_k,
+                    "include_attributes": include_attributes,
+                    "filters": filters,
+                },
+                {
+                    "rank_by": ("entity_sector_text", "BM25", query),
+                    "top_k": top_k,
+                    "include_attributes": include_attributes,
+                    "filters": filters,
+                },
+            ])
+            weights.extend([0.45, 0.35, 0.25])
+        subqueries.append({
             "rank_by": ("vector", "kNN", query_embedding),
             "top_k": top_k,
             "include_attributes": include_attributes,
             "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
-        },
-    ]
+        })
+        weights.append(0.6)
+
+    if not subqueries:
+        return []
 
     def run_query() -> Any:
         return ns.multi_query(queries=subqueries, consistency=STRONG_CONSISTENCY)
@@ -291,12 +384,12 @@ async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: i
     response = await asyncio.to_thread(run_query)
     result_sets = response.results or []
     result_lists = [result_set.rows or [] for result_set in result_sets]
-    fused = reciprocal_rank_fusion(result_lists, [0.45, 0.35, 0.25, 0.6][: len(result_lists)])
+    fused = reciprocal_rank_fusion(result_lists, weights[: len(result_lists)])
 
     attrs: dict[str, dict[str, Any]] = {}
     for result_set in result_sets:
         for row in result_set.rows or []:
-            attrs.setdefault(str(row.id), row_attrs(row, include_attributes))
+            attrs.setdefault(str(row.id), company_attrs(row))
 
     rows: list[dict[str, Any]] = []
     for cid, score in fused[:top_k]:
@@ -313,7 +406,7 @@ async def filter_only_company_rows(filters: tuple | None, *, page_size: int, max
     return await filter_only_rows_for_namespace(
         "companies",
         filters,
-        ["company_name", "headcount", "funding_stage", "sector_types", "entity_types"],
+        COMPANY_INCLUDE_ATTRIBUTES,
         page_size=page_size,
         max_results=max_results,
     )
@@ -328,6 +421,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     existing = [str(cid) for cid in payload.get("company_ids") or [] if cid]
     names = expanded_company_names([str(name) for name in payload.get("company_names") or [] if name])
     semantic_queries = [str(query).strip() for query in payload.get("company_semantic_queries") or [] if str(query).strip()]
+    query_vector = vector_from_payload(payload)
     filters = company_attribute_filters(payload)
     hard_filters = company_attribute_filters(payload, include_soft=False)
     soft_filters = company_attribute_filters(payload, only_soft=True)
@@ -344,26 +438,26 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         rows.extend(exact_rows)
         if not exact_rows:
             rows.extend(await name_bm25_lookup(names, filters, top_k=args.name_top_k))
-    if semantic_queries:
-        # Collect semantic rows separately for CE filtering
+    if semantic_queries or query_vector is not None:
+        # Collect semantic/vector rows separately for CE filtering
         semantic_rows_all: list[dict[str, Any]] = []
         if strategy == "hard_filter":
-            semantic_rows = await semantic_lookup(semantic_queries, filters, top_k=args.semantic_top_k)
+            semantic_rows = await semantic_lookup(semantic_queries, filters, top_k=args.semantic_top_k, query_vector=query_vector)
             hard_semantic_count = len(dedupe_rows(semantic_rows))
             semantic_rows_all.extend(semantic_rows)
         elif strategy == "semantic_only" or soft_filters is None:
-            semantic_rows = await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k)
+            semantic_rows = await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k, query_vector=query_vector)
             hard_semantic_count = len(dedupe_rows(semantic_rows))
             semantic_rows_all.extend(semantic_rows)
         elif strategy == "staged":
-            hard_rows = await semantic_lookup(semantic_queries, filters, top_k=args.semantic_top_k)
+            hard_rows = await semantic_lookup(semantic_queries, filters, top_k=args.semantic_top_k, query_vector=query_vector)
             hard_semantic_count = len(dedupe_rows(hard_rows))
             semantic_rows_all.extend(hard_rows)
             sector_strategy_broadened = hard_semantic_count < min_results
             if sector_strategy_broadened:
-                semantic_rows_all.extend(await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k))
+                semantic_rows_all.extend(await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k, query_vector=query_vector))
         else:
-            semantic_rows = await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k)
+            semantic_rows = await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k, query_vector=query_vector)
             hard_semantic_count = len(dedupe_rows(semantic_rows))
             semantic_rows_all.extend(semantic_rows)
 
@@ -385,7 +479,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             rows.extend(semantic_rows_all)
 
         # Soft filter rows always pass through (sector/entity type matches)
-        if soft_filters is not None and (strategy == "soft_union" or sector_strategy_broadened):
+        if semantic_queries and soft_filters is not None and (strategy == "soft_union" or sector_strategy_broadened):
             soft_rows = await filter_only_company_rows(
                 soft_union_filters,
                 page_size=args.page_size,
@@ -433,7 +527,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "truncated": bool(args.max_companies and len(company_ids) > args.max_companies),
         "sample_companies": rows[:20],
         "used_attribute_filters": filters is not None,
-        "used_semantic_search": bool(semantic_queries),
+        "used_semantic_search": bool(semantic_queries or query_vector is not None),
         "company_sector_strategy": strategy,
         "company_sector_min_results": min_results,
         "hard_semantic_count": hard_semantic_count,

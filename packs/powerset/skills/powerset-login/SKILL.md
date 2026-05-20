@@ -116,12 +116,10 @@ When `gcloud` asks for the verification code, ask the user for it and write it
 to the running command's stdin. If `gcloud` cannot read or write
 `~/.config/gcloud`, request escalation for `gcloud auth ...`.
 
-If `gcloud_account` is a non-`@powerset.co` account, do not guess. Tell the
-user to log in as a Powerset account or run:
-
-```bash
-gcloud config set account you@powerset.co
-```
+If `gcloud_account` is a non-`@powerset.co` account, do not reject it only
+because of the domain. The env pull path is per-user scoped and GCP Secret
+Manager IAM is the source of truth. If matching per-user secrets are missing or
+denied, surface that structured blocker.
 
 Do not check or configure gcloud application-default credentials during the
 normal login flow. Only run `gcloud auth application-default login
@@ -158,7 +156,7 @@ the user is using, or tell the user which host CLI is missing.
   ask to be added to the Powerpacks role."
 - `user_secrets` `not_provisioned` / `not_privileged` → "You're set up
   locally but don't have GCP per-user secrets yet. Ping #powerpacks on
-  Slack with your @powerset.co email — a maintainer will run
+  Slack with the email you use for gcloud — a maintainer will run
   `provision_user_secrets apply --users <you>` and you can re-run
   `$powerset login`."
 
@@ -182,8 +180,8 @@ Re-run the setup check and report a terse final message:
   the `shell_install` line.
 - **Never write `.env` without `--confirm`.** All primitive paths refuse
   without it.
-- The `@powerset.co` check is a UX guardrail; real authorization is enforced
-  by GCP IAM on Secret Manager resources.
+- Real authorization is enforced by GCP IAM on Secret Manager resources; do not
+  add a separate email-domain gate in front of env pull.
 - Per-user secret IDs follow `powerpacks-users-<slug>-<capability>`. The
   active `gcloud` account decides scope.
 
@@ -192,6 +190,8 @@ Re-run the setup check and report a terse final message:
 | Profile | Includes | When to pick |
 | --- | --- | --- |
 | `search-core` | Standard Powerpacks runtime secrets | default setup for search plus messages review/research |
+| `search-network` | TurboPuffer + database + OpenAI only | minimal local `/search-network` setup |
+| `import-contacts` | OpenRouter + Parallel only | minimal `$import-contacts` review/research setup |
 | `messages` | OpenRouter + Parallel | `import-contacts` LLM/research extras |
 | `sales-nav` | RapidAPI LinkedIn | LinkedIn enrichment |
 | `twitter` | RapidAPI Twitter | Twitter pipelines |

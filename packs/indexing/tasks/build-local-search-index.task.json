@@ -15,7 +15,7 @@
   "inputs": {
     "people_csv": ".powerpacks/network-import/merged/people.csv"
   },
-  "artifact_root": ".powerpacks/search-index/<run-id>",
+  "artifact_root": ".powerpacks/search-index",
   "steps": [
     {"id": "flatten_people", "kind": "local_transform"},
     {"id": "build_roles", "kind": "local_transform"},

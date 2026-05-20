@@ -1611,6 +1611,16 @@ class DeepResearchContactsTests(unittest.TestCase):
                 self.assertEqual(manifest["counts"]["results_fetched"], 2)
                 self.assertEqual(manifest["counts"]["real_name_found"], 2)
                 self.assertEqual(manifest["counts"]["linkedin_found"], 2)
+                submitted_inputs = [run["input"] for run in state["runs"].values()]
+                self.assertEqual(len(submitted_inputs), 2)
+                for sent in submitted_inputs:
+                    self.assertEqual(set(sent), {"handle", "display_name", "bio", "known_info", "phone_number", "area_code"})
+                    self.assertEqual(sent["known_info"], "")
+                    self.assertNotIn("source_channel", sent)
+                    self.assertNotIn("Message count", json.dumps(sent))
+                    self.assertNotIn("Last message", json.dumps(sent))
+                    self.assertNotIn("Message source", json.dumps(sent))
+                    self.assertNotIn("group", json.dumps(sent).lower())
                 # Per-handle artifacts written
                 for handle in ("phone-4155550101", "phone-4155550202"):
                     raw = output_dir / handle / "00_parallel_raw.json"
@@ -2128,13 +2138,26 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 country="United States",
             )
             with queue.open("w", newline="") as h:
-                writer = csv.DictWriter(h, fieldnames=["handle", "display_name", "phone_e164", "source_channel"])
+                writer = csv.DictWriter(h, fieldnames=[
+                    "handle",
+                    "display_name",
+                    "phone_e164",
+                    "source_channel",
+                    "message_source",
+                    "total_messages",
+                    "imessage_message_count",
+                    "whatsapp_message_count",
+                ])
                 writer.writeheader()
                 writer.writerow({
                     "handle": handle,
                     "display_name": "Aisha Founder",
                     "phone_e164": "+14155556666",
                     "source_channel": "phone",
+                    "message_source": "imessage,whatsapp",
+                    "total_messages": "30",
+                    "imessage_message_count": "11",
+                    "whatsapp_message_count": "19",
                 })
 
             spec = importlib.util.spec_from_file_location("build_research_review_csv", self.BUILD)
@@ -2169,8 +2192,16 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             network_review = json.loads((research_dir / handle / "03_network_review.json").read_text(encoding="utf-8"))
             self.assertEqual(network_review["handle"], handle)
             self.assertEqual(network_review["public_identifier"], "aisha-founder")
+            self.assertEqual(network_review["source_channel"], "imessage,whatsapp")
+            self.assertEqual(network_review["message_source"], "imessage,whatsapp")
             self.assertEqual(network_review["model"], "openai/gpt-4.1")
             self.assertEqual(network_review["review"]["bucket"], "yes")
+            with output.open(newline="") as h:
+                rows = list(csv.DictReader(h))
+            self.assertEqual(rows[0]["message_source"], "imessage,whatsapp")
+            self.assertEqual(rows[0]["total_messages"], "30")
+            self.assertEqual(rows[0]["imessage_message_count"], "11")
+            self.assertEqual(rows[0]["whatsapp_message_count"], "19")
             manifest = json.loads(output.with_suffix(output.suffix + ".manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["review_source"], "network_review_llm")
             self.assertEqual(manifest["counts"]["network_review_written"], 1)

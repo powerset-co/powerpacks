@@ -33,6 +33,11 @@ def _json_list(value: Any) -> list[Any]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _word_tokenize(text: str) -> list[str]:
+    tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return tokens + [f"{tokens[idx]} {tokens[idx + 1]}" for idx in range(len(tokens) - 1)]
+
+
 def _first(mapping: dict[str, Any], *fields: str) -> str:
     for field in fields:
         value = _clean(mapping.get(field))
@@ -51,6 +56,15 @@ def _int_or_none(value: Any) -> int | None:
     except (TypeError, ValueError):
         match = re.search(r"\b(19\d{2}|20\d{2})\b", str(value))
         return int(match.group(1)) if match else None
+
+
+def _number_or_none(value: Any) -> float | None:
+    if value in (None, "", []):
+        return None
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _year(mapping: dict[str, Any], *fields: str) -> int | None:
@@ -130,27 +144,56 @@ def _company_from_experience(exp: dict[str, Any]) -> dict[str, Any]:
     key_data = identity if (identity.get("rapidapi_company_id") or identity.get("company_public_identifier")) else exp
     name = identity.get("company_name") or _first(exp, "company_name", "company", "organization", "name")
     description = _first(exp, "description", "summary")
+    semantic_text = " ".join(part for part in [name, description, _first(exp, "industry", "sector")] if part)
+    company_urn = stable_company_uuid(key_data)
+    aliases = [name] if name else []
+    entity_sector = _first(exp, "industry", "sector", "entity_sector_text")
+    stage = _first(exp, "stage", "company_stage")
+    customer_type = _first(exp, "customer_type", "customer_types")
+    doc2query = []
+    if name:
+        doc2query.append(f"{name} company")
+    if entity_sector:
+        doc2query.append(f"{entity_sector} company")
     return {
-        "id": stable_company_uuid(key_data),
+        "id": company_urn,
+        "company_urn": company_urn,
         "company_name": name,
-        "name_aliases_text": name,
-        "semantic_text": " ".join(part for part in [name, description, _first(exp, "industry", "sector")] if part),
-        "entity_sector_text": _first(exp, "industry", "sector", "entity_sector_text"),
-        "doc2query_text": "",
+        "original_name": name,
+        "name_aliases": aliases,
+        "name_aliases_text": " ".join(aliases),
+        "semantic_text": semantic_text,
+        "entity_sector_text": entity_sector,
+        "word_text": entity_sector,
+        "char_text": " ".join(aliases),
+        "d2q_text": " ".join(doc2query),
+        "doc2query": doc2query,
         "website_domain": _first(exp, "website_domain", "domain"),
         "linkedin_url": identity.get("company_linkedin_url") or _first(exp, "company_linkedin_url", "linkedin_url"),
+        "logo_url": _first(exp, "logo_url", "company_logo_url"),
         "description": description,
         "city": _first(exp, "city"),
         "state": _first(exp, "state"),
         "country": _first(exp, "country"),
         "metro_area": _first(exp, "metro_area"),
         "macro_region": _first(exp, "macro_region"),
-        "entity_types": [],
-        "sector_types": [],
-        "technology_types": [],
-        "customer_type": [],
-        "investor_urns": [],
-        "yc_batches": [],
+        "headcount": _number_or_none(exp.get("headcount") or exp.get("company_headcount")),
+        "founded_year": _int_or_none(exp.get("founded_year") or exp.get("company_founded_year")),
+        "funding_total": _number_or_none(exp.get("funding_total") or exp.get("company_funding_total")),
+        "funding_stage": _first(exp, "funding_stage", "company_funding_stage") or "VENTURE_UNKNOWN",
+        "stage": stage,
+        "last_funding_at": _first(exp, "last_funding_at", "company_last_funding_at"),
+        "valuation": _number_or_none(exp.get("valuation") or exp.get("company_valuation")),
+        "entity_types": exp.get("entity_types") or exp.get("company_entity_types") or [],
+        "sector_types": exp.get("sector_types") or exp.get("company_sector_types") or [],
+        "technology_types": exp.get("technology_types") or exp.get("company_technology_types") or [],
+        "customer_type": customer_type,
+        "investor_urns": exp.get("investor_urns") or exp.get("company_investor_urns") or [],
+        "accelerators": exp.get("accelerators") or [],
+        "yc_batches": exp.get("yc_batches") or [],
+        "ownership_status": _first(exp, "ownership_status"),
+        "company_type": _first(exp, "company_type"),
+        "confidence_score": _number_or_none(exp.get("confidence_score")) or 0.0,
         "allowed_operator_ids": [],
         "rapidapi_company_id": identity.get("rapidapi_company_id", ""),
         "company_public_identifier": identity.get("company_public_identifier", ""),
@@ -225,6 +268,7 @@ def _education_record(row: dict[str, Any], edu: dict[str, Any], default_operator
         "id": stable_education_edge_uuid(person_uuid, school_uuid, degree, field, start_year or "", end_year or ""),
         "person_id": person_uuid,
         "base_id": person_uuid,
+        "education_id": school_uuid,
         "canonical_education_id": school_uuid,
         "school_name": school_name,
         "degree": degree,
@@ -317,7 +361,13 @@ def build_summary_records(people_rows: list[dict[str, Any]], default_operator_id
         pid = _first(row, "base_id", "person_id", "id") or stable_person_uuid(row)
         text = _summary_text(row)
         internal.append({"id": stable_summary_uuid(pid), "person_id": pid, "base_id": pid, "text": text})
-        summaries.append({"id": pid, "tech_skills": _tech_skills(row, text), "allowed_operator_ids": _allowed_operator_ids(row, default_operator_id)})
+        summaries.append({
+            "id": pid,
+            "summary": text,
+            "summary_tokens": _word_tokenize(text),
+            "tech_skills": _tech_skills(row, text),
+            "allowed_operator_ids": _allowed_operator_ids(row, default_operator_id),
+        })
     return {"internal_text": sorted(internal, key=lambda r: r["id"]), "summaries": sorted(summaries, key=lambda r: r["id"])}
 
 

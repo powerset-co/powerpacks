@@ -9,17 +9,29 @@ command or user action. Persists non-secret account state to
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import os
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 try:
-    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, update_channel
+    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, now_iso, save_registry, update_channel
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, update_channel
+    from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, now_iso, save_registry, update_channel
+
+
+DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
+DEFAULT_NETWORK_IMPORT_DIR = Path(".powerpacks/network-import")
+ONBOARDING_SOURCE_ORDER = ["gmail", "linkedin_csv", "messages", "twitter"]
+ONBOARDING_IMPORT_RUN_ID = "network-onboarding"
+ONBOARDING_IMPORT_LEDGER = ".powerpacks/network-import/import-network-run.json"
+ONBOARDING_INDEX_DIR = ".powerpacks/search-index"
 
 
 def emit(payload: Any) -> None:
@@ -30,62 +42,189 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def run_json(cmd: list[str]) -> dict[str, Any] | None:
+def run_command(cmd: list[str], *, timeout: int = 90) -> tuple[int, dict[str, Any] | None, str]:
     try:
-        completed = subprocess.run(cmd, cwd=repo_root(), capture_output=True, text=True, timeout=90)
-    except Exception:
-        return None
-    if completed.returncode not in (0, 20):
-        return None
+        completed = subprocess.run(cmd, cwd=repo_root(), capture_output=True, text=True, timeout=timeout)
+    except Exception as exc:
+        return 1, None, str(exc)
+    payload = None
     try:
-        return json.loads(completed.stdout)
+        payload = json.loads(completed.stdout)
     except json.JSONDecodeError:
+        payload = None
+    return completed.returncode, payload, completed.stderr
+
+
+def run_json(cmd: list[str]) -> dict[str, Any] | None:
+    code, payload, _ = run_command(cmd)
+    if code not in (0, 20):
         return None
+    return payload
 
 
 def artifact_exists(path: str) -> bool:
     return bool(path and Path(path).exists())
 
 
+def csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        return list(csv.DictReader(handle))
+
+
+def json_object(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def set_channel_from_artifacts(
+    channel: str,
+    *,
+    path: Path,
+    linked: bool,
+    usernames: list[str] | None = None,
+    artifacts: list[str] | None = None,
+    notes: str = "",
+) -> dict[str, Any]:
+    registry = load_registry(path)
+    rec = registry["accounts"][channel]
+    rec["linked"] = linked
+    if linked:
+        rec["skipped"] = False
+    rec["usernames"] = list(dict.fromkeys(usernames or []))
+    rec["artifacts"] = list(dict.fromkeys(artifacts or []))
+    rec["notes"] = notes
+    rec["last_checked_at"] = now_iso()
+    rec["last_success_at"] = rec["last_checked_at"] if linked else ""
+    save_registry(registry, path)
+    return registry
+
+
+def msgvault_gmail_run(run_dir: Path) -> tuple[bool, list[str], str]:
+    """Return whether run_dir is an active Gmail msgvault import for onboarding.
+
+    Auto-detection is intentionally narrower than "any Gmail artifact": the
+    onboarding step imports Gmail with the default `msgvault-*` run id. Test,
+    smoke, and harness runs may have valid-looking manifests but should not
+    mark a user's Gmail onboarding as complete.
+    """
+
+    if not run_dir.is_dir() or not run_dir.name.startswith("msgvault-"):
+        return False, [], ""
+    manifest = json_object(run_dir / "manifest.json")
+    if (
+        manifest.get("status") != "completed"
+        or manifest.get("source") != "msgvault"
+        or manifest.get("task") != "import_gmail_network_msgvault"
+    ):
+        return False, [], ""
+    artifact = run_dir / "people.csv"
+    artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
+    if artifacts.get("people_csv"):
+        artifact = Path(str(artifacts["people_csv"]))
+        if not artifact.is_absolute() and not artifact.exists():
+            artifact = run_dir / artifact
+    if not artifact.exists():
+        return False, [], ""
+
+    emails: list[str] = []
+    for row in csv_rows(run_dir / "accounts.csv"):
+        email = (row.get("account_email") or "").strip().lower()
+        source = (row.get("source") or "").strip().lower()
+        if email and source == "msgvault":
+            emails.append(email)
+    if not emails:
+        return False, [], ""
+    return True, list(dict.fromkeys(emails)), str(artifact)
+
+
+def refresh_registry(path: Path) -> tuple[dict[str, Any], list[str]]:
+    registry = load_registry(path)
+    updates: list[str] = []
+
+    # Gmail: infer linked state from local msgvault import artifacts.
+    gmail_usernames: list[str] = []
+    gmail_artifacts: list[str] = []
+    gmail_root = Path(".powerpacks/network-import/gmail")
+    if gmail_root.exists():
+        for run_dir in sorted(gmail_root.iterdir()):
+            ok, account_emails, artifact = msgvault_gmail_run(run_dir)
+            if not ok:
+                continue
+            gmail_usernames.extend(account_emails)
+            gmail_artifacts.append(artifact)
+            updates.append(f"gmail:{artifact}")
+            updates.extend(f"gmail:{email}" for email in account_emails)
+    gmail_record = registry.get("accounts", {}).get("gmail", {})
+    if gmail_artifacts:
+        registry = set_channel_from_artifacts("gmail", path=path, linked=True, usernames=gmail_usernames, artifacts=gmail_artifacts)
+    elif not gmail_record.get("skipped", False):
+        registry = set_channel_from_artifacts("gmail", path=path, linked=False)
+
+    # Messages: mark linked if local contacts artifact exists.
+    if artifact_exists(".powerpacks/messages/contacts.csv"):
+        update_channel("messages", path=path, success=True, artifact=".powerpacks/messages/contacts.csv")
+        updates.append("messages:contacts.csv")
+
+    # LinkedIn CSV / Twitter: infer from local import artifacts. Prefer canonical
+    # people.csv, but accept the older people_harmonic_all.csv alias.
+    for source, channel in [("linkedin", "linkedin_csv"), ("twitter", "twitter")]:
+        seen_dirs: set[Path] = set()
+        for pattern in ["*/people.csv", "*/people_harmonic_all.csv"]:
+            for p in Path(f".powerpacks/network-import/{source}").glob(pattern):
+                if p.parent in seen_dirs:
+                    continue
+                seen_dirs.add(p.parent)
+                update_channel(channel, path=path, success=True, artifact=str(p))
+                updates.append(f"{channel}:{p}")
+
+    registry = load_registry(path)
+    return registry, updates
+
+
 def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
     acct = registry.get("accounts", {})
-    return [
-        {
-            "channel": "messages",
-            "linked": acct.get("messages", {}).get("linked", False),
-            "what_it_needs": "Full Disk Access for iMessage and/or WAHA for WhatsApp, then messages import.",
-            "next_action": "Run the import-contacts workflow if you want message/contact metadata.",
-            "command": "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py status",
-        },
-        {
+    steps_by_channel = {
+        "gmail": {
             "channel": "gmail",
             "linked": acct.get("gmail", {}).get("linked", False),
-            "what_it_needs": "Powerset Gmail OAuth connection. Sync itself is backend-side metadata only.",
-            "next_action": "Connect at https://search.powerset.dev/gmail, then run gmail_network_import accounts.",
-            "command": "uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py accounts",
+            "skipped": acct.get("gmail", {}).get("skipped", False),
+            "what_it_needs": "Local msgvault SQLite archive with Gmail metadata, usually ~/.msgvault/msgvault.db.",
+            "next_action": "Run msgvault sync, then choose one or more Gmail source accounts to import.",
+            "command": "uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault-accounts --db ~/.msgvault/msgvault.db",
         },
-        {
+        "linkedin_csv": {
             "channel": "linkedin_csv",
             "linked": acct.get("linkedin_csv", {}).get("linked", False),
+            "skipped": acct.get("linkedin_csv", {}).get("skipped", False),
             "what_it_needs": "LinkedIn Connections.csv export from LinkedIn settings.",
             "next_action": "Export Connections.csv, then run linkedin_network_import run --csv <path> --source-user <label>.",
             "command": "uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run --csv <Connections.csv> --source-user <label>",
         },
-        {
-            "channel": "linkedin_mcp",
-            "linked": acct.get("linkedin_mcp", {}).get("linked", False),
-            "what_it_needs": "Install/login to stickerdaniel/linkedin-mcp-server via uvx or MCP client.",
-            "next_action": "Run linkedin_mcp_import instructions, add the MCP config, and login when browser opens.",
-            "command": "uv run --project . python packs/ingestion/primitives/linkedin_mcp_import/linkedin_mcp_import.py instructions",
+        "messages": {
+            "channel": "messages",
+            "linked": acct.get("messages", {}).get("linked", False),
+            "skipped": acct.get("messages", {}).get("skipped", False),
+            "what_it_needs": "Full Disk Access for iMessage and/or wacli for WhatsApp, then messages import.",
+            "next_action": "Run the import-contacts workflow if you want message/contact metadata.",
+            "command": "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py status",
         },
-        {
+        "twitter": {
             "channel": "twitter",
             "linked": acct.get("twitter", {}).get("linked", False),
+            "skipped": acct.get("twitter", {}).get("skipped", False),
             "what_it_needs": "Operator Twitter/X handle plus RapidAPI key for crawl.",
             "next_action": "Record handle with account_registry mark, then run twitter_network_import when ready.",
             "command": "uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run --handle <handle>",
         },
-    ]
+    }
+    return [steps_by_channel[channel] for channel in ONBOARDING_SOURCE_ORDER]
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -96,33 +235,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_check(args: argparse.Namespace) -> int:
     path = Path(args.accounts)
-    registry = load_registry(path)
-    updates: list[str] = []
-
-    # Gmail: use existing local token/backend stats if available.
-    gmail = run_json(["uv", "run", "--project", ".", "python", "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py", "accounts"])
-    if gmail and gmail.get("status") == "ok":
-        accounts = gmail.get("accounts") or gmail.get("connected_accounts") or []
-        for account in accounts:
-            email = account.get("email") or account.get("account_email") if isinstance(account, dict) else ""
-            if email:
-                update_channel("gmail", path=path, username=email, success=True, artifact="gmail-stats")
-                updates.append(f"gmail:{email}")
-
-    # Messages: mark linked if local contacts artifact exists.
-    if artifact_exists(".powerpacks/messages/contacts.csv"):
-        update_channel("messages", path=path, success=True, artifact=".powerpacks/messages/contacts.csv")
-        updates.append("messages:contacts.csv")
-
-    # LinkedIn CSV / Twitter: infer from provider-neutral local import artifacts.
-    for channel_dir, registry_channel in (("linkedin", "linkedin_csv"), ("twitter", "twitter")):
-        for run_dir in Path(f".powerpacks/network-import/{channel_dir}").glob("*"):
-            p = run_dir / "people.csv"
-            if p.exists():
-                update_channel(registry_channel, path=path, success=True, artifact=str(p))
-                updates.append(f"{registry_channel}:{p}")
-
-    registry = load_registry(path)
+    registry, updates = refresh_registry(path)
     emit({"status": "checked", "accounts_path": args.accounts, "updates": updates, "registry": registry, "steps": build_steps(registry)})
     return 0
 
@@ -130,384 +243,670 @@ def cmd_check(args: argparse.Namespace) -> int:
 def cmd_plan(args: argparse.Namespace) -> int:
     registry = load_registry(Path(args.accounts))
     steps = build_steps(registry)
-    todo = [step for step in steps if args.all or not step["linked"]]
-    emit({"status": "plan", "accounts_path": args.accounts, "todo": todo, "already_linked": [s for s in steps if s["linked"]]})
+    todo = [step for step in steps if args.all or (not step["linked"] and not step.get("skipped"))]
+    emit({"status": "plan", "accounts_path": args.accounts, "todo": todo, "already_linked": [s for s in steps if s["linked"]], "skipped": [s for s in steps if s.get("skipped")]})
     return 0
 
 
-
-DEFAULT_ONBOARDING_LEDGER = Path(".powerpacks/ingestion/onboarding-run.json")
-ONBOARDING_FLOW = ["messages", "gmail", "linkedin_csv", "linkedin_mcp", "twitter", "merge", "enrich"]
-YES = {"y", "yes", "true", "1", "ok", "sure"}
-NO = {"n", "no", "false", "0", "skip", "s"}
-
-
-def now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def read_json(path: Path, default: Any = None) -> Any:
+def read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return default
+        return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return default
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def shell_join(parts: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in parts)
 
 
-def normalize_reply(value: str) -> str:
-    return (value or "").strip()
+def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = False) -> str:
+    cmd = [
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/onboarding/onboarding.py", "step",
+        "--accounts", args.accounts,
+        "--gmail-db", args.gmail_db,
+        "--gmail-output-dir", args.gmail_output_dir,
+        "--linkedin-ledger", args.linkedin_ledger,
+    ]
+    if placeholders:
+        cmd.extend(["--linkedin-csv", "<Connections.csv>", "--linkedin-source-user", "<label>"])
+    else:
+        if args.linkedin_csv:
+            cmd.extend(["--linkedin-csv", args.linkedin_csv])
+        if args.linkedin_source_user:
+            cmd.extend(["--linkedin-source-user", args.linkedin_source_user])
+    return shell_join(cmd)
 
 
-def load_run(path: Path) -> dict[str, Any]:
-    state = read_json(path, {}) or {}
-    state.setdefault("version", 1)
-    state.setdefault("created_at", now_iso())
-    state.setdefault("updated_at", now_iso())
-    state.setdefault("index", 0)
-    state.setdefault("phase", "ask")
-    state.setdefault("answers", {})
-    state.setdefault("skipped", [])
-    state.setdefault("context", {})
-    return state
+def import_network_command(args: argparse.Namespace, *, dry_run: bool = False) -> str:
+    cmd = [
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "run",
+        "--ledger", ONBOARDING_IMPORT_LEDGER,
+        "--run-id", ONBOARDING_IMPORT_RUN_ID,
+        "--operator-id", args.operator_id,
+        "--include-existing-artifacts",
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    return shell_join(cmd)
 
 
-def save_run(path: Path, state: dict[str, Any]) -> None:
-    state["updated_at"] = now_iso()
-    write_json(path, state)
+def import_network_status_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "status",
+        "--ledger", ONBOARDING_IMPORT_LEDGER,
+    ])
 
 
-def current_step(state: dict[str, Any]) -> str | None:
-    idx = int(state.get("index") or 0)
-    if idx >= len(ONBOARDING_FLOW):
-        return None
-    return ONBOARDING_FLOW[idx]
+def import_network_continue_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "continue",
+        "--ledger", ONBOARDING_IMPORT_LEDGER,
+    ])
 
 
-def advance(state: dict[str, Any]) -> None:
-    state["index"] = int(state.get("index") or 0) + 1
-    state["phase"] = "ask"
+def import_network_approve_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "approve",
+        "--ledger", ONBOARDING_IMPORT_LEDGER,
+    ])
 
 
-def prompt_for(step: str, registry: dict[str, Any]) -> dict[str, Any]:
-    acct = registry.get("accounts", {})
-    linked = bool(acct.get(step, {}).get("linked", False)) if step in acct else False
-    if step == "messages":
-        return {
-            "status": "needs_user_input",
-            "step": step,
-            "linked": linked,
-            "message": "Import local message contacts? This reads contact metadata only, not message bodies.",
-            "choices": ["yes", "no", "skip"],
-        }
-    if step == "gmail":
-        return {
-            "status": "needs_user_input",
-            "step": step,
-            "linked": linked,
-            "message": "Connect Gmail? OAuth opens in your browser; Powerpacks does not scan Gmail locally.",
-            "choices": ["yes", "no", "skip"],
-        }
-    if step == "linkedin_csv":
-        return {
-            "status": "needs_user_input",
-            "step": step,
-            "linked": linked,
-            "message": "Import a LinkedIn Connections.csv export? Reply yes if you have the file path ready.",
-            "choices": ["yes", "no", "skip"],
-        }
-    if step == "linkedin_mcp":
-        return {
-            "status": "needs_user_input",
-            "step": step,
-            "linked": linked,
-            "message": "Set up LinkedIn MCP browser access? This is optional and connection export is still WIP upstream.",
-            "choices": ["yes", "no", "skip"],
-        }
-    if step == "twitter":
-        return {
-            "status": "needs_user_input",
-            "step": step,
-            "linked": linked,
-            "message": "Configure Twitter/X follower import for an operator handle? This uses RapidAPI only after approval.",
-            "choices": ["yes", "no", "skip"],
-        }
-    if step == "merge":
-        return {
-            "status": "needs_user_input",
-            "step": step,
-            "linked": False,
-            "message": "Merge imported sources locally now? This dedupes by LinkedIn and flags similar names for review.",
-            "choices": ["yes", "no", "skip"],
-        }
-    if step == "enrich":
-        return {
-            "status": "needs_user_input",
-            "step": step,
-            "linked": False,
-            "message": "Prepare profile enrichment now? Provider calls pause for approval.",
-            "choices": ["yes", "no", "skip"],
-        }
-    raise ValueError(f"unknown step: {step}")
+def onboarding_merged_people_csv() -> str:
+    return f".powerpacks/network-import/network-runs/{ONBOARDING_IMPORT_RUN_ID}/merged/people.csv"
 
 
-def complete_payload(state: dict[str, Any], registry: dict[str, Any], ledger_path: Path) -> dict[str, Any]:
+def build_search_index_command(args: argparse.Namespace, *, dry_run: bool = False) -> str:
+    cmd = [
+        "uv", "run", "--project", ".", "python",
+        "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py", "run",
+        "--input", onboarding_merged_people_csv(),
+        "--output-dir", ONBOARDING_INDEX_DIR,
+        "--default-operator-id", args.operator_id,
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    return shell_join(cmd)
+
+
+def build_search_index_status_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py", "status",
+        "--ledger", f"{ONBOARDING_INDEX_DIR}/ledger.json",
+    ])
+
+
+def build_search_index_continue_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py", "continue",
+        "--ledger", f"{ONBOARDING_INDEX_DIR}/ledger.json",
+    ])
+
+
+def build_local_duckdb_command(args: argparse.Namespace) -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "scripts/build-local-duckdb-shim.py",
+        "--records-dir", ONBOARDING_INDEX_DIR,
+        "--operator-id", args.operator_id,
+        "--force",
+    ])
+
+
+def onboarding_handoff(args: argparse.Namespace, registry: dict[str, Any]) -> dict[str, Any]:
+    steps = build_steps(registry)
+    linked = [step["channel"] for step in steps if step["linked"]]
+    skipped = [step["channel"] for step in steps if step.get("skipped")]
     return {
-        "status": "completed",
-        "message": "Onboarding flow complete.",
-        "ledger": str(ledger_path),
-        "accounts": registry,
-        "answers": state.get("answers", {}),
-        "skipped": state.get("skipped", []),
+        "status": "ready_for_import",
+        "accounts_path": args.accounts,
+        "source_order": ONBOARDING_SOURCE_ORDER,
+        "linked_sources": linked,
+        "skipped_sources": skipped,
+        "confirmation_prompt": (
+            "We can now import linked sources and build your local search index. "
+            "Large mailboxes or networks can take a few hours. Continue?"
+        ),
+        "codex_orchestration": {
+            "main_thread": "Handle account linking, browser/login actions, user confirmations, and worker handoffs.",
+            "worker_policy": "Use worker sub-agents for import-network, then build-local-search-index. Close workers when they finish.",
+        },
+        "worker_phases": [
+            {
+                "name": "import-network",
+                "agent_type": "worker",
+                "depends_on": [],
+                "dry_run_command": import_network_command(args, dry_run=True),
+                "run_command": import_network_command(args),
+                "status_command": import_network_status_command(),
+                "continue_command": import_network_continue_command(),
+                "approve_command": import_network_approve_command(),
+                "expected_output": onboarding_merged_people_csv(),
+                "instructions": (
+                    "Run dry-run first. Then run import-network with existing linked artifacts. "
+                    "If a child primitive blocks on paid enrichment, return the approval gate to the main thread."
+                ),
+            },
+            {
+                "name": "build-local-search-index",
+                "agent_type": "worker",
+                "depends_on": ["import-network"],
+                "dry_run_command": build_search_index_command(args, dry_run=True),
+                "run_command": build_search_index_command(args),
+                "status_command": build_search_index_status_command(),
+                "continue_command": build_search_index_continue_command(),
+                "materialize_duckdb_command": build_local_duckdb_command(args),
+                "expected_output": f"{ONBOARDING_INDEX_DIR}/local-search.duckdb",
+                "instructions": (
+                    "Use the merged people.csv produced by import-network. Run dry-run first; "
+                    "do not approve paid provider work inside the worker."
+                ),
+            },
+        ],
     }
 
 
-def next_prompt(state: dict[str, Any], accounts_path: Path, ledger_path: Path) -> dict[str, Any]:
-    registry = load_registry(accounts_path)
-    step = current_step(state)
-    if not step:
-        state["status"] = "completed"
-        save_run(ledger_path, state)
-        return complete_payload(state, registry, ledger_path)
-    payload = prompt_for(step, registry)
-    payload.update({"ledger": str(ledger_path), "accounts_path": str(accounts_path), "phase": state.get("phase", "ask")})
-    save_run(ledger_path, state)
-    return payload
+def gmail_import_py() -> str:
+    return "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
 
 
-def action_for_yes(step: str, state: dict[str, Any], accounts_path: Path, ledger_path: Path) -> dict[str, Any]:
-    state["answers"][step] = "yes"
-    if step == "messages":
-        if artifact_exists(".powerpacks/messages/contacts.csv"):
-            update_channel("messages", path=accounts_path, success=True, artifact=".powerpacks/messages/contacts.csv")
-            advance(state)
-            payload = next_prompt(state, accounts_path, ledger_path)
-            payload["completed_action"] = {
-                "step": "messages",
-                "message": "Messages contacts already imported.",
-                "artifact": ".powerpacks/messages/contacts.csv",
-            }
-            return payload
-        state["phase"] = "awaiting_done"
-        return {
-            "status": "needs_agent_action",
-            "step": step,
-            "message": "Starting messages import workflow. It reads contact metadata only, not message bodies.",
-            "command": "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run",
-            "continue_command": f"uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --ledger {ledger_path} --input done",
-        }
-    if step == "gmail":
-        state["phase"] = "awaiting_done"
-        return {
-            "status": "needs_user_action",
-            "step": step,
-            "message": "Finish Gmail OAuth in the browser; this terminal will detect the linked account.",
-            "url": "https://search.powerset.dev/gmail/connect",
-            "command": "uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py connect --timeout-seconds 600",
-            "continue_command": f"uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --ledger {ledger_path} --input done",
-        }
-    if step == "linkedin_csv":
-        state["phase"] = "awaiting_csv_path"
-        return {
-            "status": "needs_user_input",
-            "step": step,
-            "message": "Paste the path to your LinkedIn Connections.csv export.",
-            "example": "~/Downloads/Connections.csv",
-        }
-    if step == "linkedin_mcp":
-        state["phase"] = "awaiting_linkedin_mcp_username"
-        return {
-            "status": "needs_user_action",
-            "step": step,
-            "message": "Install/login to the LinkedIn MCP, then reply with your LinkedIn profile URL or username.",
-            "command": "uv run --project . python packs/ingestion/primitives/linkedin_mcp_import/linkedin_mcp_import.py instructions",
-            "login_command": "uvx linkedin-scraper-mcp@latest --login",
-        }
-    if step == "twitter":
-        state["phase"] = "awaiting_twitter_handle"
-        return {"status": "needs_user_input", "step": step, "message": "Reply with the Twitter/X operator handle to import."}
-    if step == "merge":
-        state["phase"] = "awaiting_done"
-        return {
-            "status": "needs_agent_action",
-            "step": step,
-            "message": "Starting local merge.",
-            "command": "uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run",
-            "continue_command": f"uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --ledger {ledger_path} --input done",
-        }
-    if step == "enrich":
-        state["phase"] = "awaiting_enrich_input"
-        return {
-            "status": "needs_user_input",
-            "step": step,
-            "message": "Paste the people CSV to enrich, usually .powerpacks/network-import/merged/people_harmonic_all.merged.csv",
-        }
-    raise ValueError(f"unknown step: {step}")
+def msgvault_setup_py() -> str:
+    return "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py"
 
 
-def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path, ledger_path: Path) -> dict[str, Any]:
-    step = current_step(state)
-    if not step:
-        return complete_payload(state, load_registry(accounts_path), ledger_path)
-    phase = state.get("phase", "ask")
-    reply = normalize_reply(user_input)
-    low = reply.lower()
+def msgvault_home_from_args(args: argparse.Namespace) -> Path:
+    return Path(args.gmail_db).expanduser().parent
 
-    if phase == "ask":
-        if low in NO:
-            state["answers"][step] = "skip"
-            state.setdefault("skipped", []).append(step)
-            advance(state)
-            return next_prompt(state, accounts_path, ledger_path)
-        if low not in YES:
-            payload = prompt_for(step, load_registry(accounts_path))
-            payload.update({"status": "needs_user_input", "error": "Please reply yes, no, or skip.", "ledger": str(ledger_path)})
-            return payload
-        payload = action_for_yes(step, state, accounts_path, ledger_path)
-        save_run(ledger_path, state)
-        payload["ledger"] = str(ledger_path)
-        return payload
 
-    if phase == "awaiting_done":
-        if low not in {"done", "yes", "y", "ok"}:
-            return {"status": "needs_user_input", "step": step, "message": "Reply done when finished, or skip.", "ledger": str(ledger_path)}
-        if step == "messages" and artifact_exists(".powerpacks/messages/contacts.csv"):
-            update_channel("messages", path=accounts_path, success=True, artifact=".powerpacks/messages/contacts.csv")
-        elif step == "gmail":
-            gmail = run_json(["uv", "run", "--project", ".", "python", "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py", "accounts"])
-            if gmail and gmail.get("status") == "ok":
-                for account in (gmail.get("accounts") or gmail.get("connected_accounts") or []):
-                    email = account.get("email") or account.get("account_email") if isinstance(account, dict) else ""
-                    if email:
-                        update_channel("gmail", path=accounts_path, username=email, success=True, artifact="gmail-stats")
-            else:
-                update_channel("gmail", path=accounts_path, linked=True, notes="User reported Gmail OAuth completed; account check did not confirm.")
-        elif step == "merge":
-            update_channel("messages", path=accounts_path, artifact=".powerpacks/network-import/merged/people_harmonic_all.merged.csv", notes="Merge step run/requested.")
-        advance(state)
-        return next_prompt(state, accounts_path, ledger_path)
+def msgvault_config_path(args: argparse.Namespace) -> Path:
+    return msgvault_home_from_args(args) / "config.toml"
 
-    if phase == "awaiting_csv_path":
-        csv_path = Path(reply).expanduser()
+
+def msgvault_oauth_configured(args: argparse.Namespace) -> bool:
+    path = msgvault_config_path(args)
+    if not path.exists():
+        return False
+    try:
+        return "client_secrets" in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def msgvault_home_args(args: argparse.Namespace) -> list[str]:
+    home = msgvault_home_from_args(args)
+    default_home = Path("~/.msgvault").expanduser()
+    return ["--home", str(home)] if home != default_home else []
+
+
+def linkedin_import_py() -> str:
+    return "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py"
+
+
+def discover_msgvault_accounts(args: argparse.Namespace) -> tuple[int, dict[str, Any] | None, str]:
+    cmd = [sys.executable, gmail_import_py(), "msgvault-accounts", "--db", args.gmail_db]
+    return run_command(cmd, timeout=args.import_timeout)
+
+
+def run_gmail_msgvault_import(args: argparse.Namespace, account_email: str) -> tuple[int, dict[str, Any] | None, str]:
+    cmd = [
+        sys.executable,
+        gmail_import_py(),
+        "msgvault",
+        "--db", args.gmail_db,
+        "--account-email", account_email,
+        "--operator-id", args.operator_id,
+        "--output-dir", args.gmail_output_dir,
+    ]
+    return run_command(cmd, timeout=args.import_timeout)
+
+
+def run_gmail_accounts_command(args: argparse.Namespace) -> str:
+    return shell_join(["uv", "run", "--project", ".", "python", gmail_import_py(), "msgvault-accounts", "--db", args.gmail_db])
+
+
+def run_gmail_import_command(args: argparse.Namespace, account_email: str) -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python", gmail_import_py(), "msgvault",
+        "--db", args.gmail_db,
+        "--account-email", account_email,
+        "--operator-id", args.operator_id,
+        "--output-dir", args.gmail_output_dir,
+    ])
+
+
+def normalize_email(value: str) -> str:
+    email = (value or "").strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise ValueError(f"invalid email: {value}")
+    return email
+
+
+def email_slug(email: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", email.lower()).strip("-")
+    return slug or "gmail"
+
+
+def gmail_background_sync_command(email: str) -> dict[str, str]:
+    slug = email_slug(email)
+    session = f"powerpacks-msgvault-sync-{slug}"
+    log_path = f".powerpacks/ingestion/logs/msgvault-sync-{slug}.log"
+    pid_path = f".powerpacks/ingestion/pids/msgvault-sync-{slug}.pid"
+    script = (
+        "mkdir -p .powerpacks/ingestion/logs .powerpacks/ingestion/pids; "
+        f"session={shlex.quote(session)}; "
+        f"log={shlex.quote(log_path)}; "
+        f"pid={shlex.quote(pid_path)}; "
+        "if command -v tmux >/dev/null 2>&1; then "
+        f"tmux has-session -t \"$session\" 2>/dev/null || tmux new-session -d -s \"$session\" \"cd '$PWD' && msgvault sync-full {shlex.quote(email)} >> '$PWD'/\"$log\" 2>&1\"; "
+        "tmux display-message -p -t \"$session\" '#{pane_pid}' > \"$pid\"; "
+        f"printf 'Started Gmail sync for {email} (tmux %s, pid %s, log %s)\\n' \"$session\" \"$(cat \"$pid\")\" \"$log\"; "
+        "else "
+        f"nohup msgvault sync-full {shlex.quote(email)} >> \"$log\" 2>&1 & "
+        "echo $! > \"$pid\"; "
+        f"printf 'Started Gmail sync for {email} (pid %s, log %s)\\n' \"$(cat \"$pid\")\" \"$log\"; "
+        "fi"
+    )
+    return {
+        "label": f"start_msgvault_sync_{email}",
+        "command": shell_join(["sh", "-lc", script]),
+        "description": (
+            f"Start local Gmail metadata sync for {email} in the background. "
+            "Large mailboxes can take a few hours; rerun onboarding after a checkpoint exists."
+        ),
+    }
+
+
+def gmail_browser_setup_command(args: argparse.Namespace, email: str) -> dict[str, str]:
+    cmd = [
+        "uv", "run", "--project", ".", "python", msgvault_setup_py(), "browser-setup",
+        "--email", email,
+        "--add-account",
+        *msgvault_home_args(args),
+    ]
+    return {
+        "label": f"create_oauth_app_and_authorize_{email}",
+        "command": shell_join(cmd),
+        "description": f"Create the local-msg-vault Google OAuth app, configure msgvault, and authorize {email}.",
+    }
+
+
+def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> list[dict[str, str]]:
+    if not msgvault_oauth_configured(args):
+        first, rest = emails[0], emails[1:]
+        commands = [gmail_browser_setup_command(args, first)]
+        if rest:
+            commands.append({
+                "label": "add_oauth_test_users",
+                "command": shell_join([
+                    "uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-test-users",
+                    *rest,
+                    *msgvault_home_args(args),
+                ]),
+                "description": "Add remaining Gmail addresses as Google OAuth test users with browser automation.",
+            })
+            for email in rest:
+                commands.append({
+                    "label": f"authorize_{email}",
+                    "command": shell_join([
+                        "uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-account",
+                        "--email", email,
+                        *msgvault_home_args(args),
+                    ]),
+                    "description": f"Authorize {email} in msgvault.",
+                })
+        for email in emails:
+            commands.append(gmail_background_sync_command(email))
+        commands.append({
+            "label": "rerun_onboarding",
+            "command": onboarding_step_command(args),
+            "description": "Rerun onboarding after msgvault has written a Gmail sync checkpoint.",
+        })
+        return commands
+
+    add_users = [
+        "uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-test-users",
+        *emails,
+        *msgvault_home_args(args),
+    ]
+    commands = [{
+        "label": "add_oauth_test_users",
+        "command": shell_join(add_users),
+        "description": "Add the Gmail addresses as Google OAuth test users with browser automation.",
+    }]
+    for email in emails:
+        commands.append({
+            "label": f"authorize_{email}",
+            "command": shell_join([
+                "uv", "run", "--project", ".", "python", msgvault_setup_py(), "add-account",
+                "--email", email,
+                *msgvault_home_args(args),
+            ]),
+            "description": f"Authorize {email} in msgvault.",
+        })
+    for email in emails:
+        commands.append(gmail_background_sync_command(email))
+    commands.append({
+        "label": "rerun_onboarding",
+        "command": onboarding_step_command(args),
+        "description": "Rerun onboarding after msgvault has written a Gmail sync checkpoint.",
+    })
+    return commands
+
+
+def run_linkedin_import(args: argparse.Namespace, mode: str) -> tuple[int, dict[str, Any] | None, str]:
+    cmd = [sys.executable, linkedin_import_py(), mode, "--ledger", args.linkedin_ledger]
+    if mode == "run":
+        cmd = [
+            sys.executable,
+            linkedin_import_py(),
+            "run",
+            "--csv", str(Path(args.linkedin_csv).expanduser()),
+            "--source-user", args.linkedin_source_user,
+            "--operator-id", args.operator_id,
+            "--ledger", args.linkedin_ledger,
+        ]
+    return run_command(cmd, timeout=args.import_timeout)
+
+
+def import_continue_command(args: argparse.Namespace) -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python", linkedin_import_py(),
+        "approve", "--ledger", args.linkedin_ledger,
+    ]) + " && " + shell_join([
+        "uv", "run", "--project", ".", "python", linkedin_import_py(),
+        "continue", "--ledger", args.linkedin_ledger,
+    ])
+
+
+def cmd_step(args: argparse.Namespace) -> int:
+    """Idempotent one-step onboarding loop for CLI/harness use.
+
+    The command is safe to run repeatedly. It refreshes accounts.json from local
+    artifacts first, then returns the next missing action. LinkedIn CSV is
+    handled as the primary interactive handoff: provide a Connections.csv once,
+    approve external enrichment separately if blocked, then keep rerunning this
+    command until the final people.csv artifact is detected.
+    """
+    path = Path(args.accounts)
+    registry, updates = refresh_registry(path)
+    accounts = registry.get("accounts", {})
+
+    skip_sources = set(args.skip_source or [])
+    if args.skip_gmail:
+        skip_sources.add("gmail")
+    if skip_sources:
+        skipped: list[str] = []
+        for channel in sorted(skip_sources):
+            record = accounts.get(channel, {})
+            if not record.get("linked", False):
+                registry = update_channel(channel, path=path, linked=False, skipped=True, notes="Skipped by operator during onboarding")
+                skipped.append(channel)
+        if skipped:
+            emit({
+                "status": "skipped",
+                "channels": skipped,
+                "message": "Skipped selected onboarding sources.",
+                "accounts_path": args.accounts,
+                "registry": registry,
+                "next_command": onboarding_step_command(args),
+            })
+            return 0
+
+    gmail_record = accounts.get("gmail", {})
+    gmail_action_requested = bool(args.gmail_account or args.gmail_all or args.gmail_add_email)
+    if (not gmail_record.get("linked", False) and not gmail_record.get("skipped", False)) or gmail_action_requested:
+        try:
+            extra_emails = list(dict.fromkeys(normalize_email(email) for email in (args.gmail_add_email or [])))
+        except ValueError as exc:
+            emit({
+                "status": "needs_input",
+                "channel": "gmail",
+                "message": str(exc),
+                "repeat_command": onboarding_step_command(args),
+            })
+            return 20
+        if extra_emails:
+            emit({
+                "status": "needs_agent_action",
+                "channel": "gmail",
+                "message": "Adding these Gmail accounts requires browser automation and msgvault authorization. Codex should run the commands in order, start Gmail sync in the background, and only ask the user to complete browser login or consent if Google asks. Large mailboxes can take a few hours; onboarding can import from the latest local checkpoint and rerun later.",
+                "emails": extra_emails,
+                "commands": gmail_add_email_commands(args, extra_emails),
+                "repeat_command_after_sync": onboarding_step_command(args),
+                "accounts_path": args.accounts,
+                "updates": updates,
+            })
+            return 20
+
+        db_path = Path(args.gmail_db).expanduser()
+        if not db_path.exists():
+            emit({
+                "status": "needs_input",
+                "channel": "gmail",
+                "prompt": "Which Gmail address should we link first? Do not infer it from gcloud, Powerset login, or local machine state. After the user provides an email, rerun with --gmail-add-email <email>. Large mailboxes can take a few hours to fully sync, so Codex should start the sync while the user is here.",
+                "question": "Which Gmail address should we link first?",
+                "email_source": "user_provided",
+                "msgvault_db": str(db_path),
+                "example_sync": "msgvault sync-full <email>",
+                "next_command": onboarding_step_command(args),
+                "first_gmail_command": onboarding_step_command(args) + " --gmail-add-email EMAIL",
+                "add_other_email_command": onboarding_step_command(args) + " --gmail-add-email EMAIL",
+                "skip_command": onboarding_step_command(args) + " --skip-gmail",
+                "accounts_path": args.accounts,
+                "updates": updates,
+            })
+            return 20
+
+        code, discovered, stderr = discover_msgvault_accounts(args)
+        if code != 0 or not discovered:
+            emit({
+                "status": "blocked",
+                "channel": "gmail",
+                "message": "Could not list Gmail accounts from msgvault.",
+                "accounts_command": run_gmail_accounts_command(args),
+                "stderr": stderr,
+                "repeat_command": onboarding_step_command(args),
+            })
+            return code or 1
+        discovered_accounts = [row.get("account_email", "") for row in discovered.get("accounts", []) if row.get("account_email")]
+        if not discovered_accounts:
+            emit({
+                "status": "waiting",
+                "channel": "gmail",
+                "message": "No Gmail source accounts found in msgvault yet. Start msgvault sync for the linked Gmail account, keep it running while the user is present, then rerun onboarding after a checkpoint exists.",
+                "accounts_command": run_gmail_accounts_command(args),
+                "repeat_command": onboarding_step_command(args),
+                "skip_command": onboarding_step_command(args) + " --skip-gmail",
+            })
+            return 20
+
+        selected = discovered_accounts if args.gmail_all else [email.strip().lower() for email in args.gmail_account if email.strip()]
+        if not selected:
+            emit({
+                "status": "needs_input",
+                "channel": "gmail",
+                "prompt": "Confirm discovered Gmail accounts to import with --gmail-account <email> or --gmail-all. Message counts are local sync checkpoints; large mailboxes can keep syncing in the background for a few hours. Tell me any other Gmail addresses you want to add; use --gmail-add-email <email> so onboarding can add OAuth test users, authorize them, and start background sync.",
+                "discovered_accounts": discovered.get("accounts", []),
+                "add_commands": [onboarding_step_command(args) + f" --gmail-account {shlex.quote(email)}" for email in discovered_accounts],
+                "all_command": onboarding_step_command(args) + " --gmail-all",
+                "add_other_email_command": onboarding_step_command(args) + " --gmail-add-email EMAIL",
+                "skip_command": onboarding_step_command(args) + " --skip-gmail",
+                "accounts_path": args.accounts,
+                "updates": updates,
+            })
+            return 20
+
+        unknown = sorted(set(selected) - set(discovered_accounts))
+        if unknown:
+            emit({
+                "status": "needs_input",
+                "channel": "gmail",
+                "message": "Some requested Gmail accounts were not found in msgvault.",
+                "unknown_accounts": unknown,
+                "discovered_accounts": discovered.get("accounts", []),
+                "repeat_command": onboarding_step_command(args),
+            })
+            return 20
+
+        imported: list[dict[str, Any]] = []
+        for email in selected:
+            code, payload, stderr = run_gmail_msgvault_import(args, email)
+            if code != 0 or not payload:
+                emit({
+                    "status": "failed",
+                    "channel": "gmail",
+                    "account_email": email,
+                    "stderr": stderr,
+                    "import": payload,
+                    "repeat_command": onboarding_step_command(args),
+                })
+                return code or 1
+            artifacts = payload.get("artifacts", {}) if isinstance(payload, dict) else {}
+            artifact = artifacts.get("people_csv") or artifacts.get("manifest_json") or payload.get("run_dir", "")
+            registry = update_channel("gmail", path=path, username=email, artifact=artifact, success=True, notes="Imported from local msgvault metadata")
+            imported.append({
+                "account_email": email,
+                "run_dir": payload.get("run_dir"),
+                "counts": payload.get("counts"),
+                "artifact": artifact,
+                "command": run_gmail_import_command(args, email),
+            })
+        emit({
+            "status": "progressed",
+            "channel": "gmail",
+            "message": "Imported selected Gmail msgvault account metadata and updated accounts.json.",
+            "imported_accounts": imported,
+            "accounts_path": args.accounts,
+            "registry": registry,
+            "next_command": onboarding_step_command(args),
+        })
+        return 0
+
+    if not accounts.get("linkedin_csv", {}).get("linked", False) and not accounts.get("linkedin_csv", {}).get("skipped", False):
+        ledger = read_json(Path(args.linkedin_ledger))
+        if ledger and ledger.get("status") not in {"completed", "failed"}:
+            code, payload, stderr = run_linkedin_import(args, "continue")
+            registry, more_updates = refresh_registry(path)
+            updates.extend(more_updates)
+            if registry.get("accounts", {}).get("linkedin_csv", {}).get("linked", False):
+                emit({
+                    "status": "progressed",
+                    "channel": "linkedin_csv",
+                    "message": "LinkedIn CSV import artifact detected and accounts.json is linked.",
+                    "accounts_path": args.accounts,
+                    "updates": updates,
+                    "registry": registry,
+                    "next_command": onboarding_step_command(args),
+                })
+                return 0
+            if payload and payload.get("status") == "blocked_approval":
+                emit({
+                    "status": "blocked_approval",
+                    "channel": "linkedin_csv",
+                    "message": payload.get("message"),
+                    "approval_type": payload.get("approval_type"),
+                    "approval_command": payload.get("continue_command") or import_continue_command(args),
+                    "repeat_command_after_approval": onboarding_step_command(args),
+                    "import": payload,
+                })
+                return 20
+            if code != 0:
+                emit({"status": "failed", "channel": "linkedin_csv", "import": payload, "stderr": stderr, "repeat_command": onboarding_step_command(args)})
+                return code
+            emit({"status": "waiting", "channel": "linkedin_csv", "import": payload, "updates": updates, "repeat_command": onboarding_step_command(args)})
+            return 20
+
+        if not args.linkedin_csv:
+            emit({
+                "status": "needs_input",
+                "channel": "linkedin_csv",
+                "prompt": "Export LinkedIn Connections.csv, then rerun with --linkedin-csv <path> --linkedin-source-user <label>.",
+                "next_command": onboarding_step_command(args, placeholders=True),
+                "accounts_path": args.accounts,
+                "updates": updates,
+            })
+            return 20
+        csv_path = Path(args.linkedin_csv).expanduser()
         if not csv_path.exists():
-            return {"status": "needs_user_input", "step": step, "message": "That file does not exist. Paste a valid Connections.csv path or skip.", "ledger": str(ledger_path)}
-        state["context"]["linkedin_csv_path"] = str(csv_path)
-        update_channel("linkedin_csv", path=accounts_path, username=csv_path.stem, artifact=str(csv_path), linked=True, notes="CSV path recorded; run import command to ingest.")
-        advance(state)
-        payload = next_prompt(state, accounts_path, ledger_path)
-        payload["completed_action"] = {
-            "step": "linkedin_csv",
-            "message": "Recorded CSV path. Run this import command when ready.",
-            "command": f"uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run --csv {csv_path} --source-user {csv_path.stem}",
-        }
-        return payload
+            emit({
+                "status": "waiting",
+                "channel": "linkedin_csv",
+                "message": f"Waiting for LinkedIn Connections.csv at {csv_path}.",
+                "repeat_command": onboarding_step_command(args),
+                "accounts_path": args.accounts,
+                "updates": updates,
+            })
+            return 20
+        if not args.linkedin_source_user:
+            emit({
+                "status": "needs_input",
+                "channel": "linkedin_csv",
+                "prompt": "Provide a non-secret source label for this LinkedIn export with --linkedin-source-user <label>.",
+                "next_command": onboarding_step_command(args, placeholders=True),
+                "accounts_path": args.accounts,
+                "updates": updates,
+            })
+            return 20
 
-    if phase == "awaiting_linkedin_mcp_username":
-        if not reply:
-            return {"status": "needs_user_input", "step": step, "message": "Reply with your LinkedIn profile URL or username, or skip.", "ledger": str(ledger_path)}
-        update_channel("linkedin_mcp", path=accounts_path, username=reply, success=True, notes="User reported LinkedIn MCP login/setup completed.")
-        advance(state)
-        return next_prompt(state, accounts_path, ledger_path)
+        code, payload, stderr = run_linkedin_import(args, "run")
+        registry, more_updates = refresh_registry(path)
+        updates.extend(more_updates)
+        if payload and payload.get("status") == "blocked_approval":
+            emit({
+                "status": "blocked_approval",
+                "channel": "linkedin_csv",
+                "message": payload.get("message"),
+                "approval_type": payload.get("approval_type"),
+                "approval_command": payload.get("continue_command") or import_continue_command(args),
+                "repeat_command_after_approval": onboarding_step_command(args),
+                "import": payload,
+                "updates": updates,
+            })
+            return 20
+        if code != 0:
+            emit({"status": "failed", "channel": "linkedin_csv", "import": payload, "stderr": stderr, "repeat_command": onboarding_step_command(args)})
+            return code
+        emit({"status": "progressed", "channel": "linkedin_csv", "import": payload, "updates": updates, "next_command": onboarding_step_command(args)})
+        return 0
 
-    if phase == "awaiting_twitter_handle":
-        handle = reply.lstrip("@")
-        if not handle:
-            return {"status": "needs_user_input", "step": step, "message": "Reply with a Twitter/X handle, or skip.", "ledger": str(ledger_path)}
-        update_channel("twitter", path=accounts_path, username=handle, linked=True, notes="Handle recorded; crawl requires RapidAPI approval.")
-        advance(state)
-        payload = next_prompt(state, accounts_path, ledger_path)
-        payload["completed_action"] = {
-            "step": "twitter",
-            "message": "Recorded Twitter/X handle. Run this import command when ready.",
-            "command": f"uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run --handle {handle}",
-        }
-        return payload
+    steps = build_steps(registry)
+    non_optional_todo = [step for step in steps if not step["linked"] and not step.get("skipped")]
+    if non_optional_todo:
+        emit({
+            "status": "next_action",
+            "accounts_path": args.accounts,
+            "updates": updates,
+            "next": non_optional_todo[0],
+            "todo": non_optional_todo,
+            "repeat_command": onboarding_step_command(args),
+        })
+        return 20
 
-    if phase == "awaiting_enrich_input":
-        csv_path = Path(reply).expanduser()
-        if not csv_path.exists():
-            return {"status": "needs_user_input", "step": step, "message": "That file does not exist. Paste a valid people CSV path or skip.", "ledger": str(ledger_path)}
-        advance(state)
-        payload = next_prompt(state, accounts_path, ledger_path)
-        payload["completed_action"] = {
-            "step": "enrich",
-            "message": "Run this enrichment command when ready. Provider calls pause for approval.",
-            "command": f"uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run --input {csv_path}",
-        }
-        return payload
-
-    return {"status": "failed", "error": f"unknown phase {phase}", "ledger": str(ledger_path)}
-
-
-def cmd_run(args: argparse.Namespace) -> int:
-    ledger_path = Path(args.ledger)
-    if ledger_path.exists() and not args.force:
-        state = load_run(ledger_path)
-    else:
-        state = {"version": 1, "created_at": now_iso(), "updated_at": now_iso(), "index": 0, "phase": "ask", "answers": {}, "skipped": [], "context": {}}
-    save_run(ledger_path, state)
-    emit(next_prompt(state, Path(args.accounts), ledger_path))
+    emit({
+        "status": "completed",
+        "accounts_path": args.accounts,
+        "updates": updates,
+        "registry": registry,
+        "handoff": onboarding_handoff(args, registry),
+        "message": "Required onboarding sources are linked or skipped.",
+    })
     return 0
 
-
-def cmd_continue(args: argparse.Namespace) -> int:
-    ledger_path = Path(args.ledger)
-    state = load_run(ledger_path)
-    payload = handle_continue(state, args.input, Path(args.accounts), ledger_path)
-    save_run(ledger_path, state)
-    emit(payload)
-    return 0
-
-
-def cmd_skip(args: argparse.Namespace) -> int:
-    ledger_path = Path(args.ledger)
-    state = load_run(ledger_path)
-    step = current_step(state)
-    if step:
-        state["answers"][step] = "skip"
-        state.setdefault("skipped", []).append(step)
-        advance(state)
-    emit(next_prompt(state, Path(args.accounts), ledger_path))
-    return 0
-
-
-def cmd_run_status(args: argparse.Namespace) -> int:
-    ledger_path = Path(args.ledger)
-    state = load_run(ledger_path)
-    payload = next_prompt(state, Path(args.accounts), ledger_path)
-    payload["run_state"] = state
-    emit(payload)
-    return 0
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Guided onboarding for local network ingestion sources")
     sub = parser.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--accounts", default=str(DEFAULT_ACCOUNTS_PATH))
-    run_common = argparse.ArgumentParser(add_help=False)
-    run_common.add_argument("--accounts", default=str(DEFAULT_ACCOUNTS_PATH))
-    run_common.add_argument("--ledger", default=str(DEFAULT_ONBOARDING_LEDGER))
-
-    run = sub.add_parser("run", parents=[run_common], help="Start/resume the conversational onboarding flow")
-    run.add_argument("--force", action="store_true")
-    run.set_defaults(func=cmd_run)
-
-    cont = sub.add_parser("continue", parents=[run_common], help="Continue onboarding with the user's latest reply")
-    cont.add_argument("--input", required=True)
-    cont.set_defaults(func=cmd_continue)
-
-    skip = sub.add_parser("skip", parents=[run_common], help="Skip the current onboarding step")
-    skip.set_defaults(func=cmd_skip)
-
-    run_status = sub.add_parser("run-status", parents=[run_common], help="Show current conversational onboarding prompt")
-    run_status.set_defaults(func=cmd_run_status)
-
     status = sub.add_parser("status", parents=[common])
     status.set_defaults(func=cmd_status)
     check = sub.add_parser("check", parents=[common])
@@ -515,6 +914,21 @@ def build_parser() -> argparse.ArgumentParser:
     plan = sub.add_parser("plan", parents=[common])
     plan.add_argument("--all", action="store_true")
     plan.set_defaults(func=cmd_plan)
+
+    step = sub.add_parser("step", parents=[common], help="Idempotent CLI onboarding loop; rerun until completed or blocked for approval/input")
+    step.add_argument("--gmail-db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db for Gmail metadata onboarding")
+    step.add_argument("--gmail-account", action="append", default=[], help="Gmail source account email to import from msgvault; repeat for multiple accounts")
+    step.add_argument("--gmail-add-email", action="append", default=[], help="Additional Gmail address to add as an OAuth test user and authorize in msgvault")
+    step.add_argument("--gmail-all", action="store_true", help="Import all Gmail source accounts discovered in msgvault")
+    step.add_argument("--skip-gmail", action="store_true", help="Skip Gmail/msgvault onboarding (alias for --skip-source gmail)")
+    step.add_argument("--skip-source", action="append", choices=["messages", "gmail", "linkedin_csv", "twitter"], default=[], help="Mark an onboarding source skipped; repeat as needed")
+    step.add_argument("--gmail-output-dir", default=str(DEFAULT_NETWORK_IMPORT_DIR))
+    step.add_argument("--linkedin-csv", default="", help="Path to LinkedIn Connections.csv export when available")
+    step.add_argument("--linkedin-source-user", default="", help="Non-secret label for the LinkedIn export owner/source")
+    step.add_argument("--operator-id", default="local")
+    step.add_argument("--linkedin-ledger", default=".powerpacks/network-import/linkedin/import-run.json")
+    step.add_argument("--import-timeout", type=int, default=90)
+    step.set_defaults(func=cmd_step)
     return parser
 
 

@@ -12,5 +12,6 @@ Default setup command:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup --email <gmail>
+uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-test-users <gmail>
 uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <gmail>
 ```

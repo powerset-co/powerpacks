@@ -38,7 +38,7 @@ The agent should:
   producing `query_results.csv` with reasoning, confidence, and trait scores
 - expect LLM filtering + reranking to legitimately take about 2-3 minutes for
   large searches; do not kill the run just because this step is quiet
-- persist result artifacts in reranked order for refinement and interoperability
+- persist result artifacts in reranked order for audit/export only
 
 ## Skill Composition
 
@@ -101,6 +101,19 @@ If a future workflow chains more skills, keep the same pattern: each task
 consumes a path or task-state step and produces a path or task-state step.
 Example: `search-company` -> `search-network` -> `fix-people` is valid only if
 each boundary has a written artifact.
+
+## Fresh Search Rule
+
+Always start a new search run for a search request. Do not scan, discover,
+reuse, resume, or refine from prior `.powerpacks/search`, `.powerpacks/sales-nav`,
+CSV, JSONL, manifest, artifact, or task-state files when deciding how to answer
+a search request. Do not look for "matching" or "recent" artifacts before
+running retrieval.
+
+Artifacts are outputs of the current run only. You may read artifacts created
+by the current run to export or summarize its results. If the user asks to
+change, narrow, broaden, or refine a search, create a new search run with the
+updated constraints rather than filtering a previous artifact.
 
 ## Fast path runner
 
@@ -262,14 +275,14 @@ search.
     Do not dump full hydrated profiles unless the user explicitly asks to debug
     hydration; then pass `--dump-profiles`.
 13. Run conservative LLM filtering by default:
-    `llm_filter_candidates --state "$STATE" --profile-scope auto --write-state`.
+    `llm_filter_candidates --state "$STATE" --profile-scope auto --batch-size 5 --concurrency 1000 --write-state`.
     Auto uses compact/current-role profiles only when role filters are
     current-scoped (`is_current_role: true`); all-time/past-role queries use the
     full hydrated profile. Do not dump filter scores/prompts unless debugging; then
     pass `--dump-debug`. Use `--allow-partial-hydration` only when the user
     explicitly accepts partial review.
 14. Run async LLM reranking by default with the stronger configured model:
-    `llm_rerank_candidates --state "$STATE" --concurrency 200 --model gpt-5.4 --write-state`.
+    `llm_rerank_candidates --state "$STATE" --concurrency 400 --model gpt-5.4 --write-state`.
     Rerank is the final ordering pass and reads the full hydrated profile from
     `profiles_path`. The primary output is `llm_rerank_candidates/query_results.csv`; columns must match the app
     query-results schema: `conversation_id`, `query`, `person_id`,
@@ -418,8 +431,8 @@ Before showing the preview, perform this payload quality gate:
   filters
 - include company-domain adjacency only when explicitly requested, confirmed by
   the user, or recorded as a separate exploratory slice
-- use persisted task state and artifacts as the source of truth; do not paste
-  the full candidate set into chat
+- use the current run's task state and artifacts as the source of truth; do not
+  paste the full candidate set into chat
 - the normal approval vocabulary is `execute` or `modify`. `execute` runs
   retrieval, hydration, LLM filter, LLM rerank, and persistence; `modify`
   revises the extracted payload before any retrieval.
@@ -504,12 +517,12 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
 ## Artifact Review
 
 After persisting artifacts, present the task state path plus the CSV, JSONL,
-and manifest paths. Use those files for refinement instead of trying to keep
-the full candidate set in chat.
+and manifest paths. These files are for audit/export of the current run, not
+for future search reuse.
 
 When the user asks to refine, filter, export, tag, or build on prior results,
-use `refine_search_results` with the persisted JSONL/manifest and write a child
-artifact rather than mutating the original run.
+run a new search with the updated constraints. Do not scan prior artifacts to
+find a reusable candidate set.
 
 ## Primary Primitives
 
@@ -532,7 +545,6 @@ artifact rather than mutating the original run.
 - `llm_filter_candidates`
 - `llm_rerank_candidates`
 - `persist_search_results`
-- `refine_search_results`
 
 ## Helper References
 

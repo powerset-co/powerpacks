@@ -13,6 +13,7 @@ Spend-bearing provider calls are approval-gated.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import hashlib
 import json
@@ -22,8 +23,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 try:
@@ -51,10 +53,16 @@ except ModuleNotFoundError:
 DEFAULT_LEDGER = Path(".powerpacks/network-import/enrichment/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 RAPIDAPI_BASE_URL = "https://professional-network-data.p.rapidapi.com"
+DEFAULT_RAPIDAPI_MAX_WORKERS = int(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MAX_WORKERS", "10"))
+DEFAULT_RAPIDAPI_MAX_RPM = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MAX_RPM", "300"))
+DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_FAILURE_RETRY_HOURS", "24"))
+DEFAULT_PROGRESS_INTERVAL_SECONDS = float(os.environ.get("POWERPACKS_RAPIDAPI_PROGRESS_INTERVAL_SECONDS", "60"))
+DEFAULT_PROGRESS_INTERVAL_ROWS = int(os.environ.get("POWERPACKS_RAPIDAPI_PROGRESS_INTERVAL_ROWS", "100"))
 PIPELINE_STEPS = ["prepare_queue", "enrich_linkedin", "merge_people"]
 
 QUEUE_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["enrichment_route", "enrichment_reason"]
 CACHE_COLUMNS = QUEUE_COLUMNS + ["cache_status", "cache_path", "cache_reason"]
+RECENT_FAILURE_COLUMNS = CACHE_COLUMNS + ["last_checked_at", "retry_after", "rapidapi_status_code", "rapidapi_error"]
 PROVIDER_COLUMNS = QUEUE_COLUMNS + [
     "rapidapi_status_code",
     "rapidapi_error",
@@ -75,12 +83,47 @@ class PipelineFailed(Exception):
     pass
 
 
+def load_dotenv(path: Path, keys: set[str] | None = None) -> None:
+    """Load simple KEY=VALUE entries without overriding the shell env."""
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ or (keys is not None and key not in keys):
+            continue
+        os.environ[key] = value.strip().strip('"').strip("'")
+
+
+load_dotenv(Path(__file__).resolve().parents[4] / ".env", {"RAPIDAPI_LINKEDIN_KEY", "RAPIDAPI_KEY"})
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def parse_iso(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def emit_progress(message: str) -> None:
+    print(f"[enrich-people] {message}", file=sys.stderr, flush=True)
 
 
 def sha(value: str, length: int = 12) -> str:
@@ -218,6 +261,28 @@ def profile_cache_path(cache_dir: Path | str | None, public_identifier: str) -> 
     return Path(cache_dir) / f"{slug}.json"
 
 
+class StartRateLimiter:
+    def __init__(self, max_rpm: float, extra_sleep_seconds: float = 0.0) -> None:
+        intervals = []
+        if max_rpm and max_rpm > 0:
+            intervals.append(60.0 / max_rpm)
+        if extra_sleep_seconds and extra_sleep_seconds > 0:
+            intervals.append(extra_sleep_seconds)
+        self.interval = max(intervals) if intervals else 0.0
+        self.lock = Lock()
+        self.next_start = 0.0
+
+    def wait(self) -> None:
+        if self.interval <= 0:
+            return
+        with self.lock:
+            now = time.monotonic()
+            wait_for = max(0.0, self.next_start - now)
+            self.next_start = max(now, self.next_start) + self.interval
+        if wait_for > 0:
+            time.sleep(wait_for)
+
+
 def read_usable_cached_profile(cache_path: Path | None) -> dict[str, Any] | None:
     if not cache_path or not cache_path.exists():
         return None
@@ -229,6 +294,26 @@ def read_usable_cached_profile(cache_path: Path | None) -> dict[str, Any] | None
     if isinstance(normalized, dict) and normalized.get("success") is True and isinstance(raw, dict):
         return cached
     return None
+
+
+def recent_cached_failure(cache_path: Path | None, retry_hours: float) -> dict[str, Any] | None:
+    if not cache_path or not cache_path.exists() or retry_hours <= 0:
+        return None
+    cached = read_json(cache_path, None)
+    if not isinstance(cached, dict):
+        return None
+    normalized = cached.get("normalized_profile")
+    if not isinstance(normalized, dict) or normalized.get("success") is not False:
+        return None
+    checked_at = parse_iso(str(cached.get("last_checked_at") or cached.get("fetched_at") or ""))
+    if checked_at is None:
+        return None
+    retry_after = checked_at + timedelta(hours=retry_hours)
+    if datetime.now(timezone.utc) >= retry_after:
+        return None
+    result = dict(cached)
+    result["retry_after"] = retry_after.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return result
 
 
 def rapidapi_profile(
@@ -262,10 +347,23 @@ def rapidapi_profile(
     if cache_path and status == 200 and isinstance(data, dict) and normalized.get("success") is True:
         write_json(cache_path, {
             "fetched_at": now_iso(),
+            "last_checked_at": now_iso(),
             "public_identifier": public_identifier,
             "linkedin_url": linkedin_url,
             "raw_response": data,
             "normalized_profile": normalized,
+        })
+    elif cache_path:
+        checked_at = now_iso()
+        write_json(cache_path, {
+            "fetched_at": checked_at,
+            "last_checked_at": checked_at,
+            "public_identifier": public_identifier,
+            "linkedin_url": linkedin_url,
+            "raw_response": data if isinstance(data, dict) else {},
+            "normalized_profile": normalized,
+            "status_code": status,
+            "error": error or normalized.get("error") or "",
         })
     return {"status_code": status, "data": data, "error": error, "from_cache": False, "normalized_profile": normalized}
 
@@ -369,18 +467,21 @@ def cached_profile_from_row(row: dict[str, Any], public_identifier: str, linkedi
     return None
 
 
-def classify_rapidapi_cache_status(row: dict[str, str], profile_cache_dir: Path, refresh_cache: bool) -> tuple[str, str, Path | None]:
+def classify_rapidapi_cache_status(row: dict[str, str], profile_cache_dir: Path, refresh_cache: bool, retry_hours: float) -> tuple[str, str, Path | None, dict[str, Any] | None]:
     public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
     cache_path = profile_cache_path(profile_cache_dir, public_identifier)
     if refresh_cache:
-        return "miss", "refresh requested", cache_path
+        return "miss", "refresh requested", cache_path, None
     if cached_profile_from_row(row, public_identifier, row.get("linkedin_url") or "") is not None:
-        return "hit", "input rapidapi_response", cache_path
+        return "hit", "input rapidapi_response", cache_path, None
     if read_usable_cached_profile(cache_path):
-        return "hit", "profile cache", cache_path
+        return "hit", "profile cache", cache_path, None
+    recent_failure = recent_cached_failure(cache_path, retry_hours)
+    if recent_failure:
+        return "recent_failure", "recent provider failure", cache_path, recent_failure
     if cache_path and cache_path.exists():
-        return "miss", "cache entry unusable", cache_path
-    return "miss", "no usable cache", cache_path
+        return "miss", "cache entry unusable", cache_path, None
+    return "miss", "no usable cache", cache_path, None
 
 
 def count_rapidapi_cache_misses(cache_misses_csv: Path) -> int:
@@ -455,11 +556,13 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
     queue: list[dict[str, Any]] = []
     cache_hits: list[dict[str, Any]] = []
     cache_misses: list[dict[str, Any]] = []
+    recent_failures: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
     route_counts: dict[str, int] = {}
     profile_cache_dir = Path(ledger["input"].get("profile_cache_dir") or DEFAULT_BASE_DIR / "profile_cache_v2")
     refresh_cache = bool(ledger["input"].get("refresh_cache"))
+    failure_retry_hours = float(ledger["input"].get("failure_retry_hours") if ledger["input"].get("failure_retry_hours") is not None else DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
     for row in rows:
         route, reason = route_row(row, force=bool(ledger["input"].get("force")))
         row["enrichment_route"] = route
@@ -467,11 +570,20 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
         route_counts[route] = route_counts.get(route, 0) + 1
         if route == "linkedin_provider":
             queue.append(row)
-            status, cache_reason, cache_path = classify_rapidapi_cache_status(row, profile_cache_dir, refresh_cache)
+            status, cache_reason, cache_path, recent_failure = classify_rapidapi_cache_status(row, profile_cache_dir, refresh_cache, failure_retry_hours)
             cache_row = dict(row)
             cache_row.update({"cache_status": status, "cache_path": str(cache_path or ""), "cache_reason": cache_reason})
             if status == "hit":
                 cache_hits.append(cache_row)
+            elif status == "recent_failure":
+                normalized = recent_failure.get("normalized_profile") if isinstance(recent_failure, dict) else {}
+                cache_row.update({
+                    "last_checked_at": recent_failure.get("last_checked_at") or recent_failure.get("fetched_at") or "",
+                    "retry_after": recent_failure.get("retry_after") or "",
+                    "rapidapi_status_code": recent_failure.get("status_code") or "",
+                    "rapidapi_error": recent_failure.get("error") or (normalized.get("error") if isinstance(normalized, dict) else "") or "",
+                })
+                recent_failures.append(cache_row)
             else:
                 cache_misses.append(cache_row)
         elif route == "needs_resolution":
@@ -482,28 +594,38 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
     queue_path = run_dir / "linkedin_enrichment_queue.csv"
     cache_hits_path = run_dir / "rapidapi_cache_hits.csv"
     cache_misses_path = run_dir / "rapidapi_cache_misses.csv"
+    recent_failures_path = run_dir / "rapidapi_recent_failures.csv"
     unresolved_path = run_dir / "needs_resolution_queue.csv"
     skipped_path = run_dir / "skipped_enrichment.csv"
     write_csv(queue_path, QUEUE_COLUMNS, queue)
     write_csv(cache_hits_path, CACHE_COLUMNS, cache_hits)
     write_csv(cache_misses_path, CACHE_COLUMNS, cache_misses)
+    write_csv(recent_failures_path, RECENT_FAILURE_COLUMNS, recent_failures)
     write_csv(unresolved_path, QUEUE_COLUMNS, unresolved)
     write_csv(skipped_path, QUEUE_COLUMNS, skipped)
     ledger["artifacts"].update({
         "linkedin_enrichment_queue_csv": str(queue_path),
         "rapidapi_cache_hits_csv": str(cache_hits_path),
         "rapidapi_cache_misses_csv": str(cache_misses_path),
+        "rapidapi_recent_failures_csv": str(recent_failures_path),
         "needs_resolution_queue_csv": str(unresolved_path),
         "skipped_enrichment_csv": str(skipped_path),
     })
     ledger["queue_count"] = len(queue)
     ledger["cache_hit_count"] = len(cache_hits)
     ledger["paid_call_count"] = len(cache_misses)
+    ledger["recent_failure_count"] = len(recent_failures)
+    emit_progress(
+        "Prepared LinkedIn enrichment queue: "
+        f"{len(queue)} total, {len(cache_hits)} cached, {len(cache_misses)} paid lookups, "
+        f"{len(recent_failures)} recent failures."
+    )
     return {
         "input_rows": len(rows),
         "queue_rows": len(queue),
         "cache_hit_rows": len(cache_hits),
         "paid_call_rows": len(cache_misses),
+        "recent_failure_rows": len(recent_failures),
         "unresolved_rows": len(unresolved),
         "skipped_rows": len(skipped),
         "route_counts": route_counts,
@@ -522,6 +644,7 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
         out_path = Path(ledger["run_dir"]) / "provider_enriched.csv"
         write_csv(out_path, PROVIDER_COLUMNS, [])
         ledger["artifacts"]["provider_enriched_csv"] = str(out_path)
+        emit_progress("No LinkedIn enrichment work needed.")
         return {"processed": 0, "cached": 0, "fetched": 0, "output_file": str(out_path), "providers": {"rapidapi": False}}
 
     paid_call_count = int(ledger.get("paid_call_count") or 0)
@@ -531,12 +654,20 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
 
     profile_cache_dir = Path(ledger["input"].get("profile_cache_dir") or DEFAULT_BASE_DIR / "profile_cache_v2")
     refresh_cache = bool(ledger["input"].get("refresh_cache"))
+    max_workers = max(1, int(ledger["input"].get("max_workers") or DEFAULT_RAPIDAPI_MAX_WORKERS))
+    max_rpm = float(ledger["input"].get("max_rpm") if ledger["input"].get("max_rpm") is not None else DEFAULT_RAPIDAPI_MAX_RPM)
+    sleep_seconds = float(ledger["input"].get("sleep_seconds") or 0.0)
+    rate_limiter = StartRateLimiter(max_rpm, sleep_seconds)
     raw_dir = Path(ledger["run_dir"]) / "raw_provider_responses"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    enriched: list[dict[str, Any]] = []
-    cached_count = 0
-    fetched_count = 0
-    for row in rows:
+    cache_rows = sum(1 for row in rows if row.get("cache_status") == "hit")
+    emit_progress(
+        "Starting LinkedIn profile enrichment: "
+        f"{len(rows)} profiles, {cache_rows} cached, {paid_call_count} to fetch, "
+        f"max {max_workers} workers, {max_rpm:g} rpm."
+    )
+
+    def enrich_one(row: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any], bool]:
         public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
         linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
         if not public_identifier and linkedin_url:
@@ -551,12 +682,9 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
                 rapid = rapidapi_profile(public_identifier, linkedin_url, "", cache_dir=profile_cache_dir, refresh_cache=False)
             if not rapid.get("from_cache"):
                 raise PipelineFailed(f"usable RapidAPI cache was expected for {public_identifier or linkedin_url}")
-            cached_count += 1
         else:
+            rate_limiter.wait()
             rapid = rapidapi_profile(public_identifier, linkedin_url, rapid_key, cache_dir=profile_cache_dir, refresh_cache=refresh_cache)
-            fetched_count += 1
-            time.sleep(float(ledger["input"].get("sleep_seconds") or 0.0))
-        write_json(raw_dir / f"{public_identifier or sha(linkedin_url or row.get('id',''))}.json", {"input": row, "rapidapi": rapid, "cache_hit": bool(rapid.get("from_cache"))})
         out = dict(row)
         out.update({
             "public_identifier": public_identifier,
@@ -567,11 +695,59 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
             "rapidapi_from_cache": "true" if rapid.get("from_cache") else "false",
             "provider_enriched_at": now_iso(),
         })
+        raw_payload = {"input": row, "rapidapi": rapid, "cache_hit": bool(rapid.get("from_cache"))}
+        return out, raw_payload, is_cache_hit
+
+    enriched_by_index: dict[int, dict[str, Any]] = {}
+    raw_by_index: dict[int, dict[str, Any]] = {}
+    cached_count = 0
+    fetched_count = 0
+    processed_count = 0
+    last_progress = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {executor.submit(enrich_one, row): index for index, row in enumerate(rows)}
+        for future in concurrent.futures.as_completed(future_to_index):
+            index = future_to_index[future]
+            out, raw_payload, was_cache_hit = future.result()
+            enriched_by_index[index] = out
+            raw_by_index[index] = raw_payload
+            if was_cache_hit:
+                cached_count += 1
+            else:
+                fetched_count += 1
+            processed_count += 1
+            now = time.monotonic()
+            if (
+                processed_count == len(rows)
+                or processed_count % DEFAULT_PROGRESS_INTERVAL_ROWS == 0
+                or now - last_progress >= DEFAULT_PROGRESS_INTERVAL_SECONDS
+            ):
+                emit_progress(
+                    "LinkedIn profile enrichment progress: "
+                    f"{processed_count}/{len(rows)} processed "
+                    f"({cached_count} cached, {fetched_count} fetched)."
+                )
+                last_progress = now
+    enriched: list[dict[str, Any]] = []
+    for index in range(len(rows)):
+        out = enriched_by_index[index]
+        raw_payload = raw_by_index[index]
+        public_identifier = out.get("public_identifier") or extract_public_identifier(out.get("linkedin_url") or "")
+        write_json(raw_dir / f"{public_identifier or sha(out.get('linkedin_url') or out.get('id',''))}.json", raw_payload)
         enriched.append(out)
     out_path = Path(ledger["run_dir"]) / "provider_enriched.csv"
     write_csv(out_path, PROVIDER_COLUMNS, enriched)
     ledger["artifacts"].update({"provider_enriched_csv": str(out_path), "raw_provider_responses_dir": str(raw_dir)})
-    return {"processed": len(enriched), "cached": cached_count, "fetched": fetched_count, "output_file": str(out_path), "providers": {"rapidapi": True}}
+    emit_progress(f"LinkedIn profile enrichment finished: {len(enriched)} profiles processed.")
+    return {
+        "processed": len(enriched),
+        "cached": cached_count,
+        "fetched": fetched_count,
+        "output_file": str(out_path),
+        "providers": {"rapidapi": True},
+        "max_workers": max_workers,
+        "max_rpm": max_rpm,
+    }
 
 
 def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
@@ -590,10 +766,11 @@ def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
         merged = merge_provider_profile(row, rapid, rapid_raw)
         key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or sha(json.dumps(row, sort_keys=True))
         by_key[key] = merged
-    output = Path(ledger["run_dir"]) / "people_enriched.csv"
+    output = Path(ledger["run_dir"]) / "people.csv"
     rows = list(by_key.values())
     write_csv(output, PEOPLE_SCHEMA_COLUMNS, rows)
-    ledger["artifacts"]["people_enriched_csv"] = str(output)
+    ledger["artifacts"]["people_csv"] = str(output)
+    emit_progress(f"Wrote people.csv with {len(rows)} rows.")
     return {"rows": len(rows), "output_file": str(output)}
 
 
@@ -673,6 +850,9 @@ def command_run(args: argparse.Namespace) -> int:
             "refresh_cache": args.refresh_cache,
             "company_corpus_jsonl": [str(Path(p)) for p in (args.company_corpus_jsonl or [])],
             "sleep_seconds": args.sleep_seconds,
+            "max_workers": args.max_workers,
+            "max_rpm": args.max_rpm,
+            "failure_retry_hours": args.failure_retry_hours,
         },
         "steps": {},
         "approvals": {},
@@ -716,7 +896,7 @@ def command_approve(args: argparse.Namespace) -> int:
 
 def command_status(args: argparse.Namespace) -> int:
     ledger = load_ledger(Path(args.ledger))
-    emit({"status": ledger.get("status", "unknown"), "blocked": ledger.get("blocked"), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {}), "queue_count": ledger.get("queue_count"), "cache_hit_count": ledger.get("cache_hit_count"), "paid_call_count": ledger.get("paid_call_count")})
+    emit({"status": ledger.get("status", "unknown"), "blocked": ledger.get("blocked"), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {}), "queue_count": ledger.get("queue_count"), "cache_hit_count": ledger.get("cache_hit_count"), "paid_call_count": ledger.get("paid_call_count"), "recent_failure_count": ledger.get("recent_failure_count")})
     return 0
 
 
@@ -746,6 +926,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--refresh-cache", action="store_true", help="Force RapidAPI calls even when a successful local cache entry exists")
     run.add_argument("--company-corpus-jsonl", action="append", default=[])
     run.add_argument("--sleep-seconds", type=float, default=0.0)
+    run.add_argument("--max-workers", type=int, default=DEFAULT_RAPIDAPI_MAX_WORKERS)
+    run.add_argument("--max-rpm", type=float, default=DEFAULT_RAPIDAPI_MAX_RPM)
+    run.add_argument("--failure-retry-hours", type=float, default=DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
     run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
     run.set_defaults(func=command_run)
 

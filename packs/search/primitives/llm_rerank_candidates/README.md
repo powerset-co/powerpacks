@@ -1,6 +1,6 @@
 # llm_rerank_candidates
 
-Async fan-out LLM rerank over a JSONL of candidates or a Powerpacks task-state. Stdlib only.
+Async fan-out LLM rerank over a JSONL of candidates or a Powerpacks task-state.
 
 Same shape as the production `SEARCH_V2_RERANK_MAX_CONCURRENT=400` path
 in network-search-api, but Powerpacks-local. Useful for:
@@ -28,8 +28,8 @@ Powerpacks task-state (`--state`) after `hydrate_people` has run.
 - `--query STRING` — the search query (prompt context; defaults to `state.query`
   in `--state` mode)
 - `--traits TRAIT` — expected traits (repeatable; pass once per trait)
-- `--concurrency N` — `asyncio.Semaphore` size (default 50; env
-  `LLM_RERANK_CONCURRENCY`)
+- `--concurrency N` — `asyncio.Semaphore` size (default follows
+  `LLM_RERANK_CONCURRENCY`, then `SEARCH_V2_RERANK_MAX_CONCURRENT`, then `400`)
 - `--model NAME` — chat completion model (default `gpt-4o-mini`)
 - `--api-base URL` — base URL (default `https://api.openai.com`; useful
   for testing against a localhost mock or a different OpenAI-compatible
@@ -145,9 +145,7 @@ python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py \
 ## Concurrency model
 
 - A single `asyncio.Semaphore(N)` gates how many calls are in flight.
-- Each in-flight call runs `urllib.request.urlopen` on a thread from a
-  `ThreadPoolExecutor(max_workers=N)` so blocking I/O doesn't stall the
-  event loop.
+- Each in-flight call uses the repo's `openai.AsyncOpenAI` client.
 - Retries are async-aware (`asyncio.sleep` for backoff).
 - `concurrency` of 200 is safe in practice on macOS / Linux but watch
   the file-descriptor limit (`ulimit -n`) and your OpenAI tier rate

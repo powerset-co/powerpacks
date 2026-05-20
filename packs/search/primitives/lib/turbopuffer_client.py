@@ -36,7 +36,14 @@ ADJACENCY_LIMIT = int(os.getenv("POWERPACKS_COMPANY_ADJACENCY_LIMIT", "1000"))
 ADJACENCY_EXCLUDE_SENIORITY = ["entry", "trainee"]
 ROLE_ADJACENCY_MAP_PATH = Path(__file__).resolve().parents[3] / "data" / "roles" / "role_adjacency.opus.json"
 _ROLE_ADJACENCY_MAP: dict[str, list[str]] | None = None
-LOCAL_BACKEND_NAMESPACES = {"people", "summaries", "education", "schools"}
+LOCAL_BACKEND_NAMESPACES = {"people", "summaries", "education", "schools", "companies"}
+LOCAL_BACKEND_TABLES = {
+    "people": "local_people_positions",
+    "summaries": "local_summaries",
+    "education": "local_people_education",
+    "schools": "local_education",
+    "companies": "local_companies",
+}
 
 
 ADJACENCY_QUERIES: dict[tuple[str | None, str | None], list[str]] = {
@@ -235,6 +242,8 @@ def ensure_packages() -> None:
 
 
 def namespace_name(logical_name: str = "people") -> str:
+    if os.getenv("POWERPACKS_LOCAL_SEARCH_DB") and logical_name in LOCAL_BACKEND_TABLES:
+        return LOCAL_BACKEND_TABLES[logical_name]
     env_key = f"POWERPACKS_TURBOPUFFER_{logical_name.upper()}_NAMESPACE"
     configured = os.getenv(env_key)
     if configured:
@@ -276,12 +285,15 @@ def local_store() -> Any:
     return _local_store_for_path(db_path)
 
 
+def local_namespace_has_vectors(logical_name: str, field: str = "vector") -> bool:
+    return bool(is_local_backend() and logical_name in LOCAL_BACKEND_NAMESPACES and local_store().has_nonempty_vectors(logical_name, field))
+
+
 def namespace(logical_name: str = "people") -> Any:
     if is_local_backend() and logical_name in LOCAL_BACKEND_NAMESPACES:
         return local_store().namespace(logical_name)
-    # Companies and investors remain TurboPuffer-backed in local mode unless the
-    # caller provides resolved IDs; local DuckDB covers people, summaries,
-    # education, and schools only.
+    # Investors remain TurboPuffer-backed in local mode. Local DuckDB covers
+    # people, summaries, education, schools, and companies.
     return client().namespace(namespace_name(logical_name))
 
 

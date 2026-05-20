@@ -7,7 +7,7 @@ Ports the Twitter/X discovery pipeline into Powerpacks-local artifacts:
 - optional OpenAI MOE expert evaluation (approval-gated)
 - free parallel LinkedIn URL pre-resolution from bio/website/link aggregators
 - optional parallel RapidAPI LinkedIn validation (approval-gated)
-- provider-neutral people.csv skeleton output
+- canonical people.csv output plus temporary people_harmonic_all.csv alias
 
 Stdlib-only. No DB writes. No external API calls before approval.
 """
@@ -21,6 +21,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import unicodedata
@@ -33,10 +35,10 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS
+    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, normalize_people_row
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS
+    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, normalize_people_row
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/twitter/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
@@ -212,8 +214,7 @@ def parse_twitter_user(data: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(user_obj, dict):
         return None
     core = user_obj.get("core") if isinstance(user_obj.get("core"), dict) else {}
-    legacy_obj = user_obj.get("legacy") or user_obj.get("old")
-    legacy = legacy_obj if isinstance(legacy_obj, dict) else {}
+    legacy = user_obj.get("legacy") if isinstance(user_obj.get("legacy"), dict) else {}
     avatar = user_obj.get("avatar") if isinstance(user_obj.get("avatar"), dict) else {}
     location_obj = user_obj.get("location")
     user_id = str(user_obj.get("rest_id") or legacy.get("id_str") or "")
@@ -866,6 +867,10 @@ def load_rapidapi_json(row: dict[str, Any]) -> dict[str, Any] | None:
 def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
     src = Path(ledger["artifacts"].get("linkedin_validated_csv") or ledger["artifacts"].get("linkedin_resolved_csv"))
     rows = read_csv(src)
+    source_artifacts = [
+        value for key, value in sorted(ledger.get("artifacts", {}).items())
+        if key.endswith("_csv") and value
+    ]
     people: list[dict[str, Any]] = []
     for row in rows:
         linkedin_url = row.get("linkedin_url", "")
@@ -916,13 +921,26 @@ def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
             "harmonic_response": "",
             "harmonic_location": "",
             "twitter_handle": row.get("handle", ""),
-            "twitter_response": "",
+            "twitter_response": json.dumps({
+                "handle": row.get("handle", ""),
+                "source": row.get("source", ""),
+                "follower_count": row.get("follower_count", ""),
+                "enrichment_score": row.get("enrichment_score", ""),
+                "moe_verdict": row.get("moe_verdict", ""),
+                "linkedin_status": row.get("linkedin_status", ""),
+                "linkedin_validation_status": row.get("linkedin_validation_status", ""),
+            }, ensure_ascii=False),
             "rapidapi_response": row.get("rapidapi_response", ""),
+            "source_channels": "twitter",
+            "source_artifacts": json.dumps(source_artifacts, ensure_ascii=False),
         })
     out = Path(ledger["run_dir"]) / "people.csv"
+    legacy = Path(ledger["run_dir"]) / "people_harmonic_all.csv"
     write_csv(out, PEOPLE_COLUMNS, people)
+    shutil.copyfile(out, legacy)
     ledger["artifacts"]["people_csv"] = str(out)
-    return {"rows": len(people), "output_file": str(out)}
+    ledger["artifacts"]["people_harmonic_all_csv"] = str(legacy)
+    return {"rows": len(people), "output_file": str(out), "legacy_output_file": str(legacy)}
 
 
 STEP_FUNCS = {

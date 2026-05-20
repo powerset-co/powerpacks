@@ -11,7 +11,7 @@ All artifacts stay under `.powerpacks/network-import/twitter/<run-id>/`. The pri
 3. `moe_evaluate` — OpenAI mixture-of-experts triage using the legacy expert lenses.
 4. `pre_resolve_linkedin` — free parallel LinkedIn URL extraction from bio, website, and link aggregators.
 5. `validate_linkedin` — parallel RapidAPI LinkedIn validation/enrichment.
-6. `format_people` — provider-neutral `people.csv` output.
+6. `format_people` — canonical `people.csv` output plus temporary legacy `people_harmonic_all.csv` alias.
 
 ## Cost / approval gates
 
@@ -58,5 +58,6 @@ uv run --project . python packs/ingestion/primitives/twitter_network_import/twit
 - `linkedin_resolved.csv` — free parallel pre-resolution of LinkedIn URLs from bio/website/link aggregators.
 - `linkedin_resolution_queue.csv` — remaining candidates that need a later lookup/search pass.
 - `linkedin_validated.csv` — parallel RapidAPI LinkedIn validation results when approved.
-- `people.csv` — downstream-compatible provider-neutral person shape with Twitter handle and provider raw JSON columns.
+- `people.csv` — canonical downstream-compatible person shape with Twitter handle and provider raw JSON columns.
+- `people_harmonic_all.csv` — temporary compatibility alias.
 - `raw_twitter_responses/`, `raw_linkedin_responses/` — local raw response cache for audit/debug.

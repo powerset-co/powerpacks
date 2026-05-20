@@ -65,6 +65,10 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "search-network" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "import-email" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "import-network" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())
             self.assertTrue((skills_dir / "search-network" / "powerpacks" / "pyproject.toml").exists())
             self.assertIn(
@@ -78,6 +82,30 @@ class CoreLayoutTests(unittest.TestCase):
                 path.relative_to(skills_dir)
                 for path in skills_dir.glob("*/powerpacks/packs/*/skills/*/SKILL.md")
             )
+            self.assertEqual(nested_skill_files, [])
+
+    def test_codex_adapter_uses_shared_powerpacks_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            codex_home = Path(td) / ".codex"
+            skills_dir = Path(td) / "skills"
+            proc = subprocess.run(
+                [str(ROOT / "install.sh"), "codex", str(skills_dir)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "CODEX_HOME": str(codex_home), "POWERPACKS_SKIP_UV_SYNC": "1"},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            bundle = codex_home / "powerpacks"
+            self.assertTrue((bundle / "packs").is_dir())
+            self.assertTrue((bundle / "pyproject.toml").exists())
+            self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "import-contacts" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
+            self.assertTrue((skills_dir / "import-contacts" / "powerpacks").is_symlink())
+            self.assertEqual((skills_dir / "powerset" / "powerpacks").resolve(), bundle.resolve())
+            self.assertEqual((skills_dir / "import-contacts" / "powerpacks").resolve(), bundle.resolve())
+            nested_skill_files = sorted(path.relative_to(bundle) for path in bundle.glob("packs/*/skills/*/SKILL.md"))
             self.assertEqual(nested_skill_files, [])
 
     def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:

@@ -2,8 +2,9 @@
 
 This is the local interchange shape used by Gmail/LinkedIn/Twitter/messages
 merge flows. It is intentionally a superset: source-specific columns may be
-blank for channels that do not provide them. Current importers write the
-provider-neutral file as `people.csv`.
+blank for channels that do not provide them. Canonical exports should be named
+`people.csv`; legacy-compatible aliases such as `people_harmonic_all.csv` may
+exist temporarily, but this module is provider-neutral.
 """
 
 from __future__ import annotations

@@ -56,7 +56,9 @@ python packs/messages/primitives/deep_research_contacts/deep_research_contacts.p
 
 A CSV in the column order `deep_research_contacts.py` expects.
 Most columns are blank for phone-source contacts (`primary_email`, `domain`,
-`bio`, `follower_count`, etc.); only the phone/messaging fields are populated:
+`bio`, `follower_count`, etc.). The queue keeps local message context for
+sorting/review artifacts, but the Parallel submitter sends only the redacted
+research input documented in `deep_research_contacts`:
 
 ```
 handle, display_name, first_name, last_name,

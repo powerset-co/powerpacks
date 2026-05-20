@@ -23,6 +23,31 @@ import openai
 
 logger = logging.getLogger(__name__)
 
+CITY_ALIASES = {
+    "sf": "San Francisco",
+    "s.f.": "San Francisco",
+    "nyc": "New York City",
+}
+
+PERSON_LOCATION_PREFIXES = (
+    "in",
+    "based in",
+    "located in",
+    "lives in",
+    "living in",
+)
+
+COMPANY_LOCATION_NOUNS = (
+    "companies",
+    "company",
+    "startups",
+    "startup",
+    "firms",
+    "firm",
+    "employers",
+    "employer",
+)
+
 # ---------------------------------------------------------------------------
 # Prompts — ported verbatim from network-search-api/prompts/
 # ---------------------------------------------------------------------------
@@ -279,10 +304,40 @@ def _merge(
         filters.pop("is_current_role", None)
         filters.pop("is_current_company", None)
 
+    _apply_location_alias_fallback(filters, query)
+
     # Strip empty/null values
     filters = {k: v for k, v in filters.items() if v is not None and v != [] and v != ""}
 
     return filters
+
+
+def _add_unique(filters: dict[str, Any], key: str, value: str) -> None:
+    values = list(filters.get(key) or [])
+    if value not in values:
+        values.append(value)
+    filters[key] = values
+
+
+def _alias_token_pattern(alias: str) -> str:
+    return re.escape(alias).replace(r"\ ", r"\s+")
+
+
+def _apply_location_alias_fallback(filters: dict[str, Any], query: str) -> None:
+    """Deterministically recover common city abbreviations missed by extraction."""
+    q = " ".join(query.lower().split())
+    company_nouns = "|".join(COMPANY_LOCATION_NOUNS)
+    person_prefixes = "|".join(re.escape(prefix).replace(r"\ ", r"\s+") for prefix in PERSON_LOCATION_PREFIXES)
+    for alias, city in CITY_ALIASES.items():
+        token = _alias_token_pattern(alias)
+        company_prefix = rf"\b{token}\s+(?:{company_nouns})\b"
+        company_suffix = rf"\b(?:{company_nouns})\s+(?:in|based\s+in|located\s+in)\s+{token}\b"
+        person_suffix = rf"\b(?:{person_prefixes})\s+{token}\b"
+
+        if re.search(company_prefix, q) or re.search(company_suffix, q):
+            _add_unique(filters, "company_cities", city)
+        elif re.search(person_suffix, q):
+            _add_unique(filters, "cities", city)
 
 
 # ---------------------------------------------------------------------------

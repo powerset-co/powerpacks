@@ -16,6 +16,7 @@ import difflib
 import hashlib
 import json
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,40 @@ except ModuleNotFoundError:
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
 MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources", "merged_row_count", "needs_review"]
 REVIEW_COLUMNS = ["left_id", "right_id", "left_name", "right_name", "similarity", "left_sources", "right_sources", "reason"]
+NETWORK_CONTACT_COLUMNS = [
+    "contact_id",
+    "merge_key",
+    "display_name",
+    "linkedin_url",
+    "public_identifier",
+    "primary_email",
+    "primary_phone",
+    "source_channels",
+    "source_count",
+    "needs_review",
+]
+NETWORK_CONTACT_SOURCE_COLUMNS = [
+    "contact_id",
+    "merge_key",
+    "source_channel",
+    "source_identifier",
+    "source_artifact",
+    "display_name",
+    "linkedin_url",
+    "public_identifier",
+    "primary_email",
+    "primary_phone",
+]
+NETWORK_COMPANY_COLUMNS = [
+    "company_id",
+    "company_key",
+    "company_name",
+    "company_urn",
+    "source_channels",
+    "contact_count",
+    "contact_ids",
+    "contact_names",
+]
 
 
 def now_iso() -> str:
@@ -81,10 +116,13 @@ def row_name(row: dict[str, str]) -> str:
 
 
 def discover_inputs(base: Path) -> list[Path]:
-    """Discover canonical provider-neutral people inputs under .powerpacks."""
-
-    paths = list(base.glob("network-import/*/*/people.csv"))
+    paths_by_dir: dict[Path, Path] = {}
+    for p in base.glob("network-import/*/*/people.csv"):
+        paths_by_dir[p.parent] = p
+    for p in base.glob("network-import/*/*/people_harmonic_all.csv"):
+        paths_by_dir.setdefault(p.parent, p)
     msg = base / "messages" / "contacts.csv"
+    paths = list(paths_by_dir.values())
     if msg.exists():
         paths.append(msg)
     return sorted(set(paths))
@@ -145,6 +183,120 @@ def choose(current: str, incoming: str) -> str:
     if incoming and len(incoming) > len(current) and current in {"", "[]", "{}"}:
         return incoming
     return current
+
+
+def row_source_channels(row: dict[str, str]) -> list[str]:
+    channels: list[str] = []
+    for src in (row.get("source_channels") or "").split(","):
+        src = src.strip()
+        if src and src not in channels:
+            channels.append(src)
+    return channels or ["unknown"]
+
+
+def source_identifier(row: dict[str, str], channel: str = "") -> str:
+    linkedin_key = stable_linkedin_key(row)
+    if linkedin_key:
+        return row.get("linkedin_url") or linkedin_key
+    if channel.startswith("gmail") or row.get("primary_email"):
+        return row.get("primary_email") or row.get("all_emails", "")
+    if channel in {"imessage", "whatsapp", "messages"} or row.get("primary_phone"):
+        return row.get("primary_phone") or row.get("all_phones", "")
+    if channel == "twitter" or row.get("twitter_handle"):
+        return row.get("twitter_handle", "")
+    return row.get("id") or row_name(row)
+
+
+def network_contact_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contact_id": row.get("id", ""),
+        "merge_key": row.get("merge_key", ""),
+        "display_name": row_name(row),
+        "linkedin_url": row.get("linkedin_url", ""),
+        "public_identifier": row.get("public_identifier", ""),
+        "primary_email": row.get("primary_email", ""),
+        "primary_phone": row.get("primary_phone", ""),
+        "source_channels": row.get("source_channels", ""),
+        "source_count": len([s for s in (row.get("source_channels") or "").split(",") if s.strip()]),
+        "needs_review": row.get("needs_review", "false"),
+    }
+
+
+def normalize_company_key(value: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
+    return value or "unknown"
+
+
+def network_company_rows(people_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    companies: dict[str, dict[str, Any]] = {}
+    for row in people_rows:
+        company_name = (row.get("current_company") or "").strip()
+        company_urn = (row.get("current_company_urn") or "").strip()
+        if not company_name and not company_urn:
+            continue
+        key = company_urn or f"name:{normalize_company_key(company_name)}"
+        rec = companies.setdefault(key, {
+            "company_id": f"company:{sha(key, 16)}",
+            "company_key": key,
+            "company_name": company_name,
+            "company_urn": company_urn,
+            "source_channels": set(),
+            "contact_ids": [],
+            "contact_names": [],
+        })
+        if company_name and not rec.get("company_name"):
+            rec["company_name"] = company_name
+        if company_urn and not rec.get("company_urn"):
+            rec["company_urn"] = company_urn
+        for src in (row.get("source_channels") or "").split(","):
+            if src.strip():
+                rec["source_channels"].add(src.strip())
+        contact_id = row.get("id") or row.get("merge_key") or ""
+        if contact_id and contact_id not in rec["contact_ids"]:
+            rec["contact_ids"].append(contact_id)
+        name = row_name(row)
+        if name and name not in rec["contact_names"]:
+            rec["contact_names"].append(name)
+    out: list[dict[str, Any]] = []
+    for rec in companies.values():
+        out.append({
+            "company_id": rec["company_id"],
+            "company_key": rec["company_key"],
+            "company_name": rec.get("company_name", ""),
+            "company_urn": rec.get("company_urn", ""),
+            "source_channels": ",".join(sorted(rec["source_channels"])),
+            "contact_count": len(rec["contact_ids"]),
+            "contact_ids": json.dumps(rec["contact_ids"], ensure_ascii=False),
+            "contact_names": json.dumps(rec["contact_names"], ensure_ascii=False),
+        })
+    out.sort(key=lambda row: (-int(row["contact_count"]), str(row.get("company_name") or row.get("company_key"))))
+    return out
+
+
+def source_fact_rows(contact: dict[str, Any], source_rows: list[dict[str, str]]) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in source_rows:
+        for channel in row_source_channels(row):
+            identifier = source_identifier(row, channel)
+            artifact = row.get("source_artifacts", "")
+            key = (channel, identifier, artifact)
+            if key in seen:
+                continue
+            seen.add(key)
+            facts.append({
+                "contact_id": contact.get("id", ""),
+                "merge_key": contact.get("merge_key", ""),
+                "source_channel": channel,
+                "source_identifier": identifier,
+                "source_artifact": artifact,
+                "display_name": row_name(row),
+                "linkedin_url": row.get("linkedin_url", ""),
+                "public_identifier": row.get("public_identifier", ""),
+                "primary_email": row.get("primary_email", ""),
+                "primary_phone": row.get("primary_phone", ""),
+            })
+    return facts
 
 
 def merge_group(key: str, rows: list[dict[str, str]]) -> dict[str, Any]:
@@ -223,7 +375,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         all_rows.extend(rows)
         per_file[str(path)] = len(rows)
     groups, singletons = build_groups(all_rows)
-    merged_rows = [merge_group(key, rows) for key, rows in sorted(groups.items())]
+    merged_rows: list[dict[str, Any]] = []
+    source_rows: list[dict[str, Any]] = []
+    for key, rows in sorted(groups.items()):
+        merged = merge_group(key, rows)
+        merged_rows.append(merged)
+        source_rows.extend(source_fact_rows(merged, rows))
     for row in singletons:
         normalized = normalize_people_row(row)
         normalized.update({
@@ -236,10 +393,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not normalized.get("id"):
             normalized["id"] = f"merged:{sha(normalized['merge_key'])}"
         merged_rows.append(normalized)
+        source_rows.extend(source_fact_rows(normalized, [normalized]))
     review = similar_pairs(merged_rows, args.name_threshold)
     output_dir = Path(args.output_dir)
     output = output_dir / "people.csv"
+    legacy_output = output_dir / "people_harmonic_all.merged.csv"
+    review_path = output_dir / "possible_duplicates_review.csv"
+    network_contacts_path = output_dir / "network_contacts.csv"
+    network_contact_sources_path = output_dir / "network_contact_sources.csv"
+    network_companies_path = output_dir / "network_companies.csv"
+    manifest = output_dir / "merge_manifest.json"
     write_csv(output, MERGED_COLUMNS, merged_rows)
+    shutil.copyfile(output, legacy_output)
+    write_csv(review_path, REVIEW_COLUMNS, review)
+    write_csv(network_contacts_path, NETWORK_CONTACT_COLUMNS, [network_contact_row(row) for row in merged_rows])
+    write_csv(network_contact_sources_path, NETWORK_CONTACT_SOURCE_COLUMNS, source_rows)
+    company_rows = network_company_rows(merged_rows)
+    write_csv(network_companies_path, NETWORK_COMPANY_COLUMNS, company_rows)
     manifest_payload = {
         "created_at": now_iso(),
         "inputs": per_file,
@@ -247,9 +417,18 @@ def cmd_run(args: argparse.Namespace) -> int:
         "merged_rows": len(merged_rows),
         "linkedin_groups": len(groups),
         "review_pairs": len(review),
+        "source_rows": len(source_rows),
+        "company_rows": len(company_rows),
         "output": str(output),
+        "people_csv": str(output),
+        "network_contacts_csv": str(network_contacts_path),
+        "network_contact_sources_csv": str(network_contact_sources_path),
+        "network_companies_csv": str(network_companies_path),
+        "legacy_output": str(legacy_output),
     }
-    emit({"status": "completed", **manifest_payload})
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    emit({"status": "completed", **manifest_payload, "manifest": str(manifest)})
     return 0
 
 
@@ -257,7 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Merge/dedupe local network import people artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
-    run.add_argument("--input", action="append", help="Input provider-neutral people.csv or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
+    run.add_argument("--input", action="append", help="Input people.csv, legacy people_harmonic_all.csv, or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
     run.add_argument("--base-dir", default=".powerpacks")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     run.add_argument("--name-threshold", type=float, default=0.92)

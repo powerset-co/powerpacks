@@ -183,8 +183,10 @@ $import-whatsapp                  # isolated WhatsApp sync test via wacli
 ### Secrets / env vars
 
 `$powerset login` and `$powerset env pull` populate `.env` from GCP Secret
-Manager for internal Powerset users. The default `search-core` profile is the
-normal one-shot setup and pulls what is available on a best-effort basis.
+Manager for provisioned users. The default `search-core` profile is the normal
+one-shot setup and pulls what is available on a best-effort basis. For narrower
+access, use `search-network` for local search or `import-contacts` for contact
+review/research.
 
 | Key | Used by |
 | --- | --- |
@@ -214,6 +216,11 @@ bin/update-codex                           # pull, sync agent files, reinstall C
 ./install.sh codex                          # default: ~/.codex/skills/
 ./install.sh codex /custom/skills/dir       # explicit target
 ```
+
+The Codex adapter installs each skill entrypoint under `~/.codex/skills/<skill>/`
+and stores one shared support bundle at `~/.codex/powerpacks`. Each installed
+skill links `powerpacks/` to that shared bundle, so adding a skill does not copy
+the full pack tree again.
 
 ### Claude Code
 
@@ -351,8 +358,8 @@ contracts.
 
 ## Runtime Provisioning
 
-Internal Powerset users can provision a local `.env` from GCP Secret Manager
-without pasting raw secrets into chat:
+Provisioned users can populate a local `.env` from GCP Secret Manager without
+pasting raw secrets into chat:
 
 ```bash
 gcloud auth login

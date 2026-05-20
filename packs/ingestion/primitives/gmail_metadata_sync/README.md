@@ -1,17 +1,15 @@
 # gmail_metadata_sync
 
-Local wrapper for a server-side Gmail metadata sync endpoint.
+Deprecated. Powerpacks no longer uses Powerset-hosted Gmail OAuth/sync endpoints
+for Gmail metadata import.
 
-This primitive does **not** read Gmail bodies/subjects locally. It uses the local Powerset bearer token and calls a backend endpoint, defaulting to:
-
-`POST https://search-api-7wk4uhe77q-uw.a.run.app/v2/integrations/gmail-sync`
-
-The backend endpoint still needs to exist/own OAuth refresh-token access and metadata-only ingestion.
+Use msgvault locally, then import its SQLite metadata:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/gmail_metadata_sync/gmail_metadata_sync.py run
-uv run --project . python packs/ingestion/primitives/gmail_metadata_sync/gmail_metadata_sync.py approve
-uv run --project . python packs/ingestion/primitives/gmail_metadata_sync/gmail_metadata_sync.py continue
+uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault \
+  --db ~/.msgvault/msgvault.db \
+  --account-email me@gmail.com
 ```
 
-The sync trigger is approval-gated.
+The msgvault-backed import reads only metadata tables and never reads message
+bodies, subjects, snippets, raw MIME, or attachments.

@@ -1,39 +1,50 @@
 #!/usr/bin/env python3
-"""Resumable local LinkedIn network import orchestrator.
+"""Resumable local LinkedIn Connections.csv import.
 
-Ports the LinkedIn Connections.csv -> provider enrichment -> people.csv
-shape into Powerpacks. Stdlib-only. All artifacts stay under .powerpacks/.
-Paid external APIs are approval-gated.
+This primitive is source-specific only: it parses LinkedIn's Connections.csv into
+Powerpacks' shared people schema, then delegates LinkedIn profile enrichment to
+`packs/ingestion/primitives/enrich_people`. Provider calls, cache handling,
+normalization, and final `people.csv` writing live in that shared primitive.
+
+Stdlib-only. Local artifacts only. External RapidAPI calls are approval-gated by
+`enrich_people`; seeded profile-cache hits complete without keys or approval.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import hashlib
+import io
 import json
-import os
-import re
 import sys
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 try:
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS
+    from packs.ingestion.primitives.enrich_people import enrich_people as people_enrichment
+    from packs.ingestion.schemas.people_schema import (
+        PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
+        extract_public_identifier,
+        normalize_linkedin_url,
+        normalize_people_row,
+    )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS
+    from packs.ingestion.primitives.enrich_people import enrich_people as people_enrichment
+    from packs.ingestion.schemas.people_schema import (
+        PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
+        extract_public_identifier,
+        normalize_linkedin_url,
+        normalize_people_row,
+    )
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/linkedin/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
-HARMONIC_BASE_URL = "https://api.harmonic.ai"
-RAPIDAPI_BASE_URL = "https://professional-network-data.p.rapidapi.com"
+DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
 
 CONNECTION_COLUMNS = [
     "person_id",
@@ -47,16 +58,7 @@ CONNECTION_COLUMNS = [
     "linkedin_email",
     "connected_on",
 ]
-PROVIDER_COLUMNS = CONNECTION_COLUMNS + [
-    "harmonic_status_code",
-    "harmonic_error",
-    "harmonic_response",
-    "rapidapi_status_code",
-    "rapidapi_error",
-    "rapidapi_response",
-    "enriched_at",
-]
-PIPELINE_STEPS = ["convert", "enrich_providers", "merge_people"]
+PIPELINE_STEPS = ["convert", "enrich_people"]
 
 
 class PipelineBlocked(Exception):
@@ -97,76 +99,9 @@ def sha(value: str, length: int = 12) -> str:
 
 
 def generate_person_id(public_identifier: str) -> str:
-    """Deterministic UUID-ish ID compatible in spirit with legacy generated IDs.
-
-    Uses UUIDv5-like stable hashing without importing uuid namespace constants from
-    the old repo. The actual output is stable for Powerpacks artifacts.
-    """
     import uuid
 
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"linkedin:{public_identifier.lower().strip()}"))
-
-
-def extract_public_identifier(linkedin_url: str) -> str:
-    if not linkedin_url:
-        return ""
-    match = re.search(r"linkedin\.com/in/([^/?#]+)", linkedin_url, re.IGNORECASE)
-    if not match:
-        return ""
-    return urllib.parse.unquote(match.group(1).strip().rstrip("/")).lower()
-
-
-def normalize_linkedin_url(value: str) -> str:
-    url = (value or "").strip()
-    if not url:
-        return ""
-    if url.startswith("linkedin.com/"):
-        url = "https://www." + url
-    elif url.startswith("www.linkedin.com/"):
-        url = "https://" + url
-    return url.split("?")[0].rstrip("/")
-
-
-def split_name(full_name: str) -> tuple[str, str]:
-    parts = (full_name or "").strip().split()
-    if not parts:
-        return "", ""
-    return parts[0], " ".join(parts[1:])
-
-
-def count_items(value: Any) -> int:
-    if isinstance(value, list):
-        return len(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-            return len(parsed) if isinstance(parsed, list) else 0
-        except json.JSONDecodeError:
-            return 0
-    return 0
-
-
-def profile_richness(experiences: list[Any], education: list[Any]) -> int:
-    return len(experiences or []) + len(education or [])
-
-
-def current_position(experiences: list[dict[str, Any]]) -> tuple[str, str, str]:
-    for exp in experiences or []:
-        if exp.get("is_current_position") or exp.get("is_current") or not (exp.get("ends_at") or exp.get("end_date")):
-            return (
-                str(exp.get("title") or ""),
-                str(exp.get("company_name") or exp.get("company") or ""),
-                str(exp.get("company") if exp.get("company_name") else exp.get("company_urn") or ""),
-            )
-    if experiences:
-        exp = experiences[0]
-        return (str(exp.get("title") or ""), str(exp.get("company_name") or exp.get("company") or ""), str(exp.get("company_urn") or ""))
-    return "", "", ""
-
-
-def read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        return list(csv.DictReader(handle))
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
@@ -205,6 +140,35 @@ class LinkedInConnection:
             "connected_on": self.connected_on,
         }
 
+    def people_row(self, source_csv: Path) -> dict[str, str]:
+        full_name = f"{self.first_name} {self.last_name}".strip()
+        provenance = {
+            "source": "linkedin_csv",
+            "source_user": self.source_user,
+            "source_csv": str(source_csv),
+            "connected_on": self.connected_on,
+        }
+        return normalize_people_row({
+            "id": self.person_id,
+            "public_identifier": self.public_identifier,
+            "linkedin_url": self.linkedin_url,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "full_name": full_name,
+            "current_title": self.position,
+            "current_company": self.company,
+            "primary_email": self.email_address,
+            "all_emails": self.email_address,
+            "source_channels": "linkedin_csv",
+            "source_artifacts": json.dumps(provenance, sort_keys=True),
+            "enrichment_provider": "linkedin_csv_source",
+        })
+
+
+def linkedin_export_header(line: str) -> bool:
+    lowered = line.strip().lower()
+    return lowered.startswith("first name,") or ("first name" in lowered and "url" in lowered and "," in lowered)
+
 
 def parse_connections_csv(path: Path, source_user: str, limit: int | None = None) -> tuple[list[LinkedInConnection], dict[str, Any]]:
     if not path.exists():
@@ -216,12 +180,12 @@ def parse_connections_csv(path: Path, source_user: str, limit: int | None = None
     with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
         header_line = ""
         for line in handle:
-            if line.strip().startswith("First Name,"):
+            if linkedin_export_header(line):
                 header_line = line.strip()
                 break
         if not header_line:
-            raise PipelineFailed("Could not find LinkedIn export header row starting with 'First Name,'")
-        reader = csv.DictReader(handle, fieldnames=header_line.split(","))
+            raise PipelineFailed("Could not find LinkedIn export header row containing 'First Name' and 'URL'")
+        reader = csv.DictReader(handle, fieldnames=next(csv.reader([header_line])))
         for row in reader:
             url = normalize_linkedin_url(row.get("URL", ""))
             pub_id = extract_public_identifier(url)
@@ -251,162 +215,10 @@ def parse_connections_csv(path: Path, source_user: str, limit: int | None = None
     return connections, {"parsed": len(connections), "duplicates": duplicates, "skipped_invalid": skipped}
 
 
-def http_json(method: str, url: str, *, headers: dict[str, str] | None = None, params: dict[str, str] | None = None, timeout: int = 60) -> tuple[int, dict[str, Any] | None, str]:
-    if params:
-        url = url + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, method=method, headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-            return response.status, json.loads(raw) if raw else None, ""
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            data = json.loads(raw) if raw else None
-        except json.JSONDecodeError:
-            data = None
-        return exc.code, data, raw[:1000]
-    except Exception as exc:
-        return 0, None, str(exc)
-
-
-def harmonic_enrich(linkedin_url: str, api_key: str) -> dict[str, Any]:
-    status, data, error = http_json(
-        "POST",
-        f"{HARMONIC_BASE_URL}/persons",
-        headers={"accept": "application/json", "apikey": api_key},
-        params={"linkedin_url": linkedin_url},
-        timeout=90,
-    )
-    enrichment_id = ""
-    if isinstance(data, dict):
-        enrichment_id = str(data.get("enrichment_id") or data.get("enrichment_urn") or "")
-        detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
-        enrichment_id = enrichment_id or str(detail.get("enrichment_urn") or "")
-    return {"status_code": status, "data": data, "error": error, "enrichment_id": enrichment_id}
-
-
-def rapidapi_profile(public_identifier: str, linkedin_url: str, api_key: str) -> dict[str, Any]:
-    status, data, error = http_json(
-        "GET",
-        f"{RAPIDAPI_BASE_URL}/get-profile-data-by-url",
-        headers={"x-rapidapi-host": "professional-network-data.p.rapidapi.com", "x-rapidapi-key": api_key},
-        params={"url": linkedin_url or f"https://www.linkedin.com/in/{public_identifier}"},
-        timeout=90,
-    )
-    return {"status_code": status, "data": data, "error": error}
-
-
-def normalize_rapidapi(data: dict[str, Any] | None, public_identifier: str, linkedin_url: str) -> dict[str, Any]:
-    if not isinstance(data, dict):
-        return {}
-    profile = data.get("data") if isinstance(data.get("data"), dict) else data
-    # Common RapidAPI variants: top-level normalized, LinkedIn-ish camelCase, or nested data.
-    full_name = profile.get("full_name") or profile.get("fullName") or profile.get("name") or ""
-    first = profile.get("first_name") or profile.get("firstName") or ""
-    last = profile.get("last_name") or profile.get("lastName") or ""
-    if full_name and (not first or not last):
-        sf, sl = split_name(full_name)
-        first = first or sf
-        last = last or sl
-    experiences = profile.get("experiences") or profile.get("experience") or profile.get("positions") or []
-    education = profile.get("education") or profile.get("educations") or []
-    location = profile.get("location") if isinstance(profile.get("location"), dict) else {}
-    location_str = profile.get("location_str") or profile.get("location") if isinstance(profile.get("location"), str) else ""
-    title, company, company_urn = current_position(experiences if isinstance(experiences, list) else [])
-    return {
-        "public_identifier": profile.get("public_identifier") or profile.get("username") or public_identifier,
-        "linkedin_url": profile.get("linkedin_url") or profile.get("profile_url") or profile.get("profileURL") or linkedin_url,
-        "first_name": first or "",
-        "last_name": last or "",
-        "full_name": full_name or f"{first} {last}".strip(),
-        "headline": profile.get("headline") or "",
-        "summary": profile.get("summary") or profile.get("about") or "",
-        "city": profile.get("city") or location.get("city", ""),
-        "state": profile.get("state") or location.get("state", ""),
-        "country": profile.get("country") or location.get("country", ""),
-        "location_raw": location_str or location.get("location", ""),
-        "profile_picture_url": profile.get("profile_pic_url") or profile.get("profilePicture") or profile.get("profile_picture_url") or "",
-        "work_experiences": experiences if isinstance(experiences, list) else [],
-        "education": education if isinstance(education, list) else [],
-        "current_title": title,
-        "current_company": company,
-        "current_company_urn": company_urn,
-        "entity_urn": "",
-    }
-
-
-def normalize_harmonic(data: dict[str, Any] | None, public_identifier: str, linkedin_url: str) -> dict[str, Any]:
-    if not isinstance(data, dict) or "full_name" not in data:
-        return {}
-    location = data.get("location") if isinstance(data.get("location"), dict) else {}
-    socials = data.get("socials") if isinstance(data.get("socials"), dict) else {}
-    linkedin = socials.get("LINKEDIN") if isinstance(socials.get("LINKEDIN"), dict) else {}
-    experiences = data.get("experience") if isinstance(data.get("experience"), list) else []
-    education = data.get("education") if isinstance(data.get("education"), list) else []
-    title, company, company_urn = current_position(experiences)
-    return {
-        "public_identifier": public_identifier,
-        "linkedin_url": linkedin.get("url") or data.get("linkedin_url") or linkedin_url,
-        "first_name": data.get("first_name", ""),
-        "last_name": data.get("last_name", ""),
-        "full_name": data.get("full_name", ""),
-        "headline": data.get("linkedin_headline", ""),
-        "summary": data.get("summary", ""),
-        "city": location.get("city", ""),
-        "state": location.get("state", ""),
-        "country": location.get("country", ""),
-        "location_raw": location.get("location", ""),
-        "profile_picture_url": data.get("profile_picture_url", ""),
-        "work_experiences": experiences,
-        "education": education,
-        "current_title": title,
-        "current_company": company,
-        "current_company_urn": company_urn,
-        "entity_urn": data.get("entity_urn", ""),
-        "harmonic_location": json.dumps(location) if location else "",
-    }
-
-
-def merge_provider_profile(base: dict[str, Any], harmonic: dict[str, Any], rapid: dict[str, Any], harmonic_raw: dict[str, Any] | None, rapid_raw: dict[str, Any] | None) -> dict[str, Any]:
-    h_score = profile_richness(harmonic.get("work_experiences", []), harmonic.get("education", []))
-    r_score = profile_richness(rapid.get("work_experiences", []), rapid.get("education", []))
-    rich = rapid if r_score > h_score else harmonic
-    fallback = harmonic if rich is rapid else rapid
-    provider = "rapidapi" if rich is rapid else "harmonic"
-    if harmonic and rapid:
-        provider = f"{provider}_preferred_harmonic_rapidapi"
-
-    pub_id = base["public_identifier"]
-    row: dict[str, Any] = {col: "" for col in PEOPLE_COLUMNS}
-    row.update({
-        "id": generate_person_id(pub_id),
-        "public_identifier": pub_id,
-        "linkedin_url": base.get("linkedin_url", ""),
-        "first_name": base.get("first_name", ""),
-        "last_name": base.get("last_name", ""),
-        "enriched_at": now_iso(),
-        "enrichment_provider": provider if (harmonic or rapid) else "linkedin_csv_only",
-    })
-    for key in [
-        "linkedin_url", "first_name", "last_name", "full_name", "headline", "summary",
-        "city", "state", "country", "location_raw", "profile_picture_url",
-        "current_title", "current_company", "current_company_urn", "entity_urn", "harmonic_location",
-    ]:
-        row[key] = rich.get(key) or fallback.get(key) or row.get(key, "")
-    if not row["full_name"]:
-        row["full_name"] = f"{row['first_name']} {row['last_name']}".strip()
-    row["work_experiences"] = json.dumps(rich.get("work_experiences") or fallback.get("work_experiences") or [])
-    row["education"] = json.dumps(rich.get("education") or fallback.get("education") or [])
-    row["harmonic_response"] = json.dumps(harmonic_raw) if harmonic_raw else ""
-    row["rapidapi_response"] = json.dumps(rapid_raw) if rapid_raw else ""
-    return row
-
-
 def load_ledger(path: Path) -> dict[str, Any]:
     ledger = read_json(path, {}) or {}
     ledger.setdefault("primitive", "linkedin_network_import")
-    ledger.setdefault("version", 1)
+    ledger.setdefault("version", 2)
     ledger.setdefault("created_at", now_iso())
     ledger.setdefault("updated_at", now_iso())
     ledger.setdefault("steps", {})
@@ -441,22 +253,26 @@ def approval_id(ledger: dict[str, Any], step_id: str) -> str:
     return f"{ledger.get('run_id', 'run')}:{step_id}"
 
 
-def is_approved(ledger: dict[str, Any], step_id: str) -> bool:
-    return bool(ledger.setdefault("approvals", {}).get(approval_id(ledger, step_id)))
-
-
-def block_for_approval(ledger_path: Path, ledger: dict[str, Any], step_id: str, message: str) -> None:
-    app_id = approval_id(ledger, step_id)
-    ledger["blocked"] = {"step_id": step_id, "approval_id": app_id, "approval_type": "external_api_spend"}
-    mark_step(ledger, step_id, "blocked_approval", approval_id=app_id, approval_type="external_api_spend")
+def block_for_delegate_approval(ledger_path: Path, ledger: dict[str, Any], blocked: dict[str, Any], delegate_ledger: Path) -> None:
+    app_id = approval_id(ledger, "enrich_people")
+    ledger["blocked"] = {
+        "step_id": "enrich_people",
+        "approval_id": app_id,
+        "approval_type": blocked.get("approval_type", "external_api_spend"),
+        "delegate_ledger": str(delegate_ledger),
+        "delegate_approval_id": blocked.get("approval_id"),
+    }
+    mark_step(ledger, "enrich_people", "blocked_approval", approval_id=app_id, approval_type=ledger["blocked"]["approval_type"])
     save_ledger(ledger_path, ledger)
     raise PipelineBlocked({
         "status": "blocked_approval",
-        "step_id": step_id,
+        "step_id": "enrich_people",
         "approval_id": app_id,
-        "approval_type": "external_api_spend",
-        "message": message,
+        "approval_type": ledger["blocked"]["approval_type"],
+        "message": blocked.get("message") or "Approve paid LinkedIn enrichment?",
         "ledger": str(ledger_path),
+        "delegate_ledger": str(delegate_ledger),
+        "delegate_approval_id": blocked.get("approval_id"),
         "continue_command": f"uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py approve --ledger {ledger_path} && uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py continue --ledger {ledger_path}",
     })
 
@@ -465,83 +281,101 @@ def step_convert(ledger: dict[str, Any]) -> dict[str, Any]:
     run_dir = Path(ledger["run_dir"])
     inp = Path(ledger["input"]["csv"])
     connections, stats = parse_connections_csv(inp, ledger["input"]["source_user"], ledger["input"].get("limit"))
-    rows = [conn.row() for conn in connections]
-    out = run_dir / "connections_for_enrichment.csv"
-    write_csv(out, CONNECTION_COLUMNS, rows)
-    ledger["artifacts"]["connections_csv"] = str(out)
-    return {**stats, "output_file": str(out)}
+    connection_rows = [conn.row() for conn in connections]
+    people_rows = [conn.people_row(inp) for conn in connections]
+    connections_out = run_dir / "connections_for_enrichment.csv"
+    people_out = run_dir / "source_people.csv"
+    write_csv(connections_out, CONNECTION_COLUMNS, connection_rows)
+    write_csv(people_out, PEOPLE_COLUMNS, people_rows)
+    ledger["artifacts"].update({
+        "connections_csv": str(connections_out),
+        "source_people_csv": str(people_out),
+    })
+    return {**stats, "connections_file": str(connections_out), "source_people_file": str(people_out)}
 
 
-def step_enrich_providers(ledger: dict[str, Any]) -> dict[str, Any]:
-    connections_path = Path(ledger["artifacts"]["connections_csv"])
-    rows = read_csv(connections_path)
-    limit = ledger["input"].get("limit")
-    if limit:
-        rows = rows[: int(limit)]
-    harmonic_key = os.getenv("HARMONIC_API_KEY", "").strip()
-    rapid_key = os.getenv("RAPIDAPI_KEY", "").strip() or os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip()
-    use_harmonic = ledger["input"].get("use_harmonic", True)
-    use_rapidapi = ledger["input"].get("use_rapidapi", True)
-    if use_harmonic and not harmonic_key:
-        raise PipelineFailed("HARMONIC_API_KEY is not set")
-    if use_rapidapi and not rapid_key:
-        raise PipelineFailed("RAPIDAPI_KEY/RAPIDAPI_LINKEDIN_KEY is not set")
-
-    enriched: list[dict[str, Any]] = []
-    raw_dir = Path(ledger["run_dir"]) / "raw_provider_responses"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    for i, row in enumerate(rows, start=1):
-        pub_id = row["public_identifier"]
-        result = dict(row)
-        harmonic = {"status_code": "", "data": None, "error": ""}
-        rapid = {"status_code": "", "data": None, "error": ""}
-        if use_harmonic:
-            harmonic = harmonic_enrich(row["linkedin_url"], harmonic_key)
-            time.sleep(ledger["input"].get("sleep_seconds", 0.0))
-        if use_rapidapi:
-            rapid = rapidapi_profile(pub_id, row["linkedin_url"], rapid_key)
-            time.sleep(ledger["input"].get("sleep_seconds", 0.0))
-        write_json(raw_dir / f"{pub_id}.json", {"connection": row, "harmonic": harmonic, "rapidapi": rapid})
-        result.update({
-            "harmonic_status_code": harmonic.get("status_code", ""),
-            "harmonic_error": harmonic.get("error", ""),
-            "harmonic_response": json.dumps(harmonic.get("data")) if harmonic.get("data") else "",
-            "rapidapi_status_code": rapid.get("status_code", ""),
-            "rapidapi_error": rapid.get("error", ""),
-            "rapidapi_response": json.dumps(rapid.get("data")) if rapid.get("data") else "",
-            "enriched_at": now_iso(),
-        })
-        enriched.append(result)
-    out = Path(ledger["run_dir"]) / "provider_enriched.csv"
-    write_csv(out, PROVIDER_COLUMNS, enriched)
-    ledger["artifacts"]["provider_enriched_csv"] = str(out)
-    ledger["artifacts"]["raw_provider_responses_dir"] = str(raw_dir)
-    return {"processed": len(enriched), "output_file": str(out), "providers": {"harmonic": use_harmonic, "rapidapi": use_rapidapi}}
+def ensure_delegate_ledger(ledger: dict[str, Any]) -> Path:
+    run_dir = Path(ledger["run_dir"])
+    delegate_path = run_dir / "enrich_people.ledger.json"
+    if delegate_path.exists():
+        return delegate_path
+    source_people = ledger.get("artifacts", {}).get("source_people_csv")
+    if not source_people:
+        raise PipelineFailed("convert step did not produce source_people_csv")
+    delegate = {
+        "primitive": "enrich_people",
+        "version": 1,
+        "status": "running",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "run_id": f"{ledger.get('run_id', 'linkedin')}-enrichment",
+        "run_dir": str(run_dir),
+        "ledger": str(delegate_path),
+        "input": {
+            "input_csv": source_people,
+            "limit": None,
+            "force": bool(ledger.get("input", {}).get("force_enrich")),
+            "profile_cache_dir": ledger.get("input", {}).get("profile_cache_dir") or str(DEFAULT_PROFILE_CACHE_DIR),
+            "refresh_cache": bool(ledger.get("input", {}).get("refresh_cache")),
+            "company_corpus_jsonl": ledger.get("input", {}).get("company_corpus_jsonl") or [],
+            "sleep_seconds": ledger.get("input", {}).get("sleep_seconds") or 0.0,
+            "max_workers": ledger.get("input", {}).get("max_workers"),
+            "max_rpm": ledger.get("input", {}).get("max_rpm"),
+            "failure_retry_hours": ledger.get("input", {}).get("failure_retry_hours"),
+        },
+        "steps": {},
+        "approvals": {},
+        "artifacts": {},
+    }
+    people_enrichment.save_ledger(delegate_path, delegate)
+    return delegate_path
 
 
-def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
-    provider_path = Path(ledger["artifacts"].get("provider_enriched_csv") or ledger["artifacts"]["connections_csv"])
-    rows = read_csv(provider_path)
-    people: list[dict[str, Any]] = []
-    for row in rows:
-        harmonic_raw = json.loads(row["harmonic_response"]) if row.get("harmonic_response") else None
-        rapid_raw = json.loads(row["rapidapi_response"]) if row.get("rapidapi_response") else None
-        harmonic = normalize_harmonic(harmonic_raw, row["public_identifier"], row["linkedin_url"])
-        rapid = normalize_rapidapi(rapid_raw, row["public_identifier"], row["linkedin_url"])
-        people.append(merge_provider_profile(row, harmonic, rapid, harmonic_raw, rapid_raw))
-    out = Path(ledger["run_dir"]) / "people.csv"
-    write_csv(out, PEOPLE_COLUMNS, people)
-    ledger["artifacts"]["people_csv"] = str(out)
-    return {"rows": len(people), "output_file": str(out)}
+def step_enrich_people(ledger: dict[str, Any], ledger_path: Path) -> dict[str, Any]:
+    delegate_path = ensure_delegate_ledger(ledger)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = people_enrichment.run_until_blocked_or_done(delegate_path)
+    except people_enrichment.PipelineBlocked as blocked:
+        block_for_delegate_approval(ledger_path, ledger, blocked.payload, delegate_path)
+    if code != 0:
+        delegate = people_enrichment.load_ledger(delegate_path)
+        failed_step = people_enrichment.next_pending_step(delegate)
+        error = "enrich_people failed"
+        if failed_step:
+            error = delegate.get("steps", {}).get(failed_step, {}).get("error") or error
+        raise PipelineFailed(error)
+
+    delegate = people_enrichment.load_ledger(delegate_path)
+    artifacts = delegate.get("artifacts", {}) or {}
+    ledger["artifacts"].update({f"enrich_people_{key}": value for key, value in artifacts.items()})
+    for key in [
+        "people_csv",
+        "provider_enriched_csv",
+        "linkedin_enrichment_queue_csv",
+        "rapidapi_cache_hits_csv",
+        "rapidapi_cache_misses_csv",
+        "needs_resolution_queue_csv",
+        "skipped_enrichment_csv",
+        "raw_provider_responses_dir",
+    ]:
+        if artifacts.get(key):
+            ledger["artifacts"][key] = artifacts[key]
+    ledger["artifacts"]["enrich_people_ledger"] = str(delegate_path)
+    return {
+        "delegate_ledger": str(delegate_path),
+        "people_csv": artifacts.get("people_csv"),
+        "cache_hit_count": delegate.get("cache_hit_count", 0),
+        "paid_call_count": delegate.get("paid_call_count", 0),
+        "queue_count": delegate.get("queue_count", 0),
+    }
 
 
-def execute_step(ledger: dict[str, Any], step_id: str) -> dict[str, Any]:
+def execute_step(ledger_path: Path, ledger: dict[str, Any], step_id: str) -> dict[str, Any]:
     if step_id == "convert":
         return step_convert(ledger)
-    if step_id == "enrich_providers":
-        return step_enrich_providers(ledger)
-    if step_id == "merge_people":
-        return step_merge_people(ledger)
+    if step_id == "enrich_people":
+        return step_enrich_people(ledger, ledger_path)
     raise PipelineFailed(f"unknown step: {step_id}")
 
 
@@ -555,17 +389,10 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
             save_ledger(ledger_path, ledger)
             emit({"status": "completed", "ledger": str(ledger_path), "run_dir": ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})})
             return 0
-        if step_id == "enrich_providers" and not is_approved(ledger, step_id):
-            providers = []
-            if ledger["input"].get("use_harmonic", True):
-                providers.append("Harmonic")
-            if ledger["input"].get("use_rapidapi", True):
-                providers.append("RapidAPI")
-            block_for_approval(ledger_path, ledger, step_id, f"Run paid external LinkedIn enrichment for {ledger.get('connection_count', 'converted')} connections via {', '.join(providers)}?")
         try:
             mark_step(ledger, step_id, "running")
             save_ledger(ledger_path, ledger)
-            summary = execute_step(ledger, step_id)
+            summary = execute_step(ledger_path, ledger, step_id)
             if step_id == "convert":
                 ledger["connection_count"] = summary.get("parsed", 0)
             mark_step(ledger, step_id, "completed", summary=summary)
@@ -588,9 +415,12 @@ def command_run(args: argparse.Namespace) -> int:
         if existing.get("status") not in {"completed", "failed"}:
             emit({"status": "active_run_exists", "ledger": str(ledger_path), "message": "Use continue/approve or --force."})
             return 0
+    if args.no_harmonic:
+        # Accepted for old scripts; shared enrichment is RapidAPI-only now.
+        pass
     ledger = {
         "primitive": "linkedin_network_import",
-        "version": 1,
+        "version": 2,
         "status": "running",
         "created_at": now_iso(),
         "updated_at": now_iso(),
@@ -602,9 +432,14 @@ def command_run(args: argparse.Namespace) -> int:
             "source_user": args.source_user,
             "operator_id": args.operator_id,
             "limit": args.limit,
-            "use_harmonic": not args.no_harmonic,
-            "use_rapidapi": not args.no_rapidapi,
+            "profile_cache_dir": str(Path(args.profile_cache_dir)),
+            "refresh_cache": args.refresh_cache,
+            "company_corpus_jsonl": [str(Path(p)) for p in (args.company_corpus_jsonl or [])],
             "sleep_seconds": args.sleep_seconds,
+            "force_enrich": args.force_enrich,
+            "max_workers": args.max_workers,
+            "max_rpm": args.max_rpm,
+            "failure_retry_hours": args.failure_retry_hours,
         },
         "steps": {},
         "approvals": {},
@@ -638,9 +473,20 @@ def command_approve(args: argparse.Namespace) -> int:
         emit({"status": "no_pending_approval", "ledger": str(ledger_path)})
         return 1
     ledger.setdefault("approvals", {})[app_id] = {"approved_at": now_iso(), "source": "operator"}
+
+    delegate_ledger = blocked.get("delegate_ledger")
+    delegate_approval_id = blocked.get("delegate_approval_id")
+    if delegate_ledger and delegate_approval_id:
+        delegate_path = Path(delegate_ledger)
+        delegate = people_enrichment.load_ledger(delegate_path)
+        delegate.setdefault("approvals", {})[delegate_approval_id] = {"approved_at": now_iso(), "source": "operator", "step_id": "enrich_linkedin"}
+        if delegate.get("blocked", {}).get("approval_id") == delegate_approval_id:
+            delegate.pop("blocked", None)
+        people_enrichment.save_ledger(delegate_path, delegate)
+
     ledger.pop("blocked", None)
     save_ledger(ledger_path, ledger)
-    emit({"status": "approved", "approval_id": app_id, "ledger": str(ledger_path)})
+    emit({"status": "approved", "approval_id": app_id, "ledger": str(ledger_path), "delegate_ledger": delegate_ledger})
     return 0
 
 
@@ -651,32 +497,31 @@ def command_status(args: argparse.Namespace) -> int:
 
 
 def command_check_keys(_: argparse.Namespace) -> int:
-    emit({
-        "status": "ok",
-        "keys_present": {
-            "HARMONIC_API_KEY": bool(os.getenv("HARMONIC_API_KEY", "").strip()),
-            "RAPIDAPI_KEY": bool(os.getenv("RAPIDAPI_KEY", "").strip()),
-            "RAPIDAPI_LINKEDIN_KEY": bool(os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip()),
-        },
-    })
-    return 0
+    return people_enrichment.command_check_keys(argparse.Namespace())
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="LinkedIn Connections.csv network import")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
-    run.add_argument("--csv", required=True)
-    run.add_argument("--source-user", required=True)
+    run.add_argument("--csv", required=True, help="LinkedIn Connections.csv export")
+    run.add_argument("--source-user", required=True, help="Non-secret source label for this export")
     run.add_argument("--operator-id", default="local")
     run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
     run.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     run.add_argument("--run-id")
-    run.add_argument("--force", action="store_true")
-    run.add_argument("--no-harmonic", action="store_true")
-    run.add_argument("--no-rapidapi", action="store_true")
+    run.add_argument("--force", action="store_true", help="Overwrite an active linkedin_network_import ledger")
+    run.add_argument("--force-enrich", action="store_true", help="Re-enrich rows even when source rows look complete")
+    run.add_argument("--profile-cache-dir", default=str(DEFAULT_PROFILE_CACHE_DIR))
+    run.add_argument("--refresh-cache", action="store_true", help="Force RapidAPI calls even when cache entries exist")
+    run.add_argument("--company-corpus-jsonl", action="append", default=[])
     run.add_argument("--sleep-seconds", type=float, default=0.0)
+    run.add_argument("--max-workers", type=int, default=people_enrichment.DEFAULT_RAPIDAPI_MAX_WORKERS)
+    run.add_argument("--max-rpm", type=float, default=people_enrichment.DEFAULT_RAPIDAPI_MAX_RPM)
+    run.add_argument("--failure-retry-hours", type=float, default=people_enrichment.DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
+    run.add_argument("--no-harmonic", action="store_true", help=argparse.SUPPRESS)
+    run.add_argument("--no-rapidapi", action="store_true", help=argparse.SUPPRESS)
     run.set_defaults(func=command_run)
 
     cont = sub.add_parser("continue")
@@ -699,6 +544,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if getattr(args, "no_rapidapi", False):
+        emit({"status": "error", "error": "linkedin_network_import delegates to RapidAPI-only enrich_people; --no-rapidapi is no longer supported"})
+        return 2
     try:
         return args.func(args)
     except ValueError as exc:

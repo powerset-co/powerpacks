@@ -16,6 +16,10 @@ Examples:
 
 ## Workflow
 
+Fresh company resolution only: do not scan, discover, reuse, or resume prior
+company search artifacts, state files, CSVs, JSONL, or manifests. Resolve the
+company set from the user's current request every time.
+
 1. Decompose the request into the `role-search-filters` company fields only:
    `company_names`, `company_semantic_queries`, `entity_types`, `sector_types`,
    funding/headcount filters, company geography, `investor_names`, and

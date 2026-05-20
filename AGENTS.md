@@ -125,13 +125,6 @@ tell the user their selected `@powerset.co` account is fine but gcloud's cached
 token expired. Do not route this to Slack and do not run ADC setup;
 application-default credentials are not needed for normal Powerpacks workflows.
 
-## Workspace state
-
-If `.powerpacks/` exists in the working directory, list its contents (or
-`tree -L 2 .powerpacks/` if available) so the user can see what artifacts
-are already present from prior runs. Don't rebuild artifacts that already
-exist unless explicitly asked.
-
 ## Pack-specific readiness
 
 - **Messages pack** (iMessage / WhatsApp imports, contact review):
@@ -146,7 +139,7 @@ exist unless explicitly asked.
     via `uv run --project . python packs/powerset/primitives/auth/auth.py whoami`.
 - **Indexing pack** (build-local-search-index): local files only. It consumes
   `.powerpacks/network-import/merged/people.csv` and writes
-  `.powerpacks/search-index/<run-id>/`; do not run LLM, network, Supabase,
+  `.powerpacks/search-index/`; do not run LLM, network, Supabase,
   Postgres, or TurboPuffer calls for this workflow.
 - **Search pack** (search-network, search-company): requires `.env` with
   TurboPuffer + Postgres credentials. If `.env` is present, run the search
@@ -189,6 +182,16 @@ Routes:
   `packs/messages/skills/import-contacts/SKILL.md`
 - `$msgvault`, `$local-msg-vault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
   `packs/ingestion/skills/msgvault/SKILL.md`
+- `$onboard`, `$ingestion-onboarding`, local ingestion onboarding, link/export
+  local network sources →
+  `packs/ingestion/skills/onboard/SKILL.md`
+- `$import-email`, Gmail, email, msgvault metadata import →
+  `packs/ingestion/skills/import-email/SKILL.md`
+- `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
+  `packs/ingestion/skills/import-twitter/SKILL.md`
+- `$import-network`, local network ingestion orchestration, LinkedIn CSV plus
+  msgvault/messages/Twitter merge, DuckDB materialization →
+  `packs/ingestion/skills/import-network/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Ask a brief
 clarifying question only when the same wording could mean multiple surfaces,

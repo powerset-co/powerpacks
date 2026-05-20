@@ -203,14 +203,6 @@ def check_gcloud_account() -> dict[str, Any]:
             fix_args=["gcloud", "auth", "login"],
         )
     account = out.strip().splitlines()[0].strip()
-    if not account.endswith("@powerset.co"):
-        return check(
-            "gcloud_account", "warn",
-            f"active gcloud account {account} is not @powerset.co; switch with `gcloud config set account you@powerset.co`",
-            account=account,
-            fix_kind="human_action",
-            fix_command="gcloud auth login  # then: gcloud config set account you@powerset.co",
-        )
     return check("gcloud_account", "ok", f"signed in as {account}", account=account)
 
 
@@ -326,7 +318,7 @@ def check_user_secrets(profile: str, project: str) -> dict[str, Any]:
             f"no per-user secrets exist yet for {payload.get('email')}; ask a Powerpacks maintainer to add you",
             email=payload.get("email"),
             fix_kind="human_action",
-            fix_command="ping #powerpacks on Slack with your @powerset.co email",
+            fix_command="ping #powerpacks on Slack with the email you use for gcloud",
         )
     if status == "not_privileged":
         return check(
@@ -334,7 +326,7 @@ def check_user_secrets(profile: str, project: str) -> dict[str, Any]:
             f"per-user secrets exist but you cannot read them",
             email=payload.get("email"),
             fix_kind="human_action",
-            fix_command="ping #powerpacks on Slack with your @powerset.co email",
+            fix_command="ping #powerpacks on Slack with the email you use for gcloud",
         )
     if status == "gcloud_auth_error":
         return check(

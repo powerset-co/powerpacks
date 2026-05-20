@@ -212,6 +212,23 @@ def normalize_review_payload(review: dict[str, Any] | None) -> dict[str, Any] | 
     }
 
 
+def queue_message_source(queue_row: dict[str, str]) -> str:
+    """Return the concrete message transport(s) for a queue row.
+
+    `source_channel` in the research queue is the broad upstream enrichment
+    channel (`phone` for message imports). The per-message transport lives in
+    `message_source` (for example `imessage`, `whatsapp`, or
+    `imessage,whatsapp`). Some older/intermediate CSVs may still call that
+    column `source`, so keep a fallback for those while preserving `phone` as a
+    final legacy default.
+    """
+    return (
+        (queue_row.get("message_source") or "").strip()
+        or (queue_row.get("source") or "").strip()
+        or (queue_row.get("source_channel") or "").strip()
+    )
+
+
 def network_review_payload(
     handle: str,
     queue_row: dict[str, str],
@@ -228,7 +245,8 @@ def network_review_payload(
         "public_identifier": linkedin_public_identifier(linkedin_url),
         "full_name": full_name,
         "linkedin_url": linkedin_url,
-        "source_channel": queue_row.get("source_channel") or "phone",
+        "source_channel": queue_message_source(queue_row) or "phone",
+        "message_source": queue_message_source(queue_row),
         "model": model,
         "review": review,
     }
@@ -302,7 +320,7 @@ def flatten_row(
         "total_messages": queue_row.get("total_messages", "") or "0",
         "imessage_message_count": queue_row.get("imessage_message_count", "") or "",
         "whatsapp_message_count": queue_row.get("whatsapp_message_count", "") or "",
-        "message_source": queue_row.get("message_source", "") or "",
+        "message_source": queue_message_source(queue_row),
         "last_message": queue_row.get("last_message", "") or "",
         "imessage_last_message": queue_row.get("imessage_last_message", "") or "",
         "whatsapp_last_message": queue_row.get("whatsapp_last_message", "") or "",
@@ -488,7 +506,7 @@ def llm_bucket(
             "total_messages": queue_row.get("total_messages", "0"),
             "imessage_message_count": queue_row.get("imessage_message_count", ""),
             "whatsapp_message_count": queue_row.get("whatsapp_message_count", ""),
-            "message_source": queue_row.get("message_source", ""),
+            "message_source": queue_message_source(queue_row),
             "last_message": queue_row.get("last_message", ""),
             "imessage_last_message": queue_row.get("imessage_last_message", ""),
             "whatsapp_last_message": queue_row.get("whatsapp_last_message", ""),

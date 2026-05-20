@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+SOURCE="${1:-people_harmonic_all.csv}"
+LIMIT="${POWERPACKS_CANARY_LIMIT:-400}"
+if [[ ! -f "$SOURCE" ]]; then
+  echo "missing source CSV: $SOURCE" >&2
+  echo "place people_harmonic_all.csv at repo root or pass a source CSV path" >&2
+  exit 2
+fi
+
+RUN_ID="${POWERPACKS_CANARY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+BASE=".powerpacks/processing-canary/$RUN_ID"
+INPUT="$BASE/people.first${LIMIT}.csv"
+OUT="$BASE/search-index"
+OPERATOR_ID="${POWERPACKS_CANARY_OPERATOR_ID:-local-canary}"
+OPERATOR_EMAIL="${POWERPACKS_CANARY_OPERATOR_EMAIL:-local-canary@example.com}"
+CHECKPOINT_EVERY="${POWERPACKS_CANARY_CHECKPOINT_EVERY:-25}"
+
+mkdir -p "$BASE"
+python3 - "$SOURCE" "$INPUT" "$LIMIT" <<'PY'
+import csv, sys
+src, dst, limit_text = sys.argv[1], sys.argv[2], sys.argv[3]
+limit = int(limit_text)
+with open(src, newline='', encoding='utf-8-sig', errors='replace') as handle:
+    reader = csv.DictReader(handle)
+    rows = []
+    for idx, row in enumerate(reader):
+        if idx >= limit:
+            break
+        rows.append(row)
+    if not reader.fieldnames:
+        raise SystemExit('source CSV has no header')
+with open(dst, 'w', newline='', encoding='utf-8') as handle:
+    writer = csv.DictWriter(handle, fieldnames=reader.fieldnames, extrasaction='ignore')
+    writer.writeheader()
+    writer.writerows(rows)
+print(f'wrote {len(rows)} rows to {dst}')
+if not rows:
+    raise SystemExit('source CSV has no rows')
+PY
+
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run \
+  --input "$INPUT" \
+  --output-dir "$OUT" \
+  --default-operator-id "$OPERATOR_ID" \
+  --checkpoint-every "$CHECKPOINT_EVERY" \
+  --stop-after-role-chunks 1 \
+  --force > "$BASE/pipeline.partial.json"
+
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue \
+  --ledger "$OUT/ledger.json" > "$BASE/pipeline.resumed.json"
+
+uv run --project . python scripts/build-local-duckdb-shim.py \
+  --records-dir "$OUT" \
+  --operator-id "$OPERATOR_ID" \
+  --operator-email "$OPERATOR_EMAIL" \
+  --force > "$BASE/duckdb.json"
+
+POWERPACKS_LOCAL_SEARCH_DB="$OUT/local-search.duckdb" uv run --project . python - <<'PY' > "$BASE/smoke.json"
+import asyncio, json, os, sys
+from pathlib import Path
+ROOT = Path.cwd()
+sys.path.insert(0, str(ROOT / 'packs/search/primitives/lib'))
+import turbopuffer_client  # type: ignore
+
+db = os.environ['POWERPACKS_LOCAL_SEARCH_DB']
+turbopuffer_client._local_store_for_path.cache_clear()
+people = turbopuffer_client.namespace('people').query(top_k=5, include_attributes=['base_id', 'position_title', 'vector']).rows
+companies = turbopuffer_client.namespace('companies').query(top_k=5, include_attributes=['company_name', 'vector']).rows
+if not people:
+    raise SystemExit('no local people rows')
+query_vector = people[0].vector
+knn = turbopuffer_client.namespace('people').query(rank_by=('vector', 'kNN', query_vector), top_k=3, include_attributes=['base_id', 'position_title']).rows
+role_rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
+    {'semantic_query': 'local canary role search with deterministic vector over processed people positions, long enough to force hybrid vector retrieval without paid embeddings', 'query_embedding': query_vector, 'bm25_queries': [people[0].position_title or '']},
+    None,
+    top_k=3,
+    include_attributes=['base_id', 'position_title'],
+))
+payload = {
+    'status': 'ok' if people and companies and knn and role_rows else 'failed',
+    'duckdb': db,
+    'people_rows_sampled': len(people),
+    'company_rows_sampled': len(companies),
+    'knn_top': {'id': knn[0].id, 'position_title': getattr(knn[0], 'position_title', ''), 'score': getattr(knn[0], 'score', 0.0)} if knn else None,
+    'role_top': role_rows[0] if role_rows else None,
+    'sample_companies': [{'id': r.id, 'company_name': getattr(r, 'company_name', '')} for r in companies[:3]],
+}
+print(json.dumps(payload, indent=2, sort_keys=True))
+if payload['status'] != 'ok':
+    raise SystemExit(1)
+PY
+
+python3 - <<PY
+import json
+base = '$BASE'
+resumed = json.load(open(f'{base}/pipeline.resumed.json'))
+duckdb = json.load(open(f'{base}/duckdb.json'))
+smoke = json.load(open(f'{base}/smoke.json'))
+role_stats = json.load(open(f'{base}/search-index/stats/embed_role_positions.json'))
+company_stats = json.load(open(f'{base}/search-index/stats/embed_companies.json'))
+summary_stats = json.load(open(f'{base}/search-index/stats/embed_summaries.json'))
+fake_providers = [
+  role_stats.get('provider') == 'local-fake',
+  company_stats.get('provider') == 'local-fake',
+  summary_stats.get('provider') == 'local-fake',
+]
+print(json.dumps({
+  'status': 'ok',
+  'base': base,
+  'limit': int('$LIMIT'),
+  'pipeline_status': resumed['status'],
+  'full_compatible': not any(fake_providers),
+  'mode': 'checkpoint_scaffold_with_local_fake_vectors' if any(fake_providers) else 'full_compatible_real_or_cache_enrichment',
+  'green_criteria': {
+    'roles': 'Aleph-shaped roles_with_dense_text_remapped.jsonl and roles_with_embeddings.jsonl with real/cache classifications and dense_embedding',
+    'companies': 'Aleph-shaped companies_corpus_v3.jsonl and company_embeddings_v3.jsonl with real/cache embedding',
+    'summaries': 'Aleph-shaped unified_person.csv, summary_embeddings.jsonl, person_tech_skills.jsonl with real/cache embedding',
+    'education': 'Aleph-shaped people_education.jsonl and schools_corpus.jsonl',
+    'search': 'DuckDB kNN self-match and local hybrid role/company search from produced artifacts',
+  },
+  'remaining_gaps': ['local-fake providers are scaffold-only'] if any(fake_providers) else [],
+  'vector_stats': {'roles': role_stats, 'companies': company_stats, 'summaries': summary_stats},
+  'duckdb': duckdb['duckdb'],
+  'tables': duckdb['tables'],
+  'smoke': {'knn_top': smoke['knn_top'], 'role_top': smoke['role_top'], 'company_rows_sampled': smoke['company_rows_sampled']},
+}, indent=2, sort_keys=True))
+PY

@@ -12,6 +12,8 @@ clearly bad candidates" pass:
 - keep candidates with score >= 0.3 by default
 - when uncertain, include the candidate
 - record filtered people with reason and score
+- batch 5 candidates per request and run batches concurrently, matching
+  `network-search-api`'s `SEARCH_V2_LLM_FILTER_MAX_CONCURRENT` behavior
 
 Usage:
 
@@ -42,6 +44,13 @@ Profile handoff:
   scoped (`is_current: true`).
 - Auto uses full `profiles_path` for all-time/past-role queries.
 - Override with `--profile-scope current` or `--profile-scope all`.
+
+Batching and concurrency:
+
+- `--batch-size` defaults to `5`, matching the API filter stage.
+- `--concurrency` defaults to `$POWERPACKS_LLM_FILTER_CONCURRENCY`, then
+  `$SEARCH_V2_LLM_FILTER_MAX_CONCURRENT`, then `1000`.
+- Progress is written to stderr as batches complete.
 
 Outputs:
 

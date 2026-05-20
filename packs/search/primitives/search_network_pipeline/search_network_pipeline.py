@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """Resumable orchestrator for the local search-network primitive pipeline.
 
-This runner intentionally starts after query extraction. It needs either an
-existing task `--state` or a `--query` plus `--payload-json` containing the
-`expand_search_request` shape. Natural-language decomposition remains a skill /LLM
-handoff; everything after that is mechanical.
+This runner can prepare the parallel `expand_search_request` payload, then run
+the mechanical retrieval, hydration, LLM filter/rerank, and persistence steps.
+For manual runs it needs either an existing task `--state` or a `--query` plus
+`--payload-json` containing the `expand_search_request` shape.
 """
 from __future__ import annotations
 
-import argparse, hashlib, json, os, re, shlex, subprocess, sys, time
+import argparse, hashlib, json, os, re, shlex, subprocess, sys, threading, time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = "gpt-5.4"
-DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", "200"))
+DEFAULT_FILTER_BATCH_SIZE = int(os.environ.get("POWERPACKS_LLM_FILTER_BATCH_SIZE", "5"))
+DEFAULT_FILTER_CONCURRENCY = int(os.environ.get("POWERPACKS_LLM_FILTER_CONCURRENCY", os.environ.get("SEARCH_V2_LLM_FILTER_MAX_CONCURRENT", "1000")))
+DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 PAYLOAD_KEYS = {"intent_type", "source_type", "normalized_query", "vertical", "role_search_filters", "notes"}
 
 class Blocked(Exception):
@@ -49,7 +51,7 @@ def parse_jsons(s: str) -> list[Any]:
             i=j
     return out
 
-def run(cmd: list[str], *, env_file: str = ".env", timeout: int = 600) -> dict[str, Any]:
+def run(cmd: list[str], *, env_file: str = ".env", timeout: int = 600, stream_stderr: bool = False) -> dict[str, Any]:
     env=dict(os.environ)
     for f in [ROOT/env_file, (ROOT/"../network-search-api/.env").resolve()]:
         if f.exists():
@@ -58,9 +60,29 @@ def run(cmd: list[str], *, env_file: str = ".env", timeout: int = 600) -> dict[s
                 k,v=line.split("=",1)
                 if k not in env and v.strip(): env[k]=v.strip().strip('"').strip("'")
     t=time.monotonic()
-    p=subprocess.run(cmd, cwd=ROOT, env=env, text=True, capture_output=True, timeout=timeout)
-    js=parse_jsons(p.stdout or "")
-    return {"cmd":cmd,"returncode":p.returncode,"stdout":p.stdout,"stderr":p.stderr,"elapsed_seconds":round(time.monotonic()-t,3),"json_objects":js,"json":js[-1] if js else None}
+    if not stream_stderr:
+        p=subprocess.run(cmd, cwd=ROOT, env=env, text=True, capture_output=True, timeout=timeout)
+        stdout, stderr, returncode = p.stdout, p.stderr, p.returncode
+    else:
+        p=subprocess.Popen(cmd, cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout_parts: list[str]=[]; stderr_parts: list[str]=[]
+        def drain(pipe, parts: list[str], *, echo: bool=False) -> None:
+            if pipe is None: return
+            for line in pipe:
+                parts.append(line)
+                if echo:
+                    sys.stderr.write(line); sys.stderr.flush()
+        out_thread=threading.Thread(target=drain,args=(p.stdout,stdout_parts),daemon=True)
+        err_thread=threading.Thread(target=drain,args=(p.stderr,stderr_parts),kwargs={"echo":True},daemon=True)
+        out_thread.start(); err_thread.start()
+        try:
+            returncode=p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill(); returncode=p.wait(); stderr_parts.append(f"\nprocess timed out after {timeout}s\n")
+        out_thread.join(timeout=2); err_thread.join(timeout=2)
+        stdout, stderr = "".join(stdout_parts), "".join(stderr_parts)
+    js=parse_jsons(stdout or "")
+    return {"cmd":cmd,"returncode":returncode,"stdout":stdout,"stderr":stderr,"elapsed_seconds":round(time.monotonic()-t,3),"json_objects":js,"json":js[-1] if js else None}
 
 def require_ok(res: dict[str, Any], step: str) -> dict[str, Any]:
     if res["returncode"] != 0:
@@ -247,7 +269,7 @@ def state_has_step(state: Path, step: str) -> bool:
 def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     if args.state:
         state=Path(args.state); l["state"]=str(state); save(lp,l); return state
-    if l.get("state"):
+    if l.get("state") and not (args.query and args.payload_json):
         return Path(l["state"])
     if not args.query or not args.payload_json:
         b={"primitive":"search_network_pipeline","status":"blocked_user_action","message":"Need --state, or --query plus --payload-json from expand_search_request.","ledger":str(lp)}
@@ -294,7 +316,14 @@ def run_pipeline(args) -> dict[str, Any]:
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not args.search_only:
-        payload={"state":str(state),"model":args.model,"mode":"filter_rerank"}; aid=approval_id("llm",payload)
+        payload={
+            "state":str(state),
+            "model":args.model,
+            "mode":"filter_rerank",
+            "filter_batch_size":args.filter_batch_size,
+            "filter_concurrency":args.filter_concurrency,
+            "rerank_concurrency":args.rerank_concurrency,
+        }; aid=approval_id("llm",payload)
         if not is_approved(l,aid) and not args.confirm_llm and not args.execute_approved:
             block(
                 lp,
@@ -306,12 +335,12 @@ def run_pipeline(args) -> dict[str, Any]:
                 "Run LLM filter + rerank for this search? This may spend OpenAI credits and usually takes 2-3 minutes.",
             )
         for step,cmd in [
-            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--write-state"]),
+            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--write-state"]),
             ("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--write-state"]),
         ]:
             if done(l,step) and not args.force: continue
             mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
-            out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout),step)
+            out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True),step)
             l.setdefault("artifacts",{}).update(collect_artifacts(out))
             mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not done(l,"persist_search_results") or args.force:
@@ -378,7 +407,7 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_run(p):
-    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; tune lower for lower OpenAI tiers (tier 5 usually supports 100-200)"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
+    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; API default is 5"); p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT"); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
 
 def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)

@@ -70,6 +70,10 @@ server.
   filter is genuinely ambiguous (for example multiple plausible "Cisco"
   companies) or when the user asks to page/enrich far beyond the visible result
   set.
+- Start a fresh Sales Nav search for each search request. Do not scan, discover,
+  reuse, resume, or refine from previous `.powerpacks/sales-nav`, artifact,
+  `artifact_id`, CSV, JSONL, manifest, or state files. You may use artifacts
+  created by the current run for ingestion, enrichment, pagination, and export.
 - Do not auto-page endlessly. It is OK for the orchestrator search plan to
   include deliberate same-turn fallback queries/pages for robustness (for
   example strict role + company-only fallback), but otherwise surface
@@ -127,16 +131,17 @@ For a single simple pass, `--search-args-json` is still accepted. Prefer
 `--search-plan-json` because robust Sales Nav recall often needs multiple
 queries.
 
-The runner owns local state and exits with `status: blocked_tool_call` whenever
-the harness should call a `powerset-search` MCP tool. The block includes the
-`tool_name`, `tool_args`, `save_response_to`, and `continue_command`. The
-harness/agent should call the MCP tool natively, write the JSON response to the
-specified path, then run the continue command. Local ingest, lead enrichment,
-mutual URL resolution, export, scoring approvals, and the ledger are handled by
-the runner.
+The runner owns local state for the current invocation and exits with
+`status: blocked_tool_call` whenever the harness should call a `powerset-search`
+MCP tool. The block includes the `tool_name`, `tool_args`, `save_response_to`,
+and `continue_command`. The harness/agent should call the MCP tool natively,
+write the JSON response to the specified path, then run the continue command.
+Local ingest, lead enrichment, mutual URL resolution, export, scoring approvals,
+and the ledger are handled by the runner.
 
-For follow-up qualitative scoring, pass `--criteria`; the runner blocks for
-`approve llm --confirm` before calling `score_sales_nav_leads`.
+For follow-up qualitative search criteria, run a new Sales Nav search. Only pass
+`--criteria` when the user explicitly asks to score or analyze the current run's
+loaded leads rather than search again.
 
 Search plan shape:
 
@@ -158,8 +163,8 @@ metadata; the orchestrator strips unsupported fields from tool args.
 ## Local file handoff
 
 Normally `sales_nav_pipeline` performs these local handoffs. Use the primitives
-below directly only when debugging a failed block, resuming from a hand-edited
-state file, or honoring a power-user request to operate at the primitive level.
+below directly only when debugging a failed block in the current run or honoring
+a power-user request to operate at the primitive level.
 
 Use `packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py` as
 the durable local store for each skill invocation. It normalizes MCP page output
@@ -229,19 +234,18 @@ uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_n
   --state .powerpacks/sales-nav/runs/<run>/state.json
 ```
 
-For deterministic follow-up questions over the same Sales Nav run (for example
-"show me Brookfield VPs"), do not run a new Sales Nav search unless the user is
-changing the upstream search filters. Use local lookup first; it searches names,
-titles, companies, headlines, summaries, experiences, and education in
-`leads.jsonl` and joins mutuals:
+Do not use local lookup to answer search/refinement requests. The lookup
+primitive is only for explicit inspection of the current run's local files, not
+for deciding whether to avoid a new Sales Nav search:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py lookup \
   --state .powerpacks/sales-nav/runs/<run>/state.json --query "<name/company/title>"
 ```
 
-For qualitative/refinement questions (for example "show me people with real
-estate exposure"), run the scoring primitive instead of grepping manually:
+For explicit current-run analysis requests (for example "score these current
+results for real estate exposure"), use the scoring primitive instead of
+grepping manually. For search/refinement requests, run a new Sales Nav search:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/score_sales_nav_leads/score_sales_nav_leads.py \
@@ -329,11 +333,9 @@ Mode defaults:
   also pass targeted `keywords`/`title` when helpful. If the first query is too
   sparse, retry once or twice by relaxing the weakest text filter while keeping
   the company/set fixed.
-- "show me people with real estate exposure" after a Sales Nav run → local
-  refinement over the existing `leads.jsonl` first. Use `lookup` because it
-  searches enriched summaries, experiences, and education. Run a new Sales Nav
-  search only if the user is changing upstream search filters or the local run
-  has not been enriched yet.
+- "show me people with real estate exposure" after a Sales Nav run → run a new
+  Sales Nav search with the updated criteria. Do not scan previous `leads.jsonl`
+  or local artifacts for refinement.
 
 ### Step 2 — Run the search (always with persistence)
 
@@ -453,10 +455,10 @@ Refining upstream Sales Nav filters is a **new search**, not pagination. Re-call
 `persist_artifact: true`. You'll get back a new `artifact_id`. Tell the
 user the artifact id changed.
 
-Refining over already-loaded people is **not** a new Sales Nav search. For
+Refining over already-loaded people is a **new Sales Nav search**. For
 questions like "which of these have real estate exposure", "who is in NYC", or
-"show the Brookfield VPs with mutuals", call `sales_nav_artifacts lookup` (or a
-future local query primitive) against the existing state first.
+"show the Brookfield VPs with mutuals", do not scan local state first. Re-call
+`sales_nav_search` with the updated filters and `persist_artifact: true`.
 
 | User says | What changes |
 | --- | --- |
@@ -464,13 +466,14 @@ future local query primitive) against the existing state first.
 | "narrow to NYC" | new `sales_nav_search` with `geography_ids` |
 | "only senior+ folks" | new `sales_nav_search` with `seniority_ids` |
 | "filter to mid-stage companies" | new `sales_nav_search` with `headcount_ids` |
-| "show me their mutual" | use `mutual_member_ids` from the existing leads |
+| "show me their mutual" | use current-run `mutual_member_ids`; do not scan prior artifacts |
 
 ### Step 6 — Resuming a previous search
 
-If the user references a prior `artifact_id` (from a previous session,
-the web app, or a paste), skip directly to `get_artifact` — no
-`sales_nav_search` needed.
+Do not resume previous searches. If the user references a prior `artifact_id`
+while asking for search results, run a new search instead. Only call
+`get_artifact` for an old artifact when the user explicitly asks to inspect that
+artifact rather than run a search.
 
 ## What this skill does NOT do
 
