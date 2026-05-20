@@ -227,6 +227,5 @@ scripts/test-search-network pipeline-eval-dry-run --bucket founders
 | `packs/search/primitives/apply_prefilters/apply_prefilters.py` | Fix: degree_normalized case normalization |
 | `packs/search/evals/run_pipeline_eval.py` | Uses expand primitive by default; per-case ledgers; set_id injection |
 | `packs/search/evals/PIPELINE_EVAL_RESULTS.md` | This report |
-| `scripts/test-search-network` | Added pipeline-eval, pipeline-eval-codex, pipeline-eval-list, pipeline-eval-dry-run |
-| `scripts/codex-search-network-pipeline` | **New**: Codex agent wrapper (legacy path) |
+| `scripts/test-search-network` | Added pipeline-eval, pipeline-eval-list, pipeline-eval-dry-run |
 | `tests/test_pipeline_eval.py` | **New**: 12 unit tests for harness |

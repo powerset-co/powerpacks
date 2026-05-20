@@ -184,7 +184,7 @@ The skill walks you through decomposition → plan → user approval → retriev
 hydration → CSV/JSONL artifact. Outputs land under `.powerpacks/runs/...`.
 
 See `packs/search/docs/task-flow.md` for the full lifecycle and the
-`extract-search-query` sub-skill boundary.
+`expand_search_request` parallel extractor boundary.
 
 ### `$search-company` — company resolution
 

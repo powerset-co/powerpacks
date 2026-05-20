@@ -25,7 +25,7 @@ The agent should:
   about
 - decide whether to search directly, count first, or generate slices
 - show one compact search preview after extraction and ask the user to
-  `execute`, `modify`, or `search only`
+  `execute` or `modify`
 - after `execute`, run retrieval, hydration, LLM filtering/reranking, and
   persistence without a second approval gate
 - review the candidate frontier after each step
@@ -53,6 +53,11 @@ When a sub-step is covered by another installed skill:
 - require a concrete output artifact or recorded task-state step
 - feed that artifact into the next step
 
+Exception: the normal `search-network` happy path should not browse helper
+skills, schemas, docs, or contracts before doing work. Use the packaged
+primitives below; consult references only when a primitive fails, emits a
+schema/contract blocker, or the user asks for debugging.
+
 Default composition:
 
 - `expand_search_request` primitive: always use this first to produce
@@ -65,9 +70,9 @@ Default composition:
     --query "<user query>" --env-file .env
   ```
 
-  Do not use the `extract-search-query` skill for extraction — use the
-  primitive directly. Do not hide query extraction inside eval or harness-only
-  code paths. The skill is retained as documentation only.
+  Do not use a separate extraction skill or ask the harness to piece together
+  decomposition. Use this parallel primitive directly. Do not hide query
+  extraction inside eval or harness-only code paths.
 - `search-company`: use when natural-language company criteria, investors,
   sectors, funding, headcount, or company-domain intent must resolve into
   canonical company IDs before people retrieval
@@ -112,9 +117,31 @@ updated constraints rather than filtering a previous artifact.
 
 ## Fast path runner
 
-For the normal semantic/role search path, prefer the resumable orchestrator once
-`extract-search-query` has produced an `expand_search_request` payload and the
-user has approved the compact search preview:
+For the normal semantic/role search path, use the resumable orchestrator's
+`prepare` command as the first action after loading this skill. It runs
+`expand_search_request`, writes the payload artifact, performs the compact
+quality gate, and emits the exact preview fields plus an `execute_command`.
+Do **not** grep/search/read the repo, schemas, docs, primitive source, or prior
+artifacts before this command unless the user explicitly asked to debug them.
+
+Do not use `prepare` for the company-directory fast path below. Company-only
+queries such as `people who work at OpenAI` should call `list_company_people`
+directly and skip extraction, task state, retrieval, hydration, filtering, and
+reranking.
+
+```bash
+uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
+  --query "<user query>"
+```
+
+Show the returned `preview` compactly and ask exactly:
+
+`Execute this search or modify it?`
+
+If the user chooses `execute`, run the returned `execute_command` exactly. It
+already includes `--execute-approved`, so there is no second LLM approval gate.
+
+For manual continuation, the equivalent run command is:
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
@@ -126,6 +153,11 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
 `--execute-approved` means the user already saw and approved the extracted
 search. The orchestrator should then run retrieval, hydration, LLM filtering,
 LLM reranking, and persistence without another chat-visible approval gate.
+
+Do not read the generated payload JSON, task state, ledger, hydrated profiles,
+CSV, or JSONL just to summarize progress. The primitives emit compact preview,
+status, and final summary objects for that. Read artifacts only for diagnosis,
+refinement, or when the user asks to inspect details.
 
 Do not mention alternate execution modes, LLM reranking, or skip-rerank options
 in the user-facing preview. LLM filtering/reranking is the default execution
@@ -192,7 +224,7 @@ Rules for this fast path:
    the set with `list_sets` using the same tiebreaker as `search-contacts`
    (exact name → non-personal → most members → personal → ask), then pass
    `set_id` to `list_company_people`.
-5. Skip task state, `extract-search-query`, `search-company`, `resolve_companies`,
+5. Skip task state, `expand_search_request`, `search-company`, `resolve_companies`,
    `count_candidates`, `execute_role_search`, `hydrate_people`, approval prompts,
    slicing, LLM filtering, rerank preparation, and result export.
 6. If the user adds a role/title/seniority/domain constraint — e.g. "AI engineers

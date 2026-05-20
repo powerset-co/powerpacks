@@ -3,7 +3,7 @@
 Tests:
 - Case loading from network-search-api recall YAMLs
 - Bucket filtering (founders, date_range, education)
-- Prompt generation
+- Dry-run query listing
 - Skip-LLM env var handling
 - Dry-run mode
 """
@@ -31,10 +31,7 @@ def load_module(name: str, path: Path):
     return module
 
 
-# Only load the module if the recall dir exists (avoids yaml import failure in CI)
-pipeline_eval = None
-if RECALL_DIR.exists():
-    pipeline_eval = load_module("pipeline_eval", SEARCH_EVALS / "run_pipeline_eval.py")
+pipeline_eval = load_module("pipeline_eval", SEARCH_EVALS / "run_pipeline_eval.py")
 
 
 @unittest.skipUnless(RECALL_DIR.exists(), "network-search-api recall dir not present")
@@ -67,13 +64,12 @@ class PipelineEvalCaseLoadTests(unittest.TestCase):
 
 
 @unittest.skipUnless(RECALL_DIR.exists(), "network-search-api recall dir not present")
-class PipelineEvalPromptTests(unittest.TestCase):
-    def test_prompt_contains_query(self) -> None:
+class PipelineEvalDryRunShapeTests(unittest.TestCase):
+    def test_case_metadata_contains_query(self) -> None:
         cases = pipeline_eval.select_cases(RECALL_DIR, "founders", None, False)
         meta = cases[0]
-        prompt = pipeline_eval.build_extraction_prompt(meta)
-        self.assertIn(meta.query, prompt)
-        self.assertIn("extract-search-query", prompt)
+        self.assertTrue(meta.query)
+        self.assertEqual(pipeline_eval.case_id(meta), meta.relpath.removesuffix(".yaml").replace("/", "__"))
 
 
 class PipelineEvalSkipLlmTests(unittest.TestCase):
@@ -111,7 +107,8 @@ class PipelineEvalDryRunTests(unittest.TestCase):
         out = json.loads(proc.stdout)
         self.assertEqual(out["mode"], "dry-run")
         self.assertTrue(out["skip_llm"])
-        self.assertGreaterEqual(len(out["prompts"]), 1)
+        self.assertGreaterEqual(len(out["queries"]), 1)
+        self.assertIn("query", out["queries"][0])
 
     def test_list_founders(self) -> None:
         proc = subprocess.run(

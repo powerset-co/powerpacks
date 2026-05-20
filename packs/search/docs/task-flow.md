@@ -7,32 +7,22 @@ Powerpacks separates agent reasoning from deterministic execution.
 ```mermaid
 flowchart TD
   U[User asks /search-network query] --> S[search-network skill]
-  S --> T[task_state init]
-  T --> E[extract-search-query skill output]
-  E --> R[record expand_search_request]
-  R --> P[plan strategy and approval]
+  S --> F{company-only lookup?}
+  F -->|yes| MCP[list_company_people MCP]
+  F -->|no| PREP[search_network_pipeline prepare]
+  PREP --> E[parallel expand_search_request payload]
+  E --> P[compact preview]
   P --> A{User choice}
-  A -->|search only| X[approve search_only]
-  A -->|rerank| XR[approve rerank]
-  A -->|changes| C[request-changes]
-  C --> E
-  X --> ID[resolve IDs]
-  XR --> ID
+  A -->|modify| PREP
+  A -->|execute| RUN[search_network_pipeline run --execute-approved]
+  RUN --> T[task_state init and record expand_search_request]
+  T --> ID[resolve IDs]
   ID --> PF[apply_prefilters]
-  PF --> CT[count_candidates]
-  CT --> D{direct or sliced}
-  D -->|direct| EX[execute_role_search]
-  D -->|sliced| SL[generate and execute slices]
-  SL --> M[merge frontier]
+  PF --> EX[execute_role_search]
   EX --> H[hydrate_people]
-  M --> H
-  H --> IO[persist_search_results]
-  IO --> AR{rerank approved?}
-  AR -->|no| OUT[return CSV/JSONL artifacts]
-  AR -->|yes| PREP[agentic_candidate_review prepare]
-  PREP --> SUB[host dispatches shard reviewers]
-  SUB --> RED[agentic_candidate_review reduce]
-  RED --> OUT
+  H --> LLM[llm_filter_candidates and llm_rerank_candidates]
+  LLM --> IO[persist_search_results]
+  IO --> OUT[return compact summary and artifact dir]
 ```
 
 ## Responsibilities
@@ -40,8 +30,10 @@ flowchart TD
 `search-network` is the high-level orchestrator. It owns the conversation,
 approval gate, task state, and final response.
 
-`extract-search-query` is the extraction sub-skill. It turns user intent into a
-schema-valid `role_search_filters` payload and records no candidates.
+`expand_search_request` is the only normal query-expansion step. It runs the
+parallel extractor prompts and turns user intent into a schema-valid
+`role_search_filters` payload. Harnesses should not compose extraction by
+reading docs, schemas, or helper skills.
 
 Primitives are executable steps. They should not guess user intent:
 
@@ -90,7 +82,7 @@ Downstream primitives read prior step outputs from state. For example,
   `resolve_investors`
 - `base_candidate_ids` from `apply_prefilters`
 
-## Extraction Harness
+## Expansion Harness
 
 The primitive parity harness is intentionally lower level:
 
@@ -102,16 +94,12 @@ flowchart LR
 ```
 
 That proves: if the payload is right, do the primitives retrieve representative
-data?
-
-It does not prove that Codex, Claude Code, or NanoClaw can extract the right
-payload from natural language.
-
-The agent extraction harness should be separate:
+data? Query-expansion quality is now evaluated through the same parallel
+`expand_search_request` primitive used by `search-network prepare`:
 
 ```mermaid
 flowchart LR
-  Y[Recall YAML query] --> A[host agent running extract-search-query skill]
+  Y[Recall YAML query] --> A[expand_search_request primitive]
   A --> J[decomposed-query JSON artifact]
   J --> V[schema validation]
   V --> P[Powerpacks primitives]
@@ -126,11 +114,9 @@ store the extracted JSON per case so misses can be debugged as either:
 - retrieval ranking/window miss
 - hydration/artifact miss
 
-The scaffold for this is `powerpacks/evals/run_agent_extraction_harness.py`.
-It writes one prompt per recall case, invokes a caller-provided host command,
-saves `<case>.extracted.json`, validates the minimum extraction contract, then
-feeds the JSON into the same primitive execution path as
-`run_recall_parity.py`.
+The scaffold for this is `packs/search/evals/run_pipeline_eval.py`. It calls
+`expand_search_request`, saves `<case>.extracted.json`, validates the minimum
+extraction contract, then feeds the JSON into `search_network_pipeline`.
 
 ## Skill Composition
 
@@ -140,12 +126,11 @@ instructions, then the host agent orchestrates the sequence.
 The intended composition is:
 
 1. `search-network` decides this is a people search.
-2. It invokes the `extract-search-query` instructions to produce
-   `expand_search_request` JSON.
+2. It invokes `search_network_pipeline prepare`, which calls the parallel
+   `expand_search_request` primitive and writes the payload artifact.
 3. It records that JSON in task state.
 4. It runs deterministic primitives from state.
-5. It optionally invokes host-level shard reviewers only after hydration and
-   explicit rerank approval.
+5. It runs packaged LLM filtering/reranking and persistence after execute.
 
 This keeps extraction auditable while preserving the agentic UX.
 
@@ -164,9 +149,10 @@ flowchart LR
   FP --> OUT[reviewed merge/fix artifact]
 ```
 
-`search-network` can orchestrate `extract-search-query` and `search-company`
-inside a normal search. It should only invoke cleanup or reconciliation skills
-such as `fix-people` when the user explicitly asks for that post-search work.
+`search-network` can orchestrate `search-company` when company criteria need
+resolution before people retrieval. It should only invoke cleanup or
+reconciliation skills such as `fix-people` when the user explicitly asks for
+that post-search work.
 
 ## Title Inspection Gap
 

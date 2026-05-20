@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run recall cases through agent extraction + search_network_pipeline.
+"""Run recall cases through expand_search_request + search_network_pipeline.
 
 This harness tests the actual product flow:
 
-1. A host agent (Codex) runs `extract-search-query` to produce JSON.
+1. The parallel `expand_search_request` primitive produces JSON.
 2. The JSON is fed to `search_network_pipeline.py run --search-only` (or
    `--execute-approved` when LLM rerank is desired).
 3. Recall is checked against expected person IDs from the YAML case.
@@ -18,11 +18,9 @@ Environment variables (also loadable from .env):
                                   payload. Use to scope evals to an org set
                                   instead of the personal default.
 
-Pass `--agent-command` as a shell command template. Supported placeholders:
-  {prompt_file}   file containing the extraction prompt
-  {output_json}   expected JSON artifact path
-  {case_id}       stable recall case id
-  {query}         shell-quoted query text
+This intentionally avoids harness-composed query expansion. Query expansion
+quality should come from the same parallel primitive used by `search-network
+prepare`.
 """
 from __future__ import annotations
 
@@ -30,7 +28,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -210,57 +207,6 @@ def expand_query(
     return decomposition
 
 
-def build_extraction_prompt(meta: CaseMeta) -> str:
-    """Build a prompt for dry-run / legacy agent mode."""
-    skill_path = SEARCH_ROOT / "skills" / "extract-search-query" / "SKILL.md"
-    return f"""Use the Powerpacks `extract-search-query` skill to decompose this recall query.
-
-Skill file: {skill_path}
-Schemas:
-- {SEARCH_ROOT / "schemas" / "decomposed-query.schema.json"}
-- {SEARCH_ROOT / "schemas" / "role-search-filters.schema.json"}
-
-Return only one JSON object. Do not include markdown fences, commentary, retrieval results, or candidate IDs.
-
-Recall case: {meta.relpath}
-Query: {meta.query}
-"""
-
-
-def invoke_agent(
-    command_template: str,
-    prompt_file: Path,
-    output_json: Path,
-    meta: CaseMeta,
-) -> dict[str, Any]:
-    """Legacy: invoke an external agent command for extraction."""
-    command = command_template.format(
-        prompt_file=shlex.quote(str(prompt_file)),
-        output_json=shlex.quote(str(output_json)),
-        case_id=shlex.quote(case_id(meta)),
-        query=shlex.quote(meta.query),
-    )
-    completed = subprocess.run(
-        command, shell=True, text=True, capture_output=True, cwd=ROOT,
-    )
-    raw_log = output_json.with_suffix(".agent.log")
-    raw_log.write_text(
-        f"$ {command}\nexit={completed.returncode}\n\n"
-        f"STDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"agent command failed ({completed.returncode}); see {raw_log}"
-        )
-    if output_json.exists() and output_json.stat().st_size:
-        extracted = json.loads(output_json.read_text())
-    else:
-        extracted = json.loads(completed.stdout.strip())
-        output_json.parent.mkdir(parents=True, exist_ok=True)
-        output_json.write_text(json.dumps(extracted, indent=2, sort_keys=True) + "\n")
-    return extracted
-
-
 # ---------------------------------------------------------------------------
 # Pipeline execution
 # ---------------------------------------------------------------------------
@@ -370,7 +316,6 @@ def check_recall(
 def run_case(
     meta: CaseMeta,
     *,
-    agent_command: str | None,
     env_file: str,
     env: dict[str, str],
     extraction_dir: Path,
@@ -395,18 +340,12 @@ def run_case(
         result.update({"status": "ignored", "reason": "no comparable expected IDs or count"})
         return result
 
-    # 1. Query extraction (primitive-first, agent fallback)
+    # 1. Query extraction through the parallel primitive.
     output_json = extraction_dir / f"{cid}.extracted.json"
     extraction_dir.mkdir(parents=True, exist_ok=True)
-
-    if agent_command:
-        prompt_file = extraction_dir / f"{cid}.prompt.txt"
-        prompt_file.write_text(build_extraction_prompt(meta))
-        decomposition = invoke_agent(agent_command, prompt_file, output_json, meta)
-    else:
-        decomposition = expand_query(
-            meta.query, output_json, env_file=env_file, model=expand_model,
-        )
+    decomposition = expand_query(
+        meta.query, output_json, env_file=env_file, model=expand_model,
+    )
     result["extraction"] = str(output_json)
 
     # 2. Write payload for pipeline, injecting set_id if provided
@@ -460,7 +399,7 @@ def write_report(results: list[dict[str, Any]]) -> None:
         "",
         f"Last run: `{now}`",
         "",
-        "Scope: recall YAMLs → agent extraction → search_network_pipeline (direct mode, no slicing).",
+        "Scope: recall YAMLs → expand_search_request → search_network_pipeline (direct mode, no slicing).",
         "",
         f"LLM rerank skipped: `{results[0].get('skip_llm', True) if results else True}`",
         "",
@@ -504,11 +443,7 @@ def write_report(results: list[dict[str, Any]]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run recall cases through agent extraction + search_network_pipeline"
-    )
-    parser.add_argument(
-        "--agent-command",
-        help="Shell command template for host agent extraction.",
+        description="Run recall cases through expand_search_request + search_network_pipeline"
     )
     parser.add_argument("--recall-dir", default=str(DEFAULT_RECALL_DIR))
     parser.add_argument("--bucket", help="Filter to a single bucket (founders, date_range, education, ...)")
@@ -532,11 +467,9 @@ def main() -> None:
         default=None,
         help="Model for expand_search_request primitive. Default reads EXPAND_SEARCH_MODEL from env, falling back to gpt-5.4-mini.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Write prompts only, no agent or pipeline invocation.")
+    parser.add_argument("--dry-run", action="store_true", help="List selected queries without invoking expansion or pipeline.")
     parser.add_argument("--list", action="store_true", help="List matching cases and exit.")
     args = parser.parse_args()
-
-    # --agent-command is optional; default uses expand_search_request primitive
 
     recall_dir = Path(args.recall_dir)
     cases = select_cases(recall_dir, args.bucket, args.case_glob, args.include_staging)
@@ -565,14 +498,11 @@ def main() -> None:
     extraction_dir.mkdir(parents=True, exist_ok=True)
 
     if args.dry_run:
-        prompts: list[str] = []
+        queries: list[dict[str, Any]] = []
         for meta in cases:
             cid = case_id(meta)
-            prompt_file = extraction_dir / f"{cid}.prompt.txt"
-            prompt_file.parent.mkdir(parents=True, exist_ok=True)
-            prompt_file.write_text(build_extraction_prompt(meta))
-            prompts.append(str(prompt_file))
-        print(json.dumps({"mode": "dry-run", "prompts": prompts, "skip_llm": do_skip_llm}, indent=2))
+            queries.append({"id": cid, "query": meta.query, "output_json": str(extraction_dir / f"{cid}.extracted.json")})
+        print(json.dumps({"mode": "dry-run", "queries": queries, "skip_llm": do_skip_llm}, indent=2))
         return
 
     results: list[dict[str, Any]] = []
@@ -581,7 +511,6 @@ def main() -> None:
         try:
             results.append(run_case(
                 meta,
-                agent_command=args.agent_command,
                 env_file=args.env_file,
                 env=env,
                 extraction_dir=extraction_dir,

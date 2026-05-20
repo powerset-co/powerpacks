@@ -6,6 +6,20 @@ This starts **after query extraction**. Provide either an existing task `--state
 or `--query` plus `--payload-json` containing the `expand_search_request` output.
 Natural-language decomposition remains a skill/LLM step.
 
+For the normal `search-network` happy path, call `prepare` first instead of
+asking the harness to inspect docs or build its own extraction flow:
+
+```bash
+uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
+  --query "software engineers in sf"
+```
+
+`prepare` runs `expand_search_request`, writes `expand_search_request.json`,
+emits a compact preview, and returns an `execute_command` to run after the user
+chooses `execute`. Do not use `prepare` for company-directory-only requests;
+those should route to the `list_company_people` MCP fast path documented in the
+`search-network` skill.
+
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
   --query "software engineers in sf" \

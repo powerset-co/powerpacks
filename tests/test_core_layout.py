@@ -20,7 +20,7 @@ class CoreLayoutTests(unittest.TestCase):
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
         self.assertEqual(
-            search_pack, ["extract-search-query", "search-company", "search-network"]
+            search_pack, ["search-company", "search-network"]
         )
         messages_pack = sorted(
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
@@ -132,7 +132,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("/search-company <query>", text)
         self.assertIn("company lookup", text.lower())
 
-    def test_search_network_uses_extraction_skill(self) -> None:
+    def test_search_network_uses_expand_primitive_directly(self) -> None:
         task = json.loads((ROOT / "packs/search/tasks/search-network.task.json").read_text())
         task_step_ids = [step["id"] for step in task["steps"]]
         self.assertIn("resolve_investors", task_step_ids)
@@ -142,14 +142,16 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("direct_execute", task_step_ids)
 
         expand_step = next(step for step in task["steps"] if step["id"] == "expand_search_request")
-        self.assertEqual(expand_step["skill"], "extract-search-query")
+        self.assertEqual(expand_step["kind"], "primitive")
+        self.assertEqual(expand_step["primitive"], "expand_search_request")
+        self.assertNotIn("skill", expand_step)
 
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
         self.assertIn("## Skill Composition", text)
-        self.assertIn("extract-search-query", text)
         self.assertIn("search-company", text)
         self.assertIn("handoff", text.lower())
-        self.assertIn("Do not hide query extraction inside eval or", text)
+        self.assertIn("harness-only code paths", text)
+        self.assertIn("Use this parallel primitive directly", text)
 
     def test_json_contracts_and_schemas_parse(self) -> None:
         roots = [
@@ -179,7 +181,8 @@ class CoreLayoutTests(unittest.TestCase):
 
     def test_search_network_uses_single_execute_preview_gate(self) -> None:
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
-        self.assertIn("execute`, `modify`, or `search only`", text)
+        self.assertIn("`execute` or `modify`", text)
+        self.assertNotIn("execute`, `modify`, or `search only`", text)
         self.assertIn("--execute-approved", text)
         self.assertIn("without a second approval gate", text)
 
