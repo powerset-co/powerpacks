@@ -70,6 +70,28 @@ Pipeline eval answers: can the parallel `expand_search_request` primitive
 produce the right payload before primitives run? This is the same expansion path
 used by `search_network_pipeline.py prepare`.
 
+### CI-safe mocked prepare regression
+
+Use this when you want to verify the harness-facing happy path without any live
+credentials:
+
+```bash
+scripts/test-search-network mock-prepare
+```
+
+This starts an in-process OpenAI-compatible Chat Completions HTTP server, points
+`OPENAI_API_BASE` at it, and runs the real command path:
+
+```text
+search_network_pipeline.py prepare -> expand_search_request -> 8 parallel extractor calls
+```
+
+It validates that `prepare` emits `preview_ready`, writes the payload artifact,
+merges fields from multiple extractor responses, and returns an
+`--execute-approved` command. It intentionally stops before retrieval, so it does
+not require or validate TurboPuffer, Postgres hydration, or real LLM reranking.
+Use live `pipeline-eval` for that full integration tier.
+
 Dry-run selected recall cases:
 
 ```bash
@@ -120,6 +142,8 @@ For a small external test, require:
 - `scripts/test-search-network check` passes.
 - Representative primitive recall buckets pass or have documented known gaps.
 - `scripts/test-search-network company-dry-run` passes.
-- At least 5 headless extraction cases produce schema-valid JSON.
+- `scripts/test-search-network mock-prepare` passes in CI or locally.
+- At least 5 live `pipeline-eval` cases produce schema-valid JSON when API
+  credentials are available.
 - For real searches, every run returns a task state path plus CSV/JSONL/manifest
   artifacts.

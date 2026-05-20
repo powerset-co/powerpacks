@@ -38,6 +38,11 @@ Commands:
   pipeline-eval-list [--bucket BUCKET] [--case-glob REGEX]
       List matching recall cases for pipeline-eval.
 
+  mock-prepare
+      Run search_network_pipeline prepare against a local mock OpenAI-compatible
+      chat API. This validates the parallel expansion/preview path without
+      OpenAI, TurboPuffer, or Postgres credentials.
+
 Environment:
   APP_DIR                           Defaults to /Users/arthur/workspace/aleph-mvp (primitive recall)
                                     or /Users/arthur/workspace/network-search-api (pipeline-eval).
@@ -115,6 +120,17 @@ case "$command" in
       --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
       --list \
       "$@"
+    ;;
+  mock-prepare)
+    py="${PYTHON:-}"
+    if [[ -z "$py" ]]; then
+      if [[ -x "$ROOT/.venv/bin/python" ]]; then
+        py="$ROOT/.venv/bin/python"
+      else
+        py="python"
+      fi
+    fi
+    "$py" -m unittest tests.test_search_network_mock_openai -v "$@"
     ;;
   extractor-eval)
     uv run --env-file "${ENV_FILE:-.env}" python "$SEARCH_EVALS/extractor_eval.py" \
