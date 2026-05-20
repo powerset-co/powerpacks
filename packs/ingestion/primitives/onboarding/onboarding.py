@@ -175,16 +175,6 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def read_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def shell_join(parts: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in parts)
 
@@ -196,7 +186,6 @@ def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = Fa
         "--accounts", args.accounts,
         "--gmail-db", args.gmail_db,
         "--gmail-output-dir", args.gmail_output_dir,
-        "--linkedin-ledger", args.linkedin_ledger,
     ]
     if placeholders:
         cmd.extend(["--linkedin-csv", "<Connections.csv>", "--linkedin-source-user", "<label>"])
@@ -212,7 +201,21 @@ def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = Fa
     return shell_join(cmd)
 
 
-def import_network_command(args: argparse.Namespace, *, dry_run: bool = False) -> str:
+def linkedin_csv_from_registry(registry: dict[str, Any]) -> str:
+    rec = registry.get("accounts", {}).get("linkedin_csv", {})
+    for artifact in reversed(rec.get("artifacts") or []):
+        if Path(str(artifact)).name.lower() == "connections.csv":
+            return str(artifact)
+    return ""
+
+
+def linkedin_source_user_from_registry(registry: dict[str, Any]) -> str:
+    rec = registry.get("accounts", {}).get("linkedin_csv", {})
+    usernames = rec.get("usernames") or []
+    return str(usernames[0]) if usernames else ""
+
+
+def import_network_command(args: argparse.Namespace, registry: dict[str, Any], *, dry_run: bool = False) -> str:
     cmd = [
         "uv", "run", "--project", ".", "python",
         "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "run",
@@ -221,6 +224,12 @@ def import_network_command(args: argparse.Namespace, *, dry_run: bool = False) -
         "--run-id", ONBOARDING_IMPORT_RUN_ID,
         "--operator-id", args.operator_id,
     ]
+    linkedin_csv = args.linkedin_csv or linkedin_csv_from_registry(registry)
+    linkedin_source_user = args.linkedin_source_user or linkedin_source_user_from_registry(registry)
+    if linkedin_csv:
+        cmd.extend(["--linkedin-csv", linkedin_csv])
+    if linkedin_source_user:
+        cmd.extend(["--linkedin-source-user", linkedin_source_user])
     if dry_run:
         cmd.append("--dry-run")
     return shell_join(cmd)
@@ -316,8 +325,8 @@ def onboarding_handoff(args: argparse.Namespace, registry: dict[str, Any]) -> di
                 "name": "import-network",
                 "agent_type": "worker",
                 "depends_on": [],
-                "dry_run_command": import_network_command(args, dry_run=True),
-                "run_command": import_network_command(args),
+                "dry_run_command": import_network_command(args, registry, dry_run=True),
+                "run_command": import_network_command(args, registry),
                 "status_command": import_network_status_command(),
                 "continue_command": import_network_continue_command(),
                 "approve_command": import_network_approve_command(),
@@ -544,9 +553,8 @@ def cmd_step(args: argparse.Namespace) -> int:
 
     The command is safe to run repeatedly. It refreshes accounts.json from local
     artifacts first, then returns the next missing action. LinkedIn CSV is
-    handled as the primary interactive handoff: provide a Connections.csv once,
-    approve external enrichment separately if blocked, then keep rerunning this
-    command until the final people.csv artifact is detected.
+    recorded as linked input here; import-network owns the later parse/enrich
+    work and any paid provider approvals.
     """
     path = Path(args.accounts)
     registry, updates = refresh_registry(path)
@@ -846,7 +854,7 @@ def build_parser() -> argparse.ArgumentParser:
     step.add_argument("--messages-contacts-csv", default="", help="Path to an existing messages contacts CSV to link without importing")
     step.add_argument("--twitter-handle", default="", help="Twitter/X handle to record without crawling")
     step.add_argument("--operator-id", default="local")
-    step.add_argument("--linkedin-ledger", default=".powerpacks/network-import/linkedin/import-run.json")
+    step.add_argument("--linkedin-ledger", default=".powerpacks/network-import/linkedin/import-run.json", help=argparse.SUPPRESS)
     step.add_argument("--import-timeout", type=int, default=90)
     step.set_defaults(func=cmd_step)
     return parser

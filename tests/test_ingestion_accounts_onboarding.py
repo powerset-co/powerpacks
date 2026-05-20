@@ -184,6 +184,33 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["status"], "needs_input")
             self.assertEqual(payload["channel"], "linkedin_csv")
 
+    def test_onboarding_step_records_linkedin_csv_without_import(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                csv_path = Path(tmp) / "Connections.csv"
+                csv_path.write_text("First Name,Last Name,URL,Email Address,Company,Position,Connected On\n", encoding="utf-8")
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                accounts.update_channel("gmail", path=path, skipped=True)
+                code, payload = self.invoke(onboarding, [
+                    "step", "--accounts", str(path),
+                    "--linkedin-csv", str(csv_path),
+                    "--linkedin-source-user", "me@example.com",
+                ])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "progressed")
+            self.assertEqual(payload["channel"], "linkedin_csv")
+            self.assertNotIn("approval_command", payload)
+            self.assertFalse((Path(tmp) / ".powerpacks/network-import/linkedin/import-run.json").exists())
+            registry = accounts.load_registry(path)
+            self.assertTrue(registry["accounts"]["linkedin_csv"]["linked"])
+            self.assertEqual(registry["accounts"]["linkedin_csv"]["usernames"], ["me@example.com"])
+            self.assertEqual(registry["accounts"]["linkedin_csv"]["artifacts"], [str(csv_path)])
+
     def test_onboarding_step_discovers_gmail_msgvault_accounts(self):
         old_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
@@ -328,6 +355,32 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertIn("--input .powerpacks/network-import/network-runs/network-onboarding/merged/people.csv", phases[1]["run_command"])
             self.assertIn("scripts/build-local-duckdb-shim.py", phases[1]["materialize_duckdb_command"])
             self.assertEqual(phases[1]["expected_output"], ".powerpacks/search-index/local-search.duckdb")
+
+    def test_onboarding_handoff_uses_recorded_linkedin_csv(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                csv_path = Path(tmp) / "Connections.csv"
+                csv_path.write_text("First Name,Last Name,URL,Email Address,Company,Position,Connected On\n", encoding="utf-8")
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                for channel in ["gmail", "messages", "twitter"]:
+                    accounts.update_channel(channel, path=path, linked=False, skipped=True)
+                accounts.update_channel(
+                    "linkedin_csv",
+                    path=path,
+                    username="me@example.com",
+                    artifact=str(csv_path),
+                    success=True,
+                )
+                code, payload = self.invoke(onboarding, ["step", "--accounts", str(path), "--operator-id", "operator-1"])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 0)
+            run_command = payload["handoff"]["worker_phases"][0]["run_command"]
+            self.assertIn(f"--linkedin-csv {str(csv_path)}", run_command)
+            self.assertIn("--linkedin-source-user me@example.com", run_command)
 
 
 if __name__ == "__main__":

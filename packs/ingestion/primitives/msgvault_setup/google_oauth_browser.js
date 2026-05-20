@@ -14,6 +14,7 @@ const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.modify",
 ];
+const HUMAN_LOGIN_ACCOUNT_RETRY_MS = 60000;
 
 class StepError extends Error {
   constructor(stuckAt, message) {
@@ -222,6 +223,32 @@ async function chooseOption(page, labelCandidates, optionCandidates) {
         } catch (_) {}
       }
     }
+    const customSelect = page
+      .locator("cfc-select, mat-select, .mat-mdc-select, [aria-haspopup='listbox']")
+      .filter({ hasText: label })
+      .first();
+    if (await visible(customSelect, 1200)) {
+      log(`opening custom select ${labelText}`);
+      await customSelect.click({ timeout: 2500 }).catch(() => {});
+      await page.waitForTimeout(600);
+      if (await clickFirst(page, optionCandidates, 2500)) return true;
+    }
+    const visibleLabel = page.getByText(label, { exact: false }).first();
+    if (await visible(visibleLabel, 1200)) {
+      log(`opening visible label ${labelText}`);
+      await visibleLabel.click({ timeout: 2500 }).catch(() => {});
+      await page.waitForTimeout(600);
+      if (await clickFirst(page, optionCandidates, 2500)) return true;
+    }
+    const genericSelect = page
+      .locator("cfc-select, mat-select, .mat-mdc-select, [role='combobox'], [aria-haspopup='listbox'], material-dropdown-select")
+      .first();
+    if (await visible(genericSelect, 1200)) {
+      log(`opening first visible select for ${labelText}`);
+      await genericSelect.click({ timeout: 2500 }).catch(() => {});
+      await page.waitForTimeout(600);
+      if (await clickFirst(page, optionCandidates, 2500)) return true;
+    }
   }
   return false;
 }
@@ -264,6 +291,7 @@ async function clickButton(page, candidates, timeout = 1800) {
 async function waitForHumanLogin(page, email, timeoutMs) {
   const start = Date.now();
   let lastUrl = "";
+  let nextAccountClickAt = 0;
   while (Date.now() - start < timeoutMs) {
     const url = page.url();
     if (url !== lastUrl) {
@@ -273,8 +301,12 @@ async function waitForHumanLogin(page, email, timeoutMs) {
     if (!url.includes("accounts.google.com") && !url.includes("/signin/")) {
       return true;
     }
-    if (await clickEmailAccount(page, email, 900)) {
-      log(`selected Google account ${email}`);
+    const now = Date.now();
+    if (now >= nextAccountClickAt) {
+      nextAccountClickAt = now + HUMAN_LOGIN_ACCOUNT_RETRY_MS;
+      if (await clickEmailAccount(page, email, 900)) {
+        log(`selected Google account ${email}; retrying account selection in 60s if login is still pending`);
+      }
     }
     await page.waitForTimeout(1500);
   }
@@ -638,9 +670,19 @@ async function createClient(page, project, email, clientName, downloadDir, timeo
     await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
   }
 
-  await chooseOption(page, [/Application type/i], [/Desktop app/i, "Desktop app"]);
-  await fillFirst(page, [/Name/i], clientName, 2500);
-  await clickFirst(page, [/Create/i], 2500);
+  const selectedType = await chooseOption(page, [/Application type/i], [/Desktop app/i, "Desktop app"]);
+  if (!selectedType) {
+    throw new StepError("clients.application_type", "Application type dropdown was visible, but Desktop app could not be selected.");
+  }
+  await page.waitForTimeout(1000);
+  const namedClient = await fillFirst(page, [/Name/i], clientName, 2500);
+  if (!namedClient) {
+    throw new StepError("clients.name", "Desktop app was selected, but the OAuth client name field was not visible.");
+  }
+  const created = await clickButton(page, [/^Create$/i], 2500);
+  if (!created) {
+    throw new StepError("clients.create", "OAuth client form was filled, but the Create button was not visible.");
+  }
   await page.waitForTimeout(2500);
 
   const downloaded = await downloadClientJson(page, downloadDir, "clients.download_new");
