@@ -473,9 +473,15 @@ class ImportContactsPipelineTests(unittest.TestCase):
             review_csv.write_text("bucket,handle\n", encoding="utf-8")
             other_csv.write_text("bucket,handle\n", encoding="utf-8")
             args = SimpleNamespace(review_host="127.0.0.1", review_port=8766, review_csv=review_csv)
-            with mock.patch.object(mod, "read_review_server_health", return_value={"status": "ok", "csv": str(review_csv.resolve())}):
+            health = {
+                "status": "ok",
+                "csv": str(review_csv.resolve()),
+                "source_sha256": mod.current_review_research_web_sha256(),
+            }
+            with mock.patch.object(mod, "read_review_server_health", return_value=health):
                 self.assertTrue(mod.review_server_matches_current_csv(args))
-            with mock.patch.object(mod, "read_review_server_health", return_value={"status": "ok", "csv": str(other_csv.resolve())}):
+            stale_csv_health = {**health, "csv": str(other_csv.resolve())}
+            with mock.patch.object(mod, "read_review_server_health", return_value=stale_csv_health):
                 self.assertFalse(mod.review_server_matches_current_csv(args))
             with mock.patch.object(mod, "read_review_server_health", return_value=None):
                 self.assertFalse(mod.review_server_matches_current_csv(args))

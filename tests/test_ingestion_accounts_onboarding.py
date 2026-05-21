@@ -249,6 +249,8 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["email_source"], "user_provided")
             self.assertIn("Do not infer it", payload["prompt"])
             self.assertIn("--gmail-add-email EMAIL", payload["first_gmail_command"])
+            self.assertNotIn("sync", payload["prompt"].lower())
+            self.assertNotIn("example_sync", payload)
 
     def test_onboarding_step_returns_agent_actions_for_extra_gmail_email(self):
         old_cwd = Path.cwd()

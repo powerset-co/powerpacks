@@ -2397,6 +2397,11 @@ class ReviewResearchWebTests(unittest.TestCase):
             self.assertIn(token, html)
         for old_token in ["--bg:#f5f6f8", "--panel:#fff", "--line:#d8dee6"]:
             self.assertNotIn(old_token, html)
+        self.assertIn("<title>Contact Review</title>", html)
+        self.assertIn("<h1>Contact Review</h1>", html)
+        self.assertIn("Click a card to toggle which contacts should be added to your Personal Network.", html)
+        self.assertNotIn("Powerpacks Research Review", html)
+        self.assertNotIn("Click a card to toggle include or exclude in upload. Every change autosaves.", html)
         self.assertIn("These contacts are strong candidates for your Personal Network.", html)
         self.assertIn("background:#0A66C2", html)
         self.assertIn(".card.selected{background:var(--surface);border-color:var(--success-border)}", html)

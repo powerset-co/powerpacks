@@ -141,7 +141,7 @@ Record selected accounts in `gmail.config.selected_accounts` /
 `gmail.config.pending_accounts` until the returned `--gmail-authorized-email
 <email>` rerun records them as linked. Do not create
 `.powerpacks/network-import/gmail` outputs or run `msgvault sync-full` during
-linking.
+linking; Gmail sync/import starts only after the import confirmation.
 
 ## Import phase: parallel fan-out, then fan-in
 

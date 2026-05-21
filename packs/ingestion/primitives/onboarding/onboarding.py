@@ -522,7 +522,7 @@ def cmd_step(args: argparse.Namespace) -> int:
             emit({
                 "status": "needs_input",
                 "channel": "gmail",
-                "prompt": "Which Gmail address should we link first? Do not infer it from gcloud, Powerset login, or local machine state. After the user provides an email, rerun with --gmail-add-email <email>. Onboarding only authorizes and records the account; msgvault sync happens later in the import phase.",
+                "prompt": "Which Gmail address should we link first? Do not infer it from gcloud, Powerset login, or local machine state. After the user provides an email, rerun with --gmail-add-email <email>. Onboarding only authorizes and records the account; mailbox update happens later in the import phase.",
                 "question": "Which Gmail address should we link first?",
                 "email_source": "user_provided",
                 "msgvault_db": str(db_path),

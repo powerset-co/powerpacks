@@ -70,7 +70,7 @@ linked; `$setup` import workers own msgvault sync for selected accounts.
 Only ask the user to complete browser login/consent when Google requires human
 action. If msgvault has no OAuth client configured yet, the first returned
 command will be `browser-setup --email <gmail> --add-account`; run that before
-test-user commands.
+test-user or additional add-account commands.
 
 LinkedIn CSV remains the primary LinkedIn path:
 
