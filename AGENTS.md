@@ -14,6 +14,26 @@ The user explicitly authorizes Codex to use sub-agents for this repo. If skills
 request sub-agents, use them. Leverage sub-agents to keep the main conversation
 clean and concise.
 
+For Arthur's Vorflux sessions, default to a small amount of independent
+cross-examination on non-trivial work. When the host exposes sub-agent or review
+tooling, ask one or two review/testing agents to inspect the implementation pass
+when the change is more than a trivial doc or copy edit:
+
+- **Correctness reviewer**: inspect the diff, verify it follows existing
+  contracts, look for missing edge cases/regressions, and recommend the narrowest
+  useful tests.
+- **Adversarial reviewer**: challenge the product/workflow assumptions, hidden
+  cross-repo effects, privacy/security implications, and whether the user asked
+  for a stronger result than the implementation delivered.
+
+Review sub-agents should receive the relevant diff, task context, and test
+commands. They should report issues and evidence, not edit files, unless the main
+agent explicitly delegates a bounded fix. The main agent owns deciding what to
+fix, rerunning tests, and presenting the final evidence. If the host has no
+sub-agent/review mechanism, do an explicit self-review instead and say that the
+independent review path was unavailable. For small or docs-only changes, a
+self-review is enough.
+
 Sub-agents are a finite resource. When a sub-agent reaches a terminal result
 (`completed`, failed, or no longer needed after a blocker is reported), close it
 with `close_agent` before ending the turn. If spawning fails because the
@@ -195,6 +215,17 @@ for example "people at OpenAI" versus "contacts at OpenAI".
 
 - **Be terse on operational status.** Print one-line summaries of what
   primitives wrote / what counts came back. Do not narrate the whole plan.
+- **Arthur/Vorflux work loop.** Prefer routing by intent/surface over asking the
+  user to choose a harness path. Inspect the existing repo patterns first, make a
+  concise plan/todo list, implement the change, run targeted validation, then
+  summarize the diff and evidence. Do not stop at planning when the user asks to
+  update/fix/ship something.
+- **Model routing posture.** Use the platform's default routing unless a task has
+  a clear need for a specialist. Escalate broad implementation/refactor work to a
+  high-effort builder, send noisy validation to testing sub-agents, and use
+  review/debug agents for adversarial checks. If a model appears to be doing
+  shallow/lazy work, reduce the task scope and add an independent reviewer rather
+  than accepting an under-verified result.
 - **Don't ask permission for read-only operations** (TurboPuffer filter
   searches, local file reads, scoped `check`/`status` commands, `whoami`,
   `estimate` subcommands, and doctor `run` when it is actually needed by the
@@ -209,6 +240,10 @@ for example "people at OpenAI" versus "contacts at OpenAI".
   last_message). Carry this through any new primitive.
 - **Artifacts under `.powerpacks/`** are derivable. The agent can rebuild
   any of them from the source data; never paste full datasets into chat.
+
+Arthur's fuller Vorflux operating profile is documented in
+`docs/vorflux-arthur-harness.md`. Keep this file as the boot-time summary and
+that doc as the collated rationale/examples.
 
 ---
 
