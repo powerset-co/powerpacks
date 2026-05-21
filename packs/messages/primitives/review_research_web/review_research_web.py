@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import html
 import json
 import os
@@ -14,6 +15,9 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+
+SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 DEFAULT_COLUMNS = [
@@ -526,6 +530,7 @@ def make_handler(csv_path: Path, research_dir: Path | None):
                     "csv": str(csv_path.resolve()),
                     "research_dir": str(research_dir.resolve()) if research_dir else None,
                     "row_count": len(rows),
+                    "source_sha256": SOURCE_SHA256,
                 }).encode(), "application/json")
                 return
             _, rows = read_rows(csv_path)
@@ -617,6 +622,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         "research_dir": str(research_dir) if research_dir else None,
         "url": url,
         "row_count": len(rows),
+        "source_sha256": SOURCE_SHA256,
     }, indent=2))
     if args.open:
         webbrowser.open(url)

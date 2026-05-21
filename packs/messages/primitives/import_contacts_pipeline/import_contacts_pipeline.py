@@ -383,6 +383,26 @@ def primitive_path(*parts: str) -> str:
     return str(repo_root().joinpath(*parts))
 
 
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def review_research_web_path() -> Path:
+    return Path(primitive_path("packs/messages/primitives/review_research_web/review_research_web.py"))
+
+
+def current_review_research_web_sha256() -> str:
+    return file_sha256(review_research_web_path())
+
+
+def review_server_source_summary() -> dict[str, str]:
+    path = review_research_web_path()
+    return {
+        "source_path": str(path),
+        "source_sha256": file_sha256(path),
+    }
+
+
 def parse_json_objects(text: str) -> list[Any]:
     out: list[Any] = []
     decoder = json.JSONDecoder()
@@ -1563,6 +1583,8 @@ def review_server_matches_current_csv(args: argparse.Namespace) -> bool:
     health = read_review_server_health(args)
     if not health or health.get("status") != "ok":
         return False
+    if health.get("source_sha256") != current_review_research_web_sha256():
+        return False
     served = health.get("csv")
     if not served:
         return False
@@ -1634,16 +1656,17 @@ def open_review_server(args: argparse.Namespace, ledger_path: Path, ledger: dict
             os.kill(pid, 0)
             if review_server_matches_current_csv(args):
                 maybe_open_browser(args)
-                mark_step(ledger_path, ledger, "review_research_web", "completed", summary={"url": review_url(args), "pid": pid, "reused": True, "csv": str(Path(args.review_csv).resolve())})
+                mark_step(ledger_path, ledger, "review_research_web", "completed", summary={"url": review_url(args), "pid": pid, "reused": True, "csv": str(Path(args.review_csv).resolve()), **review_server_source_summary()})
                 return
             stop_review_server_process(pid)
             pid_path.unlink(missing_ok=True)
         except Exception:
             pid_path.unlink(missing_ok=True)
 
+    source_path = review_research_web_path()
     cmd = [
         sys.executable,
-        primitive_path("packs/messages/primitives/review_research_web/review_research_web.py"),
+        str(source_path),
         "serve",
         "--csv", str(args.review_csv),
         "--research-dir", str(args.research_dir),
@@ -1657,9 +1680,9 @@ def open_review_server(args: argparse.Namespace, ledger_path: Path, ledger: dict
         proc = subprocess.Popen(cmd, cwd=repo_root(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     pid_path.write_text(str(proc.pid) + "\n", encoding="utf-8")
     if not wait_for_review_server(args):
-        mark_step(ledger_path, ledger, "review_research_web", "failed", summary={"url": review_url(args), "pid": proc.pid, "log": str(log_path)}, command=cmd, error="review_server_not_ready")
+        mark_step(ledger_path, ledger, "review_research_web", "failed", summary={"url": review_url(args), "pid": proc.pid, "log": str(log_path), **review_server_source_summary()}, command=cmd, error="review_server_not_ready")
         raise PipelineFailed(f"Review server did not become ready at {review_url(args)}")
-    mark_step(ledger_path, ledger, "review_research_web", "completed", summary={"url": review_url(args), "pid": proc.pid, "log": str(log_path), "csv": str(Path(args.review_csv).resolve())}, command=cmd)
+    mark_step(ledger_path, ledger, "review_research_web", "completed", summary={"url": review_url(args), "pid": proc.pid, "log": str(log_path), "csv": str(Path(args.review_csv).resolve()), **review_server_source_summary()}, command=cmd)
 
 
 def raw_review_url(args: argparse.Namespace) -> str:
