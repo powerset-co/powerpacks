@@ -302,6 +302,16 @@ def build_local_duckdb_command(args: argparse.Namespace) -> str:
     ])
 
 
+def setup_handoff_command(args: argparse.Namespace) -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/ingestion/primitives/setup/setup.py", "handoff",
+        "--operator-id", args.operator_id,
+        "--accounts", args.accounts,
+        "--setup-ledger", ".powerpacks/setup/setup-run.json",
+    ])
+
+
 def onboarding_handoff(args: argparse.Namespace, registry: dict[str, Any]) -> dict[str, Any]:
     steps = build_steps(registry)
     linked = [step["channel"] for step in steps if step["linked"]]
@@ -312,12 +322,17 @@ def onboarding_handoff(args: argparse.Namespace, registry: dict[str, Any]) -> di
         "source_order": ONBOARDING_SOURCE_ORDER,
         "linked_sources": linked,
         "skipped_sources": skipped,
+        "preferred_handoff_command": setup_handoff_command(args),
         "confirmation_prompt": (
-            "We can now import linked sources and build your local search index. "
-            "Large mailboxes or networks can take a few hours. Continue?"
+            "Your sources are connected. I can now import them, combine the results into one local network, "
+            "and prepare the files needed for local search. Large mailboxes or networks can take a while. "
+            "I won't upload anything automatically, and I'll only ask again if a login, QR/device link, "
+            "overwrite, or paid provider step needs approval. Continue?"
         ),
         "codex_orchestration": {
             "main_thread": "Handle account linking, browser/login actions, user confirmations, and worker handoffs.",
+            "preferred_flow": "Use preferred_handoff_command for the setup handoff when running under $setup; worker_phases are the direct onboarding fallback.",
+            "user_summary": "Import connected sources in parallel where possible, combine them into one local network, then prepare local search. Do not describe ledgers/fan-in/fan-out to normal users.",
             "worker_policy": "Use worker sub-agents for import-network, then build-local-search-index. Close workers when they finish.",
         },
         "worker_phases": [

@@ -345,7 +345,13 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             handoff = payload["handoff"]
             self.assertEqual(handoff["source_order"], ["gmail", "linkedin_csv", "messages", "twitter"])
+            self.assertIn("setup/setup.py handoff", handoff["preferred_handoff_command"])
+            self.assertIn("--operator-id operator-1", handoff["preferred_handoff_command"])
+            self.assertIn("Your sources are connected", handoff["confirmation_prompt"])
+            self.assertIn("won't upload anything automatically", handoff["confirmation_prompt"])
             self.assertEqual(handoff["codex_orchestration"]["main_thread"], "Handle account linking, browser/login actions, user confirmations, and worker handoffs.")
+            self.assertIn("preferred_handoff_command", handoff["codex_orchestration"]["preferred_flow"])
+            self.assertIn("Do not describe ledgers", handoff["codex_orchestration"]["user_summary"])
             phases = handoff["worker_phases"]
             self.assertEqual([phase["name"] for phase in phases], ["import-network", "build-local-search-index"])
             self.assertIn("--from-accounts", phases[0]["run_command"])
