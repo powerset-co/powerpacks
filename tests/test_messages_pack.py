@@ -2398,7 +2398,9 @@ class ReviewResearchWebTests(unittest.TestCase):
             self.assertNotIn(old_token, html)
         self.assertIn("These contacts are strong candidates for your Personal Network.", html)
         self.assertIn("background:#0A66C2", html)
-        self.assertIn("border-color:var(--success-border)", html)
+        self.assertIn(".card.selected{background:var(--surface);border-color:var(--border)}", html)
+        self.assertIn(".selected .decision{background:var(--muted);color:var(--text-strong);border:1px solid var(--border-strong)}", html)
+        self.assertNotIn(".card.selected{background:var(--surface);border-color:var(--success-border)}", html)
         self.assertIn("<div class='decision'>Yes</div>", html)
         self.assertNotIn("<div class='decision'>Included</div>", html)
         self.assertNotIn("<div class='decision'>Excluded</div>", html)
@@ -2425,7 +2427,7 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertEqual([row["exclude"] for row in rows], ["no", "no", ""])
         self.assertEqual(self.mod.summarize(rows), {"in_network": 2, "yes": 0, "maybe": 1, "no": 0})
 
-    def test_retargeted_cards_blank_feedback_and_show_new_profile_badge(self) -> None:
+    def test_retargeted_cards_blank_feedback_without_new_profile_badge(self) -> None:
         row = {
             "bucket": "yes",
             "exclude": "",
@@ -2438,7 +2440,7 @@ class ReviewResearchWebTests(unittest.TestCase):
         }
         html = self.mod.page_html(Path("review.csv"), [row], {"tab": ["yes"]}, None).decode("utf-8")
         self.assertIn("re-researched", html)
-        self.assertIn("new profile", html)
+        self.assertNotIn("new profile", html)
         self.assertIn("latest result</strong> showing latest re-researched profile", html)
         self.assertIn("new feedback", html)
         self.assertIn("Save feedback", html)
