@@ -110,6 +110,43 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(args.messages_contacts_csv, str(contacts))
             self.assertEqual(args.twitter_handle, "")
 
+    def test_pending_gmail_accounts_are_not_import_ready_until_linked(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            accounts = tmp / "accounts.json"
+            accounts.write_text(json.dumps({
+                "version": 2,
+                "accounts": {
+                    "gmail": {
+                        "skipped": False,
+                        "usernames": [],
+                        "artifacts": [],
+                        "config": {
+                            "msgvault_db": str(tmp / "msgvault.db"),
+                            "pending_accounts": ["pending@example.com"],
+                            "selected_accounts": [],
+                            "account_emails": [],
+                        },
+                    }
+                },
+            }), encoding="utf-8")
+            args = import_network_pipeline.build_parser().parse_args(["run", "--from-accounts", str(accounts), "--dry-run"])
+            args = import_network_pipeline.apply_account_sources(args)
+            self.assertEqual(args.gmail_account_emails, [])
+            self.assertEqual(args.msgvault_db, "")
+
+            data = json.loads(accounts.read_text(encoding="utf-8"))
+            data["accounts"]["gmail"]["linked"] = True
+            data["accounts"]["gmail"]["usernames"] = ["pending@example.com"]
+            data["accounts"]["gmail"]["config"]["selected_accounts"] = ["pending@example.com"]
+            data["accounts"]["gmail"]["config"]["account_emails"] = ["pending@example.com"]
+            data["accounts"]["gmail"]["config"]["pending_accounts"] = []
+            accounts.write_text(json.dumps(data), encoding="utf-8")
+            args = import_network_pipeline.build_parser().parse_args(["run", "--from-accounts", str(accounts), "--dry-run"])
+            args = import_network_pipeline.apply_account_sources(args)
+            self.assertEqual(args.gmail_account_emails, ["pending@example.com"])
+            self.assertEqual(args.msgvault_db, str(tmp / "msgvault.db"))
+
     def test_parallel_source_workers_record_child_ledgers_and_wait_for_fan_in(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -131,13 +168,21 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             calls = []
             def fake_run_cmd(cmd, timeout=None):
                 calls.append(cmd)
+                if cmd[0] == "msgvault" and "sync-full" in cmd:
+                    return 0, {"status": "completed"}, ""
                 if any("linkedin_network_import.py" in part for part in cmd):
                     return 0, {"status": "completed", "artifacts": {"people_csv": str(tmp / "linkedin_people.csv")}}, ""
                 email = cmd[cmd.index("--account-email") + 1]
                 people = tmp / f"gmail-{email}.csv"
                 return 0, {"status": "completed", "artifacts": {"people_csv": str(people), "linkedin_resolution_queue_csv": str(tmp / f"queue-{email}.csv")}, "counts": {"contacts_seen": 1, "contacts_written": 1}}, ""
-            with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
-                ok = import_network_pipeline.run_source_import_workers(ledger_path, ledger)
+            with mock.patch.object(import_network_pipeline.shutil, "which", return_value="/usr/bin/msgvault"):
+                with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                    ok = import_network_pipeline.run_source_import_workers(ledger_path, ledger)
+            self.assertCountEqual([cmd for cmd in calls if cmd[0] == "msgvault" and "sync-full" in cmd], [["msgvault", "--home", str(tmp), "sync-full", "me@example.com"], ["msgvault", "--home", str(tmp), "sync-full", "work@example.com"]])
+            for email in ["me@example.com", "work@example.com"]:
+                sync_index = calls.index(["msgvault", "--home", str(tmp), "sync-full", email])
+                import_index = next(i for i, cmd in enumerate(calls) if "--account-email" in cmd and cmd[cmd.index("--account-email") + 1] == email)
+                self.assertLess(sync_index, import_index)
             self.assertTrue(ok)
             self.assertEqual(ledger["steps"]["source_imports"]["status"], "completed")
             self.assertEqual(ledger["steps"]["gmail_msgvault"]["status"], "completed")

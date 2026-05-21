@@ -7,8 +7,9 @@ description: Walk a user through linking/exporting all local network ingestion s
 
 Use the onboarding primitive for status/plan checks. Current onboarding is
 **link-only**: record source links in `.powerpacks/ingestion/accounts.json` and
-do not run Gmail/LinkedIn network imports, `import_network_pipeline`, Twitter
-crawls, messages import/research, or enrichment until the completed handoff.
+do not run Gmail/LinkedIn network imports, `msgvault sync-full`,
+`import_network_pipeline`, Twitter crawls, messages import/research, or
+enrichment until the completed handoff.
 
 Start/resume the conversational setup flow:
 
@@ -71,8 +72,9 @@ Gmail is msgvault-backed. The Gmail step should be dead simple for the user:
 ask which discovered accounts to link and what other Gmail addresses they want
 to add. Multiple discovered source accounts are supported by repeating
 `--gmail-account`; `--gmail-all` records every discovered source account;
-`--gmail-add-email` starts the add-account flow for new addresses;
-`--skip-source gmail` records an explicit skip.
+`--gmail-add-email` starts the OAuth/test-user/add-account authorization flow
+for new addresses as pending accounts without starting msgvault sync or marking
+them import-ready; `--skip-source gmail` records an explicit skip.
 
 ```bash
 uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
@@ -86,8 +88,11 @@ the returned commands in order. Do not tell the user to run them. For extra
 Gmail addresses this means Codex runs the Google OAuth test-user browser
 automation and authorizes each Gmail account in msgvault as user-action/linking.
 The returned commands route through `msgvault_setup.py add-test-users`,
-`add-account`, or `browser-setup --add-account`; they are not network imports.
-Rerun onboarding after msgvault has source accounts to select.
+`add-account`, or `browser-setup --add-account`; they are not network imports
+and must not run `msgvault sync-full`. After those commands succeed, rerun the
+emitted command with `--gmail-authorized-email <email>` so the account moves
+from pending to linked; `$setup` import workers own `msgvault sync-full` before
+reading the local msgvault DB.
 Only ask the user to complete browser login/consent when Google requires human
 action.
 
@@ -105,7 +110,7 @@ link-only: use `--messages-contacts-csv <path>` and optional `--twitter-handle
 <handle>`, or skip sources with `--skip-source <messages|gmail|linkedin_csv|twitter>`.
 
 It tracks non-secret v2 state in `.powerpacks/ingestion/accounts.json`:
-`gmail.msgvault_db/account_emails/oauth_app/oauth_test_users/available_accounts/selected_accounts`,
+`gmail.msgvault_db/account_emails/oauth_app/oauth_test_users/available_accounts/selected_accounts/pending_accounts`,
 `linkedin_csv.csv_path/source_label`, `twitter.handle`, and
 `messages.contacts_csv`, while preserving v1 `usernames`/`artifacts` mirrors.
 When `step` returns completed, use the emitted handoff; its import phase calls

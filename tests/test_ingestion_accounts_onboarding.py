@@ -273,11 +273,43 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(commands[0]["label"], "add_oauth_test_users")
             self.assertIn("msgvault_setup.py add-test-users other@example.com", commands[0]["command"])
             self.assertIn("msgvault_setup.py add-account --email other@example.com", commands[1]["command"])
-            self.assertEqual(commands[2]["label"], "start_msgvault_sync_other@example.com")
-            self.assertIn("msgvault sync-full other@example.com", commands[2]["command"])
-            self.assertIn("tmux new-session", commands[2]["command"])
-            self.assertIn(".powerpacks/ingestion/logs/msgvault-sync-other-example-com.log", commands[2]["command"])
-            self.assertEqual(commands[3]["label"], "rerun_onboarding")
+            self.assertEqual(commands[2]["label"], "rerun_onboarding")
+            self.assertFalse(any("sync-full" in command["command"] for command in commands))
+            self.assertEqual(payload["repeat_command_after_authorization"].split()[0:4], ["uv", "run", "--project", "."])
+            self.assertIn("--gmail-authorized-email other@example.com", payload["repeat_command_after_authorization"])
+            registry = accounts.load_registry(path)
+            self.assertFalse(registry["accounts"]["gmail"]["linked"])
+            self.assertEqual(registry["accounts"]["gmail"]["usernames"], [])
+            self.assertEqual(registry["accounts"]["gmail"]["config"]["selected_accounts"], [])
+            self.assertEqual(registry["accounts"]["gmail"]["config"]["pending_accounts"], ["other@example.com"])
+            self.assertEqual(registry["accounts"]["gmail"]["config"]["oauth_test_users"], ["other@example.com"])
+
+    def test_onboarding_step_confirms_authorized_gmail_without_sync(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                msgvault_home = Path(tmp) / "msgvault-home"
+                msgvault_home.mkdir()
+                path = Path(tmp) / "accounts.json"
+                registry = accounts.default_registry()
+                registry["accounts"]["gmail"]["config"]["pending_accounts"] = ["other@example.com"]
+                accounts.save_registry(registry, path)
+                code, payload = self.invoke(onboarding, [
+                    "step", "--accounts", str(path), "--gmail-db", str(msgvault_home / "msgvault.db"),
+                    "--gmail-authorized-email", "Other@Example.com",
+                ])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "progressed")
+            self.assertEqual(payload["linked_accounts"], ["other@example.com"])
+            self.assertNotIn("sync-full", json.dumps(payload))
+            registry = accounts.load_registry(path)
+            self.assertTrue(registry["accounts"]["gmail"]["linked"])
+            self.assertEqual(registry["accounts"]["gmail"]["usernames"], ["other@example.com"])
+            self.assertEqual(registry["accounts"]["gmail"]["config"]["selected_accounts"], ["other@example.com"])
+            self.assertEqual(registry["accounts"]["gmail"]["config"]["pending_accounts"], [])
 
     def test_onboarding_step_returns_browser_setup_for_first_gmail_email(self):
         old_cwd = Path.cwd()
@@ -298,8 +330,30 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(commands[0]["label"], "create_oauth_app_and_authorize_other@example.com")
             self.assertIn("msgvault_setup.py browser-setup --email other@example.com --add-account", commands[0]["command"])
             self.assertIn("--home", commands[0]["command"])
-            self.assertEqual(commands[1]["label"], "start_msgvault_sync_other@example.com")
-            self.assertEqual(commands[2]["label"], "rerun_onboarding")
+            self.assertEqual(commands[1]["label"], "rerun_onboarding")
+            self.assertIn("--gmail-authorized-email other@example.com", commands[1]["command"])
+            self.assertFalse(any("sync-full" in command["command"] for command in commands))
+
+    def test_onboarding_step_rejects_unrequested_authorized_gmail(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                msgvault_home = Path(tmp) / "msgvault-home"
+                msgvault_home.mkdir()
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                code, payload = self.invoke(onboarding, [
+                    "step", "--accounts", str(path), "--gmail-db", str(msgvault_home / "msgvault.db"),
+                    "--gmail-authorized-email", "Other@Example.com",
+                ])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 20)
+            self.assertEqual(payload["status"], "needs_input")
+            self.assertEqual(payload["unknown_authorized_accounts"], ["other@example.com"])
+            registry = accounts.load_registry(path)
+            self.assertFalse(registry["accounts"]["gmail"]["linked"])
 
     def test_onboarding_step_records_multiple_gmail_accounts_without_import(self):
         old_cwd = Path.cwd()

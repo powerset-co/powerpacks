@@ -176,7 +176,7 @@ def shell_join(parts: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in parts)
 
 
-def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = False) -> str:
+def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = False, authorized_emails: list[str] | None = None) -> str:
     cmd = [
         "uv", "run", "--project", ".", "python",
         "packs/ingestion/primitives/onboarding/onboarding.py", "step",
@@ -195,6 +195,8 @@ def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = Fa
             cmd.extend(["--messages-contacts-csv", args.messages_contacts_csv])
         if getattr(args, "twitter_handle", ""):
             cmd.extend(["--twitter-handle", args.twitter_handle])
+    for email in authorized_emails or []:
+        cmd.extend(["--gmail-authorized-email", email])
     return shell_join(cmd)
 
 
@@ -320,36 +322,6 @@ def email_slug(email: str) -> str:
     return slug or "gmail"
 
 
-def gmail_background_sync_command(email: str) -> dict[str, str]:
-    slug = email_slug(email)
-    session = f"powerpacks-msgvault-sync-{slug}"
-    log_path = f".powerpacks/ingestion/logs/msgvault-sync-{slug}.log"
-    pid_path = f".powerpacks/ingestion/pids/msgvault-sync-{slug}.pid"
-    script = (
-        "mkdir -p .powerpacks/ingestion/logs .powerpacks/ingestion/pids; "
-        f"session={shlex.quote(session)}; "
-        f"log={shlex.quote(log_path)}; "
-        f"pid={shlex.quote(pid_path)}; "
-        "if command -v tmux >/dev/null 2>&1; then "
-        f"tmux has-session -t \"$session\" 2>/dev/null || tmux new-session -d -s \"$session\" \"cd '$PWD' && msgvault sync-full {shlex.quote(email)} >> '$PWD'/\"$log\" 2>&1\"; "
-        "tmux display-message -p -t \"$session\" '#{pane_pid}' > \"$pid\"; "
-        f"printf 'Started Gmail sync for {email} (tmux %s, pid %s, log %s)\\n' \"$session\" \"$(cat \"$pid\")\" \"$log\"; "
-        "else "
-        f"nohup msgvault sync-full {shlex.quote(email)} >> \"$log\" 2>&1 & "
-        "echo $! > \"$pid\"; "
-        f"printf 'Started Gmail sync for {email} (pid %s, log %s)\\n' \"$(cat \"$pid\")\" \"$log\"; "
-        "fi"
-    )
-    return {
-        "label": f"start_msgvault_sync_{email}",
-        "command": shell_join(["sh", "-lc", script]),
-        "description": (
-            f"Start local Gmail metadata sync for {email} in the background. "
-            "Large mailboxes can take a few hours; rerun onboarding after a checkpoint exists."
-        ),
-    }
-
-
 def gmail_browser_setup_command(args: argparse.Namespace, email: str) -> dict[str, str]:
     cmd = [
         "uv", "run", "--project", ".", "python", msgvault_setup_py(), "browser-setup",
@@ -388,12 +360,10 @@ def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> lis
                     ]),
                     "description": f"Authorize {email} in msgvault.",
                 })
-        for email in emails:
-            commands.append(gmail_background_sync_command(email))
         commands.append({
             "label": "rerun_onboarding",
-            "command": onboarding_step_command(args),
-            "description": "Rerun onboarding after msgvault has written a Gmail sync checkpoint.",
+            "command": onboarding_step_command(args, authorized_emails=emails),
+            "description": "Rerun onboarding after Gmail authorization succeeds. Import-time workers own msgvault sync.",
         })
         return commands
 
@@ -417,12 +387,10 @@ def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> lis
             ]),
             "description": f"Authorize {email} in msgvault.",
         })
-    for email in emails:
-        commands.append(gmail_background_sync_command(email))
     commands.append({
         "label": "rerun_onboarding",
-        "command": onboarding_step_command(args),
-        "description": "Rerun onboarding after msgvault has written a Gmail sync checkpoint.",
+        "command": onboarding_step_command(args, authorized_emails=emails),
+        "description": "Rerun onboarding after Gmail authorization succeeds. Import-time workers own msgvault sync.",
     })
     return commands
 
@@ -461,7 +429,7 @@ def cmd_step(args: argparse.Namespace) -> int:
             return 0
 
     gmail_record = accounts.get("gmail", {})
-    gmail_action_requested = bool(args.gmail_account or args.gmail_all or args.gmail_add_email)
+    gmail_action_requested = bool(args.gmail_account or args.gmail_all or args.gmail_add_email or getattr(args, "gmail_authorized_email", []))
     if (not gmail_record.get("linked", False) and not gmail_record.get("skipped", False)) or gmail_action_requested:
         try:
             extra_emails = list(dict.fromkeys(normalize_email(email) for email in (args.gmail_add_email or [])))
@@ -473,24 +441,76 @@ def cmd_step(args: argparse.Namespace) -> int:
                 "repeat_command": onboarding_step_command(args),
             })
             return 20
+        try:
+            authorized_emails = list(dict.fromkeys(normalize_email(email) for email in (getattr(args, "gmail_authorized_email", []) or [])))
+        except ValueError as exc:
+            emit({
+                "status": "needs_input",
+                "channel": "gmail",
+                "message": str(exc),
+                "repeat_command": onboarding_step_command(args),
+            })
+            return 20
+        if authorized_emails:
+            gmail_cfg = gmail_record.get("config", {}) if isinstance(gmail_record.get("config"), dict) else {}
+            pending_accounts = list(gmail_cfg.get("pending_accounts") or [])
+            unknown_authorized = sorted(set(authorized_emails) - set(pending_accounts))
+            if unknown_authorized:
+                emit({
+                    "status": "needs_input",
+                    "channel": "gmail",
+                    "message": "Cannot confirm Gmail authorization for account(s) that are not pending from a prior --gmail-add-email request.",
+                    "unknown_authorized_accounts": unknown_authorized,
+                    "pending_accounts": pending_accounts,
+                    "repeat_command": onboarding_step_command(args),
+                })
+                return 20
+            registry = load_registry(path)
+            rec = registry["accounts"]["gmail"]
+            rec_cfg = rec.setdefault("config", {})
+            rec_cfg["msgvault_db"] = str(Path(args.gmail_db).expanduser())
+            rec_cfg["account_emails"] = list(dict.fromkeys([*(gmail_cfg.get("account_emails") or []), *authorized_emails]))
+            rec_cfg["selected_accounts"] = list(dict.fromkeys([*(gmail_cfg.get("selected_accounts") or []), *authorized_emails]))
+            rec_cfg["oauth_test_users"] = list(dict.fromkeys([*(gmail_cfg.get("oauth_test_users") or []), *authorized_emails]))
+            rec_cfg["pending_accounts"] = [email for email in pending_accounts if email not in authorized_emails]
+            rec["usernames"] = list(dict.fromkeys([*(rec.get("usernames") or []), *authorized_emails]))
+            rec["linked"] = True
+            rec["skipped"] = False
+            rec["last_checked_at"] = now_iso()
+            rec["last_success_at"] = rec["last_checked_at"]
+            rec["notes"] = "Gmail account authorization confirmed and recorded for import. No Gmail network import or msgvault sync was run during onboarding."
+            save_registry(registry, path)
+            emit({
+                "status": "progressed",
+                "channel": "gmail",
+                "message": "Recorded authorized Gmail account(s) in accounts.json. No Gmail network import or msgvault sync was run during onboarding.",
+                "linked_accounts": authorized_emails,
+                "accounts_path": args.accounts,
+                "updates": updates,
+                "registry": registry,
+                "next_command": onboarding_step_command(args),
+            })
+            return 0
         if extra_emails:
             gmail_cfg = gmail_record.get("config", {}) if isinstance(gmail_record.get("config"), dict) else {}
             registry = load_registry(path)
             rec = registry["accounts"]["gmail"]
-            rec.setdefault("config", {})["msgvault_db"] = str(Path(args.gmail_db).expanduser())
-            rec["config"]["account_emails"] = list(dict.fromkeys([*(gmail_cfg.get("account_emails") or []), *extra_emails]))
-            rec["config"]["oauth_test_users"] = list(dict.fromkeys([*(gmail_cfg.get("oauth_test_users") or []), *extra_emails]))
+            rec_cfg = rec.setdefault("config", {})
+            rec_cfg["msgvault_db"] = str(Path(args.gmail_db).expanduser())
+            rec_cfg["oauth_test_users"] = list(dict.fromkeys([*(gmail_cfg.get("oauth_test_users") or []), *extra_emails]))
+            rec_cfg["pending_accounts"] = list(dict.fromkeys([*(gmail_cfg.get("pending_accounts") or []), *extra_emails]))
+            rec["skipped"] = False
             rec["last_checked_at"] = now_iso()
-            rec["notes"] = "Gmail account linking requested; run user-action setup commands. No Gmail network import was run."
+            rec["notes"] = "Gmail account authorization requested; run user-action setup commands, then confirm the account after msgvault authorization succeeds. No Gmail network import or msgvault sync was run during onboarding."
             save_registry(registry, path)
             emit({
                 "status": "needs_agent_action",
                 "channel": "gmail",
-                "message": "Adding these Gmail accounts requires browser automation and msgvault authorization. These are user-action/linking commands only; no Gmail network import is run during onboarding.",
+                "message": "Adding these Gmail accounts requires browser automation and msgvault authorization. These are user-action/linking commands only; no Gmail network import or msgvault sync is run during onboarding. The account stays pending until authorization is confirmed.",
                 "action_type": "user-action/linking",
                 "emails": extra_emails,
                 "commands": gmail_add_email_commands(args, extra_emails),
-                "repeat_command_after_sync": onboarding_step_command(args),
+                "repeat_command_after_authorization": onboarding_step_command(args, authorized_emails=extra_emails),
                 "accounts_path": args.accounts,
                 "updates": updates,
                 "registry": registry,
@@ -502,11 +522,10 @@ def cmd_step(args: argparse.Namespace) -> int:
             emit({
                 "status": "needs_input",
                 "channel": "gmail",
-                "prompt": "Which Gmail address should we link first? Do not infer it from gcloud, Powerset login, or local machine state. After the user provides an email, rerun with --gmail-add-email <email>. Large mailboxes can take a few hours to fully sync, so Codex should start the sync while the user is here.",
+                "prompt": "Which Gmail address should we link first? Do not infer it from gcloud, Powerset login, or local machine state. After the user provides an email, rerun with --gmail-add-email <email>. Onboarding only authorizes and records the account; msgvault sync happens later in the import phase.",
                 "question": "Which Gmail address should we link first?",
                 "email_source": "user_provided",
                 "msgvault_db": str(db_path),
-                "example_sync": "msgvault sync-full <email>",
                 "next_command": onboarding_step_command(args),
                 "first_gmail_command": onboarding_step_command(args) + " --gmail-add-email EMAIL",
                 "add_other_email_command": onboarding_step_command(args) + " --gmail-add-email EMAIL",
@@ -532,7 +551,7 @@ def cmd_step(args: argparse.Namespace) -> int:
             emit({
                 "status": "waiting",
                 "channel": "gmail",
-                "message": "No Gmail source accounts found in msgvault yet. Start msgvault sync for the linked Gmail account, keep it running while the user is present, then rerun onboarding after a checkpoint exists.",
+                "message": "No Gmail source accounts found in msgvault yet. If this is a newly authorized account, rerun onboarding after authorization is visible; the import phase runs msgvault sync after the account is linked.",
                 "accounts_command": run_gmail_accounts_command(args),
                 "repeat_command": onboarding_step_command(args),
                 "skip_command": onboarding_step_command(args) + " --skip-gmail",
@@ -544,7 +563,7 @@ def cmd_step(args: argparse.Namespace) -> int:
             emit({
                 "status": "needs_input",
                 "channel": "gmail",
-                "prompt": "Confirm discovered Gmail accounts to link with --gmail-account <email> or --gmail-all. Message counts are local sync checkpoints; large mailboxes can keep syncing in the background for a few hours. Tell me any other Gmail addresses you want to add; use --gmail-add-email <email> so onboarding can add OAuth test users and authorize them as user-action/linking.",
+                "prompt": "Confirm discovered Gmail accounts to link with --gmail-account <email> or --gmail-all. Message counts are local checkpoints from prior syncs. Tell me any other Gmail addresses you want to add; use --gmail-add-email <email> so onboarding can add OAuth test users and authorize them as user-action/linking. Import workers own new msgvault sync work.",
                 "discovered_accounts": discovered.get("accounts", []),
                 "add_commands": [onboarding_step_command(args) + f" --gmail-account {shlex.quote(email)}" for email in discovered_accounts],
                 "all_command": onboarding_step_command(args) + " --gmail-all",
@@ -570,6 +589,7 @@ def cmd_step(args: argparse.Namespace) -> int:
         available = [row.get("account_email", "") for row in discovered.get("accounts", []) if row.get("account_email")]
         existing = accounts.get("gmail", {}).get("config", {})
         account_emails = list(dict.fromkeys([*(existing.get("account_emails") or []), *available, *selected]))
+        pending = [email for email in (existing.get("pending_accounts") or []) if email not in selected]
         registry = save_link_config(
             "gmail",
             path,
@@ -578,6 +598,7 @@ def cmd_step(args: argparse.Namespace) -> int:
                 "account_emails": account_emails,
                 "available_accounts": available,
                 "selected_accounts": selected,
+                "pending_accounts": pending,
             },
             usernames=selected,
             artifacts=[],
@@ -722,9 +743,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     step = sub.add_parser("step", parents=[common], help="Idempotent CLI onboarding loop; rerun until completed or blocked for approval/input")
     step.add_argument("--gmail-db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db for Gmail metadata onboarding")
-    step.add_argument("--gmail-account", action="append", default=[], help="Gmail source account email to import from msgvault; repeat for multiple accounts")
+    step.add_argument("--gmail-account", action="append", default=[], help="Gmail source account email to link from msgvault; repeat for multiple accounts")
     step.add_argument("--gmail-add-email", action="append", default=[], help="Additional Gmail address to add as an OAuth test user and authorize in msgvault")
-    step.add_argument("--gmail-all", action="store_true", help="Import all Gmail source accounts discovered in msgvault")
+    step.add_argument("--gmail-authorized-email", action="append", default=[], help="Record Gmail address after returned msgvault add-account authorization succeeds; does not run sync")
+    step.add_argument("--gmail-all", action="store_true", help="Link all Gmail source accounts discovered in msgvault")
     step.add_argument("--skip-gmail", action="store_true", help="Skip Gmail/msgvault onboarding (alias for --skip-source gmail)")
     step.add_argument("--skip-source", action="append", choices=["messages", "gmail", "linkedin_csv", "twitter"], default=[], help="Mark an onboarding source skipped; repeat as needed")
     step.add_argument("--gmail-output-dir", default=str(DEFAULT_NETWORK_IMPORT_DIR))

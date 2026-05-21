@@ -19,9 +19,11 @@ an ingestion/product setup flow, not a generic `$powerset login` alias.
 4. **index** — after import fan-in, run processing/indexing and local DuckDB
    materialization when safe or approved.
 
-Onboarding must remain link-only. Do not run Gmail metadata import, LinkedIn
-RapidAPI enrichment, Twitter crawl, `$import-contacts` research/upload, merge,
-or indexing from the onboarding phase.
+Onboarding must remain link-only. Do not run Gmail metadata import,
+`msgvault sync-full`, LinkedIn RapidAPI enrichment, Twitter crawl,
+`$import-contacts` research/upload, merge, or indexing from the onboarding
+phase. Gmail import workers own `msgvault sync-full` for selected accounts
+before they read the local msgvault DB.
 
 ## How to explain setup to the user
 
@@ -135,8 +137,11 @@ Which other Gmail accounts should we link before import?
 ```
 
 Record selected accounts in `gmail.config.selected_accounts` /
-`gmail.config.account_emails`. Do not create `.powerpacks/network-import/gmail`
-outputs during linking.
+`gmail.config.account_emails`. Newly requested Gmail accounts stay in
+`gmail.config.pending_accounts` until the returned `--gmail-authorized-email
+<email>` rerun records them as linked. Do not create
+`.powerpacks/network-import/gmail` outputs or run `msgvault sync-full` during
+linking.
 
 ## Import phase: parallel fan-out, then fan-in
 
@@ -168,7 +173,9 @@ uv run --project . python packs/ingestion/primitives/setup/setup.py handoff \
 Use the `worker_groups.import.jobs` output to spin up parallel worker sub-agents
 where possible:
 
-- Gmail/msgvault workers per selected account.
+- Gmail/msgvault workers per selected account; each worker runs
+  `msgvault sync-full <email>` before `gmail_network_import.py msgvault` when
+  msgvault is available.
 - LinkedIn CSV import/enrichment worker.
 - Twitter worker only when explicitly linked/approved.
 - Messages/iMessage artifacts worker; WhatsApp may require a QR/device-linking

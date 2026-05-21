@@ -151,6 +151,13 @@ def account_record_is_linked(record: dict[str, Any]) -> bool:
     return bool(record.get("usernames") or record.get("artifacts") or any(cfg.values()))
 
 
+def gmail_record_has_import_identity(record: dict[str, Any]) -> bool:
+    if not isinstance(record, dict):
+        return False
+    cfg = record.get("config") if isinstance(record.get("config"), dict) else {}
+    return bool(cfg.get("selected_accounts") or cfg.get("account_emails") or record.get("usernames") or record.get("artifacts"))
+
+
 def extract_accounts_path_from_setup(path: str) -> str:
     if not path:
         return ""
@@ -183,7 +190,7 @@ def apply_account_sources(args: argparse.Namespace) -> argparse.Namespace:
             setattr(args, "from_accounts", accounts_path)
     channels = account_channels(accounts_path)
     gmail = channels.get("gmail") if isinstance(channels.get("gmail"), dict) else {}
-    if gmail and not account_record_is_linked(gmail):
+    if gmail and (not account_record_is_linked(gmail) or not gmail_record_has_import_identity(gmail)):
         gmail = {}
     gmail_cfg = gmail.get("config") if isinstance(gmail.get("config"), dict) else {}
     linkedin = channels.get("linkedin_csv") if isinstance(channels.get("linkedin_csv"), dict) else {}
@@ -400,6 +407,31 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
     input_cfg = ledger.get("input", {})
     db = input_cfg.get("msgvault_db") or str(DEFAULT_MSGVAULT_DB)
     run_id = f"{ledger['run_id']}-gmail-{source_slug(email or 'all') or index}"
+    sync_command: list[str] = []
+    sync_skipped_reason = ""
+    if email and shutil.which("msgvault"):
+        sync_cmd = ["msgvault"]
+        db_home = Path(db).expanduser().parent
+        default_home = Path(DEFAULT_MSGVAULT_DB).expanduser().parent
+        if db_home != default_home:
+            sync_cmd.extend(["--home", str(db_home)])
+        sync_cmd.extend(["sync-full", email])
+        sync_command = sync_cmd
+        sync_code, sync_payload, sync_stderr = run_cmd(sync_cmd)
+        if sync_code != 0:
+            return {
+                "id": f"gmail:{email}",
+                "source": "gmail",
+                "account_email": email,
+                "run_id": run_id,
+                "sync_command": sync_cmd,
+                "code": sync_code,
+                "payload": sync_payload,
+                "stderr": sync_stderr,
+                "phase": "msgvault_sync",
+            }
+    elif email:
+        sync_skipped_reason = "msgvault command not found; using existing msgvault DB if present"
     cmd = py_cmd(
         "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
         "msgvault",
@@ -414,7 +446,7 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
     if input_cfg.get("include_automated_gmail"):
         cmd.append("--include-automated")
     code, payload, stderr = run_cmd(cmd)
-    return {"id": f"gmail:{email or 'all'}", "source": "gmail", "account_email": email, "run_id": run_id, "command": cmd, "code": code, "payload": payload, "stderr": stderr}
+    return {"id": f"gmail:{email or 'all'}", "source": "gmail", "account_email": email, "run_id": run_id, "sync_command": sync_command, "sync_skipped_reason": sync_skipped_reason, "command": cmd, "code": code, "payload": payload, "stderr": stderr, "phase": "gmail_network_import"}
 
 
 def record_gmail_worker_result(ledger: dict[str, Any], result: dict[str, Any]) -> bool:
@@ -423,11 +455,11 @@ def record_gmail_worker_result(ledger: dict[str, Any], result: dict[str, Any]) -
     payload = result.get("payload") or {}
     code = int(result.get("code") or 0)
     if code != 0:
-        mark_step(ledger, step_id, "failed", error=result.get("stderr") or payload.get("error") or payload, account_email=email)
+        mark_step(ledger, step_id, "failed", error=result.get("stderr") or payload.get("error") or payload, account_email=email, phase=result.get("phase"))
         ledger["status"] = "failed"
         return False
-    mark_step(ledger, step_id, "completed", payload=payload, account_email=email)
-    ledger.setdefault("source_imports", {})[step_id] = {"status": "completed", "source": "gmail", "account_email": email, "run_id": result.get("run_id")}
+    mark_step(ledger, step_id, "completed", payload=payload, account_email=email, sync_command=result.get("sync_command"), sync_skipped_reason=result.get("sync_skipped_reason"))
+    ledger.setdefault("source_imports", {})[step_id] = {"status": "completed", "source": "gmail", "account_email": email, "run_id": result.get("run_id"), "sync_command": result.get("sync_command"), "sync_skipped_reason": result.get("sync_skipped_reason")}
     slug = source_slug(email)
     people_csv = ""
     for key, value in (payload.get("artifacts") or {}).items():
