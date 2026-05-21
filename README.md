@@ -50,6 +50,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 | Skill | Trigger | What it does |
 | --- | --- | --- |
 | [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: login, setup status, Auth0 identity, MCP install, env provisioning, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
+| [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | Cohesive ingestion/product setup: safe operator bootstrap restore, exact-object GCS download through `gcloud` or the `google-cloud-storage` uv dependency, source linking, multi-account Gmail/msgvault linking, parallel import worker fan-out/fan-in, and local search-index/DuckDB readiness. Keeps `$powerset` focused on login/env/MCP. |
 | [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$local-msg-vault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
 
 ### Sales Nav

@@ -174,6 +174,9 @@ Routes:
 - `$build-local-search-index`, local indexing, build local search index,
   prepare `.powerpacks/search-index` artifacts →
   `packs/indexing/skills/build-local-search-index/SKILL.md`
+- `$setup`, one-time setup, operator bootstrap restore, end-to-end local
+  ingestion setup, account/source linking plus import/index orchestration →
+  `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
 - `$powerset`, Powerset login/status/whoami/sets/MCP/env credentials →
@@ -212,8 +215,9 @@ the primitive blocks/fails or the user asks for implementation details.
   `estimate` subcommands, and doctor `run` when it is actually needed by the
   health-check policy). Ask only for spend (LLM calls, Parallel.ai submits,
   uploads, Docker pulls, browser-based logins, OS installs).
-- **Stdlib-only is a hard constraint** for new primitives in this repo. No
-  `requests` / `pydantic` / `httpx` / SDK dependencies.
+- Prefer small, inspectable primitives. Dependencies are allowed when they make
+  product paths safer or clearer; add them through project metadata and run via
+  `uv run --project . ...` so agents use the locked environment.
 - **Test additions** go in `tests/` and run via `uv run --project . python -m unittest discover -s tests`.
   Run the full suite after non-trivial edits.
 - **Privacy contract**: no message bodies are ever read or sent. Only

@@ -73,6 +73,7 @@ install_skill import-contacts "$REPO_ROOT/packs/messages/skills/import-contacts/
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
 install_skill onboard "$REPO_ROOT/packs/ingestion/skills/onboard/SKILL.md"
+install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
 install_skill import-email "$REPO_ROOT/packs/ingestion/skills/import-email/SKILL.md"
@@ -82,5 +83,5 @@ install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-sear
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
 printf '  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search\n'
-printf '  import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter\n'
+printf '  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

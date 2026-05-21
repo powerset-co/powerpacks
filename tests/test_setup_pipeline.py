@@ -1,0 +1,296 @@
+import argparse
+import importlib.util
+import io
+import json
+import os
+import sys
+import tarfile
+import tempfile
+import types
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / 'packs/ingestion/primitives/setup/setup.py'
+SPEC = importlib.util.spec_from_file_location('setup_primitive', SCRIPT)
+setup = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+SPEC.loader.exec_module(setup)
+
+OPERATOR_ID = 'op-123'
+
+
+def add_file(tf: tarfile.TarFile, name: str, data: bytes) -> None:
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    tf.addfile(info, io.BytesIO(data))
+
+
+def make_bundle(path: Path, *, privacy=True, restore_paths=None, traversal=False) -> None:
+    manifest = {
+        'schema_version': 1,
+        'operator': 'patrick',
+        'operator_id': OPERATOR_ID,
+        'privacy': {
+            'operator_scoped': True,
+            'raw_msgvault_db_copied': False,
+            'raw_mail_copied': False,
+            'message_bodies_copied': False,
+            'attachments_copied': False,
+            'secrets_copied': False,
+        } if privacy else {},
+    }
+    restore = {
+        'status': 'ok',
+        'operator': 'patrick',
+        'operator_id': OPERATOR_ID,
+        'normal_pipeline_outputs': restore_paths or [
+            '.powerpacks/search-index',
+            '.powerpacks/network-import/merged',
+            '.powerpacks/network-import/profile_cache_v2',
+            '.powerpacks/network-import/network-runs/run-1/import-network.ledger.json',
+        ],
+    }
+    with tarfile.open(path, 'w:gz') as tf:
+        add_file(tf, 'patrick/manifest.json', json.dumps(manifest).encode())
+        add_file(tf, '.powerpacks/operator-bootstrap/restore-manifest.json', json.dumps(restore).encode())
+        add_file(tf, '.powerpacks/search-index/records/people.records.jsonl', b'{}\n')
+        add_file(tf, '.powerpacks/search-index/ledger.json', json.dumps({'status': 'completed', 'default_operator_id': OPERATOR_ID, 'steps': [{'id': 'x', 'status': 'completed'}]}).encode())
+        add_file(tf, '.powerpacks/network-import/merged/people.csv', b'id\np1\n')
+        add_file(tf, '.powerpacks/network-import/profile_cache_v2/a.json', b'{}')
+        add_file(tf, '.powerpacks/network-import/network-runs/run-1/import-network.ledger.json', json.dumps({'status': 'completed', 'steps': {'merge': {'status': 'completed'}}}).encode())
+        if traversal:
+            add_file(tf, '../evil.txt', b'evil')
+
+
+class SetupPipelineTests(unittest.TestCase):
+    def temp_workspace(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        tmp = Path(td.name)
+        old_root = setup.ROOT
+        setup.ROOT = tmp
+        self.addCleanup(lambda: setattr(setup, 'ROOT', old_root))
+        return tmp
+
+    def test_inspect_validates_privacy_and_hashes(self):
+        tmp = self.temp_workspace()
+        bundle = tmp / 'bundle.tar.gz'
+        make_bundle(bundle)
+        payload = setup.inspect_bundle(bundle)
+        self.assertEqual(payload['status'], 'ok')
+        self.assertEqual(payload['operator_id'], OPERATOR_ID)
+        self.assertIn('bundle_sha256', payload)
+        self.assertIn('.powerpacks/network-import/network-runs/run-1/import-network.ledger.json', payload['would_restore'])
+
+    def test_missing_legacy_privacy_flags_need_user_action(self):
+        tmp = self.temp_workspace()
+        bundle = tmp / 'bundle.tar.gz'
+        make_bundle(bundle, privacy=False)
+        payload = setup.inspect_bundle(bundle)
+        self.assertEqual(payload['status'], 'needs_user_action')
+        self.assertTrue(payload['legacy_privacy_override_required'])
+        self.assertEqual(set(payload['missing_privacy_flags']), set(setup.REQUIRED_PRIVACY))
+        self.assertEqual(setup.inspect_bundle(bundle, allow_legacy=True)['status'], 'ok')
+
+    def test_tar_member_path_traversal_rejected(self):
+        tmp = self.temp_workspace()
+        bundle = tmp / 'bundle.tar.gz'
+        make_bundle(bundle, traversal=True)
+        with self.assertRaises(ValueError):
+            setup.inspect_bundle(bundle)
+
+    def test_restore_allowlist_blocks_unrelated_paths(self):
+        tmp = self.temp_workspace()
+        bundle = tmp / 'bundle.tar.gz'
+        make_bundle(bundle, restore_paths=['.powerpacks/search-index', '.powerpacks/messages/raw.db', '.powerpacks/network-import/network-runs/ok-run/x.json'])
+        payload = setup.inspect_bundle(bundle)
+        self.assertIn('.powerpacks/messages/raw.db', payload['restore_root_classification']['blocked'])
+        self.assertIn('.powerpacks/network-import/network-runs/ok-run/x.json', payload['restore_root_classification']['allowed'])
+
+    def test_apply_refuses_overwrite_without_force_and_backs_up_with_force(self):
+        tmp = self.temp_workspace()
+        bundle = tmp / 'bundle.tar.gz'
+        make_bundle(bundle)
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/old.txt').write_text('old', encoding='utf-8')
+        args = argparse.Namespace(bundle=str(bundle), operator_id=OPERATOR_ID, force=False, inspect_file='', setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'), allow_legacy_bootstrap_manifest=False)
+        self.assertEqual(setup.apply_bundle(args)['status'], 'rejected')
+        args.force = True
+        payload = setup.apply_bundle(args)
+        self.assertEqual(payload['status'], 'ok')
+        self.assertTrue((tmp / '.powerpacks/search-index/records/people.records.jsonl').exists())
+        self.assertTrue(list((tmp / '.powerpacks/operator-bootstrap/backups').glob('*/.powerpacks/search-index/old.txt')))
+        ledger = json.loads((tmp / '.powerpacks/search-index/ledger.json').read_text())
+        self.assertEqual(ledger['status'], 'restored')
+        self.assertEqual(ledger['steps'][0]['status'], 'restored')
+        self.assertTrue((tmp / '.powerpacks/operator-bootstrap/applied/patrick/manifest.json').exists())
+
+    def test_inspect_apply_hash_rebinding(self):
+        tmp = self.temp_workspace()
+        bundle = tmp / 'bundle.tar.gz'
+        make_bundle(bundle)
+        inspect = setup.inspect_bundle(bundle)
+        inspect['bundle_sha256'] = 'bad'
+        inspect_file = tmp / 'inspect.json'
+        inspect_file.write_text(json.dumps(inspect), encoding='utf-8')
+        args = argparse.Namespace(bundle=str(bundle), operator_id=OPERATOR_ID, force=True, inspect_file=str(inspect_file), setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'), allow_legacy_bootstrap_manifest=False)
+        payload = setup.apply_bundle(args)
+        self.assertEqual(payload['status'], 'rejected')
+        self.assertIn('hash mismatch', payload['reason'])
+
+    def test_status_indexing_readiness_cases(self):
+        tmp = self.temp_workspace()
+        ns = argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(tmp / 'accounts.json'), setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'))
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/local-search.duckdb').write_text('db')
+        (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'default_operator_id': OPERATOR_ID}))
+        self.assertEqual(setup.status_payload(ns)['search_index_readiness']['status'], 'search_ready')
+        (tmp / '.powerpacks/search-index/local-search.duckdb').unlink()
+        (tmp / '.powerpacks/search-index/records').mkdir()
+        (tmp / '.powerpacks/search-index/records/people.records.jsonl').write_text('{}\n')
+        self.assertEqual(setup.status_payload(ns)['search_index_readiness']['status'], 'records_only_duckdb_missing')
+        import shutil
+        shutil.rmtree(tmp / '.powerpacks/search-index')
+        (tmp / '.powerpacks/network-import/merged').mkdir(parents=True)
+        (tmp / '.powerpacks/network-import/merged/people.csv').write_text('id\n')
+        self.assertEqual(setup.status_payload(ns)['search_index_readiness']['status'], 'people_csv_ready_for_processing')
+        self.assertIn('build_processing_pipeline.py plan', setup.status_payload(ns)['search_index_readiness']['plan_command'])
+
+    def test_handoff_structured_approvals_and_worker_group(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com', 'work@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com', 'work@example.com']}},
+            'linkedin_csv': {'linked': True, 'skipped': False, 'usernames': ['me'], 'artifacts': ['Connections.csv'], 'config': {'csv_path': 'Connections.csv', 'source_label': 'me'}},
+            'twitter': {'linked': False, 'skipped': True, 'usernames': ['stale'], 'artifacts': [], 'config': {'handle': 'stale'}},
+        }}), encoding='utf-8')
+        ns = argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(accounts), setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'))
+        payload = setup.handoff_payload(ns)
+        self.assertEqual(payload['status'], 'ok')
+        self.assertIn('import', payload['worker_groups'])
+        self.assertTrue(payload['worker_groups']['import']['parallel'])
+        self.assertIn('import_network_fan_in', payload['commands'])
+        self.assertIn('processing_plan', payload['commands'])
+        jobs = payload['worker_groups']['import']['jobs']
+        self.assertEqual([job['id'] for job in jobs if job['source'] == 'gmail'], ['gmail:me@example.com', 'gmail:work@example.com'])
+        self.assertTrue(all('--ledger .powerpacks/network-import/import-network-run.' in job['command'] for job in jobs))
+        self.assertNotIn('twitter', {job['source'] for job in jobs})
+        ids = {x['id'] for x in payload['requires_approval']}
+        for required in ['browser_auth', 'gcs_download', 'destructive_restore_overwrite', 'provider_spend']:
+            self.assertIn(required, ids)
+
+    def test_handoff_empty_accounts_has_no_executable_fallback_workers(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {}}), encoding='utf-8')
+        ns = argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(accounts), setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'))
+        payload = setup.handoff_payload(ns)
+        group = payload['worker_groups']['import']
+        self.assertEqual(group['status'], 'no_linked_sources')
+        self.assertEqual(group['jobs'], [])
+
+    def test_setup_skill_documents_product_contract(self):
+        text = (ROOT / 'packs/ingestion/skills/setup/SKILL.md').read_text(encoding='utf-8')
+        for required in [
+            'bootstrap',
+            'link-only',
+            'msgvault',
+            'add-test-users',
+            'add-account',
+            'import-network',
+            'parallel worker sub-agents',
+            'fan-in',
+            'build_processing_pipeline.py plan',
+            'browser/Gmail OAuth',
+            'GCP Desktop OAuth app',
+            'exact-object GCS bootstrap download',
+            'destructive bootstrap restore/overwrite',
+            'RapidAPI, Parallel, OpenAI',
+            'WhatsApp QR',
+        ]:
+            self.assertIn(required, text)
+
+    def test_pull_refuses_without_allow_flag(self):
+        args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output='out.tar.gz', allow_gcs_download=False)
+        self.assertEqual(setup.run_pull(args), 2)
+
+    def test_raw_google_application_credentials_uses_isolated_gcloud_and_cleans_up(self):
+        tmp = self.temp_workspace()
+        out = tmp / 'bundle.tar.gz'
+        calls = []
+        def fake_run(cmd, env=None, capture_output=None, text=None, check=None):
+            calls.append((cmd, dict(env or {})))
+            if cmd[:3] == ['gcloud', 'storage', 'cp']:
+                out.write_bytes(b'bundle')
+            return subprocess_result(0, '', '')
+        def subprocess_result(code, stdout, stderr):
+            return type('R', (), {'returncode': code, 'stdout': stdout, 'stderr': stderr})()
+        args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output=str(out), allow_gcs_download=True, download_backend='gcloud')
+        with mock.patch.dict(os.environ, {'GOOGLE_APPLICATION_CREDENTIALS': '{"type":"service_account"}'}, clear=False):
+            with mock.patch.object(setup.subprocess, 'run', side_effect=fake_run):
+                self.assertEqual(setup.run_pull(args), 0)
+        self.assertEqual(calls[0][0][:3], ['gcloud', 'auth', 'activate-service-account'])
+        cfg = Path(calls[0][1]['CLOUDSDK_CONFIG'])
+        key = Path(calls[0][1]['GOOGLE_APPLICATION_CREDENTIALS'])
+        self.assertFalse(cfg.exists())
+        self.assertFalse(key.exists())
+        self.assertEqual(calls[1][0], ['gcloud', 'storage', 'cp', 'gs://bucket/object.tar.gz', str(out)])
+
+    def test_python_google_cloud_storage_backend_downloads_exact_object(self):
+        tmp = self.temp_workspace()
+        out = tmp / 'bundle.tar.gz'
+        seen = {}
+
+        class Blob:
+            def __init__(self, name):
+                self.name = name
+            def download_to_filename(self, path):
+                seen['object'] = self.name
+                Path(path).write_bytes(b'bundle')
+
+        class Bucket:
+            def __init__(self, name):
+                self.name = name
+            def blob(self, name):
+                seen['bucket'] = self.name
+                return Blob(name)
+
+        class Client:
+            def bucket(self, name):
+                return Bucket(name)
+
+        google_mod = types.ModuleType('google')
+        cloud_mod = types.ModuleType('google.cloud')
+        storage_mod = types.ModuleType('google.cloud.storage')
+        storage_mod.Client = Client
+        cloud_mod.storage = storage_mod
+        google_mod.cloud = cloud_mod
+        args = argparse.Namespace(gcs_uri='gs://bucket/path/object.tar.gz', output=str(out), allow_gcs_download=True, download_backend='python')
+        with mock.patch.dict(sys.modules, {'google': google_mod, 'google.cloud': cloud_mod, 'google.cloud.storage': storage_mod}):
+            with mock.patch.dict(os.environ, {'GOOGLE_APPLICATION_CREDENTIALS': '{"type":"service_account"}'}, clear=False):
+                self.assertEqual(setup.run_pull(args), 0)
+        self.assertEqual(seen, {'bucket': 'bucket', 'object': 'path/object.tar.gz'})
+        self.assertTrue(out.exists())
+        self.assertFalse(list((tmp / '.powerpacks/setup/tmp').glob('gcloud-key-*.json')))
+
+    def test_auto_pull_falls_back_to_python_backend_when_gcloud_cp_fails(self):
+        tmp = self.temp_workspace()
+        out = tmp / 'bundle.tar.gz'
+
+        def fake_python_download(gcs_uri, output, env):
+            output.write_bytes(b'bundle')
+            return 0, {'status': 'ok', 'download_backend': 'python-google-cloud-storage'}
+
+        args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output=str(out), allow_gcs_download=True, download_backend='auto')
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(setup.shutil, 'which', return_value='/bin/gcloud'):
+                with mock.patch.object(setup, 'run_gcloud_download', return_value=(2, {'status': 'needs_user_action', 'reason': 'gcloud storage cp failed', 'stderr': 'denied'})):
+                    with mock.patch.object(setup, 'run_python_gcs_download', side_effect=fake_python_download):
+                        self.assertEqual(setup.run_pull(args), 0)
+        self.assertTrue(out.exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

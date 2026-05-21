@@ -18,7 +18,8 @@ agent to a `SKILL.md`, and that skill calls this script.
 ## Inputs
 
 - LinkedIn CSV: LinkedIn `Connections.csv`, handled by `linkedin_network_import`.
-- Gmail: local msgvault SQLite (`~/.msgvault/msgvault.db`), handled by `gmail_network_import msgvault`.
+- Gmail: local msgvault SQLite (`~/.msgvault/msgvault.db`), handled by `gmail_network_import msgvault`; multiple selected accounts from onboarding are imported with isolated Gmail child run ids.
+- Setup/account state: `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` fills in LinkedIn CSV/source label, msgvault DB, selected Gmail accounts, Twitter handle, and message contacts artifacts unless explicit CLI flags override them.
 - Messages: existing `.powerpacks/messages/contacts.csv`, produced by `$import-contacts`; include with `--include-existing-artifacts`.
 - Twitter/X: existing `.powerpacks/network-import/twitter/*/people.csv`, produced by `twitter_network_import`; include with `--include-existing-artifacts`.
 
@@ -26,10 +27,25 @@ agent to a `SKILL.md`, and that skill calls this script.
 
 ```bash
 uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run \
-  --linkedin-csv ~/Downloads/Connections.csv \
-  --linkedin-source-user casper \
-  --gmail-account-email arthur@powerset.co
+  --from-accounts .powerpacks/ingestion/accounts.json
 ```
+
+## Parallel source fan-out / fan-in
+
+`run --dry-run --from-accounts ...` emits `worker_groups.import.jobs`. Jobs for
+Gmail accounts, LinkedIn CSV import/enrichment, Twitter, and messages artifacts
+are independent and marked with `parallelizable` plus a reason. Gmail account
+imports use one deterministic child run id per account and isolated output
+directories, so they can run concurrently. LinkedIn uses its own child ledger and
+may block on the existing RapidAPI approval gate. Twitter and messages remain
+existing-artifact or dedicated-skill workers unless explicitly approved; this
+orchestrator never runs `$import-contacts` research/upload implicitly.
+
+Fan-in (`merge_network_sources.py` and `build_network_duckdb.py`) runs only after
+selected source workers complete or return a blocked approval. Manual fan-out can
+use `--only-source gmail|linkedin_csv|twitter|messages` with isolated ledgers;
+run the normal command, or `--fan-in-only`, afterward to merge/load DuckDB from
+the produced artifacts.
 
 Optional email LinkedIn resolution/enrichment bridge:
 
