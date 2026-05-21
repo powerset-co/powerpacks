@@ -18,6 +18,10 @@ DEFAULT_CSV=Path(".powerpacks/messages/research_review.csv")
 DEFAULT_RESEARCH_DIR=Path(".powerpacks/messages/research")
 DEFAULT_RETARGET_RESEARCH_DIR=Path(".powerpacks/messages/research_retarget")
 UUID_NAMESPACE=uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+TRUTHY={"yes","true","1","y","on"}
+FALSY={"no","false","0","n","off"}
+INCLUDE_DECISIONS={"include","approved","approve","yes","true","1"}
+EXCLUDE_DECISIONS={"exclude","excluded","skip","skipped","no","false","0"}
 
 def emit(x): print(json.dumps(x,indent=2,sort_keys=True))
 def read_json(p:Path,default=None):
@@ -30,11 +34,24 @@ def auth_token():
     if p.returncode!=0 or not p.stdout.strip(): raise RuntimeError("could not get Powerset token; run $powerset login")
     return p.stdout.strip()
 def approved(row):
+    approved_raw=(row.get("approved") or "").strip().lower()
+    upload_decision=(row.get("upload_decision") or "").strip().lower()
     ex=(row.get("exclude") or "").strip().lower()
-    if ex in {"yes","true","1"}: return False
-    if ex in {"no","false","0"}: return True
-    in_network=(row.get("in_network") or "").strip().lower()
-    if in_network in {"yes","true","1"}: return True
+
+    # Explicit rejections win over defaults. `exclude=yes` is the legacy UI
+    # rejection; `approved=false` / `upload_decision=exclude` are prepared CSV
+    # forms of the same decision.
+    if approved_raw in FALSY or upload_decision in EXCLUDE_DECISIONS or ex in TRUTHY:
+        return False
+
+    # Explicit approvals. In-network status alone is intentionally not an
+    # approval signal; it only attaches network_person_id after the row is
+    # otherwise approved.
+    if approved_raw in TRUTHY or upload_decision in INCLUDE_DECISIONS or ex in FALSY:
+        return True
+
+    # Legacy default: confident/yes bucket rows are approved unless explicitly
+    # rejected above.
     b=(row.get("bucket") or "").strip().lower()
     return b in {"confident","yes"}
 

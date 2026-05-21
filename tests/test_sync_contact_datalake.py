@@ -102,7 +102,11 @@ class SyncContactDatalakeTests(unittest.TestCase):
             root = Path(td)
             csv_path = root / "research_review.csv"
             research_dir = root / "research"
-            for handle in ("phone-yes", "phone-default-yes", "phone-maybe", "phone-network", "phone-no"):
+            handles = (
+                "phone-yes", "phone-default-yes", "phone-maybe", "phone-network",
+                "phone-network-approved", "phone-upload-decision", "phone-no",
+            )
+            for handle in handles:
                 (research_dir / handle).mkdir(parents=True)
                 (research_dir / handle / "01_research_parallel.json").write_text(
                     json.dumps({"person": {"full_name": handle}, "social": {}}),
@@ -111,23 +115,25 @@ class SyncContactDatalakeTests(unittest.TestCase):
             with csv_path.open("w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=[
                     "bucket", "handle", "phone_e164", "full_name", "exclude", "in_network",
-                    "network_person_id", "network_linkedin_url",
+                    "approved", "upload_decision", "network_person_id", "network_linkedin_url",
                 ])
                 writer.writeheader()
                 writer.writerow({"bucket": "medium", "handle": "phone-yes", "phone_e164": "+15550000001", "full_name": "Yes", "exclude": "no", "in_network": ""})
                 writer.writerow({"bucket": "yes", "handle": "phone-default-yes", "phone_e164": "+15550000005", "full_name": "Default Yes", "exclude": "", "in_network": "false"})
                 writer.writerow({"bucket": "medium", "handle": "phone-maybe", "phone_e164": "+15550000002", "full_name": "Maybe", "exclude": "", "in_network": ""})
                 writer.writerow({"bucket": "medium", "handle": "phone-network", "phone_e164": "+15550000004", "full_name": "Network", "exclude": "", "in_network": "true", "network_person_id": "person-1", "network_linkedin_url": "https://www.linkedin.com/in/network-person/"})
-                writer.writerow({"bucket": "confident", "handle": "phone-no", "phone_e164": "+15550000003", "full_name": "No", "exclude": "yes", "in_network": "true", "network_person_id": "person-2", "network_linkedin_url": "https://www.linkedin.com/in/excluded/"})
+                writer.writerow({"bucket": "medium", "handle": "phone-network-approved", "phone_e164": "+15550000006", "full_name": "Network Approved", "exclude": "", "in_network": "true", "approved": "true", "network_person_id": "person-3", "network_linkedin_url": "https://www.linkedin.com/in/network-approved/"})
+                writer.writerow({"bucket": "medium", "handle": "phone-upload-decision", "phone_e164": "+15550000007", "full_name": "Upload Decision", "exclude": "", "in_network": "", "upload_decision": "include"})
+                writer.writerow({"bucket": "confident", "handle": "phone-no", "phone_e164": "+15550000003", "full_name": "No", "exclude": "yes", "in_network": "true", "approved": "true", "network_person_id": "person-2", "network_linkedin_url": "https://www.linkedin.com/in/excluded/"})
 
             records = sync_contact_datalake.load_records(csv_path, research_dir)
 
-        self.assertEqual([record["handle"] for record in records], ["phone-yes", "phone-default-yes", "phone-network"])
+        self.assertEqual([record["handle"] for record in records], ["phone-yes", "phone-default-yes", "phone-network-approved", "phone-upload-decision"])
         self.assertTrue(records[0]["approved"])
         network_record = records[2]
-        self.assertEqual(network_record["network_person_id"], "person-1")
-        self.assertEqual(network_record["network_linkedin_url"], "https://www.linkedin.com/in/network-person")
-        self.assertEqual(network_record["linkedin_url"], "https://www.linkedin.com/in/network-person")
+        self.assertEqual(network_record["network_person_id"], "person-3")
+        self.assertEqual(network_record["network_linkedin_url"], "https://www.linkedin.com/in/network-approved")
+        self.assertEqual(network_record["linkedin_url"], "https://www.linkedin.com/in/network-approved")
         self.assertNotIn("include", records[0])
         self.assertNotIn("upload_decision", records[0])
 

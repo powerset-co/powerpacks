@@ -30,6 +30,8 @@ VALID_BUCKETS = {
 }
 TRUTHY = {"1", "true", "yes", "y", "on"}
 FALSY = {"0", "false", "no", "n", "off"}
+INCLUDE_DECISIONS = {"include", "approved", "approve", "yes", "true", "1"}
+EXCLUDE_DECISIONS = {"exclude", "excluded", "skip", "skipped", "no", "false", "0"}
 
 
 class UploadError(RuntimeError):
@@ -75,11 +77,34 @@ def is_in_network(row: dict[str, str]) -> bool:
     return bool((row.get("network_person_id") or "").strip())
 
 
+def normalize_bool(value: str) -> bool | None:
+    raw = (value or "").strip().lower()
+    if raw in TRUTHY:
+        return True
+    if raw in FALSY:
+        return False
+    return None
+
+
+def normalize_upload_decision(value: str) -> bool | None:
+    raw = (value or "").strip().lower()
+    if raw in INCLUDE_DECISIONS:
+        return True
+    if raw in EXCLUDE_DECISIONS:
+        return False
+    return None
+
+
 def approved_for_row(row: dict[str, str]) -> bool:
-    explicit = normalize_exclude(row.get("exclude", ""))
-    if explicit is not None:
-        return explicit
-    if is_in_network(row):
+    # Explicit rejections win over defaults. In-network is not an approval
+    # signal; it only changes review grouping/contact-update behavior after a
+    # row is otherwise approved.
+    approved_field = normalize_bool(row.get("approved", ""))
+    upload_decision = normalize_upload_decision(row.get("upload_decision", ""))
+    explicit_exclude = normalize_exclude(row.get("exclude", ""))
+    if approved_field is False or upload_decision is False or explicit_exclude is False:
+        return False
+    if approved_field is True or upload_decision is True or explicit_exclude is True:
         return True
     return normalize_bucket(row.get("bucket", "")) == "yes"
 

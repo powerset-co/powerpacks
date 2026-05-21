@@ -359,7 +359,10 @@ class MessagesPackTests(unittest.TestCase):
             with csv_path.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(
                     handle,
-                    fieldnames=["bucket", "handle", "top_title_company_pairs", "exclude"],
+                    fieldnames=[
+                        "bucket", "handle", "top_title_company_pairs", "exclude",
+                        "in_network", "approved", "upload_decision",
+                    ],
                 )
                 writer.writeheader()
                 writer.writerow(
@@ -386,6 +389,33 @@ class MessagesPackTests(unittest.TestCase):
                         "exclude": "",
                     }
                 )
+                writer.writerow(
+                    {
+                        "bucket": "medium",
+                        "handle": "phone-4",
+                        "top_title_company_pairs": "Designer @ Network",
+                        "exclude": "",
+                        "in_network": "true",
+                    }
+                )
+                writer.writerow(
+                    {
+                        "bucket": "medium",
+                        "handle": "phone-5",
+                        "top_title_company_pairs": "PM @ Approved",
+                        "exclude": "",
+                        "approved": "true",
+                    }
+                )
+                writer.writerow(
+                    {
+                        "bucket": "medium",
+                        "handle": "phone-6",
+                        "top_title_company_pairs": "Investor @ Include",
+                        "exclude": "",
+                        "upload_decision": "include",
+                    }
+                )
 
             result = subprocess.run(
                 [
@@ -401,8 +431,8 @@ class MessagesPackTests(unittest.TestCase):
                 check=True,
             )
             payload = json.loads(result.stdout)
-            self.assertEqual(payload["approved_count"], 1)
-            self.assertEqual(payload["skipped_unapproved_count"], 2)
+            self.assertEqual(payload["approved_count"], 3)
+            self.assertEqual(payload["skipped_unapproved_count"], 3)
             self.assertNotIn("yes_count", payload)
             self.assertNotIn("maybe_count", payload)
             self.assertNotIn("no_count", payload)
@@ -561,8 +591,8 @@ class MessagesPackTests(unittest.TestCase):
                 check=True,
             )
             upload_payload = json.loads(upload_result.stdout)
-            self.assertEqual(upload_payload["approved_count"], 2)
-            self.assertEqual(upload_payload["skipped_unapproved_count"], 1)
+            self.assertEqual(upload_payload["approved_count"], 0)
+            self.assertEqual(upload_payload["skipped_unapproved_count"], 3)
 
     def test_extract_imessage_privacy_settings_print_only(self) -> None:
         result = subprocess.run(
