@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -564,12 +565,68 @@ def gcs_destinations(gcs_uri: str, operator: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def upload_to_gcs(archive_path: Path, manifest_path: Path, destinations: dict[str, str], *, dry_run: bool) -> dict[str, Any]:
+def parse_exact_gcs_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith("gs://") or uri.endswith("/") or "*" in uri:
+        raise ValueError(f"not an exact gs:// object URI: {uri}")
+    bucket, sep, object_name = uri[5:].partition("/")
+    if not bucket or not sep or not object_name:
+        raise ValueError(f"not an exact gs:// object URI: {uri}")
+    return bucket, object_name
+
+
+def python_gcs_upload(local_path: Path, destination: str) -> None:
+    try:
+        from google.cloud import storage  # type: ignore
+    except Exception as exc:
+        raise SystemExit(f"google-cloud-storage is required for --gcs-upload-backend python; run through uv: {exc}") from exc
+    bucket_name, object_name = parse_exact_gcs_uri(destination)
+    tmp_key = None
+    old_gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    try:
+        gac = (old_gac or "").strip()
+        if gac.startswith("{"):
+            fd, key_path = tempfile.mkstemp(prefix="powerpacks-gcs-key-", suffix=".json", dir="/var/tmp")
+            os.close(fd)
+            tmp_key = Path(key_path)
+            tmp_key.write_text(gac, encoding="utf-8")
+            tmp_key.chmod(0o600)
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(tmp_key)
+        storage.Client().bucket(bucket_name).blob(object_name).upload_from_filename(str(local_path))
+    finally:
+        if old_gac is None:
+            os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+        else:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = old_gac
+        if tmp_key:
+            tmp_key.unlink(missing_ok=True)
+
+
+def upload_one(local_path: Path, destination: str, backend: str) -> str:
+    if backend == "python":
+        python_gcs_upload(local_path, destination)
+        return "python-google-cloud-storage"
+    if backend == "gcloud":
+        run_command(["gcloud", "storage", "cp", str(local_path), destination])
+        return "gcloud"
+    if backend == "auto":
+        if shutil.which("gcloud"):
+            try:
+                run_command(["gcloud", "storage", "cp", str(local_path), destination])
+                return "gcloud"
+            except SystemExit:
+                python_gcs_upload(local_path, destination)
+                return "python-google-cloud-storage"
+        python_gcs_upload(local_path, destination)
+        return "python-google-cloud-storage"
+    raise SystemExit(f"unsupported --gcs-upload-backend: {backend}")
+
+
+def upload_to_gcs(archive_path: Path, manifest_path: Path, destinations: dict[str, str], *, dry_run: bool, backend: str) -> dict[str, Any]:
     if dry_run:
-        return {"status": "dry_run", **destinations}
-    run_command(["gcloud", "storage", "cp", str(archive_path), destinations["bundle"]])
-    run_command(["gcloud", "storage", "cp", str(manifest_path), destinations["manifest"]])
-    return {"status": "uploaded", **destinations}
+        return {"status": "dry_run", "upload_backend": backend, **destinations}
+    used_bundle_backend = upload_one(archive_path, destinations["bundle"], backend)
+    used_manifest_backend = upload_one(manifest_path, destinations["manifest"], backend)
+    return {"status": "uploaded", "upload_backend": used_bundle_backend if used_bundle_backend == used_manifest_backend else "mixed", **destinations}
 
 
 def assemble_operator(
@@ -687,7 +744,7 @@ def assemble_operator(
     archive_path = package_bundle(operator_dir, output_root / "restores" / operator["slug"] / ".powerpacks", output_root / "bundles", operator["slug"], force=True)
     if args.gcs_uri:
         destinations = gcs_destinations(args.gcs_uri, operator)
-        manifest["gcs"] = upload_to_gcs(archive_path, manifest_path, destinations, dry_run=args.gcs_dry_run)
+        manifest["gcs"] = upload_to_gcs(archive_path, manifest_path, destinations, dry_run=args.gcs_dry_run, backend=args.gcs_upload_backend)
     return manifest
 
 
@@ -738,7 +795,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
     }
     write_json(output_root / "summary.json", summary)
     if args.gcs_uri and not args.gcs_dry_run:
-        run_command(["gcloud", "storage", "cp", str(output_root / "summary.json"), args.gcs_uri.rstrip("/") + "/summary.json"])
+        upload_one(output_root / "summary.json", args.gcs_uri.rstrip("/") + "/summary.json", args.gcs_upload_backend)
     emit(summary)
     return 0
 
@@ -768,6 +825,7 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--skip-duckdb", action="store_true")
     gen.add_argument("--gcs-uri", default="", help="Optional GCS base URI, e.g. gs://bucket/powerpacks/operator-bootstrap")
     gen.add_argument("--gcs-dry-run", action="store_true")
+    gen.add_argument("--gcs-upload-backend", choices=["auto", "gcloud", "python"], default="auto", help="Upload bundles with gcloud storage cp or google-cloud-storage through uv.")
     gen.add_argument("--force", action="store_true")
     gen.set_defaults(func=cmd_generate)
     return parser

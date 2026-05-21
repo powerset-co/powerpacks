@@ -1,10 +1,14 @@
 import csv
 import importlib.util
 import json
+import os
+import sys
 import tarfile
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +126,8 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                         str(tmp / "out"),
                         "--gcs-uri",
                         "gs://bucket/bootstrap",
+                        "--gcs-upload-backend",
+                        "gcloud",
                         "--force",
                     ]
                 )
@@ -152,6 +158,62 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
             self.assertIn(".powerpacks/search-index/ledger.json", names)
             self.assertFalse(any("msgvault" in name.lower() for name in names))
             self.assertEqual(len(uploads), 3)
+
+    def test_python_gcs_upload_backend_materializes_raw_credentials(self) -> None:
+        mod = load_module()
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            archive = tmp / "bundle.tar.gz"
+            manifest = tmp / "manifest.json"
+            archive.write_text("bundle", encoding="utf-8")
+            manifest.write_text("{}", encoding="utf-8")
+            seen: list[tuple[str, str, str]] = []
+            case = self
+
+            class Blob:
+                def __init__(self, bucket: str, name: str) -> None:
+                    self.bucket = bucket
+                    self.name = name
+                def upload_from_filename(self, path: str) -> None:
+                    seen.append((self.bucket, self.name, Path(path).name))
+
+            class Bucket:
+                def __init__(self, name: str) -> None:
+                    self.name = name
+                def blob(self, name: str) -> Blob:
+                    return Blob(self.name, name)
+
+            class Client:
+                def bucket(self, name: str) -> Bucket:
+                    creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+                    case.assertFalse(creds.startswith("{"))
+                    case.assertTrue(Path(creds).exists())
+                    return Bucket(name)
+
+            google_mod = types.ModuleType("google")
+            cloud_mod = types.ModuleType("google.cloud")
+            storage_mod = types.ModuleType("google.cloud.storage")
+            storage_mod.Client = Client
+            cloud_mod.storage = storage_mod
+            google_mod.cloud = cloud_mod
+            with mock.patch.dict(sys.modules, {"google": google_mod, "google.cloud": cloud_mod, "google.cloud.storage": storage_mod}):
+                with mock.patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": '{"type":"service_account"}'}, clear=False):
+                    payload = mod.upload_to_gcs(
+                        archive,
+                        manifest,
+                        {
+                            "prefix": "gs://bucket/bootstrap/users/patrick/operators/id",
+                            "bundle": "gs://bucket/bootstrap/users/patrick/operators/id/operator-bootstrap.tar.gz",
+                            "manifest": "gs://bucket/bootstrap/users/patrick/operators/id/manifest.json",
+                        },
+                        dry_run=False,
+                        backend="python",
+                    )
+            self.assertEqual(payload["status"], "uploaded")
+            self.assertEqual(payload["upload_backend"], "python-google-cloud-storage")
+            self.assertEqual(seen[0], ("bucket", "bootstrap/users/patrick/operators/id/operator-bootstrap.tar.gz", archive.name))
+            self.assertEqual(seen[1], ("bucket", "bootstrap/users/patrick/operators/id/manifest.json", manifest.name))
+            self.assertFalse(list(Path("/var/tmp").glob("powerpacks-gcs-key-*.json")))
 
 
 if __name__ == "__main__":
