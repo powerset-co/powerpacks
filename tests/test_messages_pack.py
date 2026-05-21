@@ -2367,6 +2367,50 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertTrue(self.mod.matches_filter(rows[1], {}, None))
         self.assertFalse(self.mod.matches_filter(rows[0], {}, None))
 
+    def test_review_search_matches_name_only_and_preserves_query_across_tabs(self) -> None:
+        row = {
+            "bucket": "yes",
+            "exclude": "",
+            "full_name": "Alice Founder",
+            "top_title_company_pairs": "CEO @ Acme Labs",
+            "schools": "Stanford University",
+            "signals": "repeat_founder",
+        }
+
+        self.assertTrue(self.mod.matches_filter(row, {"tab": ["yes"], "q": ["Alice"]}, None))
+        self.assertFalse(self.mod.matches_filter(row, {"tab": ["yes"], "q": ["Acme"]}, None))
+        self.assertFalse(self.mod.matches_filter(row, {"tab": ["yes"], "q": ["Stanford"]}, None))
+
+        html = self.mod.page_html(Path("review.csv"), [row], {"tab": ["yes"], "q": ["Alice"]}, None).decode("utf-8")
+        self.assertIn("placeholder='Search by name…'", html)
+        self.assertIn("aria-label='Search by name'", html)
+        self.assertIn("href='/?q=Alice&amp;tab=maybe'", html)
+        self.assertNotIn("<strong>source</strong>", html)
+        self.assertNotIn("<button type='submit'>Filter</button>", html)
+        self.assertNotIn("class='filters'", html)
+
+    def test_review_render_uses_warm_design_tokens(self) -> None:
+        html = self.mod.page_html(Path("review.csv"), [{"bucket": "yes", "exclude": "", "full_name": "Jane Doe"}], {"tab": ["yes"]}, None).decode("utf-8")
+
+        for token in ["--bg:#F7F3EE", "--surface:#FDFAF7", "--border:#E8DDD6", "--red:#F2502A", "--success-border:#BBF7D0"]:
+            self.assertIn(token, html)
+        for old_token in ["--bg:#f5f6f8", "--panel:#fff", "--line:#d8dee6"]:
+            self.assertNotIn(old_token, html)
+        self.assertIn("These contacts are strong candidates for your Personal Network.", html)
+        self.assertIn("background:#0A66C2", html)
+        self.assertIn(".card.selected{background:var(--surface);border-color:var(--success-border)}", html)
+        self.assertIn(".tab.yes.active,.tab.in_network.active{background:var(--success-tint);border-color:var(--success-border);color:var(--success)}", html)
+        self.assertIn(".selected .decision{background:var(--success-tint);color:var(--success);border:1px solid var(--success-border)}", html)
+        self.assertNotIn("rgba(34,197,94,.045)", html)
+        self.assertIn("<div class='decision'>Yes</div>", html)
+        self.assertNotIn("<div class='decision'>Included</div>", html)
+        self.assertNotIn("<div class='decision'>Excluded</div>", html)
+        self.assertNotIn("class='bucket", html)
+        self.assertNotIn("<span class='bucket", html)
+        self.assertNotIn("&middot; <strong>msgs</strong>", html)
+        self.assertIn("<strong>phone</strong>", html)
+        self.assertIn("<strong>msgs</strong>", html)
+
     def test_bulk_in_network_selection_targets_all_network_rows(self) -> None:
         rows = [
             {"bucket": "maybe", "exclude": "", "in_network": "true", "network_person_id": "p1"},
@@ -2383,7 +2427,7 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertEqual([row["exclude"] for row in rows], ["no", "no", ""])
         self.assertEqual(self.mod.summarize(rows), {"in_network": 2, "yes": 0, "maybe": 1, "no": 0})
 
-    def test_retargeted_cards_blank_feedback_and_show_new_profile_badge(self) -> None:
+    def test_retargeted_cards_blank_feedback_without_new_profile_badge(self) -> None:
         row = {
             "bucket": "yes",
             "exclude": "",
@@ -2396,7 +2440,7 @@ class ReviewResearchWebTests(unittest.TestCase):
         }
         html = self.mod.page_html(Path("review.csv"), [row], {"tab": ["yes"]}, None).decode("utf-8")
         self.assertIn("re-researched", html)
-        self.assertIn("new profile", html)
+        self.assertNotIn("new profile", html)
         self.assertIn("latest result</strong> showing latest re-researched profile", html)
         self.assertIn("new feedback", html)
         self.assertIn("Save feedback", html)
