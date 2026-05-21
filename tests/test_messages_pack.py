@@ -2392,12 +2392,16 @@ class ReviewResearchWebTests(unittest.TestCase):
     def test_review_render_uses_warm_design_tokens(self) -> None:
         html = self.mod.page_html(Path("review.csv"), [{"bucket": "yes", "exclude": "", "full_name": "Jane Doe"}], {"tab": ["yes"]}, None).decode("utf-8")
 
-        for token in ["--bg:#F7F3EE", "--surface:#FDFAF7", "--border:#ECE3DA", "--red:#F2502A", "--success-border:#BBF7D0"]:
+        for token in ["--bg:#F7F3EE", "--surface:#FDFAF7", "--border:#E8DDD6", "--red:#DD3D17", "--success-border:#BBF7D0"]:
             self.assertIn(token, html)
         for old_token in ["--bg:#f5f6f8", "--panel:#fff", "--line:#d8dee6"]:
             self.assertNotIn(old_token, html)
         self.assertIn("These contacts are strong candidates for your Personal Network.", html)
         self.assertIn("background:#0A66C2", html)
+        self.assertIn("border-color:var(--success-border)", html)
+        self.assertIn("<div class='decision'>Included</div>", html)
+        self.assertNotIn("<div class='decision'>YES</div>", html)
+        self.assertNotIn("rgba(34,197,94,.045)", html)
 
     def test_bulk_in_network_selection_targets_all_network_rows(self) -> None:
         rows = [
