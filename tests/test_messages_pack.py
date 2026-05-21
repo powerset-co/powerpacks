@@ -2367,6 +2367,37 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertTrue(self.mod.matches_filter(rows[1], {}, None))
         self.assertFalse(self.mod.matches_filter(rows[0], {}, None))
 
+    def test_review_search_matches_name_only_and_preserves_query_across_tabs(self) -> None:
+        row = {
+            "bucket": "yes",
+            "exclude": "",
+            "full_name": "Alice Founder",
+            "top_title_company_pairs": "CEO @ Acme Labs",
+            "schools": "Stanford University",
+            "signals": "repeat_founder",
+        }
+
+        self.assertTrue(self.mod.matches_filter(row, {"tab": ["yes"], "q": ["Alice"]}, None))
+        self.assertFalse(self.mod.matches_filter(row, {"tab": ["yes"], "q": ["Acme"]}, None))
+        self.assertFalse(self.mod.matches_filter(row, {"tab": ["yes"], "q": ["Stanford"]}, None))
+
+        html = self.mod.page_html(Path("review.csv"), [row], {"tab": ["yes"], "q": ["Alice"]}, None).decode("utf-8")
+        self.assertIn("placeholder='Search by name…'", html)
+        self.assertIn("aria-label='Search by name'", html)
+        self.assertIn("href='/?q=Alice&amp;tab=maybe'", html)
+        self.assertNotIn("<button type='submit'>Filter</button>", html)
+        self.assertNotIn("class='filters'", html)
+
+    def test_review_render_uses_warm_design_tokens(self) -> None:
+        html = self.mod.page_html(Path("review.csv"), [{"bucket": "yes", "exclude": "", "full_name": "Jane Doe"}], {"tab": ["yes"]}, None).decode("utf-8")
+
+        for token in ["--bg:#F7F3EE", "--surface:#FDFAF7", "--border:#ECE3DA", "--red:#F2502A", "--success-border:#BBF7D0"]:
+            self.assertIn(token, html)
+        for old_token in ["--bg:#f5f6f8", "--panel:#fff", "--line:#d8dee6", "#0a66c2"]:
+            self.assertNotIn(old_token, html)
+        self.assertIn("These contacts are strong candidates for your Personal Network.", html)
+        self.assertIn("background:var(--red)", html)
+
     def test_bulk_in_network_selection_targets_all_network_rows(self) -> None:
         rows = [
             {"bucket": "maybe", "exclude": "", "in_network": "true", "network_person_id": "p1"},

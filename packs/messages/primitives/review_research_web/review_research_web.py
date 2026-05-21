@@ -66,24 +66,92 @@ TAB_INFO = {
     "yes": {
         "label": "Yes",
         "icon": """<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/><circle cx='12' cy='12' r='10'/></svg>""",
-        "body": "These are contacts that you explicitly approved for us to upload into your Powerset Personal Network.",
+        "body": "These contacts are strong candidates for your Personal Network.",
     },
     "maybe": {
         "label": "Maybe",
         "icon": """<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='M9.1 9a3 3 0 1 1 4.8 2.4c-.9.6-1.4 1.2-1.4 2.1'/><path d='M12 17h.01'/></svg>""",
-        "body": "These are candidates that are worth adding, but require your review to explicitly approve uploads.",
+        "body": "These contacts may be worth adding, but need your review.",
     },
     "no": {
         "label": "No",
         "icon": """<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='m15 9-6 6'/><path d='m9 9 6 6'/></svg>""",
-        "body": "These are contacts that do not seem worthwhile to add to your network, you may still approve for us to upload into your Powerset Personal Network.",
+        "body": "These contacts don't appear to be a strong fit, but you can still approve them for your Personal Network.",
     },
     "in_network": {
         "label": "In Network",
         "icon": """<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><path d='M22 21v-2a4 4 0 0 0-3-3.87'/><path d='M16 3.13a4 4 0 0 1 0 7.75'/></svg>""",
-        "body": "These are contacts that were matched to your existing Powerset Personal Network. All contacts in this section will be updated with the phone number and message count (counts above 500 are capped). Deselect any you do not wish to upload, or select all/none.",
+        "body": "These contacts already match someone in your Personal Network. Their phone number and message activity will be associated with their profiles. Deselect any you'd like to skip.",
     },
 }
+
+SEARCH_ICON = """<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' aria-hidden='true'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>"""
+
+REVIEW_CSS = """
+:root{
+  color-scheme:light;
+  --bg:#F7F3EE;--surface:#FDFAF7;--border:#ECE3DA;--border-strong:#DDD4C8;
+  --fg:#1A1614;--text-strong:#3A2E2A;--text-muted:#5C4D44;
+  --muted:#F0EAE2;--muted-strong:#8C7B70;
+  --red:#F2502A;--red-dark:#C73E1F;
+  --success-border:#BBF7D0;--success-text:#15803D;
+  --warning-bg:#FFF7ED;--warning-text:#C2410C;
+  --danger-bg:#FEF2F2;--danger-text:#B91C1C;
+  --font:-apple-system,BlinkMacSystemFont,Segoe UI,system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body,button,input,textarea{font-family:var(--font)}
+body{margin:0;background:var(--bg);color:var(--fg);line-height:1.6}
+.wrap{max-width:1480px;margin:0 auto;padding:28px 24px 42px}
+header{margin-bottom:18px}
+h1{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.15;color:var(--fg);margin:0 0 6px}
+.meta{color:var(--muted-strong);font-size:13px;line-height:1.4;overflow-wrap:anywhere}
+
+.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:14px}
+.tab{display:flex;gap:8px;align-items:center;padding:9px 14px;border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;text-decoration:none;color:var(--muted-strong);font-size:13px;font-weight:600}
+.tab.active{background:var(--surface);border-color:var(--border);color:var(--fg);margin-bottom:-1px}
+.tab strong{font-size:12px;color:var(--text-strong);background:var(--muted);border-radius:999px;padding:2px 7px}
+
+.info-panel{display:flex;align-items:flex-start;gap:12px;background:var(--surface);border:1px solid var(--border);border-left-width:4px;border-radius:10px;padding:14px 16px;margin:0 0 14px;box-shadow:0 1px 2px rgba(58,46,42,.04)}
+.info-panel h2{font-size:15px;line-height:1.25;margin:0 0 3px;color:var(--fg)}
+.info-panel p{margin:0;color:var(--text-muted);font-size:13px;line-height:1.45}
+.info-body{flex:1}.info-icon{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:999px;flex:0 0 auto}
+.info-icon svg{width:18px;height:18px}
+.bulk-actions{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+.bulk-actions button{font:inherit;border:1px solid var(--border-strong);background:var(--surface);color:var(--text-strong);border-radius:7px;font-size:12px;font-weight:800;padding:7px 10px;cursor:pointer}
+.bulk-actions button:hover{border-color:var(--red);color:var(--red)}.bulk-actions button:disabled{opacity:.6;cursor:wait}
+.info-panel.yes,.info-panel.in_network{border-left-color:#22C55E}.info-panel.yes .info-icon,.info-panel.in_network .info-icon{background:rgba(34,197,94,.12);color:var(--success-text)}
+.info-panel.maybe{border-left-color:#F59E0B}.info-panel.maybe .info-icon{background:var(--warning-bg);color:var(--warning-text)}
+.info-panel.no{border-left-color:#EF4444}.info-panel.no .info-icon{background:var(--danger-bg);color:var(--danger-text)}
+
+.search{position:relative;margin-bottom:16px}
+.search svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--muted-strong);pointer-events:none}
+.search input{width:100%;font:inherit;border:1px solid var(--border);border-radius:10px;padding:10px 12px 10px 38px;background:var(--surface);color:var(--fg);font-size:13px;outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
+.search input:focus{border-color:var(--red);background:#fff;box-shadow:0 0 0 3px rgba(242,80,42,.1)}
+.search input::placeholder{color:#B8A898}
+
+.badge{display:inline-block;height:18px;line-height:18px;border-radius:999px;padding:0 7px;font-size:11px;font-weight:800;white-space:nowrap}
+.badge.retarget{background:rgba(139,92,246,.12);color:#7C3AED}.badge.new-profile{background:rgba(34,197,94,.12);color:var(--success-text)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
+.card{background:var(--surface);border:1.5px solid var(--border);border-radius:10px;min-height:292px;padding:14px;cursor:pointer;box-shadow:0 1px 3px rgba(58,46,42,.06);transition:border-color .12s,box-shadow .12s,opacity .12s,transform .12s}
+.card:hover{border-color:var(--border-strong);box-shadow:0 4px 14px rgba(58,46,42,.08);transform:translateY(-1px)}
+.card.selected{border-color:var(--success-border);background:linear-gradient(0deg,rgba(34,197,94,.045),rgba(34,197,94,.045)),var(--surface);box-shadow:0 1px 3px rgba(58,46,42,.06),inset 0 0 0 1px rgba(34,197,94,.08)}.card.excluded{opacity:.48}.card.saving{outline:2px solid rgba(242,80,42,.38)}
+.head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.name-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.name{font-weight:800;font-size:17px;line-height:1.2;color:var(--fg)}
+.li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:var(--red);color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{background:var(--red-dark);text-decoration:none}
+.decision,.bucket{display:inline-block;border-radius:999px;white-space:nowrap}.decision{height:20px;line-height:20px;font-size:12px;font-weight:800;padding:0 8px;background:var(--muted);color:var(--text-muted)}
+.selected .decision,.bucket.yes,.bucket.in_network{background:rgba(34,197,94,.12);color:var(--success-text)}
+.bucket{height:20px;line-height:20px;padding:0 8px;background:var(--muted);color:var(--text-strong);font-size:12px;margin-top:6px;vertical-align:baseline}.bucket.maybe{background:var(--warning-bg);color:var(--warning-text)}
+.line{font-size:13px;color:var(--text-muted);line-height:1.5;margin:4px 0;overflow-wrap:anywhere}.line strong{color:var(--text-strong);font-weight:650}
+.profile{border-top:1px solid var(--border);margin-top:10px;padding-top:10px}.profile a{color:var(--red);text-decoration:none}.profile a:hover{text-decoration:underline}
+.hint{margin-top:10px}.hint label{display:block;color:var(--text-strong);font-size:12px;font-weight:700;margin-bottom:5px}
+.hint textarea{width:100%;min-height:54px;resize:vertical;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--fg);font-size:13px;line-height:1.35;padding:7px 8px;outline:none}
+.hint textarea:focus{border-color:var(--red);background:var(--surface);box-shadow:0 0 0 3px rgba(242,80,42,.1)}
+.hint-actions{display:flex;align-items:center;gap:8px;margin-top:5px}.hint button{border:1px solid var(--border-strong);background:var(--surface);color:var(--text-strong);border-radius:6px;font-size:12px;line-height:1;font-weight:700;padding:6px 9px;cursor:pointer}.hint button:hover{border-color:var(--red);color:var(--red)}.hint .hint-status{display:inline-block;min-height:16px;color:var(--muted-strong);font-size:11px}
+.empty{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px;color:var(--text-muted)}
+.toast{position:fixed;right:16px;bottom:16px;background:var(--fg);color:#fff;border-radius:8px;padding:9px 12px;font-size:13px;opacity:0;transform:translateY(8px);transition:opacity .15s,transform .15s;pointer-events:none;box-shadow:0 8px 24px rgba(58,46,42,.18)}.toast.show{opacity:1;transform:translateY(0)}
+@media(max-width:900px){.wrap{padding:20px 14px}.info-panel{display:block}.info-icon{margin-bottom:8px}.bulk-actions{margin:10px 0 0}.cards{grid-template-columns:1fr}}
+""".strip()
 
 
 def esc(value: Any) -> str:
@@ -272,23 +340,7 @@ def matches_filter(row: dict[str, str], params: dict[str, list[str]], research_d
         return False
     if q:
         view = row_view(row, research_dir)
-        haystack = " ".join([
-            row.get("handle", ""),
-            row.get("phone_e164", ""),
-            row.get("group_names", ""),
-            row.get("signals", ""),
-            row.get("short_reason", ""),
-            row.get("retarget_hint", ""),
-            row.get("network_name", ""),
-            row.get("network_linkedin_url", ""),
-            row.get("network_match_method", ""),
-            row.get("review_source", ""),
-            view["name"],
-            view["title_pairs"],
-            view["schools"],
-            view["linkedin_url"],
-        ]).lower()
-        if q not in haystack:
+        if q not in view["name"].lower():
             return False
     return True
 
@@ -326,6 +378,24 @@ def apply_bulk_selection(rows: list[dict[str, str]], tab: str, selected: bool) -
     return changed
 
 
+def render_info_panel(active_tab: str) -> str:
+    info = TAB_INFO[active_tab]
+    bulk_actions = ""
+    if active_tab == "in_network":
+        bulk_actions = (
+            "<div class='bulk-actions' aria-label='Bulk in-network actions'>"
+            "<button type='button' data-bulk-selected='true'>Select all</button>"
+            "<button type='button' data-bulk-selected='false'>Select none</button>"
+            "</div>"
+        )
+    return (
+        f"<section class='info-panel {esc(active_tab)}' aria-label='{esc(info['label'])} guidance'>"
+        f"<div class='info-icon' aria-hidden='true'>{info['icon']}</div>"
+        f"<div class='info-body'><h2>{esc(info['label'])}</h2><p>{esc(info['body'])}</p></div>"
+        f"{bulk_actions}</section>"
+    )
+
+
 def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list[str]], research_dir: Path | None) -> bytes:
     summary = summarize(rows)
     active_tab = (params.get("tab") or ["yes"])[0].strip().lower()
@@ -333,7 +403,6 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         active_tab = "yes"
     visible = [(idx, row) for idx, row in enumerate(rows) if matches_filter(row, params, research_dir)]
     q = (params.get("q") or [""])[0]
-    info = TAB_INFO[active_tab]
 
     def tab_href(tab: str) -> str:
         next_params = {
@@ -352,26 +421,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         "<!doctype html><html><head><meta charset='utf-8'>",
         "<meta name='viewport' content='width=device-width, initial-scale=1'>",
         "<title>Powerpacks Research Review</title>",
-        "<style>",
-        ":root{color-scheme:light;--bg:#f5f6f8;--panel:#fff;--line:#d8dee6;--text:#17202a;--muted:#5f6c7a;--soft:#eef2f6;--ink:#17202a;--font:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}",
-        "*{box-sizing:border-box}body,button,input,textarea{font-family:var(--font)}body{margin:0;background:var(--bg);color:var(--text)}",
-        ".wrap{max-width:1480px;margin:0 auto;padding:28px 24px 42px}",
-        "header{margin-bottom:18px}",
-        "h1{font-size:24px;line-height:1.15;margin:0 0 7px}",
-        ".meta{color:var(--muted);font-size:13px;line-height:1.4;overflow-wrap:anywhere}",
-        ".tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:12px}.tab{display:flex;gap:8px;align-items:center;padding:9px 12px;border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;text-decoration:none;color:var(--muted);font-size:13px}.tab.active{background:var(--panel);border-color:var(--line);color:var(--text);margin-bottom:-1px}.tab strong{font-size:12px;color:var(--text);background:var(--soft);border-radius:999px;padding:2px 7px}",
-        ".info-panel{display:flex;align-items:flex-start;gap:12px;background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:14px 16px;margin:0 0 14px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.info-panel h2{font-size:15px;line-height:1.25;margin:0 0 3px}.info-panel p{margin:0;color:var(--muted);font-size:13px;line-height:1.45}.info-body{flex:1}.info-icon{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:999px;flex:0 0 auto}.info-icon svg{width:18px;height:18px}.bulk-actions{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}.bulk-actions button{font:inherit;border:1px solid #9aa8b7;background:#fff;color:#334155;border-radius:7px;font-size:12px;font-weight:800;padding:7px 10px;cursor:pointer}.bulk-actions button:hover{border-color:#63b7aa;color:#0f5f59}.bulk-actions button:disabled{opacity:.6;cursor:wait}.info-panel.yes,.info-panel.in_network{border-left-color:#43a99a}.info-panel.yes .info-icon,.info-panel.in_network .info-icon{background:#d9f3ee;color:#0f5f59}.info-panel.maybe{border-left-color:#d49322}.info-panel.maybe .info-icon{background:#fff1d6;color:#7a4b00}.info-panel.no{border-left-color:#b65b5b}.info-panel.no .info-icon{background:#fde2e2;color:#8a2424}",
-        ".filters{display:flex;gap:8px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:14px}.filters input{font:inherit;border:1px solid #b8c1cc;border-radius:6px;padding:7px 8px;min-width:280px;flex:1}.filters button{font:inherit;border:1px solid var(--ink);background:var(--ink);color:#fff;border-radius:6px;padding:7px 12px}.filters a{display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;padding:0 6px}",
-        ".badge{display:inline-block;height:18px;line-height:18px;border-radius:999px;padding:0 7px;font-size:11px;font-weight:800;white-space:nowrap}.badge.retarget{background:#e9ddff;color:#5b21b6}.badge.new-profile{background:#dcfce7;color:#166534}",
-        ".cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}",
-        ".card{background:var(--panel);border:1px solid var(--line);border-radius:8px;min-height:292px;padding:14px;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,.04);transition:border-color .12s,box-shadow .12s,opacity .12s}.card:hover{border-color:#aeb8c5;box-shadow:0 3px 10px rgba(15,23,42,.08)}.card.selected{border-color:#63b7aa;background:#f1fbf8}.card.excluded{opacity:.64}.card.saving{outline:2px solid #f6c76b}",
-        ".head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.name-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.name{font-weight:800;font-size:17px;line-height:1.2}.li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#0a66c2;color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{filter:brightness(.92);text-decoration:none}.decision{display:inline-block;height:20px;line-height:20px;font-size:12px;font-weight:800;border-radius:999px;padding:0 8px;background:#eceff3;color:#5b6876;white-space:nowrap}.selected .decision{background:#ccefe8;color:#0f5f59}",
-        ".bucket{display:inline-block;height:20px;line-height:20px;border-radius:999px;padding:0 8px;background:#eef2f6;color:#334155;font-size:12px;margin-top:6px;white-space:nowrap;vertical-align:baseline}.bucket.yes{background:#d9f3ee;color:#0f5f59}.bucket.in_network{background:#d9f3ee;color:#0f5f59}.bucket.maybe{background:#fff1d6;color:#7a4b00}",
-        ".line{font-size:13px;color:var(--muted);line-height:1.38;margin:5px 0;overflow-wrap:anywhere}.line strong{color:#334155;font-weight:650}.profile{border-top:1px solid #e5e9ef;margin-top:10px;padding-top:10px}.profile a{color:#0f5f59;text-decoration:none}.profile a:hover{text-decoration:underline}",
-        ".hint{margin-top:10px}.hint label{display:block;color:#334155;font-size:12px;font-weight:700;margin-bottom:5px}.hint textarea{width:100%;min-height:54px;resize:vertical;border:1px solid #c6ced8;border-radius:7px;background:#fff;color:var(--text);font-size:13px;line-height:1.35;padding:7px 8px}.hint textarea:focus{outline:2px solid #9dd8cf;border-color:#63b7aa}.hint-actions{display:flex;align-items:center;gap:8px;margin-top:5px}.hint button{border:1px solid #9aa8b7;background:#fff;color:#334155;border-radius:6px;font-size:12px;line-height:1;font-weight:700;padding:6px 9px;cursor:pointer}.hint button:hover{border-color:#63b7aa;color:#0f5f59}.hint .hint-status{display:inline-block;min-height:16px;color:var(--muted);font-size:11px}",
-        ".empty{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:24px;color:var(--muted)}.toast{position:fixed;right:16px;bottom:16px;background:#17202a;color:#fff;border-radius:8px;padding:9px 12px;font-size:13px;opacity:0;transform:translateY(8px);transition:opacity .15s,transform .15s;pointer-events:none}.toast.show{opacity:1;transform:translateY(0)}",
-        "@media(max-width:900px){.wrap{padding:20px 14px}.info-panel{display:block}.info-icon{margin-bottom:8px}.bulk-actions{margin:10px 0 0}.cards{grid-template-columns:1fr}.filters input{min-width:180px}}",
-        "</style></head><body><div class='wrap'>",
+        f"<style>{REVIEW_CSS}</style></head><body><div class='wrap'>",
         "<header><h1>Powerpacks Research Review</h1>",
         "<div class='meta'>Click a card to toggle include or exclude in upload. Every change autosaves.</div></header>",
         "<nav class='tabs'>",
@@ -380,11 +430,12 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         tab_link("no", "No", summary["no"]),
         tab_link("in_network", "In Network", summary["in_network"]),
         "</nav>",
-        f"<section class='info-panel {esc(active_tab)}' aria-label='{esc(info['label'])} guidance'><div class='info-icon' aria-hidden='true'>{info['icon']}</div><div class='info-body'><h2>{esc(info['label'])}</h2><p>{esc(info['body'])}</p></div>" + ("<div class='bulk-actions' aria-label='Bulk in-network actions'><button type='button' data-bulk-selected='true'>Select all</button><button type='button' data-bulk-selected='false'>Select none</button></div>" if active_tab == "in_network" else "") + "</section>",
-        "<form class='filters' method='get' action='/'>",
+        render_info_panel(active_tab),
+        "<form class='search' method='get' action='/'>",
         f"<input type='hidden' name='tab' value='{esc(active_tab)}'>",
-        f"<input name='q' placeholder='Search name, company, school, signal, LinkedIn' value='{esc(q)}'>",
-        "<button type='submit'>Filter</button><a href='/'>clear</a></form>",
+        SEARCH_ICON,
+        f"<input name='q' placeholder='Search by name…' value='{esc(q)}' aria-label='Search by name'>",
+        "</form>",
     ]
     if not visible:
         parts.append("<div class='empty'>No research rows match this view.</div>")
@@ -399,7 +450,6 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             groups = " | ".join(split_pipe(row.get("group_names", ""), limit=5)) or "none"
             signals = " | ".join(split_pipe(row.get("signals", ""), limit=5)) or "none"
             linkedin = view["linkedin_url"]
-            github = view["github_url"]
             decision = "IN NETWORK" if label == "in_network" and selected else ("YES" if selected else "EXCLUDED")
             count_key = "in_network" if label == "in_network" and selected else (label if label != "in_network" else "")
             card_class = "card selected" if selected else "card excluded"
@@ -432,7 +482,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
                 f"<div class='line'><strong>reason</strong> {esc(row.get('short_reason') or 'none')}</div>",
                 f"<div class='line'><strong>identity</strong> {esc(row.get('identity_risk') or 'none')}</div>",
                 f"<div class='line'><strong>signals</strong> {esc(signals)}</div>",
-                (f"<div class='line'><strong>latest result</strong> showing latest re-researched profile. Add new feedback below to run another pass.</div>" if is_retargeted else ""),
+                ("<div class='line'><strong>latest result</strong> showing latest re-researched profile. Add new feedback below to run another pass.</div>" if is_retargeted else ""),
                 f"<div class='hint'><label for='hint-{idx}'>{'new feedback' if is_retargeted else 'feedback'}</label><textarea id='hint-{idx}' data-row='{idx}' placeholder='LinkedIn URL, company, title, location, or any clue'>{esc(hint)}</textarea><div class='hint-actions'><button type='button' data-save-hint='{idx}'>Save feedback</button><span class='hint-status'></span></div></div>",
                 "</div></article>",
             ])
