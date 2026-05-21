@@ -428,10 +428,10 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
     parts = [
         "<!doctype html><html><head><meta charset='utf-8'>",
         "<meta name='viewport' content='width=device-width, initial-scale=1'>",
-        "<title>Powerpacks Research Review</title>",
+        "<title>Contact Review</title>",
         f"<style>{REVIEW_CSS}</style></head><body><div class='wrap'>",
-        "<header><h1>Powerpacks Research Review</h1>",
-        "<div class='meta'>Click a card to toggle include or exclude in upload. Every change autosaves.</div></header>",
+        "<header><h1>Contact Review</h1>",
+        "<div class='meta'>Click a card to toggle which contacts should be added to your Personal Network.</div></header>",
         "<nav class='tabs'>",
         tab_link("yes", "Yes", summary["yes"]),
         tab_link("maybe", "Maybe", summary["maybe"]),
