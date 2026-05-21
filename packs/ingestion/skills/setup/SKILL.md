@@ -59,6 +59,13 @@ uv run --project . python packs/ingestion/primitives/setup/setup.py pull-bootstr
   --allow-gcs-download
 ```
 
+`pull-bootstrap` defaults to `--download-backend auto`: it uses `gcloud storage
+cp` when Google Cloud CLI is installed, and can fall back to the project
+`google-cloud-storage` dependency when run through `uv run --project .` with
+`--download-backend python`. Raw service-account JSON in
+`GOOGLE_APPLICATION_CREDENTIALS` is materialized to a temporary 0600 key and
+cleaned up after either backend.
+
 Then link sources:
 
 ```bash

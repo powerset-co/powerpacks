@@ -238,6 +238,77 @@ def redacted_error(text: str) -> str:
     return re.sub(r'/(?:var/tmp|tmp|[^\s]*)/[^\s]*', '<redacted-path>', text or '')
 
 
+def parse_exact_gcs_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith('gs://') or uri.endswith('/') or '*' in uri:
+        raise ValueError('gcs-uri must be an exact object gs:// URI')
+    rest = uri[5:]
+    bucket, sep, object_name = rest.partition('/')
+    if not bucket or not sep or not object_name:
+        raise ValueError('gcs-uri must be an exact object gs:// URI')
+    return bucket, object_name
+
+
+def materialize_raw_google_credentials(env: dict[str, str], *, needs_config: bool) -> tuple[dict[str, str], Path | None, Path | None]:
+    tmp_key = None
+    cfg = None
+    gac = env.get('GOOGLE_APPLICATION_CREDENTIALS', '').strip()
+    if gac.startswith('{'):
+        tmp_dir = ROOT / '.powerpacks/setup/tmp'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        fd, key_path = tempfile.mkstemp(prefix='gcloud-key-', suffix='.json', dir=str(tmp_dir))
+        os.close(fd)
+        tmp_key = Path(key_path)
+        tmp_key.write_text(gac, encoding='utf-8')
+        tmp_key.chmod(0o600)
+        env['GOOGLE_APPLICATION_CREDENTIALS'] = str(tmp_key)
+        if needs_config:
+            cfg = Path(tempfile.mkdtemp(prefix='gcloud-config-', dir=str(tmp_dir)))
+            env['CLOUDSDK_CONFIG'] = str(cfg)
+    return env, tmp_key, cfg
+
+
+def run_gcloud_download(gcs_uri: str, out: Path, env: dict[str, str]) -> tuple[int, dict[str, Any]]:
+    cp = subprocess.run(
+        ['gcloud', 'storage', 'cp', gcs_uri, str(out)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if cp.returncode != 0:
+        return 2, {
+            'status': 'needs_user_action',
+            'reason': 'gcloud storage cp failed',
+            'guidance': 'Run gcloud auth login --no-launch-browser, install Google Cloud CLI, or retry with --download-backend python.',
+            'stderr': redacted_error(cp.stderr),
+        }
+    return 0, {'status': 'ok', 'download_backend': 'gcloud'}
+
+
+def run_python_gcs_download(gcs_uri: str, out: Path, env: dict[str, str]) -> tuple[int, dict[str, Any]]:
+    try:
+        from google.cloud import storage  # type: ignore
+    except Exception as exc:
+        return 2, {
+            'status': 'needs_user_action',
+            'reason': 'google-cloud-storage is unavailable',
+            'guidance': 'Run through uv (`uv run --project . python ...`) so project dependencies are available, or use --download-backend gcloud.',
+            'error': str(exc),
+        }
+    bucket_name, object_name = parse_exact_gcs_uri(gcs_uri)
+    try:
+        client = storage.Client()
+        client.bucket(bucket_name).blob(object_name).download_to_filename(str(out))
+    except Exception as exc:
+        return 2, {
+            'status': 'needs_user_action',
+            'reason': 'python google-cloud-storage download failed',
+            'guidance': 'Verify ADC/service-account credentials and exact-object permissions, or retry with --download-backend gcloud.',
+            'error': redacted_error(str(exc)),
+        }
+    return 0, {'status': 'ok', 'download_backend': 'python-google-cloud-storage'}
+
+
 def run_pull(args: argparse.Namespace) -> int:
     if not args.allow_gcs_download:
         emit({
@@ -246,7 +317,9 @@ def run_pull(args: argparse.Namespace) -> int:
             'requires_approval': [{'id': 'gcs_download'}],
         })
         return 2
-    if not str(args.gcs_uri).startswith('gs://') or str(args.gcs_uri).endswith('/') or '*' in str(args.gcs_uri):
+    try:
+        parse_exact_gcs_uri(str(args.gcs_uri))
+    except ValueError as exc:
         emit({'status': 'rejected', 'reason': 'gcs-uri must be an exact object gs:// URI'})
         return 2
     out = Path(args.output)
@@ -255,18 +328,10 @@ def run_pull(args: argparse.Namespace) -> int:
     tmp_key = None
     cfg = None
     try:
-        gac = env.get('GOOGLE_APPLICATION_CREDENTIALS', '').strip()
-        if gac.startswith('{'):
-            tmp_dir = ROOT / '.powerpacks/setup/tmp'
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            fd, key_path = tempfile.mkstemp(prefix='gcloud-key-', suffix='.json', dir=str(tmp_dir))
-            os.close(fd)
-            tmp_key = Path(key_path)
-            tmp_key.write_text(gac, encoding='utf-8')
-            tmp_key.chmod(0o600)
-            cfg = Path(tempfile.mkdtemp(prefix='gcloud-config-', dir=str(tmp_dir)))
-            env['CLOUDSDK_CONFIG'] = str(cfg)
-            env['GOOGLE_APPLICATION_CREDENTIALS'] = str(tmp_key)
+        backend = getattr(args, 'download_backend', 'auto')
+        use_gcloud = backend == 'gcloud' or (backend == 'auto' and shutil.which('gcloud'))
+        env, tmp_key, cfg = materialize_raw_google_credentials(env, needs_config=use_gcloud)
+        if use_gcloud and tmp_key:
             auth = subprocess.run(
                 ['gcloud', 'auth', 'activate-service-account', '--key-file', str(tmp_key)],
                 env=env,
@@ -275,6 +340,14 @@ def run_pull(args: argparse.Namespace) -> int:
                 check=False,
             )
             if auth.returncode != 0:
+                if backend == 'auto':
+                    code, payload = run_python_gcs_download(args.gcs_uri, out, env)
+                    payload['gcloud_fallback_reason'] = 'gcloud service-account activation failed'
+                    payload['gcloud_stderr'] = redacted_error(auth.stderr)
+                    if code == 0:
+                        payload.update({'output': str(out), 'bundle_sha256': sha256_file(out) if out.exists() else ''})
+                    emit(payload)
+                    return code
                 emit({
                     'status': 'needs_user_action',
                     'reason': 'gcloud service-account activation failed',
@@ -282,23 +355,22 @@ def run_pull(args: argparse.Namespace) -> int:
                     'stderr': redacted_error(auth.stderr),
                 })
                 return 2
-        cp = subprocess.run(
-            ['gcloud', 'storage', 'cp', args.gcs_uri, str(out)],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if cp.returncode != 0:
-            emit({
-                'status': 'needs_user_action',
-                'reason': 'gcloud storage cp failed',
-                'guidance': 'Run gcloud auth login --no-launch-browser, then retry the exact-object download.',
-                'stderr': redacted_error(cp.stderr),
-            })
-            return 2
-        emit({'status': 'ok', 'output': str(out), 'bundle_sha256': sha256_file(out) if out.exists() else ''})
-        return 0
+        if use_gcloud:
+            code, payload = run_gcloud_download(args.gcs_uri, out, env)
+            if code != 0 and backend == 'auto':
+                gcloud_payload = payload
+                code, payload = run_python_gcs_download(args.gcs_uri, out, env)
+                payload['gcloud_fallback_reason'] = gcloud_payload.get('reason')
+                if gcloud_payload.get('stderr'):
+                    payload['gcloud_stderr'] = gcloud_payload.get('stderr')
+        elif backend in ('auto', 'python'):
+            code, payload = run_python_gcs_download(args.gcs_uri, out, env)
+        else:
+            code, payload = 2, {'status': 'rejected', 'reason': f'unsupported download backend: {backend}'}
+        if code == 0:
+            payload.update({'output': str(out), 'bundle_sha256': sha256_file(out) if out.exists() else ''})
+        emit(payload)
+        return code
     finally:
         if tmp_key:
             try:
@@ -633,6 +705,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--gcs-uri', required=True)
     s.add_argument('--output', required=True)
     s.add_argument('--allow-gcs-download', action='store_true')
+    s.add_argument('--download-backend', choices=['auto', 'gcloud', 'python'], default='auto', help='Use gcloud storage cp when available, or google-cloud-storage through uv for the Python backend.')
     s.set_defaults(func=run_pull)
 
     s = sub.add_parser('apply-bootstrap')

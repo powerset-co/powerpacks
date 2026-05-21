@@ -3,8 +3,10 @@ import importlib.util
 import io
 import json
 import os
+import sys
 import tarfile
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -225,7 +227,7 @@ class SetupPipelineTests(unittest.TestCase):
             return subprocess_result(0, '', '')
         def subprocess_result(code, stdout, stderr):
             return type('R', (), {'returncode': code, 'stdout': stdout, 'stderr': stderr})()
-        args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output=str(out), allow_gcs_download=True)
+        args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output=str(out), allow_gcs_download=True, download_backend='gcloud')
         with mock.patch.dict(os.environ, {'GOOGLE_APPLICATION_CREDENTIALS': '{"type":"service_account"}'}, clear=False):
             with mock.patch.object(setup.subprocess, 'run', side_effect=fake_run):
                 self.assertEqual(setup.run_pull(args), 0)
@@ -235,6 +237,59 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertFalse(cfg.exists())
         self.assertFalse(key.exists())
         self.assertEqual(calls[1][0], ['gcloud', 'storage', 'cp', 'gs://bucket/object.tar.gz', str(out)])
+
+    def test_python_google_cloud_storage_backend_downloads_exact_object(self):
+        tmp = self.temp_workspace()
+        out = tmp / 'bundle.tar.gz'
+        seen = {}
+
+        class Blob:
+            def __init__(self, name):
+                self.name = name
+            def download_to_filename(self, path):
+                seen['object'] = self.name
+                Path(path).write_bytes(b'bundle')
+
+        class Bucket:
+            def __init__(self, name):
+                self.name = name
+            def blob(self, name):
+                seen['bucket'] = self.name
+                return Blob(name)
+
+        class Client:
+            def bucket(self, name):
+                return Bucket(name)
+
+        google_mod = types.ModuleType('google')
+        cloud_mod = types.ModuleType('google.cloud')
+        storage_mod = types.ModuleType('google.cloud.storage')
+        storage_mod.Client = Client
+        cloud_mod.storage = storage_mod
+        google_mod.cloud = cloud_mod
+        args = argparse.Namespace(gcs_uri='gs://bucket/path/object.tar.gz', output=str(out), allow_gcs_download=True, download_backend='python')
+        with mock.patch.dict(sys.modules, {'google': google_mod, 'google.cloud': cloud_mod, 'google.cloud.storage': storage_mod}):
+            with mock.patch.dict(os.environ, {'GOOGLE_APPLICATION_CREDENTIALS': '{"type":"service_account"}'}, clear=False):
+                self.assertEqual(setup.run_pull(args), 0)
+        self.assertEqual(seen, {'bucket': 'bucket', 'object': 'path/object.tar.gz'})
+        self.assertTrue(out.exists())
+        self.assertFalse(list((tmp / '.powerpacks/setup/tmp').glob('gcloud-key-*.json')))
+
+    def test_auto_pull_falls_back_to_python_backend_when_gcloud_cp_fails(self):
+        tmp = self.temp_workspace()
+        out = tmp / 'bundle.tar.gz'
+
+        def fake_python_download(gcs_uri, output, env):
+            output.write_bytes(b'bundle')
+            return 0, {'status': 'ok', 'download_backend': 'python-google-cloud-storage'}
+
+        args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output=str(out), allow_gcs_download=True, download_backend='auto')
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(setup.shutil, 'which', return_value='/bin/gcloud'):
+                with mock.patch.object(setup, 'run_gcloud_download', return_value=(2, {'status': 'needs_user_action', 'reason': 'gcloud storage cp failed', 'stderr': 'denied'})):
+                    with mock.patch.object(setup, 'run_python_gcs_download', side_effect=fake_python_download):
+                        self.assertEqual(setup.run_pull(args), 0)
+        self.assertTrue(out.exists())
 
 
 if __name__ == '__main__':
