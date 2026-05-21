@@ -2385,6 +2385,7 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertIn("placeholder='Search by name…'", html)
         self.assertIn("aria-label='Search by name'", html)
         self.assertIn("href='/?q=Alice&amp;tab=maybe'", html)
+        self.assertNotIn("<strong>source</strong>", html)
         self.assertNotIn("<button type='submit'>Filter</button>", html)
         self.assertNotIn("class='filters'", html)
 
@@ -2393,10 +2394,10 @@ class ReviewResearchWebTests(unittest.TestCase):
 
         for token in ["--bg:#F7F3EE", "--surface:#FDFAF7", "--border:#ECE3DA", "--red:#F2502A", "--success-border:#BBF7D0"]:
             self.assertIn(token, html)
-        for old_token in ["--bg:#f5f6f8", "--panel:#fff", "--line:#d8dee6", "#0a66c2"]:
+        for old_token in ["--bg:#f5f6f8", "--panel:#fff", "--line:#d8dee6"]:
             self.assertNotIn(old_token, html)
         self.assertIn("These contacts are strong candidates for your Personal Network.", html)
-        self.assertIn("background:var(--red)", html)
+        self.assertIn("background:#0A66C2", html)
 
     def test_bulk_in_network_selection_targets_all_network_rows(self) -> None:
         rows = [

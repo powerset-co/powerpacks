@@ -138,7 +138,7 @@ h1{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.15;color:v
 .card.selected{border-color:var(--success-border);background:linear-gradient(0deg,rgba(34,197,94,.045),rgba(34,197,94,.045)),var(--surface);box-shadow:0 1px 3px rgba(58,46,42,.06),inset 0 0 0 1px rgba(34,197,94,.08)}.card.excluded{opacity:.48}.card.saving{outline:2px solid rgba(242,80,42,.38)}
 .head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.name-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .name{font-weight:800;font-size:17px;line-height:1.2;color:var(--fg)}
-.li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:var(--red);color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{background:var(--red-dark);text-decoration:none}
+.li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#0A66C2;color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{background:#004182;text-decoration:none}
 .decision,.bucket{display:inline-block;border-radius:999px;white-space:nowrap}.decision{height:20px;line-height:20px;font-size:12px;font-weight:800;padding:0 8px;background:var(--muted);color:var(--text-muted)}
 .selected .decision,.bucket.yes,.bucket.in_network{background:rgba(34,197,94,.12);color:var(--success-text)}
 .bucket{height:20px;line-height:20px;padding:0 8px;background:var(--muted);color:var(--text-strong);font-size:12px;margin-top:6px;vertical-align:baseline}.bucket.maybe{background:var(--warning-bg);color:var(--warning-text)}
@@ -472,7 +472,6 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
                 f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{retarget_badge}{new_profile_badge}</div><span class='{bucket_class}'>{esc(label_text)}</span></div>",
                 f"<div class='decision'>{decision}</div></div>",
                 f"<div class='line'><strong>phone</strong> {esc(row.get('phone_e164') or 'unknown')} &middot; <strong>msgs</strong> {esc(row.get('total_messages') or '0')}{esc(channel_detail)}</div>",
-                f"<div class='line'><strong>source</strong> {esc(row.get('message_source') or 'unknown')}</div>",
                 f"<div class='line'><strong>location</strong> {esc(location)}</div>",
                 f"<div class='line'><strong>groups</strong> {esc(groups)}</div>",
                 f"<div class='line'><strong>network</strong> {esc((row.get('network_name') or 'none') if is_in_network(row) else 'none')}</div>",
