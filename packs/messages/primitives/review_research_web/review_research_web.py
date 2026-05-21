@@ -133,7 +133,7 @@ h1{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.15;color:v
 .search input:focus{border-color:var(--red);background:var(--surface);box-shadow:0 0 0 3px rgba(221,61,23,.1)}
 .search input::placeholder{color:var(--placeholder)}
 
-.badge,.bucket,.decision{display:inline-flex;align-items:center;gap:5px;height:auto;line-height:1.2;border-radius:999px;padding:3px 9px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.badge,.decision{display:inline-flex;align-items:center;gap:5px;height:auto;line-height:1.2;border-radius:999px;padding:3px 9px;font-size:11.5px;font-weight:600;white-space:nowrap}
 .badge.retarget{background:var(--info-tint);color:var(--info);border:1px solid var(--info-border)}.badge.new-profile{background:var(--success-tint);color:var(--success);border:1px solid var(--success-border)}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;min-height:292px;padding:18px;cursor:pointer;box-shadow:0 1px 3px rgba(26,22,20,.04),0 4px 12px rgba(26,22,20,.04);transition:border-color .12s,box-shadow .12s,opacity .12s,background .12s}
@@ -143,9 +143,8 @@ h1{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.15;color:v
 .name{font-weight:700;font-size:16.5px;letter-spacing:-.015em;line-height:1.22;color:var(--fg)}
 .li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#0A66C2;color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{background:#004182;text-decoration:none}
 .decision{background:var(--muted);color:var(--text-muted);border:1px solid var(--border)}
-.selected .decision,.bucket.yes,.bucket.in_network{background:var(--success-tint);color:var(--success);border:1px solid var(--success-border)}
-.excluded .decision,.bucket.no{background:var(--danger-tint);color:var(--danger);border:1px solid var(--danger-border)}
-.bucket{background:var(--muted);color:var(--text-strong);margin-top:6px;vertical-align:baseline}.bucket.maybe{background:var(--warning-tint);color:var(--warning);border:1px solid var(--warning-border)}
+.selected .decision{background:var(--success-tint);color:var(--success);border:1px solid var(--success-border)}
+.excluded .decision{background:var(--danger-tint);color:var(--danger);border:1px solid var(--danger-border)}
 .line{font-size:13px;color:var(--text-muted);line-height:1.48;margin:4px 0;overflow-wrap:anywhere}.line strong{color:var(--text-strong);font-weight:600}
 .profile{border-top:1px solid var(--border);margin-top:12px;padding-top:12px}.profile a{color:var(--red);text-decoration:none}.profile a:hover{text-decoration:underline}
 .hint{margin-top:12px}.hint label{display:block;color:var(--text-strong);font-size:12px;font-weight:650;margin-bottom:6px}
@@ -448,16 +447,14 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         for idx, row in visible[:500]:
             selected = is_selected(row)
             label = row_tab(row)
-            label_text = "in network" if label == "in_network" else label
             view = row_view(row, research_dir)
             location = view["location"] or "unknown"
             groups = " | ".join(split_pipe(row.get("group_names", ""), limit=5)) or "none"
             signals = " | ".join(split_pipe(row.get("signals", ""), limit=5)) or "none"
             linkedin = view["linkedin_url"]
-            decision = "In network" if label == "in_network" and selected else ("Included" if selected else "Excluded")
+            decision = "Yes" if selected else "No"
             count_key = "in_network" if label == "in_network" and selected else (label if label != "in_network" else "")
             card_class = "card selected" if selected else "card excluded"
-            bucket_class = f"bucket {label}" if label in {"in_network", "yes", "maybe", "no"} else "bucket"
             linkedin_icon = f"<a class='li-icon' href='{esc(linkedin)}' target='_blank' rel='noreferrer' title='LinkedIn' aria-label='Open LinkedIn profile'>in</a>" if linkedin else ""
             is_retargeted = bool((row.get("retarget_status") or "").strip())
             profile_status = (row.get("retarget_profile_status") or "").strip()
@@ -473,9 +470,10 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
             parts.extend([
                 f"<article class='{card_class}' role='button' tabindex='0' data-row='{idx}' data-selected='{str(selected).lower()}' data-decision='{esc(count_key)}' data-network='{str(is_in_network(row)).lower()}'>",
                 "<div class='head'>",
-                f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{retarget_badge}{new_profile_badge}</div><span class='{bucket_class}'>{esc(label_text)}</span></div>",
+                f"<div><div class='name-row'><div class='name'>{esc(view['name'])}</div>{linkedin_icon}{retarget_badge}{new_profile_badge}</div></div>",
                 f"<div class='decision'>{decision}</div></div>",
-                f"<div class='line'><strong>phone</strong> {esc(row.get('phone_e164') or 'unknown')} &middot; <strong>msgs</strong> {esc(row.get('total_messages') or '0')}{esc(channel_detail)}</div>",
+                f"<div class='line'><strong>phone</strong> {esc(row.get('phone_e164') or 'unknown')}</div>",
+                f"<div class='line'><strong>msgs</strong> {esc(row.get('total_messages') or '0')}{esc(channel_detail)}</div>",
                 f"<div class='line'><strong>location</strong> {esc(location)}</div>",
                 f"<div class='line'><strong>groups</strong> {esc(groups)}</div>",
                 f"<div class='line'><strong>network</strong> {esc((row.get('network_name') or 'none') if is_in_network(row) else 'none')}</div>",
@@ -499,8 +497,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         "function showToast(text){toast.textContent=text;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1100)}",
         "function bump(label,delta){if(!label)return;const el=document.querySelector('[data-count='+label+']');if(el)el.textContent=String(Math.max(0,Number(el.textContent||0)+delta))}",
         "function cardDecision(card,selected){if(card.dataset.network==='true')return selected?'in_network':'';if(!selected)return'no';return'yes'}",
-        "function decisionLabel(card,decision){return card.dataset.network==='true'?'in network':decision}",
-        "function setCard(card,selected){const decision=cardDecision(card,selected);card.dataset.selected=String(selected);card.classList.toggle('selected',selected);card.classList.toggle('excluded',!selected);card.querySelector('.decision').textContent=card.dataset.network==='true'?(selected?'In network':'Excluded'):(selected?'Included':'Excluded');card.dataset.decision=decision;const badge=card.querySelector('.bucket');if(badge){badge.textContent=decisionLabel(card,decision);badge.className='bucket '+(card.dataset.network==='true'?'in_network':(decision==='yes'?'yes':(decision==='no'?'no':'')))}}",
+        "function setCard(card,selected){const decision=cardDecision(card,selected);card.dataset.selected=String(selected);card.classList.toggle('selected',selected);card.classList.toggle('excluded',!selected);card.querySelector('.decision').textContent=selected?'Yes':'No';card.dataset.decision=decision}",
         "async function toggle(card){const was=card.dataset.selected==='true';const oldDecision=card.dataset.decision||'';const next=!was;const nextDecision=cardDecision(card,next);card.classList.add('saving');try{const body=new URLSearchParams({row:card.dataset.row,selected:String(next)});const res=await fetch('/toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());setCard(card,next);if(oldDecision!==nextDecision){bump(oldDecision,-1);bump(nextDecision,1)}showToast(next?(nextDecision==='in_network'?'Saved: in network':'Saved: upload yes'):'Saved: excluded')}catch(e){showToast('Save failed');}finally{card.classList.remove('saving')}}",
         "async function saveHint(el){const status=el.parentElement.querySelector('.hint-status');if(status)status.textContent='saving…';try{const body=new URLSearchParams({row:el.dataset.row,hint:el.value});const res=await fetch('/hint',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());if(status)status.textContent='saved';showToast('Saved hint')}catch(e){if(status)status.textContent='save failed';showToast('Hint save failed')}}",
         "async function bulkSelect(btn){const selected=btn.dataset.bulkSelected==='true';document.querySelectorAll('[data-bulk-selected]').forEach(b=>b.disabled=true);try{const body=new URLSearchParams({tab:'in_network',selected:String(selected)});const res=await fetch('/bulk-toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});if(!res.ok)throw new Error(await res.text());showToast(selected?'Selected all in-network':'Deselected all in-network');setTimeout(()=>location.reload(),250)}catch(e){showToast('Bulk save failed');document.querySelectorAll('[data-bulk-selected]').forEach(b=>b.disabled=false)}}",

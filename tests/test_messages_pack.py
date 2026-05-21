@@ -2399,8 +2399,14 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertIn("These contacts are strong candidates for your Personal Network.", html)
         self.assertIn("background:#0A66C2", html)
         self.assertIn("border-color:var(--success-border)", html)
-        self.assertIn("<div class='decision'>Included</div>", html)
-        self.assertNotIn("<div class='decision'>YES</div>", html)
+        self.assertIn("<div class='decision'>Yes</div>", html)
+        self.assertNotIn("<div class='decision'>Included</div>", html)
+        self.assertNotIn("<div class='decision'>Excluded</div>", html)
+        self.assertNotIn("class='bucket", html)
+        self.assertNotIn("<span class='bucket", html)
+        self.assertNotIn("&middot; <strong>msgs</strong>", html)
+        self.assertIn("<strong>phone</strong>", html)
+        self.assertIn("<strong>msgs</strong>", html)
         self.assertNotIn("rgba(34,197,94,.045)", html)
 
     def test_bulk_in_network_selection_targets_all_network_rows(self) -> None:
