@@ -215,6 +215,7 @@ class SetupPipelineTests(unittest.TestCase):
     def test_setup_and_import_skills_include_user_friendly_import_copy(self):
         setup_text = (ROOT / 'packs/ingestion/skills/setup/SKILL.md').read_text(encoding='utf-8')
         import_text = (ROOT / 'packs/ingestion/skills/import-network/SKILL.md').read_text(encoding='utf-8')
+        onboard_text = (ROOT / 'packs/ingestion/skills/onboard/SKILL.md').read_text(encoding='utf-8')
         for required in [
             'How to explain setup to the user',
             'Keep the user\'s view simple',
@@ -233,6 +234,11 @@ class SetupPipelineTests(unittest.TestCase):
             'These sources can be imported at the same time',
         ]:
             self.assertIn(required, import_text)
+        self.assertIn('handoff.handoff_command', onboard_text)
+        self.assertIn('only post-link handoff path', onboard_text)
+        self.assertIn('legacy direct onboarding worker phases', onboard_text)
+        self.assertNotIn('worker_phases[0]', onboard_text)
+        self.assertNotIn('worker_phases[1]', onboard_text)
 
     def test_pull_refuses_without_allow_flag(self):
         args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output='out.tar.gz', allow_gcs_download=False)
