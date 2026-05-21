@@ -315,41 +315,6 @@ def save_link_config(channel: str, path: Path, *, config: dict[str, Any], userna
     return registry
 
 
-def email_slug(email: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", email.lower()).strip("-")
-    return slug or "gmail"
-
-
-def gmail_background_sync_command(email: str) -> dict[str, str]:
-    slug = email_slug(email)
-    session = f"powerpacks-msgvault-sync-{slug}"
-    log_path = f".powerpacks/ingestion/logs/msgvault-sync-{slug}.log"
-    pid_path = f".powerpacks/ingestion/pids/msgvault-sync-{slug}.pid"
-    script = (
-        "mkdir -p .powerpacks/ingestion/logs .powerpacks/ingestion/pids; "
-        f"session={shlex.quote(session)}; "
-        f"log={shlex.quote(log_path)}; "
-        f"pid={shlex.quote(pid_path)}; "
-        "if command -v tmux >/dev/null 2>&1; then "
-        f"tmux has-session -t \"$session\" 2>/dev/null || tmux new-session -d -s \"$session\" \"cd '$PWD' && msgvault sync-full {shlex.quote(email)} >> '$PWD'/\"$log\" 2>&1\"; "
-        "tmux display-message -p -t \"$session\" '#{pane_pid}' > \"$pid\"; "
-        f"printf 'Started Gmail sync for {email} (tmux %s, pid %s, log %s)\\n' \"$session\" \"$(cat \"$pid\")\" \"$log\"; "
-        "else "
-        f"nohup msgvault sync-full {shlex.quote(email)} >> \"$log\" 2>&1 & "
-        "echo $! > \"$pid\"; "
-        f"printf 'Started Gmail sync for {email} (pid %s, log %s)\\n' \"$(cat \"$pid\")\" \"$log\"; "
-        "fi"
-    )
-    return {
-        "label": f"start_msgvault_sync_{email}",
-        "command": shell_join(["sh", "-lc", script]),
-        "description": (
-            f"Start local Gmail metadata sync for {email} in the background. "
-            "Large mailboxes can take a few hours; rerun onboarding after a checkpoint exists."
-        ),
-    }
-
-
 def gmail_browser_setup_command(args: argparse.Namespace, email: str) -> dict[str, str]:
     cmd = [
         "uv", "run", "--project", ".", "python", msgvault_setup_py(), "browser-setup",
@@ -388,12 +353,10 @@ def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> lis
                     ]),
                     "description": f"Authorize {email} in msgvault.",
                 })
-        for email in emails:
-            commands.append(gmail_background_sync_command(email))
         commands.append({
             "label": "rerun_onboarding",
             "command": onboarding_step_command(args),
-            "description": "Rerun onboarding after msgvault has written a Gmail sync checkpoint.",
+            "description": "Rerun onboarding after msgvault authorization records local source accounts.",
         })
         return commands
 
@@ -417,12 +380,10 @@ def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> lis
             ]),
             "description": f"Authorize {email} in msgvault.",
         })
-    for email in emails:
-        commands.append(gmail_background_sync_command(email))
     commands.append({
         "label": "rerun_onboarding",
         "command": onboarding_step_command(args),
-        "description": "Rerun onboarding after msgvault has written a Gmail sync checkpoint.",
+        "description": "Rerun onboarding after msgvault authorization records local source accounts.",
     })
     return commands
 
@@ -490,7 +451,7 @@ def cmd_step(args: argparse.Namespace) -> int:
                 "action_type": "user-action/linking",
                 "emails": extra_emails,
                 "commands": gmail_add_email_commands(args, extra_emails),
-                "repeat_command_after_sync": onboarding_step_command(args),
+                "repeat_command_after_linking": onboarding_step_command(args),
                 "accounts_path": args.accounts,
                 "updates": updates,
                 "registry": registry,
@@ -502,11 +463,10 @@ def cmd_step(args: argparse.Namespace) -> int:
             emit({
                 "status": "needs_input",
                 "channel": "gmail",
-                "prompt": "Which Gmail address should we link first? Do not infer it from gcloud, Powerset login, or local machine state. After the user provides an email, rerun with --gmail-add-email <email>. Large mailboxes can take a few hours to fully sync, so Codex should start the sync while the user is here.",
+                "prompt": "Which Gmail address should we link first? Do not infer it from gcloud, Powerset login, or local machine state. After the user provides an email, rerun with --gmail-add-email <email>. Codex should run only browser/OAuth authorization commands during onboarding.",
                 "question": "Which Gmail address should we link first?",
                 "email_source": "user_provided",
                 "msgvault_db": str(db_path),
-                "example_sync": "msgvault sync-full <email>",
                 "next_command": onboarding_step_command(args),
                 "first_gmail_command": onboarding_step_command(args) + " --gmail-add-email EMAIL",
                 "add_other_email_command": onboarding_step_command(args) + " --gmail-add-email EMAIL",
@@ -532,7 +492,7 @@ def cmd_step(args: argparse.Namespace) -> int:
             emit({
                 "status": "waiting",
                 "channel": "gmail",
-                "message": "No Gmail source accounts found in msgvault yet. Start msgvault sync for the linked Gmail account, keep it running while the user is present, then rerun onboarding after a checkpoint exists.",
+                "message": "No Gmail source accounts found in msgvault yet. Complete msgvault authorization for the Gmail account, then rerun onboarding after msgvault records the local account.",
                 "accounts_command": run_gmail_accounts_command(args),
                 "repeat_command": onboarding_step_command(args),
                 "skip_command": onboarding_step_command(args) + " --skip-gmail",
@@ -544,7 +504,7 @@ def cmd_step(args: argparse.Namespace) -> int:
             emit({
                 "status": "needs_input",
                 "channel": "gmail",
-                "prompt": "Confirm discovered Gmail accounts to link with --gmail-account <email> or --gmail-all. Message counts are local sync checkpoints; large mailboxes can keep syncing in the background for a few hours. Tell me any other Gmail addresses you want to add; use --gmail-add-email <email> so onboarding can add OAuth test users and authorize them as user-action/linking.",
+                "prompt": "Confirm discovered Gmail accounts to link with --gmail-account <email> or --gmail-all. Tell me any other Gmail addresses you want to add; use --gmail-add-email <email> so onboarding can add OAuth test users and authorize them as user-action/linking.",
                 "discovered_accounts": discovered.get("accounts", []),
                 "add_commands": [onboarding_step_command(args) + f" --gmail-account {shlex.quote(email)}" for email in discovered_accounts],
                 "all_command": onboarding_step_command(args) + " --gmail-all",

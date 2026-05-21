@@ -249,6 +249,8 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["email_source"], "user_provided")
             self.assertIn("Do not infer it", payload["prompt"])
             self.assertIn("--gmail-add-email EMAIL", payload["first_gmail_command"])
+            self.assertNotIn("sync", payload["prompt"].lower())
+            self.assertNotIn("example_sync", payload)
 
     def test_onboarding_step_returns_agent_actions_for_extra_gmail_email(self):
         old_cwd = Path.cwd()
@@ -273,11 +275,11 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(commands[0]["label"], "add_oauth_test_users")
             self.assertIn("msgvault_setup.py add-test-users other@example.com", commands[0]["command"])
             self.assertIn("msgvault_setup.py add-account --email other@example.com", commands[1]["command"])
-            self.assertEqual(commands[2]["label"], "start_msgvault_sync_other@example.com")
-            self.assertIn("msgvault sync-full other@example.com", commands[2]["command"])
-            self.assertIn("tmux new-session", commands[2]["command"])
-            self.assertIn(".powerpacks/ingestion/logs/msgvault-sync-other-example-com.log", commands[2]["command"])
-            self.assertEqual(commands[3]["label"], "rerun_onboarding")
+            self.assertEqual(commands[2]["label"], "rerun_onboarding")
+            self.assertIn("repeat_command_after_linking", payload)
+            self.assertNotIn("repeat_command_after_sync", payload)
+            self.assertFalse(any("msgvault sync-full" in command["command"] for command in commands))
+            self.assertFalse(any(command["label"].startswith("start_msgvault_sync") for command in commands))
 
     def test_onboarding_step_returns_browser_setup_for_first_gmail_email(self):
         old_cwd = Path.cwd()
@@ -298,8 +300,9 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(commands[0]["label"], "create_oauth_app_and_authorize_other@example.com")
             self.assertIn("msgvault_setup.py browser-setup --email other@example.com --add-account", commands[0]["command"])
             self.assertIn("--home", commands[0]["command"])
-            self.assertEqual(commands[1]["label"], "start_msgvault_sync_other@example.com")
-            self.assertEqual(commands[2]["label"], "rerun_onboarding")
+            self.assertEqual(commands[1]["label"], "rerun_onboarding")
+            self.assertFalse(any("msgvault sync-full" in command["command"] for command in commands))
+            self.assertFalse(any(command["label"].startswith("start_msgvault_sync") for command in commands))
 
     def test_onboarding_step_records_multiple_gmail_accounts_without_import(self):
         old_cwd = Path.cwd()

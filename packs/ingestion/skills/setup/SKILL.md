@@ -136,7 +136,8 @@ Which other Gmail accounts should we link before import?
 
 Record selected accounts in `gmail.config.selected_accounts` /
 `gmail.config.account_emails`. Do not create `.powerpacks/network-import/gmail`
-outputs during linking.
+outputs during linking. Do not run `msgvault sync-full` during linking; Gmail
+sync/import starts only after the import confirmation.
 
 ## Import phase: parallel fan-out, then fan-in
 

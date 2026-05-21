@@ -61,12 +61,12 @@ the returned commands in order. Do not tell the user to run them. For extra
 Gmail addresses this means Codex runs the Google OAuth test-user browser
 automation and authorizes each Gmail account in msgvault as user-action/linking.
 These commands may include `msgvault_setup.py add-test-users`, `add-account`, or
-`browser-setup --add-account`; they are not network imports. Rerun onboarding
-after msgvault has source accounts to select.
+`browser-setup --add-account`; they are not sync jobs or network imports.
+Rerun onboarding after msgvault has source accounts to select.
 Only ask the user to complete browser login/consent when Google requires human
 action. If msgvault has no OAuth client configured yet, the first returned
 command will be `browser-setup --email <gmail> --add-account`; run that before
-test-user or sync commands.
+test-user or additional add-account commands.
 
 LinkedIn CSV remains the primary LinkedIn path:
 
