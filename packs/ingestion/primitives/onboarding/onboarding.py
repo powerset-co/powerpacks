@@ -30,9 +30,6 @@ except ModuleNotFoundError:
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 DEFAULT_NETWORK_IMPORT_DIR = Path(".powerpacks/network-import")
 ONBOARDING_SOURCE_ORDER = ["gmail", "linkedin_csv", "messages", "twitter"]
-ONBOARDING_IMPORT_RUN_ID = "network-onboarding"
-ONBOARDING_IMPORT_LEDGER = ".powerpacks/network-import/import-network-run.json"
-ONBOARDING_INDEX_DIR = ".powerpacks/search-index"
 
 
 def emit(payload: Any) -> None:
@@ -201,104 +198,13 @@ def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = Fa
     return shell_join(cmd)
 
 
-def linkedin_csv_from_registry(registry: dict[str, Any]) -> str:
-    rec = registry.get("accounts", {}).get("linkedin_csv", {})
-    for artifact in reversed(rec.get("artifacts") or []):
-        if Path(str(artifact)).name.lower() == "connections.csv":
-            return str(artifact)
-    return ""
-
-
-def linkedin_source_user_from_registry(registry: dict[str, Any]) -> str:
-    rec = registry.get("accounts", {}).get("linkedin_csv", {})
-    usernames = rec.get("usernames") or []
-    return str(usernames[0]) if usernames else ""
-
-
-def import_network_command(args: argparse.Namespace, registry: dict[str, Any], *, dry_run: bool = False) -> str:
-    cmd = [
+def setup_handoff_command(args: argparse.Namespace) -> str:
+    return shell_join([
         "uv", "run", "--project", ".", "python",
-        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "run",
-        "--from-accounts", args.accounts,
-        "--ledger", ONBOARDING_IMPORT_LEDGER,
-        "--run-id", ONBOARDING_IMPORT_RUN_ID,
+        "packs/ingestion/primitives/setup/setup.py", "handoff",
         "--operator-id", args.operator_id,
-    ]
-    linkedin_csv = args.linkedin_csv or linkedin_csv_from_registry(registry)
-    linkedin_source_user = args.linkedin_source_user or linkedin_source_user_from_registry(registry)
-    if linkedin_csv:
-        cmd.extend(["--linkedin-csv", linkedin_csv])
-    if linkedin_source_user:
-        cmd.extend(["--linkedin-source-user", linkedin_source_user])
-    if dry_run:
-        cmd.append("--dry-run")
-    return shell_join(cmd)
-
-
-def import_network_status_command() -> str:
-    return shell_join([
-        "uv", "run", "--project", ".", "python",
-        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "status",
-        "--ledger", ONBOARDING_IMPORT_LEDGER,
-    ])
-
-
-def import_network_continue_command() -> str:
-    return shell_join([
-        "uv", "run", "--project", ".", "python",
-        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "continue",
-        "--ledger", ONBOARDING_IMPORT_LEDGER,
-    ])
-
-
-def import_network_approve_command() -> str:
-    return shell_join([
-        "uv", "run", "--project", ".", "python",
-        "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py", "approve",
-        "--ledger", ONBOARDING_IMPORT_LEDGER,
-    ])
-
-
-def onboarding_merged_people_csv() -> str:
-    return f".powerpacks/network-import/network-runs/{ONBOARDING_IMPORT_RUN_ID}/merged/people.csv"
-
-
-def build_search_index_command(args: argparse.Namespace, *, dry_run: bool = False) -> str:
-    cmd = [
-        "uv", "run", "--project", ".", "python",
-        "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py", "run",
-        "--input", onboarding_merged_people_csv(),
-        "--output-dir", ONBOARDING_INDEX_DIR,
-        "--default-operator-id", args.operator_id,
-    ]
-    if dry_run:
-        cmd.append("--dry-run")
-    return shell_join(cmd)
-
-
-def build_search_index_status_command() -> str:
-    return shell_join([
-        "uv", "run", "--project", ".", "python",
-        "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py", "status",
-        "--ledger", f"{ONBOARDING_INDEX_DIR}/ledger.json",
-    ])
-
-
-def build_search_index_continue_command() -> str:
-    return shell_join([
-        "uv", "run", "--project", ".", "python",
-        "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py", "continue",
-        "--ledger", f"{ONBOARDING_INDEX_DIR}/ledger.json",
-    ])
-
-
-def build_local_duckdb_command(args: argparse.Namespace) -> str:
-    return shell_join([
-        "uv", "run", "--project", ".", "python",
-        "scripts/build-local-duckdb-shim.py",
-        "--records-dir", ONBOARDING_INDEX_DIR,
-        "--operator-id", args.operator_id,
-        "--force",
+        "--accounts", args.accounts,
+        "--setup-ledger", ".powerpacks/setup/setup-run.json",
     ])
 
 
@@ -312,46 +218,19 @@ def onboarding_handoff(args: argparse.Namespace, registry: dict[str, Any]) -> di
         "source_order": ONBOARDING_SOURCE_ORDER,
         "linked_sources": linked,
         "skipped_sources": skipped,
+        "handoff_command": setup_handoff_command(args),
         "confirmation_prompt": (
-            "We can now import linked sources and build your local search index. "
-            "Large mailboxes or networks can take a few hours. Continue?"
+            "Your sources are connected. I can now import them, combine the results into one local network, "
+            "and prepare the files needed for local search. Large mailboxes or networks can take a while. "
+            "I won't upload anything automatically, and I'll only ask again if a login, QR/device link, "
+            "overwrite, or paid provider step needs approval. Continue?"
         ),
         "codex_orchestration": {
             "main_thread": "Handle account linking, browser/login actions, user confirmations, and worker handoffs.",
-            "worker_policy": "Use worker sub-agents for import-network, then build-local-search-index. Close workers when they finish.",
+            "flow": "Run handoff_command next. The setup handoff owns import worker planning, approval gates, fan-in, and indexing readiness.",
+            "user_summary": "Import connected sources in parallel where possible, combine them into one local network, then prepare local search. Do not describe ledgers/fan-in/fan-out to normal users.",
+            "worker_policy": "Use setup.py handoff worker_groups to dispatch import workers. Do not use legacy direct onboarding worker phases.",
         },
-        "worker_phases": [
-            {
-                "name": "import-network",
-                "agent_type": "worker",
-                "depends_on": [],
-                "dry_run_command": import_network_command(args, registry, dry_run=True),
-                "run_command": import_network_command(args, registry),
-                "status_command": import_network_status_command(),
-                "continue_command": import_network_continue_command(),
-                "approve_command": import_network_approve_command(),
-                "expected_output": onboarding_merged_people_csv(),
-                "instructions": (
-                    "Run dry-run first. Then run import-network from the account registry. "
-                    "If a child primitive blocks on paid enrichment, return the approval gate to the main thread."
-                ),
-            },
-            {
-                "name": "build-local-search-index",
-                "agent_type": "worker",
-                "depends_on": ["import-network"],
-                "dry_run_command": build_search_index_command(args, dry_run=True),
-                "run_command": build_search_index_command(args),
-                "status_command": build_search_index_status_command(),
-                "continue_command": build_search_index_continue_command(),
-                "materialize_duckdb_command": build_local_duckdb_command(args),
-                "expected_output": f"{ONBOARDING_INDEX_DIR}/local-search.duckdb",
-                "instructions": (
-                    "Use the merged people.csv produced by import-network. Run dry-run first; "
-                    "do not approve paid provider work inside the worker."
-                ),
-            },
-        ],
     }
 
 

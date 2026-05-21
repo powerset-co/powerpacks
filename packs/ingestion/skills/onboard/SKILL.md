@@ -89,23 +89,22 @@ It tracks non-secret state in `.powerpacks/ingestion/accounts.json`.
 When `step` returns `status: completed`, read the emitted `handoff` object.
 Show the `confirmation_prompt` and ask once before long work. After approval:
 
-- Spawn a `worker` sub-agent for `worker_phases[0]` (`import-network`). Tell it
-  it is not alone in the repo, to run `dry_run_command` first, then
-  `run_command`, and to return any approval gate to the main thread.
-- After import-network completes, spawn a `worker` sub-agent for
-  `worker_phases[1]` (`build-local-search-index`). Tell it to use the merged
-  people CSV from the import phase, run `dry_run_command` first, then
-  `run_command`, then `materialize_duckdb_command`.
-- Keep the main thread terse: report approval gates, current counts, final
-  artifact paths, and real failures. Close workers when they finish.
+- Run `handoff.handoff_command`. That command is the only post-link handoff path
+  and delegates import worker planning, approval gates, fan-in, and indexing
+  readiness to `$setup` / `setup.py handoff`.
+- Dispatch import/index workers only from the setup handoff response. Do not use
+  legacy direct onboarding worker phases.
+- Keep the main thread user-friendly: report connected sources, approval gates,
+  current counts, final local paths, and real failures. Do not describe ledgers,
+  fan-in/fan-out, or implementation details unless the user asks.
 
 Do not put account-linking browser flows in a worker. The top-level Codex
 orchestrator owns Gmail/msgvault linking, Google browser actions, LinkedIn CSV
 handoff, message/WhatsApp linking, Twitter linking, and user confirmations.
 
-The handoff import command is the first place that calls
+The setup handoff is the first post-link place that plans
 `import_network_pipeline.py run --from-accounts ...`; onboarding itself never
-does. Never store tokens/passwords/cookies there. The v2 registry stores
+runs imports. Never store tokens/passwords/cookies there. The v2 registry stores
 non-secret config (`gmail.msgvault_db/account_emails/oauth_app/oauth_test_users/available_accounts/selected_accounts`,
 `linkedin_csv.csv_path/source_label`, `twitter.handle`,
 `messages.contacts_csv`) while preserving v1 `usernames`/`artifacts` mirrors.

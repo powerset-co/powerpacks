@@ -345,16 +345,15 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             handoff = payload["handoff"]
             self.assertEqual(handoff["source_order"], ["gmail", "linkedin_csv", "messages", "twitter"])
+            self.assertIn("setup/setup.py handoff", handoff["handoff_command"])
+            self.assertIn("--operator-id operator-1", handoff["handoff_command"])
+            self.assertIn("Your sources are connected", handoff["confirmation_prompt"])
+            self.assertIn("won't upload anything automatically", handoff["confirmation_prompt"])
             self.assertEqual(handoff["codex_orchestration"]["main_thread"], "Handle account linking, browser/login actions, user confirmations, and worker handoffs.")
-            phases = handoff["worker_phases"]
-            self.assertEqual([phase["name"] for phase in phases], ["import-network", "build-local-search-index"])
-            self.assertIn("--from-accounts", phases[0]["run_command"])
-            self.assertIn("--run-id network-onboarding", phases[0]["run_command"])
-            self.assertEqual(phases[0]["expected_output"], ".powerpacks/network-import/network-runs/network-onboarding/merged/people.csv")
-            self.assertIn("build_processing_pipeline.py run", phases[1]["run_command"])
-            self.assertIn("--input .powerpacks/network-import/network-runs/network-onboarding/merged/people.csv", phases[1]["run_command"])
-            self.assertIn("scripts/build-local-duckdb-shim.py", phases[1]["materialize_duckdb_command"])
-            self.assertEqual(phases[1]["expected_output"], ".powerpacks/search-index/local-search.duckdb")
+            self.assertIn("Run handoff_command next", handoff["codex_orchestration"]["flow"])
+            self.assertIn("Do not describe ledgers", handoff["codex_orchestration"]["user_summary"])
+            self.assertNotIn("worker_phases", handoff)
+            self.assertNotIn("preferred_handoff_command", handoff)
 
     def test_onboarding_handoff_uses_recorded_linkedin_csv(self):
         old_cwd = Path.cwd()
@@ -378,9 +377,14 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
             self.assertEqual(code, 0)
-            run_command = payload["handoff"]["worker_phases"][0]["run_command"]
-            self.assertIn(f"--linkedin-csv {str(csv_path)}", run_command)
-            self.assertIn("--linkedin-source-user me@example.com", run_command)
+            handoff = payload["handoff"]
+            self.assertIn("setup/setup.py handoff", handoff["handoff_command"])
+            self.assertIn(f"--accounts {str(path)}", handoff["handoff_command"])
+            self.assertNotIn("--linkedin-csv", handoff["handoff_command"])
+            self.assertNotIn("worker_phases", handoff)
+            registry = accounts.load_registry(path)
+            self.assertEqual(registry["accounts"]["linkedin_csv"]["artifacts"], [str(csv_path)])
+            self.assertEqual(registry["accounts"]["linkedin_csv"]["usernames"], ["me@example.com"])
 
 
 if __name__ == "__main__":
