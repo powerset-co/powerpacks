@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.request
 import unittest
 from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2411,6 +2412,27 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertIn("<strong>phone</strong>", html)
         self.assertIn("<strong>msgs</strong>", html)
 
+    def test_health_source_hash_identifies_running_ui_code(self) -> None:
+        self.assertEqual(self.mod.SOURCE_SHA256, hashlib.sha256(self.WEB.read_bytes()).hexdigest())
+
+    def test_health_endpoint_includes_source_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = Path(td) / "research_review.csv"
+            csv_path.write_text("bucket,full_name\nyes,Jane Doe\n", encoding="utf-8")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), self.mod.make_handler(csv_path, None))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                _, port = server.server_address
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=2) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(payload["status"], "ok")
+                self.assertEqual(payload["csv"], str(csv_path.resolve()))
+                self.assertEqual(payload["source_sha256"], self.mod.SOURCE_SHA256)
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_bulk_in_network_selection_targets_all_network_rows(self) -> None:
         rows = [
             {"bucket": "maybe", "exclude": "", "in_network": "true", "network_person_id": "p1"},
@@ -2471,3 +2493,45 @@ class ReviewResearchWebTests(unittest.TestCase):
             self.assertEqual(view["title_pairs"], "Founder @ Acme")
             self.assertEqual(view["schools"], "MIT")
             self.assertEqual(view["linkedin_url"], "https://linkedin.test/jane")
+
+
+class ImportContactsPipelineReviewServerTests(unittest.TestCase):
+    PIPELINE = ROOT / "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        spec = importlib.util.spec_from_file_location("import_contacts_pipeline", cls.PIPELINE)
+        assert spec and spec.loader
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_review_server_reuse_requires_current_ui_source_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            review_csv = Path(td) / "research_review.csv"
+            review_csv.write_text("bucket,full_name\nyes,Jane Doe\n", encoding="utf-8")
+            args = SimpleNamespace(review_host="127.0.0.1", review_port=8787, review_csv=review_csv)
+            current_hash = "current-ui-hash"
+            base_health = {
+                "status": "ok",
+                "csv": str(review_csv.resolve()),
+                "source_sha256": current_hash,
+            }
+
+            with mock.patch.object(self.mod, "current_review_research_web_sha256", return_value=current_hash):
+                with mock.patch.object(self.mod, "read_review_server_health", return_value=base_health):
+                    self.assertTrue(self.mod.review_server_matches_current_csv(args))
+                with mock.patch.object(self.mod, "read_review_server_health", return_value={**base_health, "source_sha256": "old-ui-hash"}):
+                    self.assertFalse(self.mod.review_server_matches_current_csv(args))
+                stale_health = {k: v for k, v in base_health.items() if k != "source_sha256"}
+                with mock.patch.object(self.mod, "read_review_server_health", return_value=stale_health):
+                    self.assertFalse(self.mod.review_server_matches_current_csv(args))
+                other_csv = Path(td) / "other.csv"
+                other_csv.write_text("bucket,full_name\nyes,Other Person\n", encoding="utf-8")
+                with mock.patch.object(self.mod, "read_review_server_health", return_value={**base_health, "csv": str(other_csv.resolve())}):
+                    self.assertFalse(self.mod.review_server_matches_current_csv(args))
+
+    def test_review_server_source_summary_records_path_and_hash(self) -> None:
+        summary = self.mod.review_server_source_summary()
+        path = Path(summary["source_path"])
+        self.assertEqual(path, self.mod.review_research_web_path())
+        self.assertEqual(summary["source_sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
