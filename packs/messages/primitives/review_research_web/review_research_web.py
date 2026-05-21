@@ -113,6 +113,7 @@ h1{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.15;color:v
 .tab{display:inline-flex;gap:7px;align-items:center;padding:6px 12px;border:1px solid var(--input);border-radius:20px;text-decoration:none;color:var(--text-muted);background:var(--surface);font-size:13px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.04);transition:background .15s,border-color .15s,color .15s,transform .15s}
 .tab:hover{background:var(--muted);border-color:#D0C4BA;transform:translateY(-1px)}
 .tab.active{background:var(--red-tint);border-color:var(--red-border);color:var(--red)}
+.tab.yes.active,.tab.in_network.active{background:var(--success-tint);border-color:var(--success-border);color:var(--success)}
 .tab strong{font-size:11.5px;font-weight:600;color:inherit;background:rgba(255,255,255,.68);border-radius:20px;padding:1px 7px}
 
 .info-panel{display:flex;align-items:flex-start;gap:12px;background:var(--surface);border:1px solid var(--border);border-left-width:3px;border-radius:16px;padding:16px 18px;margin:0 0 16px;box-shadow:0 1px 3px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.04)}
@@ -138,12 +139,12 @@ h1{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.15;color:v
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;min-height:292px;padding:20px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.04);transition:border-color .15s,box-shadow .15s,opacity .12s,background .12s,transform .15s}
 .card:hover{border-color:#D4C8BC;box-shadow:0 3px 12px rgba(0,0,0,.08);transform:translateY(-1px)}
-.card.selected{background:var(--surface);border-color:var(--border)}.card.excluded{opacity:.48}.card.saving{outline:2px solid rgba(242,80,42,.38)}
+.card.selected{background:var(--surface);border-color:var(--success-border)}.card.excluded{opacity:.48}.card.saving{outline:2px solid rgba(242,80,42,.38)}
 .head{display:flex;justify-content:space-between;gap:10px;margin-bottom:12px}.name-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .name{font-weight:600;font-size:17px;letter-spacing:-.01em;line-height:1.22;color:var(--fg)}
 .li-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;background:#0A66C2;color:#fff;text-decoration:none;font-size:12px;font-weight:900;line-height:1}.li-icon:hover{background:#004182;text-decoration:none}
 .decision{background:var(--muted);color:var(--text-muted);border:1px solid var(--border)}
-.selected .decision{background:var(--muted);color:var(--text-strong);border:1px solid var(--border-strong)}
+.selected .decision{background:var(--success-tint);color:var(--success);border:1px solid var(--success-border)}
 .excluded .decision{background:var(--danger-tint);color:var(--danger);border:1px solid var(--danger-border)}
 .line{font-size:13px;color:var(--text-muted);line-height:1.48;margin:4px 0;overflow-wrap:anywhere}.line strong{color:var(--text-strong);font-weight:600}
 .profile{border-top:1px solid var(--border);margin-top:12px;padding-top:12px}.profile a{color:var(--red);text-decoration:none}.profile a:hover{text-decoration:underline}
@@ -417,7 +418,7 @@ def page_html(csv_path: Path, rows: list[dict[str, str]], params: dict[str, list
         return "/?" + urllib.parse.urlencode(next_params) if next_params else "/?tab=yes"
 
     def tab_link(tab: str, label: str, count: int) -> str:
-        klass = "tab active" if active_tab == tab else "tab"
+        klass = f"tab {tab}{' active' if active_tab == tab else ''}"
         return f"<a class='{klass}' href='{esc(tab_href(tab))}'><span>{esc(label)}</span><strong data-count='{esc(tab)}'>{count}</strong></a>"
 
     parts = [

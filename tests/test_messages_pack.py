@@ -2398,9 +2398,10 @@ class ReviewResearchWebTests(unittest.TestCase):
             self.assertNotIn(old_token, html)
         self.assertIn("These contacts are strong candidates for your Personal Network.", html)
         self.assertIn("background:#0A66C2", html)
-        self.assertIn(".card.selected{background:var(--surface);border-color:var(--border)}", html)
-        self.assertIn(".selected .decision{background:var(--muted);color:var(--text-strong);border:1px solid var(--border-strong)}", html)
-        self.assertNotIn(".card.selected{background:var(--surface);border-color:var(--success-border)}", html)
+        self.assertIn(".card.selected{background:var(--surface);border-color:var(--success-border)}", html)
+        self.assertIn(".tab.yes.active,.tab.in_network.active{background:var(--success-tint);border-color:var(--success-border);color:var(--success)}", html)
+        self.assertIn(".selected .decision{background:var(--success-tint);color:var(--success);border:1px solid var(--success-border)}", html)
+        self.assertNotIn("rgba(34,197,94,.045)", html)
         self.assertIn("<div class='decision'>Yes</div>", html)
         self.assertNotIn("<div class='decision'>Included</div>", html)
         self.assertNotIn("<div class='decision'>Excluded</div>", html)
@@ -2409,7 +2410,6 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertNotIn("&middot; <strong>msgs</strong>", html)
         self.assertIn("<strong>phone</strong>", html)
         self.assertIn("<strong>msgs</strong>", html)
-        self.assertNotIn("rgba(34,197,94,.045)", html)
 
     def test_bulk_in_network_selection_targets_all_network_rows(self) -> None:
         rows = [
