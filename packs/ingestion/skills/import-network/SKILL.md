@@ -69,6 +69,9 @@ approval gate. Do not ask again for routine local metadata import work.
 
 - `--linkedin-csv <Connections.csv>` and `--linkedin-source-user <label>` for LinkedIn.
 - `--gmail-account-email <email>` / repeated `--gmail-account-emails <email>` and optional `--msgvault-db <path>` for email/msgvault.
+  The Gmail import worker owns `msgvault sync-full` for each selected account
+  before reading the local msgvault DB. Do not run this sync from onboarding.
+  Use `--skip-msgvault-sync` only for tests or known pre-synced local DBs.
 - `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` to consume link-only state from `$setup` / `$onboard`.
 - `--include-existing-artifacts` to include already-generated messages and Twitter people artifacts.
 

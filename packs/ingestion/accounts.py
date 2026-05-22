@@ -32,6 +32,7 @@ def empty_config(channel: str) -> dict[str, Any]:
             "oauth_test_users": [],
             "available_accounts": [],
             "selected_accounts": [],
+            "pending_accounts": [],
         }
     if channel == "linkedin_csv":
         return {"csv_path": "", "source_label": ""}
@@ -90,7 +91,7 @@ def load_registry(path: Path = DEFAULT_ACCOUNTS_PATH) -> dict[str, Any]:
             base["artifacts"] = [str(base["artifacts"])] if base.get("artifacts") else []
         # Preserve v1 mirrors while seeding v2 config for handoffs.
         if channel == "gmail":
-            for key in ["account_emails", "oauth_test_users", "available_accounts", "selected_accounts"]:
+            for key in ["account_emails", "oauth_test_users", "available_accounts", "selected_accounts", "pending_accounts"]:
                 if not isinstance(base["config"].get(key), list):
                     base["config"][key] = [str(base["config"][key])] if base["config"].get(key) else []
             if base["usernames"] and not base["config"].get("account_emails"):

@@ -197,6 +197,7 @@ class SetupPipelineTests(unittest.TestCase):
             'bootstrap',
             'link-only',
             'msgvault',
+            'msgvault sync-full',
             'add-test-users',
             'add-account',
             'import-network',

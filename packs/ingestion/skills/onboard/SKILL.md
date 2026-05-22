@@ -7,9 +7,9 @@ description: Walk a user through linking/exporting all local network ingestion s
 
 Onboarding is the top-level Codex-run state machine. Task 2 onboarding is
 **link-only**: it records source links in `.powerpacks/ingestion/accounts.json`
-and must not run `gmail_network_import`, `linkedin_network_import`,
-`import_network_pipeline`, Twitter crawls, messages import/research, or
-downstream enrichment. Keep human/browser account linking in the main thread,
+and must not run `gmail_network_import`, `msgvault sync-full`,
+`linkedin_network_import`, `import_network_pipeline`, Twitter crawls, messages
+import/research, or downstream enrichment. Keep human/browser account linking in the main thread,
 then hand long local import/index work to worker sub-agents only after the
 completed handoff and user confirmation.
 
@@ -34,11 +34,13 @@ on a first run, ask which Gmail address they want to link first. Do not infer
 the email from gcloud, Powerset login, git config, local status, or old
 artifacts. After the user answers, run `step --gmail-add-email <email>`.
 
-Once msgvault has a local checkpoint, ask which discovered accounts to link
-and what other Gmail addresses they want to add. Multiple discovered source
-accounts are supported by repeating `--gmail-account`; `--gmail-all` records
-every discovered source account; `--gmail-add-email` starts the add-account
-flow for new addresses; `--skip-source gmail` records an explicit skip.
+If msgvault already has local checkpoints, ask which discovered accounts to
+link. Otherwise, `--gmail-add-email` records a pending authorization request and
+returns authorization commands without marking the account import-ready or
+starting sync. Multiple discovered source accounts are supported by repeating
+`--gmail-account`; `--gmail-all` records every discovered source account;
+`--gmail-add-email` starts the add-account flow for new addresses;
+`--skip-source gmail` records an explicit skip.
 
 Fresh Gmail start:
 
@@ -61,8 +63,10 @@ the returned commands in order. Do not tell the user to run them. For extra
 Gmail addresses this means Codex runs the Google OAuth test-user browser
 automation and authorizes each Gmail account in msgvault as user-action/linking.
 These commands may include `msgvault_setup.py add-test-users`, `add-account`, or
-`browser-setup --add-account`; they are not sync jobs or network imports.
-Rerun onboarding after msgvault has source accounts to select.
+`browser-setup --add-account`; they are not network imports and must not start
+`msgvault sync-full`. After those commands succeed, rerun the emitted command
+with `--gmail-authorized-email <email>` so the account moves from pending to
+linked; `$setup` import workers own msgvault sync for selected accounts.
 Only ask the user to complete browser login/consent when Google requires human
 action. If msgvault has no OAuth client configured yet, the first returned
 command will be `browser-setup --email <gmail> --add-account`; run that before
