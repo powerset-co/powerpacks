@@ -179,7 +179,7 @@ Routes:
   `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
-- `$powerset`, Powerset login/status/whoami/sets/MCP/env credentials →
+- `$powerset`, `$powerset setup`, Powerset login/status/whoami/sets/MCP/env credentials →
   `packs/powerset/skills/powerset/SKILL.md`
 - `$import-contacts`, iMessage, WhatsApp, contact import/review/upload/retarget →
   `packs/messages/skills/import-contacts/SKILL.md`

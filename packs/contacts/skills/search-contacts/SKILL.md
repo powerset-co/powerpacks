@@ -24,7 +24,7 @@ Call the remote `powerset-search` MCP tools directly:
 - `list_set_contacts` — app-equivalent `GET /v2/set-contacts/{set_id}` for
   contacts across a set.
 
-If the MCP is missing, route the user through `$powerset login` / `mcp_install`
+If the MCP is missing, route the user through `$powerset setup` / `mcp_install`
 rather than pretending to fetch contacts.
 
 ## Routing

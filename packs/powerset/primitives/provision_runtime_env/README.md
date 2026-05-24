@@ -13,7 +13,8 @@ python primitives/provision_runtime_env/provision_runtime_env.py pull --profile 
 
 `search-core` is the default setup profile and writes the standard Powerpacks
 runtime secrets so search and messages workflows work after the normal
-`$powerset login` / `$powerset env pull` flow.
+`$powerset setup` flow. `$powerset env pull` remains available when you only
+need to refresh runtime keys.
 
 Minimal profiles are available for narrower provisioning:
 

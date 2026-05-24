@@ -1,19 +1,22 @@
 ---
 name: powerset
-description: Unified Powerset command surface. Use for `$powerset login`, `$powerset status`, `$powerset whoami`, `$powerset sets list`, `$powerset sets use <id|name>`, `$powerset mcp install`, `$powerset env pull`, `$powerset create oauth app`, and `$powerset help`.
+description: Unified Powerset command surface. Use for `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset whoami`, `$powerset sets list`, `$powerset sets use <id|name>`, `$powerset mcp install`, `$powerset env pull`, `$powerset create oauth app`, and `$powerset help`.
 ---
 
 # Powerset
 
 Use this skill when the user asks for `$powerset ...` or wants Powerset setup,
 status, identity, MCP registration, runtime env provisioning, or default set
-selection.
+selection. `$powerset setup` is the preferred one-command first-run path: it
+does login, runtime env pull, and MCP registration so users do not need to run
+multiple smaller commands.
 
 ## Command routing
 
 | User command | Do this |
 | --- | --- |
 | `$powerset`, `$powerset help` | Print the supported subcommands below. |
+| `$powerset setup [--profile <profile>]` | Run the setup workflow below: ensure login, pull env, and install/refresh MCP. The explicit command is consent to write `.env`. |
 | `$powerset login` | Run the login workflow below. |
 | `$powerset status` | Run the setup check quietly and summarize only blockers. |
 | `$powerset whoami` | Run the Auth0 `whoami` primitive. |
@@ -24,14 +27,18 @@ selection.
 | `$powerset create oauth app` | Route to the msgvault setup primitive for Gmail OAuth Desktop app guidance. |
 
 Aliases remain valid for backcompat: `$powerset-login` means `$powerset login`;
-`$powerset-set` means `$powerset sets` / `$powerset sets use`.
+`$powerset-set` means `$powerset sets` / `$powerset sets use`. If the user asks
+for Powerset setup, runtime setup, or API key bootstrap without naming a
+subcommand, prefer `$powerset setup` over separate login/env commands. Keep
+plain `$setup` routed to the ingestion/product setup skill, not this command.
 
 ## Help text
 
 When asked for help, respond with:
 
 ```text
-$powerset login                 log in and provision local Powerpacks config
+$powerset setup                 log in, pull env, and install/refresh MCP
+$powerset login                 refresh Auth0 credentials and MCP config
 $powerset status                check local setup
 $powerset whoami                show current Powerset/Auth0 identity
 $powerset sets list             list visible Powerset sets
@@ -52,6 +59,82 @@ Resolve primitive paths from the current environment:
   'auth.py' -g 'provision_runtime_env.py' -g 'mcp_install.py'`.
 
 Prefer `python3` if `python` is not on PATH.
+
+## `$powerset setup`
+
+This is the preferred one-command setup path. It combines the user-facing pieces
+people otherwise had to run separately:
+
+1. ensure Powerset/Auth0 login is present;
+2. pull allowlisted runtime env keys into local `.env`;
+3. install/refresh the `powerset-search` MCP for local hosts.
+
+Default profile is `search-core` unless the user specifies `--profile <name>`.
+The explicit `$powerset setup` request is consent to write `.env`; do not ask
+for a separate env-write confirmation. It is not the same as bare `$setup`,
+which stays the ingestion/product setup flow.
+
+User-facing output must be terse:
+
+- Start with exactly: `Setting up Powerset...`
+- Do not narrate setup checks, missing check names, token formats, MCP config
+  details, or successful substeps.
+- If a browser/code login is needed, show only the auth URL/code prompt.
+- On success, say exactly:
+  `Powerset setup complete. Please restart Codex to reload the Powerset MCP token.`
+- If still blocked, give one short sentence with the required action. Do not
+  paste raw reports or secret values.
+
+Run one internal setup check first:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
+  --profile search-core \
+  --env-file .env \
+  --gcp-project powerset-search
+```
+
+Handle `fix_kind` values exactly as in the `$powerset login` workflow below.
+In particular, run direct primitives/CLIs from this shell rather than nested
+doctor fix commands so browser/code prompts stay visible.
+
+If `auth0_login` is missing or expired, run the Auth0 login directly:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/auth/auth.py login
+```
+
+After Auth0 credentials and gcloud access are usable, always run the env pull
+for the requested/default profile, even if the initial setup check was already
+healthy. This makes `$powerset setup` the single refresh command for rotated or
+newly added per-user runtime keys:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
+  --profile search-core \
+  --env-file .env \
+  --confirm \
+  --best-effort
+```
+
+If this reports expired gcloud credentials, immediately run:
+
+```bash
+gcloud auth login --no-launch-browser
+```
+
+Relay the URL/code prompt tersely, then rerun the env pull command.
+
+Then install/refresh MCP:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+```
+
+Re-run the setup check at the end and use the success/blocker message above. If
+`user_secrets` is still a human-action blocker, tell the user to ping
+`#powerpacks` with the email they use for gcloud so a maintainer can provision
+per-user secrets.
 
 ## `$powerset login`
 
@@ -110,9 +193,10 @@ login blocker and should not be surfaced.
 If the setup check reports `user_secrets` with `fix_kind: interactive` or a message
 like `gcloud credentials need reauthentication`, this is not a Slack/IAM issue:
 the selected `@powerset.co` account is fine, but gcloud's cached token expired.
-For explicit `$powerset login` or `$powerset env pull` requests, immediately run
-`gcloud auth login --no-launch-browser`, relay the verification URL/code prompt,
-and ask them to paste the code. Do not stop for a separate yes/no confirmation.
+For explicit `$powerset setup`, `$powerset login`, or `$powerset env pull`
+requests, immediately run `gcloud auth login --no-launch-browser`, relay the
+verification URL/code prompt, and ask them to paste the code. Do not stop for a
+separate yes/no confirmation.
 
 Re-run the setup check at the end and use one of the terse final messages above.
 If `user_secrets` is still

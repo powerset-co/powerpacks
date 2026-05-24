@@ -151,6 +151,18 @@ class CoreLayoutTests(unittest.TestCase):
         # The setup classification must be documented.
         self.assertIn("fix_kind", text)
 
+    def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
+        text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()
+        self.assertIn("$powerset setup [--profile <profile>]", text)
+        self.assertIn("$powerset setup                 log in, pull env, and install/refresh MCP", text)
+        self.assertIn("packs/powerset/primitives/auth/auth.py login", text)
+        self.assertIn("packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull", text)
+        self.assertIn("packs/powerset/primitives/mcp_install/mcp_install.py install --host all", text)
+        self.assertIn("Powerset setup complete. Please restart Codex", text)
+
+        login_alias = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
+        self.assertIn("prefer the unified `$powerset setup`", login_alias)
+
     def test_search_surface_documents_company_entrypoint(self) -> None:
         text = (ROOT / "packs/search/docs/search-surface.md").read_text()
         self.assertIn("/search-network <query>", text)

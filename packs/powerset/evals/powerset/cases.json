@@ -1,0 +1,45 @@
+[
+  {
+    "id": "fresh-machine-setup",
+    "query": "I just installed Powerpacks on a fresh MacBook. I have a @powerset.co Google account. Run $powerset setup so I can use everything.",
+    "must_include": [
+      "gcloud",
+      "auth.py",
+      "provision_runtime_env",
+      "mcp_install",
+      "doctor",
+      "@powerset.co"
+    ],
+    "must_not_include": [
+      "skip the consent",
+      "fake credentials",
+      "paste your password"
+    ],
+    "expected_tools": [
+      "auth.py login",
+      "provision_runtime_env pull",
+      "mcp_install install",
+      "doctor run"
+    ],
+    "notes": "$powerset setup is the preferred one-command first-run path. It must walk through gcloud auth check, Auth0 PKCE login, env pull, MCP install, and a final doctor check."
+  },
+  {
+    "id": "already-setup-refresh-env",
+    "query": "I already ran setup, but please run $powerset setup again to make sure my env and MCP config are current.",
+    "must_include": [
+      "doctor",
+      "provision_runtime_env",
+      "mcp_install"
+    ],
+    "must_not_include": [
+      "secret values",
+      "application-default login"
+    ],
+    "expected_tools": [
+      "provision_runtime_env pull",
+      "mcp_install install",
+      "doctor run"
+    ],
+    "notes": "$powerset setup is also the one-command refresh path and should pull env even when credentials are otherwise healthy."
+  }
+]

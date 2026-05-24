@@ -27,7 +27,7 @@ This pack **depends on `packs/powerset`** for:
 - `doctor` — verifies the MCP is reachable and the token is fresh.
 
 If those are not in place, the skill routes the user through
-`$powerset login` first.
+`$powerset setup` first.
 
 ## Skill Surface
 

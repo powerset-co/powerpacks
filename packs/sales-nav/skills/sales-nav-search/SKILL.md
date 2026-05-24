@@ -11,7 +11,7 @@ or any other Sales Navigator search request scoped to the user's set.
 
 The skill is in its own pack (`packs/sales-nav`) but **depends on
 `packs/powerset`** for Auth0 login and MCP install. If those aren't ready,
-route the user to `$powerset login` first.
+route the user to `$powerset setup` first.
 
 It calls these MCP tools served by the remote `powerset-search` MCP at
 `https://search-api-7wk4uhe77q-uw.a.run.app/mcp`:
@@ -34,7 +34,7 @@ server.
 ## Hard rules
 
 - This skill **requires** the `powerset-search` MCP. If it is not
-  registered, route the user through `$powerset login` →
+  registered, route the user through `$powerset setup` →
   `mcp_install install --host all`.
 - Every Sales Nav call is **scoped to a `set_id`**. The MCP server enforces
   the set context. Pass the one the user specifies. If the user does not
@@ -271,7 +271,7 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_inst
 ```
 
 If `installed: false` for the host the user is on, route to
-`$powerset login` first.
+`$powerset setup` first.
 
 ### Step 0b — Resolve set scope
 
