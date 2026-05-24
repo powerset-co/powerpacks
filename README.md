@@ -49,7 +49,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: login, setup status, Auth0 identity, MCP install, env provisioning, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
+| [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: one-command setup (login + env pull + MCP), credential refresh, setup status, Auth0 identity, MCP install, env provisioning, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
 | [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | Cohesive ingestion/product setup: safe operator bootstrap restore, exact-object GCS download through `gcloud` or the `google-cloud-storage` uv dependency, source linking, multi-account Gmail/msgvault linking, parallel import worker fan-out/fan-in, and local search-index/DuckDB readiness. Keeps `$powerset` focused on login/env/MCP. |
 | [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$local-msg-vault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
 
@@ -57,7 +57,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`sales-nav-search`](packs/sales-nav/skills/sales-nav-search/SKILL.md) | `$sales-nav-search` | Run a Sales Navigator search through the `powerset-search` MCP. Resolves company / title filters, runs a paginated lead search with server-side artifact persistence on by default, paginates via `get_artifact`. Depends on `$powerset login` having run first. |
+| [`sales-nav-search`](packs/sales-nav/skills/sales-nav-search/SKILL.md) | `$sales-nav-search` | Run a Sales Navigator search through the `powerset-search` MCP. Resolves company / title filters, runs a paginated lead search with server-side artifact persistence on by default, paginates via `get_artifact`. Depends on `$powerset setup` having run first. |
 
 ### Messages pack
 
@@ -71,7 +71,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
 - give the agent operational entrypoints: `$search-network <query>`,
-  `$search-company <query>`, `$powerset login`, and the messages-pack import
+  `$search-company <query>`, `$powerset setup`, and the messages-pack import
   skill
 - decompose broad recruiting queries into bounded retrieval plans
 - persist task state and CSV/JSONL artifacts so users can refine prior runs
@@ -132,7 +132,8 @@ powerpacks/
 
 The `powerset` pack is the foundation — every other pack depends on its
 `auth` and `task_state` primitives. Anyone using Powerpacks runs
-`$powerset login` first.
+`$powerset setup` first; `$powerset login` remains available as a backcompat
+credential refresh command.
 
 ## Quickstart for a fresh account
 
@@ -166,7 +167,7 @@ codex mcp get powerset-search
 # 5. Inside the agent, run what you need:
 $search-network senior infra eng at fintech
 $search-company stripe-like fintech infra companies
-$powerset login                   # provisions .env from GCP Secret Manager
+$powerset setup                   # login + .env pull + powerset-search MCP
 $import-contacts                  # guided iMessage + WhatsApp import harness
 $import-whatsapp                  # isolated WhatsApp sync test via wacli
 ```
@@ -177,13 +178,16 @@ $import-whatsapp                  # isolated WhatsApp sync test via wacli
 | --- | --- |
 | Any skill | `uv`, git. Powerpacks uses uv-managed Python 3.12 from `.python-version`. |
 | `search-network` / `search-company` | `.env` populated with Powerpacks runtime secrets; see [Secrets / env vars](#secrets--env-vars). |
-| `powerset login` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
+| `powerset setup` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
 | `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, plus optional review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
-| `sales-nav-search` | `$powerset login` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
+| `sales-nav-search` | `$powerset setup` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
 
 ### Secrets / env vars
 
-`$powerset login` and `$powerset env pull` populate `.env` from GCP Secret
+`$powerset setup` is the recommended one-command path: it logs in, runs
+`$powerset env pull`, and installs/refreshes the `powerset-search` MCP.
+`$powerset login` and `$powerset env pull` remain available as smaller
+backcompat/maintenance commands. Env pull populates `.env` from GCP Secret
 Manager for provisioned users. The default `search-core` profile is the normal
 one-shot setup and pulls what is available on a best-effort basis. For narrower
 access, use `search-network` for local search or `import-contacts` for contact
@@ -283,7 +287,7 @@ bin/update-claude-code       # Claude Code: pull, sync agent files, reinstall sk
 This is the only command needed for skill / primitive changes. The `mcp_install`
 registrations are written to host config files (`~/.codex/config.toml`,
 `~/.claude.json`) and only need re-running when the MCP URL or token format
-changes — `$powerset login` covers that path.
+changes — `$powerset setup` covers that path.
 
 ### MCP install (powerset-search)
 
@@ -323,7 +327,7 @@ python3 -m unittest discover -s tests
 # 3. Messages-pack end-to-end smoke (synthetic data, no network/spend)
 scripts/smoke-messages.sh
 
-# 4. MCP reachability (after $powerset login)
+# 4. MCP reachability (after $powerset setup)
 claude mcp list                    # "powerset-search ... ✓ Connected"
 uv run --project . python packs/powerset/primitives/doctor/doctor.py run
 ```
@@ -332,7 +336,7 @@ Then, **inside the agent host**, sanity-check each skill family:
 
 | Skill | Test prompt |
 | --- | --- |
-| `powerset login` | Type `$powerset login` — the agent should run the doctor, handle missing setup, provision env, and finish with `mcp_install`. |
+| `powerset setup` | Type `$powerset setup` — the agent should run the doctor, handle missing login, provision env, and finish with `mcp_install`. |
 | `search-network` | `$search-network senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
 | `import-contacts` | `$import-contacts` — should show a task checklist, ask once for local metadata import consent, then run until permissions/QR/cost approval are needed. |

@@ -19,5 +19,5 @@ retarget research path.
 overridden with `--max-workers`.
 
 The key comes from the repo-local Powerpacks runtime env:
-`RAPIDAPI_LINKEDIN_KEY`. Provision it with `$powerset login` or
+`RAPIDAPI_LINKEDIN_KEY`. Provision it with `$powerset setup` or
 `$powerset env pull`.

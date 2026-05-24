@@ -18,8 +18,8 @@ It only manages local set scope:
 
 ## Workflow
 
-1. Ensure Powerset login exists. If credentials are missing, route the user to
-   `$powerset login`.
+1. Ensure Powerset setup exists. If credentials or MCP registration are missing,
+   route the user to `$powerset setup`.
 2. Confirm the Powerset Search MCP is installed when needed:
 
 ```bash

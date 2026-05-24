@@ -7,7 +7,7 @@ This walkthrough assumes:
 
 - macOS or Linux laptop
 - you can install software with Homebrew (macOS) or apt (Linux)
-- you have a Powerset account (for `$powerset login`)
+- you have a Powerset account (for `$powerset setup`)
 
 If you only want a subset of skills, you can skip the prereq sections you
 don't need.
@@ -37,24 +37,23 @@ Homebrew is available, setup installs `uv` automatically.
 ### `search-network` / `search-company`
 
 These hit Powerset infrastructure, so you need a working `.env`. Run
-`$powerset login` (below) to populate it, or copy `packs/powerset/templates/env.example` to
+`$powerset setup` (below) to populate it, or copy `packs/powerset/templates/env.example` to
 `.env` and fill it in manually.
 
-### `$powerset login` (recommended setup path)
+### `$powerset setup` (recommended setup path)
 
-Powerset employees only. Pulls allowlisted secrets from GCP Secret Manager
-into a local `.env`.
+For provisioned users, pulls allowlisted secrets from GCP Secret Manager into a
+local `.env`, ensures Auth0 login, and installs/refreshes the
+`powerset-search` MCP. The skill runs the needed Auth0 / gcloud login steps
+itself when credentials are missing or expired.
 
 ```bash
 brew install --cask google-cloud-sdk    # macOS
 # or: curl https://sdk.cloud.google.com | bash
-
-gcloud auth login                       # use your @powerset.co account
-gcloud config set project powerset-prod
 ```
 
-The skill refuses to provision unless your active gcloud account ends in
-`@powerset.co`.
+The env pull succeeds only when your active gcloud account has matching
+Secret Manager access for its per-user secrets.
 
 ### Messages import prerequisites
 
@@ -151,18 +150,19 @@ scripts/smoke-messages.sh
 
 ## 4. First run, per skill
 
-### `$powerset login` — bootstrap your `.env`
+### `$powerset setup` — bootstrap login, `.env`, and MCP
 
 Inside Codex / Claude Code / Pi:
 
 ```text
-$powerset login
+$powerset setup
 ```
 
 It runs the Powerset doctor, starts Auth0 login if needed, pulls allowlisted
 secrets into `.env` (no values printed), and installs/refreshes the
 `powerset-search` MCP. It does not check gcloud application-default credentials;
-ADC is not needed for normal Powerpacks workflows.
+ADC is not needed for normal Powerpacks workflows. `$powerset login` remains
+available as a smaller credential-refresh/backcompat command.
 
 Pick a profile based on what you'll use:
 

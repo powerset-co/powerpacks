@@ -1,7 +1,7 @@
 [
   {
-    "id": "fresh-machine-google-account",
-    "query": "I just installed Powerpacks on a fresh MacBook. I have a @powerset.co Google account. Set me up.",
+    "id": "explicit-login-fresh-machine-backcompat",
+    "query": "I explicitly want to run $powerset login on a fresh MacBook with my @powerset.co Google account. Refresh my credentials and local config.",
     "must_include": [
       "gcloud",
       "auth.py",
@@ -22,7 +22,7 @@
       "mcp_install install",
       "doctor run"
     ],
-    "notes": "Happy path on a clean box. The skill must walk through gcloud auth check, Auth0 PKCE login, GCP secret provisioning, MCP install, and a final doctor check."
+    "notes": "Backcompat explicit-login path. For generic first-run setup, use the powerset skill eval for $powerset setup; this alias should still walk through gcloud auth check, Auth0 PKCE login, GCP secret provisioning, MCP install, and a final doctor check when the user explicitly asks for login."
   },
   {
     "id": "non-powerset-google-account",

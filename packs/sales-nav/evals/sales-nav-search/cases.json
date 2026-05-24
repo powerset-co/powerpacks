@@ -57,13 +57,13 @@
     "id": "missing-mcp",
     "query": "Find VPs at Stripe. (Note: my powerset-search MCP is not installed yet.)",
     "must_include": [
-      "$powerset login",
+      "$powerset setup",
       "mcp_install"
     ],
     "must_not_include": [
       "sales_nav_search"
     ],
-    "notes": "If the MCP is missing, the skill must route the user through $powerset login first. It must NOT pretend to call sales_nav_search."
+    "notes": "If the MCP is missing, the skill must route the user through $powerset setup first. It must NOT pretend to call sales_nav_search."
   },
   {
     "id": "qualitative-refinement-existing-run",

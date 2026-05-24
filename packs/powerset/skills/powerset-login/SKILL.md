@@ -6,9 +6,12 @@ description: One-command Powerset login flow. Quietly refreshes credentials, env
 # Powerset Login
 
 Use this skill when the user asks for `$powerset login`, `$powerset-login`,
-secret provisioning, runtime setup, API key bootstrap, or "log me in to
-Powerset". Also the right skill when an unrelated Powerpacks command failed
-because of a missing key or expired session.
+or "log me in to Powerset". For first-run Powerset setup, runtime setup,
+secret provisioning, or API key bootstrap, prefer the unified `$powerset setup`
+command in `packs/powerset/skills/powerset/SKILL.md`; it intentionally runs
+login plus env pull plus MCP registration so users do not need multiple small
+commands. This alias remains the right skill when an unrelated Powerpacks
+command failed because of a missing key or expired session.
 
 **This skill is built to be fast and quiet.** The user said "log me in" — do
 that. Don't ask permission for every step. Use setup-check classifications to
