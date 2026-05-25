@@ -271,15 +271,18 @@ export function LocalResultsTable({ records, query, conversationId, totalCount }
                     data-trait-count={traitEntries.length}
                   >
                     <div className="space-y-2 overflow-hidden p-2">
-                      {(record.positions?.length > 0 || record.education?.length > 0 || record.summary) && (
+                      {(record.positions?.length > 0 || record.education?.length > 0 || (record.location && record.matched_profile_sections?.includes("location")) || record.summary) && (
                         <div className="flex justify-end">
                           <PersonDebugPopover
                             verticalSources={record.vertical_sources}
                             overallReasoning={record.overall_reasoning}
                             summary={record.summary}
+                            location={record.location}
                             positions={record.positions}
                             education={record.education}
                             matchedPositionIndexes={record.matched_position_indexes}
+                            matchedEducationIndexes={record.matched_education_indexes}
+                            matchedProfileSections={record.matched_profile_sections}
                             personId={record.personId}
                             personName={record.name}
                           />

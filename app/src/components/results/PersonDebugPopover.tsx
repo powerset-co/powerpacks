@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Briefcase, GraduationCap, MoreHorizontal, FileText, ChevronDown, Flag } from "lucide-react";
+import { Briefcase, GraduationCap, MoreHorizontal, FileText, ChevronDown, Flag, MapPin } from "lucide-react";
 import { FeedbackPopover } from "@/components/feedback/FeedbackPopover";
 
 export interface DebugPosition {
@@ -50,14 +50,18 @@ export interface PersonDebugPopoverProps {
   overallReasoning?: string;
   /** Person's LinkedIn summary / about section */
   summary?: string;
+  /** Person's profile location */
+  location?: string;
   /** Work experience entries */
   positions?: DebugPosition[];
   /** Education entries */
   education?: DebugEducation[];
   /** Indexes of positions that matched the search query */
   matchedPositionIndexes?: number[];
-  /** Which search verticals matched this person */
-  verticalSources?: string[];
+  /** Indexes of education entries that matched the search query exactly */
+  matchedEducationIndexes?: number[];
+  /** Profile sections with explicit backend evidence */
+  matchedProfileSections?: string[];
   /** Person ID for feedback */
   personId?: string;
   /** Person name for feedback context */
@@ -155,7 +159,7 @@ function WorkExperienceItem({
   );
 }
 
-function EducationItem({ edu }: { edu: DebugEducation }) {
+function EducationItem({ edu, isMatched }: { edu: DebugEducation; isMatched?: boolean }) {
   // Support both year-based (hydrate API) and date-based (FE type) formats
   const startYear = edu.start_year ?? (edu.start_date ? new Date(edu.start_date).getFullYear() : null);
   const endYear = edu.end_year ?? (edu.end_date ? new Date(edu.end_date).getFullYear() : null);
@@ -171,7 +175,14 @@ function EducationItem({ edu }: { edu: DebugEducation }) {
     <div className="py-2 first:pt-0 last:pb-0">
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium break-words">{edu.school_name}</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-medium break-words">{edu.school_name}</p>
+            {isMatched && (
+              <Badge className="text-xs shrink-0 bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30">
+                Matched
+              </Badge>
+            )}
+          </div>
           {(edu.degree || edu.field_of_study) && (
             <p className="text-xs text-muted-foreground break-words">
               {[edu.degree, edu.field_of_study].filter(Boolean).join(" in ")}
@@ -222,24 +233,37 @@ export function PersonDebugPopover({
   verticalSources,
   overallReasoning,
   summary,
+  location,
   positions,
   education,
   matchedPositionIndexes,
+  matchedEducationIndexes,
+  matchedProfileSections,
   personId,
   personName,
   onFeedback,
 }: PersonDebugPopoverProps) {
+  const hasExplicitLocationEvidence =
+    matchedProfileSections?.includes("location") ||
+    verticalSources?.includes("location");
   const hasContent =
     (positions && positions.length > 0) ||
     (education && education.length > 0) ||
+    (location && hasExplicitLocationEvidence) ||
     summary;
 
   if (!hasContent) return null;
 
   // Summary-only match: verticals === ['summary'] means no real position matched.
-  // The pipeline defaults matched_position_indexes to [0] as a fallback — suppress it.
+  // Defensively suppress any legacy fallback position index in this summary-only case.
   const isSummaryOnly = verticalSources?.length === 1 && verticalSources[0] === "summary";
   const effectiveMatchedIndexes = isSummaryOnly ? [] : matchedPositionIndexes;
+  const hasExplicitEducationEvidence =
+    matchedProfileSections?.includes("education") ||
+    verticalSources?.includes("education") ||
+    (Array.isArray(matchedEducationIndexes) && matchedEducationIndexes.length > 0);
+  const hasExactEducationIndexes = Array.isArray(matchedEducationIndexes) && matchedEducationIndexes.length > 0;
+  const showEducationSectionMatchedBadge = hasExplicitEducationEvidence && !hasExactEducationIndexes;
 
   return (
     <Popover>
@@ -308,6 +332,22 @@ export function PersonDebugPopover({
               </div>
             )}
 
+            {/* Profile Location */}
+            {location && hasExplicitLocationEvidence && (
+              <div>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <MapPin size={14} className="text-muted-foreground" />
+                  <span className="text-xs font-medium text-muted-foreground">Location</span>
+                  {hasExplicitLocationEvidence && (
+                    <Badge className="text-xs shrink-0 bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30">
+                      Matched
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-sm text-foreground/80 break-words">{location}</p>
+              </div>
+            )}
+
             {/* Person Summary — collapsible, 3 lines by default */}
             {summary && (
               <CollapsibleSummary
@@ -359,10 +399,19 @@ export function PersonDebugPopover({
                     <span className="text-xs font-medium text-muted-foreground">
                       Education
                     </span>
+                    {showEducationSectionMatchedBadge && (
+                      <Badge className="text-xs shrink-0 bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30">
+                        Matched
+                      </Badge>
+                    )}
                   </div>
                   <div className="divide-y divide-border">
                     {education.map((edu, idx) => (
-                      <EducationItem key={idx} edu={edu} />
+                      <EducationItem
+                        key={idx}
+                        edu={edu}
+                        isMatched={matchedEducationIndexes?.includes(idx)}
+                      />
                     ))}
                   </div>
                 </div>
