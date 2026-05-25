@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Briefcase, GraduationCap, MoreHorizontal, FileText, ChevronDown, Flag } from "lucide-react";
+import { Briefcase, GraduationCap, MoreHorizontal, FileText, ChevronDown, Flag, MapPin } from "lucide-react";
 import { FeedbackPopover } from "@/components/feedback/FeedbackPopover";
 
 export interface DebugPosition {
@@ -50,6 +50,8 @@ export interface PersonDebugPopoverProps {
   overallReasoning?: string;
   /** Person's LinkedIn summary / about section */
   summary?: string;
+  /** Person's profile location */
+  location?: string;
   /** Work experience entries */
   positions?: DebugPosition[];
   /** Education entries */
@@ -231,6 +233,7 @@ export function PersonDebugPopover({
   verticalSources,
   overallReasoning,
   summary,
+  location,
   positions,
   education,
   matchedPositionIndexes,
@@ -240,9 +243,13 @@ export function PersonDebugPopover({
   personName,
   onFeedback,
 }: PersonDebugPopoverProps) {
+  const hasExplicitLocationEvidence =
+    matchedProfileSections?.includes("location") ||
+    verticalSources?.includes("location");
   const hasContent =
     (positions && positions.length > 0) ||
     (education && education.length > 0) ||
+    (location && hasExplicitLocationEvidence) ||
     summary;
 
   if (!hasContent) return null;
@@ -322,6 +329,22 @@ export function PersonDebugPopover({
                   Why they match
                 </p>
                 <p className="text-sm text-foreground">{overallReasoning}</p>
+              </div>
+            )}
+
+            {/* Profile Location */}
+            {location && hasExplicitLocationEvidence && (
+              <div>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <MapPin size={14} className="text-muted-foreground" />
+                  <span className="text-xs font-medium text-muted-foreground">Location</span>
+                  {hasExplicitLocationEvidence && (
+                    <Badge className="text-xs shrink-0 bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30">
+                      Matched
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-sm text-foreground/80 break-words">{location}</p>
               </div>
             )}
 
