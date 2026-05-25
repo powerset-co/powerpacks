@@ -56,8 +56,10 @@ export interface PersonDebugPopoverProps {
   education?: DebugEducation[];
   /** Indexes of positions that matched the search query */
   matchedPositionIndexes?: number[];
-  /** Which search verticals matched this person */
-  verticalSources?: string[];
+  /** Indexes of education entries that matched the search query exactly */
+  matchedEducationIndexes?: number[];
+  /** Profile sections with explicit backend evidence */
+  matchedProfileSections?: string[];
   /** Person ID for feedback */
   personId?: string;
   /** Person name for feedback context */
@@ -155,7 +157,7 @@ function WorkExperienceItem({
   );
 }
 
-function EducationItem({ edu }: { edu: DebugEducation }) {
+function EducationItem({ edu, isMatched }: { edu: DebugEducation; isMatched?: boolean }) {
   // Support both year-based (hydrate API) and date-based (FE type) formats
   const startYear = edu.start_year ?? (edu.start_date ? new Date(edu.start_date).getFullYear() : null);
   const endYear = edu.end_year ?? (edu.end_date ? new Date(edu.end_date).getFullYear() : null);
@@ -171,7 +173,14 @@ function EducationItem({ edu }: { edu: DebugEducation }) {
     <div className="py-2 first:pt-0 last:pb-0">
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium break-words">{edu.school_name}</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-medium break-words">{edu.school_name}</p>
+            {isMatched && (
+              <Badge className="text-xs shrink-0 bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30">
+                Matched
+              </Badge>
+            )}
+          </div>
           {(edu.degree || edu.field_of_study) && (
             <p className="text-xs text-muted-foreground break-words">
               {[edu.degree, edu.field_of_study].filter(Boolean).join(" in ")}
@@ -225,6 +234,8 @@ export function PersonDebugPopover({
   positions,
   education,
   matchedPositionIndexes,
+  matchedEducationIndexes,
+  matchedProfileSections,
   personId,
   personName,
   onFeedback,
@@ -237,9 +248,15 @@ export function PersonDebugPopover({
   if (!hasContent) return null;
 
   // Summary-only match: verticals === ['summary'] means no real position matched.
-  // The pipeline defaults matched_position_indexes to [0] as a fallback — suppress it.
+  // Defensively suppress any legacy fallback position index in this summary-only case.
   const isSummaryOnly = verticalSources?.length === 1 && verticalSources[0] === "summary";
   const effectiveMatchedIndexes = isSummaryOnly ? [] : matchedPositionIndexes;
+  const hasExplicitEducationEvidence =
+    matchedProfileSections?.includes("education") ||
+    verticalSources?.includes("education") ||
+    (Array.isArray(matchedEducationIndexes) && matchedEducationIndexes.length > 0);
+  const hasExactEducationIndexes = Array.isArray(matchedEducationIndexes) && matchedEducationIndexes.length > 0;
+  const showEducationSectionMatchedBadge = hasExplicitEducationEvidence && !hasExactEducationIndexes;
 
   return (
     <Popover>
@@ -359,10 +376,19 @@ export function PersonDebugPopover({
                     <span className="text-xs font-medium text-muted-foreground">
                       Education
                     </span>
+                    {showEducationSectionMatchedBadge && (
+                      <Badge className="text-xs shrink-0 bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30">
+                        Matched
+                      </Badge>
+                    )}
                   </div>
                   <div className="divide-y divide-border">
                     {education.map((edu, idx) => (
-                      <EducationItem key={idx} edu={edu} />
+                      <EducationItem
+                        key={idx}
+                        edu={edu}
+                        isMatched={matchedEducationIndexes?.includes(idx)}
+                      />
                     ))}
                   </div>
                 </div>

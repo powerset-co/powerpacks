@@ -280,6 +280,8 @@ export function LocalResultsTable({ records, query, conversationId, totalCount }
                             positions={record.positions}
                             education={record.education}
                             matchedPositionIndexes={record.matched_position_indexes}
+                            matchedEducationIndexes={record.matched_education_indexes}
+                            matchedProfileSections={record.matched_profile_sections}
                             personId={record.personId}
                             personName={record.name}
                           />

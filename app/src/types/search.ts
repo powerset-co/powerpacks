@@ -78,7 +78,7 @@ export function extractTraitScores(blob: Record<string, any> | null | undefined)
  * and falls back to a direct value.
  */
 export function extractMatchedPositionIndexes(blob: Record<string, any> | null | undefined, direct?: number[]): number[] {
-  if (direct && direct.length > 0) return direct;
+  if (Array.isArray(direct)) return direct;
   if (!blob) return [];
   if (Array.isArray(blob.matched_position_indexes)) return blob.matched_position_indexes;
   return [];
@@ -147,6 +147,8 @@ export interface DatabaseRecord {
   education?: Education[];
   emails?: string[];
   matched_position_indexes?: number[];
+  matched_education_indexes?: number[];
+  matched_profile_sections?: string[];
   overall_reasoning?: string;
   vertical_sources?: string[];
   rerank_reasoning?: string | null;
