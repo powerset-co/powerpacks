@@ -39,7 +39,12 @@ def empty_config(channel: str) -> dict[str, Any]:
     if channel == "twitter":
         return {"handle": ""}
     if channel == "messages":
-        return {"contacts_csv": ""}
+        return {
+            "contacts_csv": "",
+            "planned_contacts_csv": "",
+            "imessage": {},
+            "whatsapp": {},
+        }
     return {}
 
 

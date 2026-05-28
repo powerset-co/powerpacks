@@ -2294,32 +2294,49 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         })
     save_ledger(ledger_path, ledger)
 
-    extract_imessage(args, ledger_path, ledger)
-    normalize_channel(
-        args,
-        ledger_path,
-        ledger,
-        step_id="normalize_imessage",
-        input_csv=DEFAULT_IMESSAGE_CONTACTS,
-        output_jsonl=DEFAULT_IMESSAGE_NORMALIZED,
-        manifest=DEFAULT_IMESSAGE_NORMALIZED_MANIFEST,
-        force=args.force_imessage,
-    )
-    extract_whatsapp(args, ledger_path, ledger)
-    normalize_channel(
-        args,
-        ledger_path,
-        ledger,
-        step_id="normalize_whatsapp",
-        input_csv=DEFAULT_WHATSAPP_CONTACTS,
-        output_jsonl=DEFAULT_WHATSAPP_NORMALIZED,
-        manifest=DEFAULT_WHATSAPP_NORMALIZED_MANIFEST,
-        force=args.force_whatsapp,
-    )
-    ensure_contacts(args, ledger_path, ledger)
+    selective_mode = selective_step_mode(args)
+
+    if step_enabled(args, "include_imessage"):
+        extract_imessage(args, ledger_path, ledger)
+        normalize_channel(
+            args,
+            ledger_path,
+            ledger,
+            step_id="normalize_imessage",
+            input_csv=DEFAULT_IMESSAGE_CONTACTS,
+            output_jsonl=DEFAULT_IMESSAGE_NORMALIZED,
+            manifest=DEFAULT_IMESSAGE_NORMALIZED_MANIFEST,
+            force=args.force_imessage,
+        )
+    if step_enabled(args, "include_whatsapp"):
+        extract_whatsapp(args, ledger_path, ledger)
+        normalize_channel(
+            args,
+            ledger_path,
+            ledger,
+            step_id="normalize_whatsapp",
+            input_csv=DEFAULT_WHATSAPP_CONTACTS,
+            output_jsonl=DEFAULT_WHATSAPP_NORMALIZED,
+            manifest=DEFAULT_WHATSAPP_NORMALIZED_MANIFEST,
+            force=args.force_whatsapp,
+        )
+    if step_enabled(args, "include_contact_merge"):
+        ensure_contacts(args, ledger_path, ledger)
+    if selective_mode and not step_enabled(args, "include_powerset_candidates"):
+        return selected_steps_completed(args, ledger_path, ledger)
+
     sync_candidates(args, ledger_path, ledger)
+    if selective_mode and not step_enabled(args, "include_local_match"):
+        return selected_steps_completed(args, ledger_path, ledger)
+
     match_contacts(args, ledger_path, ledger)
+    if selective_mode and not step_enabled(args, "include_llm_review"):
+        return selected_steps_completed(args, ledger_path, ledger)
+
     llm_review(args, ledger_path, ledger)
+    if selective_mode and not step_enabled(args, "include_research"):
+        return selected_steps_completed(args, ledger_path, ledger)
+
     prepare_queue(args, ledger_path, ledger)
     parallel_research(args, ledger_path, ledger)
     build_review_csv(args, ledger_path, ledger)
@@ -2327,6 +2344,11 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         migrate_review_schema(args, ledger_path, ledger)
         reapply_previous_review_state(args, ledger_path, ledger)
         merge_cached_retarget_results(args, ledger_path, ledger)
+
+    if selective_mode and not step_enabled(args, "include_review"):
+        return selected_steps_completed(args, ledger_path, ledger)
+
+    if has_research_review(args):
         if not completed(ledger, "review_research_web") or args.stop_before_upload:
             open_review_server(args, ledger_path, ledger)
             payload = {
@@ -2358,8 +2380,17 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     if has_research_review(args):
         migrate_review_schema(args, ledger_path, ledger)
         reapply_previous_review_state(args, ledger_path, ledger)
+
+    if selective_mode and not step_enabled(args, "include_retarget"):
+        return selected_steps_completed(args, ledger_path, ledger)
     retarget_research_after_review(args, ledger_path, ledger)
+
+    if selective_mode and not step_enabled(args, "include_upload"):
+        return selected_steps_completed(args, ledger_path, ledger)
     upload_review(args, ledger_path, ledger)
+
+    if selective_mode and not step_enabled(args, "include_datalake_sync"):
+        return selected_steps_completed(args, ledger_path, ledger)
     sync_contact_datalake(args, ledger_path, ledger)
 
     payload = {
@@ -2425,6 +2456,50 @@ def add_hidden_arg(parser: argparse.ArgumentParser, *names: str, **kwargs: Any) 
     parser.add_argument(*names, **kwargs)
 
 
+SELECTIVE_STEP_FLAGS = [
+    "include_imessage",
+    "include_whatsapp",
+    "include_contact_merge",
+    "include_powerset_candidates",
+    "include_local_match",
+    "include_llm_review",
+    "include_research",
+    "include_review",
+    "include_retarget",
+    "include_upload",
+    "include_datalake_sync",
+]
+
+
+def selective_step_mode(args: argparse.Namespace) -> bool:
+    return any(bool(getattr(args, flag, False)) for flag in SELECTIVE_STEP_FLAGS)
+
+
+def step_enabled(args: argparse.Namespace, flag: str) -> bool:
+    return not selective_step_mode(args) or bool(getattr(args, flag, False))
+
+
+def selected_steps_completed(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
+    ledger["status"] = "selected_steps_completed"
+    ledger["current_block"] = None
+    save_ledger(ledger_path, ledger)
+    return {
+        "primitive": "import_contacts_pipeline",
+        "status": "selected_steps_completed",
+        "message": "Selected messages contact steps completed.",
+        "ledger": str(ledger_path),
+        "selected_steps": {flag: bool(getattr(args, flag, False)) for flag in SELECTIVE_STEP_FLAGS},
+        "artifacts": ledger.get("artifacts", {}),
+        "privacy": {
+            "ran_powerset_sync": bool(getattr(args, "include_powerset_candidates", False)),
+            "ran_research": bool(getattr(args, "include_research", False)),
+            "opened_review": bool(getattr(args, "include_review", False)),
+            "uploaded": bool(getattr(args, "include_upload", False)),
+            "synced_datalake": bool(getattr(args, "include_datalake_sync", False)),
+        },
+    }
+
+
 def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--ledger", type=Path, default=DEFAULT_LEDGER)
     add_hidden_arg(parser, "--contacts", type=Path, default=DEFAULT_CONTACTS)
@@ -2456,6 +2531,17 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--no-open-browser", dest="open_browser", action="store_false")
     add_hidden_arg(parser, "--no-open-review", action="store_true")
     add_hidden_arg(parser, "--stop-before-upload", action="store_true")
+    add_hidden_arg(parser, "--include-imessage", action="store_true")
+    add_hidden_arg(parser, "--include-whatsapp", action="store_true")
+    add_hidden_arg(parser, "--include-contact-merge", action="store_true")
+    add_hidden_arg(parser, "--include-powerset-candidates", action="store_true")
+    add_hidden_arg(parser, "--include-local-match", action="store_true")
+    add_hidden_arg(parser, "--include-llm-review", action="store_true")
+    add_hidden_arg(parser, "--include-research", action="store_true")
+    add_hidden_arg(parser, "--include-review", action="store_true")
+    add_hidden_arg(parser, "--include-retarget", action="store_true")
+    add_hidden_arg(parser, "--include-upload", action="store_true")
+    add_hidden_arg(parser, "--include-datalake-sync", action="store_true")
     add_hidden_arg(parser, "--force-imessage", action="store_true")
     add_hidden_arg(parser, "--force-whatsapp", action="store_true")
     add_hidden_arg(parser, "--whatsapp-provider", default=DEFAULT_WHATSAPP_PROVIDER, choices=("wacli",))

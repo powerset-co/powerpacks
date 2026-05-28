@@ -650,13 +650,32 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
                 })
         else:
             slug = re.sub(r'[^A-Za-z0-9._-]+', '-', ch.lower()).strip('-') or ch
+            if ch == 'messages':
+                whatsapp_cfg = cfg.get('whatsapp') if isinstance(cfg.get('whatsapp'), dict) else {}
+                imessage_cfg = cfg.get('imessage') if isinstance(cfg.get('imessage'), dict) else {}
+                include_flags = []
+                if imessage_cfg.get('status') != 'skipped':
+                    include_flags.append('--include-imessage')
+                if whatsapp_cfg.get('status') == 'linked' or whatsapp_cfg.get('authenticated') is True:
+                    include_flags.append('--include-whatsapp')
+                include_flags.append('--include-contact-merge')
+                command = (
+                    'uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run'
+                    ' --ledger .powerpacks/messages/import-run.setup-messages.json'
+                    f' {" ".join(include_flags)}'
+                )
+                requires_approval = ['whatsapp_qr'] if '--include-whatsapp' in include_flags else []
+            else:
+                command = commands['import_network_run'] + f' --only-source {ch} --ledger .powerpacks/network-import/import-network-run.{slug}.json --run-id setup-{slug}'
+                requires_approval = []
             worker_jobs.append({
                 'id': ch,
                 'source': ch,
                 'parallelizable': True,
-                'ledger': f'.powerpacks/network-import/import-network-run.{slug}.json',
+                'ledger': f'.powerpacks/messages/import-run.setup-messages.json' if ch == 'messages' else f'.powerpacks/network-import/import-network-run.{slug}.json',
                 'run_id': f'setup-{slug}',
-                'command': commands['import_network_run'] + f' --only-source {ch} --ledger .powerpacks/network-import/import-network-run.{slug}.json --run-id setup-{slug}',
+                'command': command,
+                'requires_approval': requires_approval,
             })
     worker_group = {'parallel': True, 'fan_in': 'run commands.import_network_fan_in after all nonblocked worker jobs complete', 'jobs': worker_jobs}
     if not worker_jobs:

@@ -8,6 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -210,6 +211,61 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertTrue(registry["accounts"]["linkedin_csv"]["linked"])
             self.assertEqual(registry["accounts"]["linkedin_csv"]["usernames"], ["me@example.com"])
             self.assertEqual(registry["accounts"]["linkedin_csv"]["artifacts"], [str(csv_path)])
+
+    def test_onboarding_step_messages_checks_readiness_not_contacts_csv(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                accounts.update_channel("gmail", path=path, skipped=True)
+                accounts.update_channel("linkedin_csv", path=path, skipped=True)
+                readiness = {
+                    "imessage": {"status": "ready", "payload": {"chat_db": {"path": "chat.db"}, "addressbook_matches": 3}},
+                    "whatsapp": {"status": "needs_auth", "authenticated": False, "auth_command": "whatsapp-auth", "payload": {}},
+                    "privacy": {"reads_message_bodies": False, "syncs_whatsapp": False, "exports_contacts": False},
+                }
+                with mock.patch.object(onboarding, "messages_link_status", return_value=readiness):
+                    code, payload = self.invoke(onboarding, ["step", "--accounts", str(path)])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 20)
+            self.assertEqual(payload["status"], "needs_agent_action")
+            self.assertEqual(payload["channel"], "messages")
+            self.assertIn("authorize_whatsapp", payload["commands"][0]["label"])
+            self.assertNotIn("--messages-contacts-csv", payload["message"])
+            registry = accounts.load_registry(path)
+            self.assertFalse(registry["accounts"]["messages"]["linked"])
+
+    def test_onboarding_step_records_messages_readiness_without_import(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                accounts.update_channel("gmail", path=path, skipped=True)
+                accounts.update_channel("linkedin_csv", path=path, skipped=True)
+                readiness = {
+                    "imessage": {"status": "ready", "payload": {"chat_db": {"path": "chat.db"}, "addressbook_matches": 3}},
+                    "whatsapp": {"status": "needs_auth", "authenticated": False, "auth_command": "whatsapp-auth", "payload": {}},
+                    "privacy": {"reads_message_bodies": False, "syncs_whatsapp": False, "exports_contacts": False},
+                }
+                with mock.patch.object(onboarding, "messages_link_status", return_value=readiness):
+                    code, payload = self.invoke(onboarding, ["step", "--accounts", str(path), "--skip-messages-whatsapp"])
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "progressed")
+            self.assertEqual(payload["channel"], "messages")
+            self.assertIn("No iMessage extraction, WhatsApp sync", payload["message"])
+            registry = accounts.load_registry(path)
+            self.assertTrue(registry["accounts"]["messages"]["linked"])
+            self.assertEqual(registry["accounts"]["messages"]["usernames"], ["imessage"])
+            self.assertEqual(registry["accounts"]["messages"]["artifacts"], [])
+            self.assertEqual(registry["accounts"]["messages"]["config"]["planned_contacts_csv"], ".powerpacks/messages/contacts.csv")
+            self.assertEqual(registry["accounts"]["messages"]["config"]["whatsapp"]["status"], "skipped")
 
     def test_onboarding_step_discovers_gmail_msgvault_accounts(self):
         old_cwd = Path.cwd()

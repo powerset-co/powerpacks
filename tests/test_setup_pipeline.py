@@ -191,6 +191,52 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(group['status'], 'no_linked_sources')
         self.assertEqual(group['jobs'], [])
 
+    def test_handoff_messages_worker_uses_selected_contact_import_steps(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+            'messages': {
+                'linked': True,
+                'skipped': False,
+                'usernames': ['imessage'],
+                'artifacts': [],
+                'config': {'planned_contacts_csv': '.powerpacks/messages/contacts.csv'},
+            },
+        }}), encoding='utf-8')
+        ns = argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(accounts), setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'))
+        payload = setup.handoff_payload(ns)
+        jobs = payload['worker_groups']['import']['jobs']
+        self.assertEqual(len(jobs), 1)
+        job = jobs[0]
+        self.assertEqual(job['source'], 'messages')
+        self.assertIn('import_contacts_pipeline/import_contacts_pipeline.py run', job['command'])
+        self.assertIn('--include-imessage --include-contact-merge', job['command'])
+        self.assertNotIn('--include-whatsapp', job['command'])
+        self.assertNotIn('stop-after', job['command'])
+        self.assertEqual(job['requires_approval'], [])
+
+    def test_handoff_messages_worker_includes_whatsapp_when_linked(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+            'messages': {
+                'linked': True,
+                'skipped': False,
+                'usernames': ['imessage', 'whatsapp'],
+                'artifacts': [],
+                'config': {
+                    'planned_contacts_csv': '.powerpacks/messages/contacts.csv',
+                    'imessage': {'status': 'ready'},
+                    'whatsapp': {'status': 'linked', 'authenticated': True},
+                },
+            },
+        }}), encoding='utf-8')
+        ns = argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(accounts), setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'))
+        payload = setup.handoff_payload(ns)
+        job = payload['worker_groups']['import']['jobs'][0]
+        self.assertIn('--include-imessage --include-whatsapp --include-contact-merge', job['command'])
+        self.assertEqual(job['requires_approval'], ['whatsapp_qr'])
+
     def test_setup_skill_documents_product_contract(self):
         text = (ROOT / 'packs/ingestion/skills/setup/SKILL.md').read_text(encoding='utf-8')
         for required in [

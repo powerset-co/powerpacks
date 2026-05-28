@@ -25,6 +25,13 @@ Onboarding must remain link-only. Do not run Gmail metadata import,
 phase. Gmail import workers own `msgvault sync-full` for selected accounts
 before they read the local msgvault DB.
 
+Messages onboarding checks iMessage/Contacts permissions and WhatsApp auth/link
+state only. WhatsApp link uses `import_whatsapp_wacli.py auth`; it must not run
+WhatsApp sync or export contacts in the link phase. Messages import workers
+later call `import_contacts_pipeline.py run` with explicit include flags, for
+example `--include-imessage --include-whatsapp --include-contact-merge`, instead
+of using stop-before/stop-after flags.
+
 ## How to explain setup to the user
 
 Keep the user's view simple. Use plain product language first, and keep internal
@@ -178,8 +185,8 @@ where possible:
   msgvault is available.
 - LinkedIn CSV import/enrichment worker.
 - Twitter worker only when explicitly linked/approved.
-- Messages/iMessage artifacts worker; WhatsApp may require a QR/device-linking
-  approval before artifacts exist.
+- Messages/iMessage/WhatsApp contacts worker using explicit include flags.
+  WhatsApp may require a QR/device-linking approval before contacts exist.
 
 Workers must use isolated ledgers/run ids for `--only-source` source jobs and
 must return blocked approvals to the main thread. Merge/network DuckDB fan-in

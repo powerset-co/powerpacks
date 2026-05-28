@@ -81,10 +81,14 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
 ```
 
 The LinkedIn step only validates and records the CSV path/source label; it does
-not run enrichment or imports. Messages and Twitter are also link-only:
-`--messages-contacts-csv <path>` records a contacts CSV and `--twitter-handle
-<handle>` records a handle. Other missing sources can be marked done with
-`--skip-source <messages|gmail|linkedin_csv|twitter>`.
+not run enrichment or imports. Messages onboarding is also link-only: it runs
+the scoped iMessage/Contacts permission check and checks WhatsApp auth/link
+status. If WhatsApp is not linked, run the returned `import_whatsapp_wacli.py
+auth` command or rerun with `--skip-messages-whatsapp`; neither path runs
+WhatsApp sync or exports contacts. `--messages-contacts-csv <path>` remains a
+legacy/manual override for recording an existing contacts CSV. Twitter records a
+handle with `--twitter-handle <handle>`. Other missing sources can be marked
+done with `--skip-source <messages|gmail|linkedin_csv|twitter>`.
 
 It tracks non-secret state in `.powerpacks/ingestion/accounts.json`.
 
@@ -106,9 +110,9 @@ Do not put account-linking browser flows in a worker. The top-level Codex
 orchestrator owns Gmail/msgvault linking, Google browser actions, LinkedIn CSV
 handoff, message/WhatsApp linking, Twitter linking, and user confirmations.
 
-The setup handoff is the first post-link place that plans
-`import_network_pipeline.py run --from-accounts ...`; onboarding itself never
-runs imports. Never store tokens/passwords/cookies there. The v2 registry stores
-non-secret config (`gmail.msgvault_db/account_emails/oauth_app/oauth_test_users/available_accounts/selected_accounts`,
+The setup handoff is the first post-link place that plans imports. Onboarding
+itself never runs imports. Never store tokens/passwords/cookies there. The v2
+registry stores non-secret config (`gmail.msgvault_db/account_emails/oauth_app/oauth_test_users/available_accounts/selected_accounts`,
 `linkedin_csv.csv_path/source_label`, `twitter.handle`,
-`messages.contacts_csv`) while preserving v1 `usernames`/`artifacts` mirrors.
+`messages.imessage/whatsapp/planned_contacts_csv`) while preserving v1
+`usernames`/`artifacts` mirrors.

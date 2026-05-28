@@ -1174,6 +1174,57 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_auth(args: argparse.Namespace) -> int:
+    store = Path(args.store)
+    store.mkdir(parents=True, exist_ok=True)
+    try:
+        wacli_info = ensure_wacli_installed(install=not args.no_install)
+        doctor = wacli_json(store, ["doctor"], timeout=60)
+        status_before = auth_status(store)
+        auth_summary: dict[str, Any] = {
+            "authenticated_before": status_before.get("authenticated"),
+            "ran_sync": False,
+            "exported_contacts": False,
+        }
+        if not status_before.get("authenticated"):
+            auth_summary.update(run_auth(store, timeout=args.auth_timeout, idle_exit=args.idle_exit))
+        status_after = auth_status(store)
+        auth_summary["authenticated_after"] = status_after.get("authenticated")
+        linked = bool(status_after.get("authenticated"))
+        emit({
+            "primitive": "import_whatsapp_wacli",
+            "command": "auth",
+            "status": "linked" if linked else "blocked_user_action",
+            "message": (
+                "WhatsApp account is linked. No WhatsApp sync or export was run."
+                if linked
+                else "WhatsApp needs a QR scan. Scan it, then rerun the auth command."
+            ),
+            "store": str(store),
+            "wacli": wacli_info,
+            "doctor": doctor,
+            "auth": auth_summary,
+            "privacy": {
+                "reads_message_bodies": False,
+                "syncs_messages": False,
+                "exports_contacts": False,
+            },
+        })
+        return 0 if linked else 20
+    except PrimitiveBlocked as exc:
+        emit({"primitive": "import_whatsapp_wacli", "command": "auth", **exc.payload, "store": str(store)})
+        return exc.code
+    except Exception as exc:
+        emit({
+            "primitive": "import_whatsapp_wacli",
+            "command": "auth",
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "store": str(store),
+        })
+        return 1
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     started = time.time()
     store = Path(args.store)
@@ -1367,6 +1418,13 @@ def main() -> int:
     status = sub.add_parser("status", help="show wacli install/auth/store status")
     add_common_args(status)
     status.set_defaults(func=cmd_status)
+
+    auth = sub.add_parser("auth", help="authenticate WhatsApp without syncing or exporting metadata")
+    add_common_args(auth)
+    auth.add_argument("--idle-exit", default=DEFAULT_IDLE_EXIT)
+    auth.add_argument("--auth-timeout", type=int, default=DEFAULT_AUTH_TIMEOUT)
+    auth.add_argument("--no-install", action="store_true", help="fail instead of installing wacli with Homebrew")
+    auth.set_defaults(func=cmd_auth)
 
     export = sub.add_parser("export", help="export metadata from an existing wacli store without syncing")
     add_common_args(export)

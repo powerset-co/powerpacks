@@ -1211,6 +1211,39 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertEqual(calls[:5], ["extract_imessage", "normalize_imessage", "extract_whatsapp", "normalize_whatsapp", "ensure_contacts"])
             self.assertIn("open_raw_contacts_review_server", calls)
 
+    def test_run_pipeline_include_flags_run_only_selected_contact_steps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                processor="core2x",
+                contacts=Path(tmp) / "contacts.csv",
+                candidates=Path(tmp) / "powerset_contacts.csv",
+                research_queue=Path(tmp) / "research_queue.csv",
+                research_dir=Path(tmp) / "research",
+                review_csv=Path(tmp) / "research_review.csv",
+                model="anthropic/claude-sonnet-4-6",
+                no_open_review=True,
+                stop_before_upload=False,
+                review_host="127.0.0.1",
+                review_port=8766,
+                force_imessage=False,
+                force_whatsapp=False,
+                include_imessage=True,
+                include_whatsapp=True,
+                include_contact_merge=True,
+            )
+            calls = []
+
+            with self.patch_pipeline_steps(calls):
+                payload = mod.run_pipeline(args)
+
+            self.assertEqual(payload["status"], "selected_steps_completed")
+            self.assertEqual(calls, ["extract_imessage", "normalize_imessage", "extract_whatsapp", "normalize_whatsapp", "ensure_contacts"])
+            self.assertFalse(payload["privacy"]["ran_powerset_sync"])
+            self.assertFalse(payload["privacy"]["ran_research"])
+            self.assertFalse(payload["privacy"]["uploaded"])
+
     def test_raw_review_continue_builds_review_csv_then_uploads(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"

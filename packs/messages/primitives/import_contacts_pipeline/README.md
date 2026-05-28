@@ -15,6 +15,23 @@ uv run --project . python packs/messages/primitives/import_contacts_pipeline/imp
 uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py approve
 ```
 
+Callers can opt into only specific parts of the pipeline by passing explicit
+include flags. When any include flag is present, only the selected phases run.
+For example, setup's messages import worker prepares local message contacts
+without Powerset sync, research, review, upload, or datalake sync:
+
+```bash
+uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run \
+  --include-imessage \
+  --include-whatsapp \
+  --include-contact-merge
+```
+
+Additional phases can be added by tacking on flags such as
+`--include-powerset-candidates`, `--include-local-match`,
+`--include-llm-review`, `--include-research`, `--include-review`,
+`--include-retarget`, `--include-upload`, and `--include-datalake-sync`.
+
 ## Approval behavior
 
 The orchestrator never reads approvals from stdin. When it reaches a gate, it

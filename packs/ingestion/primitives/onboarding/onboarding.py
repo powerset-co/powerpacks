@@ -29,6 +29,8 @@ except ModuleNotFoundError:
 
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 DEFAULT_NETWORK_IMPORT_DIR = Path(".powerpacks/network-import")
+DEFAULT_MESSAGES_CONTACTS_CSV = Path(".powerpacks/messages/contacts.csv")
+DEFAULT_WACLI_STORE = Path(".powerpacks/messages/wacli")
 ONBOARDING_SOURCE_ORDER = ["gmail", "linkedin_csv", "messages", "twitter"]
 
 
@@ -135,9 +137,9 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "channel": "messages",
             "linked": acct.get("messages", {}).get("linked", False),
             "skipped": acct.get("messages", {}).get("skipped", False),
-            "what_it_needs": "Existing messages contacts CSV path, if you want message/contact metadata included later.",
-            "next_action": "Record an existing contacts CSV with onboarding --messages-contacts-csv <path>, or skip.",
-            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step --messages-contacts-csv <contacts.csv>",
+            "what_it_needs": "iMessage/Contacts permission readiness and optional WhatsApp device link status.",
+            "next_action": "Run the scoped Messages readiness check; link WhatsApp with QR if desired. No message import, WhatsApp sync, research, or upload runs during onboarding.",
+            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step",
         },
         "twitter": {
             "channel": "twitter",
@@ -193,6 +195,8 @@ def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = Fa
             cmd.extend(["--linkedin-source-user", args.linkedin_source_user])
         if getattr(args, "messages_contacts_csv", ""):
             cmd.extend(["--messages-contacts-csv", args.messages_contacts_csv])
+        if getattr(args, "skip_messages_whatsapp", False):
+            cmd.append("--skip-messages-whatsapp")
         if getattr(args, "twitter_handle", ""):
             cmd.extend(["--twitter-handle", args.twitter_handle])
     for email in authorized_emails or []:
@@ -315,6 +319,70 @@ def save_link_config(channel: str, path: Path, *, config: dict[str, Any], userna
     rec["last_success_at"] = rec["last_checked_at"]
     save_registry(registry, path)
     return registry
+
+
+def messages_open_privacy_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
+        "open-privacy-settings",
+        "--target", "both",
+    ])
+
+
+def messages_whatsapp_auth_command() -> str:
+    return shell_join([
+        "uv", "run", "--project", ".", "python",
+        "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
+        "auth",
+        "--store", str(DEFAULT_WACLI_STORE),
+    ])
+
+
+def messages_link_status(args: argparse.Namespace) -> dict[str, Any]:
+    imessage_cmd = [
+        sys.executable,
+        "packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
+        "check",
+        "--strict",
+    ]
+    imessage_code, imessage_payload, imessage_stderr = run_command(imessage_cmd, timeout=args.import_timeout)
+    whatsapp_cmd = [
+        sys.executable,
+        "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
+        "status",
+        "--store", str(DEFAULT_WACLI_STORE),
+    ]
+    whatsapp_code, whatsapp_payload, whatsapp_stderr = run_command(whatsapp_cmd, timeout=args.import_timeout)
+    imessage_ready = imessage_code == 0 and bool((imessage_payload or {}).get("chat_db", {}).get("readable"))
+    whatsapp_auth = bool((whatsapp_payload or {}).get("auth", {}).get("authenticated"))
+    if whatsapp_payload and whatsapp_payload.get("status") == "ok" and not whatsapp_auth:
+        whatsapp_status = "needs_auth"
+    elif whatsapp_payload and whatsapp_payload.get("status"):
+        whatsapp_status = str(whatsapp_payload.get("status"))
+    else:
+        whatsapp_status = "failed" if whatsapp_code else "unknown"
+    return {
+        "imessage": {
+            "status": "ready" if imessage_ready else "blocked_user_action",
+            "command": shell_join(["uv", "run", "--project", ".", "python", *imessage_cmd[1:]]),
+            "payload": imessage_payload or {},
+            "stderr": imessage_stderr,
+        },
+        "whatsapp": {
+            "status": "linked" if whatsapp_auth else whatsapp_status,
+            "authenticated": whatsapp_auth,
+            "command": shell_join(["uv", "run", "--project", ".", "python", *whatsapp_cmd[1:]]),
+            "auth_command": messages_whatsapp_auth_command(),
+            "payload": whatsapp_payload or {},
+            "stderr": whatsapp_stderr,
+        },
+        "privacy": {
+            "reads_message_bodies": False,
+            "syncs_whatsapp": False,
+            "exports_contacts": False,
+        },
+    }
 
 
 def gmail_browser_setup_command(args: argparse.Namespace, email: str) -> dict[str, str]:
@@ -663,23 +731,89 @@ def cmd_step(args: argparse.Namespace) -> int:
         return 0
 
     if not accounts.get("messages", {}).get("linked", False) and not accounts.get("messages", {}).get("skipped", False):
-        if not args.messages_contacts_csv:
+        if args.messages_contacts_csv:
+            contacts_csv = Path(args.messages_contacts_csv).expanduser()
+            if not contacts_csv.exists():
+                emit({"status": "waiting", "channel": "messages", "message": f"Waiting for contacts CSV at {contacts_csv}.", "repeat_command": onboarding_step_command(args)})
+                return 20
+            registry = save_link_config(
+                "messages",
+                path,
+                config={"contacts_csv": str(contacts_csv), "planned_contacts_csv": str(DEFAULT_MESSAGES_CONTACTS_CSV)},
+                artifacts=[str(contacts_csv)],
+                notes="Linked existing messages contacts CSV; no messages import/research run during onboarding.",
+            )
+            emit({"status": "progressed", "channel": "messages", "message": "Recorded existing messages contacts CSV source link. No messages import/research was run.", "registry": registry, "next_command": onboarding_step_command(args)})
+            return 0
+
+        readiness = messages_link_status(args)
+        if readiness["imessage"]["status"] != "ready":
             emit({
-                "status": "needs_input",
+                "status": "blocked_user_action",
                 "channel": "messages",
-                "prompt": "Provide an existing contacts CSV with --messages-contacts-csv <path>, or skip messages. Onboarding will only record the source link.",
-                "next_command": onboarding_step_command(args) + " --messages-contacts-csv <contacts.csv>",
+                "message": "iMessage/Contacts permission check did not pass. Enable Full Disk Access and Contacts access for this terminal/Codex host, then rerun setup.",
+                "readiness": readiness,
+                "commands": [{
+                    "label": "open_privacy_settings",
+                    "command": messages_open_privacy_command(),
+                    "description": "Open macOS privacy settings for Messages chat.db and Contacts access.",
+                }],
+                "repeat_command": onboarding_step_command(args),
                 "skip_command": onboarding_step_command(args) + " --skip-source messages",
                 "accounts_path": args.accounts,
                 "updates": updates,
             })
             return 20
-        contacts_csv = Path(args.messages_contacts_csv).expanduser()
-        if not contacts_csv.exists():
-            emit({"status": "waiting", "channel": "messages", "message": f"Waiting for contacts CSV at {contacts_csv}.", "repeat_command": onboarding_step_command(args)})
+
+        whatsapp_linked = bool(readiness["whatsapp"].get("authenticated"))
+        if not whatsapp_linked and not args.skip_messages_whatsapp:
+            emit({
+                "status": "needs_agent_action",
+                "channel": "messages",
+                "message": "iMessage is ready. WhatsApp is not linked yet. Run the auth-only WhatsApp link command, or rerun with --skip-messages-whatsapp to continue without WhatsApp.",
+                "readiness": readiness,
+                "commands": [{
+                    "label": "authorize_whatsapp",
+                    "command": readiness["whatsapp"]["auth_command"],
+                    "description": "Authenticate WhatsApp with QR/device linking only. This does not sync or export messages.",
+                }],
+                "repeat_command": onboarding_step_command(args),
+                "skip_whatsapp_command": onboarding_step_command(args) + " --skip-messages-whatsapp",
+                "accounts_path": args.accounts,
+                "updates": updates,
+            })
             return 20
-        registry = save_link_config("messages", path, config={"contacts_csv": str(contacts_csv)}, artifacts=[str(contacts_csv)], notes="Linked messages contacts CSV; no messages import/research run during onboarding.")
-        emit({"status": "progressed", "channel": "messages", "message": "Recorded messages contacts CSV source link. No messages import/research was run.", "registry": registry, "next_command": onboarding_step_command(args)})
+
+        config = {
+            "contacts_csv": "",
+            "planned_contacts_csv": str(DEFAULT_MESSAGES_CONTACTS_CSV),
+            "imessage": {
+                "status": "ready",
+                "chat_db": (readiness["imessage"]["payload"].get("chat_db") or {}).get("path", ""),
+                "addressbook_matches": readiness["imessage"]["payload"].get("addressbook_matches", 0),
+            },
+            "whatsapp": {
+                "status": "linked" if whatsapp_linked else "skipped",
+                "store": str(DEFAULT_WACLI_STORE),
+                "authenticated": whatsapp_linked,
+            },
+        }
+        registry = save_link_config(
+            "messages",
+            path,
+            config=config,
+            usernames=["imessage", *(["whatsapp"] if whatsapp_linked else [])],
+            artifacts=[],
+            notes="Linked Messages readiness. Onboarding checked iMessage permissions and WhatsApp auth only; no iMessage extraction, WhatsApp sync, research, or upload ran.",
+        )
+        emit({
+            "status": "progressed",
+            "channel": "messages",
+            "message": "Recorded Messages readiness. No iMessage extraction, WhatsApp sync, research, or upload ran.",
+            "readiness": readiness,
+            "registry": registry,
+            "next_command": onboarding_step_command(args),
+        })
         return 0
 
     if not accounts.get("twitter", {}).get("linked", False) and not accounts.get("twitter", {}).get("skipped", False):
@@ -748,6 +882,7 @@ def build_parser() -> argparse.ArgumentParser:
     step.add_argument("--linkedin-csv", default="", help="Path to LinkedIn Connections.csv export when available")
     step.add_argument("--linkedin-source-user", default="", help="Non-secret label for the LinkedIn export owner/source")
     step.add_argument("--messages-contacts-csv", default="", help="Path to an existing messages contacts CSV to link without importing")
+    step.add_argument("--skip-messages-whatsapp", action="store_true", help="Record iMessage readiness and skip WhatsApp linking for this setup run")
     step.add_argument("--twitter-handle", default="", help="Twitter/X handle to record without crawling")
     step.add_argument("--operator-id", default="local")
     step.add_argument("--linkedin-ledger", default=".powerpacks/network-import/linkedin/import-run.json", help=argparse.SUPPRESS)
