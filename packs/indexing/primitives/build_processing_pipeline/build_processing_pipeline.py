@@ -217,6 +217,36 @@ def _chat_cost_stage(
     }
 
 
+def _row_id_set(rows: list[dict[str, Any]], key: str) -> set[str]:
+    return {str(row.get(key) or "").strip() for row in rows if str(row.get(key) or "").strip()}
+
+
+def _jsonl_id_set(path_text: str | None, key: str) -> set[str]:
+    if not path_text:
+        return set()
+    path = Path(path_text)
+    if not path.exists():
+        return set()
+    return _row_id_set(read_jsonl(path), key)
+
+
+def _company_name_key(value: Any) -> str:
+    return enrich_companies_checkpointed.norm_name(value)
+
+
+def _coverage(required: set[str], available: set[str], artifact: str | None) -> dict[str, Any]:
+    missing = sorted(required - available)
+    reused = len(required) - len(missing)
+    return {
+        "artifact": artifact or "",
+        "required": len(required),
+        "reused": reused,
+        "missing": len(missing),
+        "complete": bool(artifact) and not missing,
+        "missing_sample": missing[:20],
+    }
+
+
 def _embedding_cost_stage(
     *,
     provider: str,
@@ -224,9 +254,13 @@ def _embedding_cost_stage(
     rows: list[dict[str, Any]],
     id_field: str,
     text_fields: str,
-    input_embeddings: bool,
+    input_embeddings: str | None,
+    artifact_id_field: str | None = None,
 ) -> dict[str, Any]:
-    if input_embeddings:
+    required = _row_id_set(rows, id_field)
+    available = _jsonl_id_set(input_embeddings, artifact_id_field or id_field)
+    coverage = _coverage(required, available, input_embeddings)
+    if input_embeddings and coverage["complete"]:
         return {
             "provider": "precomputed_artifact",
             "model": model,
@@ -236,13 +270,14 @@ def _embedding_cost_stage(
             "estimated_api_batches": 0,
             "estimated_usd": 0.0,
             "known_pricing": True,
+            "artifact_coverage": coverage,
         }
     fields = [field for field in str(text_fields).split(",") if field]
     tokens = 0
     embeddable_rows = 0
     for record in rows:
         rid = str(record.get(id_field) or "").strip()
-        if not rid:
+        if not rid or (input_embeddings and rid in available):
             continue
         embeddable_rows += 1
         text = embed_records_checkpointed.text_for_record(record, fields) or rid
@@ -258,6 +293,7 @@ def _embedding_cost_stage(
         "estimated_api_batches": (embeddable_rows + DEFAULT_EMBEDDING_API_BATCH_SIZE - 1) // DEFAULT_EMBEDDING_API_BATCH_SIZE,
         "estimated_usd": estimated,
         "known_pricing": estimated is not None,
+        "artifact_coverage": coverage,
     }
 
 
@@ -288,8 +324,12 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
     embedding_model = str(getattr(args, "embedding_openai_model", None) or os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", embed_records_checkpointed.DEFAULT_MODEL))
 
     role_inputs = _role_inputs_for_estimate(people)
+    role_required = _row_id_set(role_inputs, "title_hash")
+    role_available = _jsonl_id_set(role_input, "title_hash")
+    role_coverage = _coverage(role_required, role_available, role_input)
+    role_missing = [role for role in role_inputs if not role_input or str(role.get("title_hash") or "").strip() not in role_available]
     role_input_tokens = 0
-    for role in role_inputs:
+    for role in role_missing:
         payload = {
             "model": role_model,
             "response_format": {"type": "json_object"},
@@ -300,14 +340,23 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
     role_stage = _chat_cost_stage(
         provider=role_provider,
         model=role_model,
-        calls=len(role_inputs),
+        calls=len(role_missing),
         input_tokens=role_input_tokens,
-        output_tokens=len(role_inputs) * DEFAULT_ROLE_OUTPUT_TOKENS,
-        precomputed=bool(role_input),
+        output_tokens=len(role_missing) * DEFAULT_ROLE_OUTPUT_TOKENS,
+        precomputed=bool(role_input) and not role_missing,
     )
+    role_stage["artifact_coverage"] = role_coverage
 
-    company_rows = read_jsonl(Path(company_input)) if company_input else companies
-    company_payload_rows = [enrich_companies_checkpointed.shape_company(row) for row in company_rows]
+    company_artifact_keys = set()
+    if company_input:
+        company_artifact_keys = {_company_name_key(row.get("company_name")) for row in read_jsonl(Path(company_input)) if _company_name_key(row.get("company_name"))}
+    company_required = {_company_name_key(row.get("company_name")) for row in companies if _company_name_key(row.get("company_name"))}
+    company_coverage = _coverage(company_required, company_artifact_keys, company_input)
+    company_missing_rows = [
+        row for row in companies
+        if not company_input or _company_name_key(row.get("company_name")) not in company_artifact_keys
+    ]
+    company_payload_rows = [enrich_companies_checkpointed.shape_company(row) for row in company_missing_rows]
     company_input_tokens = 0
     for row in company_payload_rows:
         payload = enrich_companies_checkpointed.openai_classification_payload(row)
@@ -319,8 +368,9 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
         calls=len(company_payload_rows),
         input_tokens=company_input_tokens,
         output_tokens=len(company_payload_rows) * DEFAULT_COMPANY_OUTPUT_TOKENS,
-        precomputed=bool(company_input),
+        precomputed=bool(company_input) and not company_payload_rows,
     )
+    company_stage["artifact_coverage"] = company_coverage
 
     profile_rows = build_unified_profiles(people)
     summary_rows = build_summary_records(profile_rows, getattr(args, "default_operator_id", None))["internal_text"]
@@ -332,16 +382,18 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
             rows=role_inputs,
             id_field="title_hash",
             text_fields="dense_text,raw_title,description",
-            input_embeddings=bool(role_emb),
+            input_embeddings=role_emb,
+            artifact_id_field="title_hash",
         ),
         "company_enrichment": company_stage,
         "company_embeddings": _embedding_cost_stage(
             provider=embedding_provider,
             model=embedding_model,
-            rows=company_rows,
+            rows=companies,
             id_field="company_urn",
             text_fields="semantic_text,word_text,d2q_text,company_name,description",
-            input_embeddings=bool(company_emb),
+            input_embeddings=company_emb,
+            artifact_id_field="company_urn",
         ),
         "summary_embeddings": _embedding_cost_stage(
             provider=embedding_provider,
@@ -349,7 +401,8 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
             rows=summary_rows,
             id_field="person_id",
             text_fields="text",
-            input_embeddings=bool(summary_emb),
+            input_embeddings=summary_emb,
+            artifact_id_field="person_id",
         ),
     }
     known = all(stage.get("known_pricing") for stage in stages.values())
@@ -1285,6 +1338,11 @@ def _arg_artifact(args: argparse.Namespace, attr: str, relative: str) -> str | N
         candidate = Path(str(cache_dir)) / relative
         if candidate.exists():
             return str(candidate)
+    output_dir = getattr(args, "output_dir", None)
+    if output_dir:
+        candidate = Path(str(output_dir)) / relative
+        if candidate.exists():
+            return str(candidate)
     return None
 
 
@@ -1315,6 +1373,7 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
     company_emb = _arg_artifact(args, "company_input_embeddings", "company/company_embeddings_v3.jsonl")
     summary_emb = _arg_artifact(args, "summary_input_embeddings", "unified/summary_embeddings.jsonl")
     cost_estimate = estimate_costs(args, people, companies)
+    stages = cost_estimate.get("stages", {}) if isinstance(cost_estimate.get("stages"), dict) else {}
     return {
         "status": "dry_run" if getattr(args, "dry_run", False) else "estimate",
         "stage": "build_processing_pipeline",
@@ -1332,16 +1391,16 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
             "summary_embedding_chunks": (len(people) + checkpoint_every - 1) // checkpoint_every,
         },
         "providers": {
-            "roles": "precomputed_artifact" if role_input else getattr(args, "role_provider", "openai"),
-            "embeddings": "precomputed_artifacts" if role_emb and company_emb and summary_emb else getattr(args, "embedding_provider", "openai"),
-            "companies": "precomputed_artifact" if company_input else getattr(args, "company_provider", "openai"),
+            "roles": stages.get("role_enrichment", {}).get("provider") or ("precomputed_artifact" if role_input else getattr(args, "role_provider", "openai")),
+            "embeddings": getattr(args, "embedding_provider", "openai"),
+            "companies": stages.get("company_enrichment", {}).get("provider") or ("precomputed_artifact" if company_input else getattr(args, "company_provider", "openai")),
         },
         "estimated_paid_calls": {
-            "role_enrichment": 0 if role_input else len(role_hashes),
-            "role_embeddings": 0 if role_emb else len(role_hashes),
-            "company_enrichment": 0 if company_input else len(companies),
-            "company_embeddings": 0 if company_emb else len(companies),
-            "summary_embeddings": 0 if summary_emb else len(people),
+            "role_enrichment": int(stages.get("role_enrichment", {}).get("calls", 0) or 0),
+            "role_embeddings": int(stages.get("role_embeddings", {}).get("calls", 0) or 0),
+            "company_enrichment": int(stages.get("company_enrichment", {}).get("calls", 0) or 0),
+            "company_embeddings": int(stages.get("company_embeddings", {}).get("calls", 0) or 0),
+            "summary_embeddings": int(stages.get("summary_embeddings", {}).get("calls", 0) or 0),
         },
         "estimated_cost_usd": cost_estimate.get("total_estimated_usd"),
         "estimated_costs": cost_estimate,

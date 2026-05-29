@@ -136,6 +136,62 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             self.assertGreater(payload["estimated_costs"]["stages"]["summary_embeddings"]["estimated_tokens"], 0)
             self.assertFalse(output.exists(), "dry-run must not create run directories or pretend artifacts")
 
+    def test_pipeline_dry_run_auto_reuses_output_dir_artifacts_by_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            input_csv = write_fixture_with_title_hashes(FIXTURE_PEOPLE, tmp / "people_with_hashes.csv")
+            output = tmp / "pipeline"
+            operator_id = "operator:test"
+            people = pipeline.flatten_people(input_csv)
+            roles = pipeline._role_inputs_for_estimate(people)
+            companies = pipeline.build_company_corpus(people, operator_id)
+            summaries = pipeline.build_summary_records(pipeline.build_unified_profiles(people), operator_id)["internal_text"]
+
+            self.assertGreater(len(roles), 1)
+            self.assertGreater(len(companies), 1)
+            self.assertGreater(len(summaries), 1)
+            write_jsonl(output / "unified/roles/roles_with_dense_text_remapped.jsonl", [roles[0]])
+            write_jsonl(output / "unified/roles/roles_with_embeddings.jsonl", [{**roles[0], "dense_embedding": [0.01] * 1536}])
+            write_jsonl(output / "company/companies_corpus_v3.jsonl", [{"company_name": companies[0]["company_name"]}])
+            write_jsonl(output / "company/company_embeddings_v3.jsonl", [{"company_urn": companies[0]["company_urn"], "embedding": [0.02] * 1536}])
+            write_jsonl(output / "unified/summary_embeddings.jsonl", [{"person_id": summaries[0]["person_id"], "embedding": [0.03] * 1536}])
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"),
+                    "run",
+                    "--input",
+                    str(input_csv),
+                    "--output-dir",
+                    str(output),
+                    "--default-operator-id",
+                    operator_id,
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = parse_last_json(proc.stdout)
+            stages = payload["estimated_costs"]["stages"]
+
+            role_coverage = stages["role_enrichment"]["artifact_coverage"]
+            self.assertEqual(role_coverage["artifact"], str(output / "unified/roles/roles_with_dense_text_remapped.jsonl"))
+            self.assertEqual(role_coverage["reused"], 1)
+            self.assertEqual(stages["role_enrichment"]["calls"], role_coverage["missing"])
+            self.assertEqual(stages["role_embeddings"]["calls"], stages["role_embeddings"]["artifact_coverage"]["missing"])
+
+            company_coverage = stages["company_enrichment"]["artifact_coverage"]
+            self.assertEqual(company_coverage["reused"], 1)
+            self.assertLess(stages["company_enrichment"]["calls"], payload["counts"]["companies"])
+            self.assertEqual(stages["company_embeddings"]["artifact_coverage"]["reused"], 1)
+            self.assertEqual(stages["summary_embeddings"]["artifact_coverage"]["reused"], 1)
+            self.assertFalse(stages["summary_embeddings"]["artifact_coverage"]["complete"])
+            self.assertEqual(payload["paid_calls_made"], 0)
+
     def test_embed_records_openai_boundary_checkpoint_resume(self) -> None:
         calls: list[list[str]] = []
         original = embed_records_checkpointed.openai_embeddings
