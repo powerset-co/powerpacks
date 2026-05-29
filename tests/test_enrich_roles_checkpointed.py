@@ -55,6 +55,27 @@ class EnrichRolesCheckpointedTests(unittest.TestCase):
             row = json.loads((root / "roles/roles_with_dense_text_remapped.jsonl").read_text().strip())
             self.assertEqual(row["role_ids"], ["founder"])
 
+    def test_input_classifications_can_pay_for_missing_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            flattened = root / "flattened_people.jsonl"
+            self._write_flattened(flattened, count=2)
+            base = stage.collect_role_inputs(flattened)[0]
+            input_file = root / "roles_input.jsonl"
+            input_file.write_text(json.dumps({**base, "role_ids": ["founder"], "seniority_band": "owner", "role_track": "founder", "role_type": "founder", "cluster": "founder", "doc2query": ["founder search"], "inferred_skills": ["fundraising"]}) + "\n")
+
+            def fake_openai(role, **_kwargs):
+                return {"role_ids": ["software_engineer"], "seniority_band": "senior-ic", "role_track": "engineering", "role_type": "engineering", "cluster": "engineering", "doc2query": [role["raw_title"]], "inferred_skills": ["software engineering"]}
+
+            with mock.patch.object(stage, "call_openai_role_enrichment", side_effect=fake_openai) as mocked:
+                result = stage.run(self._args(flattened, root / "roles", input_classifications=str(input_file), allow_paid=True))
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(mocked.call_count, 1)
+            counts = result["counts"]
+            self.assertEqual(counts["artifact_hits"], 1)
+            self.assertEqual(counts["artifact_misses"], 1)
+            self.assertEqual(counts["paid_calls"], 1)
+
     def test_openai_provider_is_blocked_without_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -212,6 +212,48 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             self.assertFalse(stages["summary_embeddings"]["artifact_coverage"]["complete"])
             self.assertEqual(payload["paid_calls_made"], 0)
 
+    def test_completed_ledger_does_not_gate_incremental_rerun(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            input_csv = write_fixture_with_title_hashes(FIXTURE_PEOPLE, tmp / "people_with_hashes.csv")
+            output = tmp / "pipeline"
+            operator_id = "operator:test"
+            people = pipeline.flatten_people(input_csv)
+            roles = []
+            for role in pipeline._role_inputs_for_estimate(people):
+                roles.append(enrich_roles_checkpointed.merge_role(role, {"role_ids": ["software_engineer"], "seniority_band": "senior-ic", "role_track": "engineering", "role_type": "engineering", "cluster": "engineering", "doc2query": ["engineering"], "inferred_skills": ["software"]}))
+            companies = pipeline.build_company_corpus(people, operator_id)
+            company_rows = []
+            for company in companies:
+                company_rows.append({**company, "entity_types": ["venture_backed_startup"], "sector_types": ["saas"], "technology_types": [], "customer_type": "Business (B2B)", "funding_stage": "SEED", "company_type": "STARTUP", "ownership_status": "PRIVATE", "stage": "Seed", "accelerators": [], "yc_batches": [], "doc2query": ["software company"], "d2q_text": "software company", "word_text": "software", "semantic_text": company.get("semantic_text") or company["company_name"], "confidence_score": 0.9})
+            summaries = pipeline.build_summary_records(pipeline.build_unified_profiles(people), operator_id)["internal_text"]
+            write_jsonl(output / "unified/roles/roles_with_dense_text_remapped.jsonl", roles)
+            write_jsonl(output / "unified/roles/roles_with_embeddings.jsonl", [{**row, "dense_embedding": [0.01] * 1536} for row in roles])
+            write_jsonl(output / "company/companies_corpus_v3.jsonl", company_rows)
+            write_jsonl(output / "company/company_embeddings_v3.jsonl", [{"company_urn": row["company_urn"], "company_name": row["company_name"], "semantic_text": row.get("semantic_text", ""), "embedding": [0.02] * 1536} for row in companies])
+            write_jsonl(output / "unified/summary_embeddings.jsonl", [{"person_id": row["person_id"], "embedding": [0.03] * 1536} for row in summaries])
+            (output / "ledger.json").write_text(json.dumps({"status": "restored", "run_dir": str(output), "steps": []}), encoding="utf-8")
+
+            proc = subprocess.run([
+                sys.executable,
+                str(ROOT / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"),
+                "run",
+                "--input",
+                str(input_csv),
+                "--output-dir",
+                str(output),
+                "--default-operator-id",
+                operator_id,
+            ], cwd=ROOT, capture_output=True, text=True, check=False)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = parse_last_json(proc.stdout)
+            self.assertEqual(payload["status"], "completed")
+            counts = payload["counts"]
+            self.assertEqual(counts["build_roles"]["paid_calls"], 0)
+            self.assertGreater(counts["build_roles"]["artifact_hits"], 0)
+            self.assertEqual(counts["build_company_corpus"]["paid_calls"], 0)
+            self.assertGreater(counts["embed_role_positions"]["artifact_hits"], 0)
+
     def test_embed_records_openai_boundary_checkpoint_resume(self) -> None:
         calls: list[list[str]] = []
         original = embed_records_checkpointed.openai_embeddings
@@ -275,6 +317,49 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 self.assertGreaterEqual(len(calls), 2)
         finally:
             embed_records_checkpointed.openai_embeddings = original
+
+    def test_embed_records_replays_existing_embeddings_and_pays_for_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            input_path = root / "records.jsonl"
+            output = root / "embeddings.jsonl"
+            checkpoint = root / "checkpoint"
+            cached = root / "cached.jsonl"
+            write_jsonl(input_path, [{"id": "a", "text": "alpha"}, {"id": "b", "text": "beta"}])
+            write_jsonl(cached, [{"id": "a", "embedding": [0.01] * 1536}])
+
+            def fake_openai_embeddings(texts: list[str], **_kwargs):
+                self.assertEqual(texts, ["beta"])
+                return [[0.02] * 1536]
+
+            with mock.patch.object(embed_records_checkpointed, "openai_embeddings", side_effect=fake_openai_embeddings) as mocked:
+                manifest = embed_records_checkpointed.run(Namespace(
+                    input=str(input_path),
+                    output=str(output),
+                    output_dir=str(checkpoint),
+                    id_field="id",
+                    text_fields="text",
+                    copy_fields="text",
+                    checkpoint_every=100,
+                    provider="openai",
+                    input_embeddings=str(cached),
+                    input_id_field="id",
+                    input_embedding_field="embedding",
+                    allow_paid=True,
+                    api_key="test-key",
+                    base_url="https://example.invalid/v1",
+                    model="text-embedding-test",
+                    dimension=1536,
+                    api_batch_size=128,
+                    cost_per_1k_tokens=0.0,
+                    dry_run=False,
+                    force=False,
+                    stop_after_chunks=None,
+                ))
+            self.assertEqual(mocked.call_count, 1)
+            self.assertEqual(manifest["counts"]["artifact_hits"], 1)
+            self.assertEqual(manifest["counts"]["artifact_misses"], 1)
+            self.assertEqual(manifest["counts"]["paid_calls"], 1)
 
     def test_mocked_openai_pipeline_writes_aleph_artifacts_resumes_and_filters_company_classification(self) -> None:
         try:

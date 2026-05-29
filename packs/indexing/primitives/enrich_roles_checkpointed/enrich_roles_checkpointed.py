@@ -226,7 +226,7 @@ def chunk_path(output_dir: Path, chunk_index: int) -> Path:
 
 
 def default_state(flattened: Path, output_dir: Path, checkpoint_every: int, provider: str, input_classifications: str | None) -> dict[str, Any]:
-    return {"status": "running", "created_at": now_iso(), "updated_at": now_iso(), "flattened": str(flattened), "output_dir": str(output_dir), "checkpoint_every": checkpoint_every, "input_rows_processed": 0, "positions_seen": 0, "unique_roles_written": 0, "chunks_written": 0, "seen_title_hashes": [], "provider": provider, "input_classifications": input_classifications, "hash_contract": "md5(normalized_title + '|' + normalized_description[:500])[:16]"}
+    return {"status": "running", "created_at": now_iso(), "updated_at": now_iso(), "flattened": str(flattened), "output_dir": str(output_dir), "checkpoint_every": checkpoint_every, "input_rows_processed": 0, "positions_seen": 0, "unique_roles_written": 0, "chunks_written": 0, "seen_title_hashes": [], "provider": provider, "input_classifications": input_classifications, "artifact_hits": 0, "artifact_misses": 0, "paid_calls": 0, "hash_contract": "md5(normalized_title + '|' + normalized_description[:500])[:16]"}
 
 
 def load_state(flattened: Path, output_dir: Path, checkpoint_every: int, force: bool, provider: str, input_classifications: str | None) -> dict[str, Any]:
@@ -282,7 +282,7 @@ def finalize(output_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     state["completed_at"] = now_iso()
     state["unique_roles_written"] = len(roles)
     save_state(output_dir, state)
-    manifest = {"status": "completed", "stage": "enrich_roles_checkpointed", "provider": state.get("provider"), "input": state.get("flattened"), "checkpoint": str(state_path(output_dir)), "checkpoint_every": state.get("checkpoint_every"), "chunks": [str(path) for path in chunks], "artifacts": {"roles_with_dense_text_remapped": str(roles_path), "raw_titles": str(raw_titles_path), "role_mapping": str(mapping_path)}, "counts": {"input_rows_processed": state.get("input_rows_processed", 0), "positions_seen": state.get("positions_seen", 0), "unique_roles": len(roles), "chunks_written": len(chunks)}}
+    manifest = {"status": "completed", "stage": "enrich_roles_checkpointed", "provider": state.get("provider"), "input": state.get("flattened"), "checkpoint": str(state_path(output_dir)), "checkpoint_every": state.get("checkpoint_every"), "chunks": [str(path) for path in chunks], "artifacts": {"roles_with_dense_text_remapped": str(roles_path), "raw_titles": str(raw_titles_path), "role_mapping": str(mapping_path)}, "counts": {"input_rows_processed": state.get("input_rows_processed", 0), "positions_seen": state.get("positions_seen", 0), "unique_roles": len(roles), "chunks_written": len(chunks), "artifact_hits": state.get("artifact_hits", 0), "artifact_misses": state.get("artifact_misses", 0), "paid_calls": state.get("paid_calls", 0)}}
     write_json(output_dir / "manifest.json", manifest)
     return manifest
 
@@ -341,18 +341,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(f"missing flattened input: {flattened}")
     if getattr(args, "dry_run", False):
         return dry_run(args)
-    provider = "input-classifications" if getattr(args, "input_classifications", None) else str(args.provider)
+    requested_provider = str(args.provider)
     if args.provider not in {"openai", "tlm"}:
         raise SystemExit("role provider must be openai/tlm; no fake/mock/local provider is available")
     input_classifications = load_input_classifications(getattr(args, "input_classifications", None))
-    if not input_classifications:
-        if not getattr(args, "allow_paid", False):
-            raise SystemExit(f"role provider '{args.provider}' requires --allow-paid; no paid API was called")
-        api_key = getattr(args, "api_key", None) or os.getenv("OPENAI_API_KEY", "")
-        if not api_key:
-            raise SystemExit("role provider requires OPENAI_API_KEY or --api-key; no paid API was called")
-    else:
-        api_key = ""
+    allow_paid = bool(getattr(args, "allow_paid", False))
+    provider = "input-classifications" if input_classifications else requested_provider
+    if input_classifications and allow_paid:
+        provider = f"input-classifications+{requested_provider}"
+    api_key = getattr(args, "api_key", None) or os.getenv("OPENAI_API_KEY", "")
+    if not input_classifications and not allow_paid:
+        raise SystemExit(f"role provider '{args.provider}' requires --allow-paid; no paid API was called")
+    if not input_classifications and not api_key:
+        raise SystemExit("role provider requires OPENAI_API_KEY or --api-key; no paid API was called")
     base_url = getattr(args, "base_url", None) or os.getenv("POWERPACKS_OPENAI_BASE", "https://api.openai.com/v1")
     model = getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", DEFAULT_MODEL)
     state = load_state(flattened, output_dir, args.checkpoint_every, args.force, provider, getattr(args, "input_classifications", None))
@@ -369,16 +370,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             base = role_input(person, position)
             if not base or base["title_hash"] in seen_hashes:
                 continue
-            if input_classifications:
-                cached = input_classifications.get(base["title_hash"])
-                if cached is None:
-                    raise SystemExit(f"missing input role classification for title_hash={base['title_hash']}")
+            cached = input_classifications.get(base["title_hash"]) if input_classifications else None
+            if cached is not None:
+                state["artifact_hits"] = int(state.get("artifact_hits") or 0) + 1
                 role = merge_role(base, cached)
             else:
+                if input_classifications:
+                    state["artifact_misses"] = int(state.get("artifact_misses") or 0) + 1
+                if not allow_paid:
+                    raise SystemExit(f"missing input role classification for title_hash={base['title_hash']}")
+                if not api_key:
+                    raise SystemExit("role provider requires OPENAI_API_KEY or --api-key; no paid API was called")
                 try:
                     role = merge_role(base, call_openai_role_enrichment(base, api_key=api_key, base_url=base_url, model=model))
                 except RuntimeError as exc:
                     raise SystemExit(str(exc)) from exc
+                state["paid_calls"] = int(state.get("paid_calls") or 0) + 1
             seen_hashes.add(base["title_hash"])
             batch.append(role)
         state["input_rows_processed"] = idx

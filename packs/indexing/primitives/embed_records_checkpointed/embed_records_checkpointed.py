@@ -168,6 +168,9 @@ def load_state(output_dir: Path, input_path: Path, checkpoint_every: int, provid
         "input_rows_processed": 0,
         "embeddings_written": 0,
         "chunks_written": 0,
+        "artifact_hits": 0,
+        "artifact_misses": 0,
+        "paid_calls": 0,
     }
     write_json(cp, state)
     return state
@@ -217,7 +220,14 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
         "checkpoint": str(checkpoint_path(output_dir)),
         "chunks": [str(path) for path in chunks],
         "output": str(output_path),
-        "counts": {"input_rows_processed": state.get("input_rows_processed", 0), "embeddings": len(rows), "chunks_written": len(chunks)},
+        "counts": {
+            "input_rows_processed": state.get("input_rows_processed", 0),
+            "embeddings": len(rows),
+            "chunks_written": len(chunks),
+            "artifact_hits": state.get("artifact_hits", 0),
+            "artifact_misses": state.get("artifact_misses", 0),
+            "paid_calls": state.get("paid_calls", 0),
+        },
     }
     write_json(output_dir / "manifest.json", manifest)
     return manifest
@@ -259,12 +269,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     fields = [field for field in str(args.text_fields).split(",") if field]
     dimension = int(getattr(args, "dimension", DEFAULT_DIMENSION) or DEFAULT_DIMENSION)
     input_embeddings = load_input_embeddings(getattr(args, "input_embeddings", None), getattr(args, "input_id_field", None) or args.id_field, getattr(args, "input_embedding_field", "embedding"))
+    allow_paid = bool(getattr(args, "allow_paid", False))
     if input_embeddings:
-        provider = "input-embeddings"
-        api_key = ""
+        provider = "input-embeddings+openai" if allow_paid else "input-embeddings"
+        api_key = getattr(args, "api_key", None) or os.getenv("OPENAI_API_KEY", "")
     else:
         provider = "openai"
-        if not getattr(args, "allow_paid", False):
+        if not allow_paid:
             raise SystemExit("embedding provider 'openai' requires --allow-paid; no paid API was called")
         api_key = getattr(args, "api_key", None) or os.getenv("OPENAI_API_KEY", "")
         if not api_key:
@@ -286,11 +297,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return
         outputs: list[dict[str, Any]] = []
         if input_embeddings:
+            missing: list[tuple[str, str, dict[str, Any]]] = []
             for rid, text, copied in pending:
                 embedding = input_embeddings.get(rid)
-                if embedding is None:
-                    raise SystemExit(f"missing input embedding for id={rid}")
-                outputs.append({"id": rid, "embedding": embedding, "text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(), **copied})
+                if embedding is not None:
+                    state["artifact_hits"] = int(state.get("artifact_hits") or 0) + 1
+                    outputs.append({"id": rid, "embedding": embedding, "text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(), **copied})
+                else:
+                    state["artifact_misses"] = int(state.get("artifact_misses") or 0) + 1
+                    missing.append((rid, text, copied))
+            if missing:
+                if not allow_paid:
+                    raise SystemExit(f"missing input embedding for id={missing[0][0]}")
+                if not api_key:
+                    raise SystemExit("embedding provider 'openai' requires OPENAI_API_KEY or --api-key; no paid API was called")
+                for start in range(0, len(missing), api_batch_size):
+                    group = missing[start : start + api_batch_size]
+                    embeddings = openai_embeddings([item[1] for item in group], api_key=api_key, base_url=base_url, model=model, dimension=dimension)
+                    state["paid_calls"] = int(state.get("paid_calls") or 0) + len(group)
+                    for (rid, text, copied), embedding in zip(group, embeddings):
+                        outputs.append({"id": rid, "embedding": embedding, "text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(), **copied})
         else:
             for start in range(0, len(pending), api_batch_size):
                 group = pending[start : start + api_batch_size]

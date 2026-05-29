@@ -441,6 +441,7 @@ def load_state(output_dir: Path, input_path: Path, checkpoint_every: int, provid
         "chunks_written": 0,
         "artifact_hits": 0,
         "artifact_misses": 0,
+        "paid_calls": 0,
     }
     write_json(cp, state)
     return state
@@ -517,6 +518,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
             "chunks_written": len(chunks),
             "artifact_hits": state.get("artifact_hits", 0),
             "artifact_misses": state.get("artifact_misses", 0),
+            "paid_calls": state.get("paid_calls", 0),
         },
         "provider_notes": [
             "artifact replays precomputed real Aleph-shaped companies_corpus_v3 fields without spend",
@@ -536,12 +538,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(f"company provider '{args.provider}' is not supported; no paid API was called")
     if not input_path.exists():
         raise SystemExit(f"missing company input JSONL: {input_path}")
-    artifact = load_company_artifact(getattr(args, "artifact_path", None)) if provider == "artifact" else {}
+    artifact = load_company_artifact(getattr(args, "artifact_path", None)) if getattr(args, "artifact_path", None) else {}
     if getattr(args, "dry_run", False) or getattr(args, "estimate", False):
         return estimate_payload(input_path, provider, artifact, getattr(args, "model", None))
-    if provider == "openai" and not getattr(args, "allow_paid", False):
+    allow_paid = bool(getattr(args, "allow_paid", False))
+    if provider == "openai" and not artifact and not allow_paid:
         raise SystemExit("company provider 'openai' requires --allow-paid; no paid API was called")
-    state = load_state(output_dir, input_path, int(args.checkpoint_every), provider, getattr(args, "artifact_path", None), bool(args.force))
+    state_provider = "artifact+openai" if artifact and allow_paid else provider
+    state = load_state(output_dir, input_path, int(args.checkpoint_every), state_provider, getattr(args, "artifact_path", None), bool(args.force))
     if state.get("status") == "completed" and output_path.exists() and not args.force:
         manifest = output_dir / "manifest.json"
         return read_json(manifest) if manifest.exists() else {"status": "completed", "output": str(output_path)}
@@ -550,25 +554,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     chunks_this_run = 0
     for idx, row in iter_unprocessed(input_path, int(state.get("input_rows_processed") or 0)):
         shaped = shape_company(row)
-        if provider == "artifact":
+        cached = artifact.get(norm_name(shaped.get("company_name"))) if artifact else None
+        if cached:
             try:
-                enriched = apply_artifact(shaped, artifact, args.artifact_missing_policy)
+                shaped = merge_enrichment(shaped, cached)
             except RuntimeError as exc:
                 raise SystemExit(str(exc)) from exc
-            if enriched is None:
+            state["artifact_hits"] = int(state.get("artifact_hits") or 0) + 1
+        else:
+            if artifact:
                 state["artifact_misses"] = int(state.get("artifact_misses") or 0) + 1
-                state["input_rows_processed"] = idx
-                continue
-            if norm_name(shaped.get("company_name")) in artifact:
-                state["artifact_hits"] = int(state.get("artifact_hits") or 0) + 1
-            else:
-                state["artifact_misses"] = int(state.get("artifact_misses") or 0) + 1
-            shaped = enriched
-        elif provider == "openai":
+            if provider == "artifact" and not allow_paid:
+                if args.artifact_missing_policy == "skip":
+                    state["input_rows_processed"] = idx
+                    continue
+                raise SystemExit(f"missing precomputed company artifact for company_name={shaped.get('company_name')!r}")
+            if not allow_paid:
+                raise SystemExit("company provider 'openai' requires --allow-paid; no paid API was called")
             try:
                 shaped = merge_enrichment(shaped, call_openai_company_classifier(shaped, model=getattr(args, "model", None), api_key=getattr(args, "api_key", None), base_url=getattr(args, "base_url", None)))
             except RuntimeError as exc:
                 raise SystemExit(str(exc)) from exc
+            state["paid_calls"] = int(state.get("paid_calls") or 0) + 1
         batch.append(shaped)
         state["input_rows_processed"] = idx
         if len(batch) >= int(args.checkpoint_every):

@@ -577,6 +577,9 @@ def step_roles(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, A
         "status": "completed",
         "roles": int(counts.get("unique_roles", 0) or 0),
         "positions_seen": int(counts.get("positions_seen", 0) or 0),
+        "artifact_hits": int(counts.get("artifact_hits", 0) or 0),
+        "artifact_misses": int(counts.get("artifact_misses", 0) or 0),
+        "paid_calls": int(counts.get("paid_calls", 0) or 0),
         "input_rows_processed": int(counts.get("input_rows_processed", 0) or 0),
         "chunks_written": int(counts.get("chunks_written", 0) or 0),
         "checkpoint_every": int(ledger.get("checkpoint_every") or 1000),
@@ -602,6 +605,11 @@ def _cache_path(ledger: dict[str, Any], explicit_key: str, relative: str) -> str
     cache_dir = ledger.get("aleph_cache_dir")
     if cache_dir:
         candidate = Path(str(cache_dir)) / relative
+        if candidate.exists():
+            return str(candidate)
+    run_root = ledger.get("run_dir")
+    if run_root:
+        candidate = Path(str(run_root)) / relative
         if candidate.exists():
             return str(candidate)
     return None
@@ -666,6 +674,9 @@ def _embedding_stats(result: dict[str, Any], ledger: dict[str, Any]) -> dict[str
         "provider": result.get("provider") or ledger.get("embedding_provider") or "openai",
         "dimension": 1536,
         "embeddings": int(counts.get("embeddings", result.get("embeddings_written", 0)) or 0),
+        "artifact_hits": int(counts.get("artifact_hits", result.get("artifact_hits", 0)) or 0),
+        "artifact_misses": int(counts.get("artifact_misses", result.get("artifact_misses", 0)) or 0),
+        "paid_calls": int(counts.get("paid_calls", result.get("paid_calls", 0)) or 0),
         "input_rows_processed": int(counts.get("input_rows_processed", result.get("input_rows_processed", 0)) or 0),
         "chunks_written": int(counts.get("chunks_written", result.get("chunks_written_total", 0)) or 0),
         "checkpoint_every": int(ledger.get("checkpoint_every") or 1000),
@@ -917,6 +928,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str,
         "provider_equivalence": manifest.get("provider_equivalence"),
         "artifact_hits": int(counts.get("artifact_hits", 0) or 0),
         "artifact_misses": int(counts.get("artifact_misses", 0) or 0),
+        "paid_calls": int(counts.get("paid_calls", 0) or 0),
         "defaulted_numeric_fields": {"companies": count_defaulted_numeric(record_inputs, contract)},
     }
     write_stats(ledger, "build_company_corpus", stats)
@@ -1330,6 +1342,24 @@ def execute(ledger_path: Path, runtime: dict[str, Any] | None = None) -> dict[st
     return ledger
 
 
+def reset_incremental_progress(rd: Path) -> None:
+    """Clear checkpoint bookkeeping while preserving reusable output artifacts."""
+
+    for path in [
+        rd / "roles",
+        rd / "company/enrichment_checkpoints",
+        rd / "company/embedding_checkpoints",
+        rd / "summaries/embedding_checkpoints",
+        rd / "stats",
+        rd / "manifest.json",
+        rd / "vectors/checkpoint.json",
+    ]:
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+
+
 def _arg_artifact(args: argparse.Namespace, attr: str, relative: str) -> str | None:
     value = getattr(args, attr, None)
     if value:
@@ -1481,20 +1511,20 @@ def main() -> None:
         if args.dry_run or args.estimate:
             emit_json(estimate_run(args))
             return
+        previous_ledger: dict[str, Any] | None = None
         if rd.exists():
             if args.force:
                 shutil.rmtree(rd)
             elif paths(rd)["ledger"].exists():
                 ledger = load_ledger(paths(rd)["ledger"])
-                if ledger.get("status") != "completed":
+                if ledger.get("status") in {"pending", "running", "partial"}:
                     ledger = execute(paths(rd)["ledger"], {"stop_after_role_chunks": args.stop_after_role_chunks, "stop_after_company_chunks": args.stop_after_company_chunks, "stop_after_embedding_chunks": args.stop_after_embedding_chunks})
                     emit_json({"status": ledger["status"], "run_dir": ledger["run_dir"], "counts": {step["id"]: step.get("stats", {}) for step in ledger.get("steps", [])}})
                     return
-                emit_json(completed_no_work_payload(paths(rd)["ledger"], ledger))
-                return
+                previous_ledger = ledger
+                reset_incremental_progress(rd)
             else:
-                ledger_path = paths(rd)["ledger"]
-                raise SystemExit(f"search index directory already exists without a ledger: {rd}. Rerun with --force to replace it.")
+                reset_incremental_progress(rd)
         rd.mkdir(parents=True, exist_ok=True)
         ledger = default_ledger(
             Path(args.input),
@@ -1526,6 +1556,13 @@ def main() -> None:
             company_input_classifications=args.company_input_classifications,
             company_input_embeddings=args.company_input_embeddings,
         )
+        ledger["sync_mode"] = "incremental_existing_outputs"
+        if previous_ledger:
+            ledger["previous_ledger"] = {
+                "status": previous_ledger.get("status"),
+                "completed_at": previous_ledger.get("updated_at") or previous_ledger.get("completed_at"),
+                "artifact_check": check_artifact_paths(previous_ledger),
+            }
         ledger_path = paths(rd)["ledger"]
         save_ledger(ledger_path, ledger)
         ledger = execute(ledger_path, {"stop_after_role_chunks": args.stop_after_role_chunks, "stop_after_company_chunks": args.stop_after_company_chunks, "stop_after_embedding_chunks": args.stop_after_embedding_chunks})
