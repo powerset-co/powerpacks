@@ -157,7 +157,7 @@ class EnrichPeopleTests(unittest.TestCase):
             experiences = json.loads(rows[0]["work_experiences"])
             self.assertEqual(experiences[0]["rapidapi_company_id"], "123")
             self.assertEqual(experiences[0]["company_public_identifier"], "acme")
-            self.assertEqual(experiences[0]["company_key"], "rapidapi:123")
+            self.assertEqual(experiences[0]["company_key"], "linkedin_company:acme")
             self.assertEqual(rows[0]["current_company_urn"], "")
 
     def test_cache_hit_completes_without_key_or_network(self):
@@ -344,7 +344,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(rows[0]["current_company_urn"], "legacy-company-id")
             experiences = json.loads(rows[0]["work_experiences"])
             self.assertEqual(experiences[0]["company_name"], "Acme Metadata")
-            self.assertEqual(experiences[0]["company_key"], "rapidapi:123")
+            self.assertEqual(experiences[0]["company_key"], "linkedin_company:acme")
 
     def test_rapidapi_linkedin_key_preferred(self):
         with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "preferred", "RAPIDAPI_KEY": "fallback"}, clear=True):

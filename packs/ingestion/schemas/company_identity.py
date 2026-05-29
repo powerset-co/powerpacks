@@ -17,8 +17,21 @@ from typing import Any
 _COMPANY_KEYS = ("company", "organization", "employer")
 _RAPIDAPI_ID_FIELDS = ("company_id", "companyId", "company_urn", "companyUrn")
 _LOOKUP_RAPIDAPI_ID_FIELDS = ("rapidapi_company_id", "company_id", "companyId")
-_LINKEDIN_URL_FIELDS = ("linkedin_url", "company_linkedin_url", "company_linkedin_profile_url")
-_SLUG_FIELDS = ("company_public_identifier", "public_identifier", "linkedin_slug")
+_LINKEDIN_URL_FIELDS = (
+    "linkedin_url",
+    "company_linkedin_url",
+    "company_linkedin_profile_url",
+    "companyURL",
+    "companyUrl",
+    "company_url",
+)
+_SLUG_FIELDS = (
+    "company_public_identifier",
+    "public_identifier",
+    "linkedin_slug",
+    "companyUsername",
+    "company_username",
+)
 _NAME_FIELDS = ("company_name", "name")
 TITLE_HASH_MAX_DESCRIPTION_LENGTH = 500
 
@@ -138,10 +151,10 @@ def _metadata_from_row(row: dict[str, Any]) -> dict[str, str]:
         metadata["company_linkedin_url"] = company_url
     if company_name:
         metadata["company_name"] = company_name
-    if rapidapi_id:
-        metadata["company_key"] = f"rapidapi:{rapidapi_id}"
-    elif slug:
+    if slug:
         metadata["company_key"] = f"linkedin_company:{slug}"
+    elif rapidapi_id:
+        metadata["company_key"] = f"rapidapi:{rapidapi_id}"
     return metadata
 
 
@@ -262,12 +275,12 @@ def resolve_company_identity(
         if value and (not result.get(key) or key in {"company_name", "company_linkedin_url", "company_public_identifier"}):
             result[key] = value
 
-    rapidapi_id = result.get("rapidapi_company_id", "")
     slug = result.get("company_public_identifier", "")
-    if rapidapi_id and not _is_harmonic_urn(rapidapi_id):
-        result["company_key"] = f"rapidapi:{rapidapi_id}"
-    elif slug:
+    rapidapi_id = result.get("rapidapi_company_id", "")
+    if slug:
         result["company_key"] = f"linkedin_company:{slug}"
+    elif rapidapi_id and not _is_harmonic_urn(rapidapi_id):
+        result["company_key"] = f"rapidapi:{rapidapi_id}"
     else:
         result["company_key"] = ""
     if result.get("company_linkedin_url"):

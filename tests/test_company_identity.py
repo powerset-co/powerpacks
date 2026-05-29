@@ -51,7 +51,7 @@ class CompanyIdentityTests(unittest.TestCase):
         self.assertEqual(resolved["rapidapi_company_id"], "999")
         self.assertEqual(resolved["company_public_identifier"], "acme")
         self.assertEqual(resolved["company_linkedin_url"], "https://www.linkedin.com/company/acme")
-        self.assertEqual(resolved["company_key"], "rapidapi:999")
+        self.assertEqual(resolved["company_key"], "linkedin_company:acme")
 
         harmonic = resolve_company_identity(
             {"company_urn": "urn:harmonic:company:bad", "company_linkedin_url": "linkedin.com/company/acme"}
@@ -86,7 +86,8 @@ class CompanyIdentityTests(unittest.TestCase):
                 "title": "CEO",
                 "companyName": "Acme",
                 "companyId": "123",
-                "company_linkedin_url": "https://www.linkedin.com/company/acme/",
+                "companyURL": "https://www.linkedin.com/company/acme/",
+                "companyUsername": "acme",
                 "description": "Built things",
                 "start_date": {"year": 2020, "month": 5, "day": 1},
                 "end_date": {"year": 2022},
@@ -97,7 +98,9 @@ class CompanyIdentityTests(unittest.TestCase):
         self.assertEqual(converted["title"], "CEO")
         self.assertEqual(converted["company"], "Acme")
         self.assertEqual(converted["rapidapi_company_id"], "123")
-        self.assertEqual(converted["company_key"], "rapidapi:123")
+        self.assertEqual(converted["company_public_identifier"], "acme")
+        self.assertEqual(converted["company_linkedin_url"], "https://www.linkedin.com/company/acme")
+        self.assertEqual(converted["company_key"], "linkedin_company:acme")
         self.assertEqual(converted["starts_at"], {"year": 2020, "month": 5, "day": 1})
         self.assertEqual(converted["ends_at"], {"year": 2022, "month": None, "day": None})
         self.assertFalse(converted["is_current_position"])

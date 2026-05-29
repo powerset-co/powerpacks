@@ -88,22 +88,24 @@ def stable_person_uuid(row: dict[str, Any]) -> str:
 
 
 def company_canonical_key(data: dict[str, Any]) -> str:
-    for field in ("rapidapi_company_id", "company_id", "companyId"):
-        value = _clean(data.get(field))
-        if value and not value.lower().startswith("urn:harmonic:"):
-            return f"rapidapi:{value}"
     company_key = _clean(data.get("company_key"))
-    if company_key.startswith("rapidapi:") or company_key.startswith("linkedin_company:"):
+    if company_key.startswith("linkedin_company:"):
         return company_key
     for field in ("company_public_identifier", "public_identifier", "linkedin_slug"):
         value = _key_text(data.get(field))
         if value:
             return f"linkedin_company:{value}"
     identity = resolve_company_identity(data)
-    if identity.get("rapidapi_company_id"):
-        return f"rapidapi:{identity['rapidapi_company_id']}"
     if identity.get("company_public_identifier"):
         return f"linkedin_company:{identity['company_public_identifier']}"
+    if company_key.startswith("rapidapi:"):
+        return company_key
+    for field in ("rapidapi_company_id", "company_id", "companyId"):
+        value = _clean(data.get(field))
+        if value and not value.lower().startswith("urn:harmonic:"):
+            return f"rapidapi:{value}"
+    if identity.get("rapidapi_company_id"):
+        return f"rapidapi:{identity['rapidapi_company_id']}"
     name = _key_text(data.get("company_name") or data.get("company") or data.get("organization") or data.get("name"))
     return f"name:{name}"
 

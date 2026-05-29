@@ -12,7 +12,7 @@ from packs.indexing.lib.artifacts import (
     stable_person_uuid,
 )
 from packs.indexing.lib.contracts import load_search_contract, normalize_record_for_contract, validate_record
-from packs.indexing.lib.identity import person_uuid
+from packs.indexing.lib.identity import company_uuid, person_uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,6 +119,8 @@ class IndexingContractTest(unittest.TestCase):
         self.assertTrue({"company_urn", "company_name", "name_aliases", "word_text", "char_text", "d2q_text", "doc2query", "semantic_text"} <= set(record))
         self.assertIn("id", record)  # local stable id alias for downstream joins
         self.assertIn("semantic_text", record)
+        self.assertEqual(record["canonical_key"], "linkedin_company:secureco")
+        self.assertEqual(record["company_urn"], company_uuid("linkedin_company:secureco"))
 
     def test_education_and_school_records_match_contracts_plus_operational_id(self):
         result = build_education_corpus(self.people)

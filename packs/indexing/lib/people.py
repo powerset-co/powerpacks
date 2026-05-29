@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from packs.indexing.lib.io import write_csv as _write_csv, write_jsonl as _write_jsonl
+from packs.ingestion.schemas.company_identity import extract_company_public_identifier
 
 try:  # pragma: no cover - exercised by direct script execution paths
     from .identity import canonical_person_key, position_uuid, stable_company_id, stable_person_id_from_key
@@ -271,13 +272,22 @@ def _company_name(exp: dict[str, Any]) -> str:
 
 
 def _company_key(exp: dict[str, Any]) -> str:
-    for field in ("company_key", "rapidapi_company_id", "company_id", "company_urn", "company_public_identifier", "company_linkedin_url"):
+    public_identifier = _string(exp.get("company_public_identifier"))
+    if public_identifier:
+        return f"linkedin_company:{public_identifier.lower()}"
+    linkedin_url = _string(exp.get("company_linkedin_url") or exp.get("linkedin_url") or exp.get("company_url"))
+    if linkedin_url:
+        slug = extract_company_public_identifier(linkedin_url)
+        if slug:
+            return f"linkedin_company:{slug}"
+    company_key = _string(exp.get("company_key"))
+    if company_key.startswith("linkedin_company:"):
+        return company_key
+    for field in ("rapidapi_company_id", "company_id", "company_urn", "company_key"):
         value = _string(exp.get(field))
         if value:
             if field == "rapidapi_company_id":
                 return f"rapidapi:{value}"
-            if field == "company_public_identifier":
-                return f"linkedin_company:{value.lower()}"
             return value
     name = _company_name(exp)
     return f"name:{name.lower()}" if name else ""
