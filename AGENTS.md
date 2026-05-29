@@ -1,5 +1,17 @@
 # Powerpacks agent guidance
 
+## Vorflux GitHub integration guardrail
+
+For pull-request actions, prefer Vorflux's GitHub integration over raw `gh` commands:
+
+- Use Vorflux PR tools for PR creation, editing, commenting, reviewing, and merging whenever available.
+- Prefer the Vorflux GitHub App / platform integration identity when available. Do not default to a specific person's connected GitHub account unless the user explicitly asks for personal attribution or the platform reports that a connected-user token is the only available integration for the action.
+- For PR creation, confirm the Vorflux tool reports that an integrated token was used, such as `used_user_token: false` for the app/bot path, `used_user_token: true` for an explicitly requested connected-user path, or an equivalent indicator.
+- Do not use raw GitHub CLI/API calls for mutating PR actions unless unavoidable. If unavoidable, first run `gh api user --jq .login`, verify the active identity is appropriate for the requested action, and include the verified login in your status update.
+
+This keeps PR authorship, merge attribution, and repository permissions aligned with the available Vorflux GitHub integration rather than an incidental shell token.
+
+
 This file is the canonical bootup instruction sheet for any coding agent
 (Codex, Claude Code, NanoClaw, pi, etc.) working in the `powerpacks` repo.
 
