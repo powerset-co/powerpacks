@@ -7,6 +7,7 @@ explicit --input-classifications, or calls OpenAI with --allow-paid.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -14,7 +15,6 @@ import shutil
 import sys
 import tempfile
 import time
-import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -23,13 +23,15 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
-from packs.indexing.lib.provider_http import post_json  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_MODEL = "gpt-5.1"
 DEFAULT_MAX_COMPLETION_TOKENS = 700
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
+DEFAULT_OPENAI_CONCURRENCY = 8
 CHAT_MODEL_PRICES_PER_1K_USD = {
     "gpt-5.2": {"input": 0.00175, "output": 0.01400},
     "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
@@ -155,38 +157,98 @@ def role_prompt(role: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
-def call_openai_role_enrichment(role: dict[str, Any], *, api_key: str, base_url: str, model: str, timeout: int = 60, max_retries: int = 3) -> dict[str, Any]:
-    timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(timeout)))
+def _parse_chat_json(content: str | None, context: str) -> dict[str, Any]:
+    raw = (content or "{}").strip()
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"{context} returned non-object JSON")
+    return parsed
+
+
+async def call_openai_role_enrichment_async(
+    client: AsyncOpenAI,
+    role: dict[str, Any],
+    *,
+    model: str,
+    semaphore: asyncio.Semaphore,
+    max_retries: int = 3,
+) -> dict[str, Any]:
     max_completion_tokens = int(os.getenv("POWERPACKS_ROLE_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS)))
-    payload = {
-        "model": model,
-        "response_format": {"type": "json_object"},
-        "messages": role_prompt(role),
-        "temperature": 0,
-        "max_completion_tokens": max_completion_tokens,
-    }
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    url = base_url.rstrip("/") + "/chat/completions"
-    last_error = ""
-    for attempt in range(max_retries + 1):
-        try:
-            result = post_json(url, payload, headers, timeout=timeout)
-            content = (((result.get("choices") or [{}])[0].get("message") or {}).get("content") or "{}").strip()
-            parsed = json.loads(content)
-            if not isinstance(parsed, dict):
-                raise RuntimeError("OpenAI role enrichment returned non-object JSON")
-            return parsed
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:500]
-            last_error = f"HTTP {exc.code}: {detail}"
-            if exc.code not in {408, 409, 429, 500, 502, 503, 504} or attempt >= max_retries:
-                break
-        except (urllib.error.URLError, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
-            last_error = str(exc)
-            if attempt >= max_retries:
-                break
-        time.sleep(min(2**attempt, 30))
-    raise RuntimeError(f"OpenAI role enrichment failed after retries: {last_error}")
+    async with semaphore:
+        attempt = 0
+        while True:
+            try:
+                response = await client.chat.completions.create(
+                    model=model,
+                    response_format={"type": "json_object"},
+                    messages=role_prompt(role),
+                    temperature=0,
+                    max_completion_tokens=max_completion_tokens,
+                )
+                return _parse_chat_json(response.choices[0].message.content, "OpenAI role enrichment")
+            except APIStatusError as exc:
+                status = int(getattr(exc, "status_code", 0) or 0)
+                if status in {408, 409, 429, 500, 502, 503, 504} and attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"OpenAI role enrichment failed: HTTP {status}: {getattr(exc, 'message', str(exc))}") from exc
+            except (APIConnectionError, APITimeoutError, TimeoutError, asyncio.TimeoutError) as exc:
+                if attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"OpenAI role enrichment failed: network: {exc}") from exc
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"OpenAI role enrichment returned invalid JSON: {exc}") from exc
+
+
+async def call_openai_role_enrichments_async(
+    roles: list[dict[str, Any]],
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout: int,
+    concurrency: int,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    try:
+        return await asyncio.gather(*[
+            call_openai_role_enrichment_async(client, role, model=model, semaphore=semaphore, max_retries=max_retries)
+            for role in roles
+        ])
+    finally:
+        await client.close()
+
+
+def call_openai_role_enrichments(
+    roles: list[dict[str, Any]],
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout: int | None = None,
+    concurrency: int | None = None,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    if not roles:
+        return []
+    return asyncio.run(call_openai_role_enrichments_async(
+        roles,
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
+        concurrency=concurrency or int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY))),
+        max_retries=max_retries,
+    ))
+
+
+def call_openai_role_enrichment(role: dict[str, Any], *, api_key: str, base_url: str, model: str, timeout: int = 60, max_retries: int = 3) -> dict[str, Any]:
+    return call_openai_role_enrichments([role], api_key=api_key, base_url=base_url, model=model, timeout=timeout, concurrency=1, max_retries=max_retries)[0]
 
 
 def merge_role(base: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, Any]:
@@ -369,8 +431,51 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return read_json(manifest_path) if manifest_path.exists() else {"status": "completed", "checkpoint": str(state_path(output_dir))}
     seen_hashes = set(state.get("seen_title_hashes") or [])
     batch: list[dict[str, Any]] = []
+    paid_pending: list[dict[str, Any]] = []
+    paid_concurrency = int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY)))
+    paid_timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     chunks_this_run = 0
     started = time.time()
+
+    def flush_output(force: bool = False) -> dict[str, Any] | None:
+        nonlocal batch, chunks_this_run
+        if not batch or (not force and len(batch) < args.checkpoint_every):
+            return None
+        chunk_index = int(state.get("chunks_written") or 0) + 1
+        written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
+        state["chunks_written"] = chunk_index
+        state["unique_roles_written"] = int(state.get("unique_roles_written") or 0) + written
+        state["seen_title_hashes"] = sorted(seen_hashes)
+        save_state(output_dir, state)
+        batch = []
+        chunks_this_run += 1
+        if args.stop_after_chunks and chunks_this_run >= args.stop_after_chunks:
+            return {"status": "partial", "checkpoint": str(state_path(output_dir)), "chunks_written_total": state["chunks_written"], "input_rows_processed": state["input_rows_processed"]}
+        return None
+
+    def flush_paid(force: bool = False) -> dict[str, Any] | None:
+        nonlocal paid_pending
+        paid_flush_size = max(1, min(paid_concurrency, int(args.checkpoint_every)))
+        if not paid_pending or (not force and len(paid_pending) < paid_flush_size):
+            return None
+        pending = paid_pending
+        paid_pending = []
+        try:
+            enrichments = call_openai_role_enrichments(
+                pending,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                timeout=paid_timeout,
+                concurrency=paid_concurrency,
+            )
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        for base, enrichment in zip(pending, enrichments):
+            batch.append(merge_role(base, enrichment))
+        state["paid_calls"] = int(state.get("paid_calls") or 0) + len(pending)
+        return flush_output(force=True)
+
     for idx, person in iter_unprocessed_rows(flattened, int(state.get("input_rows_processed") or 0)):
         for position in get_positions(person):
             state["positions_seen"] = int(state.get("positions_seen") or 0) + 1
@@ -381,6 +486,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if cached is not None:
                 state["artifact_hits"] = int(state.get("artifact_hits") or 0) + 1
                 role = merge_role(base, cached)
+                seen_hashes.add(base["title_hash"])
+                batch.append(role)
             else:
                 if input_classifications:
                     state["artifact_misses"] = int(state.get("artifact_misses") or 0) + 1
@@ -388,32 +495,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise SystemExit(f"missing input role classification for title_hash={base['title_hash']}")
                 if not api_key:
                     raise SystemExit("role provider requires OPENAI_API_KEY or --api-key; no paid API was called")
-                try:
-                    role = merge_role(base, call_openai_role_enrichment(base, api_key=api_key, base_url=base_url, model=model))
-                except RuntimeError as exc:
-                    raise SystemExit(str(exc)) from exc
-                state["paid_calls"] = int(state.get("paid_calls") or 0) + 1
-            seen_hashes.add(base["title_hash"])
-            batch.append(role)
+                seen_hashes.add(base["title_hash"])
+                paid_pending.append(base)
+                partial = flush_paid()
+                if partial:
+                    return partial
         state["input_rows_processed"] = idx
         if len(batch) >= args.checkpoint_every:
-            chunk_index = int(state.get("chunks_written") or 0) + 1
-            written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
-            state["chunks_written"] = chunk_index
-            state["unique_roles_written"] = int(state.get("unique_roles_written") or 0) + written
-            state["seen_title_hashes"] = sorted(seen_hashes)
-            save_state(output_dir, state)
-            batch = []
-            chunks_this_run += 1
-            if args.stop_after_chunks and chunks_this_run >= args.stop_after_chunks:
-                return {"status": "partial", "checkpoint": str(state_path(output_dir)), "chunks_written_total": state["chunks_written"], "input_rows_processed": state["input_rows_processed"]}
+            partial = flush_paid(force=True) or flush_output()
+            if partial:
+                return partial
+    partial = flush_paid(force=True)
+    if partial:
+        return partial
     if batch:
-        chunk_index = int(state.get("chunks_written") or 0) + 1
-        written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
-        state["chunks_written"] = chunk_index
-        state["unique_roles_written"] = int(state.get("unique_roles_written") or 0) + written
-        state["seen_title_hashes"] = sorted(seen_hashes)
-        save_state(output_dir, state)
+        partial = flush_output(force=True)
+        if partial:
+            return partial
     state["elapsed_seconds_last_run"] = round(time.time() - started, 3)
     return finalize(output_dir, state)
 

@@ -256,19 +256,22 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
 
     def test_embed_records_openai_boundary_checkpoint_resume(self) -> None:
         calls: list[list[str]] = []
-        original = embed_records_checkpointed.openai_embeddings
+        original = embed_records_checkpointed.openai_embedding_batches
 
-        def fake_openai_embeddings(texts: list[str], **kwargs):
-            calls.append(list(texts))
+        def fake_openai_embedding_batches(text_groups: list[list[str]], **kwargs):
             dim = int(kwargs.get("dimension") or 1536)
-            out = []
-            for idx, _text in enumerate(texts):
-                vector = [0.0] * dim
-                vector[idx % dim] = 1.0
-                out.append(vector)
-            return out
+            grouped = []
+            for texts in text_groups:
+                calls.append(list(texts))
+                out = []
+                for idx, _text in enumerate(texts):
+                    vector = [0.0] * dim
+                    vector[idx % dim] = 1.0
+                    out.append(vector)
+                grouped.append(out)
+            return grouped
 
-        embed_records_checkpointed.openai_embeddings = fake_openai_embeddings
+        embed_records_checkpointed.openai_embedding_batches = fake_openai_embedding_batches
         try:
             with tempfile.TemporaryDirectory() as td:
                 tmp = Path(td)
@@ -316,7 +319,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 self.assertTrue(all(len(row["embedding"]) == 1536 for row in rows))
                 self.assertGreaterEqual(len(calls), 2)
         finally:
-            embed_records_checkpointed.openai_embeddings = original
+            embed_records_checkpointed.openai_embedding_batches = original
 
     def test_embed_records_replays_existing_embeddings_and_pays_for_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -328,11 +331,11 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             write_jsonl(input_path, [{"id": "a", "text": "alpha"}, {"id": "b", "text": "beta"}])
             write_jsonl(cached, [{"id": "a", "embedding": [0.01] * 1536}])
 
-            def fake_openai_embeddings(texts: list[str], **_kwargs):
-                self.assertEqual(texts, ["beta"])
-                return [[0.02] * 1536]
+            def fake_openai_embedding_batches(text_groups: list[list[str]], **_kwargs):
+                self.assertEqual(text_groups, [["beta"]])
+                return [[[0.02] * 1536]]
 
-            with mock.patch.object(embed_records_checkpointed, "openai_embeddings", side_effect=fake_openai_embeddings) as mocked:
+            with mock.patch.object(embed_records_checkpointed, "openai_embedding_batches", side_effect=fake_openai_embedding_batches) as mocked:
                 manifest = embed_records_checkpointed.run(Namespace(
                     input=str(input_path),
                     output=str(output),
@@ -370,9 +373,9 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
         role_calls: list[str] = []
         company_calls: list[str] = []
         embedding_calls: list[int] = []
-        orig_role = enrich_roles_checkpointed.call_openai_role_enrichment
-        orig_company = enrich_companies_checkpointed.call_openai_company_classifier
-        orig_embed = embed_records_checkpointed.openai_embeddings
+        orig_role = enrich_roles_checkpointed.call_openai_role_enrichments
+        orig_company = enrich_companies_checkpointed.call_openai_company_classifiers
+        orig_embed = embed_records_checkpointed.openai_embedding_batches
 
         def fake_role(role: dict, **_kwargs) -> dict:
             role_calls.append(role.get("raw_title", ""))
@@ -419,9 +422,18 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 vectors.append(vector)
             return vectors
 
-        enrich_roles_checkpointed.call_openai_role_enrichment = fake_role
-        enrich_companies_checkpointed.call_openai_company_classifier = fake_company
-        embed_records_checkpointed.openai_embeddings = fake_embeddings
+        def fake_roles(roles: list[dict], **_kwargs) -> list[dict]:
+            return [fake_role(role) for role in roles]
+
+        def fake_companies(companies: list[dict], **_kwargs) -> list[dict]:
+            return [fake_company(company) for company in companies]
+
+        def fake_embedding_batches(text_groups: list[list[str]], **kwargs) -> list[list[list[float]]]:
+            return [fake_embeddings(texts, **kwargs) for texts in text_groups]
+
+        enrich_roles_checkpointed.call_openai_role_enrichments = fake_roles
+        enrich_companies_checkpointed.call_openai_company_classifiers = fake_companies
+        embed_records_checkpointed.openai_embedding_batches = fake_embedding_batches
         try:
             with tempfile.TemporaryDirectory() as td:
                 tmp = Path(td)
@@ -503,9 +515,9 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                     else:
                         os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
         finally:
-            enrich_roles_checkpointed.call_openai_role_enrichment = orig_role
-            enrich_companies_checkpointed.call_openai_company_classifier = orig_company
-            embed_records_checkpointed.openai_embeddings = orig_embed
+            enrich_roles_checkpointed.call_openai_role_enrichments = orig_role
+            enrich_companies_checkpointed.call_openai_company_classifiers = orig_company
+            embed_records_checkpointed.openai_embedding_batches = orig_embed
 
 
 if __name__ == "__main__":

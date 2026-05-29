@@ -30,7 +30,10 @@ class EnrichRolesCheckpointedTests(unittest.TestCase):
             def fake_openai(role, **_kwargs):
                 return {"role_ids": ["software_engineer"], "seniority_band": "senior-ic", "role_track": "engineering", "role_type": "engineering", "cluster": "engineering", "doc2query": [role["raw_title"] + " search"], "inferred_skills": ["software engineering"]}
 
-            with mock.patch.object(stage, "call_openai_role_enrichment", side_effect=fake_openai):
+            def fake_openai_batch(roles, **_kwargs):
+                return [fake_openai(role) for role in roles]
+
+            with mock.patch.object(stage, "call_openai_role_enrichments", side_effect=fake_openai_batch):
                 partial = stage.run(self._args(flattened, root / "roles", stop_after_chunks=1))
                 self.assertEqual(partial["status"], "partial")
                 final = stage.run(self._args(flattened, root / "roles", force=False, stop_after_chunks=None))
@@ -67,7 +70,10 @@ class EnrichRolesCheckpointedTests(unittest.TestCase):
             def fake_openai(role, **_kwargs):
                 return {"role_ids": ["software_engineer"], "seniority_band": "senior-ic", "role_track": "engineering", "role_type": "engineering", "cluster": "engineering", "doc2query": [role["raw_title"]], "inferred_skills": ["software engineering"]}
 
-            with mock.patch.object(stage, "call_openai_role_enrichment", side_effect=fake_openai) as mocked:
+            def fake_openai_batch(roles, **_kwargs):
+                return [fake_openai(role) for role in roles]
+
+            with mock.patch.object(stage, "call_openai_role_enrichments", side_effect=fake_openai_batch) as mocked:
                 result = stage.run(self._args(flattened, root / "roles", input_classifications=str(input_file), allow_paid=True))
             self.assertEqual(result["status"], "completed")
             self.assertEqual(mocked.call_count, 1)

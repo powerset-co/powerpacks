@@ -179,7 +179,10 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                     "confidence_score": 0.8,
                 }
 
-            with mock.patch.object(stage, "call_openai_company_classifier", side_effect=fake_classifier) as mocked:
+            def fake_classifier_batch(rows, **_kwargs):
+                return [fake_classifier(row) for row in rows]
+
+            with mock.patch.object(stage, "call_openai_company_classifiers", side_effect=fake_classifier_batch) as mocked:
                 manifest = stage.run(Namespace(
                     input=str(input_path),
                     output=str(output_path),

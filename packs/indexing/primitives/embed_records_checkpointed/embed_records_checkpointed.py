@@ -9,13 +9,13 @@ This primitive has no fake/mock provider. It either:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import os
 import sys
 import tempfile
 import time
-import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -24,12 +24,14 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
-from packs.indexing.lib.provider_http import post_json  # noqa: E402
 
 DEFAULT_DIMENSION = 1536
 DEFAULT_MODEL = "text-embedding-3-small"
 DEFAULT_COST_PER_1K_TOKENS = 0.00002
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
+DEFAULT_OPENAI_CONCURRENCY = 4
 
 
 def now_iso() -> str:
@@ -86,39 +88,106 @@ def openai_embeddings(
     timeout: int = 60,
     max_retries: int = 3,
 ) -> list[list[float]]:
+    groups = openai_embedding_batches(
+        [texts],
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        dimension=dimension,
+        timeout=timeout,
+        concurrency=1,
+        max_retries=max_retries,
+    )
+    return groups[0] if groups else []
+
+
+async def openai_embeddings_one_async(
+    client: AsyncOpenAI,
+    texts: list[str],
+    *,
+    model: str,
+    dimension: int,
+    semaphore: asyncio.Semaphore,
+    max_retries: int = 3,
+) -> list[list[float]]:
     if not texts:
         return []
-    url = base_url.rstrip("/") + "/embeddings"
     payload: dict[str, Any] = {"model": model, "input": texts}
     if dimension:
         payload["dimensions"] = dimension
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-    last_error = ""
-    for attempt in range(max_retries + 1):
-        try:
-            response_payload = post_json(url, payload, headers, timeout=timeout)
-            data = response_payload.get("data") if isinstance(response_payload, dict) else None
-            if not isinstance(data, list) or len(data) != len(texts):
-                raise RuntimeError("OpenAI embeddings response row count mismatch")
-            ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
-            embeddings: list[list[float]] = []
-            for item in ordered:
-                embedding = item.get("embedding") if isinstance(item, dict) else None
-                if not isinstance(embedding, list) or (dimension and len(embedding) != dimension):
-                    raise RuntimeError(f"OpenAI embeddings dimension mismatch: {len(embedding) if isinstance(embedding, list) else 'invalid'} != {dimension}")
-                embeddings.append([float(value) for value in embedding])
-            return embeddings
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:500]
-            last_error = f"HTTP {exc.code}: {detail}"
-            if exc.code not in {408, 409, 429, 500, 502, 503, 504} or attempt >= max_retries:
-                break
-        except (urllib.error.URLError, TimeoutError, RuntimeError) as exc:
-            last_error = str(exc)
-            if attempt >= max_retries:
-                break
-        time.sleep(min(2**attempt, 30))
-    raise RuntimeError(f"OpenAI embeddings request failed after retries: {last_error}")
+    async with semaphore:
+        attempt = 0
+        while True:
+            try:
+                response = await client.embeddings.create(**payload)
+                data = sorted(response.data, key=lambda item: int(item.index))
+                if len(data) != len(texts):
+                    raise RuntimeError("OpenAI embeddings response row count mismatch")
+                out: list[list[float]] = []
+                for item in data:
+                    embedding = list(item.embedding)
+                    if dimension and len(embedding) != dimension:
+                        raise RuntimeError(f"OpenAI embeddings dimension mismatch: {len(embedding)} != {dimension}")
+                    out.append([float(value) for value in embedding])
+                return out
+            except APIStatusError as exc:
+                status = int(getattr(exc, "status_code", 0) or 0)
+                if status in {408, 409, 429, 500, 502, 503, 504} and attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"OpenAI embeddings request failed: HTTP {status}: {getattr(exc, 'message', str(exc))}") from exc
+            except (APIConnectionError, APITimeoutError, TimeoutError, asyncio.TimeoutError) as exc:
+                if attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"OpenAI embeddings request failed: network: {exc}") from exc
+
+
+async def openai_embedding_batches_async(
+    text_groups: list[list[str]],
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    dimension: int,
+    timeout: int,
+    concurrency: int,
+    max_retries: int = 3,
+) -> list[list[list[float]]]:
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    try:
+        return await asyncio.gather(*[
+            openai_embeddings_one_async(client, group, model=model, dimension=dimension, semaphore=semaphore, max_retries=max_retries)
+            for group in text_groups
+        ])
+    finally:
+        await client.close()
+
+
+def openai_embedding_batches(
+    text_groups: list[list[str]],
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    dimension: int = DEFAULT_DIMENSION,
+    timeout: int | None = None,
+    concurrency: int | None = None,
+    max_retries: int = 3,
+) -> list[list[list[float]]]:
+    return asyncio.run(openai_embedding_batches_async(
+        text_groups,
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        dimension=dimension,
+        timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
+        concurrency=concurrency or int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY))),
+        max_retries=max_retries,
+    ))
 
 
 def atomic_write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> int:
@@ -309,16 +378,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise SystemExit(f"missing input embedding for id={missing[0][0]}")
                 if not api_key:
                     raise SystemExit("embedding provider 'openai' requires OPENAI_API_KEY or --api-key; no paid API was called")
-                for start in range(0, len(missing), api_batch_size):
-                    group = missing[start : start + api_batch_size]
-                    embeddings = openai_embeddings([item[1] for item in group], api_key=api_key, base_url=base_url, model=model, dimension=dimension)
+                groups = [missing[start : start + api_batch_size] for start in range(0, len(missing), api_batch_size)]
+                embedding_groups = openai_embedding_batches(
+                    [[item[1] for item in group] for group in groups],
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                    dimension=dimension,
+                )
+                for group, embeddings in zip(groups, embedding_groups):
                     state["paid_calls"] = int(state.get("paid_calls") or 0) + len(group)
                     for (rid, text, copied), embedding in zip(group, embeddings):
                         outputs.append({"id": rid, "embedding": embedding, "text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(), **copied})
         else:
-            for start in range(0, len(pending), api_batch_size):
-                group = pending[start : start + api_batch_size]
-                embeddings = openai_embeddings([item[1] for item in group], api_key=api_key, base_url=base_url, model=model, dimension=dimension)
+            groups = [pending[start : start + api_batch_size] for start in range(0, len(pending), api_batch_size)]
+            embedding_groups = openai_embedding_batches(
+                [[item[1] for item in group] for group in groups],
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                dimension=dimension,
+            )
+            for group, embeddings in zip(groups, embedding_groups):
+                state["paid_calls"] = int(state.get("paid_calls") or 0) + len(group)
                 for (rid, text, copied), embedding in zip(group, embeddings):
                     outputs.append({"id": rid, "embedding": embedding, "text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(), **copied})
         chunk_index = int(state.get("chunks_written") or 0) + 1

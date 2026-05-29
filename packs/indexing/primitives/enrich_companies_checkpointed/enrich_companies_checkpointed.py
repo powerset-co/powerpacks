@@ -14,13 +14,13 @@ or making provider calls.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import re
 import shutil
 import sys
 import tempfile
-import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -29,12 +29,14 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
-from packs.indexing.lib.provider_http import post_json  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_MODEL = "gpt-5.1"
 DEFAULT_MAX_COMPLETION_TOKENS = 1200
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
+DEFAULT_OPENAI_CONCURRENCY = 8
 WORD_RE = re.compile(r"[a-z0-9]+")
 CHAT_MODEL_PRICES_PER_1K_USD = {
     "gpt-5.2": {"input": 0.00175, "output": 0.01400},
@@ -387,27 +389,97 @@ def openai_classification_payload(local: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def call_openai_company_classifier(local: dict[str, Any], *, model: str | None = None, api_key: str | None = None, base_url: str | None = None) -> dict[str, Any]:
-    api_key = api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY or --api-key is required for --provider openai; no API call was made")
+def _parse_chat_json(content: str | None, context: str) -> dict[str, Any]:
+    raw = (content or "{}").strip()
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"{context} returned non-object JSON")
+    return parsed
+
+
+async def call_openai_company_classifier_async(
+    client: AsyncOpenAI,
+    local: dict[str, Any],
+    *,
+    model: str | None,
+    semaphore: asyncio.Semaphore,
+    max_retries: int = 3,
+) -> dict[str, Any]:
     payload = openai_classification_payload(local)
     if model:
         payload["model"] = model
-    url = (base_url or os.getenv("POWERPACKS_OPENAI_BASE") or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-    timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", "60"))
+    async with semaphore:
+        attempt = 0
+        while True:
+            try:
+                response = await client.chat.completions.create(**payload)
+                return _parse_chat_json(response.choices[0].message.content, "OpenAI company classifier")
+            except APIStatusError as exc:
+                status = int(getattr(exc, "status_code", 0) or 0)
+                if status in {408, 409, 429, 500, 502, 503, 504} and attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"OpenAI company classifier failed: HTTP {status}: {getattr(exc, 'message', str(exc))}") from exc
+            except (APIConnectionError, APITimeoutError, TimeoutError, asyncio.TimeoutError) as exc:
+                if attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"OpenAI company classifier failed: network: {exc}") from exc
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"OpenAI company classifier returned invalid JSON: {exc}") from exc
+
+
+async def call_openai_company_classifiers_async(
+    rows: list[dict[str, Any]],
+    *,
+    model: str | None,
+    api_key: str,
+    base_url: str,
+    timeout: int,
+    concurrency: int,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
     try:
-        body = post_json(url, payload, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, timeout=timeout)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI company classifier failed: HTTP {exc.code}: {detail}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise RuntimeError(f"OpenAI company classifier failed: {exc}") from exc
-    content = (((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "{}").strip()
-    parsed = json.loads(content)
-    if not isinstance(parsed, dict):
-        raise RuntimeError("OpenAI company classifier returned non-object JSON")
-    return parsed
+        return await asyncio.gather(*[
+            call_openai_company_classifier_async(client, row, model=model, semaphore=semaphore, max_retries=max_retries)
+            for row in rows
+        ])
+    finally:
+        await client.close()
+
+
+def call_openai_company_classifiers(
+    rows: list[dict[str, Any]],
+    *,
+    model: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    timeout: int | None = None,
+    concurrency: int | None = None,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY or --api-key is required for --provider openai; no API call was made")
+    if not rows:
+        return []
+    return asyncio.run(call_openai_company_classifiers_async(
+        rows,
+        model=model,
+        api_key=api_key,
+        base_url=(base_url or os.getenv("POWERPACKS_OPENAI_BASE") or "https://api.openai.com/v1"),
+        timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
+        concurrency=concurrency or int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY))),
+        max_retries=max_retries,
+    ))
+
+
+def call_openai_company_classifier(local: dict[str, Any], *, model: str | None = None, api_key: str | None = None, base_url: str | None = None) -> dict[str, Any]:
+    return call_openai_company_classifiers([local], model=model, api_key=api_key, base_url=base_url, concurrency=1)[0]
 
 
 def checkpoint_path(output_dir: Path) -> Path:
@@ -549,7 +621,55 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return read_json(manifest) if manifest.exists() else {"status": "completed", "output": str(output_path)}
 
     batch: list[dict[str, Any]] = []
+    paid_pending: list[dict[str, Any]] = []
+    paid_concurrency = int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY)))
+    paid_timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     chunks_this_run = 0
+
+    def flush_output(force: bool = False) -> dict[str, Any] | None:
+        nonlocal batch, chunks_this_run
+        if not batch or (not force and len(batch) < int(args.checkpoint_every)):
+            return None
+        chunk_index = int(state.get("chunks_written") or 0) + 1
+        written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
+        state["chunks_written"] = chunk_index
+        state["companies_written"] = int(state.get("companies_written") or 0) + written
+        save_state(output_dir, state)
+        batch = []
+        chunks_this_run += 1
+        if args.stop_after_chunks and chunks_this_run >= args.stop_after_chunks:
+            return {
+                "status": "partial",
+                "checkpoint": str(checkpoint_path(output_dir)),
+                "chunks_written_total": state["chunks_written"],
+                "input_rows_processed": state["input_rows_processed"],
+                "companies_written": state["companies_written"],
+            }
+        return None
+
+    def flush_paid(force: bool = False) -> dict[str, Any] | None:
+        nonlocal paid_pending
+        paid_flush_size = max(1, min(paid_concurrency, int(args.checkpoint_every)))
+        if not paid_pending or (not force and len(paid_pending) < paid_flush_size):
+            return None
+        pending = paid_pending
+        paid_pending = []
+        try:
+            enrichments = call_openai_company_classifiers(
+                pending,
+                model=getattr(args, "model", None),
+                api_key=getattr(args, "api_key", None),
+                base_url=getattr(args, "base_url", None),
+                timeout=paid_timeout,
+                concurrency=paid_concurrency,
+            )
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        for shaped, enrichment in zip(pending, enrichments):
+            batch.append(merge_enrichment(shaped, enrichment))
+        state["paid_calls"] = int(state.get("paid_calls") or 0) + len(pending)
+        return flush_output(force=True)
+
     for idx, row in iter_unprocessed(input_path, int(state.get("input_rows_processed") or 0)):
         shaped = shape_company(row)
         cached = artifact.get(norm_name(shaped.get("company_name"))) if artifact else None
@@ -569,35 +689,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise SystemExit(f"missing precomputed company artifact for company_name={shaped.get('company_name')!r}")
             if not allow_paid:
                 raise SystemExit("company provider 'openai' requires --allow-paid; no paid API was called")
-            try:
-                shaped = merge_enrichment(shaped, call_openai_company_classifier(shaped, model=getattr(args, "model", None), api_key=getattr(args, "api_key", None), base_url=getattr(args, "base_url", None)))
-            except RuntimeError as exc:
-                raise SystemExit(str(exc)) from exc
-            state["paid_calls"] = int(state.get("paid_calls") or 0) + 1
-        batch.append(shaped)
+            paid_pending.append(shaped)
+            partial = flush_paid()
+            if partial:
+                return partial
+            shaped = None
+        if shaped is not None:
+            batch.append(shaped)
         state["input_rows_processed"] = idx
         if len(batch) >= int(args.checkpoint_every):
-            chunk_index = int(state.get("chunks_written") or 0) + 1
-            written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
-            state["chunks_written"] = chunk_index
-            state["companies_written"] = int(state.get("companies_written") or 0) + written
-            save_state(output_dir, state)
-            batch = []
-            chunks_this_run += 1
-            if args.stop_after_chunks and chunks_this_run >= args.stop_after_chunks:
-                return {
-                    "status": "partial",
-                    "checkpoint": str(checkpoint_path(output_dir)),
-                    "chunks_written_total": state["chunks_written"],
-                    "input_rows_processed": state["input_rows_processed"],
-                    "companies_written": state["companies_written"],
-                }
+            partial = flush_paid(force=True) or flush_output()
+            if partial:
+                return partial
+    partial = flush_paid(force=True)
+    if partial:
+        return partial
     if batch:
-        chunk_index = int(state.get("chunks_written") or 0) + 1
-        written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
-        state["chunks_written"] = chunk_index
-        state["companies_written"] = int(state.get("companies_written") or 0) + written
-        save_state(output_dir, state)
+        partial = flush_output(force=True)
+        if partial:
+            return partial
     return finalize(output_dir, output_path, state)
 
 
