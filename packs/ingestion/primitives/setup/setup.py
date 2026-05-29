@@ -1191,7 +1191,7 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
         'ledger': str(SETUP_REFRESH_LEDGER),
         'source_fingerprint': due.get('source_fingerprint') or linked_source_fingerprint(accounts),
         'linked_sources': due.get('linked_sources') or linked_sources(accounts),
-        'network_changed': bool(before_hash and after_hash and before_hash != after_hash),
+        'network_changed': bool(after_hash and before_hash != after_hash),
         'before_people_sha256': before_hash,
         'after_people_sha256': after_hash,
         'promoted': promoted,
