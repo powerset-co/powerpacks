@@ -24,6 +24,7 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
+from dotenv import load_dotenv  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 
 DEFAULT_DIMENSION = 1536
@@ -337,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--provider", choices=["openai"], default="openai")
     run_p.add_argument("--api-key")
     run_p.add_argument("--base-url")
-    run_p.add_argument("--model", default=DEFAULT_MODEL)
+    run_p.add_argument("--model", default=None)
     run_p.add_argument("--dimension", type=int, default=DEFAULT_DIMENSION)
     run_p.add_argument("--api-batch-size", type=int, default=128)
     run_p.add_argument("--cost-per-1k-tokens", type=float, default=DEFAULT_COST_PER_1K_TOKENS)
@@ -356,6 +357,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    load_dotenv(ROOT / ".env", override=False)
     args = build_parser().parse_args()
     emit(args.func(args))
 

@@ -23,13 +23,24 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
+from dotenv import load_dotenv  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
-DEFAULT_MODEL = "gpt-4o-mini"
-OPENAI_PRICE_PER_1K_INPUT_TOKENS_USD = 0.00015
-OPENAI_PRICE_PER_1K_OUTPUT_TOKENS_USD = 0.00060
+DEFAULT_MODEL = "gpt-5.1"
+CHAT_MODEL_PRICES_PER_1K_USD = {
+    "gpt-5.2": {"input": 0.00175, "output": 0.01400},
+    "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
+    "gpt-5.1": {"input": 0.00125, "output": 0.01000},
+    "gpt-5.1-chat-latest": {"input": 0.00125, "output": 0.01000},
+    "gpt-5": {"input": 0.00125, "output": 0.01000},
+    "gpt-5-chat-latest": {"input": 0.00125, "output": 0.01000},
+    "gpt-5-mini": {"input": 0.00025, "output": 0.00200},
+    "gpt-5-nano": {"input": 0.00005, "output": 0.00040},
+    "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},
+    "gpt-4o-mini-2024-07-18": {"input": 0.00015, "output": 0.00060},
+}
 DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE = 250
 ROLE_FIELDS = ["title_hash", "raw_title", "description", "cluster", "role_ids", "seniority_band", "role_type", "role_track", "specialization", "doc2query", "inferred_skills", "dense_text"]
 
@@ -291,34 +302,34 @@ def collect_role_inputs(flattened: Path) -> list[dict[str, Any]]:
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     roles = collect_role_inputs(Path(args.flattened))
     provider = "input-classifications" if getattr(args, "input_classifications", None) else args.provider
+    model = getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", DEFAULT_MODEL)
     input_tokens = 0
     for role in roles:
         payload = {
-            "model": getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", DEFAULT_MODEL),
+            "model": model,
             "response_format": {"type": "json_object"},
             "messages": role_prompt(role),
             "temperature": 0,
         }
         input_tokens += estimate_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     output_tokens = 0 if provider == "input-classifications" else len(roles) * DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE
-    estimated_cost = 0.0
-    if provider == "openai":
-        estimated_cost = round(
-            (input_tokens / 1000.0) * OPENAI_PRICE_PER_1K_INPUT_TOKENS_USD
-            + (output_tokens / 1000.0) * OPENAI_PRICE_PER_1K_OUTPUT_TOKENS_USD,
-            6,
-        )
+    prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
+    estimated_cost = 0.0 if provider != "openai" else None
+    if prices:
+        estimated_cost = round((input_tokens / 1000.0) * prices["input"] + (output_tokens / 1000.0) * prices["output"], 6)
     return {
         "status": "dry-run",
         "stage": "enrich_roles_checkpointed",
         "provider": provider,
+        "model": model,
         "unique_roles": len(roles),
         "estimated_tokens": input_tokens,
         "estimated_input_tokens": input_tokens,
         "estimated_output_tokens": output_tokens,
         "estimated_calls": 0 if getattr(args, "input_classifications", None) else len(roles),
         "estimated_openai_cost_usd": estimated_cost,
-        "pricing_assumption": "gpt-4o-mini $0.15/M input, $0.60/M output; output tokens estimated",
+        "known_pricing": bool(prices) or provider != "openai",
+        "pricing_assumption": f"{model} known OpenAI pricing; output tokens estimated" if prices else f"{model} pricing unknown; output tokens estimated",
         "would_write": [str(Path(args.output_dir) / "checkpoint.json"), str(Path(args.output_dir) / "roles_with_dense_text_remapped.jsonl")],
     }
 
@@ -413,7 +424,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--input-classifications", help="Precomputed Aleph roles_with_dense_text_remapped.jsonl; not a provider")
     run_p.add_argument("--api-key")
     run_p.add_argument("--base-url")
-    run_p.add_argument("--model", default=DEFAULT_MODEL)
+    run_p.add_argument("--model", default=None)
     run_p.add_argument("--allow-paid", action="store_true")
     run_p.add_argument("--dry-run", action="store_true")
     run_p.add_argument("--force", action="store_true")
@@ -426,6 +437,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    load_dotenv(ROOT / ".env", override=False)
     args = build_parser().parse_args()
     emit(args.func(args))
 

@@ -70,6 +70,7 @@ EMBEDDING_MODEL_PRICES_PER_1K_USD = {
 DEFAULT_ROLE_OUTPUT_TOKENS = 250
 DEFAULT_COMPANY_OUTPUT_TOKENS = 350
 DEFAULT_EMBEDDING_API_BATCH_SIZE = 128
+DEFAULT_CHAT_MODEL = "gpt-5.1"
 
 
 def run_dir(output_dir: Path) -> Path:
@@ -320,7 +321,7 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
     company_provider = "openai" if str(getattr(args, "company_provider", "openai") or "openai") == "llm" else str(getattr(args, "company_provider", "openai") or "openai")
     embedding_provider = str(getattr(args, "embedding_provider", "openai") or "openai")
     role_model = str(getattr(args, "role_openai_model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", enrich_roles_checkpointed.DEFAULT_MODEL))
-    company_model = str(getattr(args, "company_openai_model", None) or os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", "gpt-4o-mini"))
+    company_model = str(getattr(args, "company_openai_model", None) or os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_CHAT_MODEL))
     embedding_model = str(getattr(args, "embedding_openai_model", None) or os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", embed_records_checkpointed.DEFAULT_MODEL))
 
     role_inputs = _role_inputs_for_estimate(people)

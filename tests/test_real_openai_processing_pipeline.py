@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PEOPLE = ROOT / "tests/fixtures/indexing/people.csv"
@@ -78,6 +79,25 @@ def parse_last_json(stdout: str) -> dict:
 
 
 class OpenAIProcessingPipelineTests(unittest.TestCase):
+    def test_pipeline_default_chat_models_are_gpt_5_1(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            input_csv = write_fixture_with_title_hashes(FIXTURE_PEOPLE, Path(td) / "people_with_hashes.csv")
+            args = Namespace(
+                input=str(input_csv),
+                output_dir=str(Path(td) / "pipeline"),
+                default_operator_id="operator:test",
+                limit=1,
+                checkpoint_every=1000,
+                role_openai_model=None,
+                company_openai_model=None,
+                embedding_openai_model=None,
+                dry_run=True,
+            )
+            with mock.patch.dict(os.environ, {}, clear=True):
+                payload = pipeline.estimate_run(args)
+        self.assertEqual(payload["estimated_costs"]["effective_models"]["roles"], "gpt-5.1")
+        self.assertEqual(payload["estimated_costs"]["effective_models"]["companies"], "gpt-5.1")
+
     def test_user_facing_fake_embedding_provider_is_rejected(self) -> None:
         proc = subprocess.run(
             [

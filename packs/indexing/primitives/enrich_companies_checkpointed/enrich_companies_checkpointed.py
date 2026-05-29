@@ -29,12 +29,24 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
+from dotenv import load_dotenv  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
+DEFAULT_MODEL = "gpt-5.1"
 WORD_RE = re.compile(r"[a-z0-9]+")
-OPENAI_PRICE_PER_1K_INPUT_TOKENS_USD = 0.00015
-OPENAI_PRICE_PER_1K_OUTPUT_TOKENS_USD = 0.00060
+CHAT_MODEL_PRICES_PER_1K_USD = {
+    "gpt-5.2": {"input": 0.00175, "output": 0.01400},
+    "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
+    "gpt-5.1": {"input": 0.00125, "output": 0.01000},
+    "gpt-5.1-chat-latest": {"input": 0.00125, "output": 0.01000},
+    "gpt-5": {"input": 0.00125, "output": 0.01000},
+    "gpt-5-chat-latest": {"input": 0.00125, "output": 0.01000},
+    "gpt-5-mini": {"input": 0.00025, "output": 0.00200},
+    "gpt-5-nano": {"input": 0.00005, "output": 0.00040},
+    "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},
+    "gpt-4o-mini-2024-07-18": {"input": 0.00015, "output": 0.00060},
+}
 ALEPH_COMPANY_FIELDS = [
     "company_urn",
     "company_name",
@@ -352,7 +364,7 @@ def apply_artifact(local: dict[str, Any], artifact: dict[str, dict[str, Any]], m
 
 def openai_classification_payload(local: dict[str, Any]) -> dict[str, Any]:
     return {
-        "model": os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", "gpt-4o-mini"),
+        "model": os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL),
         "response_format": {"type": "json_object"},
         "messages": [
             {
@@ -446,27 +458,30 @@ def iter_unprocessed(path: Path, start_index: int) -> Iterable[tuple[int, dict[s
         yield idx, row
 
 
-def estimate_payload(input_path: Path, provider: str, artifact: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+def estimate_payload(input_path: Path, provider: str, artifact: dict[str, dict[str, Any]] | None = None, model_override: str | None = None) -> dict[str, Any]:
     rows = list(read_jsonl(input_path))
     artifact = artifact or {}
+    model = model_override or os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL)
     missing = [clean(row.get("company_name")) for row in rows if provider == "artifact" and norm_name(row.get("company_name")) not in artifact]
     estimated_input_tokens = sum(max(1, len(json.dumps(row, ensure_ascii=False)) // 4) for row in rows)
     estimated_output_tokens = len(rows) * 350
+    prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
+    estimated_cost = 0.0 if provider != "openai" else None
+    if prices:
+        estimated_cost = round((estimated_input_tokens / 1000.0) * prices["input"] + (estimated_output_tokens / 1000.0) * prices["output"], 6)
     return {
         "status": "dry_run",
         "stage": "enrich_companies_checkpointed",
         "provider": provider,
+        "model": model,
         "input": str(input_path),
         "companies": len(rows),
         "batches": len(rows),
         "missing_artifact_companies": missing,
         "estimated_input_tokens": estimated_input_tokens,
         "estimated_output_tokens": estimated_output_tokens,
-        "estimated_openai_cost_usd": round(
-            (estimated_input_tokens / 1000.0) * OPENAI_PRICE_PER_1K_INPUT_TOKENS_USD
-            + (estimated_output_tokens / 1000.0) * OPENAI_PRICE_PER_1K_OUTPUT_TOKENS_USD,
-            6,
-        ) if provider == "openai" else 0.0,
+        "estimated_openai_cost_usd": estimated_cost,
+        "known_pricing": bool(prices) or provider != "openai",
         "will_call_provider": False,
         "will_write_enriched_artifacts": False,
     }
@@ -523,7 +538,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(f"missing company input JSONL: {input_path}")
     artifact = load_company_artifact(getattr(args, "artifact_path", None)) if provider == "artifact" else {}
     if getattr(args, "dry_run", False) or getattr(args, "estimate", False):
-        return estimate_payload(input_path, provider, artifact)
+        return estimate_payload(input_path, provider, artifact, getattr(args, "model", None))
     if provider == "openai" and not getattr(args, "allow_paid", False):
         raise SystemExit("company provider 'openai' requires --allow-paid; no paid API was called")
     state = load_state(output_dir, input_path, int(args.checkpoint_every), provider, getattr(args, "artifact_path", None), bool(args.force))
@@ -600,7 +615,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--dry-run", action="store_true", help="Validate/count/estimate only; no provider calls and no enriched output writes")
     run_p.add_argument("--estimate", action="store_true", help="Alias for --dry-run")
     run_p.add_argument("--allow-paid", action="store_true")
-    run_p.add_argument("--model", default=os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", "gpt-4o-mini"))
+    run_p.add_argument("--model", default=None)
     run_p.add_argument("--api-key")
     run_p.add_argument("--base-url")
     run_p.add_argument("--force", action="store_true")
@@ -613,6 +628,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    load_dotenv(ROOT / ".env", override=False)
     args = build_parser().parse_args()
     emit(args.func(args))
 
