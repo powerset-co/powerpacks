@@ -37,7 +37,7 @@ Gmail accounts, LinkedIn CSV import/enrichment, Twitter, and messages artifacts
 are independent and marked with `parallelizable` plus a reason. Gmail account
 imports use one deterministic child run id per account and isolated output
 directories, so they can run concurrently. LinkedIn uses its own child ledger and
-may block on the existing RapidAPI approval gate. Twitter and messages remain
+may pause for an existing RapidAPI approval confirmation. Twitter and messages remain
 existing-artifact or dedicated-skill workers unless explicitly approved; this
 orchestrator never runs `$import-contacts` research/upload implicitly.
 
@@ -69,7 +69,7 @@ The pipeline writes:
 
 ## Approval behavior
 
-The orchestrator does not bypass child gates. If LinkedIn enrichment needs paid
+The orchestrator does not bypass child confirmations. If LinkedIn enrichment needs paid
 RapidAPI calls, it returns `blocked_approval`; use:
 
 ```bash
@@ -80,6 +80,6 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
 Gmail msgvault import, merge, and DuckDB loading are local-only. Gmail
 email-to-LinkedIn resolution is optional: `--gmail-linkedin-provider harness`
 only prepares prompts; `--gmail-linkedin-provider parallel` is spend-bearing and
-approval-gated. RapidAPI profile hydration only happens after resolutions are
+requires approval. RapidAPI profile hydration only happens after resolutions are
 applied and is delegated to `enrich_people.py` with its normal approval/cache
 behavior.

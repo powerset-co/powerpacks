@@ -56,7 +56,8 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
 ```
 
 `--gmail-linkedin-provider parallel` is spend-bearing and must stop for explicit
-approval. `enrich_people.py` then approval-gates RapidAPI LinkedIn cache misses.
+approval. `enrich_people.py` then asks for approval before RapidAPI LinkedIn
+cache misses.
 
 ## Expected outputs
 

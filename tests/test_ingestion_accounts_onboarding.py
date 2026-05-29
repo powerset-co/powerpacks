@@ -386,7 +386,9 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["status"], "needs_agent_action")
             commands = payload["commands"]
             self.assertEqual(commands[0]["label"], "create_oauth_app_and_authorize_other@example.com")
-            self.assertIn("msgvault_setup.py browser-setup --email other@example.com --add-account", commands[0]["command"])
+            self.assertIn("msgvault_setup.py browser-setup --email other@example.com", commands[0]["command"])
+            self.assertIn(f"--project {onboarding.gmail_oauth_project_id('other@example.com')}", commands[0]["command"])
+            self.assertIn("--add-account", commands[0]["command"])
             self.assertIn("--home", commands[0]["command"])
             self.assertEqual(commands[1]["label"], "rerun_onboarding")
             self.assertIn("--gmail-authorized-email other@example.com", commands[1]["command"])

@@ -88,8 +88,14 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                     out = Path(cmd[cmd.index("--output-dir") + 1])
                     (out / "stats").mkdir(parents=True)
                     (out / "records").mkdir(parents=True)
+                    (out / "roles").mkdir(parents=True)
+                    (out / "company").mkdir(parents=True)
+                    (out / "unified").mkdir(parents=True)
                     (out / "local-search.duckdb").write_text("duckdb", encoding="utf-8")
                     (out / "records/people.records.jsonl").write_text("{}\n", encoding="utf-8")
+                    (out / "roles/roles_with_embeddings.jsonl").write_text("heavy roles\n", encoding="utf-8")
+                    (out / "company/company_embeddings_v3.jsonl").write_text("heavy companies\n", encoding="utf-8")
+                    (out / "unified/summary_embeddings.jsonl").write_text("heavy summaries\n", encoding="utf-8")
                     (out / "stats/bootstrap_from_aleph.json").write_text(
                         json.dumps(
                             {
@@ -152,10 +158,14 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                 names = set(archive.getnames())
             self.assertIn("patrick/import/inputs/contact_rows_min.csv", names)
             self.assertIn("patrick/enrich/resolution/linkedin_resolutions_cached.csv", names)
-            self.assertIn("patrick/processing/search-index/local-search.duckdb", names)
+            self.assertNotIn("patrick/processing/search-index/local-search.duckdb", names)
             self.assertIn("patrick/sync/manifest.json", names)
-            self.assertIn(".powerpacks/search-index/local-search.duckdb", names)
+            self.assertNotIn(".powerpacks/search-index/local-search.duckdb", names)
+            self.assertIn(".powerpacks/search-index/records/people.records.jsonl", names)
             self.assertIn(".powerpacks/search-index/ledger.json", names)
+            self.assertNotIn(".powerpacks/search-index/roles/roles_with_embeddings.jsonl", names)
+            self.assertNotIn(".powerpacks/search-index/company/company_embeddings_v3.jsonl", names)
+            self.assertNotIn(".powerpacks/search-index/unified/summary_embeddings.jsonl", names)
             self.assertFalse(any("msgvault" in name.lower() for name in names))
             self.assertEqual(len(uploads), 3)
 

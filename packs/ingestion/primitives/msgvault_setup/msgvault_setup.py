@@ -284,6 +284,10 @@ def choose_project_id(home: Path, requested_project: str, email: str, account: s
     state_project = validate_project_id(str(state_source.get("project_id") or "")) if state_source.get("project_id") else ""
     if state_project:
         return state_project, {"source": "state", "state_path": str(setup_state_path(home))}
+    if email and account and email.lower() != account.lower():
+        project_id = default_project_id(email)
+        save_oauth_app_state(home, app_name, {"project_id": project_id, "email": email})
+        return project_id, {"source": "deterministic_default", "state_path": str(setup_state_path(home))}
     current = gcloud_value(["config", "get-value", "project", "--quiet"])
     if current.startswith(f"{DEFAULT_PROJECT_NAME}-"):
         save_oauth_app_state(home, app_name, {"project_id": current, "email": email or account})
@@ -315,14 +319,24 @@ def validate_project_id(project_id: str) -> str:
     return project_id
 
 
-def ensure_gcloud_auth(open_browser: bool) -> dict[str, Any]:
+def ensure_gcloud_auth(open_browser: bool, expected_account: str = "") -> dict[str, Any]:
     if not shutil.which("gcloud"):
         return {"status": "error", "message": "gcloud not installed"}
     progress("Checking Google Cloud login...")
+    expected = expected_account.strip()
     account = gcloud_value(["config", "get-value", "account", "--quiet"])
-    if account:
+    needs_login = bool(expected and account and account.lower() != expected.lower())
+    if account and not needs_login:
         token = run_command(["gcloud", "auth", "print-access-token", "--quiet"], timeout=30)
         if token["ok"]:
+            if expected and account.lower() != expected.lower():
+                return {
+                    "status": "error",
+                    "account": account,
+                    "expected_account": expected,
+                    "message": f"Google Cloud login must use {expected}; active account is {account}.",
+                    "login_ran": False,
+                }
             progress(f"Google Cloud login confirmed as {account}.")
             return {"status": "ok", "account": account, "login_ran": False}
         token_error = token.get("stderr") or token.get("stdout") or ""
@@ -334,11 +348,21 @@ def ensure_gcloud_auth(open_browser: bool) -> dict[str, Any]:
                 "login_ran": False,
             }
     cmd = ["gcloud", "auth", "login"]
+    if expected:
+        cmd.append(expected)
     if not open_browser:
         cmd.append("--no-launch-browser")
     progress("Refreshing Google Cloud login...")
     result = run_visible_command(cmd, timeout=900)
     account = gcloud_value(["config", "get-value", "account", "--quiet"])
+    if result["ok"] and expected and account.lower() != expected.lower():
+        return {
+            "status": "error",
+            "account": account,
+            "expected_account": expected,
+            "message": f"Google Cloud login must use {expected}; active account is {account or 'unknown'}.",
+            "login_ran": True,
+        }
     token = run_command(["gcloud", "auth", "print-access-token", "--quiet"], timeout=30) if account else {"ok": False, "stderr": ""}
     if result["ok"] and account and token["ok"]:
         progress(f"Google Cloud login refreshed as {account}.")
@@ -927,6 +951,8 @@ def build_user_action(
             f"Create an OAuth client named {oauth_client_name} with application type Desktop app.",
             "Download the JSON file and pass it back with --client-secret.",
         ],
+        "automation_note": "Workspace accounts may require an internal OAuth audience or adding the Gmail address as a test user before authorization.",
+        "instructions_url": "packs/ingestion/primitives/msgvault_setup/README.md",
         "expected_client_type": "Desktop app",
         "oauth_client_name": oauth_client_name,
         "continue_command": " ".join(cmd),
@@ -1033,7 +1059,10 @@ def cmd_browser_setup(args: argparse.Namespace) -> int:
         )
         return 0
 
-    auth = ensure_gcloud_auth(open_browser=not getattr(args, "no_open_browser", False))
+    auth = ensure_gcloud_auth(
+        open_browser=not getattr(args, "no_open_browser", False),
+        expected_account=args.email,
+    )
     if auth["status"] != "ok":
         emit({"status": "error", "message": "Google login failed.", "gcloud_auth": auth})
         return 1

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -36,6 +37,91 @@ def write_msgvault_db(path: Path) -> None:
 
 
 class ImportNetworkPipelineTests(unittest.TestCase):
+    def test_gmail_api_estimate_uses_oauth_token_without_message_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / "tokens").mkdir()
+            client = home / "client_secret.json"
+            client.write_text(json.dumps({
+                "installed": {
+                    "client_id": "client-id",
+                    "client_secret": "client-secret",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                }
+            }), encoding="utf-8")
+            (home / "config.toml").write_text(f'[oauth]\nclient_secrets = "{client}"\n', encoding="utf-8")
+            (home / "tokens/me@example.com.json").write_text(json.dumps({
+                "access_token": "access-token",
+                "client_id": "client-id",
+                "expiry": (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "refresh_token": "refresh-token",
+                "token_type": "Bearer",
+            }), encoding="utf-8")
+            with mock.patch.object(import_network_pipeline, "gmail_label_totals", return_value=({
+                "INBOX": 90,
+                "SENT": 10,
+                "CATEGORY_SOCIAL": 5,
+                "CATEGORY_PROMOTIONS": 25,
+                "CATEGORY_FORUMS": 10,
+                "CATEGORY_UPDATES": 15,
+            }, "")) as labels:
+                with mock.patch.object(import_network_pipeline, "gmail_message_id_count") as count:
+                    estimate = import_network_pipeline.estimate_gmail_account_via_api(
+                        home,
+                        "me@example.com",
+                        "-category:social -category:promotions -category:forums -category:updates",
+                        ["CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES"],
+                    )
+            self.assertEqual(estimate["status"], "ok")
+            self.assertEqual(estimate["messages_total_estimate"], 100)
+            self.assertIsNone(estimate["messages_matching_sync_query_estimate"])
+            self.assertIsNone(estimate["messages_excluded_by_sync_query_estimate"])
+            self.assertFalse(estimate["privacy"]["message_bodies_read"])
+            self.assertFalse(estimate["privacy"]["message_ids_listed"])
+            labels.assert_called_once()
+            count.assert_not_called()
+
+    def test_gmail_api_estimate_can_count_query_ids_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / "tokens").mkdir()
+            client = home / "client_secret.json"
+            client.write_text(json.dumps({
+                "installed": {
+                    "client_id": "client-id",
+                    "client_secret": "client-secret",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                }
+            }), encoding="utf-8")
+            (home / "config.toml").write_text(f'[oauth]\nclient_secrets = "{client}"\n', encoding="utf-8")
+            (home / "tokens/me@example.com.json").write_text(json.dumps({
+                "access_token": "access-token",
+                "client_id": "client-id",
+                "expiry": (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "refresh_token": "refresh-token",
+                "token_type": "Bearer",
+            }), encoding="utf-8")
+            with mock.patch.object(import_network_pipeline, "gmail_label_totals", return_value=({
+                "INBOX": 90,
+                "SENT": 10,
+                "CATEGORY_SOCIAL": 5,
+                "CATEGORY_PROMOTIONS": 25,
+                "CATEGORY_FORUMS": 10,
+                "CATEGORY_UPDATES": 15,
+            }, "")):
+                with mock.patch.object(import_network_pipeline, "gmail_message_id_count", return_value=({"count": 60, "complete": True, "pages": 2}, "")) as count:
+                    estimate = import_network_pipeline.estimate_gmail_account_via_api(
+                        home,
+                        "me@example.com",
+                        "-category:social -category:promotions -category:forums -category:updates",
+                        ["CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES"],
+                        max_pages=10,
+                    )
+            self.assertEqual(estimate["messages_matching_sync_query_estimate"], 60)
+            self.assertEqual(estimate["messages_excluded_by_sync_query_estimate"], 40)
+            self.assertTrue(estimate["privacy"]["message_ids_listed"])
+            self.assertEqual(count.call_args.args[1], "-category:social -category:promotions -category:forums -category:updates")
+
     def test_msgvault_db_defaults_only_when_gmail_is_requested(self) -> None:
         self.assertEqual(
             import_network_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="", gmail_account_email="me@example.com")),
@@ -178,19 +264,57 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             with mock.patch.object(import_network_pipeline.shutil, "which", return_value="/usr/bin/msgvault"):
                 with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
                     ok = import_network_pipeline.run_source_import_workers(ledger_path, ledger)
-            self.assertCountEqual([cmd for cmd in calls if cmd[0] == "msgvault" and "sync-full" in cmd], [["msgvault", "--home", str(tmp), "sync-full", "me@example.com"], ["msgvault", "--home", str(tmp), "sync-full", "work@example.com"]])
+            default_query = "-category:social -category:promotions -category:forums -category:updates"
+            self.assertCountEqual([cmd for cmd in calls if cmd[0] == "msgvault" and "sync-full" in cmd], [["msgvault", "--home", str(tmp), "sync-full", "me@example.com", "--query", default_query], ["msgvault", "--home", str(tmp), "sync-full", "work@example.com", "--query", default_query]])
             for email in ["me@example.com", "work@example.com"]:
-                sync_index = calls.index(["msgvault", "--home", str(tmp), "sync-full", email])
+                sync_index = calls.index(["msgvault", "--home", str(tmp), "sync-full", email, "--query", default_query])
                 import_index = next(i for i, cmd in enumerate(calls) if "--account-email" in cmd and cmd[cmd.index("--account-email") + 1] == email)
                 self.assertLess(sync_index, import_index)
+                import_cmd = calls[import_index]
+                self.assertIn("--exclude-label", import_cmd)
+                self.assertIn("CATEGORY_PROMOTIONS", import_cmd)
             self.assertTrue(ok)
             self.assertEqual(ledger["steps"]["source_imports"]["status"], "completed")
             self.assertEqual(ledger["steps"]["gmail_msgvault"]["status"], "completed")
             self.assertIn("gmail_msgvault:me-example.com", ledger["steps"])
             self.assertIn("gmail_msgvault:work-example.com", ledger["steps"])
+            self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_query"], default_query)
+            self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["gmail_estimate"]["status"], "token_missing")
             self.assertIn("linkedin_people_csv", ledger["artifacts"])
             self.assertEqual(len(ledger["artifacts"]["gmail_people_csvs"]), 2)
             self.assertTrue(ledger["worker_groups"]["import"]["parallel"])
+
+    def test_gmail_category_mail_can_be_included_for_sync_and_import(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ledger_path = tmp / "ledger.json"
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {
+                    "operator_id": "local",
+                    "msgvault_db": str(tmp / "msgvault.db"),
+                    "gmail_account_emails": ["me@example.com"],
+                    "gmail_linkedin_provider": "off",
+                    "include_category_mail": True,
+                },
+                "steps": {},
+                "artifacts": {},
+            }
+            calls = []
+            def fake_run_cmd(cmd, timeout=None):
+                calls.append(cmd)
+                if cmd[0] == "msgvault" and "sync-full" in cmd:
+                    return 0, {"status": "completed"}, ""
+                people = tmp / "gmail.csv"
+                return 0, {"status": "completed", "artifacts": {"people_csv": str(people)}, "counts": {"contacts_seen": 1, "contacts_written": 1}}, ""
+            with mock.patch.object(import_network_pipeline.shutil, "which", return_value="/usr/bin/msgvault"):
+                with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                    self.assertTrue(import_network_pipeline.run_source_import_workers(ledger_path, ledger))
+            self.assertIn(["msgvault", "--home", str(tmp), "sync-full", "me@example.com"], calls)
+            import_cmd = next(cmd for cmd in calls if any("gmail_network_import.py" in part for part in cmd))
+            self.assertIn("--include-category-mail", import_cmd)
+            self.assertNotIn("--exclude-label", import_cmd)
 
     def test_linkedin_approval_blocks_before_fan_in(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -224,8 +348,39 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
                 self.assertTrue(import_network_pipeline.run_merge(ledger_path, ledger))
             cmd = seen_cmds[0]
+            self.assertIn("--no-discover", cmd)
             input_values = [cmd[i + 1] for i, part in enumerate(cmd) if part == "--input"]
             self.assertEqual(input_values, [str(tmp / "linkedin.csv"), str(tmp / "gmail-a.csv"), str(tmp / "gmail-b.csv")])
+
+    def test_include_existing_artifacts_uses_only_expected_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            base = tmp / ".powerpacks/network-import"
+            canonical = base / "merged/people.csv"
+            stale_discovered = base / "gmail/old-scratch/people.csv"
+            current_gmail = tmp / "current-gmail.csv"
+            current_linkedin = tmp / "current-linkedin.csv"
+            messages = tmp / ".powerpacks/messages/contacts.csv"
+            for path in (canonical, stale_discovered, current_gmail, current_linkedin, messages):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("id\nx\n", encoding="utf-8")
+            ledger = {
+                "input": {"include_existing_artifacts": True},
+                "artifacts": {
+                    "gmail_people_csvs": [str(current_gmail)],
+                    "linkedin_people_csv": str(current_linkedin),
+                },
+            }
+            merge_dir = tmp / "run/merged"
+            with mock.patch.object(import_network_pipeline, "DEFAULT_BASE_DIR", base):
+                paths = import_network_pipeline.merge_input_paths(ledger, merge_dir)
+            self.assertIn(str(canonical), paths)
+            self.assertIn(str(current_linkedin), paths)
+            self.assertIn(str(current_gmail), paths)
+            self.assertNotIn(str(stale_discovered), paths)
+            message_inputs = [path for path in paths if path.endswith("source-inputs/messages/contacts.csv")]
+            self.assertEqual(len(message_inputs), 1)
+            self.assertTrue(Path(message_inputs[0]).exists())
 
     def test_merge_includes_linked_messages_contacts_csv(self) -> None:
         with tempfile.TemporaryDirectory() as td:

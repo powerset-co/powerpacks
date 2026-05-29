@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Package full per-operator Powerpacks bootstrap bundles.
+"""Package per-operator Powerpacks bootstrap bundles.
 
 This is an operator-scoped migration helper for bootstrapping sync/import/
 enrich/processing state from existing Aleph/Powerpacks artifacts. It packages
-the reusable intermediate outputs/checkpoints needed to resume local ingestion
+the reusable outputs/checkpoints needed to resume local ingestion
 without bundling raw msgvault databases, raw mail, message bodies, secrets, or
 provider credentials.
 """
@@ -286,6 +286,19 @@ def copy_file(src: Path, dst: Path) -> bool:
     return True
 
 
+def link_or_copy_file(src: Path, dst: Path) -> bool:
+    if not src.exists():
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() or dst.is_symlink():
+        dst.unlink()
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
+    return True
+
+
 def copy_stage_path(src: Path, restore_powerpacks_root: Path) -> str | None:
     if not src.exists():
         return None
@@ -397,10 +410,10 @@ def make_readme(operator: dict[str, Any], manifest: dict[str, Any]) -> str:
             "- sync/: metadata-only sync status; no raw msgvault DB, raw mail, attachments, secrets, or message bodies.",
             "- import/: contact/source metadata needed by import-network.",
             "- enrich/: LinkedIn resolution and local profile cache checkpoints.",
-            "- processing/search-index/: local search records and local-search.duckdb.",
+            "- .powerpacks/search-index/records/: restore-ready local search records with vectors.",
             "",
             "Local search:",
-            "export POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb",
+            "local-search.duckdb is intentionally not bundled. Rebuild it from .powerpacks/search-index/records/ after restore.",
             "",
             f"Generated: {manifest['generated_at']}",
         ]
@@ -421,6 +434,21 @@ PROCESSING_STEPS = [
     "embed_summaries",
     "build_vectors",
     "validate_contracts",
+]
+
+
+SEARCH_INDEX_RECORD_FILES = [
+    Path("records/people.records.jsonl"),
+    Path("records/summaries.records.jsonl"),
+    Path("records/education.records.jsonl"),
+    Path("records/schools.records.jsonl"),
+    Path("records/companies.records.jsonl"),
+]
+
+SEARCH_INDEX_METADATA_FILES = [
+    Path("manifest.json"),
+    Path("stats/bootstrap_from_aleph.json"),
+    Path("vectors/checkpoint.json"),
 ]
 
 
@@ -453,9 +481,25 @@ def write_processing_restore_ledger(restore_powerpacks_root: Path, operator: dic
             "steps": [{"id": step, "status": "completed"} for step in PROCESSING_STEPS],
             "artifacts": artifacts,
             "bootstrap_stats": stats,
-            "records_dir": str(records_dir),
+            "records_dir": ".powerpacks/search-index/records",
         },
     )
+
+
+def copy_processing_restore_payload(source_dir: Path, restore_powerpacks_root: Path) -> list[str]:
+    dst = restore_powerpacks_root / "search-index"
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.mkdir(parents=True, exist_ok=True)
+
+    copied: list[str] = []
+    for rel in SEARCH_INDEX_RECORD_FILES:
+        if link_or_copy_file(source_dir / rel, dst / rel):
+            copied.append(str(Path(".powerpacks/search-index") / rel))
+    for rel in SEARCH_INDEX_METADATA_FILES:
+        if copy_file(source_dir / rel, dst / rel):
+            copied.append(str(Path(".powerpacks/search-index") / rel))
+    return copied
 
 
 def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_root: Path, output_root: Path) -> dict[str, Any]:
@@ -466,10 +510,6 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
 
     copied: list[str] = []
     missing: list[str] = []
-    network_operator_dir = network_root / "operators" / operator["slug"]
-    copied_network = copy_stage_path(network_operator_dir, restore_powerpacks_root)
-    if copied_network:
-        copied.append(copied_network)
 
     import_ledger_path = operator_dir / "import/outputs/import-network.ledger.json"
     import_ledger = read_json(import_ledger_path) if import_ledger_path.exists() else {}
@@ -497,21 +537,27 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
 
     processing_dir = operator_dir / "processing/search-index"
     if processing_dir.exists():
-        dst = restore_powerpacks_root / "search-index"
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.copytree(processing_dir, dst)
+        copied.extend(copy_processing_restore_payload(processing_dir, restore_powerpacks_root))
         write_processing_restore_ledger(restore_powerpacks_root, operator, processing_dir)
         copied.append(".powerpacks/search-index")
 
     restore_manifest = {
         "status": "ok",
+        "bundle_mode": "restore_records_only",
         "operator": operator["slug"],
         "operator_id": operator["operator_id"],
         "generated_at": now_iso(),
         "restore_root": str(restore_powerpacks_root),
         "normal_pipeline_outputs": copied,
         "missing_referenced_outputs": missing,
+        "excluded_heavy_outputs": [
+            ".powerpacks/search-index/local-search.duckdb",
+            ".powerpacks/search-index/roles",
+            ".powerpacks/search-index/company",
+            ".powerpacks/search-index/unified",
+            ".powerpacks/search-index/roles/embedding_checkpoints",
+            ".powerpacks/search-index/company/embedding_checkpoints",
+        ],
         "commands": {
             "import_dry_run": f"uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --ledger {run_dir_text}/import-network.ledger.json --run-id {Path(run_dir_text).name if run_dir_text else 'network-bootstrap'} --dry-run" if run_dir_text else "",
             "processing_dry_run": "uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --dry-run",
@@ -529,17 +575,19 @@ def package_bundle(operator_dir: Path, restore_powerpacks_root: Path, bundles_di
             archive_path.unlink()
         else:
             raise SystemExit(f"bundle exists: {archive_path}. Use --force to replace.")
-    stage_root = bundles_dir.parent / "bundle-staging" / slug
-    if stage_root.exists():
-        shutil.rmtree(stage_root)
-    stage_root.mkdir(parents=True)
-    shutil.copytree(operator_dir, stage_root / operator_dir.name)
-    if restore_powerpacks_root.exists():
-        shutil.copytree(restore_powerpacks_root, stage_root / ".powerpacks")
     env = os.environ.copy()
     env["COPYFILE_DISABLE"] = "1"
+    archive_path_abs = archive_path.resolve()
+    cmd = ["tar", "-czf", str(archive_path_abs)]
+    if restore_powerpacks_root.exists():
+        # The restore tree already carries the heavy search-index payload. Keep
+        # the operator section lightweight so bundles do not store it twice.
+        cmd.extend(["--exclude", f"{operator_dir.name}/processing"])
+    cmd.extend(["-C", str(operator_dir.parent.resolve()), operator_dir.name])
+    if restore_powerpacks_root.exists():
+        cmd.extend(["-C", str(restore_powerpacks_root.parent.resolve()), ".powerpacks"])
     completed = subprocess.run(
-        ["tar", "-C", str(stage_root), "-czf", str(archive_path), operator_dir.name, ".powerpacks"],
+        cmd,
         capture_output=True,
         text=True,
         env=env,

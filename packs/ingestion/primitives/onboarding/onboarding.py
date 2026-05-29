@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -385,10 +386,16 @@ def messages_link_status(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def gmail_oauth_project_id(email: str) -> str:
+    digest = hashlib.sha1(email.strip().lower().encode("utf-8")).hexdigest()[:14]
+    return f"local-msg-vault-{digest}"
+
+
 def gmail_browser_setup_command(args: argparse.Namespace, email: str) -> dict[str, str]:
     cmd = [
         "uv", "run", "--project", ".", "python", msgvault_setup_py(), "browser-setup",
         "--email", email,
+        "--project", gmail_oauth_project_id(email),
         "--add-account",
         *msgvault_home_args(args),
     ]

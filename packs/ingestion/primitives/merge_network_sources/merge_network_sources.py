@@ -365,7 +365,12 @@ def similar_pairs(rows: list[dict[str, Any]], threshold: float) -> list[dict[str
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    inputs = [Path(p) for p in args.input] if args.input else discover_inputs(Path(args.base_dir))
+    if args.input:
+        inputs = [Path(p) for p in args.input]
+    elif args.no_discover:
+        inputs = []
+    else:
+        inputs = discover_inputs(Path(args.base_dir))
     all_rows: list[dict[str, str]] = []
     per_file: dict[str, int] = {}
     for path in inputs:
@@ -437,6 +442,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
     run.add_argument("--input", action="append", help="Input people.csv, legacy people_harmonic_all.csv, or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
+    run.add_argument("--no-discover", action="store_true", help="Do not discover inputs from the filesystem when --input is omitted")
     run.add_argument("--base-dir", default=".powerpacks")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     run.add_argument("--name-threshold", type=float, default=0.92)

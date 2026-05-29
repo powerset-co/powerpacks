@@ -156,7 +156,220 @@ class SetupPipelineTests(unittest.TestCase):
         (tmp / '.powerpacks/network-import/merged').mkdir(parents=True)
         (tmp / '.powerpacks/network-import/merged/people.csv').write_text('id\n')
         self.assertEqual(setup.status_payload(ns)['search_index_readiness']['status'], 'people_csv_ready_for_processing')
-        self.assertIn('build_processing_pipeline.py plan', setup.status_payload(ns)['search_index_readiness']['plan_command'])
+        plan_command = setup.status_payload(ns)['search_index_readiness']['plan_command']
+        self.assertIn('build_processing_pipeline.py plan', plan_command)
+        self.assertNotIn('--default-operator-id', plan_command)
+
+    def test_status_marks_restored_bootstrap_import_refresh_due_until_live_sync(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {}},
+            'twitter': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
+        }}), encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'pending',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'pending'},
+                'import': {'status': 'pending'},
+                'index': {'status': 'pending'},
+            },
+        }), encoding='utf-8')
+        (tmp / '.powerpacks/network-import/merged').mkdir(parents=True)
+        (tmp / '.powerpacks/network-import/merged/people.csv').write_text('id\np1\n', encoding='utf-8')
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/local-search.duckdb').write_text('db', encoding='utf-8')
+        (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
+
+        payload = setup.status_payload(argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(accounts), setup_ledger=str(ledger)))
+        phases = payload['setup_ledger']['phases']
+        self.assertEqual(payload['setup_ledger']['status'], 'refresh_due')
+        self.assertEqual(phases['link']['status'], 'ready')
+        self.assertEqual(phases['import']['status'], 'refresh_due')
+        self.assertEqual(phases['import']['refresh_due']['reason'], 'never_synced_after_bootstrap')
+        self.assertEqual(phases['index']['status'], 'ready')
+        self.assertIn('run setup refresh', payload['next_actions'])
+
+    def test_status_ready_after_live_refresh_for_same_sources(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        account_payload = {'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+            'twitter': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
+        }}
+        accounts.write_text(json.dumps(account_payload), encoding='utf-8')
+        accounts_summary = setup.accounts_summary(accounts)
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'pending',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'pending'},
+                'import': {'status': 'ready', 'live_refresh': {
+                    'status': 'completed',
+                    'completed_at': setup.now(),
+                    'source_fingerprint': setup.linked_source_fingerprint(accounts_summary),
+                }},
+                'index': {'status': 'pending'},
+            },
+        }), encoding='utf-8')
+        (tmp / '.powerpacks/network-import/merged').mkdir(parents=True)
+        (tmp / '.powerpacks/network-import/merged/people.csv').write_text('id\np1\n', encoding='utf-8')
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/local-search.duckdb').write_text('db', encoding='utf-8')
+        (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
+
+        payload = setup.status_payload(argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(accounts), setup_ledger=str(ledger), refresh_interval_hours=168))
+        self.assertEqual(payload['setup_ledger']['status'], 'ready')
+        self.assertEqual(payload['setup_ledger']['phases']['import']['status'], 'ready')
+        self.assertNotIn('run setup refresh', payload['next_actions'])
+
+    def test_status_rewrites_stale_handoff_commands_to_current_defaults(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+        }}), encoding='utf-8')
+        summary = setup.accounts_summary(accounts)
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'pending',
+            'handoff': {
+                'generated_at': '2026-01-01T00:00:00Z',
+                'commands': {
+                    'import_network_run': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts accounts.json --operator-id old',
+                },
+                'requires_approval': [],
+            },
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'pending'},
+                'import': {'status': 'ready', 'live_refresh': {
+                    'status': 'completed',
+                    'completed_at': setup.now(),
+                    'source_fingerprint': setup.linked_source_fingerprint(summary),
+                }},
+                'index': {'status': 'pending'},
+            },
+        }), encoding='utf-8')
+        (tmp / '.powerpacks/network-import/merged').mkdir(parents=True)
+        (tmp / '.powerpacks/network-import/merged/people.csv').write_text('id\np1\n', encoding='utf-8')
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/local-search.duckdb').write_text('db', encoding='utf-8')
+        (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
+
+        payload = setup.status_payload(argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(accounts), setup_ledger=str(ledger), refresh_interval_hours=168))
+        commands = payload['setup_ledger']['handoff']['commands']
+        self.assertIn('--include-existing-artifacts', commands['import_network_run'])
+        self.assertIn('--include-existing-artifacts', commands['import_network_dry_run'])
+        self.assertIn('destructive_restore_overwrite', {item['id'] for item in payload['setup_ledger']['handoff']['requires_approval']})
+
+    def test_run_refreshes_linked_sources_and_marks_index_stale_when_network_changes(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        account_payload = {'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+            'messages': {
+                'linked': True,
+                'skipped': False,
+                'usernames': ['imessage'],
+                'artifacts': [],
+                'config': {'imessage': {'status': 'ready'}},
+            },
+        }}
+        accounts.parent.mkdir(parents=True, exist_ok=True)
+        accounts.write_text(json.dumps(account_payload), encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'pending',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'pending'},
+                'import': {'status': 'pending'},
+                'index': {'status': 'pending'},
+            },
+        }), encoding='utf-8')
+        (tmp / '.powerpacks/network-import/merged').mkdir(parents=True)
+        (tmp / '.powerpacks/network-import/merged/people.csv').write_text('id\nold\n', encoding='utf-8')
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/local-search.duckdb').write_text('db', encoding='utf-8')
+        (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
+        calls = []
+
+        def fake_run_json_command(cmd):
+            calls.append(cmd)
+            joined = ' '.join(cmd)
+            if 'import_contacts_pipeline.py' in joined:
+                return 0, {'status': 'selected_steps_completed', 'artifacts': {'contacts_csv': '.powerpacks/messages/contacts.csv'}}, ''
+            if 'import_network_pipeline.py' in joined:
+                run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+                merged_dir = run_dir / 'merged'
+                merged_dir.mkdir(parents=True)
+                for name, content in {
+                    'people.csv': 'id\nnew\n',
+                    'network_contacts.csv': 'id\nc1\n',
+                    'network_contact_sources.csv': 'id\ns1\n',
+                    'network_companies.csv': 'id\nco1\n',
+                    'merge_manifest.json': '{}\n',
+                }.items():
+                    (merged_dir / name).write_text(content, encoding='utf-8')
+                duckdb_dir = run_dir / 'duckdb'
+                duckdb_dir.mkdir(parents=True)
+                duckdb = duckdb_dir / 'network.setup-refresh-test.duckdb'
+                manifest = duckdb_dir / 'manifest.setup-refresh-test.json'
+                duckdb.write_text('duckdb', encoding='utf-8')
+                manifest.write_text('{}\n', encoding='utf-8')
+                return 0, {
+                    'status': 'completed',
+                    'run_id': 'setup-refresh-test',
+                    'artifacts': {
+                        'merged_people_csv': str(merged_dir / 'people.csv'),
+                        'network_contacts_csv': str(merged_dir / 'network_contacts.csv'),
+                        'network_contact_sources_csv': str(merged_dir / 'network_contact_sources.csv'),
+                        'network_companies_csv': str(merged_dir / 'network_companies.csv'),
+                        'merge_manifest': str(merged_dir / 'merge_manifest.json'),
+                        'duckdb': str(duckdb),
+                        'duckdb_manifest': str(manifest),
+                    },
+                }, ''
+            raise AssertionError(f'unexpected command: {cmd}')
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            refresh_interval_hours=168,
+        )
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            code = setup.run_setup(args)
+        self.assertEqual(code, 0)
+        message_cmd = next(cmd for cmd in calls if 'import_contacts_pipeline.py' in ' '.join(cmd))
+        self.assertIn('--parallel-timeout', message_cmd)
+        self.assertIn('--reuse-existing-artifacts', message_cmd)
+        self.assertNotIn('--force-imessage', message_cmd)
+        self.assertNotIn('--force-whatsapp', message_cmd)
+        network_cmd = next(cmd for cmd in calls if 'import_network_pipeline.py' in ' '.join(cmd))
+        self.assertIn('--include-existing-artifacts', network_cmd)
+        self.assertEqual((tmp / '.powerpacks/network-import/merged/people.csv').read_text(encoding='utf-8'), 'id\nnew\n')
+        self.assertTrue((tmp / '.powerpacks/network-import/duckdb/network.duckdb').exists())
+        saved = json.loads(ledger.read_text(encoding='utf-8'))
+        self.assertEqual(saved['status'], 'needs_index_processing')
+        self.assertEqual(saved['phases']['import']['status'], 'ready')
+        self.assertEqual(saved['phases']['import']['live_refresh']['status'], 'completed')
+        self.assertTrue(saved['phases']['import']['live_refresh']['network_changed'])
+        self.assertEqual(saved['phases']['index']['status'], 'needs_processing')
 
     def test_handoff_structured_approvals_and_worker_group(self):
         tmp = self.temp_workspace()
@@ -173,6 +386,8 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertTrue(payload['worker_groups']['import']['parallel'])
         self.assertIn('import_network_fan_in', payload['commands'])
         self.assertIn('processing_plan', payload['commands'])
+        self.assertIn('--include-existing-artifacts', payload['commands']['import_network_run'])
+        self.assertIn('--include-existing-artifacts', payload['commands']['import_network_dry_run'])
         jobs = payload['worker_groups']['import']['jobs']
         self.assertEqual([job['id'] for job in jobs if job['source'] == 'gmail'], ['gmail:me@example.com', 'gmail:work@example.com'])
         self.assertTrue(all('--ledger .powerpacks/network-import/import-network-run.' in job['command'] for job in jobs))
@@ -242,6 +457,7 @@ class SetupPipelineTests(unittest.TestCase):
         for required in [
             'bootstrap',
             'link-only',
+            'automatically refresh linked sources',
             'msgvault',
             'msgvault sync-full',
             'add-test-users',
@@ -269,7 +485,8 @@ class SetupPipelineTests(unittest.TestCase):
             'I won’t upload anything automatically',
             'Use jargon only in hidden/internal notes',
             'Use normal user language',
-            'combine the imported people and companies into one local network',
+            'refresh anything that is missing or stale',
+            'include existing artifacts',
         ]:
             self.assertIn(required, setup_text)
         for required in [

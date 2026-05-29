@@ -9,6 +9,7 @@ from packs.ingestion.schemas.company_identity import (
     build_company_identity_lookup,
     extract_company_public_identifier,
     extract_rapidapi_company_id,
+    generate_title_hash,
     normalize_company_linkedin_url,
     rapidapi_experience_to_powerpacks,
     resolve_company_identity,
@@ -102,11 +103,24 @@ class CompanyIdentityTests(unittest.TestCase):
         self.assertFalse(converted["is_current_position"])
         self.assertEqual(converted["location"], "NYC")
         self.assertEqual(converted["source"], "rapidapi")
+        self.assertEqual(converted["title_hash"], generate_title_hash("CEO", "Built things"))
 
         current = rapidapi_experience_to_powerpacks({"title": "Now", "start_year": "2023"})
         self.assertEqual(current["starts_at"], {"year": 2023, "month": None, "day": None})
         self.assertIsNone(current["ends_at"])
         self.assertTrue(current["is_current_position"])
+        self.assertEqual(current["title_hash"], generate_title_hash("Now", ""))
+
+    def test_title_hash_matches_aleph_contract(self) -> None:
+        self.assertEqual(
+            generate_title_hash("Staff Engineer\nPlatform", "Built APIs\r\nand infrastructure"),
+            generate_title_hash("Staff Engineer Platform", "Built APIs  and infrastructure"),
+        )
+        self.assertEqual(
+            generate_title_hash("Engineer", "x" * 600),
+            generate_title_hash("Engineer", "x" * 500),
+        )
+        self.assertEqual(rapidapi_experience_to_powerpacks({"description": "No title"})["title_hash"], "")
 
 
 if __name__ == "__main__":

@@ -22,4 +22,4 @@ uv run --project . python packs/ingestion/primitives/account_registry/account_re
   --channel linkedin_csv --username <label> --artifact <people_csv> --success
 ```
 
-External provider enrichment is approval-gated.
+External provider enrichment requires approval.

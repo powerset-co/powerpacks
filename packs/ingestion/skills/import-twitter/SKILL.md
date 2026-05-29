@@ -8,7 +8,7 @@ description: Import or smoke-test Twitter/X network artifacts through the RapidA
 Use this skill for `$import-twitter` or Twitter/X network import testing.
 
 This is an alias/wrapper around `twitter_network_import`. The production source
-crawl is RapidAPI-backed and approval-gated. Keep artifacts under
+crawl is RapidAPI-backed and requires approval. Keep artifacts under
 `.powerpacks/network-import/twitter/`.
 
 ## Jake 10-row sanity command
@@ -33,8 +33,8 @@ uv run --project . python packs/ingestion/primitives/twitter_network_import/twit
 ## Notes
 
 - Requires a RapidAPI Twitter key subscribed to `twitter241` (`RAPIDAPI_TWITTER_KEY` or `RAPIDAPI_KEY`).
-- MOE uses OpenAI and is approval-gated; do not run deep research for this smoke.
-- RapidAPI LinkedIn validation uses `RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` and is approval-gated.
+- MOE uses OpenAI and requires approval; do not run deep research for this smoke.
+- RapidAPI LinkedIn validation uses `RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` and requires approval.
 - Final output should include `people.csv`; summarize as `x/10 linkedins` plus counts, not raw rows.
 
 After Twitter finishes, run `$import-network --include-existing-artifacts` or the import-network primitive to merge into local network contacts and DuckDB.

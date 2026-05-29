@@ -81,7 +81,7 @@ def company_from_position(position: dict[str, Any]) -> str:
 
 
 def title_hash(title: str, description: str) -> str:
-    raise RuntimeError("title_hash must come from upstream Aleph/DVC checkpoint data; no local fallback hash is allowed")
+    raise RuntimeError("title_hash must come from upstream import/enrichment or Aleph bootstrap data; no local fallback hash is allowed")
 
 
 def shape_role(row: dict[str, Any]) -> dict[str, Any]:
@@ -100,7 +100,7 @@ def role_input(person: dict[str, Any], position: dict[str, Any]) -> dict[str, An
     company = company_from_position(position)
     upstream_title_hash = clean(position.get("title_hash") or person.get("title_hash"))
     if not upstream_title_hash:
-        raise RuntimeError(f"missing upstream title_hash for role {title!r}; run one-time Aleph bootstrap or copy the exact DVC hash stage first")
+        raise RuntimeError(f"missing upstream title_hash for role {title!r}; rebuild import/enrichment artifacts or restore an Aleph bootstrap with title_hash values")
     return {
         "title_hash": upstream_title_hash,
         "raw_title": title,
@@ -212,7 +212,7 @@ def chunk_path(output_dir: Path, chunk_index: int) -> Path:
 
 
 def default_state(flattened: Path, output_dir: Path, checkpoint_every: int, provider: str, input_classifications: str | None) -> dict[str, Any]:
-    return {"status": "running", "created_at": now_iso(), "updated_at": now_iso(), "flattened": str(flattened), "output_dir": str(output_dir), "checkpoint_every": checkpoint_every, "input_rows_processed": 0, "positions_seen": 0, "unique_roles_written": 0, "chunks_written": 0, "seen_title_hashes": [], "provider": provider, "input_classifications": input_classifications, "hash_contract": "md5(normalized_title + '::' + normalized_description)"}
+    return {"status": "running", "created_at": now_iso(), "updated_at": now_iso(), "flattened": str(flattened), "output_dir": str(output_dir), "checkpoint_every": checkpoint_every, "input_rows_processed": 0, "positions_seen": 0, "unique_roles_written": 0, "chunks_written": 0, "seen_title_hashes": [], "provider": provider, "input_classifications": input_classifications, "hash_contract": "md5(normalized_title + '|' + normalized_description[:500])[:16]"}
 
 
 def load_state(flattened: Path, output_dir: Path, checkpoint_every: int, force: bool, provider: str, input_classifications: str | None) -> dict[str, Any]:

@@ -386,6 +386,23 @@ class ImportContactsPipelineTests(unittest.TestCase):
             run_command.assert_not_called()
             self.assertEqual(mod.read_json(ledger_path)["steps"]["ensure_contacts"]["status"], "completed")
 
+    def test_forced_channel_refresh_rebuilds_existing_contacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            contacts = Path(tmp) / "contacts.csv"
+            contacts.write_text(",".join(mod.CONTACT_CSV_HEADERS) + "\n", encoding="utf-8")
+            imessage = Path(tmp) / "imessage.contacts.csv"
+            imessage.write_text("phone,name\n+15550000001,Ada\n", encoding="utf-8")
+            args = SimpleNamespace(contacts=contacts, timeout=30, env_file=".env", force_imessage=True, force_whatsapp=False)
+            merge_payload = {"primitive": "merge_message_contacts", "counts": {"rows_written": 1}}
+            with mock.patch.object(mod, "DEFAULT_IMESSAGE_CONTACTS", imessage):
+                with mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", Path(tmp) / "missing-whatsapp.csv"):
+                    with mock.patch.object(mod, "run_command", return_value={"returncode": 0, "json": merge_payload}) as run_command:
+                        mod.ensure_contacts(args, ledger_path, ledger)
+            run_command.assert_called_once()
+            self.assertEqual(mod.read_json(ledger_path)["steps"]["ensure_contacts"]["summary"]["source"], "merged_channel_exports")
+
     def test_new_run_archives_previous_contact_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"
@@ -451,6 +468,24 @@ class ImportContactsPipelineTests(unittest.TestCase):
             contacts.write_text("old\n", encoding="utf-8")
             args = SimpleNamespace(
                 command="continue",
+                ledger=Path(tmp) / "import-run.json",
+                contacts=contacts,
+                candidates=Path(tmp) / "powerset_contacts.csv",
+                research_queue=Path(tmp) / "research_queue.csv",
+                review_csv=Path(tmp) / "research_review.csv",
+                retarget_queue=Path(tmp) / "retarget_queue.csv",
+                retarget_ledger=Path(tmp) / "retarget_attempts.json",
+            )
+            self.assertIsNone(mod.archive_existing_run_artifacts(args))
+            self.assertTrue(contacts.exists())
+
+    def test_reuse_existing_artifacts_does_not_archive_previous_contact_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            contacts = Path(tmp) / "contacts.csv"
+            contacts.write_text("old\n", encoding="utf-8")
+            args = SimpleNamespace(
+                command="run",
+                reuse_existing_artifacts=True,
                 ledger=Path(tmp) / "import-run.json",
                 contacts=contacts,
                 candidates=Path(tmp) / "powerset_contacts.csv",

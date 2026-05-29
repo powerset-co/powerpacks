@@ -63,7 +63,7 @@ approval. Continue?
 ```
 
 After confirmation, run the pipeline until it completes or reaches a real
-approval gate. Do not ask again for routine local metadata import work.
+approval confirmation. Do not ask again for routine local metadata import work.
 
 ## Inputs
 
@@ -87,7 +87,7 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
 Twitter imports, and existing messages/iMessage/WhatsApp artifacts have no
 cross-source dependency, so `$setup` may dispatch them in parallel sub-agents.
 The fan-in merge and network DuckDB phases must wait for all selected source
-workers to complete or block on an approval gate.
+workers to complete or block on an approval confirmation.
 
 That paragraph is for execution planning. Do not repeat it to the user. Say:
 
@@ -99,7 +99,8 @@ then combine the results when they finish.
 For manual worker fan-out, run source workers with `--only-source` and isolated
 ledgers/run ids, then run the normal command (or `--fan-in-only`) for merge and
 DuckDB after all source workers finish. Do not approve RapidAPI/Parallel/OpenAI
-gates inside workers; return those gates to the main thread.
+spend confirmations inside workers; return those confirmations to the main
+thread.
 
 ## Bootstrap Prior Checkpoints
 
@@ -120,7 +121,7 @@ uv run --project . python packs/ingestion/primitives/bootstrap_network_from_expo
 Then run the command printed in
 `.powerpacks/network-bootstrap/operators/<operator-slug>/outputs/commands.txt`.
 
-Resume after a child approval gate:
+Resume after a child approval confirmation:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve

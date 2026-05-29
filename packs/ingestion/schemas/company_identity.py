@@ -7,6 +7,7 @@ identifiers and are never promoted into RapidAPI company IDs or company keys.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import urllib.parse
@@ -19,12 +20,30 @@ _LOOKUP_RAPIDAPI_ID_FIELDS = ("rapidapi_company_id", "company_id", "companyId")
 _LINKEDIN_URL_FIELDS = ("linkedin_url", "company_linkedin_url", "company_linkedin_profile_url")
 _SLUG_FIELDS = ("company_public_identifier", "public_identifier", "linkedin_slug")
 _NAME_FIELDS = ("company_name", "name")
+TITLE_HASH_MAX_DESCRIPTION_LENGTH = 500
 
 
 def _clean_string(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _normalize_title_hash_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\n", " ").replace("\r", " ").strip()
+
+
+def generate_title_hash(raw_title: Any, description: Any = "") -> str:
+    """Generate the canonical Aleph-compatible hash for a role title."""
+
+    title = _normalize_title_hash_text(raw_title)
+    if not title:
+        return ""
+    desc = "" if description is None else str(description)
+    normalized_desc = _normalize_title_hash_text(desc[:TITLE_HASH_MAX_DESCRIPTION_LENGTH])
+    return hashlib.md5(f"{title}|{normalized_desc}".encode()).hexdigest()[:16]
 
 
 def _is_harmonic_urn(value: Any) -> bool:
@@ -333,6 +352,7 @@ def rapidapi_experience_to_powerpacks(
     exp = exp if isinstance(exp, dict) else {}
     identity = resolve_company_identity(exp, lookup)
     title = _first_string(exp, ("title", "position", "role"))
+    description = _first_string(exp, ("description", "summary"))
     company_name = identity.get("company_name") or _company_name(exp)
     starts_at = _date_from_fields(
         exp,
@@ -361,7 +381,8 @@ def rapidapi_experience_to_powerpacks(
         "company_public_identifier": identity.get("company_public_identifier", ""),
         "company_linkedin_url": identity.get("company_linkedin_url", ""),
         "company_key": identity.get("company_key", ""),
-        "description": _first_string(exp, ("description", "summary")),
+        "description": description,
+        "title_hash": generate_title_hash(title, description),
         "starts_at": starts_at,
         "ends_at": ends_at,
         "is_current_position": bool(is_current),

@@ -1,6 +1,6 @@
 ---
 name: import-contacts
-description: One-command guided contact import workflow. Orchestrates iMessage, WhatsApp, merge, Powerset matching, research, review, retarget feedback, and upload gates.
+description: One-command guided contact import workflow. Orchestrates iMessage, WhatsApp, merge, Powerset matching, research, review, retarget feedback, and upload confirmations.
 ---
 
 # Import Contacts
@@ -172,8 +172,8 @@ Do not treat long-running stages as failures just because they are quiet.
 - Network-review scoring writes `03_network_review.json` cache files and can
   take minutes when many new researched profiles need scoring.
 
-At 10k contacts, expect local steps to remain viable but LLM and research gates
-to dominate. At 100k contacts, do not assume the current one-shot flow is the
+At 10k contacts, expect local steps to remain viable but LLM and research
+confirmations to dominate. At 100k contacts, do not assume the current one-shot flow is the
 right path; pause and inspect counts/estimates before approving spend.
 
 ## Loop

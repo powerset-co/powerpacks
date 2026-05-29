@@ -355,12 +355,14 @@ def load_by_ids(path: Path, ids: set[str], key: str) -> tuple[dict[str, dict[str
     scanned = 0
     if not ids:
         return out, scanned
+    remaining = set(ids)
     for row in read_jsonl(path):
         scanned += 1
         rid = clean(row.get(key))
-        if rid in ids:
+        if rid in remaining:
             out[rid] = row
-            if set(out) >= ids:
+            remaining.remove(rid)
+            if not remaining:
                 break
     return out, scanned
 
@@ -376,12 +378,14 @@ def iter_csv_dicts(path: Path) -> Iterable[dict[str, str]]:
 def load_csv_by_ids(path: Path, ids: set[str]) -> tuple[dict[str, dict[str, Any]], int]:
     out: dict[str, dict[str, Any]] = {}
     scanned = 0
+    remaining = set(ids)
     for row in iter_csv_dicts(path):
         scanned += 1
         rid = clean(row.get("id") or row.get("person_id") or row.get("base_person_id"))
-        if rid in ids:
+        if rid in remaining:
             out[rid] = row
-            if set(out) >= ids:
+            remaining.remove(rid)
+            if not remaining:
                 break
     return out, scanned
 
@@ -679,7 +683,10 @@ def main() -> None:
     by_operator, emails = load_operator_access(access_path)
     mode = "operator_access" if by_operator else "smoke"
     if args.operator_id:
-        operators = [(args.operator_id, by_operator.get(args.operator_id, set()), args.operator_email or emails.get(args.operator_id))]
+        selected_ids = by_operator.get(args.operator_id, set())
+        if by_operator and not selected_ids:
+            raise SystemExit(f"operator access has no rows for operator_id {args.operator_id}")
+        operators = [(args.operator_id, selected_ids, args.operator_email or emails.get(args.operator_id))]
     else:
         operators = [(op, ids, emails.get(op)) for op, ids in sorted(by_operator.items())]
     if not operators:

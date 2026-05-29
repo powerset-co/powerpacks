@@ -95,6 +95,8 @@ class MsgvaultSetupTests(unittest.TestCase):
         self.assertEqual(payload["status"], "needs_user_action")
         self.assertEqual(payload["action"]["expected_client_type"], "Desktop app")
         self.assertEqual(payload["action"]["oauth_client_name"], "local-msg-vault")
+        self.assertIn("Workspace accounts", payload["action"]["automation_note"])
+        self.assertIn("msgvault_setup", payload["action"]["instructions_url"])
         self.assertIn("--client-secret /path/to/client_secret.json", payload["action"]["continue_command"])
         self.assertIn("gmail.googleapis.com", payload["action"]["urls"]["gmail_api"])
 
@@ -112,25 +114,14 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertEqual(project_id, "local-msg-vault-state1")
             self.assertEqual(choice["source"], "state")
 
-    def test_choose_project_reuses_existing_local_project(self):
+    def test_choose_project_defaults_from_supplied_email_without_gcloud_state(self):
         with tempfile.TemporaryDirectory() as tmp, \
-            mock.patch.object(msgvault_setup, "gcloud_value", return_value="powerset-search"), \
-            mock.patch.object(msgvault_setup, "local_msg_vault_projects", return_value=[
-                {"projectId": "local-msg-vault-newest", "createTime": "2026-01-02T00:00:00Z"},
-                {"projectId": "local-msg-vault-oldest", "createTime": "2026-01-01T00:00:00Z"},
-            ]):
-            project_id, choice = msgvault_setup.choose_project_id(Path(tmp), "", "me@example.com", "me@example.com")
-            self.assertEqual(project_id, "local-msg-vault-newest")
-            self.assertEqual(choice["source"], "existing_local_msg_vault_project")
-
-    def test_choose_project_saves_current_local_project(self):
-        with tempfile.TemporaryDirectory() as tmp, \
-            mock.patch.object(msgvault_setup, "gcloud_value", return_value="local-msg-vault-current1"):
+            mock.patch.object(msgvault_setup, "gcloud_value", side_effect=AssertionError("must not inspect gcloud project")):
             home = Path(tmp)
-            project_id, choice = msgvault_setup.choose_project_id(home, "", "me@example.com", "me@example.com")
-            self.assertEqual(project_id, "local-msg-vault-current1")
-            self.assertEqual(choice["source"], "gcloud_current_project")
-            self.assertEqual(msgvault_setup.load_setup_state(home)["project_id"], "local-msg-vault-current1")
+            project_id, choice = msgvault_setup.choose_project_id(home, "", "me@example.com", "other@example.com")
+            self.assertEqual(project_id, msgvault_setup.default_project_id("me@example.com"))
+            self.assertEqual(choice["source"], "deterministic_default")
+            self.assertEqual(msgvault_setup.load_setup_state(home)["project_id"], project_id)
 
     def test_gcloud_reauth_error_detection(self):
         self.assertTrue(msgvault_setup.is_gcloud_reauth_error("There was a problem refreshing your current auth tokens"))
@@ -159,6 +150,44 @@ class MsgvaultSetupTests(unittest.TestCase):
             result = msgvault_setup.ensure_gcloud_auth(open_browser=True)
         self.assertEqual(result["status"], "ok")
         self.assertTrue(result["login_ran"])
+
+    def test_ensure_gcloud_auth_targets_expected_account(self):
+        calls = []
+        accounts = iter(["other@example.com", "me@example.com"])
+
+        def fake_gcloud_value(args):
+            if args[:3] == ["config", "get-value", "account"]:
+                return next(accounts)
+            return ""
+
+        def fake_visible(cmd, **kwargs):
+            calls.append(cmd)
+            return {"ok": True, "returncode": 0, "message": ""}
+
+        with mock.patch.object(msgvault_setup.shutil, "which", return_value="/bin/gcloud"), \
+            mock.patch.object(msgvault_setup, "gcloud_value", side_effect=fake_gcloud_value), \
+            mock.patch.object(msgvault_setup, "run_command", return_value={"ok": True, "stdout": "token", "stderr": ""}), \
+            mock.patch.object(msgvault_setup, "run_visible_command", side_effect=fake_visible):
+            result = msgvault_setup.ensure_gcloud_auth(
+                open_browser=False,
+                expected_account="me@example.com",
+            )
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["account"], "me@example.com")
+        self.assertEqual(calls, [["gcloud", "auth", "login", "me@example.com", "--no-launch-browser"]])
+
+    def test_ensure_gcloud_auth_rejects_wrong_account_after_login(self):
+        with mock.patch.object(msgvault_setup.shutil, "which", return_value="/bin/gcloud"), \
+            mock.patch.object(msgvault_setup, "gcloud_value", return_value="other@example.com"), \
+            mock.patch.object(msgvault_setup, "run_command", return_value={"ok": True, "stdout": "token", "stderr": ""}), \
+            mock.patch.object(msgvault_setup, "run_visible_command", return_value={"ok": True, "returncode": 0, "message": ""}):
+            result = msgvault_setup.ensure_gcloud_auth(
+                open_browser=True,
+                expected_account="me@example.com",
+            )
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["expected_account"], "me@example.com")
+        self.assertIn("must use me@example.com", result["message"])
 
     def test_setup_without_secret_prompts_for_oauth_json(self):
         with tempfile.TemporaryDirectory() as tmp, \
@@ -214,7 +243,7 @@ class MsgvaultSetupTests(unittest.TestCase):
             home = tmp_path / "msgvault"
             self.write_secret(secret)
             with mock.patch.object(msgvault_setup, "ensure_msgvault", return_value={"installed": True, "path": "/bin/msgvault"}), \
-                mock.patch.object(msgvault_setup, "ensure_gcloud_auth", return_value={"status": "ok", "account": "me@example.com"}), \
+                mock.patch.object(msgvault_setup, "ensure_gcloud_auth", return_value={"status": "ok", "account": "me@example.com"}) as auth, \
                 mock.patch.object(msgvault_setup, "create_gcloud_project", return_value={"status": "ok", "project": "local-msg-vault-test", "created": True}), \
                 mock.patch.object(msgvault_setup, "set_gcloud_project", return_value={"status": "ok"}), \
                 mock.patch.object(msgvault_setup, "enable_gmail_api", return_value={"status": "ok"}), \
@@ -236,6 +265,7 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertEqual(payload["status"], "ok")
             self.assertEqual(payload["oauth_client_name"], "local-msg-vault")
             self.assertTrue((home / "client_secret.json").exists())
+            auth.assert_called_once_with(open_browser=True, expected_account="me@example.com")
 
     def test_browser_setup_skips_when_client_secret_is_already_configured(self):
         with tempfile.TemporaryDirectory() as tmp:

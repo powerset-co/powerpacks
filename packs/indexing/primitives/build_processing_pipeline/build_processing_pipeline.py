@@ -435,7 +435,7 @@ def _role_hashes_for_flattened(people: list[dict[str, Any]]) -> list[str]:
             upstream_title_hash = str(exp.get("title_hash") or person.get("title_hash") or "").strip()
             title = str(exp.get("title") or exp.get("position_title") or exp.get("role") or "").strip()
             if not upstream_title_hash and title:
-                raise RuntimeError(f"missing upstream title_hash for role {title!r}; run one-time Aleph bootstrap or copy the exact DVC hash stage first")
+                raise RuntimeError(f"missing upstream title_hash for role {title!r}; rebuild import/enrichment artifacts or restore an Aleph bootstrap with title_hash values")
             if upstream_title_hash:
                 hashes.append(upstream_title_hash)
     return hashes

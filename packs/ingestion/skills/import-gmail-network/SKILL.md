@@ -14,7 +14,7 @@ task JSON, or `../aleph-mvp`; code must live inside Powerpacks.
 
 ## Consent / approval model
 
-Current V1 has no spend/write approval gates because it only reads local
+Current V1 has no spend/write approval confirmations because it only reads local
 msgvault metadata and writes local artifacts. Stop for explicit approval before
 any uploads, source seeding, production mutation, or paid enrichment.
 

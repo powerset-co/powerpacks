@@ -18,6 +18,10 @@ from typing import Any
 
 ROOT = Path.cwd()
 SETUP_LEDGER = Path('.powerpacks/setup/setup-run.json')
+DEFAULT_REFRESH_INTERVAL_HOURS = 168
+DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS', '900'))
+SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/import-network-run.setup-refresh.json')
+SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
 REQUIRED_PRIVACY = [
     'raw_msgvault_db_copied', 'raw_mail_copied', 'message_bodies_copied',
     'attachments_copied', 'secrets_copied',
@@ -47,6 +51,10 @@ APPROVALS = [
 ]
 
 
+def approval_payload() -> list[dict[str, str]]:
+    return [{'id': k, 'description': d} for k, d in APPROVALS]
+
+
 def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
@@ -62,6 +70,36 @@ def read_json(path: Path) -> Any:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+
+
+def parse_json_fragment(text: str) -> Any:
+    decoder = json.JSONDecoder()
+    for idx, char in enumerate(text or ''):
+        if char not in '[{':
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[idx:])
+            return value
+        except json.JSONDecodeError:
+            continue
+    raise json.JSONDecodeError('no JSON object or array found', text or '', 0)
+
+
+def tail(text: str, limit: int = 4000) -> str:
+    if not text:
+        return ''
+    return text[-limit:]
+
+
+def run_json_command(cmd: list[str], timeout: int = 6 * 60 * 60) -> tuple[int, dict[str, Any], str]:
+    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+    payload: dict[str, Any]
+    try:
+        parsed = parse_json_fragment(proc.stdout)
+        payload = parsed if isinstance(parsed, dict) else {'payload': parsed}
+    except json.JSONDecodeError:
+        payload = {}
+    return proc.returncode, payload, proc.stderr
 
 
 def sha256_file(path: Path) -> str:
@@ -93,6 +131,26 @@ def load_setup_ledger(path: Path = SETUP_LEDGER) -> dict[str, Any]:
 def save_setup_ledger(ledger: dict[str, Any], path: Path = SETUP_LEDGER) -> None:
     ledger['updated_at'] = now()
     write_json(path, ledger)
+
+
+def parse_iso(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace('Z', '+00:00')
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def age_hours(value: Any) -> float | None:
+    parsed = parse_iso(value)
+    if parsed is None:
+        return None
+    return (datetime.now(timezone.utc) - parsed).total_seconds() / 3600
 
 
 def safe_member_name(name: str) -> PurePosixPath:
@@ -556,6 +614,69 @@ def accounts_summary(path: Path) -> dict[str, Any]:
     return {'exists': True, 'version': data.get('version'), 'channels': channels}
 
 
+def linked_source_fingerprint(accounts: dict[str, Any]) -> str:
+    channels = accounts.get('channels') or {}
+    linked = {
+        ch: {
+            'status': rec.get('status'),
+            'linked': bool(rec.get('linked')),
+            'skipped': bool(rec.get('skipped')),
+            'config': rec.get('config') or {},
+        }
+        for ch, rec in sorted(channels.items())
+        if isinstance(rec, dict) and (rec.get('linked') or rec.get('skipped'))
+    }
+    raw = json.dumps(linked, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]
+
+
+def linked_sources(accounts: dict[str, Any]) -> list[str]:
+    channels = accounts.get('channels') or {}
+    return sorted(ch for ch, rec in channels.items() if isinstance(rec, dict) and rec.get('linked'))
+
+
+def import_refresh_due(
+    ledger: dict[str, Any],
+    accounts: dict[str, Any],
+    refresh_interval_hours: int,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    sources = linked_sources(accounts)
+    if not sources:
+        return {'due': False, 'reason': 'no_linked_sources', 'linked_sources': sources}
+    fingerprint = linked_source_fingerprint(accounts)
+    refresh = ((ledger.get('phases') or {}).get('import') or {}).get('live_refresh')
+    refresh = refresh if isinstance(refresh, dict) else {}
+    if force_refresh:
+        return {'due': True, 'reason': 'forced', 'linked_sources': sources, 'source_fingerprint': fingerprint}
+    if refresh.get('status') != 'completed':
+        return {'due': True, 'reason': 'never_synced_after_bootstrap', 'linked_sources': sources, 'source_fingerprint': fingerprint}
+    if refresh.get('source_fingerprint') != fingerprint:
+        return {'due': True, 'reason': 'linked_sources_changed', 'linked_sources': sources, 'source_fingerprint': fingerprint}
+    last_age = age_hours(refresh.get('completed_at'))
+    if last_age is None:
+        return {'due': True, 'reason': 'missing_refresh_timestamp', 'linked_sources': sources, 'source_fingerprint': fingerprint}
+    if refresh_interval_hours >= 0 and last_age >= refresh_interval_hours:
+        return {
+            'due': True,
+            'reason': 'refresh_interval_elapsed',
+            'age_hours': round(last_age, 2),
+            'refresh_interval_hours': refresh_interval_hours,
+            'linked_sources': sources,
+            'source_fingerprint': fingerprint,
+        }
+    return {
+        'due': False,
+        'reason': 'recent_refresh',
+        'age_hours': round(last_age, 2),
+        'refresh_interval_hours': refresh_interval_hours,
+        'linked_sources': sources,
+        'source_fingerprint': fingerprint,
+        'last_refresh': refresh,
+    }
+
+
 def indexing_readiness(operator_id: str) -> dict[str, Any]:
     si = ROOT / '.powerpacks/search-index'
     duck = si / 'local-search.duckdb'
@@ -569,15 +690,84 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
     if records.exists() and any(records.glob('*.records.jsonl')) and not duck.exists():
         return {'status': 'records_only_duckdb_missing', 'repair_command': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'}
     if people.exists():
-        return {'status': 'people_csv_ready_for_processing', 'people_csv': str(people), 'plan_command': f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {operator_id}', 'requires_approval': ['provider_spend', 'provider_allow_flags']}
+        return {'status': 'people_csv_ready_for_processing', 'people_csv': str(people), 'plan_command': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index', 'requires_approval': ['provider_spend', 'provider_allow_flags']}
     return {'status': 'not_ready', 'missing': ['.powerpacks/network-import/merged/people.csv']}
+
+
+def normalize_setup_phases(
+    ledger: dict[str, Any],
+    accounts: dict[str, Any],
+    idx: dict[str, Any],
+    refresh_interval_hours: int = DEFAULT_REFRESH_INTERVAL_HOURS,
+) -> None:
+    phases = ledger.setdefault('phases', {phase: {'status': 'pending'} for phase in ['bootstrap', 'link', 'import', 'index']})
+    for phase in ['bootstrap', 'link', 'import', 'index']:
+        phases.setdefault(phase, {'status': 'pending'})
+
+    channels = accounts.get('channels') or {}
+    if accounts.get('exists') and channels:
+        linked = sorted(ch for ch, rec in channels.items() if isinstance(rec, dict) and rec.get('linked'))
+        skipped = sorted(ch for ch, rec in channels.items() if isinstance(rec, dict) and rec.get('skipped'))
+        unresolved = sorted(
+            ch for ch, rec in channels.items()
+            if isinstance(rec, dict) and not rec.get('linked') and not rec.get('skipped')
+        )
+        if not unresolved and (linked or skipped):
+            phases['link'] = {'status': 'ready', 'linked_sources': linked, 'skipped_sources': skipped}
+
+    people_csv = ROOT / '.powerpacks/network-import/merged/people.csv'
+    prior_import = dict(phases.get('import') or {})
+    refresh_state = import_refresh_due(ledger, accounts, refresh_interval_hours)
+    live_refresh = prior_import.get('live_refresh') if isinstance(prior_import.get('live_refresh'), dict) else {}
+    if refresh_state.get('due'):
+        phases['import'] = {
+            'status': 'refresh_due',
+            'source': 'operator_bootstrap' if phases.get('bootstrap', {}).get('status') == 'restored' else 'linked_sources',
+            'people_csv': '.powerpacks/network-import/merged/people.csv' if people_csv.exists() else '',
+            'refresh_due': refresh_state,
+            'live_refresh': live_refresh,
+        }
+    elif people_csv.exists() and live_refresh:
+        phases['import'] = {
+            'status': 'ready',
+            'source': 'live_refresh',
+            'people_csv': '.powerpacks/network-import/merged/people.csv',
+            'live_refresh': live_refresh,
+        }
+    elif people_csv.exists() and phases.get('bootstrap', {}).get('status') == 'restored':
+        phases['import'] = {
+            'status': 'refresh_due',
+            'source': 'operator_bootstrap',
+            'people_csv': '.powerpacks/network-import/merged/people.csv',
+            'refresh_due': refresh_state,
+            'live_refresh': live_refresh,
+        }
+
+    prior_index = phases.get('index') if isinstance(phases.get('index'), dict) else {}
+    if prior_index.get('status') == 'needs_processing':
+        phases['index'] = prior_index
+    elif idx.get('status') == 'search_ready':
+        phases['index'] = {
+            'status': 'ready',
+            'duckdb': idx.get('duckdb', ''),
+            'ledger': idx.get('ledger', ''),
+        }
+
+    statuses = {phase: phases.get(phase, {}).get('status') for phase in ['bootstrap', 'link', 'import', 'index']}
+    if statuses['bootstrap'] == 'restored' and statuses['link'] == 'ready' and statuses['import'] in ('ready', 'completed') and statuses['index'] == 'ready':
+        ledger['status'] = 'ready'
+    elif statuses['import'] == 'refresh_due':
+        ledger['status'] = 'refresh_due'
 
 
 def status_payload(args: argparse.Namespace) -> dict[str, Any]:
     ledger = load_setup_ledger(Path(args.setup_ledger))
     idx = indexing_readiness(args.operator_id)
-    if idx['status'] == 'search_ready' and ledger.get('phases', {}).get('index', {}).get('status') == 'restored':
-        ledger['phases']['index']['status'] = 'ready'
+    accounts = accounts_summary(Path(args.accounts))
+    normalize_setup_phases(ledger, accounts, idx, int(getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS)))
+    if isinstance(ledger.get('handoff'), dict):
+        ledger['handoff']['commands'] = setup_commands(args)
+        ledger['handoff']['requires_approval'] = approval_payload()
     bundles = sorted(
         str(p) for p in (ROOT / '.powerpacks/operator-bootstrap/bundles').glob('*.operator-bootstrap.tar.gz')
     )
@@ -590,10 +780,12 @@ def status_payload(args: argparse.Namespace) -> dict[str, Any]:
         next_actions.append(idx['repair_command'])
     elif idx['status'] == 'people_csv_ready_for_processing':
         next_actions.append(idx['plan_command'])
+    if ledger.get('phases', {}).get('import', {}).get('status') == 'refresh_due':
+        next_actions.append('run setup refresh')
     return {
         'status': 'ok',
         'operator_id': args.operator_id,
-        'accounts': accounts_summary(Path(args.accounts)),
+        'accounts': accounts,
         'setup_ledger': ledger,
         'bootstrap_bundle_candidates': bundles,
         'search_index_readiness': idx,
@@ -612,21 +804,25 @@ def run_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
-    approvals = [{'id': k, 'description': d} for k, d in APPROVALS]
-    idx = indexing_readiness(args.operator_id)
-    commands = {
-        'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id}',
-        'import_network_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id}',
+def setup_commands(args: argparse.Namespace) -> dict[str, str]:
+    return {
+        'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
+        'import_network_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
         'import_network_fan_in': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts --fan-in-only --ledger .powerpacks/network-import/import-network-run.fan-in.json --run-id setup-fan-in',
         'import_network_status': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py status',
         'import_network_continue': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue',
         'import_network_approve': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve',
-        'processing_plan': f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {args.operator_id}',
+        'processing_plan': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index',
         'processing_run': f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {args.operator_id}',
         'processing_continue': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue --output-dir .powerpacks/search-index',
         'build_local_duckdb_shim': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {args.operator_id} --force',
     }
+
+
+def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
+    approvals = approval_payload()
+    idx = indexing_readiness(args.operator_id)
+    commands = setup_commands(args)
     worker_jobs = []
     acct = accounts_summary(Path(args.accounts))
     for ch, rec in sorted((acct.get('channels') or {}).items()):
@@ -705,6 +901,251 @@ def run_handoff(args: argparse.Namespace) -> int:
     return 0
 
 
+def message_refresh_command(accounts: dict[str, Any], ledger_path: Path, *, force: bool = True) -> list[str] | None:
+    messages = (accounts.get('channels') or {}).get('messages')
+    if not isinstance(messages, dict) or not messages.get('linked'):
+        return None
+    cfg = messages.get('config') if isinstance(messages.get('config'), dict) else {}
+    whatsapp_cfg = cfg.get('whatsapp') if isinstance(cfg.get('whatsapp'), dict) else {}
+    imessage_cfg = cfg.get('imessage') if isinstance(cfg.get('imessage'), dict) else {}
+    include_flags = []
+    if imessage_cfg.get('status') != 'skipped':
+        include_flags.append('--include-imessage')
+    if whatsapp_cfg.get('status') == 'linked' or whatsapp_cfg.get('authenticated') is True:
+        include_flags.append('--include-whatsapp')
+    include_flags.append('--include-contact-merge')
+    cmd = [
+        sys.executable,
+        'packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py',
+        'run',
+        '--ledger',
+        str(ledger_path),
+        '--parallel-timeout',
+        str(DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS),
+        '--reuse-existing-artifacts',
+        *include_flags,
+    ]
+    if force and '--include-imessage' in include_flags:
+        cmd.append('--force-imessage')
+    if force and '--include-whatsapp' in include_flags:
+        cmd.append('--force-whatsapp')
+    return cmd
+
+
+def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: bool) -> list[str]:
+    cmd = [
+        sys.executable,
+        'packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py',
+        'run',
+        '--from-accounts',
+        args.accounts,
+        '--operator-id',
+        args.operator_id,
+        '--include-existing-artifacts',
+        '--ledger',
+        str(SETUP_REFRESH_LEDGER),
+        '--run-id',
+        run_id,
+    ]
+    if force:
+        cmd.append('--force')
+    return cmd
+
+
+def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
+    promoted: dict[str, str] = {}
+    merged_people = artifacts.get('merged_people_csv')
+    if merged_people:
+        source_dir = Path(str(merged_people)).parent
+        dest_dir = ROOT / '.powerpacks/network-import/merged'
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for name in [
+            'people.csv',
+            'people_harmonic_all.merged.csv',
+            'network_contacts.csv',
+            'network_contact_sources.csv',
+            'network_companies.csv',
+            'merge_manifest.json',
+            'possible_duplicates_review.csv',
+        ]:
+            src = source_dir / name
+            if src.exists():
+                dst = dest_dir / name
+                shutil.copy2(src, dst)
+                promoted[f'merged_{name}'] = str(dst)
+    duckdb = artifacts.get('duckdb')
+    if duckdb and Path(str(duckdb)).exists():
+        dest_dir = ROOT / '.powerpacks/network-import/duckdb'
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dst = dest_dir / 'network.duckdb'
+        shutil.copy2(Path(str(duckdb)), dst)
+        promoted['network_duckdb'] = str(dst)
+    manifest = artifacts.get('duckdb_manifest')
+    if manifest and Path(str(manifest)).exists():
+        dest_dir = ROOT / '.powerpacks/network-import/duckdb'
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dst = dest_dir / 'manifest.json'
+        shutil.copy2(Path(str(manifest)), dst)
+        promoted['network_duckdb_manifest'] = str(dst)
+    return promoted
+
+
+def matching_bootstrap_bundle(operator_id: str) -> Path | None:
+    for bundle in sorted((ROOT / '.powerpacks/operator-bootstrap/bundles').glob('*.operator-bootstrap.tar.gz')):
+        try:
+            inspected = inspect_bundle(bundle)
+        except Exception:
+            continue
+        if inspected.get('status') == 'ok' and inspected.get('operator_id') == operator_id:
+            return bundle
+    return None
+
+
+def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> tuple[dict[str, Any] | None, int]:
+    if ledger.get('phases', {}).get('bootstrap', {}).get('status') != 'pending':
+        return None, 0
+    bundle = Path(args.bootstrap_bundle) if getattr(args, 'bootstrap_bundle', '') else matching_bootstrap_bundle(args.operator_id)
+    if not bundle:
+        return {'status': 'skipped', 'reason': 'no_matching_bootstrap_bundle'}, 0
+    inspected = inspect_bundle(bundle)
+    if inspected.get('status') != 'ok':
+        return {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected}, 20
+    force = bool(getattr(args, 'force_bootstrap', False))
+    if inspected.get('would_overwrite') and not force:
+        return {
+            'status': 'blocked_user_action',
+            'step': 'bootstrap',
+            'reason': 'bootstrap restore would overwrite existing artifacts',
+            'requires_approval': [{'id': 'destructive_restore_overwrite'}],
+            'inspect': inspected,
+        }, 20
+    apply_args = argparse.Namespace(
+        bundle=str(bundle),
+        operator_id=args.operator_id,
+        force=force,
+        inspect_file='',
+        setup_ledger=args.setup_ledger,
+        allow_legacy_bootstrap_manifest=False,
+    )
+    payload = apply_bundle(apply_args)
+    if payload.get('status') != 'ok':
+        return payload, 20 if payload.get('requires_approval') else 1
+    return payload, 0
+
+
+def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts: dict[str, Any], due: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    started_at = now()
+    run_id = f"setup-refresh-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    before_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
+    results: dict[str, Any] = {'status': 'running', 'started_at': started_at, 'reason': due.get('reason'), 'run_id': run_id}
+
+    refresh_reason = str(due.get('reason') or '')
+    force_messages = refresh_reason in {'forced', 'refresh_interval_elapsed', 'linked_sources_changed'}
+    message_cmd = message_refresh_command(accounts, SETUP_MESSAGES_LEDGER, force=force_messages)
+    if message_cmd:
+        code, payload, stderr = run_json_command(message_cmd)
+        results['messages'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
+        if code in (20, 21) or str(payload.get('status', '')).startswith('blocked'):
+            return {'status': 'blocked_user_action', 'step': 'messages', 'refresh': results, 'payload': payload}, code or 20
+        if code != 0:
+            return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': tail(stderr) or payload}, 1
+
+    force_network = refresh_reason in {'forced', 'refresh_interval_elapsed', 'linked_sources_changed'}
+    code, payload, stderr = run_json_command(network_refresh_command(args, run_id, force=force_network))
+    results['network'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
+    if code == 20 or payload.get('status') == 'blocked_approval':
+        return {'status': 'blocked_approval', 'step': 'network_import', 'refresh': results, 'payload': payload}, 20
+    if code != 0:
+        return {'status': 'failed', 'step': 'network_import', 'refresh': results, 'error': tail(stderr) or payload}, 1
+
+    promoted = promote_network_artifacts(payload.get('artifacts') or {})
+    after_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
+    completed = {
+        'status': 'completed',
+        'started_at': started_at,
+        'completed_at': now(),
+        'run_id': payload.get('run_id') or run_id,
+        'ledger': str(SETUP_REFRESH_LEDGER),
+        'source_fingerprint': due.get('source_fingerprint') or linked_source_fingerprint(accounts),
+        'linked_sources': due.get('linked_sources') or linked_sources(accounts),
+        'network_changed': bool(before_hash and after_hash and before_hash != after_hash),
+        'before_people_sha256': before_hash,
+        'after_people_sha256': after_hash,
+        'promoted': promoted,
+        'messages_ledger': str(SETUP_MESSAGES_LEDGER) if message_cmd else '',
+    }
+    return {'status': 'completed', 'refresh': completed, 'results': results}, 0
+
+
+def run_setup(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.setup_ledger)
+    ledger = load_setup_ledger(ledger_path)
+    bootstrap_payload, bootstrap_code = maybe_apply_bootstrap(args, ledger)
+    if bootstrap_code:
+        emit(bootstrap_payload or {'status': 'failed', 'step': 'bootstrap'})
+        return bootstrap_code
+
+    status_args = argparse.Namespace(
+        operator_id=args.operator_id,
+        accounts=args.accounts,
+        setup_ledger=args.setup_ledger,
+        refresh_interval_hours=args.refresh_interval_hours,
+    )
+    status = status_payload(status_args)
+    save_setup_ledger(status['setup_ledger'], ledger_path)
+    ledger = status['setup_ledger']
+    accounts = status['accounts']
+    import_phase = ledger.get('phases', {}).get('import', {})
+    due = import_phase.get('refresh_due') if isinstance(import_phase.get('refresh_due'), dict) else {}
+
+    if import_phase.get('status') == 'refresh_due':
+        refresh_payload, refresh_code = run_live_refresh(args, ledger, accounts, due)
+        ledger = load_setup_ledger(ledger_path)
+        if refresh_code:
+            ledger.setdefault('phases', {}).setdefault('import', {})['live_refresh'] = {
+                'status': refresh_payload.get('status'),
+                'updated_at': now(),
+                'payload': refresh_payload,
+            }
+            ledger['status'] = refresh_payload.get('status', 'blocked')
+            save_setup_ledger(ledger, ledger_path)
+            emit({'status': refresh_payload.get('status'), 'bootstrap': bootstrap_payload, **refresh_payload})
+            return refresh_code
+        refresh = refresh_payload['refresh']
+        ledger.setdefault('phases', {})['import'] = {
+            'status': 'ready',
+            'source': 'live_refresh',
+            'people_csv': '.powerpacks/network-import/merged/people.csv',
+            'live_refresh': refresh,
+        }
+        if refresh.get('network_changed'):
+            ledger.setdefault('phases', {})['index'] = {
+                'status': 'needs_processing',
+                'reason': 'network_changed_after_live_refresh',
+                'requires_approval': ['provider_spend', 'provider_allow_flags'],
+                'plan_command': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index',
+            }
+            ledger['status'] = 'needs_index_processing'
+        else:
+            idx = indexing_readiness(args.operator_id)
+            if idx.get('status') == 'search_ready':
+                ledger.setdefault('phases', {})['index'] = {'status': 'ready', 'duckdb': idx.get('duckdb', ''), 'ledger': idx.get('ledger', '')}
+                ledger['status'] = 'ready'
+        save_setup_ledger(ledger, ledger_path)
+
+    final_status = status_payload(status_args)
+    save_setup_ledger(final_status['setup_ledger'], ledger_path)
+    emit({
+        'status': final_status['setup_ledger'].get('status'),
+        'operator_id': args.operator_id,
+        'bootstrap': bootstrap_payload,
+        'setup_ledger': final_status['setup_ledger'],
+        'search_index_readiness': final_status['search_index_readiness'],
+        'next_actions': final_status['next_actions'],
+    })
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='cmd', required=True)
@@ -713,6 +1154,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--operator-id', required=True)
     s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
+    s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.set_defaults(func=run_status)
 
     s = sub.add_parser('inspect-bootstrap')
@@ -741,6 +1183,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--accounts', required=True)
     s.add_argument('--setup-ledger', required=True)
     s.set_defaults(func=run_handoff)
+
+    s = sub.add_parser('run')
+    s.add_argument('--operator-id', required=True)
+    s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
+    s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
+    s.add_argument('--bootstrap-bundle', default='')
+    s.add_argument('--force-bootstrap', action='store_true')
+    s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
+    s.set_defaults(func=run_setup)
     return p
 
 

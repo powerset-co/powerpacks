@@ -49,6 +49,12 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
   --gmail-add-email me@gmail.com
 ```
 
+For first-run Gmail linking, the email supplied with `--gmail-add-email` is also
+the Google account that should own/create the local OAuth project. The returned
+setup command should pass an explicit deterministic `--project` derived from
+that email and must require/login as the same email before project creation. Do
+not pick a project from the active local `gcloud` state.
+
 Record discovered Gmail accounts:
 
 ```bash
@@ -98,11 +104,11 @@ When `step` returns `status: completed`, read the emitted `handoff` object.
 Show the `confirmation_prompt` and ask once before long work. After approval:
 
 - Run `handoff.handoff_command`. That command is the only post-link handoff path
-  and delegates import worker planning, approval gates, fan-in, and indexing
+  and delegates import worker planning, approval confirmations, fan-in, and indexing
   readiness to `$setup` / `setup.py handoff`.
 - Dispatch import/index workers only from the setup handoff response. Do not use
   legacy direct onboarding worker phases.
-- Keep the main thread user-friendly: report connected sources, approval gates,
+- Keep the main thread user-friendly: report connected sources, approval confirmations,
   current counts, final local paths, and real failures. Do not describe ledgers,
   fan-in/fan-out, or implementation details unless the user asks.
 

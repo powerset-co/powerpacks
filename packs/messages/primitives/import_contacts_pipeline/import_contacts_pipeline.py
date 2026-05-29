@@ -3,7 +3,7 @@
 
 The orchestrator is intentionally mechanical. It shells out to the existing
 small primitives, records progress in `.powerpacks/messages/import-run.json`,
-and exits at explicit approval gates for paid Parallel research and final
+and exits at explicit approval confirmations for paid Parallel research and final
 upload.
 
 It does not infer approval from stdin. Agents should ask the user, then feed the
@@ -732,6 +732,8 @@ def fresh_archive_dir() -> Path:
 def archive_existing_run_artifacts(args: argparse.Namespace) -> dict[str, Any] | None:
     if getattr(args, "command", "") != "run":
         return None
+    if getattr(args, "reuse_existing_artifacts", False):
+        return None
 
     paths = [path for path in fresh_run_artifact_paths(args) if path.exists() and path.is_file()]
     if not paths:
@@ -1130,6 +1132,17 @@ def normalize_channel(
 
 def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
     completed_provider = (ledger.get("artifacts") or {}).get("whatsapp_provider")
+    if DEFAULT_WHATSAPP_CONTACTS.exists() and not args.force_whatsapp and getattr(args, "reuse_existing_artifacts", False):
+        ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
+        ledger.setdefault("artifacts", {})["whatsapp_provider"] = "wacli"
+        mark_step(
+            ledger_path,
+            ledger,
+            "extract_whatsapp",
+            "completed",
+            summary={"reused": str(DEFAULT_WHATSAPP_CONTACTS), "reason": "existing_artifact"},
+        )
+        return
     if (
         completed(ledger, "extract_whatsapp")
         and completed_provider == "wacli"
@@ -1194,7 +1207,8 @@ def write_empty_contacts_csv(path: Path) -> dict[str, Any]:
 def ensure_contacts(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
     remove_stale_empty_contacts(args)
     contacts = Path(args.contacts)
-    if contacts.exists():
+    rebuild_contacts = bool(getattr(args, "force_imessage", False) or getattr(args, "force_whatsapp", False))
+    if contacts.exists() and not rebuild_contacts:
         try:
             validate_contacts_csv(contacts)
         except PipelineFailed as exc:
@@ -2544,6 +2558,7 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--include-datalake-sync", action="store_true")
     add_hidden_arg(parser, "--force-imessage", action="store_true")
     add_hidden_arg(parser, "--force-whatsapp", action="store_true")
+    add_hidden_arg(parser, "--reuse-existing-artifacts", action="store_true")
     add_hidden_arg(parser, "--whatsapp-provider", default=DEFAULT_WHATSAPP_PROVIDER, choices=("wacli",))
     add_hidden_arg(parser, "--wacli-max-messages", type=int, default=0)
     add_hidden_arg(parser, "--wacli-max-group-participants", type=int, default=30)
@@ -2568,7 +2583,7 @@ def main() -> int:
     add_pipeline_args(cont)
     cont.set_defaults(func=cmd_run)
 
-    approve = sub.add_parser("approve", help="Approve the current blocked gate")
+    approve = sub.add_parser("approve", help="Approve the current blocked confirmation")
     approve.add_argument("kind", nargs="?", choices=["llm", "parallel", "upload"], help=argparse.SUPPRESS)
     add_hidden_arg(approve, "--ledger", type=Path, default=DEFAULT_LEDGER)
     add_hidden_arg(approve, "--approval-id")

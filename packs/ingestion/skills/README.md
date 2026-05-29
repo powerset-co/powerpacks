@@ -18,7 +18,7 @@ source primitives, merge step, and DuckDB loader every time.
 A skill is the harness-facing contract: when the user says `$import-email`, the
 agent loads `SKILL.md` and follows its instructions. The runtime handler is the
 Python primitive/orchestrator because it needs deterministic CLI arguments,
-ledger/resume state, JSON output, tests, and child approval gates.
+ledger/resume state, JSON output, tests, and child approval confirmations.
 
 So the flow is:
 

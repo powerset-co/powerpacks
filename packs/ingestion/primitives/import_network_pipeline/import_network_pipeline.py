@@ -7,7 +7,7 @@ Sources handled here:
 - Existing message contacts and Twitter artifacts are picked up by merge discovery
 
 This orchestrator is local-first. It does not upload or mutate production. Child
-primitives remain responsible for their own approval gates.
+primitives remain responsible for their own approval confirmations.
 """
 
 from __future__ import annotations
@@ -21,7 +21,11 @@ import shutil
 import subprocess
 import sys
 import threading
-from datetime import datetime, timezone
+import tomllib
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +33,17 @@ DEFAULT_LEDGER = Path(".powerpacks/network-import/import-network-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_MSGVAULT_DB = Path.home() / ".msgvault" / "msgvault.db"
 DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS", str(6 * 60 * 60)))
+DEFAULT_GMAIL_ESTIMATE_MAX_PAGES = int(os.environ.get("POWERPACKS_GMAIL_ESTIMATE_MAX_PAGES", "0"))
+DEFAULT_GMAIL_EXCLUDED_LABELS = ("CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES")
+GMAIL_ESTIMATE_LABEL_IDS = ("INBOX", "SENT", "CATEGORY_PERSONAL", "CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES", "SPAM", "TRASH")
+GMAIL_LABEL_QUERY_TERMS = {
+    "CATEGORY_SOCIAL": "-category:social",
+    "CATEGORY_PROMOTIONS": "-category:promotions",
+    "CATEGORY_FORUMS": "-category:forums",
+    "CATEGORY_UPDATES": "-category:updates",
+    "SPAM": "-in:spam",
+    "TRASH": "-in:trash",
+}
 
 
 SOURCE_NAMES = ["gmail", "linkedin_csv", "twitter", "messages"]
@@ -119,6 +134,340 @@ def truthy_env(name: str) -> bool:
 
 def skip_msgvault_sync(input_cfg: dict[str, Any]) -> bool:
     return bool(input_cfg.get("skip_msgvault_sync") or truthy_env("POWERPACKS_SKIP_MSGVAULT_SYNC"))
+
+
+def normalize_label_names(values: Any) -> list[str]:
+    out: list[str] = []
+    for value in unique_strings(values):
+        label = value.strip().upper()
+        if label and label not in out:
+            out.append(label)
+    return out
+
+
+def gmail_excluded_labels(input_cfg: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    if not bool(input_cfg.get("include_category_mail")):
+        labels.extend(DEFAULT_GMAIL_EXCLUDED_LABELS)
+    labels.extend(normalize_label_names(input_cfg.get("gmail_exclude_labels")))
+    return normalize_label_names(labels)
+
+
+def gmail_label_to_query_term(label: str) -> str:
+    normalized = str(label or "").strip().upper()
+    if not normalized:
+        return ""
+    if normalized in GMAIL_LABEL_QUERY_TERMS:
+        return GMAIL_LABEL_QUERY_TERMS[normalized]
+    if normalized.startswith("CATEGORY_"):
+        return f"-category:{normalized.removeprefix('CATEGORY_').lower()}"
+    return f"-label:{normalized}"
+
+
+def gmail_sync_query(input_cfg: dict[str, Any]) -> str:
+    explicit = str(input_cfg.get("gmail_sync_query") or "").strip()
+    if explicit:
+        return explicit
+    return " ".join(term for term in (gmail_label_to_query_term(label) for label in gmail_excluded_labels(input_cfg)) if term)
+
+
+def msgvault_home_for_db(db: str) -> Path:
+    if db:
+        return Path(db).expanduser().parent
+    return DEFAULT_MSGVAULT_DB.expanduser().parent
+
+
+def read_msgvault_config(home: Path) -> dict[str, Any]:
+    config = home / "config.toml"
+    if not config.exists():
+        return {}
+    try:
+        return tomllib.loads(config.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def configured_client_secret_paths(home: Path) -> list[Path]:
+    paths: list[Path] = []
+    cfg = read_msgvault_config(home)
+    oauth = cfg.get("oauth") if isinstance(cfg.get("oauth"), dict) else {}
+    default_secret = oauth.get("client_secrets") if isinstance(oauth.get("client_secrets"), str) else ""
+    if default_secret:
+        paths.append(Path(default_secret).expanduser())
+    apps = oauth.get("apps") if isinstance(oauth.get("apps"), dict) else {}
+    for app in apps.values():
+        if isinstance(app, dict) and isinstance(app.get("client_secrets"), str):
+            paths.append(Path(app["client_secrets"]).expanduser())
+    fallback = home / "client_secret.json"
+    if fallback not in paths:
+        paths.append(fallback)
+    out: list[Path] = []
+    for path in paths:
+        if path not in out:
+            out.append(path)
+    return out
+
+
+def load_oauth_client(home: Path, client_id: str = "") -> tuple[dict[str, Any] | None, str]:
+    last_error = ""
+    for path in configured_client_secret_paths(home):
+        if not path.exists():
+            last_error = f"configured client secret not found: {path}"
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            last_error = f"could not read configured client secret: {exc}"
+            continue
+        installed = data.get("installed") if isinstance(data, dict) else None
+        if not isinstance(installed, dict):
+            last_error = "configured client secret is not an installed-app OAuth JSON"
+            continue
+        if client_id and installed.get("client_id") != client_id:
+            last_error = "configured client secret does not match token client_id"
+            continue
+        if not installed.get("client_id") or not installed.get("client_secret"):
+            last_error = "configured client secret is missing client_id/client_secret"
+            continue
+        return installed, ""
+    return None, last_error or "msgvault OAuth client secret is not configured"
+
+
+def token_path_for_email(home: Path, email: str) -> Path:
+    exact = home / "tokens" / f"{email}.json"
+    if exact.exists():
+        return exact
+    lower = home / "tokens" / f"{email.lower()}.json"
+    if lower.exists():
+        return lower
+    return exact
+
+
+def parse_google_expiry(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def token_needs_refresh(token: dict[str, Any]) -> bool:
+    expiry = parse_google_expiry(token.get("expiry"))
+    if expiry is None:
+        return True
+    return expiry <= datetime.now(timezone.utc) + timedelta(minutes=5)
+
+
+def refresh_google_token(token: dict[str, Any], client: dict[str, Any], token_path: Path) -> tuple[dict[str, Any] | None, str]:
+    refresh_token = str(token.get("refresh_token") or "")
+    if not refresh_token:
+        return None, "OAuth token has no refresh_token; reauthorize the Gmail account"
+    token_uri = str(client.get("token_uri") or "https://oauth2.googleapis.com/token")
+    form = urllib.parse.urlencode({
+        "client_id": client["client_id"],
+        "client_secret": client["client_secret"],
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }).encode("utf-8")
+    request = urllib.request.Request(token_uri, data=form, method="POST")
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            refreshed = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+        return None, f"token refresh failed: {exc}"
+    if not refreshed.get("access_token"):
+        return None, "token refresh did not return an access_token"
+    updated = dict(token)
+    updated.update({
+        "access_token": refreshed["access_token"],
+        "token_type": refreshed.get("token_type", token.get("token_type") or "Bearer"),
+        "expires_in": refreshed.get("expires_in", token.get("expires_in")),
+        "expiry": (datetime.now(timezone.utc) + timedelta(seconds=int(refreshed.get("expires_in") or 3600))).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    })
+    try:
+        token_path.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.chmod(token_path, 0o600)
+    except OSError:
+        pass
+    return updated, ""
+
+
+def gmail_api_get(access_token: str, path: str, params: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    query = urllib.parse.urlencode({key: value for key, value in params.items() if value is not None})
+    url = f"https://gmail.googleapis.com/gmail/v1/users/me/{path}"
+    if query:
+        url = f"{url}?{query}"
+    request = urllib.request.Request(url)
+    request.add_header("Authorization", f"Bearer {access_token}")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8")), ""
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8")
+        except OSError:
+            body = ""
+        return None, f"Gmail API HTTP {exc.code}: {body[:300] or exc.reason}"
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, f"Gmail API request failed: {exc}"
+
+
+def gmail_label_totals(access_token: str, labels: Iterable[str] = GMAIL_ESTIMATE_LABEL_IDS) -> tuple[dict[str, int], str]:
+    totals: dict[str, int] = {}
+    for label in labels:
+        payload, error = gmail_api_get(access_token, f"labels/{label}", {"fields": "id,messagesTotal,threadsTotal"})
+        if error:
+            return totals, error
+        totals[label] = int((payload or {}).get("messagesTotal") or 0)
+    return totals, ""
+
+
+def gmail_message_id_count(access_token: str, query: str, *, max_pages: int = DEFAULT_GMAIL_ESTIMATE_MAX_PAGES) -> tuple[dict[str, Any], str]:
+    page_token = ""
+    counted = 0
+    pages = 0
+    while True:
+        params: dict[str, Any] = {"maxResults": 500, "fields": "messages/id,nextPageToken"}
+        if query.strip():
+            params["q"] = query.strip()
+        if page_token:
+            params["pageToken"] = page_token
+        payload, error = gmail_api_get(access_token, "messages", params)
+        if error:
+            return {"count": counted, "complete": False, "pages": pages, "page_size": 500}, error
+        pages += 1
+        counted += len((payload or {}).get("messages") or [])
+        page_token = str((payload or {}).get("nextPageToken") or "")
+        if not page_token:
+            return {"count": counted, "complete": True, "pages": pages, "page_size": 500}, ""
+        if pages >= max_pages:
+            return {"count": counted, "complete": False, "pages": pages, "page_size": 500, "truncated_at": counted}, ""
+
+
+def estimate_gmail_account_via_api(home: Path, email: str, sync_query: str, excluded_labels: list[str], *, max_pages: int = DEFAULT_GMAIL_ESTIMATE_MAX_PAGES) -> dict[str, Any]:
+    estimate: dict[str, Any] = {
+        "scope": "gmail_api",
+        "account_email": email,
+        "sync_query": sync_query,
+        "excluded_labels": excluded_labels,
+        "privacy": {"message_bodies_read": False, "message_subjects_read": False, "snippets_read": False, "message_ids_listed": max_pages > 0},
+    }
+    if not email:
+        estimate.update({"status": "skipped", "message": "No Gmail account email was provided."})
+        return estimate
+    token_path = token_path_for_email(home, email)
+    if not token_path.exists():
+        estimate.update({"status": "token_missing", "message": "No msgvault OAuth token found for this Gmail account."})
+        return estimate
+    try:
+        token = json.loads(token_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        estimate.update({"status": "token_invalid", "message": f"Could not read msgvault OAuth token: {exc}"})
+        return estimate
+    client, error = load_oauth_client(home, str(token.get("client_id") or ""))
+    if error or client is None:
+        estimate.update({"status": "oauth_client_missing", "message": error})
+        return estimate
+    if token_needs_refresh(token):
+        refreshed, error = refresh_google_token(token, client, token_path)
+        if error or refreshed is None:
+            estimate.update({"status": "refresh_failed", "message": error})
+            return estimate
+        token = refreshed
+    access_token = str(token.get("access_token") or "")
+    if not access_token:
+        estimate.update({"status": "token_invalid", "message": "OAuth token has no access_token."})
+        return estimate
+    label_totals, error = gmail_label_totals(access_token)
+    if error:
+        if "HTTP 401" in error:
+            refreshed, refresh_error = refresh_google_token(token, client, token_path)
+            if refreshed is not None:
+                access_token = str(refreshed.get("access_token") or "")
+                label_totals, error = gmail_label_totals(access_token)
+            elif refresh_error:
+                error = refresh_error
+        if error:
+            estimate.update({"status": "api_error", "message": error})
+            return estimate
+    visible_mailbox_estimate = int(label_totals.get("INBOX", 0)) + int(label_totals.get("SENT", 0))
+    excluded_label_counts = {label: int(label_totals.get(label, 0)) for label in excluded_labels if label in label_totals}
+    estimate.update({
+        "status": "ok",
+        "messages_total_estimate": visible_mailbox_estimate,
+        "messages_total_estimate_basis": "Gmail INBOX + SENT label totals",
+        "messages_matching_sync_query_estimate": None,
+        "messages_matching_sync_query_count_complete": False,
+        "messages_matching_sync_query_count_pages": 0,
+        "messages_excluded_by_sync_query_estimate": None,
+        "label_message_estimates": label_totals,
+        "excluded_label_message_estimates": excluded_label_counts,
+        "message": "Gmail API fetched label totals only; no message IDs, bodies, subjects, snippets, or raw MIME were fetched.",
+    })
+    if max_pages <= 0:
+        return estimate
+    query_count, error = gmail_message_id_count(access_token, sync_query, max_pages=max_pages)
+    if error:
+        estimate.update({
+            "status": "partial",
+            "messages_matching_sync_query_estimate": int(query_count.get("count") or 0),
+            "messages_matching_sync_query_count_pages": int(query_count.get("pages") or 0),
+            "message": f"Gmail label totals fetched, but sync-query ID counting did not finish: {error}",
+        })
+        return estimate
+    estimate.update({
+        "messages_matching_sync_query_estimate": int(query_count.get("count") or 0),
+        "messages_matching_sync_query_count_complete": bool(query_count.get("complete")),
+        "messages_matching_sync_query_count_pages": int(query_count.get("pages") or 0),
+        "messages_excluded_by_sync_query_estimate": max(0, visible_mailbox_estimate - int(query_count.get("count") or 0)) if query_count.get("complete") else None,
+        "message": "Gmail API fetched label totals and listed message IDs for the sync query; no message bodies, subjects, snippets, or raw MIME were fetched.",
+    })
+    return estimate
+
+
+def estimate_gmail_accounts_via_api(input_cfg: dict[str, Any], emails: list[str]) -> list[dict[str, Any]]:
+    if input_cfg.get("skip_gmail_estimate"):
+        return [{
+            "scope": "gmail_api",
+            "status": "skipped",
+            "message": "Gmail API estimate skipped by configuration.",
+            "account_email": email,
+            "sync_query": gmail_sync_query(input_cfg),
+            "excluded_labels": gmail_excluded_labels(input_cfg),
+        } for email in emails]
+    home = msgvault_home_for_db(str(input_cfg.get("msgvault_db") or ""))
+    labels = gmail_excluded_labels(input_cfg)
+    query = gmail_sync_query(input_cfg)
+    max_pages = int(input_cfg.get("gmail_estimate_max_pages") or DEFAULT_GMAIL_ESTIMATE_MAX_PAGES)
+    return [estimate_gmail_account_via_api(home, email, query, labels, max_pages=max_pages) for email in emails]
+
+
+def summarize_gmail_estimates(estimates: list[dict[str, Any]]) -> str:
+    ok = [estimate for estimate in estimates if estimate.get("status") in {"ok", "partial"}]
+    if not ok:
+        statuses = ", ".join(str(estimate.get("status") or "unknown") for estimate in estimates) or "unavailable"
+        return f"Gmail API estimate unavailable ({statuses}); large first syncs can take minutes."
+    total = sum(int(estimate.get("messages_total_estimate") or 0) for estimate in ok)
+    matching_counts = [estimate.get("messages_matching_sync_query_estimate") for estimate in ok]
+    has_matching_counts = any(value is not None for value in matching_counts)
+    filtered = sum(int(value or 0) for value in matching_counts if value is not None)
+    complete = all(bool(estimate.get("messages_matching_sync_query_count_complete")) for estimate in ok)
+    excluded_values = [estimate.get("messages_excluded_by_sync_query_estimate") for estimate in ok]
+    excluded = sum(int(value or 0) for value in excluded_values if value is not None)
+    if not has_matching_counts:
+        return f"Gmail API rough estimate: {total:,} messages from label totals. Large initial syncs can take minutes."
+    qualifier = "" if complete else "at least "
+    excluded_text = f"{excluded:,} excluded" if complete else "exclusion count still being bounded"
+    return (
+        f"Gmail API estimate: {qualifier}{filtered:,}/{total:,} messages match the sync query "
+        f"({excluded_text}). Large initial syncs can take minutes."
+    )
 
 
 def ordered_records(records: list[dict[str, Any]], account_order: list[str] | None = None) -> list[dict[str, Any]]:
@@ -415,6 +764,13 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
     input_cfg = ledger.get("input", {})
     db = input_cfg.get("msgvault_db") or str(DEFAULT_MSGVAULT_DB)
     run_id = f"{ledger['run_id']}-gmail-{source_slug(email or 'all') or index}"
+    excluded_labels = gmail_excluded_labels(input_cfg)
+    sync_query = gmail_sync_query(input_cfg)
+    existing_estimates = ledger.get("artifacts", {}).get("gmail_api_estimates") or []
+    estimate = next((item for item in existing_estimates if isinstance(item, dict) and item.get("account_email") == email), None)
+    if estimate is None:
+        estimates = estimate_gmail_accounts_via_api(input_cfg, [email])
+        estimate = estimates[0] if estimates else {}
     sync_command: list[str] = []
     sync_skipped_reason = ""
     if email and skip_msgvault_sync(input_cfg):
@@ -426,7 +782,10 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
         if db_home != default_home:
             sync_cmd.extend(["--home", str(db_home)])
         sync_cmd.extend(["sync-full", email])
+        if sync_query:
+            sync_cmd.extend(["--query", sync_query])
         sync_command = sync_cmd
+        emit_progress(f"Starting msgvault sync for {email}. Query: {sync_query or '(all mail)'}. {summarize_gmail_estimates([estimate])}")
         sync_code, sync_payload, sync_stderr = run_cmd(sync_cmd)
         if sync_code != 0:
             return {
@@ -435,6 +794,9 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
                 "account_email": email,
                 "run_id": run_id,
                 "sync_command": sync_cmd,
+                "excluded_labels": excluded_labels,
+                "sync_query": sync_query,
+                "gmail_estimate": estimate,
                 "code": sync_code,
                 "payload": sync_payload,
                 "stderr": sync_stderr,
@@ -455,8 +817,12 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
         cmd.extend(["--limit", str(input_cfg["gmail_limit"])])
     if input_cfg.get("include_automated_gmail"):
         cmd.append("--include-automated")
+    if input_cfg.get("include_category_mail"):
+        cmd.append("--include-category-mail")
+    for label in excluded_labels:
+        cmd.extend(["--exclude-label", label])
     code, payload, stderr = run_cmd(cmd)
-    return {"id": f"gmail:{email or 'all'}", "source": "gmail", "account_email": email, "run_id": run_id, "sync_command": sync_command, "sync_skipped_reason": sync_skipped_reason, "command": cmd, "code": code, "payload": payload, "stderr": stderr, "phase": "gmail_network_import"}
+    return {"id": f"gmail:{email or 'all'}", "source": "gmail", "account_email": email, "run_id": run_id, "sync_command": sync_command, "sync_skipped_reason": sync_skipped_reason, "excluded_labels": excluded_labels, "sync_query": sync_query, "gmail_estimate": estimate, "command": cmd, "code": code, "payload": payload, "stderr": stderr, "phase": "gmail_network_import"}
 
 
 def record_gmail_worker_result(ledger: dict[str, Any], result: dict[str, Any]) -> bool:
@@ -468,8 +834,8 @@ def record_gmail_worker_result(ledger: dict[str, Any], result: dict[str, Any]) -
         mark_step(ledger, step_id, "failed", error=result.get("stderr") or payload.get("error") or payload, account_email=email, phase=result.get("phase"))
         ledger["status"] = "failed"
         return False
-    mark_step(ledger, step_id, "completed", payload=payload, account_email=email, sync_command=result.get("sync_command"), sync_skipped_reason=result.get("sync_skipped_reason"))
-    ledger.setdefault("source_imports", {})[step_id] = {"status": "completed", "source": "gmail", "account_email": email, "run_id": result.get("run_id"), "sync_command": result.get("sync_command"), "sync_skipped_reason": result.get("sync_skipped_reason")}
+    mark_step(ledger, step_id, "completed", payload=payload, account_email=email, sync_command=result.get("sync_command"), sync_skipped_reason=result.get("sync_skipped_reason"), excluded_labels=result.get("excluded_labels"), sync_query=result.get("sync_query"), gmail_estimate=result.get("gmail_estimate"))
+    ledger.setdefault("source_imports", {})[step_id] = {"status": "completed", "source": "gmail", "account_email": email, "run_id": result.get("run_id"), "sync_command": result.get("sync_command"), "sync_skipped_reason": result.get("sync_skipped_reason"), "excluded_labels": result.get("excluded_labels"), "sync_query": result.get("sync_query"), "gmail_estimate": result.get("gmail_estimate")}
     slug = source_slug(email)
     people_csv = ""
     for key, value in (payload.get("artifacts") or {}).items():
@@ -501,7 +867,9 @@ def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     if not emails:
         mark_step(ledger, "gmail_msgvault", "skipped", reason="no Gmail account emails/msgvault DB")
         return True
-    begin_step(ledger_path, ledger, "gmail_msgvault", f"Importing Gmail metadata for {len(emails)} msgvault account(s).")
+    estimates = estimate_gmail_accounts_via_api(input_cfg, emails)
+    ledger.setdefault("artifacts", {})["gmail_api_estimates"] = estimates
+    begin_step(ledger_path, ledger, "gmail_msgvault", f"Importing Gmail metadata for {len(emails)} msgvault account(s). {summarize_gmail_estimates(estimates)}")
     ok = True
     max_workers = min(len(emails), int(os.environ.get("POWERPACKS_IMPORT_NETWORK_GMAIL_MAX_WORKERS", "4"))) or 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -527,6 +895,8 @@ def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any
                 "account_email": email,
                 "step_id": f"gmail_msgvault:{source_slug(email or 'all')}",
                 "artifact_root": str(Path(DEFAULT_BASE_DIR) / "gmail" / f"{run_id}-gmail-{source_slug(email or 'all')}"),
+                "sync_query": gmail_sync_query(input_cfg),
+                "excluded_labels": gmail_excluded_labels(input_cfg),
                 "parallelizable": True,
                 "reason": "local msgvault metadata read with isolated output run id",
             })
@@ -538,7 +908,7 @@ def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any
             "ledger": str(Path(DEFAULT_BASE_DIR) / "network-runs" / run_id / "linkedin.ledger.json"),
             "artifact_root": str(Path(DEFAULT_BASE_DIR) / "linkedin" / f"{run_id}-linkedin"),
             "parallelizable": True,
-            "reason": "CSV conversion/enrichment uses its own child ledger and cache gates",
+            "reason": "CSV conversion/enrichment uses its own child ledger and cache confirmations",
             "requires_approval": ["rapidapi_linkedin_profile_enrichment"],
         })
     if input_cfg.get("twitter_handle"):
@@ -547,7 +917,7 @@ def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any
             "source": "twitter",
             "handle": input_cfg.get("twitter_handle"),
             "parallelizable": True,
-            "reason": "twitter import has no dependency on Gmail/LinkedIn but remains approval-gated",
+            "reason": "twitter import has no dependency on Gmail/LinkedIn but still requires spend confirmation",
             "requires_approval": ["rapidapi_twitter", "openai_moe", "rapidapi_linkedin_validation"],
             "status": "existing_artifacts_or_explicit_import_required",
         })
@@ -582,7 +952,9 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
         if "linkedin_csv" in runnable_sources and input_cfg.get("linkedin_csv") and ledger.get("steps", {}).get("linkedin", {}).get("status") not in {"completed", "skipped"}:
             futures[executor.submit(run_linkedin_child, ledger, "continue" if resume else "run")] = "linkedin_csv"
         if "gmail" in runnable_sources and ledger.get("steps", {}).get("gmail_msgvault", {}).get("status") not in {"completed", "skipped"} and gmail_emails:
-            begin_step(ledger_path, ledger, "gmail_msgvault", f"Importing Gmail metadata for {len(gmail_emails)} msgvault account(s).")
+            estimates = estimate_gmail_accounts_via_api(input_cfg, gmail_emails)
+            ledger.setdefault("artifacts", {})["gmail_api_estimates"] = estimates
+            begin_step(ledger_path, ledger, "gmail_msgvault", f"Importing Gmail metadata for {len(gmail_emails)} msgvault account(s). {summarize_gmail_estimates(estimates)}")
             for index, email in enumerate(gmail_emails):
                 futures[executor.submit(run_gmail_msgvault_account, ledger, email, index)] = "gmail"
         for future in concurrent.futures.as_completed(futures):
@@ -810,47 +1182,68 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     return True
 
 
+def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
+    input_cfg = ledger.get("input", {}) or {}
+    artifacts = ledger.get("artifacts", {}) or {}
+    include_existing = bool(input_cfg.get("include_existing_artifacts"))
+    explicit_inputs: list[str] = []
+
+    if include_existing:
+        canonical_people = DEFAULT_BASE_DIR / "merged" / "people.csv"
+        if canonical_people.exists():
+            explicit_inputs.append(str(canonical_people))
+
+    account_order = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
+    gmail_inputs = artifacts.get("gmail_final_people_csvs") or []
+    if not gmail_inputs and artifacts.get("gmail_people_records"):
+        gmail_inputs = [record.get("people_csv") for record in ordered_records(artifacts["gmail_people_records"], account_order)]
+    if not gmail_inputs:
+        gmail_inputs = sorted(str(path) for path in artifacts.get("gmail_people_csvs", []) if path)
+
+    explicit_inputs.extend(
+        value for key, value in sorted(artifacts.items())
+        if key in {"linkedin_people_csv"} and value
+    )
+    if gmail_inputs:
+        explicit_inputs.extend(str(path) for path in gmail_inputs if path)
+    elif artifacts.get("gmail_people_csv"):
+        explicit_inputs.append(str(artifacts["gmail_people_csv"]))
+
+    messages_contacts = artifacts.get("messages_contacts_csv") or input_cfg.get("messages_contacts_csv")
+    if not messages_contacts and include_existing:
+        candidate = DEFAULT_BASE_DIR.parent / "messages" / "contacts.csv"
+        if candidate.exists():
+            messages_contacts = str(candidate)
+    if messages_contacts:
+        message_input = Path(messages_contacts)
+        # `merge_network_sources` recognizes message contact CSVs by a
+        # `/messages/contacts.csv` path segment. A linked source may live
+        # elsewhere, so copy it into this run's fan-in scratch area before
+        # passing it as an explicit input.
+        if message_input.exists():
+            scratch = merge_dir / "source-inputs" / "messages" / "contacts.csv"
+            scratch.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(message_input, scratch)
+            explicit_inputs.append(str(scratch))
+        else:
+            explicit_inputs.append(str(message_input))
+
+    return list(dict.fromkeys(explicit_inputs))
+
+
 def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     begin_step(ledger_path, ledger, "merge", "Merging network sources.")
     merge_dir = Path(ledger["run_dir"]) / "merged"
     cmd = py_cmd(
         "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py",
         "run",
+        "--no-discover",
         "--base-dir", ".powerpacks",
         "--output-dir", str(merge_dir),
     )
-    if not ledger.get("input", {}).get("include_existing_artifacts"):
-        account_order = unique_strings(ledger.get("input", {}).get("gmail_account_emails") or ledger.get("input", {}).get("gmail_account_email"))
-        gmail_inputs = ledger.get("artifacts", {}).get("gmail_final_people_csvs") or []
-        if not gmail_inputs and ledger.get("artifacts", {}).get("gmail_people_records"):
-            gmail_inputs = [record.get("people_csv") for record in ordered_records(ledger["artifacts"]["gmail_people_records"], account_order)]
-        if not gmail_inputs:
-            gmail_inputs = sorted(str(path) for path in ledger.get("artifacts", {}).get("gmail_people_csvs", []) if path)
-        explicit_inputs = [
-            value for key, value in sorted(ledger.get("artifacts", {}).items())
-            if key in {"linkedin_people_csv"} and value
-        ]
-        if gmail_inputs:
-            explicit_inputs.extend(str(path) for path in gmail_inputs if path)
-        elif ledger.get("artifacts", {}).get("gmail_people_csv"):
-            explicit_inputs.append(str(ledger["artifacts"]["gmail_people_csv"]))
-        messages_contacts = ledger.get("artifacts", {}).get("messages_contacts_csv") or ledger.get("input", {}).get("messages_contacts_csv")
-        if messages_contacts:
-            message_input = Path(messages_contacts)
-            # `merge_network_sources` recognizes message contact CSVs by a
-            # `/messages/contacts.csv` path segment. A linked source may live
-            # elsewhere, so copy it into this run's fan-in scratch area before
-            # passing it as an explicit input.
-            if message_input.exists():
-                scratch = merge_dir / "source-inputs" / "messages" / "contacts.csv"
-                scratch.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(message_input, scratch)
-                explicit_inputs.append(str(scratch))
-            else:
-                explicit_inputs.append(str(message_input))
-        explicit_inputs = list(dict.fromkeys(explicit_inputs))
-        for input_path in explicit_inputs:
-            cmd.extend(["--input", str(input_path)])
+    explicit_inputs = merge_input_paths(ledger, merge_dir)
+    for input_path in explicit_inputs:
+        cmd.extend(["--input", str(input_path)])
     code, payload, stderr = run_cmd(cmd)
     if code != 0:
         mark_step(ledger, "merge", "failed", error=stderr or payload)
@@ -968,6 +1361,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             "gmail_account_emails": unique_strings(getattr(args, "gmail_account_emails", [])),
             "gmail_limit": args.gmail_limit,
             "include_automated_gmail": args.include_automated_gmail,
+            "gmail_exclude_labels": normalize_label_names(getattr(args, "gmail_exclude_label", [])),
+            "include_category_mail": bool(getattr(args, "include_category_mail", False)),
+            "gmail_sync_query": str(getattr(args, "gmail_sync_query", "") or "").strip(),
+            "skip_gmail_estimate": bool(getattr(args, "skip_gmail_estimate", False)),
+            "gmail_estimate_max_pages": int(getattr(args, "gmail_estimate_max_pages", DEFAULT_GMAIL_ESTIMATE_MAX_PAGES) or DEFAULT_GMAIL_ESTIMATE_MAX_PAGES),
             "gmail_linkedin_provider": args.gmail_linkedin_provider,
             "gmail_linkedin_limit": args.gmail_linkedin_limit,
             "gmail_resolutions_csv": args.gmail_resolutions_csv,
@@ -1012,6 +1410,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
             "would_run_steps": would_run,
             "estimated_paid_calls": 0 if not would_run else "unknown_without_running_child_stage_plans",
             "child_paid_call_counts": child_paid,
+            "gmail_api_estimates": (ledger.get("artifacts") or {}).get("gmail_api_estimates") or [],
             "artifact_check": check_artifact_paths(ledger),
         }
     would_run = []
@@ -1022,10 +1421,17 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
         "msgvault_db": resolve_msgvault_db(args),
         "gmail_account_email": args.gmail_account_email,
         "gmail_account_emails": unique_strings(getattr(args, "gmail_account_emails", [])),
+        "gmail_exclude_labels": normalize_label_names(getattr(args, "gmail_exclude_label", [])),
+        "include_category_mail": bool(getattr(args, "include_category_mail", False)),
+        "gmail_sync_query": str(getattr(args, "gmail_sync_query", "") or "").strip(),
+        "skip_gmail_estimate": bool(getattr(args, "skip_gmail_estimate", False)),
+        "gmail_estimate_max_pages": int(getattr(args, "gmail_estimate_max_pages", DEFAULT_GMAIL_ESTIMATE_MAX_PAGES) or DEFAULT_GMAIL_ESTIMATE_MAX_PAGES),
         "twitter_handle": getattr(args, "twitter_handle", ""),
         "messages_contacts_csv": getattr(args, "messages_contacts_csv", ""),
         "include_existing_artifacts": getattr(args, "include_existing_artifacts", False),
     }
+    gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
+    gmail_estimates = estimate_gmail_accounts_via_api(input_cfg, gmail_emails) if gmail_emails else []
     if args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args):
         would_run.append("gmail_msgvault")
     if getattr(args, "gmail_linkedin_provider", "off") != "off":
@@ -1041,8 +1447,10 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
         "existing_status": "missing",
         "would_run_steps": would_run,
         "worker_groups": {"import": source_worker_group(input_cfg, run_id)},
+        "gmail_api_estimates": gmail_estimates,
+        "gmail_estimate_summary": summarize_gmail_estimates(gmail_estimates) if gmail_estimates else "",
         "estimated_paid_calls": "unknown_without_existing_stage_outputs",
-        "message": "No existing import-network ledger was found; running would execute the listed stages until any child approval gate.",
+        "message": "No existing import-network ledger was found; running would execute the listed stages until any child approval confirmation.",
     }
 
 
@@ -1118,7 +1526,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--gmail-account-emails", action="append", default=[], help="Gmail/msgvault account email to import; may be repeated")
     run.add_argument("--gmail-limit", type=int)
     run.add_argument("--include-automated-gmail", action="store_true")
-    run.add_argument("--gmail-linkedin-provider", choices=["off", "harness", "parallel"], default="off", help="Prepare/run Gmail email-to-LinkedIn resolution before merge. harness is local prompt prep; parallel is spend-bearing and approval-gated.")
+    run.add_argument("--gmail-exclude-label", action="append", default=[], help="Exclude this Gmail/msgvault label during sync/import; may be repeated. Defaults to Social, Promotions, Forums, Updates.")
+    run.add_argument("--include-category-mail", action="store_true", help="Do not exclude Gmail Social, Promotions, Forums, and Updates categories during sync/import")
+    run.add_argument("--gmail-sync-query", default="", help="Override the Gmail search query passed to msgvault sync-full and the Gmail API estimate")
+    run.add_argument("--skip-gmail-estimate", action="store_true", help="Skip the pre-sync Gmail API label/count estimate")
+    run.add_argument("--gmail-estimate-max-pages", type=int, default=DEFAULT_GMAIL_ESTIMATE_MAX_PAGES, help=argparse.SUPPRESS)
+    run.add_argument("--gmail-linkedin-provider", choices=["off", "harness", "parallel"], default="off", help="Prepare/run Gmail email-to-LinkedIn resolution before merge. harness is local prompt prep; parallel is spend-bearing and requires approval.")
     run.add_argument("--gmail-linkedin-limit", type=int, help=argparse.SUPPRESS)
     run.add_argument("--gmail-resolutions-csv", default="", help="Existing linkedin_resolutions.csv to apply to Gmail people before shared enrich_people")
     run.add_argument("--include-existing-artifacts", action="store_true", help="Merge all discovered existing LinkedIn/Gmail/Twitter/message artifacts instead of only artifacts produced by this run")

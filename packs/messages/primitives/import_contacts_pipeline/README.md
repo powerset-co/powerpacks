@@ -4,7 +4,7 @@ Resumable orchestrator for the messages import/contact enrichment flow.
 
 This primitive is a mechanical task runner around the smaller messages
 primitives. `run` starts a fresh import, archives prior contact/import artifacts
-under `.powerpacks/messages/archive/`, exits at approval gates, and can be
+under `.powerpacks/messages/archive/`, exits at approval confirmations, and can be
 resumed with `continue`.
 
 ## Commands
@@ -34,8 +34,8 @@ Additional phases can be added by tacking on flags such as
 
 ## Approval behavior
 
-The orchestrator never reads approvals from stdin. When it reaches a gate, it
-exits with JSON like:
+The orchestrator never reads approvals from stdin. When it reaches a spend or
+upload confirmation, it exits with JSON like:
 
 ```json
 {

@@ -43,7 +43,7 @@ uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/reso
   --input .powerpacks/network-import/gmail/<run-id>/linkedin_resolution_queue.csv \
   --output-dir .powerpacks/network-import/gmail/<run-id>/linkedin-resolution
 
-# spend-bearing: Parallel.ai, approval-gated
+# spend-bearing: Parallel.ai, requires approval
 uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
   --provider parallel \
   --input .powerpacks/network-import/gmail/<run-id>/linkedin_resolution_queue.csv
@@ -53,7 +53,7 @@ uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_
   --people-csv .powerpacks/network-import/gmail/<run-id>/people.csv \
   --resolutions-csv .powerpacks/network-import/gmail/<run-id>/linkedin-resolution/linkedin_resolutions.csv
 
-# then hydrate resolved LinkedIn profiles through the shared RapidAPI cache/gate
+# then hydrate resolved LinkedIn profiles through the shared RapidAPI approval/cache flow
 uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run \
   --input .powerpacks/network-import/gmail-resolved/<resolved-run-id>/people.csv
 ```
@@ -94,6 +94,6 @@ Run artifacts live under `.powerpacks/network-import/gmail/<run-id>/`:
   `example.com -> Example` only for the legacy one-person seed.
 - msgvault import itself does not call EnrichLayer/RapidAPI/Parallel/Harmonic.
 - Optional LinkedIn resolution can use `resolve_linkedin_queue.py` in harness or
-  approval-gated Parallel mode, then shared `enrich_people.py` handles
-  approval-gated RapidAPI LinkedIn profile hydration for resolved rows.
+  Parallel mode with approval, then shared `enrich_people.py` handles
+  RapidAPI LinkedIn profile hydration approval for resolved rows.
 - Future Gmail sync should remain msgvault-backed unless explicitly redesigned.

@@ -14,8 +14,8 @@ an ingestion/product setup flow, not a generic `$powerset login` alias.
    artifacts/checkpoints.
 2. **link** — run onboarding as source linking only; record non-secret state in
    `.powerpacks/ingestion/accounts.json`.
-3. **import** — after explicit user confirmation, dispatch parallel worker
-   sub-agents for independent linked source imports/enrichment.
+3. **import** — automatically refresh linked sources when setup has not already
+   done a recent live sync, reusing existing artifacts by default.
 4. **index** — after import fan-in, run processing/indexing and local DuckDB
    materialization when safe or approved.
 
@@ -55,7 +55,8 @@ When reporting status, say what changed for the user:
 
 ```text
 Gmail is connected for 2 accounts. LinkedIn is connected from your Connections.csv.
-Next I’ll import those sources at the same time, then combine the results locally.
+Setup will import anything that is stale or missing, reuse what is already current,
+then finish quietly if there is nothing to do.
 ```
 
 Avoid saying this to a normal user:
@@ -75,7 +76,18 @@ agent to execute a precise command.
 
 ## Commands
 
-Start with local status/handoff inspection:
+Use the setup runner as the normal entry point. It is idempotent: it restores a
+safe matching bootstrap when needed, links are read from the account registry,
+imports refresh automatically, and completed recent work is reused.
+
+```bash
+uv run --project . python packs/ingestion/primitives/setup/setup.py run \
+  --operator-id <operator-id> \
+  --accounts .powerpacks/ingestion/accounts.json \
+  --setup-ledger .powerpacks/setup/setup-run.json
+```
+
+For inspection without running refresh work, use local status:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/setup/setup.py status \
@@ -150,25 +162,23 @@ Record selected accounts in `gmail.config.selected_accounts` /
 `.powerpacks/network-import/gmail` outputs or run `msgvault sync-full` during
 linking; Gmail sync/import starts only after the import confirmation.
 
-## Import phase: parallel fan-out, then fan-in
+## Import phase: automatic refresh, then fan-in
 
-Before import/enrichment, ask one explicit confirmation to leave the link phase.
+Do not ask for a separate "continue import" confirmation after setup has linked
+sources. `$setup` should run the refresh when it is due, include existing artifacts
+by default, and complete without ceremony when there is no new work.
 Use normal user language:
 
 ```text
-Your sources are linked. I’m ready to import them now.
+Your sources are linked. I’ll refresh anything that is missing or stale, reuse
+the current local data, and then combine everything into one local network.
 
-What I’ll do next:
-- import each connected source in parallel where possible;
-- combine the imported people and companies into one local network;
-- prepare the local search files for this machine.
-
-This can take a while for large mailboxes or networks. I won’t upload anything automatically. I’ll only interrupt you if a browser login, QR/device link, overwrite, or paid provider approval is needed.
-
-Continue?
+I won’t upload anything automatically. I’ll only interrupt you if a browser
+login, QR/device link, overwrite, or paid provider approval is needed.
 ```
 
-After confirmation, use `setup.py handoff`:
+`setup.py run` is the default path. `setup.py handoff` remains available for
+debugging or for agents that need to inspect worker commands:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/setup/setup.py handoff \
@@ -177,8 +187,10 @@ uv run --project . python packs/ingestion/primitives/setup/setup.py handoff \
   --setup-ledger .powerpacks/setup/setup-run.json
 ```
 
-Use the `worker_groups.import.jobs` output to spin up parallel worker sub-agents
-where possible:
+If using the handoff output directly, the generated `import_network_*` commands
+must include `--include-existing-artifacts`. Use the
+`worker_groups.import.jobs` output to spin up parallel worker sub-agents where
+possible:
 
 - Gmail/msgvault workers per selected account; each worker runs
   `msgvault sync-full <email>` before `gmail_network_import.py msgvault` when

@@ -29,6 +29,7 @@ from typing import Any, Iterable
 DEFAULT_LEDGER = Path(".powerpacks/network-import/gmail/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
+DEFAULT_EXCLUDED_MSGVAULT_LABELS = ("CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES")
 
 PERSONAL_DOMAINS = {
     "gmail.com",
@@ -490,7 +491,46 @@ def require_msgvault_schema(con: sqlite3.Connection) -> None:
         raise SystemExit(f"msgvault schema missing required tables: {', '.join(missing)}")
 
 
-def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "") -> Iterable[sqlite3.Row]:
+def normalize_label_names(values: Iterable[str] | None) -> list[str]:
+    out: list[str] = []
+    for value in values or []:
+        label = str(value or "").strip()
+        if label and label.upper() not in out:
+            out.append(label.upper())
+    return out
+
+
+def msgvault_has_label_tables(con: sqlite3.Connection) -> bool:
+    rows = con.execute(
+        "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name IN ('labels', 'message_labels')"
+    ).fetchall()
+    return {str(row[0]) for row in rows} == {"labels", "message_labels"}
+
+
+def default_excluded_labels(include_category_mail: bool, extra_labels: Iterable[str] | None = None) -> list[str]:
+    labels: list[str] = []
+    if not include_category_mail:
+        labels.extend(DEFAULT_EXCLUDED_MSGVAULT_LABELS)
+    labels.extend(extra_labels or [])
+    return normalize_label_names(labels)
+
+
+def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "", exclude_labels: Iterable[str] | None = None) -> Iterable[sqlite3.Row]:
+    labels = normalize_label_names(exclude_labels)
+    label_filter = ""
+    params: list[Any] = [account_email, account_email]
+    if labels and msgvault_has_label_tables(con):
+        placeholders = ",".join("?" for _ in labels)
+        label_filter = f"""
+          AND NOT EXISTS (
+              SELECT 1
+              FROM message_labels ml
+              JOIN labels l ON l.id = ml.label_id
+              WHERE ml.message_id = m.id
+                AND UPPER(l.name) IN ({placeholders})
+          )
+        """
+        params.extend(labels)
     query = """
         SELECT
             s.id AS source_id,
@@ -513,9 +553,10 @@ def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "") -> 
           AND (m.deleted_at IS NULL OR m.deleted_at = '')
           AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
           AND (? = '' OR LOWER(s.identifier) = LOWER(?))
+          {label_filter}
         ORDER BY LOWER(p.email_address), m.id
-    """
-    yield from con.execute(query, (account_email, account_email))
+    """.format(label_filter=label_filter)
+    yield from con.execute(query, params)
 
 
 def best_display_name(email: str, names: dict[str, int]) -> str:
@@ -531,10 +572,10 @@ def best_display_name(email: str, names: dict[str, int]) -> str:
     return default_name_for_email(email)
 
 
-def aggregate_msgvault_contacts(con: sqlite3.Connection, account_email: str = "") -> list[dict[str, Any]]:
+def aggregate_msgvault_contacts(con: sqlite3.Connection, account_email: str = "", exclude_labels: Iterable[str] | None = None) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
     account_filter = account_email.strip().lower()
-    for row in iter_msgvault_metadata(con, account_filter):
+    for row in iter_msgvault_metadata(con, account_filter, exclude_labels):
         try:
             email = normalize_email(str(row["email"] or ""))
         except ValueError:
@@ -718,7 +759,7 @@ def apply_linkedin_resolutions_to_people(people_csv: Path, resolutions_csv: Path
     }
 
 
-def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_email: str = "", operator_id: str = "local", *, include_automated: bool = False, limit: int | None = None) -> dict[str, Any]:
+def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_email: str = "", operator_id: str = "local", *, include_automated: bool = False, limit: int | None = None, excluded_labels: Iterable[str] | None = None) -> dict[str, Any]:
     filtered = [row for row in rows if include_automated or not row.get("automated_filtered")]
     if limit is not None:
         filtered = filtered[: max(0, int(limit))]
@@ -806,6 +847,7 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
             "contacts_written": len(filtered),
             "automated_filtered": len([row for row in rows if row.get("automated_filtered") and not include_automated]),
             "accounts": len(account_rows),
+            "excluded_labels": normalize_label_names(excluded_labels),
         },
         "artifacts": {
             "accounts_csv": str(accounts_path),
@@ -1195,10 +1237,11 @@ def command_msgvault_accounts(args: argparse.Namespace) -> int:
 
 
 def command_msgvault(args: argparse.Namespace) -> int:
+    excluded_labels = default_excluded_labels(bool(args.include_category_mail), args.exclude_label)
     con = connect_msgvault(Path(args.db))
     try:
         require_msgvault_schema(con)
-        rows = aggregate_msgvault_contacts(con, args.account_email)
+        rows = aggregate_msgvault_contacts(con, args.account_email, excluded_labels)
     finally:
         con.close()
     run_id = args.run_id or f"msgvault-{short_hash((args.account_email or 'all') + ':' + now_iso(), 12)}"
@@ -1210,6 +1253,7 @@ def command_msgvault(args: argparse.Namespace) -> int:
         operator_id=args.operator_id,
         include_automated=bool(args.include_automated),
         limit=args.limit,
+        excluded_labels=excluded_labels,
     )
     emit({
         "status": "completed",
@@ -1265,7 +1309,7 @@ def build_parser() -> argparse.ArgumentParser:
     cont.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     cont.set_defaults(func=command_continue)
 
-    approve = sub.add_parser("approve", help="Approve the currently blocked future gate")
+    approve = sub.add_parser("approve", help="Approve the currently blocked future confirmation")
     approve.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     approve.add_argument("--approval-id")
     approve.set_defaults(func=command_approve)
@@ -1286,6 +1330,8 @@ def build_parser() -> argparse.ArgumentParser:
     msgvault.add_argument("--run-id")
     msgvault.add_argument("--limit", type=int)
     msgvault.add_argument("--include-automated", action="store_true", help="Include noreply/automated service addresses")
+    msgvault.add_argument("--exclude-label", action="append", default=[], help="Exclude messages with this msgvault/Gmail label name; may be repeated")
+    msgvault.add_argument("--include-category-mail", action="store_true", help="Do not exclude default Gmail category labels: Social, Promotions, Forums, Updates")
     msgvault.set_defaults(func=command_msgvault)
 
     apply = sub.add_parser("apply-resolutions", help="Apply LinkedIn resolution results to a Gmail/msgvault people.csv")
