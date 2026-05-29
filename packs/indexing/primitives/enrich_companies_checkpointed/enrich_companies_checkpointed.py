@@ -6,7 +6,7 @@ Provider modes:
   a local JSONL artifact, keyed by normalized company_name, preserving the local
   company_urn.
 - openai/llm: explicit paid provider; blocked unless --allow-paid is set,
-  uses stdlib urllib and checkpointing when approved.
+  uses the OpenAI SDK with checkpointing when approved.
 
 Use --dry-run to validate/count/estimate without writing fake enriched outputs
 or making provider calls.
