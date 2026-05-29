@@ -811,6 +811,7 @@ def normalize_setup_phases(
     ledger: dict[str, Any],
     accounts: dict[str, Any],
     idx: dict[str, Any],
+    operator_id: str = '',
     refresh_interval_hours: int = DEFAULT_REFRESH_INTERVAL_HOURS,
 ) -> None:
     phases = ledger.setdefault('phases', {phase: {'status': 'pending'} for phase in ['bootstrap', 'link', 'import', 'index']})
@@ -857,14 +858,32 @@ def normalize_setup_phases(
         }
 
     prior_index = phases.get('index') if isinstance(phases.get('index'), dict) else {}
-    if prior_index.get('status') == 'needs_processing':
+    if idx.get('status') == 'search_ready':
+        if prior_index.get('status') == 'needs_processing':
+            estimate = run_processing_dry_run(operator_id) if operator_id else prior_index.get('processing_estimate', {})
+            paid_calls = estimate.get('estimated_paid_calls') if isinstance(estimate, dict) else {}
+            has_paid_work = any(int(value or 0) > 0 for value in paid_calls.values()) if isinstance(paid_calls, dict) else False
+            total_cost = 0.0
+            if isinstance(estimate, dict):
+                costs = estimate.get('estimated_costs') if isinstance(estimate.get('estimated_costs'), dict) else {}
+                total_cost = float(estimate.get('estimated_cost_usd') or costs.get('total_estimated_usd') or 0.0)
+            if has_paid_work or total_cost > 0:
+                prior_index['processing_estimate'] = estimate
+                phases['index'] = prior_index
+            else:
+                phases['index'] = {
+                    'status': 'ready',
+                    'duckdb': idx.get('duckdb', ''),
+                    'ledger': idx.get('ledger', ''),
+                }
+        else:
+            phases['index'] = {
+                'status': 'ready',
+                'duckdb': idx.get('duckdb', ''),
+                'ledger': idx.get('ledger', ''),
+            }
+    elif prior_index.get('status') == 'needs_processing':
         phases['index'] = prior_index
-    elif idx.get('status') == 'search_ready':
-        phases['index'] = {
-            'status': 'ready',
-            'duckdb': idx.get('duckdb', ''),
-            'ledger': idx.get('ledger', ''),
-        }
 
     statuses = {phase: phases.get(phase, {}).get('status') for phase in ['bootstrap', 'link', 'import', 'index']}
     if statuses['bootstrap'] == 'restored' and statuses['link'] == 'ready' and statuses['import'] in ('ready', 'completed') and statuses['index'] == 'ready':
@@ -877,7 +896,7 @@ def status_payload(args: argparse.Namespace) -> dict[str, Any]:
     ledger = load_setup_ledger(Path(args.setup_ledger))
     idx = indexing_readiness(args.operator_id)
     accounts = accounts_summary(Path(args.accounts))
-    normalize_setup_phases(ledger, accounts, idx, int(getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS)))
+    normalize_setup_phases(ledger, accounts, idx, args.operator_id, int(getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS)))
     if isinstance(ledger.get('handoff'), dict):
         ledger['handoff']['commands'] = setup_commands(args)
         ledger['handoff']['requires_approval'] = approval_payload()
