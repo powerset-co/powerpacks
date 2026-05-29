@@ -74,7 +74,7 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
             result = validate_record(record, load_search_contract("turbopuffer/companies.namespace.json"))
             self.assertTrue(result["ok"], result)
 
-    def test_provider_output_missing_schema_fields_is_rejected(self) -> None:
+    def test_provider_output_missing_schema_fields_uses_local_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             input_path = root / "input.jsonl"
@@ -82,25 +82,29 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
             self._write_jsonl(input_path, [{"company_urn": "urn:li:company:1", "company_name": "Acme AI"}])
             self._write_jsonl(artifact_path, [{"company_name": "Acme AI", "entity_types": ["venture_backed_startup"]}])
 
-            with self.assertRaises(SystemExit) as ctx:
-                stage.run(Namespace(
-                    input=str(input_path),
-                    output=str(root / "out.jsonl"),
-                    output_dir=str(root / "checkpoint"),
-                    checkpoint_every=100,
-                    provider="artifact",
-                    artifact_path=str(artifact_path),
-                    artifact_missing_policy="error",
-                    dry_run=False,
-                    estimate=False,
-                    allow_paid=False,
-                    model=None,
-                    api_key=None,
-                    base_url=None,
-                    force=False,
-                    stop_after_chunks=None,
-                ))
-            self.assertIn("missing required fields", str(ctx.exception))
+            output_path = root / "out.jsonl"
+            manifest = stage.run(Namespace(
+                input=str(input_path),
+                output=str(output_path),
+                output_dir=str(root / "checkpoint"),
+                checkpoint_every=100,
+                provider="artifact",
+                artifact_path=str(artifact_path),
+                artifact_missing_policy="error",
+                dry_run=False,
+                estimate=False,
+                allow_paid=False,
+                model=None,
+                api_key=None,
+                base_url=None,
+                force=False,
+                stop_after_chunks=None,
+            ))
+            self.assertEqual(manifest["status"], "completed")
+            row = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(row["entity_types"], ["venture_backed_startup"])
+            self.assertEqual(row["technology_types"], [])
+            self.assertEqual(row["accelerators"], [])
 
     def test_openai_dry_run_does_not_write_or_require_paid_approval(self) -> None:
         with tempfile.TemporaryDirectory() as td:

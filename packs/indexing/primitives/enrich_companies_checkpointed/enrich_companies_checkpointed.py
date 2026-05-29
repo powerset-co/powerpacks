@@ -343,9 +343,11 @@ def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
 
 
 def merge_enrichment(local: dict[str, Any], enriched: dict[str, Any]) -> dict[str, Any]:
-    validate_provider_output(enriched)
     merged = dict(local)
-    normalized = normalize_classification_output(enriched)
+    provider_payload = {field: local.get(field) for field in REQUIRED_PROVIDER_OUTPUT_FIELDS}
+    provider_payload.update(enriched)
+    validate_provider_output(provider_payload)
+    normalized = normalize_classification_output(provider_payload)
     for key in CLASSIFICATION_FIELDS:
         if key in normalized and normalized.get(key) not in (None, ""):
             merged[key] = normalized[key]
