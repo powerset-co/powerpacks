@@ -516,6 +516,11 @@ class PipelinePartial(Exception):
         self.stats = stats
 
 
+def paid_checkpoint_every(ledger: dict[str, Any]) -> int:
+    configured = int(ledger.get("checkpoint_every") or 1000)
+    return min(configured, int(os.getenv("POWERPACKS_PAID_CHECKPOINT_EVERY", "25")))
+
+
 def step_roles(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
     """Run mandatory checkpointed role enrichment; no scaffold fallback."""
 
@@ -528,11 +533,12 @@ def step_roles(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, A
         raise SystemExit(f"role provider '{role_provider}' requires --allow-paid-role-provider or --role-input-classifications; no paid API was called")
 
     roles_dir = ps["roles_dense"].parent
+    checkpoint_every = paid_checkpoint_every(ledger) if ledger.get("allow_paid_role_provider") else int(ledger.get("checkpoint_every") or 1000)
     manifest = enrich_roles_checkpointed.run(
         Namespace(
             flattened=str(ps["flattened"]),
             output_dir=str(roles_dir),
-            checkpoint_every=int(ledger.get("checkpoint_every") or 1000),
+            checkpoint_every=checkpoint_every,
             provider=role_provider,
             input_classifications=role_input_classifications,
             api_key=ledger.get("role_openai_api_key"),
@@ -559,7 +565,7 @@ def step_roles(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, A
             "checkpoint": manifest.get("checkpoint"),
             "chunks_written": int(manifest.get("chunks_written_total", 0) or 0),
             "input_rows_processed": int(manifest.get("input_rows_processed", 0) or 0),
-            "checkpoint_every": int(ledger.get("checkpoint_every") or 1000),
+            "checkpoint_every": checkpoint_every,
             "provider": role_provider,
         }
         write_stats(ledger, "build_roles", stats)
@@ -582,7 +588,7 @@ def step_roles(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, A
         "paid_calls": int(counts.get("paid_calls", 0) or 0),
         "input_rows_processed": int(counts.get("input_rows_processed", 0) or 0),
         "chunks_written": int(counts.get("chunks_written", 0) or 0),
-        "checkpoint_every": int(ledger.get("checkpoint_every") or 1000),
+        "checkpoint_every": checkpoint_every,
         "provider": role_provider,
         "checkpointed": True,
         "provider_equivalence": manifest.get("provider_equivalence", "shape_compatible_not_tlm_equivalent"),
@@ -640,6 +646,7 @@ def _run_embedding_stage(
     input_embedding_field: str = "embedding",
 ) -> dict[str, Any]:
     provider, allow_paid = _embedding_provider_args(ledger, input_embeddings)
+    checkpoint_every = paid_checkpoint_every(ledger) if allow_paid else int(ledger.get("checkpoint_every") or 1000)
     return embed_records_checkpointed.run(
         Namespace(
             input=str(input_path),
@@ -648,7 +655,7 @@ def _run_embedding_stage(
             id_field=id_field,
             text_fields=text_fields,
             copy_fields=copy_fields,
-            checkpoint_every=int(ledger.get("checkpoint_every") or 1000),
+            checkpoint_every=checkpoint_every,
             provider=provider,
             input_embeddings=input_embeddings,
             input_id_field=input_id_field,
@@ -679,7 +686,7 @@ def _embedding_stats(result: dict[str, Any], ledger: dict[str, Any]) -> dict[str
         "paid_calls": int(counts.get("paid_calls", result.get("paid_calls", 0)) or 0),
         "input_rows_processed": int(counts.get("input_rows_processed", result.get("input_rows_processed", 0)) or 0),
         "chunks_written": int(counts.get("chunks_written", result.get("chunks_written_total", 0)) or 0),
-        "checkpoint_every": int(ledger.get("checkpoint_every") or 1000),
+        "checkpoint_every": int(result.get("checkpoint_every") or ledger.get("checkpoint_every") or 1000),
     }
 
 
@@ -870,11 +877,12 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str,
         raise SystemExit("company provider must be openai/llm or --company-input-classifications; no fake/mock/local provider is available")
     if provider in {"openai", "llm"} and not ledger.get("allow_paid_company_provider"):
         raise SystemExit(f"company provider '{provider}' requires --allow-paid-company-provider or --company-input-classifications; no paid API was called")
+    checkpoint_every = paid_checkpoint_every(ledger) if ledger.get("allow_paid_company_provider") else int(ledger.get("checkpoint_every") or 1000)
     manifest = enrich_companies_checkpointed.run(Namespace(
         input=str(ps["companies_raw"]),
         output=str(ps["companies_corpus_v3"]),
         output_dir=str(ps["companies_corpus_v3"].parent / "enrichment_checkpoints"),
-        checkpoint_every=int(ledger.get("checkpoint_every") or 1000),
+        checkpoint_every=checkpoint_every,
         provider=provider,
         artifact_path=artifact_path,
         artifact_missing_policy=str(ledger.get("company_artifact_missing_policy") or "error"),
@@ -925,6 +933,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str,
         "aleph_shape": "companies_corpus_v3",
         "provider": provider,
         "checkpointed": True,
+        "checkpoint_every": checkpoint_every,
         "provider_equivalence": manifest.get("provider_equivalence"),
         "artifact_hits": int(counts.get("artifact_hits", 0) or 0),
         "artifact_misses": int(counts.get("artifact_misses", 0) or 0),

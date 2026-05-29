@@ -15,7 +15,6 @@ import sys
 import tempfile
 import time
 import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -25,10 +24,12 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.indexing.lib.provider_http import post_json  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_MODEL = "gpt-5.1"
+DEFAULT_MAX_COMPLETION_TOKENS = 700
 CHAT_MODEL_PRICES_PER_1K_USD = {
     "gpt-5.2": {"input": 0.00175, "output": 0.01400},
     "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
@@ -155,16 +156,21 @@ def role_prompt(role: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def call_openai_role_enrichment(role: dict[str, Any], *, api_key: str, base_url: str, model: str, timeout: int = 60, max_retries: int = 3) -> dict[str, Any]:
-    payload = {"model": model, "response_format": {"type": "json_object"}, "messages": role_prompt(role), "temperature": 0}
-    body = json.dumps(payload).encode("utf-8")
+    timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(timeout)))
+    max_completion_tokens = int(os.getenv("POWERPACKS_ROLE_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS)))
+    payload = {
+        "model": model,
+        "response_format": {"type": "json_object"},
+        "messages": role_prompt(role),
+        "temperature": 0,
+        "max_completion_tokens": max_completion_tokens,
+    }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     url = base_url.rstrip("/") + "/chat/completions"
     last_error = ""
     for attempt in range(max_retries + 1):
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:  # noqa: S310 - explicit paid provider path
-                result = json.loads(response.read().decode("utf-8"))
+            result = post_json(url, payload, headers, timeout=timeout)
             content = (((result.get("choices") or [{}])[0].get("message") or {}).get("content") or "{}").strip()
             parsed = json.loads(content)
             if not isinstance(parsed, dict):
@@ -310,6 +316,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
             "response_format": {"type": "json_object"},
             "messages": role_prompt(role),
             "temperature": 0,
+            "max_completion_tokens": int(os.getenv("POWERPACKS_ROLE_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
         }
         input_tokens += estimate_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     output_tokens = 0 if provider == "input-classifications" else len(roles) * DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE

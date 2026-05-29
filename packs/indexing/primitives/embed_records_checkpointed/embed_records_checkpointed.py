@@ -16,7 +16,6 @@ import sys
 import tempfile
 import time
 import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -26,6 +25,7 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.indexing.lib.provider_http import post_json  # noqa: E402
 
 DEFAULT_DIMENSION = 1536
 DEFAULT_MODEL = "text-embedding-3-small"
@@ -92,14 +92,11 @@ def openai_embeddings(
     payload: dict[str, Any] = {"model": model, "input": texts}
     if dimension:
         payload["dimensions"] = dimension
-    body = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
     last_error = ""
     for attempt in range(max_retries + 1):
-        req = urllib.request.Request(url, data=body, method="POST", headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:  # noqa: S310 - explicit paid provider path
-                response_payload = json.loads(response.read().decode("utf-8"))
+            response_payload = post_json(url, payload, headers, timeout=timeout)
             data = response_payload.get("data") if isinstance(response_payload, dict) else None
             if not isinstance(data, list) or len(data) != len(texts):
                 raise RuntimeError("OpenAI embeddings response row count mismatch")
@@ -218,6 +215,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
         "provider": state.get("provider"),
         "dimension": state.get("dimension", DEFAULT_DIMENSION),
         "checkpoint": str(checkpoint_path(output_dir)),
+        "checkpoint_every": state.get("checkpoint_every"),
         "chunks": [str(path) for path in chunks],
         "output": str(output_path),
         "counts": {

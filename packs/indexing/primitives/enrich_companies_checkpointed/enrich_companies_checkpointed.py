@@ -21,7 +21,6 @@ import shutil
 import sys
 import tempfile
 import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,9 +30,11 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.indexing.lib.provider_http import post_json  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_MODEL = "gpt-5.1"
+DEFAULT_MAX_COMPLETION_TOKENS = 1200
 WORD_RE = re.compile(r"[a-z0-9]+")
 CHAT_MODEL_PRICES_PER_1K_USD = {
     "gpt-5.2": {"input": 0.00175, "output": 0.01400},
@@ -382,6 +383,7 @@ def openai_classification_payload(local: dict[str, Any]) -> dict[str, Any]:
             {"role": "user", "content": json.dumps(local, ensure_ascii=False, sort_keys=True)},
         ],
         "temperature": 0,
+        "max_completion_tokens": int(os.getenv("POWERPACKS_COMPANY_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
     }
 
 
@@ -393,18 +395,14 @@ def call_openai_company_classifier(local: dict[str, Any], *, model: str | None =
     if model:
         payload["model"] = model
     url = (base_url or os.getenv("POWERPACKS_OPENAI_BASE") or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
+    timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", "60"))
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 - explicit paid provider path
-            body = json.loads(response.read().decode("utf-8"))
+        body = post_json(url, payload, {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, timeout=timeout)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"OpenAI company classifier failed: HTTP {exc.code}: {detail}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"OpenAI company classifier failed: {exc}") from exc
     content = (((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "{}").strip()
     parsed = json.loads(content)
     if not isinstance(parsed, dict):
