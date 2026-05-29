@@ -15,6 +15,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
+from dotenv import load_dotenv  # noqa: E402
 from packs.indexing.lib.artifacts import (  # noqa: E402
     build_company_corpus,
     build_education_corpus,
@@ -51,11 +52,20 @@ STEPS = [
 ]
 
 CHAT_MODEL_PRICES_PER_1K_USD = {
+    "gpt-5.2": {"input": 0.00175, "output": 0.01400},
+    "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
+    "gpt-5.1": {"input": 0.00125, "output": 0.01000},
+    "gpt-5.1-chat-latest": {"input": 0.00125, "output": 0.01000},
+    "gpt-5": {"input": 0.00125, "output": 0.01000},
+    "gpt-5-chat-latest": {"input": 0.00125, "output": 0.01000},
+    "gpt-5-mini": {"input": 0.00025, "output": 0.00200},
+    "gpt-5-nano": {"input": 0.00005, "output": 0.00040},
     "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},
     "gpt-4o-mini-2024-07-18": {"input": 0.00015, "output": 0.00060},
 }
 EMBEDDING_MODEL_PRICES_PER_1K_USD = {
     "text-embedding-3-small": 0.00002,
+    "text-embedding-3-large": 0.00013,
 }
 DEFAULT_ROLE_OUTPUT_TOKENS = 250
 DEFAULT_COMPANY_OUTPUT_TOKENS = 350
@@ -350,10 +360,16 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
         "currency": "USD",
         "total_estimated_usd": total,
         "known_pricing": known,
+        "effective_models": {
+            "roles": role_model,
+            "companies": company_model,
+            "embeddings": embedding_model,
+        },
         "stages": stages,
         "pricing_assumptions": [
-            "OpenAI gpt-4o-mini: $0.15/M input tokens and $0.60/M output tokens.",
-            "OpenAI text-embedding-3-small: $0.02/M tokens.",
+            "Pricing uses the effective model names from CLI args, exported env, or .env.",
+            "Known OpenAI chat pricing includes gpt-5.2, gpt-5.1, gpt-5, gpt-5-mini, gpt-5-nano, and gpt-4o-mini.",
+            "Known OpenAI embedding pricing includes text-embedding-3-small and text-embedding-3-large.",
             "Role enrichment output is estimated at 250 tokens per role; company enrichment output is estimated at 350 tokens per company.",
             "Token counts use a local dry-run approximation and actual provider billing can vary.",
         ],
@@ -1384,6 +1400,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    load_dotenv(ROOT / ".env", override=False)
     args = build_parser().parse_args()
     if args.cmd == "plan":
         rd = run_dir(Path(args.output_dir))
