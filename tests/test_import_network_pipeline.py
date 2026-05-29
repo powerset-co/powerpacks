@@ -284,6 +284,37 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(len(ledger["artifacts"]["gmail_people_csvs"]), 2)
             self.assertTrue(ledger["worker_groups"]["import"]["parallel"])
 
+    def test_gmail_sync_after_is_passed_to_msgvault_sync_full(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ledger_path = tmp / "ledger.json"
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {
+                    "operator_id": "local",
+                    "msgvault_db": str(tmp / "msgvault.db"),
+                    "gmail_account_emails": ["me@example.com"],
+                    "gmail_linkedin_provider": "off",
+                    "gmail_sync_after": "2026-05-15",
+                },
+                "steps": {},
+                "artifacts": {},
+            }
+            calls = []
+            def fake_run_cmd(cmd, timeout=None):
+                calls.append(cmd)
+                if cmd[0] == "msgvault" and "sync-full" in cmd:
+                    return 0, {"status": "completed"}, ""
+                return 0, {"status": "completed", "artifacts": {"people_csv": str(tmp / "gmail.csv")}, "counts": {"contacts_seen": 1, "contacts_written": 1}}, ""
+            with mock.patch.object(import_network_pipeline.shutil, "which", return_value="/usr/bin/msgvault"):
+                with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                    self.assertTrue(import_network_pipeline.run_source_import_workers(ledger_path, ledger))
+            default_query = "-category:social -category:promotions -category:forums -category:updates"
+            self.assertIn(["msgvault", "--home", str(tmp), "sync-full", "me@example.com", "--after", "2026-05-15", "--query", default_query], calls)
+            self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_after"], "2026-05-15")
+            self.assertEqual(ledger["source_imports"]["gmail_msgvault:me-example.com"]["sync_after"], "2026-05-15")
+
     def test_gmail_category_mail_can_be_included_for_sync_and_import(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

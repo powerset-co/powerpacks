@@ -230,6 +230,48 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['setup_ledger']['phases']['import']['status'], 'ready')
         self.assertNotIn('run setup refresh', payload['next_actions'])
 
+    def test_status_marks_completed_live_refresh_due_when_people_hash_drifts(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        account_payload = {'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+        }}
+        accounts.write_text(json.dumps(account_payload), encoding='utf-8')
+        accounts_summary = setup.accounts_summary(accounts)
+        people = tmp / '.powerpacks/network-import/merged/people.csv'
+        people.parent.mkdir(parents=True)
+        people.write_text('id\nbefore\n', encoding='utf-8')
+        expected_hash = setup.sha256_file(people)
+        people.write_text('id\nafter-manual-edit\n', encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'ready',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'ready'},
+                'import': {'status': 'ready', 'live_refresh': {
+                    'status': 'completed',
+                    'completed_at': setup.now(),
+                    'source_fingerprint': setup.linked_source_fingerprint(accounts_summary),
+                    'after_people_sha256': expected_hash,
+                }},
+                'index': {'status': 'ready'},
+            },
+        }), encoding='utf-8')
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/local-search.duckdb').write_text('db', encoding='utf-8')
+        (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
+
+        payload = setup.status_payload(argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(accounts), setup_ledger=str(ledger), refresh_interval_hours=168))
+        self.assertEqual(payload['setup_ledger']['status'], 'refresh_due')
+        import_phase = payload['setup_ledger']['phases']['import']
+        self.assertEqual(import_phase['status'], 'refresh_due')
+        self.assertEqual(import_phase['refresh_due']['reason'], 'import_artifact_drift')
+        self.assertEqual(import_phase['refresh_due']['artifact'], '.powerpacks/network-import/merged/people.csv')
+        self.assertIn('run setup refresh', payload['next_actions'])
+
     def test_status_rewrites_stale_handoff_commands_to_current_defaults(self):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
@@ -358,7 +400,7 @@ class SetupPipelineTests(unittest.TestCase):
         message_cmd = next(cmd for cmd in calls if 'import_contacts_pipeline.py' in ' '.join(cmd))
         self.assertIn('--parallel-timeout', message_cmd)
         self.assertIn('--reuse-existing-artifacts', message_cmd)
-        self.assertNotIn('--force-imessage', message_cmd)
+        self.assertIn('--force-imessage', message_cmd)
         self.assertNotIn('--force-whatsapp', message_cmd)
         network_cmd = next(cmd for cmd in calls if 'import_network_pipeline.py' in ' '.join(cmd))
         self.assertIn('--include-existing-artifacts', network_cmd)
@@ -370,6 +412,182 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(saved['phases']['import']['live_refresh']['status'], 'completed')
         self.assertTrue(saved['phases']['import']['live_refresh']['network_changed'])
         self.assertEqual(saved['phases']['index']['status'], 'needs_processing')
+
+    def test_run_forces_network_refresh_when_import_artifact_hash_drifts(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        account_payload = {'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+        }}
+        accounts.write_text(json.dumps(account_payload), encoding='utf-8')
+        accounts_summary = setup.accounts_summary(accounts)
+        people = tmp / '.powerpacks/network-import/merged/people.csv'
+        people.parent.mkdir(parents=True)
+        people.write_text('id\nbefore\n', encoding='utf-8')
+        expected_hash = setup.sha256_file(people)
+        people.write_text('id\nafter-manual-edit\n', encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'ready',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'ready'},
+                'import': {'status': 'ready', 'live_refresh': {
+                    'status': 'completed',
+                    'completed_at': setup.now(),
+                    'source_fingerprint': setup.linked_source_fingerprint(accounts_summary),
+                    'after_people_sha256': expected_hash,
+                    'promoted': {'merged_people.csv': str(people)},
+                }},
+                'index': {'status': 'ready'},
+            },
+        }), encoding='utf-8')
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/local-search.duckdb').write_text('db', encoding='utf-8')
+        (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
+        calls = []
+
+        def fake_run_json_command(cmd):
+            calls.append(cmd)
+            self.assertIn('import_network_pipeline.py', ' '.join(cmd))
+            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            merged_dir = run_dir / 'merged'
+            merged_dir.mkdir(parents=True)
+            for name, content in {
+                'people.csv': 'id\nrestored\n',
+                'network_contacts.csv': 'id\nc1\n',
+                'network_contact_sources.csv': 'id\ns1\n',
+                'network_companies.csv': 'id\nco1\n',
+                'merge_manifest.json': '{}\n',
+            }.items():
+                (merged_dir / name).write_text(content, encoding='utf-8')
+            duckdb_dir = run_dir / 'duckdb'
+            duckdb_dir.mkdir(parents=True)
+            duckdb = duckdb_dir / 'network.setup-refresh-test.duckdb'
+            manifest = duckdb_dir / 'manifest.setup-refresh-test.json'
+            duckdb.write_text('duckdb', encoding='utf-8')
+            manifest.write_text('{}\n', encoding='utf-8')
+            return 0, {
+                'status': 'completed',
+                'run_id': 'setup-refresh-test',
+                'artifacts': {
+                    'merged_people_csv': str(merged_dir / 'people.csv'),
+                    'network_contacts_csv': str(merged_dir / 'network_contacts.csv'),
+                    'network_contact_sources_csv': str(merged_dir / 'network_contact_sources.csv'),
+                    'network_companies_csv': str(merged_dir / 'network_companies.csv'),
+                    'merge_manifest': str(merged_dir / 'merge_manifest.json'),
+                    'duckdb': str(duckdb),
+                    'duckdb_manifest': str(manifest),
+                },
+            }, ''
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            refresh_interval_hours=168,
+        )
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            code = setup.run_setup(args)
+        self.assertEqual(code, 0)
+        network_cmd = calls[0]
+        self.assertIn('--force', network_cmd)
+        saved = json.loads(ledger.read_text(encoding='utf-8'))
+        self.assertEqual(saved['phases']['import']['live_refresh']['status'], 'completed')
+        self.assertIn('artifact_hashes', saved['phases']['import']['live_refresh'])
+        self.assertEqual((tmp / '.powerpacks/network-import/merged/people.csv').read_text(encoding='utf-8'), 'id\nrestored\n')
+
+    def test_run_forces_refresh_even_when_recent_import_is_intact(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        account_payload = {'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+        }}
+        accounts.write_text(json.dumps(account_payload), encoding='utf-8')
+        accounts_summary = setup.accounts_summary(accounts)
+        people = tmp / '.powerpacks/network-import/merged/people.csv'
+        people.parent.mkdir(parents=True)
+        people.write_text('id\ncurrent\n', encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'ready',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'ready'},
+                'import': {'status': 'ready', 'live_refresh': {
+                    'status': 'completed',
+                    'completed_at': '2026-05-29T12:00:00Z',
+                    'source_fingerprint': setup.linked_source_fingerprint(accounts_summary),
+                    'after_people_sha256': setup.sha256_file(people),
+                }},
+                'index': {'status': 'ready'},
+            },
+        }), encoding='utf-8')
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/local-search.duckdb').write_text('db', encoding='utf-8')
+        (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
+        calls = []
+
+        def fake_run_json_command(cmd):
+            calls.append(cmd)
+            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            merged_dir = run_dir / 'merged'
+            merged_dir.mkdir(parents=True)
+            for name, content in {
+                'people.csv': 'id\ncurrent\n',
+                'network_contacts.csv': 'id\nc1\n',
+                'network_contact_sources.csv': 'id\ns1\n',
+                'network_companies.csv': 'id\nco1\n',
+                'merge_manifest.json': '{}\n',
+            }.items():
+                (merged_dir / name).write_text(content, encoding='utf-8')
+            duckdb_dir = run_dir / 'duckdb'
+            duckdb_dir.mkdir(parents=True)
+            duckdb = duckdb_dir / 'network.setup-refresh-test.duckdb'
+            manifest = duckdb_dir / 'manifest.setup-refresh-test.json'
+            duckdb.write_text('duckdb', encoding='utf-8')
+            manifest.write_text('{}\n', encoding='utf-8')
+            return 0, {
+                'status': 'completed',
+                'run_id': 'setup-refresh-test',
+                'artifacts': {
+                    'merged_people_csv': str(merged_dir / 'people.csv'),
+                    'network_contacts_csv': str(merged_dir / 'network_contacts.csv'),
+                    'network_contact_sources_csv': str(merged_dir / 'network_contact_sources.csv'),
+                    'network_companies_csv': str(merged_dir / 'network_companies.csv'),
+                    'merge_manifest': str(merged_dir / 'merge_manifest.json'),
+                    'duckdb': str(duckdb),
+                    'duckdb_manifest': str(manifest),
+                },
+            }, ''
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            refresh_interval_hours=168,
+            gmail_sync_lookback_days=14,
+        )
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            code = setup.run_setup(args)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertIn('--force', calls[0])
+        self.assertIn('--gmail-sync-after', calls[0])
+        self.assertEqual(calls[0][calls[0].index('--gmail-sync-after') + 1], '2026-05-15')
+        saved = json.loads(ledger.read_text(encoding='utf-8'))
+        self.assertEqual(saved['phases']['import']['live_refresh']['status'], 'completed')
+        self.assertEqual(saved['phases']['import']['live_refresh']['gmail_sync_after'], '2026-05-15')
+        self.assertFalse(saved['phases']['import']['live_refresh']['network_changed'])
+        self.assertEqual(saved['status'], 'ready')
 
     def test_handoff_structured_approvals_and_worker_group(self):
         tmp = self.temp_workspace()

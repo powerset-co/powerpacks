@@ -12,13 +12,14 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 ROOT = Path.cwd()
 SETUP_LEDGER = Path('.powerpacks/setup/setup-run.json')
 DEFAULT_REFRESH_INTERVAL_HOURS = 168
+DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS = int(os.environ.get('POWERPACKS_SETUP_GMAIL_SYNC_LOOKBACK_DAYS', '14'))
 DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS', '900'))
 SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/import-network-run.setup-refresh.json')
 SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
@@ -635,6 +636,79 @@ def linked_sources(accounts: dict[str, Any]) -> list[str]:
     return sorted(ch for ch, rec in channels.items() if isinstance(rec, dict) and rec.get('linked'))
 
 
+def resolve_artifact_path(path_text: Any) -> Path:
+    path = Path(str(path_text or ''))
+    return path if path.is_absolute() else ROOT / path
+
+
+def completed_refresh_artifact_issue(refresh: dict[str, Any]) -> dict[str, Any] | None:
+    people_csv = ROOT / '.powerpacks/network-import/merged/people.csv'
+    expected_people_hash = str(refresh.get('after_people_sha256') or '')
+    if expected_people_hash:
+        if not people_csv.exists():
+            return {'reason': 'missing_import_artifact', 'artifact': '.powerpacks/network-import/merged/people.csv'}
+        actual_people_hash = sha256_file(people_csv)
+        if actual_people_hash != expected_people_hash:
+            return {
+                'reason': 'import_artifact_drift',
+                'artifact': '.powerpacks/network-import/merged/people.csv',
+                'expected_sha256': expected_people_hash,
+                'actual_sha256': actual_people_hash,
+            }
+
+    promoted = refresh.get('promoted') if isinstance(refresh.get('promoted'), dict) else {}
+    for key, path_text in sorted(promoted.items()):
+        path = resolve_artifact_path(path_text)
+        if not path.exists():
+            return {'reason': 'missing_import_artifact', 'artifact_key': key, 'artifact': str(path_text)}
+
+    artifact_hashes = refresh.get('artifact_hashes') if isinstance(refresh.get('artifact_hashes'), dict) else {}
+    for key, expected_hash in sorted(artifact_hashes.items()):
+        if not expected_hash:
+            continue
+        path_text = promoted.get(key)
+        if not path_text:
+            continue
+        path = resolve_artifact_path(path_text)
+        if not path.exists():
+            return {'reason': 'missing_import_artifact', 'artifact_key': key, 'artifact': str(path_text)}
+        actual_hash = sha256_file(path)
+        if actual_hash != expected_hash:
+            return {
+                'reason': 'import_artifact_drift',
+                'artifact_key': key,
+                'artifact': str(path_text),
+                'expected_sha256': expected_hash,
+                'actual_sha256': actual_hash,
+            }
+    return None
+
+
+def artifact_hashes(paths: dict[str, str]) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for key, path_text in sorted(paths.items()):
+        path = resolve_artifact_path(path_text)
+        if path.is_file():
+            hashes[key] = sha256_file(path)
+    return hashes
+
+
+def normal_setup_gmail_sync_after(ledger: dict[str, Any], accounts: dict[str, Any], lookback_days: int) -> str:
+    refresh = ((ledger.get('phases') or {}).get('import') or {}).get('live_refresh')
+    refresh = refresh if isinstance(refresh, dict) else {}
+    if refresh.get('status') != 'completed':
+        return ''
+    if refresh.get('source_fingerprint') != linked_source_fingerprint(accounts):
+        return ''
+    if completed_refresh_artifact_issue(refresh):
+        return ''
+    completed_at = parse_iso(refresh.get('completed_at'))
+    if completed_at is None:
+        return ''
+    bounded = completed_at - timedelta(days=max(0, int(lookback_days)))
+    return bounded.date().isoformat()
+
+
 def import_refresh_due(
     ledger: dict[str, Any],
     accounts: dict[str, Any],
@@ -654,6 +728,9 @@ def import_refresh_due(
         return {'due': True, 'reason': 'never_synced_after_bootstrap', 'linked_sources': sources, 'source_fingerprint': fingerprint}
     if refresh.get('source_fingerprint') != fingerprint:
         return {'due': True, 'reason': 'linked_sources_changed', 'linked_sources': sources, 'source_fingerprint': fingerprint}
+    artifact_issue = completed_refresh_artifact_issue(refresh)
+    if artifact_issue:
+        return {'due': True, **artifact_issue, 'linked_sources': sources, 'source_fingerprint': fingerprint}
     last_age = age_hours(refresh.get('completed_at'))
     if last_age is None:
         return {'due': True, 'reason': 'missing_refresh_timestamp', 'linked_sources': sources, 'source_fingerprint': fingerprint}
@@ -932,7 +1009,7 @@ def message_refresh_command(accounts: dict[str, Any], ledger_path: Path, *, forc
     return cmd
 
 
-def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: bool) -> list[str]:
+def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: bool, gmail_sync_after: str = '') -> list[str]:
     cmd = [
         sys.executable,
         'packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py',
@@ -949,6 +1026,8 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
     ]
     if force:
         cmd.append('--force')
+    if gmail_sync_after:
+        cmd.extend(['--gmail-sync-after', gmail_sync_after])
     return cmd
 
 
@@ -1040,7 +1119,8 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
     results: dict[str, Any] = {'status': 'running', 'started_at': started_at, 'reason': due.get('reason'), 'run_id': run_id}
 
     refresh_reason = str(due.get('reason') or '')
-    force_messages = refresh_reason in {'forced', 'refresh_interval_elapsed', 'linked_sources_changed'}
+    force_reasons = {'forced', 'refresh_interval_elapsed', 'linked_sources_changed', 'missing_import_artifact', 'import_artifact_drift'}
+    force_messages = refresh_reason in force_reasons
     message_cmd = message_refresh_command(accounts, SETUP_MESSAGES_LEDGER, force=force_messages)
     if message_cmd:
         code, payload, stderr = run_json_command(message_cmd)
@@ -1050,8 +1130,13 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
         if code != 0:
             return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': tail(stderr) or payload}, 1
 
-    force_network = refresh_reason in {'forced', 'refresh_interval_elapsed', 'linked_sources_changed'}
-    code, payload, stderr = run_json_command(network_refresh_command(args, run_id, force=force_network))
+    force_network = refresh_reason in force_reasons
+    gmail_sync_after = normal_setup_gmail_sync_after(
+        ledger,
+        accounts,
+        int(getattr(args, 'gmail_sync_lookback_days', DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)),
+    )
+    code, payload, stderr = run_json_command(network_refresh_command(args, run_id, force=force_network, gmail_sync_after=gmail_sync_after))
     results['network'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
     if code == 20 or payload.get('status') == 'blocked_approval':
         return {'status': 'blocked_approval', 'step': 'network_import', 'refresh': results, 'payload': payload}, 20
@@ -1072,6 +1157,9 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
         'before_people_sha256': before_hash,
         'after_people_sha256': after_hash,
         'promoted': promoted,
+        'artifact_hashes': artifact_hashes(promoted),
+        'gmail_sync_after': gmail_sync_after,
+        'gmail_sync_lookback_days': int(getattr(args, 'gmail_sync_lookback_days', DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)),
         'messages_ledger': str(SETUP_MESSAGES_LEDGER) if message_cmd else '',
     }
     return {'status': 'completed', 'refresh': completed, 'results': results}, 0
@@ -1097,6 +1185,26 @@ def run_setup(args: argparse.Namespace) -> int:
     accounts = status['accounts']
     import_phase = ledger.get('phases', {}).get('import', {})
     due = import_phase.get('refresh_due') if isinstance(import_phase.get('refresh_due'), dict) else {}
+    forced_due = import_refresh_due(
+        ledger,
+        accounts,
+        int(getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS)),
+        force_refresh=True,
+    )
+    if forced_due.get('due'):
+        import_phase = {
+            'status': 'refresh_due',
+            'source': 'forced_setup_refresh',
+            'people_csv': '.powerpacks/network-import/merged/people.csv'
+            if (ROOT / '.powerpacks/network-import/merged/people.csv').exists()
+            else '',
+            'refresh_due': forced_due,
+            'live_refresh': import_phase.get('live_refresh') if isinstance(import_phase.get('live_refresh'), dict) else {},
+        }
+        ledger.setdefault('phases', {})['import'] = import_phase
+        ledger['status'] = 'refresh_due'
+        save_setup_ledger(ledger, ledger_path)
+        due = forced_due
 
     if import_phase.get('status') == 'refresh_due':
         refresh_payload, refresh_code = run_live_refresh(args, ledger, accounts, due)
@@ -1191,6 +1299,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--bootstrap-bundle', default='')
     s.add_argument('--force-bootstrap', action='store_true')
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
+    s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
     s.set_defaults(func=run_setup)
     return p
 
