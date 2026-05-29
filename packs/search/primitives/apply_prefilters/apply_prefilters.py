@@ -214,8 +214,12 @@ def candidate_from_row(row: dict[str, Any], *, source: str, rank: int | None = N
         "position_title": row.get("position_title"),
         "city": row.get("city"),
         "state": row.get("state"),
+        "country": row.get("country"),
+        "macro_region": row.get("macro_region"),
+        "metro_areas": row.get("metro_areas"),
         "role_track": row.get("role_track"),
         "seniority_band": row.get("seniority_band"),
+        "company_name": row.get("company_name"),
         "company_id": row.get("company_id"),
         "is_current": row.get("is_current"),
         "score": row.get("score"),
@@ -272,7 +276,10 @@ async def company_base_ids(
                 return await filter_only_rows_for_namespace(
                     "people",
                     filters,
-                    ["base_id", "position_title", "city", "state", "role_track", "seniority_band", "company_id", "is_current"],
+                    [
+                        "base_id", "position_title", "city", "state", "country", "macro_region", "metro_areas",
+                        "role_track", "seniority_band", "company_name", "company_id", "is_current",
+                    ],
                     page_size=page_size,
                     max_results=max_ids,
                 )
@@ -290,7 +297,10 @@ async def company_base_ids(
                     adjacency_queries,
                     filters,
                     top_k=min(max_ids, ADJACENCY_LIMIT),
-                    include_attributes=["base_id", "position_title", "city", "state", "role_track", "seniority_band", "company_id", "is_current"],
+                    include_attributes=[
+                        "base_id", "position_title", "city", "state", "country", "macro_region", "metro_areas",
+                        "role_track", "seniority_band", "company_name", "company_id", "is_current",
+                    ],
                 )
                 return [row for row in rows if not is_non_operational_title(str(row.get("position_title") or ""))]
 
@@ -306,7 +316,10 @@ async def company_base_ids(
             return await filter_only_rows_for_namespace(
                 "people",
                 filters,
-                ["base_id", "position_title", "city", "state", "role_track", "seniority_band", "company_id", "is_current"],
+                [
+                    "base_id", "position_title", "city", "state", "country", "macro_region", "metro_areas",
+                    "role_track", "seniority_band", "company_name", "company_id", "is_current",
+                ],
                 page_size=page_size,
                 max_results=max_ids,
             )

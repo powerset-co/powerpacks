@@ -64,6 +64,13 @@ def make_bundle(path: Path, *, privacy=True, restore_paths=None, traversal=False
             add_file(tf, '../evil.txt', b'evil')
 
 
+def fake_local_duckdb_payload(tmp: Path):
+    db = tmp / '.powerpacks/search-index/local-search.duckdb'
+    db.parent.mkdir(parents=True, exist_ok=True)
+    db.write_text('duckdb', encoding='utf-8')
+    return 0, {'status': 'ok', 'duckdb': str(db), 'tables': {'local_people_positions': 1}}, ''
+
+
 class SetupPipelineTests(unittest.TestCase):
     def temp_workspace(self):
         td = tempfile.TemporaryDirectory()
@@ -356,6 +363,8 @@ class SetupPipelineTests(unittest.TestCase):
             joined = ' '.join(cmd)
             if 'import_contacts_pipeline.py' in joined:
                 return 0, {'status': 'selected_steps_completed', 'artifacts': {'contacts_csv': '.powerpacks/messages/contacts.csv'}}, ''
+            if 'build-local-duckdb-shim.py' in joined:
+                return fake_local_duckdb_payload(tmp)
             if 'import_network_pipeline.py' in joined:
                 run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
                 merged_dir = run_dir / 'merged'
@@ -387,8 +396,10 @@ class SetupPipelineTests(unittest.TestCase):
                         'duckdb_manifest': str(manifest),
                     },
                 }, ''
+            if 'build_processing_pipeline.py' in joined and '--dry-run' in cmd:
+                return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.25, 'estimated_costs': {'total_estimated_usd': 0.25}, 'estimated_paid_calls': {'role_enrichment': 1}}, ''
             if 'build_processing_pipeline.py' in joined:
-                return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.25, 'estimated_costs': {'total_estimated_usd': 0.25}}, ''
+                return 0, {'status': 'completed', 'run_dir': '.powerpacks/search-index'}, ''
             raise AssertionError(f'unexpected command: {cmd}')
 
         args = argparse.Namespace(
@@ -412,13 +423,15 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual((tmp / '.powerpacks/network-import/merged/people.csv').read_text(encoding='utf-8'), 'id\nnew\n')
         self.assertTrue((tmp / '.powerpacks/network-import/duckdb/network.duckdb').exists())
         saved = json.loads(ledger.read_text(encoding='utf-8'))
-        self.assertEqual(saved['status'], 'needs_index_processing')
+        self.assertEqual(saved['status'], 'ready')
         self.assertEqual(saved['phases']['import']['status'], 'ready')
         self.assertEqual(saved['phases']['import']['live_refresh']['status'], 'completed')
         self.assertTrue(saved['phases']['import']['live_refresh']['network_changed'])
-        self.assertEqual(saved['phases']['index']['status'], 'needs_processing')
-        self.assertIn('dry_run_command', saved['phases']['index'])
+        self.assertEqual(saved['phases']['index']['status'], 'ready')
         self.assertEqual(saved['phases']['index']['processing_estimate']['estimated_cost_usd'], 0.25)
+        processing_cmd = next(cmd for cmd in calls if 'build_processing_pipeline.py' in ' '.join(cmd) and '--dry-run' not in cmd)
+        self.assertIn('--allow-paid-role-provider', processing_cmd)
+        self.assertTrue(any('build-local-duckdb-shim.py' in ' '.join(cmd) for cmd in calls))
 
     def test_run_forces_network_refresh_when_import_artifact_hash_drifts(self):
         tmp = self.temp_workspace()
@@ -459,8 +472,12 @@ class SetupPipelineTests(unittest.TestCase):
         def fake_run_json_command(cmd, timeout=6 * 60 * 60):
             calls.append(cmd)
             joined = ' '.join(cmd)
+            if 'build-local-duckdb-shim.py' in joined:
+                return fake_local_duckdb_payload(tmp)
+            if 'build_processing_pipeline.py' in joined and '--dry-run' in cmd:
+                return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.5, 'estimated_paid_calls': {'role_enrichment': 1}}, ''
             if 'build_processing_pipeline.py' in joined:
-                return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.5}, ''
+                return 0, {'status': 'completed', 'run_dir': '.powerpacks/search-index'}, ''
             self.assertIn('import_network_pipeline.py', joined)
             run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
             merged_dir = run_dir / 'merged'
@@ -510,6 +527,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(saved['phases']['import']['live_refresh']['status'], 'completed')
         self.assertIn('artifact_hashes', saved['phases']['import']['live_refresh'])
         self.assertEqual((tmp / '.powerpacks/network-import/merged/people.csv').read_text(encoding='utf-8'), 'id\nrestored\n')
+        self.assertEqual(saved['phases']['index']['status'], 'ready')
 
     def test_run_marks_network_changed_when_missing_people_csv_is_recreated(self):
         tmp = self.temp_workspace()
@@ -550,8 +568,12 @@ class SetupPipelineTests(unittest.TestCase):
         def fake_run_json_command(cmd, timeout=6 * 60 * 60):
             calls.append(cmd)
             joined = ' '.join(cmd)
+            if 'build-local-duckdb-shim.py' in joined:
+                return fake_local_duckdb_payload(tmp)
+            if 'build_processing_pipeline.py' in joined and '--dry-run' in cmd:
+                return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.75, 'estimated_paid_calls': {'role_enrichment': 1}}, ''
             if 'build_processing_pipeline.py' in joined:
-                return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.75}, ''
+                return 0, {'status': 'completed', 'run_dir': '.powerpacks/search-index'}, ''
             run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
             merged_dir = run_dir / 'merged'
             merged_dir.mkdir(parents=True)
@@ -598,6 +620,7 @@ class SetupPipelineTests(unittest.TestCase):
         saved = json.loads(ledger.read_text(encoding='utf-8'))
         self.assertTrue(saved['phases']['import']['live_refresh']['network_changed'])
         self.assertEqual(saved['phases']['index']['processing_estimate']['estimated_cost_usd'], 0.75)
+        self.assertEqual(saved['phases']['index']['status'], 'ready')
 
     def test_run_forces_refresh_even_when_recent_import_is_intact(self):
         tmp = self.temp_workspace()
@@ -632,8 +655,15 @@ class SetupPipelineTests(unittest.TestCase):
         (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
             calls.append(cmd)
+            joined = ' '.join(cmd)
+            if 'build-local-duckdb-shim.py' in joined:
+                return fake_local_duckdb_payload(tmp)
+            if 'build_processing_pipeline.py' in joined and '--dry-run' in cmd:
+                return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.0, 'estimated_paid_calls': {'role_enrichment': 0}}, ''
+            if 'build_processing_pipeline.py' in joined:
+                return 0, {'status': 'completed', 'run_dir': '.powerpacks/search-index'}, ''
             run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
             merged_dir = run_dir / 'merged'
             merged_dir.mkdir(parents=True)
@@ -677,15 +707,109 @@ class SetupPipelineTests(unittest.TestCase):
         with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
             code = setup.run_setup(args)
         self.assertEqual(code, 0)
-        self.assertEqual(len(calls), 1)
         self.assertIn('--force', calls[0])
         self.assertIn('--gmail-sync-after', calls[0])
         self.assertEqual(calls[0][calls[0].index('--gmail-sync-after') + 1], '2026-05-15')
+        self.assertTrue(any('build_processing_pipeline.py' in ' '.join(cmd) and '--dry-run' in cmd for cmd in calls))
+        self.assertTrue(any('build_processing_pipeline.py' in ' '.join(cmd) and '--dry-run' not in cmd for cmd in calls))
+        self.assertTrue(any('build-local-duckdb-shim.py' in ' '.join(cmd) for cmd in calls))
         saved = json.loads(ledger.read_text(encoding='utf-8'))
         self.assertEqual(saved['phases']['import']['live_refresh']['status'], 'completed')
         self.assertEqual(saved['phases']['import']['live_refresh']['gmail_sync_after'], '2026-05-15')
         self.assertFalse(saved['phases']['import']['live_refresh']['network_changed'])
         self.assertEqual(saved['status'], 'ready')
+
+    def test_run_blocks_index_when_processing_cost_hits_limit(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        account_payload = {'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+        }}
+        accounts.write_text(json.dumps(account_payload), encoding='utf-8')
+        accounts_summary = setup.accounts_summary(accounts)
+        people = tmp / '.powerpacks/network-import/merged/people.csv'
+        people.parent.mkdir(parents=True)
+        people.write_text('id\ncurrent\n', encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'ready',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'ready'},
+                'import': {'status': 'ready', 'live_refresh': {
+                    'status': 'completed',
+                    'completed_at': '2026-05-29T12:00:00Z',
+                    'source_fingerprint': setup.linked_source_fingerprint(accounts_summary),
+                    'after_people_sha256': setup.sha256_file(people),
+                }},
+                'index': {'status': 'ready'},
+            },
+        }), encoding='utf-8')
+        calls = []
+
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            joined = ' '.join(cmd)
+            if 'build_processing_pipeline.py' in joined and '--dry-run' in cmd:
+                return 0, {
+                    'status': 'dry_run',
+                    'estimated_cost_usd': 10.0,
+                    'estimated_paid_calls': {'role_enrichment': 40},
+                    'estimated_costs': {'known_pricing': True, 'total_estimated_usd': 10.0},
+                }, ''
+            self.assertNotIn('build_processing_pipeline.py', joined)
+            self.assertNotIn('build-local-duckdb-shim.py', joined)
+            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            merged_dir = run_dir / 'merged'
+            merged_dir.mkdir(parents=True)
+            for name, content in {
+                'people.csv': 'id\ncurrent\n',
+                'network_contacts.csv': 'id\nc1\n',
+                'network_contact_sources.csv': 'id\ns1\n',
+                'network_companies.csv': 'id\nco1\n',
+                'merge_manifest.json': '{}\n',
+            }.items():
+                (merged_dir / name).write_text(content, encoding='utf-8')
+            duckdb_dir = run_dir / 'duckdb'
+            duckdb_dir.mkdir(parents=True)
+            duckdb = duckdb_dir / 'network.setup-refresh-test.duckdb'
+            manifest = duckdb_dir / 'manifest.setup-refresh-test.json'
+            duckdb.write_text('duckdb', encoding='utf-8')
+            manifest.write_text('{}\n', encoding='utf-8')
+            return 0, {
+                'status': 'completed',
+                'run_id': 'setup-refresh-test',
+                'artifacts': {
+                    'merged_people_csv': str(merged_dir / 'people.csv'),
+                    'network_contacts_csv': str(merged_dir / 'network_contacts.csv'),
+                    'network_contact_sources_csv': str(merged_dir / 'network_contact_sources.csv'),
+                    'network_companies_csv': str(merged_dir / 'network_companies.csv'),
+                    'merge_manifest': str(merged_dir / 'merge_manifest.json'),
+                    'duckdb': str(duckdb),
+                    'duckdb_manifest': str(manifest),
+                },
+            }, ''
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            refresh_interval_hours=168,
+            gmail_sync_lookback_days=14,
+            auto_spend_limit_usd=10.0,
+        )
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            code = setup.run_setup(args)
+        self.assertEqual(code, 20)
+        saved = json.loads(ledger.read_text(encoding='utf-8'))
+        self.assertEqual(saved['status'], 'blocked_approval')
+        self.assertEqual(saved['phases']['index']['status'], 'blocked_approval')
+        self.assertEqual(saved['phases']['index']['estimated_cost_usd'], 10.0)
+        self.assertFalse(any('build-local-duckdb-shim.py' in ' '.join(cmd) for cmd in calls))
 
     def test_handoff_structured_approvals_and_worker_group(self):
         tmp = self.temp_workspace()

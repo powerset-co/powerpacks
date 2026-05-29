@@ -38,6 +38,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
         raw = {
             "full_name": "Jane Example",
             "headline": "CEO at Acme",
+            "geo": {"city": "San Francisco, California", "country": "United States", "full": "San Francisco, California, United States"},
             "experiences": [{
                 "title": "CEO",
                 "companyName": "Acme",
@@ -114,6 +115,10 @@ class LinkedInNetworkImportTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["full_name"], "Jane Example")
+            self.assertEqual(rows[0]["location_raw"], "San Francisco, California, United States")
+            self.assertEqual(rows[0]["city"], "San Francisco")
+            self.assertEqual(rows[0]["state"], "California")
+            self.assertEqual(rows[0]["country"], "United States")
             self.assertEqual(rows[0]["current_company"], "Acme")
             self.assertEqual(rows[0]["enrichment_provider"], "rapidapi")
             experiences = json.loads(rows[0]["work_experiences"])

@@ -626,11 +626,32 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False) -> tupl
             path = resolve_artifact_path(run_dir, rel)
             counts[table] = load_jsonl_table(con, table, path)
             postprocess_table(con, table, operator_id)
+        postprocess_cross_tables(con)
         con.execute("CREATE OR REPLACE VIEW local_people AS SELECT * FROM local_people_positions")
         con.execute("CHECKPOINT")
     finally:
         con.close()
     return db_path, counts
+
+
+def postprocess_cross_tables(con: Any) -> None:
+    tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
+    if {"local_people_positions", "local_companies"} <= tables:
+        people_cols = table_columns(con, "local_people_positions")
+        company_cols = table_columns(con, "local_companies")
+        if {"company_id", "company_name"} <= people_cols and {"id", "company_name"} <= company_cols:
+            con.execute(
+                """
+                UPDATE local_people_positions AS p
+                SET company_name = c.company_name
+                FROM local_companies AS c
+                WHERE p.company_id IS NOT NULL
+                  AND CAST(p.company_id AS VARCHAR) = CAST(c.id AS VARCHAR)
+                  AND (p.company_name IS NULL OR CAST(p.company_name AS VARCHAR) = '')
+                  AND c.company_name IS NOT NULL
+                  AND CAST(c.company_name AS VARCHAR) <> ''
+                """
+            )
 
 
 def build_pipeline(args: argparse.Namespace, run_dir: Path) -> None:

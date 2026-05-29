@@ -1,0 +1,3201 @@
+{
+  "version": 1,
+  "updated_at": "2026-04-16",
+  "city_overrides": {
+    "York|New York": "New York",
+    "Angeles|California": "Los Angeles",
+    "Francisco|California": "San Francisco",
+    "Worth|Texas": "Fort Worth",
+    "Metropolitan|Michigan": "Detroit",
+    "Riyadh|RIY": {
+      "city": "Riyadh",
+      "state": "Riyadh Province",
+      "country": "Saudi Arabia"
+    }
+  },
+  "metro_to_city": {
+    "san francisco bay area": {
+      "city": "San Francisco",
+      "state": "California",
+      "country": "United States"
+    },
+    "bay area": {
+      "city": "San Francisco",
+      "state": "California",
+      "country": "United States"
+    },
+    "los angeles metropolitan area": {
+      "city": "Los Angeles",
+      "state": "California",
+      "country": "United States"
+    },
+    "new york city metropolitan area": {
+      "city": "New York",
+      "state": "New York",
+      "country": "United States"
+    },
+    "new york metropolitan area": {
+      "city": "New York",
+      "state": "New York",
+      "country": "United States"
+    },
+    "zürich metropolitan area": {
+      "city": "Zürich",
+      "state": "Zürich",
+      "country": "Switzerland"
+    },
+    "washington dc-baltimore area": {
+      "city": "Washington",
+      "state": "District of Columbia",
+      "country": "United States"
+    },
+    "washington d.c. metro area": {
+      "city": "Washington",
+      "state": "District of Columbia",
+      "country": "United States"
+    },
+    "greater oxford area": {
+      "city": "Oxford",
+      "state": "Oxfordshire",
+      "country": "United Kingdom"
+    },
+    "greater reno area": {
+      "city": "Reno",
+      "state": "Nevada",
+      "country": "United States"
+    },
+    "greater chicago area": {
+      "city": "Chicago",
+      "state": "Illinois",
+      "country": "United States"
+    },
+    "chicago metropolitan area": {
+      "city": "Chicago",
+      "state": "Illinois",
+      "country": "United States"
+    },
+    "greater st. louis": {
+      "city": "St. Louis",
+      "state": "Missouri",
+      "country": "United States"
+    },
+    "greater seattle area": {
+      "city": "Seattle",
+      "state": "Washington",
+      "country": "United States"
+    },
+    "greater nice metropolitan area": {
+      "city": "Nice",
+      "state": "Provence-Alpes-Côte d'Azur",
+      "country": "France"
+    },
+    "boise metropolitan area": {
+      "city": "Boise",
+      "state": "Idaho",
+      "country": "United States"
+    },
+    "greater boston": {
+      "city": "Boston",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "greater cambridge area": {
+      "city": "Cambridge",
+      "state": "Cambridgeshire",
+      "country": "United Kingdom"
+    },
+    "honolulu metropolitan area": {
+      "city": "Honolulu",
+      "state": "Hawaii",
+      "country": "United States"
+    },
+    "greater hartford": {
+      "city": "Hartford",
+      "state": "Connecticut",
+      "country": "United States"
+    },
+    "lausanne metropolitan area": {
+      "city": "Lausanne",
+      "state": "Vaud",
+      "country": "Switzerland"
+    },
+    "greater duluth area": {
+      "city": "Duluth",
+      "state": "Minnesota",
+      "country": "United States"
+    },
+    "cracow metropolitan area": {
+      "city": "Kraków",
+      "state": "Lesser Poland",
+      "country": "Poland"
+    },
+    "mumbai metropolitan region": {
+      "city": "Mumbai",
+      "state": "Maharashtra",
+      "country": "India"
+    },
+    "atlanta metropolitan area": {
+      "city": "Atlanta",
+      "state": "Georgia",
+      "country": "United States"
+    },
+    "basel metropolitan area": {
+      "city": "Basel",
+      "state": "Basel-Stadt",
+      "country": "Switzerland"
+    },
+    "greater philadelphia": {
+      "city": "Philadelphia",
+      "state": "Pennsylvania",
+      "country": "United States"
+    },
+    "charlotte metro": {
+      "city": "Charlotte",
+      "state": "North Carolina",
+      "country": "United States"
+    },
+    "kuwait city metropolitan area": {
+      "city": "Kuwait City",
+      "state": "",
+      "country": "Kuwait"
+    },
+    "greater paris metropolitan region": {
+      "city": "Paris",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "bellingham metropolitan area": {
+      "city": "Bellingham",
+      "state": "Washington",
+      "country": "United States"
+    },
+    "dallas-fort worth metroplex": {
+      "city": "Dallas",
+      "state": "Texas",
+      "country": "United States"
+    },
+    "wroclaw metropolitan area": {
+      "city": "Wrocław",
+      "state": "Lower Silesian",
+      "country": "Poland"
+    },
+    "miami-fort lauderdale area": {
+      "city": "Miami",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "cork metropolitan area": {
+      "city": "Cork",
+      "state": "Munster",
+      "country": "Ireland"
+    },
+    "greater tampa bay area": {
+      "city": "Tampa",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "geneva metropolitan area": {
+      "city": "Geneva",
+      "state": "Geneva",
+      "country": "Switzerland"
+    },
+    "greater minneapolis-st. paul area": {
+      "city": "Minneapolis",
+      "state": "Minnesota",
+      "country": "United States"
+    },
+    "tallinn metropolitan area": {
+      "city": "Tallinn",
+      "state": "Harju",
+      "country": "Estonia"
+    },
+    "greater tucson area": {
+      "city": "Tucson",
+      "state": "Arizona",
+      "country": "United States"
+    },
+    "salt lake city metropolitan area": {
+      "city": "Salt Lake City",
+      "state": "Utah",
+      "country": "United States"
+    },
+    "albuquerque-santa fe metropolitan area": {
+      "city": "Albuquerque",
+      "state": "New Mexico",
+      "country": "United States"
+    },
+    "greater bordeaux metropolitan area": {
+      "city": "Bordeaux",
+      "state": "Nouvelle-Aquitaine",
+      "country": "France"
+    },
+    "greater palma de mallorca metropolitan area": {
+      "city": "Palma",
+      "state": "Balearic Islands",
+      "country": "Spain"
+    },
+    "san diego metropolitan area": {
+      "city": "San Diego",
+      "state": "California",
+      "country": "United States"
+    },
+    "pensacola metropolitan area": {
+      "city": "Pensacola",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "omaha metropolitan area": {
+      "city": "Omaha",
+      "state": "Nebraska",
+      "country": "United States"
+    },
+    "bangkok metropolitan area": {
+      "city": "Bangkok",
+      "state": "",
+      "country": "Thailand"
+    },
+    "bangkok metropolitan region": {
+      "city": "Bangkok",
+      "state": "",
+      "country": "Thailand"
+    },
+    "greater bengaluru area": {
+      "city": "Bengaluru",
+      "state": "Karnataka",
+      "country": "India"
+    },
+    "greater fort wayne": {
+      "city": "Fort Wayne",
+      "state": "Indiana",
+      "country": "United States"
+    },
+    "beaumont-port arthur area": {
+      "city": "Beaumont",
+      "state": "Texas",
+      "country": "United States"
+    },
+    "lisbon metropolitan area": {
+      "city": "Lisbon",
+      "state": "Lisboa",
+      "country": "Portugal"
+    },
+    "greater madison area": {
+      "city": "Madison",
+      "state": "Wisconsin",
+      "country": "United States"
+    },
+    "antwerp metropolitan area": {
+      "city": "Antwerp",
+      "state": "Flanders",
+      "country": "Belgium"
+    },
+    "greater wilmington area": {
+      "city": "Wilmington",
+      "state": "Delaware",
+      "country": "United States"
+    },
+    "greater bend area": {
+      "city": "Bend",
+      "state": "Oregon",
+      "country": "United States"
+    },
+    "greater munich metropolitan area": {
+      "city": "Munich",
+      "state": "Bavaria",
+      "country": "Germany"
+    },
+    "greater trieste metropolitan area": {
+      "city": "Trieste",
+      "state": "Friuli Venezia Giulia",
+      "country": "Italy"
+    },
+    "london area": {
+      "city": "London",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "huntsville-decatur-albertville area": {
+      "city": "Huntsville",
+      "state": "Alabama",
+      "country": "United States"
+    },
+    "frankfurt rhine-main metropolitan area": {
+      "city": "Frankfurt",
+      "state": "Hesse",
+      "country": "Germany"
+    },
+    "greater málaga metropolitan area": {
+      "city": "Málaga",
+      "state": "Andalusia",
+      "country": "Spain"
+    },
+    "greater lexington area": {
+      "city": "Lexington",
+      "state": "Kentucky",
+      "country": "United States"
+    },
+    "greater savannah area": {
+      "city": "Savannah",
+      "state": "Georgia",
+      "country": "United States"
+    },
+    "denver metropolitan area": {
+      "city": "Denver",
+      "state": "Colorado",
+      "country": "United States"
+    },
+    "greater turin metropolitan area": {
+      "city": "Turin",
+      "state": "Piedmont",
+      "country": "Italy"
+    },
+    "greater vancouver metropolitan area": {
+      "city": "Vancouver",
+      "state": "British Columbia",
+      "country": "Canada"
+    },
+    "greater toronto area": {
+      "city": "Toronto",
+      "state": "Ontario",
+      "country": "Canada"
+    },
+    "greater uppsala metropolitan area": {
+      "city": "Uppsala",
+      "state": "Uppsala",
+      "country": "Sweden"
+    },
+    "breda-tilburg area": {
+      "city": "Breda",
+      "state": "North Brabant",
+      "country": "Netherlands"
+    },
+    "greater angers area": {
+      "city": "Angers",
+      "state": "Pays de la Loire",
+      "country": "France"
+    },
+    "greater cardiff area": {
+      "city": "Cardiff",
+      "state": "Wales",
+      "country": "United Kingdom"
+    },
+    "منطقة مدينة الكويت الحضرية": {
+      "city": "Kuwait City",
+      "state": "",
+      "country": "Kuwait"
+    },
+    "the randstad, netherlands": {
+      "city": "Amsterdam",
+      "state": "",
+      "country": "Netherlands"
+    },
+    "waco area": {
+      "city": "Waco",
+      "state": "Texas",
+      "country": "United States"
+    },
+    "greater logan area": {
+      "city": "Logan",
+      "state": "Utah",
+      "country": "United States"
+    },
+    "greater augusta area": {
+      "city": "Augusta",
+      "state": "Georgia",
+      "country": "United States"
+    },
+    "harrisonburg-staunton-waynesboro area": {
+      "city": "Harrisonburg",
+      "state": "Virginia",
+      "country": "United States"
+    },
+    "greater exeter area": {
+      "city": "Exeter",
+      "state": "Devon",
+      "country": "United Kingdom"
+    },
+    "greater new orleans region": {
+      "city": "New Orleans",
+      "state": "Louisiana",
+      "country": "United States"
+    },
+    "wrocław i okolice": {
+      "city": "Wroclaw",
+      "state": "Lower Silesian Voivodeship",
+      "country": "Poland"
+    },
+    "des moines metropolitan area": {
+      "city": "Des Moines",
+      "state": "Iowa",
+      "country": "United States"
+    },
+    "greater asheville": {
+      "city": "Asheville",
+      "state": "",
+      "country": "United States"
+    },
+    "wollongong area": {
+      "city": "Wollongong",
+      "state": "",
+      "country": "Australia"
+    },
+    "north port-sarasota area": {
+      "city": "North Port",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "porto e região": {
+      "city": "Porto",
+      "state": "",
+      "country": "Portugal"
+    },
+    "taipei–keelung metropolitan area": {
+      "city": "Taipei",
+      "state": "",
+      "country": "Taiwan"
+    },
+    "frankfurt/rhein-main": {
+      "city": "Frankfurt",
+      "state": "Hesse",
+      "country": "Germany"
+    },
+    "greater malmö metropolitan area": {
+      "city": "Malmö",
+      "state": "",
+      "country": "Sweden"
+    },
+    "randstad": {
+      "city": "Amsterdam",
+      "state": "",
+      "country": "Netherlands"
+    },
+    "greater glasgow area": {
+      "city": "Glasgow",
+      "state": "",
+      "country": "United Kingdom"
+    },
+    "paris et périphérie": {
+      "city": "Paris",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "metropolitan fresno": {
+      "city": "Fresno",
+      "state": "California",
+      "country": "United States"
+    },
+    "greater bilbao metropolitan area": {
+      "city": "Bilbao",
+      "state": "",
+      "country": "Spain"
+    },
+    "greater anchorage area": {
+      "city": "Anchorage",
+      "state": "Alaska",
+      "country": "United States"
+    },
+    "área metropolitana de ciudad de méxico": {
+      "city": "Mexico City",
+      "state": "Ciudad de México",
+      "country": "Mexico"
+    },
+    "metro cebu": {
+      "city": "Cebu",
+      "state": "Cebu",
+      "country": "Philippines"
+    },
+    "greater chattanooga": {
+      "city": "Chattanooga",
+      "state": "",
+      "country": "United States"
+    },
+    "metropolregion basel": {
+      "city": "Basel",
+      "state": "",
+      "country": "Switzerland"
+    },
+    "mobile metropolitan area": {
+      "city": "Mobile",
+      "state": "Alabama",
+      "country": "United States"
+    },
+    "greater harrisburg area": {
+      "city": "Harrisburg",
+      "state": "Pennsylvania",
+      "country": "United States"
+    },
+    "منطقة كازابلانكا الحضرية": {
+      "city": "Casablanca",
+      "state": "",
+      "country": "Morocco"
+    },
+    "агломерация екатеринбурга": {
+      "city": "Yekaterinburg",
+      "state": "Sverdlovsk Oblast",
+      "country": "Russia"
+    },
+    "knoxville metropolitan area": {
+      "city": "Knoxville",
+      "state": "Tennessee",
+      "country": "United States"
+    },
+    "greater st. george area": {
+      "city": "St. George",
+      "state": "Utah",
+      "country": "United States"
+    },
+    "spokane-coeur d'alene area": {
+      "city": "Spokane",
+      "state": "Washington",
+      "country": "United States"
+    },
+    "greater fort collins area": {
+      "city": "Fort Collins",
+      "state": "Colorado",
+      "country": "United States"
+    },
+    "craiova metropolitan area": {
+      "city": "Craiova",
+      "state": "",
+      "country": ""
+    },
+    "killeen-temple area": {
+      "city": "Killeen",
+      "state": "Texas",
+      "country": "United States"
+    },
+    "metropolregion genf": {
+      "city": "Geneva",
+      "state": "",
+      "country": "Switzerland"
+    },
+    "urbana-champaign area": {
+      "city": "Champaign",
+      "state": "Illinois",
+      "country": "United States"
+    },
+    "서울 인천 지역": {
+      "city": "Seoul",
+      "state": "Seoul",
+      "country": "South Korea"
+    },
+    "metropolregion lugano": {
+      "city": "Lugano",
+      "state": "",
+      "country": "Switzerland"
+    },
+    "lugano metropolitan area": {
+      "city": "Lugano",
+      "state": "",
+      "country": "Switzerland"
+    },
+    "greater leipzig area": {
+      "city": "Leipzig",
+      "state": "Saxony",
+      "country": "Germany"
+    },
+    "greater syracuse-auburn area": {
+      "city": "Syracuse",
+      "state": "New York",
+      "country": "United States"
+    },
+    "little rock metropolitan area": {
+      "city": "Little Rock",
+      "state": "Arkansas",
+      "country": "United States"
+    },
+    "cape coral metropolitan area": {
+      "city": "Cape Coral",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "greater treviso metropolitan area": {
+      "city": "Treviso",
+      "state": "Veneto",
+      "country": "Italy"
+    },
+    "greater kalamazoo area": {
+      "city": "Kalamazoo",
+      "state": "Michigan",
+      "country": "United States"
+    },
+    "medford-grants pass area": {
+      "city": "Medford",
+      "state": "Oregon",
+      "country": "United States"
+    },
+    "greater oviedo metropolitan area": {
+      "city": "Oviedo",
+      "state": "Asturias",
+      "country": "Spain"
+    },
+    "เขตปริมณฑลกรุงเทพมหานคร": {
+      "city": "Bangkok",
+      "state": "Bangkok",
+      "country": "Thailand"
+    },
+    "metropolregion rhein-neckar": {
+      "city": "Mannheim",
+      "state": "Baden-Württemberg",
+      "country": "Germany"
+    },
+    "la crosse-onalaska area": {
+      "city": "La Crosse",
+      "state": "Wisconsin",
+      "country": "United States"
+    },
+    "greensboro--winston-salem--high point area": {
+      "city": "Greensboro",
+      "state": "North Carolina",
+      "country": "United States"
+    },
+    "dallas–fort worth metroplex, texas, united states of america": {
+      "city": "Dallas",
+      "state": "Texas",
+      "country": "United States"
+    },
+    "santa barbara-santa maria area": {
+      "city": "Santa Barbara",
+      "state": "California",
+      "country": "United States"
+    },
+    "namur metropolitan area": {
+      "city": "Namur",
+      "state": "Wallonia",
+      "country": "Belgium"
+    },
+    "lisboa e região": {
+      "city": "Lisbon",
+      "state": "Lisbon",
+      "country": "Portugal"
+    },
+    "college station-bryan area": {
+      "city": "College Station",
+      "state": "Texas",
+      "country": "United States"
+    },
+    "baton rouge metropolitan area": {
+      "city": "Baton Rouge",
+      "state": "Louisiana",
+      "country": "United States"
+    },
+    "galway metropolitan area": {
+      "city": "Galway",
+      "state": "Galway",
+      "country": "Ireland"
+    },
+    "crestview-fort walton beach-destin area": {
+      "city": "Crestview",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "san josé metropolitan area": {
+      "city": "San José",
+      "state": "San José",
+      "country": "Costa Rica"
+    },
+    "appleton-oshkosh-neenah area": {
+      "city": "Appleton",
+      "state": "Wisconsin",
+      "country": "United States"
+    },
+    "greater poitiers area": {
+      "city": "Poitiers",
+      "state": "Nouvelle-Aquitaine",
+      "country": "France"
+    },
+    "dayton metropolitan area": {
+      "city": "Dayton",
+      "state": "Ohio",
+      "country": "United States"
+    },
+    "metropolregion münchen": {
+      "city": "Munich",
+      "state": "Bavaria",
+      "country": "Germany"
+    },
+    "peoria metropolitan area": {
+      "city": "Peoria",
+      "state": "",
+      "country": "United States"
+    },
+    "bruges metropolitan area": {
+      "city": "Bruges",
+      "state": "",
+      "country": "Belgium"
+    },
+    "greater leeds area": {
+      "city": "Leeds",
+      "state": "",
+      "country": "United Kingdom"
+    },
+    "greater reading area": {
+      "city": "Reading",
+      "state": "",
+      "country": "United Kingdom"
+    },
+    "greater zurich area": {
+      "city": "Zurich",
+      "state": "Zürich",
+      "country": "Switzerland"
+    },
+    "greater melbourne area": {
+      "city": "Melbourne",
+      "state": "",
+      "country": "Australia"
+    },
+    "greater milan metropolitan area": {
+      "city": "Milan",
+      "state": "",
+      "country": "Italy"
+    },
+    "marseille et périphérie": {
+      "city": "Marseille",
+      "state": "",
+      "country": "France"
+    },
+    "greater rivne area": {
+      "city": "Rivne",
+      "state": "",
+      "country": "Ukraine"
+    },
+    "greater leicester area": {
+      "city": "Leicester",
+      "state": "",
+      "country": "United Kingdom"
+    },
+    "prague metropolitan area": {
+      "city": "Prague",
+      "state": "",
+      "country": "Czechia"
+    },
+    "gdansk metropolitan area": {
+      "city": "Gdansk",
+      "state": "",
+      "country": "Poland"
+    },
+    "greater swansea area": {
+      "city": "Swansea",
+      "state": "",
+      "country": "United Kingdom"
+    },
+    "área metropolitana de bogotá d.c.": {
+      "city": "Bogotá",
+      "state": "",
+      "country": "Colombia"
+    },
+    "greater albacete metropolitan area": {
+      "city": "Albacete",
+      "state": "",
+      "country": "Spain"
+    },
+    "greater amarillo area": {
+      "city": "Amarillo",
+      "state": "Texas",
+      "country": "United States"
+    }
+  },
+  "location_raw_overrides": {
+    "russian hill, san francisco, california": {
+      "city": "San Francisco",
+      "state": "California",
+      "country": "United States"
+    },
+    "pw95+g52, panadura, sri lanka": {
+      "city": "Panadura",
+      "state": "",
+      "country": "Sri Lanka"
+    },
+    "brooklyn, new york, united states": {
+      "city": "New York",
+      "state": "New York",
+      "country": "United States"
+    },
+    "دبي الإمارات العربية المتحدة": {
+      "city": "Dubai",
+      "state": "",
+      "country": "United Arab Emirates"
+    },
+    "charleston county, south carolina, united states": {
+      "city": "Charleston",
+      "state": "South Carolina",
+      "country": "United States"
+    },
+    "valencia/valència, comunidad valenciana / comunitat valenciana, españa": {
+      "city": "Valencia",
+      "state": "Valencia",
+      "country": "Spain"
+    },
+    "taipei city, taiwan": {
+      "city": "Taipei",
+      "state": "",
+      "country": "Taiwan"
+    },
+    "san francisco, california, united states": {
+      "city": "San Francisco",
+      "state": "California",
+      "country": "United States"
+    },
+    "الرياض السعودية": {
+      "city": "Riyadh",
+      "state": "",
+      "country": "Saudi Arabia"
+    },
+    "austin, texas, united states": {
+      "city": "Austin",
+      "state": "Texas",
+      "country": "United States"
+    },
+    "new york, new york, united states": {
+      "city": "New York",
+      "state": "New York",
+      "country": "United States"
+    },
+    "العاصمة مدينة الكويت الكويت": {
+      "city": "Kuwait City",
+      "state": "",
+      "country": "Kuwait"
+    },
+    "bengaluru, karnataka, india": {
+      "city": "Bengaluru",
+      "state": "Karnataka",
+      "country": "India"
+    },
+    "عمان الأردن": {
+      "city": "Amman",
+      "state": "",
+      "country": "Jordan"
+    },
+    "vancouver, bc, canada": {
+      "city": "Vancouver",
+      "state": "British Columbia",
+      "country": "Canada"
+    },
+    "i̇stanbul, türkiye": {
+      "city": "Istanbul",
+      "state": "",
+      "country": "Turkey"
+    },
+    "أبو ظبي الإمارات العربية المتحدة": {
+      "city": "Abu Dhabi",
+      "state": "",
+      "country": "United Arab Emirates"
+    },
+    "palo alto, california, united states": {
+      "city": "Palo Alto",
+      "state": "California",
+      "country": "United States"
+    },
+    "san dimas, california, united states": {
+      "city": "San Dimas",
+      "state": "California",
+      "country": "United States"
+    },
+    "la habra, california, united states": {
+      "city": "La Habra",
+      "state": "California",
+      "country": "United States"
+    },
+    "oakham, massachusetts, united states": {
+      "city": "Oakham",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "redfern nsw 2016, australia": {
+      "city": "Redfern",
+      "state": "New South Wales",
+      "country": "Australia"
+    },
+    "great neck, new york, united states": {
+      "city": "Great Neck",
+      "state": "New York",
+      "country": "United States"
+    },
+    "san francisco, ca, usa": {
+      "city": "San Francisco",
+      "state": "California",
+      "country": "United States"
+    },
+    "west hartford, connecticut, united states": {
+      "city": "West Hartford",
+      "state": "Connecticut",
+      "country": "United States"
+    },
+    "hsinchu county, taiwan": {
+      "city": "Hsinchu",
+      "state": "",
+      "country": "Taiwan"
+    },
+    "กรุงเทพมหานคร, กรุงเทพมหานคร, ประเทศไทย": {
+      "city": "Bangkok",
+      "state": "Bangkok",
+      "country": "Thailand"
+    },
+    "campinas - state of são paulo, brazil": {
+      "city": "Campinas",
+      "state": "São Paulo",
+      "country": "Brazil"
+    },
+    "st. peter port, guernsey gy1 1dg, guernsey": {
+      "city": "St. Peter Port",
+      "state": "",
+      "country": "Guernsey"
+    },
+    "københavn, region hovedstaden, danmark": {
+      "city": "Copenhagen",
+      "state": "Hovedstaden",
+      "country": "Denmark"
+    },
+    "中国 上海市": {
+      "city": "Shanghai",
+      "state": "",
+      "country": "China"
+    },
+    "中国 广东省 深圳": {
+      "city": "Shenzhen",
+      "state": "Guangdong",
+      "country": "China"
+    },
+    "wellesley hills, massachusetts, united states": {
+      "city": "Wellesley Hills",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "evergreen, colorado, united states": {
+      "city": "Evergreen",
+      "state": "Colorado",
+      "country": "United States"
+    },
+    "london, england, united kingdom": {
+      "city": "London",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "salzburg, salzburg, österreich": {
+      "city": "Salzburg",
+      "state": "Salzburg",
+      "country": "Austria"
+    },
+    "münchen, bayern, deutschland": {
+      "city": "Munich",
+      "state": "Bavaria",
+      "country": "Germany"
+    },
+    "fairfield, california, united states": {
+      "city": "Fairfield",
+      "state": "California",
+      "country": "United States"
+    },
+    "anaheim, california, united states": {
+      "city": "Anaheim",
+      "state": "California",
+      "country": "United States"
+    },
+    "wrocław i okolice": {
+      "city": "Wrocław",
+      "state": "",
+      "country": "Poland"
+    },
+    "st louis, missouri, united states": {
+      "city": "St. Louis",
+      "state": "Missouri",
+      "country": "United States"
+    },
+    "los angeles, california, united states": {
+      "city": "Los Angeles",
+      "state": "California",
+      "country": "United States"
+    },
+    "日本 東京都 東京": {
+      "city": "Tokyo",
+      "state": "Tokyo",
+      "country": "Japan"
+    },
+    "san luis potosí, san luis potosi, mexico": {
+      "city": "San Luis Potosí",
+      "state": "San Luis Potosí",
+      "country": "Mexico"
+    },
+    "santa clara, california, united states": {
+      "city": "Santa Clara",
+      "state": "California",
+      "country": "United States"
+    },
+    "35020 due carrare, province of padua, italy": {
+      "city": "Due Carrare",
+      "state": "Padua",
+      "country": "Italy"
+    },
+    "中国 北京市 朝阳区": {
+      "city": "Beijing",
+      "state": "Beijing",
+      "country": "China"
+    },
+    "west newton, massachusetts, united states": {
+      "city": "West Newton",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "álvaro obregón, cdmx, mexico": {
+      "city": "Mexico City",
+      "state": "Ciudad de México",
+      "country": "Mexico"
+    },
+    "south san francisco, california, united states": {
+      "city": "South San Francisco",
+      "state": "California",
+      "country": "United States"
+    },
+    "fairfax, california, united states": {
+      "city": "Fairfax",
+      "state": "California",
+      "country": "United States"
+    },
+    "campinas, são paulo, brasil": {
+      "city": "Campinas",
+      "state": "São Paulo",
+      "country": "Brazil"
+    },
+    "الدوحة قطر": {
+      "city": "Doha",
+      "state": "",
+      "country": "Qatar"
+    },
+    "istanbul, türkiye": {
+      "city": "Istanbul",
+      "state": "",
+      "country": "Turkey"
+    },
+    "san jose, california, united states": {
+      "city": "San Jose",
+      "state": "California",
+      "country": "United States"
+    },
+    "stanford, california, united states": {
+      "city": "Stanford",
+      "state": "California",
+      "country": "United States"
+    },
+    "rohnert park, california, united states": {
+      "city": "Rohnert Park",
+      "state": "California",
+      "country": "United States"
+    },
+    "日本 東京都 世田谷区": {
+      "city": "Tokyo",
+      "state": "Tokyo",
+      "country": "Japan"
+    },
+    "malmö, skåne län, sverige": {
+      "city": "Malmo",
+      "state": "Skåne County",
+      "country": "Sweden"
+    },
+    "paris, île-de-france, france": {
+      "city": "Paris",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "محافظة العاصمة المنامة البحرين": {
+      "city": "Manama",
+      "state": "Capital Governorate",
+      "country": "Bahrain"
+    },
+    "ithaca, new york, united states": {
+      "city": "Ithaca",
+      "state": "New York",
+      "country": "United States"
+    },
+    "richardson, texas, united states": {
+      "city": "Richardson",
+      "state": "Texas",
+      "country": "United States"
+    },
+    "burlingame, california, united states": {
+      "city": "Burlingame",
+      "state": "California",
+      "country": "United States"
+    },
+    "الشرقية الخبر السعودية": {
+      "city": "Khobar",
+      "state": "Eastern Province",
+      "country": "Saudi Arabia"
+    },
+    "محافظة العاصمة الحورة البحرين": {
+      "city": "Al Hidd",
+      "state": "Capital Governorate",
+      "country": "Bahrain"
+    },
+    "madrid, comunidad de madrid, españa": {
+      "city": "Madrid",
+      "state": "Community of Madrid",
+      "country": "Spain"
+    },
+    "stockholm, stockholms län, sverige": {
+      "city": "Stockholm",
+      "state": "Stockholm County",
+      "country": "Sweden"
+    },
+    "台灣 臺北市 台北": {
+      "city": "Taipei",
+      "state": "Taipei",
+      "country": "Taiwan"
+    },
+    "poznań, wielkopolskie, poland": {
+      "city": "Poznan",
+      "state": "Greater Poland Voivodeship",
+      "country": "Poland"
+    },
+    "barcelona, cataluña, españa": {
+      "city": "Barcelona",
+      "state": "Catalonia",
+      "country": "Spain"
+    },
+    "miguel hidalgo, ciudad de méxico, méxico": {
+      "city": "Mexico City",
+      "state": "Mexico City",
+      "country": "Mexico"
+    },
+    "baleshwar, odisha, india": {
+      "city": "Baleshwar",
+      "state": "Odisha",
+      "country": "India"
+    },
+    "newtonville, massachusetts, united states": {
+      "city": "Newtonville",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "대한민국 서울": {
+      "city": "Seoul",
+      "state": "",
+      "country": "South Korea"
+    },
+    "أبو ظبي أبو ظبي الإمارات العربية المتحدة": {
+      "city": "Abu Dhabi",
+      "state": "Abu Dhabi",
+      "country": "United Arab Emirates"
+    },
+    "st paul, minnesota, united states": {
+      "city": "Saint Paul",
+      "state": "Minnesota",
+      "country": "United States"
+    },
+    "watertown, massachusetts, united states": {
+      "city": "Watertown",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "toronto, on, canada": {
+      "city": "Toronto",
+      "state": "Ontario",
+      "country": "Canada"
+    },
+    "hamel, minnesota, united states": {
+      "city": "Hamel",
+      "state": "Minnesota",
+      "country": "United States"
+    },
+    "brno - město, south moravia, czechia": {
+      "city": "Brno",
+      "state": "South Moravia",
+      "country": "Czechia"
+    },
+    "st charles, illinois, united states": {
+      "city": "Saint Charles",
+      "state": "Illinois",
+      "country": "United States"
+    },
+    "álvaro obregón, mexico city, mexico": {
+      "city": "Mexico City",
+      "state": "Mexico City",
+      "country": "Mexico"
+    },
+    "cagnes-sur-mer, provence-alpes-côte d'azur, france": {
+      "city": "Cagnes-sur-Mer",
+      "state": "Provence-Alpes-Côte d’Azur",
+      "country": "France"
+    },
+    "العاصمة surra الكويت": {
+      "city": "Surra",
+      "state": "Al Asimah",
+      "country": "Kuwait"
+    },
+    "ciudad de méxico, méxico": {
+      "city": "Mexico City",
+      "state": "Mexico City",
+      "country": "Mexico"
+    },
+    "العاصمة الكويت": {
+      "city": "Al Asimah",
+      "state": "",
+      "country": "Kuwait"
+    },
+    "sharq, al asimah, kuwait": {
+      "city": "Sharq",
+      "state": "Al Asimah",
+      "country": "Kuwait"
+    },
+    "sauquoit, new york, united states": {
+      "city": "Sauquoit",
+      "state": "New York",
+      "country": "United States"
+    },
+    "st george, utah, united states": {
+      "city": "St. George",
+      "state": "Utah",
+      "country": "United States"
+    },
+    "دبي دبي الإمارات العربية المتحدة": {
+      "city": "Dubai",
+      "state": "Dubai",
+      "country": "United Arab Emirates"
+    },
+    "wien, wien, österreich": {
+      "city": "Vienna",
+      "state": "Vienna",
+      "country": "Austria"
+    },
+    "ankara, türkiye": {
+      "city": "Ankara",
+      "state": "Ankara",
+      "country": "Turkey"
+    },
+    "st. petersburg, florida, united states": {
+      "city": "St. Petersburg",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "nice, provence-alpes-côte d'azur, france": {
+      "city": "Nice",
+      "state": "Provence-Alpes-Côte d’Azur",
+      "country": "France"
+    },
+    "st albans, england, united kingdom": {
+      "city": "St Albans",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "málaga, andalusia, spain": {
+      "city": "Malaga",
+      "state": "Andalusia",
+      "country": "Spain"
+    },
+    "san pedro, california, united states": {
+      "city": "San Pedro",
+      "state": "California",
+      "country": "United States"
+    },
+    "neuilly-sur-seine, île-de-france, france": {
+      "city": "Neuilly-sur-Seine",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "los cabos, baja california sur, mexico": {
+      "city": "Los Cabos",
+      "state": "Baja California Sur",
+      "country": "Mexico"
+    },
+    "helsingborg, skåne county, sweden": {
+      "city": "Helsingborg",
+      "state": "Skåne County",
+      "country": "Sweden"
+    },
+    "москва, москва, россия": {
+      "city": "Moscow",
+      "state": "Moscow",
+      "country": "Russia"
+    },
+    "hong kong": {
+      "city": "Hong Kong",
+      "state": "",
+      "country": "Hong Kong"
+    },
+    "miguel hidalgo, cdmx, ciudad de méxico, méxico": {
+      "city": "Mexico City",
+      "state": "Ciudad de México",
+      "country": "Mexico"
+    },
+    "bishop's cleeve, england, united kingdom": {
+      "city": "Bishop's Cleeve",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "الرياض الرياض السعودية": {
+      "city": "Riyadh",
+      "state": "",
+      "country": "Saudi Arabia"
+    },
+    "álvaro obregón, ciudad de méxico, méxico": {
+      "city": "Mexico City",
+      "state": "Ciudad de México",
+      "country": "Mexico"
+    },
+    "台灣 臺北市 臺北市": {
+      "city": "Taipei",
+      "state": "",
+      "country": "Taiwan"
+    },
+    "pozuelo de alarcón, comunidad de madrid, españa": {
+      "city": "Pozuelo de Alarcón",
+      "state": "Community of Madrid",
+      "country": "Spain"
+    },
+    "itajaí, santa catarina, brazil": {
+      "city": "Itajaí",
+      "state": "Santa Catarina",
+      "country": "Brazil"
+    },
+    "aix-en-provence, provence-alpes-côte d'azur, france": {
+      "city": "Aix-en-Provence",
+      "state": "Provence-Alpes-Côte d’Azur",
+      "country": "France"
+    },
+    "palazzago, lombardy, italy": {
+      "city": "Palazzago",
+      "state": "Lombardy",
+      "country": "Italy"
+    },
+    "st joseph, michigan, united states": {
+      "city": "St Joseph",
+      "state": "Michigan",
+      "country": "United States"
+    },
+    "frankfurt, hessen, deutschland": {
+      "city": "Frankfurt",
+      "state": "Hesse",
+      "country": "Germany"
+    },
+    "sevilla, andalucía, españa": {
+      "city": "Seville",
+      "state": "Andalusia",
+      "country": "Spain"
+    },
+    "roquebrune-cap-martin, provence-alpes-côte d’azur, france": {
+      "city": "Roquebrune-Cap-Martin",
+      "state": "Provence-Alpes-Côte d’Azur",
+      "country": "France"
+    },
+    "i̇stanbul, i̇stanbul, türkiye": {
+      "city": "Istanbul",
+      "state": "",
+      "country": "Turkey"
+    },
+    "billund, region syddanmark, danmark": {
+      "city": "Billund",
+      "state": "Southern Denmark",
+      "country": "Denmark"
+    },
+    "مسقط عمان": {
+      "city": "Muscat",
+      "state": "",
+      "country": "Oman"
+    },
+    "中国 北京市": {
+      "city": "Beijing",
+      "state": "",
+      "country": "China"
+    },
+    "中国 湖北省 武汉": {
+      "city": "Wuhan",
+      "state": "Hubei",
+      "country": "China"
+    },
+    "karāchi, sindh, pakistan": {
+      "city": "Karachi",
+      "state": "Sindh",
+      "country": "Pakistan"
+    },
+    "bathinda, india": {
+      "city": "Bathinda",
+      "state": "",
+      "country": "India"
+    },
+    "مسقط مسقط عمان": {
+      "city": "Muscat",
+      "state": "",
+      "country": "Oman"
+    },
+    "الدار البيضاء سطات الدار البيضاء المغرب": {
+      "city": "Casablanca",
+      "state": "",
+      "country": "Morocco"
+    },
+    "antalya, türkiye": {
+      "city": "Antalya",
+      "state": "",
+      "country": "Turkey"
+    },
+    "monte carlo, monaco": {
+      "city": "Monte Carlo",
+      "state": "",
+      "country": "Monaco"
+    },
+    "antibes, provence-alpes-côte d'azur, france": {
+      "city": "Antibes",
+      "state": "Provence-Alpes-Côte d’Azur",
+      "country": "France"
+    },
+    "rincón, puerto rico, united states": {
+      "city": "Rincón",
+      "state": "Puerto Rico",
+      "country": "United States"
+    },
+    "lavender bay, new south wales, australia": {
+      "city": "Lavender Bay",
+      "state": "New South Wales",
+      "country": "Australia"
+    },
+    "vigo, galicia / galiza, españa": {
+      "city": "Vigo",
+      "state": "Galicia",
+      "country": "Spain"
+    },
+    "中国 四川省 南充市": {
+      "city": "Nanchong",
+      "state": "Sichuan",
+      "country": "China"
+    },
+    "montalcino, toscana, italia": {
+      "city": "Montalcino",
+      "state": "Tuscany",
+      "country": "Italy"
+    },
+    "adana, türkiye": {
+      "city": "Adana",
+      "state": "Adana",
+      "country": "Turkey"
+    },
+    "meyrin, genf, schweiz": {
+      "city": "Meyrin",
+      "state": "Geneva",
+      "country": "Switzerland"
+    },
+    "big lake ranch, british columbia, canada": {
+      "city": "Big Lake Ranch",
+      "state": "British Columbia",
+      "country": "Canada"
+    },
+    "minneapolis–saint paul, wisconsin, united states of america": {
+      "city": "Minneapolis",
+      "state": "Minnesota",
+      "country": "United States"
+    },
+    "대한민국 서울 서울": {
+      "city": "Seoul",
+      "state": "",
+      "country": "South Korea"
+    },
+    "istanbul, istanbul, türkiye": {
+      "city": "Istanbul",
+      "state": "Istanbul",
+      "country": "Turkey"
+    },
+    "hong kong, hong kong sar": {
+      "city": "Hong Kong",
+      "state": "Hong Kong",
+      "country": "Hong Kong"
+    },
+    "中国 广东省 东莞": {
+      "city": "Dongguan",
+      "state": "Guangdong",
+      "country": "China"
+    },
+    "中国 河北省 石家庄": {
+      "city": "Shijiazhuang",
+      "state": "Hebei",
+      "country": "China"
+    },
+    "ciudad adolfo lópez mateos, méxico, méxico": {
+      "city": "Ciudad Adolfo López Mateos",
+      "state": "Mexico",
+      "country": "Mexico"
+    },
+    "port kennedy, western australia, australia": {
+      "city": "Port Kennedy",
+      "state": "Western Australia",
+      "country": "Australia"
+    },
+    "palma de mallorca y alrededores": {
+      "city": "Palma de Mallorca",
+      "state": "",
+      "country": "Spain"
+    },
+    "bogotá, distrito capital, colombia": {
+      "city": "Bogotá",
+      "state": "",
+      "country": "Colombia"
+    },
+    "debrecen, hajdú-bihar, hungary": {
+      "city": "Debrecen",
+      "state": "Hajdú-Bihar",
+      "country": "Hungary"
+    },
+    "sunshine coast, queensland, australia": {
+      "city": "Sunshine Coast",
+      "state": "Queensland",
+      "country": "Australia"
+    },
+    "campinas, são paulo, brazil": {
+      "city": "Campinas",
+      "state": "São Paulo",
+      "country": "Brazil"
+    },
+    "katowice, śląskie, poland": {
+      "city": "Katowice",
+      "state": "Silesian",
+      "country": "Poland"
+    },
+    "中国 上海市 静安区": {
+      "city": "Shanghai",
+      "state": "Shanghai",
+      "country": "China"
+    },
+    "monterrey, nuevo león, méxico": {
+      "city": "Monterrey",
+      "state": "Nuevo León",
+      "country": "Mexico"
+    },
+    "norrköping, östergötlands län, sverige": {
+      "city": "Norrköping",
+      "state": "Östergötland",
+      "country": "Sweden"
+    },
+    "นนทบุรี, ประเทศไทย": {
+      "city": "Nonthaburi",
+      "state": "",
+      "country": "Thailand"
+    },
+    "مكة جدة السعودية": {
+      "city": "Jeddah",
+      "state": "Makkah",
+      "country": "Saudi Arabia"
+    },
+    "lisboa e região": {
+      "city": "Lisbon",
+      "state": "Lisbon",
+      "country": "Portugal"
+    },
+    "querétaro arteaga, méxico": {
+      "city": "Querétaro",
+      "state": "Querétaro",
+      "country": "Mexico"
+    },
+    "тюмень, тюменская область, россия": {
+      "city": "Tyumen",
+      "state": "Tyumen Oblast",
+      "country": "Russia"
+    },
+    "中国 陕西省 西安": {
+      "city": "Xi'an",
+      "state": "Shaanxi",
+      "country": "China"
+    },
+    "salamanca, castilla y león, españa": {
+      "city": "Salamanca",
+      "state": "Castile and León",
+      "country": "Spain"
+    },
+    "новосибирск, новосибирская область, россия": {
+      "city": "Novosibirsk",
+      "state": "Novosibirsk Oblast",
+      "country": "Russia"
+    },
+    "basel, basel, schweiz": {
+      "city": "Basel",
+      "state": "Basel-Stadt",
+      "country": "Switzerland"
+    },
+    "luxembourg": {
+      "city": "Luxembourg",
+      "state": "",
+      "country": "Luxembourg"
+    },
+    "lausanne, waadt, schweiz": {
+      "city": "Lausanne",
+      "state": "Vaud",
+      "country": "Switzerland"
+    },
+    "firenze": {
+      "city": "Florence",
+      "state": "Tuscany",
+      "country": "Italy"
+    },
+    "lyon, auvergne-rhône-alpes, france": {
+      "city": "Lyon",
+      "state": "Auvergne-Rhône-Alpes",
+      "country": "France"
+    },
+    "กรุงเทพมหานคร, ประเทศไทย": {
+      "city": "Bangkok",
+      "state": "",
+      "country": "Thailand"
+    },
+    "puerto vallarta, jalisco, méxico": {
+      "city": "Puerto Vallarta",
+      "state": "Jalisco",
+      "country": "Mexico"
+    },
+    "saint joseph-de-kent, new brunswick, canada": {
+      "city": "Saint Joseph-de-Kent",
+      "state": "New Brunswick",
+      "country": "Canada"
+    },
+    "mérida, yucatán, méxico": {
+      "city": "Mérida",
+      "state": "Yucatán",
+      "country": "Mexico"
+    },
+    "granada, andalucía, españa": {
+      "city": "Granada",
+      "state": "Andalusia",
+      "country": "Spain"
+    },
+    "中国 北京市 海淀区": {
+      "city": "Beijing",
+      "state": "Beijing",
+      "country": "China"
+    },
+    "chinthamani madurai, tamil nadu, india": {
+      "city": "Madurai",
+      "state": "Tamil Nadu",
+      "country": "India"
+    },
+    "ростов-на-дону, ростовская область, россия": {
+      "city": "Rostov-on-Don",
+      "state": "Rostov Oblast",
+      "country": "Russia"
+    },
+    "genf, genf, schweiz": {
+      "city": "Geneva",
+      "state": "Geneva",
+      "country": "Switzerland"
+    },
+    "islāmābād, pakistan": {
+      "city": "Islamabad",
+      "state": "",
+      "country": "Pakistan"
+    },
+    "cardiff-by-the-sea, california, united states": {
+      "city": "Cardiff-by-the-Sea",
+      "state": "California",
+      "country": "United States"
+    },
+    "gandhinagar, gujarat, india": {
+      "city": "Gandhinagar",
+      "state": "Gujarat",
+      "country": "India"
+    },
+    "الشرقية الدمام السعودية": {
+      "city": "Dammam",
+      "state": "Eastern Province",
+      "country": "Saudi Arabia"
+    },
+    "münster-sarmsheim, rheinland-pfalz, deutschland": {
+      "city": "Münster-Sarmsheim",
+      "state": "Rhineland-Palatinate",
+      "country": "Germany"
+    },
+    "bellevue hill, new south wales, australia": {
+      "city": "Bellevue Hill",
+      "state": "New South Wales",
+      "country": "Australia"
+    },
+    "لوسيل قطر": {
+      "city": "Lusail",
+      "state": "",
+      "country": "Qatar"
+    },
+    "kristiansand og omegn": {
+      "city": "Kristiansand",
+      "state": "",
+      "country": "Norway"
+    },
+    "台灣 高雄市 kaohsiung city": {
+      "city": "Kaohsiung",
+      "state": "Kaohsiung",
+      "country": "Taiwan"
+    },
+    "göteborg, västra götalands län, sverige": {
+      "city": "Gothenburg",
+      "state": "Västra Götaland",
+      "country": "Sweden"
+    },
+    "panamá": {
+      "city": "Panama City",
+      "state": "",
+      "country": "Panama"
+    },
+    "san pedro sula, cortés, honduras": {
+      "city": "San Pedro Sula",
+      "state": "Cortés",
+      "country": "Honduras"
+    },
+    "land o' lakes, florida, united states": {
+      "city": "Land O' Lakes",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "中国 山东省 青岛": {
+      "city": "Qingdao",
+      "state": "Shandong",
+      "country": "China"
+    },
+    "nanterre, île-de-france, france": {
+      "city": "Nanterre",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "santo domingo, distrito nacional, república dominicana": {
+      "city": "Santo Domingo",
+      "state": "Distrito Nacional",
+      "country": "Dominican Republic"
+    },
+    "maurice": {
+      "city": "Port Louis",
+      "state": "",
+      "country": "Mauritius"
+    },
+    "fontainebleau, île-de-france, france": {
+      "city": "Fontainebleau",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "san miguel de allende, guanajuato, méxico": {
+      "city": "San Miguel de Allende",
+      "state": "Guanajuato",
+      "country": "Mexico"
+    },
+    "west bloomfield township, michigan, united states": {
+      "city": "West Bloomfield",
+      "state": "Michigan",
+      "country": "United States"
+    },
+    "islamabad, islāmābād, pakistan": {
+      "city": "Islamabad",
+      "state": "Islamabad Capital Territory",
+      "country": "Pakistan"
+    },
+    "mülheim an der ruhr, nordrhein-westfalen, deutschland": {
+      "city": "Mülheim an der Ruhr",
+      "state": "North Rhine-Westphalia",
+      "country": "Germany"
+    },
+    "st augustine, florida, united states": {
+      "city": "St. Augustine",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "baden, niederösterreich, österreich": {
+      "city": "Baden",
+      "state": "Lower Austria",
+      "country": "Austria"
+    },
+    "villetaneuse, île-de-france, france": {
+      "city": "Villetaneuse",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "firenze, toscana, italia": {
+      "city": "Florence",
+      "state": "Tuscany",
+      "country": "Italy"
+    },
+    "cebu, central visayas, philippines": {
+      "city": "Cebu City",
+      "state": "Central Visayas",
+      "country": "Philippines"
+    },
+    "benito juárez, ciudad de méxico, méxico": {
+      "city": "Mexico City",
+      "state": "Mexico City",
+      "country": "Mexico"
+    },
+    "中国 上海市 闵行区": {
+      "city": "Shanghai",
+      "state": "Shanghai",
+      "country": "China"
+    },
+    "salzburg (stadt), salzburg, österreich": {
+      "city": "Salzburg",
+      "state": "Salzburg",
+      "country": "Austria"
+    },
+    "日本 東京都": {
+      "city": "Tokyo",
+      "state": "Tokyo",
+      "country": "Japan"
+    },
+    "미국 미네소타 세인트폴": {
+      "city": "Saint Paul",
+      "state": "Minnesota",
+      "country": "United States"
+    },
+    "torino, piemonte, italia": {
+      "city": "Turin",
+      "state": "Piedmont",
+      "country": "Italy"
+    },
+    "asti, piemonte, italia": {
+      "city": "Asti",
+      "state": "Piedmont",
+      "country": "Italy"
+    },
+    "中国 四川省 成都市": {
+      "city": "Chengdu",
+      "state": "Sichuan",
+      "country": "China"
+    },
+    "zürich, schweiz": {
+      "city": "Zurich",
+      "state": "Zurich",
+      "country": "Switzerland"
+    },
+    "carlton, victoria, australia": {
+      "city": "Carlton",
+      "state": "Victoria",
+      "country": "Australia"
+    },
+    "الدار البيضاء سطات عمالة الدار البيضاء المغرب": {
+      "city": "Casablanca",
+      "state": "Casablanca-Settat",
+      "country": "Morocco"
+    },
+    "gilford, ontario, canada": {
+      "city": "Gilford",
+      "state": "Ontario",
+      "country": "Canada"
+    },
+    "southwark, england, united kingdom": {
+      "city": "London",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "puteaux, île-de-france, france": {
+      "city": "Puteaux",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "中国 上海市 徐汇区": {
+      "city": "Shanghai",
+      "state": "Shanghai",
+      "country": "China"
+    },
+    "eivissa/ibiza, islas baleares, españa": {
+      "city": "Ibiza",
+      "state": "Balearic Islands",
+      "country": "Spain"
+    },
+    "gwynn oak, maryland, united states": {
+      "city": "Gwynn Oak",
+      "state": "Maryland",
+      "country": "United States"
+    },
+    "rishon lezion, center district, israel": {
+      "city": "Rishon LeZion",
+      "state": "Central District",
+      "country": "Israel"
+    },
+    "gaziantep, türkiye": {
+      "city": "Gaziantep",
+      "state": "",
+      "country": "Turkey"
+    },
+    "بورسعيد بورسعيد مصر": {
+      "city": "Port Said",
+      "state": "",
+      "country": "Egypt"
+    },
+    "القاهرة مصر": {
+      "city": "Cairo",
+      "state": "",
+      "country": "Egypt"
+    },
+    "中国 上海市 杨浦区": {
+      "city": "Shanghai",
+      "state": "Shanghai",
+      "country": "China"
+    },
+    "shoalwater, western australia, australia": {
+      "city": "Shoalwater",
+      "state": "Western Australia",
+      "country": "Australia"
+    },
+    "legnano, lombardia, italia": {
+      "city": "Legnano",
+      "state": "Lombardy",
+      "country": "Italy"
+    },
+    "throsby act 2914, australia": {
+      "city": "Throsby",
+      "state": "Australian Capital Territory",
+      "country": "Australia"
+    },
+    "vichy, auvergne-rhône-alpes, france": {
+      "city": "Vichy",
+      "state": "Auvergne-Rhône-Alpes",
+      "country": "France"
+    },
+    "อำเภอเมืองปทุมธานี, ปทุมธานี, ประเทศไทย": {
+      "city": "Pathum Thani",
+      "state": "Pathum Thani",
+      "country": "Thailand"
+    },
+    "bopfingen, baden-württemberg, deutschland": {
+      "city": "Bopfingen",
+      "state": "Baden-Württemberg",
+      "country": "Germany"
+    },
+    "st cloud, florida, united states": {
+      "city": "St. Cloud",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "connolly, western australia, australia": {
+      "city": "Connolly",
+      "state": "Western Australia",
+      "country": "Australia"
+    },
+    "port st lucie, florida, united states": {
+      "city": "Port St. Lucie",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "st kilda, victoria, australia": {
+      "city": "St Kilda",
+      "state": "Victoria",
+      "country": "Australia"
+    },
+    "wooloowin, queensland, australia": {
+      "city": "Wooloowin",
+      "state": "Queensland",
+      "country": "Australia"
+    },
+    "ตาก, ประเทศไทย": {
+      "city": "Tak",
+      "state": "Tak",
+      "country": "Thailand"
+    },
+    "abidjan, côte d'ivoire": {
+      "city": "Abidjan",
+      "state": "",
+      "country": "Ivory Coast"
+    },
+    "choisy-le-roi, île-de-france, france": {
+      "city": "Choisy-le-Roi",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "toulouse et périphérie": {
+      "city": "Toulouse",
+      "state": "Occitanie",
+      "country": "France"
+    },
+    "st. jacobs, ontario, canada": {
+      "city": "St. Jacobs",
+      "state": "Ontario",
+      "country": "Canada"
+    },
+    "الداخلية عمان": {
+      "city": "Amman",
+      "state": "Amman Governorate",
+      "country": "Oman"
+    },
+    "praça unidos do brasil, petrópolis, rio de janeiro, brazil": {
+      "city": "Petrópolis",
+      "state": "Rio de Janeiro",
+      "country": "Brazil"
+    },
+    "chamonix-mont-blanc, auvergne-rhône-alpes, france": {
+      "city": "Chamonix-Mont-Blanc",
+      "state": "Auvergne-Rhône-Alpes",
+      "country": "France"
+    },
+    "bilbao, país vasco / euskadi, españa": {
+      "city": "Bilbao",
+      "state": "Basque Country",
+      "country": "Spain"
+    },
+    "中国 浙江省 杭州": {
+      "city": "Hangzhou",
+      "state": "Zhejiang",
+      "country": "China"
+    },
+    "казань, республика татарстан, россия": {
+      "city": "Kazan",
+      "state": "Tatarstan",
+      "country": "Russia"
+    },
+    "newport beach, california, united states": {
+      "city": "Newport Beach",
+      "state": "California",
+      "country": "United States"
+    },
+    "donostia-san sebastián, país vasco / euskadi, españa": {
+      "city": "San Sebastián",
+      "state": "Basque Country",
+      "country": "Spain"
+    },
+    "中国 安徽省 合肥": {
+      "city": "Hefei",
+      "state": "Anhui",
+      "country": "China"
+    },
+    "台灣 taiwan 嘉義市": {
+      "city": "Chiayi",
+      "state": "Chiayi",
+      "country": "Taiwan"
+    },
+    "ulm, baden-württemberg, deutschland": {
+      "city": "Ulm",
+      "state": "Baden-Württemberg",
+      "country": "Germany"
+    },
+    "oberndorf bei schwanenstadt, oberösterreich, österreich": {
+      "city": "Oberndorf bei Schwanenstadt",
+      "state": "Upper Austria",
+      "country": "Austria"
+    },
+    "singapore, singapore": {
+      "city": "Singapore",
+      "state": "",
+      "country": "Singapore"
+    },
+    "les houches, auvergne-rhône-alpes, france": {
+      "city": "Les Houches",
+      "state": "Auvergne-Rhône-Alpes",
+      "country": "France"
+    },
+    "méxico, méxico": {
+      "city": "Mexico City",
+      "state": "Mexico City",
+      "country": "Mexico"
+    },
+    "barranquilla, atlántico, colombia": {
+      "city": "Barranquilla",
+      "state": "Atlántico",
+      "country": "Colombia"
+    },
+    "marseille, provence-alpes-côte d'azur, france": {
+      "city": "Marseille",
+      "state": "Provence-Alpes-Côte d'Azur",
+      "country": "France"
+    },
+    "velden am wörther see, carinthia, austria": {
+      "city": "Velden am Wörther See",
+      "state": "Carinthia",
+      "country": "Austria"
+    },
+    "zikhron ya'akov, israel": {
+      "city": "Zikhron Ya'akov",
+      "state": "",
+      "country": "Israel"
+    },
+    "st thomas, us virgin islands": {
+      "city": "Saint Thomas",
+      "state": "",
+      "country": "U.S. Virgin Islands"
+    },
+    "mysuru, karnataka, india": {
+      "city": "Mysore",
+      "state": "Karnataka",
+      "country": "India"
+    },
+    "st peter, minnesota, united states": {
+      "city": "St. Peter",
+      "state": "Minnesota",
+      "country": "United States"
+    },
+    "st. john's, nl, canada": {
+      "city": "St. John's",
+      "state": "Newfoundland and Labrador",
+      "country": "Canada"
+    },
+    "nice et périphérie": {
+      "city": "Nice",
+      "state": "Provence-Alpes-Côte d'Azur",
+      "country": "France"
+    },
+    "auburndale, massachusetts, united states": {
+      "city": "Auburndale",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "curitiba, paraná, brazil": {
+      "city": "Curitiba",
+      "state": "Paraná",
+      "country": "Brazil"
+    },
+    "petah tikva, center district, israel": {
+      "city": "Petah Tikva",
+      "state": "Central District",
+      "country": "Israel"
+    },
+    "curitiba, paraná, brasil": {
+      "city": "Curitiba",
+      "state": "Paraná",
+      "country": "Brazil"
+    },
+    "annecy, auvergne-rhône-alpes, france": {
+      "city": "Annecy",
+      "state": "Auvergne-Rhône-Alpes",
+      "country": "France"
+    },
+    "mt. joy, pennsylvania, united states": {
+      "city": "Mount Joy",
+      "state": "Pennsylvania",
+      "country": "United States"
+    },
+    "santa catarina, nuevo león, mexico": {
+      "city": "Santa Catarina",
+      "state": "Nuevo León",
+      "country": "Mexico"
+    },
+    "palma, islas baleares, españa": {
+      "city": "Palma",
+      "state": "Balearic Islands",
+      "country": "Spain"
+    },
+    "gerona, cataluña, españa": {
+      "city": "Girona",
+      "state": "Catalonia",
+      "country": "Spain"
+    },
+    "hlavní město praha, česko": {
+      "city": "Prague",
+      "state": "Prague",
+      "country": "Czechia"
+    },
+    "chișinău, moldova": {
+      "city": "Chisinau",
+      "state": "",
+      "country": "Moldova"
+    },
+    "i̇zmit, kocaeli, turkey": {
+      "city": "Izmit",
+      "state": "Kocaeli",
+      "country": "Turkey"
+    },
+    "bochum, nordrhein-westfalen, deutschland": {
+      "city": "Bochum",
+      "state": "North Rhine-Westphalia",
+      "country": "Germany"
+    },
+    "cdmx, mexico": {
+      "city": "Mexico City",
+      "state": "Mexico City",
+      "country": "Mexico"
+    },
+    "walldorf, baden-württemberg, deutschland": {
+      "city": "Walldorf",
+      "state": "Baden-Württemberg",
+      "country": "Germany"
+    },
+    "karlskrona, blekinge län, sverige": {
+      "city": "Karlskrona",
+      "state": "Blekinge",
+      "country": "Sweden"
+    },
+    "fontaine, auvergne-rhône-alpes, france": {
+      "city": "Fontaine",
+      "state": "Auvergne-Rhône-Alpes",
+      "country": "France"
+    },
+    "san josé, costa rica": {
+      "city": "San José",
+      "state": "",
+      "country": "Costa Rica"
+    },
+    "panamá, panamá, panamá": {
+      "city": "Panama City",
+      "state": "Panama",
+      "country": "Panama"
+    },
+    "sopela, país vasco / euskadi, españa": {
+      "city": "Sopela",
+      "state": "Basque Country",
+      "country": "Spain"
+    },
+    "jakarta, indonesia": {
+      "city": "Jakarta",
+      "state": "",
+      "country": "Indonesia"
+    },
+    "köln, nordrhein-westfalen, deutschland": {
+      "city": "Cologne",
+      "state": "North Rhine-Westphalia",
+      "country": "Germany"
+    },
+    "الشرقية الظهران السعودية": {
+      "city": "Dhahran",
+      "state": "Eastern Province",
+      "country": "Saudi Arabia"
+    },
+    "england, united kingdom": {
+      "city": "England",
+      "state": "",
+      "country": "United Kingdom"
+    },
+    "schlieren, zürich, schweiz": {
+      "city": "Schlieren",
+      "state": "Zürich",
+      "country": "Switzerland"
+    },
+    "uppsala, uppsala län, sverige": {
+      "city": "Uppsala",
+      "state": "Uppsala",
+      "country": "Sweden"
+    },
+    "เขตปริมณฑลกรุงเทพมหานคร": {
+      "city": "Bangkok",
+      "state": "",
+      "country": "Thailand"
+    },
+    "denizli, türkiye": {
+      "city": "Denizli",
+      "state": "Denizli",
+      "country": "Turkey"
+    },
+    "maisach, bayern, deutschland": {
+      "city": "Maisach",
+      "state": "Bavaria",
+      "country": "Germany"
+    },
+    "monaco, monaco": {
+      "city": "Monaco",
+      "state": "",
+      "country": "Monaco"
+    },
+    "nürnberg, bayern, deutschland": {
+      "city": "Nürnberg",
+      "state": "Bavaria",
+      "country": "Germany"
+    },
+    "riyadh saudi arabia": {
+      "city": "Riyadh",
+      "state": "",
+      "country": "Saudi Arabia"
+    },
+    "lecco": {
+      "city": "Lecco",
+      "state": "",
+      "country": "Italy"
+    },
+    "الظهران السعودية": {
+      "city": "Dhahran",
+      "state": "",
+      "country": "Saudi Arabia"
+    },
+    "محافظة العاصمة البحرين": {
+      "city": "Manama",
+      "state": "",
+      "country": "Bahrain"
+    },
+    "nice, provence-alpes-côte d’azur, france": {
+      "city": "Nice",
+      "state": "Provence-Alpes-Côte d’Azur",
+      "country": "France"
+    },
+    "محافظة كسروان جبيل قضاء جبيل لبنان": {
+      "city": "Jbeil",
+      "state": "",
+      "country": "Lebanon"
+    },
+    "milano, lombardia, italia": {
+      "city": "Milan",
+      "state": "Lombardy",
+      "country": "Italy"
+    },
+    "irvine, california, united states": {
+      "city": "Irvine",
+      "state": "California",
+      "country": "United States"
+    },
+    "montreal, quebec, canada": {
+      "city": "Montreal",
+      "state": "Quebec",
+      "country": "Canada"
+    },
+    "shenley, england, united kingdom": {
+      "city": "Shenley",
+      "state": "",
+      "country": "United Kingdom"
+    },
+    "vanves, île-de-france, france": {
+      "city": "Vanves",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "محافظة بيروت لبنان": {
+      "city": "Beirut",
+      "state": "",
+      "country": "Lebanon"
+    },
+    "mountain view, california, united states": {
+      "city": "Mountain View",
+      "state": "California",
+      "country": "United States"
+    },
+    "thousand oaks, california, united states": {
+      "city": "Thousand Oaks",
+      "state": "California",
+      "country": "United States"
+    },
+    "kielce, woj. świętokrzyskie, polska": {
+      "city": "Kielce",
+      "state": "Świętokrzyskie",
+      "country": "Poland"
+    },
+    "ภูเก็ต, ภูเก็ต, ประเทศไทย": {
+      "city": "Phuket",
+      "state": "Phuket",
+      "country": "Thailand"
+    },
+    "7190 billund, denmark": {
+      "city": "Billund",
+      "state": "",
+      "country": "Denmark"
+    },
+    "zapopan, jalisco, méxico": {
+      "city": "Zapopan",
+      "state": "Jalisco",
+      "country": "Mexico"
+    },
+    "boise, idaho, united states": {
+      "city": "Boise",
+      "state": "Idaho",
+      "country": "United States"
+    },
+    "miami, florida, united states": {
+      "city": "Miami",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "washington, district of columbia, united states": {
+      "city": "Washington",
+      "state": "District of Columbia",
+      "country": "United States"
+    },
+    "waban, massachusetts, united states": {
+      "city": "Waban",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "kifisiá, attiki, greece": {
+      "city": "Kifisia",
+      "state": "Attica",
+      "country": "Greece"
+    },
+    "berkeley, california, united states": {
+      "city": "Berkeley",
+      "state": "California",
+      "country": "United States"
+    },
+    "stuttgart, baden-württemberg, deutschland": {
+      "city": "Stuttgart",
+      "state": "Baden-Württemberg",
+      "country": "Germany"
+    },
+    "redwood city, california, united states": {
+      "city": "Redwood City",
+      "state": "California",
+      "country": "United States"
+    },
+    "대한민국 대구": {
+      "city": "Daegu",
+      "state": "",
+      "country": "South Korea"
+    },
+    "george town, george town, cayman islands": {
+      "city": "George Town",
+      "state": "",
+      "country": "Cayman Islands"
+    },
+    "balgheim, baden-württemberg, deutschland": {
+      "city": "Balgheim",
+      "state": "Baden-Württemberg",
+      "country": "Germany"
+    },
+    "boulder, colorado, united states": {
+      "city": "Boulder",
+      "state": "Colorado",
+      "country": "United States"
+    },
+    "atherton, california, united states": {
+      "city": "Atherton",
+      "state": "California",
+      "country": "United States"
+    },
+    "toronto, ontario, canada": {
+      "city": "Toronto",
+      "state": "Ontario",
+      "country": "Canada"
+    },
+    "los angeles county, california, united states": {
+      "city": "Los Angeles",
+      "state": "California",
+      "country": "United States"
+    },
+    "kyiv, kyiv city, ukraine": {
+      "city": "Kyiv",
+      "state": "Kyiv City",
+      "country": "Ukraine"
+    },
+    "berlin, berlin, deutschland": {
+      "city": "Berlin",
+      "state": "Berlin",
+      "country": "Germany"
+    },
+    "la jolla shores, california, united states": {
+      "city": "La Jolla",
+      "state": "California",
+      "country": "United States"
+    },
+    "como, lombardia, italia": {
+      "city": "Como",
+      "state": "Lombardy",
+      "country": "Italy"
+    },
+    "washim, maharashtra 444505, india": {
+      "city": "Washim",
+      "state": "Maharashtra",
+      "country": "India"
+    },
+    "saratoga, california, united states": {
+      "city": "Saratoga",
+      "state": "California",
+      "country": "United States"
+    },
+    "الشرقية الاحساء السعودية": {
+      "city": "Al Ahsa",
+      "state": "Eastern Province",
+      "country": "Saudi Arabia"
+    },
+    "sonoma, california, united states": {
+      "city": "Sonoma",
+      "state": "California",
+      "country": "United States"
+    },
+    "vadodara, gujarat, india": {
+      "city": "Vadodara",
+      "state": "Gujarat",
+      "country": "India"
+    },
+    "st. moritz, graubünden, schweiz": {
+      "city": "St. Moritz",
+      "state": "Graubünden",
+      "country": "Switzerland"
+    },
+    "long beach, california, united states": {
+      "city": "Long Beach",
+      "state": "California",
+      "country": "United States"
+    },
+    "muntinlupa city, national capital region, philippines": {
+      "city": "Muntinlupa",
+      "state": "National Capital Region",
+      "country": "Philippines"
+    },
+    "lviv, lviv, ukraine": {
+      "city": "Lviv",
+      "state": "Lviv",
+      "country": "Ukraine"
+    },
+    "millbrae, california, united states": {
+      "city": "Millbrae",
+      "state": "California",
+      "country": "United States"
+    },
+    "kirchberg an der murr, baden-württemberg, germany": {
+      "city": "Kirchberg an der Murr",
+      "state": "Baden-Württemberg",
+      "country": "Germany"
+    },
+    "boston, massachusetts, united states": {
+      "city": "Boston",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "el cerrito, california, united states": {
+      "city": "El Cerrito",
+      "state": "California",
+      "country": "United States"
+    },
+    "mexico city, cdmx, mexico": {
+      "city": "Mexico City",
+      "state": "Mexico City",
+      "country": "Mexico"
+    },
+    "arlington, virginia, united states": {
+      "city": "Arlington",
+      "state": "Virginia",
+      "country": "United States"
+    },
+    "tabriz county, east azerbaijan province, iran": {
+      "city": "Tabriz",
+      "state": "East Azerbaijan Province",
+      "country": "Iran"
+    },
+    "dubai, united arab emirates": {
+      "city": "Dubai",
+      "state": "",
+      "country": "United Arab Emirates"
+    },
+    "stockholms län, sverige": {
+      "city": "Stockholm",
+      "state": "Stockholm",
+      "country": "Sweden"
+    },
+    "west hollywood, california, united states": {
+      "city": "West Hollywood",
+      "state": "California",
+      "country": "United States"
+    },
+    "pasadena, california, united states": {
+      "city": "Pasadena",
+      "state": "California",
+      "country": "United States"
+    },
+    "dnipro, dnipropetrovsk, ukraine": {
+      "city": "Dnipro",
+      "state": "Dnipropetrovsk",
+      "country": "Ukraine"
+    },
+    "cambridge, england, united kingdom": {
+      "city": "Cambridge",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "kitchener, ontario, canada": {
+      "city": "Kitchener",
+      "state": "Ontario",
+      "country": "Canada"
+    },
+    "bloomsburg, pennsylvania, united states": {
+      "city": "Bloomsburg",
+      "state": "Pennsylvania",
+      "country": "United States"
+    },
+    "ahvaz county, khuzestan province, iran": {
+      "city": "Ahvaz",
+      "state": "Khuzestan",
+      "country": "Iran"
+    },
+    "san marco, 30100 venice, metropolitan city of venice, italy": {
+      "city": "Venice",
+      "state": "Veneto",
+      "country": "Italy"
+    },
+    "chesapeake beach, maryland, united states": {
+      "city": "Chesapeake Beach",
+      "state": "Maryland",
+      "country": "United States"
+    },
+    "porbandar, gujarat, india": {
+      "city": "Porbandar",
+      "state": "Gujarat",
+      "country": "India"
+    },
+    "smithtown, new york, united states": {
+      "city": "Smithtown",
+      "state": "New York",
+      "country": "United States"
+    },
+    "riyadh region": {
+      "city": "Riyadh",
+      "state": "",
+      "country": "Saudi Arabia"
+    },
+    "fresno, california, united states": {
+      "city": "Fresno",
+      "state": "California",
+      "country": "United States"
+    },
+    "bacolod, western visayas, philippines": {
+      "city": "Bacolod",
+      "state": "Western Visayas",
+      "country": "Philippines"
+    },
+    "atlanta, georgia, united states": {
+      "city": "Atlanta",
+      "state": "Georgia",
+      "country": "United States"
+    },
+    "tokyo, japan": {
+      "city": "Tokyo",
+      "state": "",
+      "country": "Japan"
+    },
+    "beverly hills, california, united states": {
+      "city": "Beverly Hills",
+      "state": "California",
+      "country": "United States"
+    },
+    "milan, metropolitan city of milan, italy": {
+      "city": "Milan",
+      "state": "Lombardy",
+      "country": "Italy"
+    },
+    "san diego, california, united states": {
+      "city": "San Diego",
+      "state": "California",
+      "country": "United States"
+    },
+    "witney, england, united kingdom": {
+      "city": "Witney",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "temecula, california, united states": {
+      "city": "Temecula",
+      "state": "California",
+      "country": "United States"
+    },
+    "san biagio di callalta, veneto, italia": {
+      "city": "San Biagio di Callalta",
+      "state": "Veneto",
+      "country": "Italy"
+    },
+    "أبو ظبي البطين الإمارات العربية المتحدة": {
+      "city": "Abu Dhabi",
+      "state": "",
+      "country": "United Arab Emirates"
+    },
+    "boca raton, florida, united states": {
+      "city": "Boca Raton",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "porto alegre, rio grande do sul, brasil": {
+      "city": "Porto Alegre",
+      "state": "Rio Grande do Sul",
+      "country": "Brazil"
+    },
+    "naucalpan de juárez, méxico, méxico": {
+      "city": "Naucalpan de Juárez",
+      "state": "Mexico",
+      "country": "Mexico"
+    },
+    "newark, new jersey, united states": {
+      "city": "Newark",
+      "state": "New Jersey",
+      "country": "United States"
+    },
+    "zürich, zürich, schweiz": {
+      "city": "Zurich",
+      "state": "Zurich",
+      "country": "Switzerland"
+    },
+    "عمان عمان الأردن": {
+      "city": "Amman",
+      "state": "",
+      "country": "Jordan"
+    },
+    "dublin, ohio, united states": {
+      "city": "Dublin",
+      "state": "Ohio",
+      "country": "United States"
+    },
+    "athens, attiki, greece": {
+      "city": "Athens",
+      "state": "Attica",
+      "country": "Greece"
+    },
+    "doha, qatar": {
+      "city": "Doha",
+      "state": "",
+      "country": "Qatar"
+    },
+    "dallas, texas, united states": {
+      "city": "Dallas",
+      "state": "Texas",
+      "country": "United States"
+    },
+    "tulsa, oklahoma, united states": {
+      "city": "Tulsa",
+      "state": "Oklahoma",
+      "country": "United States"
+    },
+    "tehran, tehran province, iran": {
+      "city": "Tehran",
+      "state": "Tehran",
+      "country": "Iran"
+    },
+    "orlando, florida, united states": {
+      "city": "Orlando",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "pacifica, california, united states": {
+      "city": "Pacifica",
+      "state": "California",
+      "country": "United States"
+    },
+    "mississauga, ontario, canada": {
+      "city": "Mississauga",
+      "state": "Ontario",
+      "country": "Canada"
+    },
+    "new delhi, delhi, india": {
+      "city": "New Delhi",
+      "state": "Delhi",
+      "country": "India"
+    },
+    "brookline, massachusetts, united states": {
+      "city": "Brookline",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "new haven, connecticut, united states": {
+      "city": "New Haven",
+      "state": "Connecticut",
+      "country": "United States"
+    },
+    "las vegas, nevada, united states": {
+      "city": "Las Vegas",
+      "state": "Nevada",
+      "country": "United States"
+    },
+    "quezon city, national capital region, philippines": {
+      "city": "Quezon City",
+      "state": "National Capital Region",
+      "country": "Philippines"
+    },
+    "menlo park, california, united states": {
+      "city": "Menlo Park",
+      "state": "California",
+      "country": "United States"
+    },
+    "tartu, tartumaa, estonia": {
+      "city": "Tartu",
+      "state": "Tartumaa",
+      "country": "Estonia"
+    },
+    "المحافظة الشمالية مدينة حمد البحرين": {
+      "city": "Madinat Hamad",
+      "state": "Northern Governorate",
+      "country": "Bahrain"
+    },
+    "chicago, illinois, united states": {
+      "city": "Chicago",
+      "state": "Illinois",
+      "country": "United States"
+    },
+    "blue ridge, georgia, united states": {
+      "city": "Blue Ridge",
+      "state": "Georgia",
+      "country": "United States"
+    },
+    "alicante y alrededore": {
+      "city": "Alicante",
+      "state": "",
+      "country": "Spain"
+    },
+    "jena, thüringen, deutschland": {
+      "city": "Jena",
+      "state": "Thuringia",
+      "country": "Germany"
+    },
+    "oaxaca, méxico": {
+      "city": "Oaxaca",
+      "state": "Oaxaca",
+      "country": "Mexico"
+    },
+    "日本 東京都 江東区": {
+      "city": "Tokyo",
+      "state": "Tokyo",
+      "country": "Japan"
+    },
+    "日本 神奈川県 横浜": {
+      "city": "Yokohama",
+      "state": "Kanagawa",
+      "country": "Japan"
+    },
+    "heilbronn, baden-württemberg, deutschland": {
+      "city": "Heilbronn",
+      "state": "Baden-Württemberg",
+      "country": "Germany"
+    },
+    "são paulo, são paulo, brasil": {
+      "city": "São Paulo",
+      "state": "São Paulo",
+      "country": "Brazil"
+    },
+    "melbourne, victoria, australia": {
+      "city": "Melbourne",
+      "state": "Victoria",
+      "country": "Australia"
+    },
+    "north goa, goa, india": {
+      "city": "North Goa",
+      "state": "Goa",
+      "country": "India"
+    },
+    "fort collins, colorado, united states": {
+      "city": "Fort Collins",
+      "state": "Colorado",
+      "country": "United States"
+    },
+    "ardee, county louth, ireland": {
+      "city": "Ardee",
+      "state": "Louth",
+      "country": "Ireland"
+    },
+    "dunblane, scotland, united kingdom": {
+      "city": "Dunblane",
+      "state": "Scotland",
+      "country": "United Kingdom"
+    },
+    "malibu, california, united states": {
+      "city": "Malibu",
+      "state": "California",
+      "country": "United States"
+    },
+    "davos, graubünden, schweiz": {
+      "city": "Davos",
+      "state": "Graubünden",
+      "country": "Switzerland"
+    },
+    "pittsburgh, pennsylvania, united states": {
+      "city": "Pittsburgh",
+      "state": "Pennsylvania",
+      "country": "United States"
+    },
+    "chelmsford, england, united kingdom": {
+      "city": "Chelmsford",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "yaoundé, cameroon": {
+      "city": "Yaoundé",
+      "state": "",
+      "country": "Cameroon"
+    },
+    "wien, österreich": {
+      "city": "Vienna",
+      "state": "Vienna",
+      "country": "Austria"
+    },
+    "freiburg im breisgau, baden-württemberg, deutschland": {
+      "city": "Freiburg im Breisgau",
+      "state": "Baden-Württemberg",
+      "country": "Germany"
+    },
+    "haverford, pennsylvania, united states": {
+      "city": "Haverford",
+      "state": "Pennsylvania",
+      "country": "United States"
+    },
+    "bonn, nordrhein-westfalen, deutschland": {
+      "city": "Bonn",
+      "state": "North Rhine-Westphalia",
+      "country": "Germany"
+    },
+    "plaisir, île-de-france, france": {
+      "city": "Plaisir",
+      "state": "Île-de-France",
+      "country": "France"
+    },
+    "fairfax county, virginia, united states": {
+      "city": "Fairfax",
+      "state": "Virginia",
+      "country": "United States"
+    },
+    "leuven, flemish region, belgium": {
+      "city": "Leuven",
+      "state": "Flemish Region",
+      "country": "Belgium"
+    },
+    "nairobi county, kenya": {
+      "city": "Nairobi",
+      "state": "",
+      "country": "Kenya"
+    },
+    "spijkenisse, zuid-holland, nederland": {
+      "city": "Spijkenisse",
+      "state": "South Holland",
+      "country": "Netherlands"
+    },
+    "winter park, florida, united states": {
+      "city": "Winter Park",
+      "state": "Florida",
+      "country": "United States"
+    },
+    "binangonan, calabarzon, philippines": {
+      "city": "Binangonan",
+      "state": "Calabarzon",
+      "country": "Philippines"
+    },
+    "warwick parish, bermuda": {
+      "city": "Warwick",
+      "state": "",
+      "country": "Bermuda"
+    },
+    "bengaluru urban, karnataka, india": {
+      "city": "Bengaluru",
+      "state": "Karnataka",
+      "country": "India"
+    },
+    "stockholm, sweden": {
+      "city": "Stockholm",
+      "state": "",
+      "country": "Sweden"
+    },
+    "unknown — graphite is hq'd in san francisco, ca but team is fully distributed across north america and latin america": {
+      "city": "San Francisco",
+      "state": "California",
+      "country": "United States"
+    },
+    "unknown — moses capital is registered in dover, delaware": {
+      "city": "Dover",
+      "state": "Delaware",
+      "country": "United States"
+    },
+    "capital governorate, bahrain": {
+      "city": "Manama",
+      "state": "Capital Governorate",
+      "country": "Bahrain"
+    },
+    "bali, indonesia": {
+      "city": "Denpasar",
+      "state": "Bali",
+      "country": "Indonesia"
+    },
+    "pampanga, central luzon, philippines": {
+      "city": "San Fernando",
+      "state": "Pampanga",
+      "country": "Philippines"
+    },
+    "west midlands, england, united kingdom": {
+      "city": "Birmingham",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "suffolk county, massachusetts, united states": {
+      "city": "Boston",
+      "state": "Massachusetts",
+      "country": "United States"
+    },
+    "marathon county, wisconsin, united states": {
+      "city": "Wausau",
+      "state": "Wisconsin",
+      "country": "United States"
+    },
+    "gauteng, south africa": {
+      "city": "Johannesburg",
+      "state": "Gauteng",
+      "country": "South Africa"
+    },
+    "center district, israel": {
+      "city": "Rishon LeZion",
+      "state": "Center District",
+      "country": "Israel"
+    },
+    "rizal, calabarzon, philippines": {
+      "city": "Antipolo",
+      "state": "Rizal",
+      "country": "Philippines"
+    },
+    "leeuwarden, friesland, nederland": {
+      "city": "Leeuwarden",
+      "state": "Friesland",
+      "country": "Netherlands"
+    },
+    "central bedfordshire, england, united kingdom": {
+      "city": "Central Bedfordshire",
+      "state": "England",
+      "country": "United Kingdom"
+    },
+    "st michaels, maryland, united states": {
+      "city": "St. Michaels",
+      "state": "Maryland",
+      "country": "United States"
+    }
+  },
+  "state_expansions": {},
+  "skipped": {
+    "puerto rico": true,
+    "kuwait": true,
+    "united states": true,
+    "الإمارات العربية المتحدة": true,
+    "netherlands": true,
+    "canada": true,
+    "السعودية": true,
+    "california, united states of america": true,
+    "united arab emirates": true,
+    "austria": true,
+    "الكويت": true,
+    "france": true,
+    "mexico": true,
+    "qatar": true,
+    "singapore": true,
+    "united kingdom": true,
+    "israel": true,
+    "taiwan": true,
+    "hong kong sar": true,
+    "bulgaria": true,
+    "serbia": true,
+    "kenya": true,
+    "new zealand": true,
+    "russia": true,
+    "australia": true,
+    "bahrain": true,
+    "philippines": true,
+    "contact info": true,
+    "البحرين": true,
+    "lebanon": true,
+    "cyprus": true,
+    "россия": true,
+    "bosnia and herzegovina": true,
+    "558 followers": true,
+    "india": true,
+    "bermuda": true,
+    "brazil": true,
+    "greece": true,
+    "united states of america": true,
+    "estonia": true,
+    "kazakhstan": true,
+    "north america": true,
+    "ireland": true,
+    "japan": true,
+    "sverige": true,
+    "guatemala": true,
+    "spain": true,
+    "jersey": true,
+    "lithuania": true,
+    "germany": true,
+    "portugal": true,
+    "cayman islands": true,
+    "577 followers": true,
+    "saudi arabia": true,
+    "turkey": true,
+    "south korea": true,
+    "belgium": true,
+    "pakistan": true,
+    "finland": true,
+    "perú": true,
+    "italy": true,
+    "bangladesh": true,
+    "nederland": true,
+    "venezuela": true,
+    "colombia": true,
+    "croatia": true,
+    "argentina": true,
+    "nigeria": true,
+    "calabarzon, philippines": true,
+    "vietnam": true,
+    "thailand": true,
+    "norway": true,
+    "中国": true,
+    "deutschland": true,
+    "대한민국": true,
+    "armenia": true,
+    "ukraine": true,
+    "slovenia": true,
+    "belarus": true,
+    "mehedinti, românia": true,
+    "اليمن": true,
+    "polska": true,
+    "schweiz": true,
+    "italia": true,
+    "albania": true,
+    "hungary": true,
+    "مصر": true,
+    "9k followers": true,
+    "中国 广东省": true,
+    "costa rica": true,
+    "españa": true,
+    "missouri, united states": true,
+    "romania": true,
+    "misamis oriental, northern mindanao, philippines": true,
+    "türkiye": true,
+    "poland": true,
+    "peru": true,
+    "malawi": true,
+    "st. clair county, alabama, united states": true,
+    "ecuador": true,
+    "österreich": true,
+    "saskatchewan, canada": true,
+    "chile": true,
+    "maldives": true,
+    "occidental mindoro, mimaropa, philippines": true,
+    "north macedonia": true,
+    "tessin, schweiz": true,
+    "ghana": true,
+    "parker remick": true,
+    "north district, israel": true,
+    "lanao del norte, northern mindanao, philippines": true,
+    "gyeonggi, south korea": true,
+    "botswana": true,
+    "south africa": true,
+    "alberta, canada": true,
+    "nueva ecija, central luzon, philippines": true,
+    "24k followers": true,
+    "negros occidental, western visayas, philippines": true,
+    "jamaica": true,
+    "liguria, italia": true,
+    "cameroon": true,
+    "uruguay": true,
+    "negros oriental, central visayas, philippines": true,
+    "south sudan": true,
+    "uttar pradesh, india": true,
+    "iran": true,
+    "trinidad and tobago": true,
+    "tamil nadu, india": true,
+    "nicaragua": true,
+    "antarctica": true,
+    "papua new guinea": true,
+    "goiás, brasil": true,
+    "ilocos sur, ilocos region, philippines": true,
+    "indonesia": true,
+    "norge": true,
+    "sturgeon county, alberta, canada": true,
+    "sweden": true,
+    "british virgin islands": true,
+    "zambia": true,
+    "arizona, united states": true,
+    "switzerland": true,
+    "auvergne-rhône-alpes, france": true,
+    "waikato, new zealand": true,
+    "himachal pradesh, india": true,
+    "eastern visayas, philippines": true,
+    "iceland": true,
+    "odisha, india": true,
+    "connecticut, united states": true,
+    "gujarat, india": true,
+    "قطر": true,
+    "méxico": true,
+    "denmark": true,
+    "bavaria, germany": true,
+    "egypt": true,
+    "tehran province, iran": true,
+    "madagascar": true,
+    "davao del sur, philippines": true,
+    "tompkins county, new york, united states": true,
+    "islas baleares, españa": true,
+    "texas, united states": true,
+    "azerbaijan": true,
+    "uganda": true,
+    "台灣": true,
+    "ประเทศไทย": true,
+    "santa catarina, brazil": true,
+    "malta": true,
+    "malaysia": true,
+    "nepal": true,
+    "moldova": true,
+    "sonora, mexico": true,
+    "guangdong province, china": true,
+    "kerala, india": true,
+    "karnataka, india": true,
+    "andhra pradesh, india": true,
+    "meghalaya, india": true,
+    "rajasthan, india": true,
+    "hawaii, united states": true,
+    "massachusetts, united states": true,
+    "maharashtra, india": true,
+    "new jersey, united states": true,
+    "中国 贵州省": true,
+    "sri lanka": true,
+    "isle of man": true
+  }
+}

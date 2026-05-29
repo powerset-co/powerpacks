@@ -21,8 +21,10 @@ from packs.ingestion.schemas.company_identity import extract_company_public_iden
 
 try:  # pragma: no cover - exercised by direct script execution paths
     from .identity import canonical_person_key, position_uuid, stable_company_id, stable_person_id_from_key
+    from .location_normalization import normalize_location_fields
 except ImportError:  # pragma: no cover
     from identity import canonical_person_key, position_uuid, stable_company_id, stable_person_id_from_key  # type: ignore
+    from location_normalization import normalize_location_fields  # type: ignore
 
 try:
     from packs.ingestion.schemas.people_schema import (
@@ -432,6 +434,14 @@ def flatten_people(rows: Iterable[dict[str, Any]] | str | Path) -> list[dict[str
     seen: set[str] = set()
     for raw in raw_rows:
         row = normalize_people_row(raw)
+        location = normalize_location_fields(
+            city=row.get("city", ""),
+            state=row.get("state", ""),
+            country=row.get("country", ""),
+            location_raw=row.get("location_raw", ""),
+            metro_areas=raw.get("metro_areas") or raw.get("metro_area") or "",
+            macro_region=raw.get("macro_region") or "",
+        )
         public_id = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url", ""))
         linkedin_url = normalize_linkedin_url(row.get("linkedin_url", ""))
         full_name = row.get("full_name") or " ".join(part for part in [row.get("first_name"), row.get("last_name")] if part).strip()
@@ -453,10 +463,12 @@ def flatten_people(rows: Iterable[dict[str, Any]] | str | Path) -> list[dict[str
             "full_name": full_name,
             "headline": row.get("headline", ""),
             "summary": row.get("summary", ""),
-            "city": row.get("city", ""),
-            "state": row.get("state", ""),
-            "country": row.get("country", ""),
-            "location_raw": row.get("location_raw", ""),
+            "city": location["city"],
+            "state": location["state"],
+            "country": location["country"],
+            "location_raw": location["location_raw"],
+            "macro_region": location["macro_region"],
+            "metro_areas": location["metro_areas"],
             "profile_picture_url": row.get("profile_picture_url", ""),
             "work_experiences": work_experiences,
             "education": education,
@@ -467,7 +479,13 @@ def flatten_people(rows: Iterable[dict[str, Any]] | str | Path) -> list[dict[str
             "source_channels": row.get("source_channels", ""),
             "source_artifacts": row.get("source_artifacts", ""),
             "allowed_operator_ids": local_operator_ids(raw, None) if (raw.get("allowed_operator_ids") or raw.get("operator_ids")) else [],
-            "raw": {**{key: row.get(key, "") for key in PEOPLE_CSV_COLUMNS}, "allowed_operator_ids": raw.get("allowed_operator_ids", ""), "operator_ids": raw.get("operator_ids", "")},
+            "raw": {
+                **{key: row.get(key, "") for key in PEOPLE_CSV_COLUMNS},
+                "macro_region": location["macro_region"],
+                "metro_areas": json.dumps(location["metro_areas"]),
+                "allowed_operator_ids": raw.get("allowed_operator_ids", ""),
+                "operator_ids": raw.get("operator_ids", ""),
+            },
             "rapidapi_response": _json_object(row.get("rapidapi_response")),
             "twitter_response": _json_object(row.get("twitter_response")),
         })
@@ -523,8 +541,8 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "city": person.get("city", ""),
                 "state": person.get("state", ""),
                 "country": person.get("country", ""),
-                "macro_region": "",
-                "metro_areas": [],
+                "macro_region": person.get("macro_region", ""),
+                "metro_areas": person.get("metro_areas") or [],
                 "seniority_band": _seniority_band(title),
                 "company_id": company_id,
                 "is_current": _is_current(exp),

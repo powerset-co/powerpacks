@@ -37,8 +37,12 @@ INCLUDE_ATTRIBUTES = [
     "base_id",
     "city",
     "state",
+    "country",
+    "macro_region",
+    "metro_areas",
     "role_track",
     "seniority_band",
+    "company_name",
     "company_id",
     "is_current",
 ]

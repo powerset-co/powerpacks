@@ -15,6 +15,7 @@ from packs.indexing.lib.people import (
     epoch_seconds,
     flatten_people,
 )
+from packs.indexing.lib.location_normalization import normalize_location_fields
 
 
 class IndexingTransformTests(unittest.TestCase):
@@ -94,8 +95,31 @@ class IndexingTransformTests(unittest.TestCase):
         self.assertEqual(person["linkedin_url"], "https://www.linkedin.com/in/jane-example")
         self.assertEqual(person["public_profile_url"], "https://www.linkedin.com/in/jane-example")
         self.assertEqual(person["full_name"], "Jane Example")
+        self.assertEqual(person["city"], "San Francisco")
+        self.assertEqual(person["state"], "California")
+        self.assertEqual(person["country"], "United States")
+        self.assertEqual(person["macro_region"], "Americas")
+        self.assertEqual(person["metro_areas"], ["San Francisco Bay Area"])
         self.assertEqual(len(person["work_experiences"]), 2)
         self.assertEqual(person["education"][0]["school_name"], "Stanford University")
+
+    def test_location_normalization_ports_network_api_geo_rules(self) -> None:
+        bay_area = normalize_location_fields(
+            city="San Francisco Bay Area",
+            country="United States",
+            location_raw="San Francisco Bay Area",
+        )
+        self.assertEqual(bay_area["city"], "San Francisco")
+        self.assertEqual(bay_area["state"], "California")
+        self.assertEqual(bay_area["country"], "United States")
+        self.assertEqual(bay_area["macro_region"], "Americas")
+        self.assertEqual(bay_area["metro_areas"], ["San Francisco Bay Area"])
+
+        raw_override = normalize_location_fields(location_raw="vancouver, bc, canada")
+        self.assertEqual(raw_override["city"], "Vancouver")
+        self.assertEqual(raw_override["state"], "British Columbia")
+        self.assertEqual(raw_override["country"], "Canada")
+        self.assertEqual(raw_override["macro_region"], "Americas")
 
     def test_build_roles_emits_position_records_with_epoch_seconds_and_role_ids(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -112,6 +136,8 @@ class IndexingTransformTests(unittest.TestCase):
         self.assertIn("founder", founder["role_ids"])
         self.assertIn("chief_technology_officer", founder["role_ids"])
         self.assertEqual(founder["seniority_band"], "owner")
+        self.assertEqual(founder["macro_region"], "Americas")
+        self.assertEqual(founder["metro_areas"], ["San Francisco Bay Area"])
         self.assertTrue(founder["company_id"])
         old = roles[1]
         self.assertEqual(old["end_date_epoch"], int(datetime(2019, 12, 1, tzinfo=timezone.utc).timestamp()))

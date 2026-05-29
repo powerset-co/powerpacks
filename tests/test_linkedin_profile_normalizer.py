@@ -113,12 +113,17 @@ class LinkedinProfileNormalizerTests(unittest.TestCase):
         payload = {
             "firstName": "Native",
             "lastName": "Person",
+            "geo": {"city": "San Francisco, California", "country": "United States", "full": "San Francisco, California, United States"},
             "fullPositions": {"values": [{"title": "VP", "companyName": "NativeCo"}]},
             "education": {"values": [{"school": "University"}]},
         }
         self.assertEqual(detect_linkedin_schema(payload), "linkedin_native")
         profile = normalize_linkedin_profile(payload)
         self.assertTrue(profile["success"])
+        self.assertEqual(profile["location_str"], "San Francisco, California, United States")
+        self.assertEqual(profile["city"], "San Francisco")
+        self.assertEqual(profile["state"], "California")
+        self.assertEqual(profile["country"], "United States")
         self.assertEqual(profile["experiences"][0]["title"], "VP")
         self.assertEqual(profile["education"][0]["school"], "University")
 

@@ -21,6 +21,7 @@ SETUP_LEDGER = Path('.powerpacks/setup/setup-run.json')
 DEFAULT_REFRESH_INTERVAL_HOURS = 168
 DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS = int(os.environ.get('POWERPACKS_SETUP_GMAIL_SYNC_LOOKBACK_DAYS', '14'))
 DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS', '900'))
+DEFAULT_AUTO_SPEND_LIMIT_USD = float(os.environ.get('POWERPACKS_SETUP_AUTO_SPEND_LIMIT_USD', '10'))
 SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/import-network-run.setup-refresh.json')
 SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
 REQUIRED_PRIVACY = [
@@ -732,11 +733,172 @@ def processing_dry_run_command_args(operator_id: str) -> list[str]:
     ]
 
 
+def processing_run_command_text(operator_id: str, *, allow_paid: bool = False) -> str:
+    text = f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {operator_id}'
+    if allow_paid:
+        text += ' --allow-paid-role-provider --allow-paid-embeddings --allow-paid-company-provider'
+    return text
+
+
+def processing_run_command_args(operator_id: str, *, allow_paid: bool = False) -> list[str]:
+    cmd = [
+        sys.executable,
+        'packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py',
+        'run',
+        '--input',
+        '.powerpacks/network-import/merged/people.csv',
+        '--output-dir',
+        '.powerpacks/search-index',
+        '--default-operator-id',
+        operator_id,
+    ]
+    if allow_paid:
+        cmd.extend(['--allow-paid-role-provider', '--allow-paid-embeddings', '--allow-paid-company-provider'])
+    return cmd
+
+
+def build_local_duckdb_shim_command_text(operator_id: str) -> str:
+    return f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'
+
+
+def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
+    return [
+        sys.executable,
+        'scripts/build-local-duckdb-shim.py',
+        '--records-dir',
+        '.powerpacks/search-index',
+        '--operator-id',
+        operator_id,
+        '--force',
+    ]
+
+
 def run_processing_dry_run(operator_id: str) -> dict[str, Any]:
     code, payload, stderr = run_json_command(processing_dry_run_command_args(operator_id), timeout=60 * 60)
     if code != 0:
         return {'status': 'failed', 'command': processing_dry_run_command_text(operator_id), 'error': tail(stderr) or payload}
     return payload
+
+
+def estimated_paid_calls(estimate: dict[str, Any]) -> int:
+    paid = estimate.get('estimated_paid_calls') if isinstance(estimate.get('estimated_paid_calls'), dict) else {}
+    total = 0
+    for value in paid.values():
+        try:
+            total += int(value or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def estimated_cost_usd(estimate: dict[str, Any]) -> float | None:
+    costs = estimate.get('estimated_costs') if isinstance(estimate.get('estimated_costs'), dict) else {}
+    value = estimate.get('estimated_cost_usd')
+    if value is None:
+        value = costs.get('total_estimated_usd')
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def estimate_has_known_pricing(estimate: dict[str, Any]) -> bool:
+    costs = estimate.get('estimated_costs') if isinstance(estimate.get('estimated_costs'), dict) else {}
+    return bool(costs.get('known_pricing', True))
+
+
+def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledger_path: Path) -> tuple[dict[str, Any], int]:
+    people = ROOT / '.powerpacks/network-import/merged/people.csv'
+    if not people.exists():
+        payload = {'status': 'not_ready', 'reason': 'missing_people_csv', 'missing': ['.powerpacks/network-import/merged/people.csv']}
+        ledger.setdefault('phases', {})['index'] = payload
+        ledger['status'] = 'not_ready'
+        save_setup_ledger(ledger, ledger_path)
+        return payload, 0
+
+    spend_limit = float(getattr(args, 'auto_spend_limit_usd', DEFAULT_AUTO_SPEND_LIMIT_USD))
+    estimate = run_processing_dry_run(args.operator_id)
+    if estimate.get('status') == 'failed':
+        payload = {'status': 'failed', 'step': 'index_dry_run', 'processing_estimate': estimate}
+        ledger.setdefault('phases', {})['index'] = payload
+        ledger['status'] = 'failed'
+        save_setup_ledger(ledger, ledger_path)
+        return payload, 1
+
+    paid_calls = estimated_paid_calls(estimate)
+    total_cost = estimated_cost_usd(estimate)
+    known_pricing = estimate_has_known_pricing(estimate)
+    needs_paid_approval = paid_calls > 0 and (not known_pricing or total_cost is None or total_cost >= spend_limit)
+    if total_cost is not None and total_cost >= spend_limit:
+        needs_paid_approval = True
+
+    if needs_paid_approval:
+        payload = {
+            'status': 'blocked_approval',
+            'step': 'index_processing',
+            'reason': 'estimated_processing_cost_requires_approval',
+            'auto_spend_limit_usd': spend_limit,
+            'estimated_cost_usd': total_cost,
+            'estimated_paid_calls': estimate.get('estimated_paid_calls', {}),
+            'processing_estimate': estimate,
+            'requires_approval': [{'id': 'provider_spend'}],
+            'approve_command': processing_run_command_text(args.operator_id, allow_paid=True),
+        }
+        ledger.setdefault('phases', {})['index'] = payload
+        ledger['status'] = 'blocked_approval'
+        save_setup_ledger(ledger, ledger_path)
+        return payload, 20
+
+    allow_paid = paid_calls > 0 or bool(total_cost and total_cost > 0)
+    code, processing_payload, processing_stderr = run_json_command(
+        processing_run_command_args(args.operator_id, allow_paid=allow_paid),
+        timeout=6 * 60 * 60,
+    )
+    if code != 0:
+        payload = {
+            'status': 'failed',
+            'step': 'index_processing',
+            'processing_estimate': estimate,
+            'processing': processing_payload,
+            'error': tail(processing_stderr) or processing_payload,
+        }
+        ledger.setdefault('phases', {})['index'] = payload
+        ledger['status'] = 'failed'
+        save_setup_ledger(ledger, ledger_path)
+        return payload, 1
+
+    code, duckdb_payload, duckdb_stderr = run_json_command(build_local_duckdb_shim_command_args(args.operator_id), timeout=60 * 60)
+    if code != 0:
+        payload = {
+            'status': 'failed',
+            'step': 'local_duckdb',
+            'processing_estimate': estimate,
+            'processing': processing_payload,
+            'local_duckdb': duckdb_payload,
+            'error': tail(duckdb_stderr) or duckdb_payload,
+        }
+        ledger.setdefault('phases', {})['index'] = payload
+        ledger['status'] = 'failed'
+        save_setup_ledger(ledger, ledger_path)
+        return payload, 1
+
+    payload = {
+        'status': 'ready',
+        'people_csv': '.powerpacks/network-import/merged/people.csv',
+        'people_sha256': sha256_file(people),
+        'auto_spend_limit_usd': spend_limit,
+        'auto_approved_paid_calls': paid_calls if allow_paid else 0,
+        'estimated_cost_usd': total_cost,
+        'processing_estimate': estimate,
+        'processing': processing_payload,
+        'local_duckdb': duckdb_payload,
+        'duckdb': duckdb_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb') if isinstance(duckdb_payload, dict) else '.powerpacks/search-index/local-search.duckdb',
+        'updated_at': now(),
+    }
+    ledger.setdefault('phases', {})['index'] = payload
+    ledger['status'] = 'ready'
+    save_setup_ledger(ledger, ledger_path)
+    return payload, 0
 
 
 def import_refresh_due(
@@ -790,20 +952,30 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
     ledger = si / 'ledger.json'
     records = si / 'records'
     people = ROOT / '.powerpacks/network-import/merged/people.csv'
+    people_hash = sha256_file(people) if people.exists() else ''
+    processing_needed = {
+        'status': 'people_csv_ready_for_processing',
+        'people_csv': str(people),
+        'people_sha256': people_hash,
+        'plan_command': processing_plan_command_text(),
+        'dry_run_command': processing_dry_run_command_text(operator_id),
+        'requires_approval': ['provider_spend', 'provider_allow_flags'],
+    }
     if duck.exists() and ledger.exists():
         lg = read_json(ledger) if ledger.exists() else {}
         if lg.get('status') in ('completed', 'restored') and (not operator_id or lg.get('default_operator_id') in (None, operator_id) or lg.get('restored_operator_id') in (None, operator_id)):
-            return {'status': 'search_ready', 'duckdb': str(duck), 'ledger': str(ledger)}
+            index_input_hash = str(lg.get('input_sha256') or '')
+            if people_hash and index_input_hash and index_input_hash != people_hash:
+                return {
+                    **processing_needed,
+                    'reason': 'search_index_stale_for_people_csv',
+                    'index_input_sha256': index_input_hash,
+                }
+            return {'status': 'search_ready', 'duckdb': str(duck), 'ledger': str(ledger), 'people_sha256': people_hash, 'index_input_sha256': index_input_hash}
     if records.exists() and any(records.glob('*.records.jsonl')) and not duck.exists():
         return {'status': 'records_only_duckdb_missing', 'repair_command': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'}
     if people.exists():
-        return {
-            'status': 'people_csv_ready_for_processing',
-            'people_csv': str(people),
-            'plan_command': processing_plan_command_text(),
-            'dry_run_command': processing_dry_run_command_text(operator_id),
-            'requires_approval': ['provider_spend', 'provider_allow_flags'],
-        }
+        return processing_needed
     return {'status': 'not_ready', 'missing': ['.powerpacks/network-import/merged/people.csv']}
 
 
@@ -860,36 +1032,47 @@ def normalize_setup_phases(
     prior_index = phases.get('index') if isinstance(phases.get('index'), dict) else {}
     if idx.get('status') == 'search_ready':
         if prior_index.get('status') == 'needs_processing':
-            estimate = run_processing_dry_run(operator_id) if operator_id else prior_index.get('processing_estimate', {})
-            paid_calls = estimate.get('estimated_paid_calls') if isinstance(estimate, dict) else {}
-            has_paid_work = any(int(value or 0) > 0 for value in paid_calls.values()) if isinstance(paid_calls, dict) else False
-            total_cost = 0.0
-            if isinstance(estimate, dict):
-                costs = estimate.get('estimated_costs') if isinstance(estimate.get('estimated_costs'), dict) else {}
-                total_cost = float(estimate.get('estimated_cost_usd') or costs.get('total_estimated_usd') or 0.0)
-            if has_paid_work or total_cost > 0:
-                prior_index['processing_estimate'] = estimate
-                phases['index'] = prior_index
-            else:
-                phases['index'] = {
+            if idx.get('index_input_sha256') and idx.get('index_input_sha256') == idx.get('people_sha256'):
+                ready_index = dict(prior_index)
+                ready_index.update({
                     'status': 'ready',
                     'duckdb': idx.get('duckdb', ''),
                     'ledger': idx.get('ledger', ''),
-                }
+                })
+                phases['index'] = ready_index
+            else:
+                estimate = run_processing_dry_run(operator_id) if operator_id else prior_index.get('processing_estimate', {})
+                prior_index['processing_estimate'] = estimate
+                phases['index'] = prior_index
         else:
-            phases['index'] = {
+            ready_index = dict(prior_index) if prior_index.get('status') == 'ready' else {}
+            ready_index.update({
                 'status': 'ready',
                 'duckdb': idx.get('duckdb', ''),
                 'ledger': idx.get('ledger', ''),
-            }
+            })
+            phases['index'] = ready_index
     elif prior_index.get('status') == 'needs_processing':
         phases['index'] = prior_index
+    elif idx.get('status') == 'people_csv_ready_for_processing':
+        phases['index'] = {
+            'status': 'needs_processing',
+            'reason': idx.get('reason') or 'people_csv_ready_for_processing',
+            'people_csv': '.powerpacks/network-import/merged/people.csv',
+            'plan_command': idx.get('plan_command') or processing_plan_command_text(),
+            'dry_run_command': idx.get('dry_run_command') or processing_dry_run_command_text(operator_id),
+            'requires_approval': idx.get('requires_approval') or ['provider_spend', 'provider_allow_flags'],
+            'people_sha256': idx.get('people_sha256', ''),
+            'index_input_sha256': idx.get('index_input_sha256', ''),
+        }
 
     statuses = {phase: phases.get(phase, {}).get('status') for phase in ['bootstrap', 'link', 'import', 'index']}
     if statuses['bootstrap'] == 'restored' and statuses['link'] == 'ready' and statuses['import'] in ('ready', 'completed') and statuses['index'] == 'ready':
         ledger['status'] = 'ready'
     elif statuses['import'] == 'refresh_due':
         ledger['status'] = 'refresh_due'
+    elif statuses['index'] == 'needs_processing':
+        ledger['status'] = 'needs_index_processing'
 
 
 def status_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -946,9 +1129,9 @@ def setup_commands(args: argparse.Namespace) -> dict[str, str]:
         'import_network_approve': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve',
         'processing_plan': processing_plan_command_text(),
         'processing_dry_run': processing_dry_run_command_text(args.operator_id),
-        'processing_run': f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {args.operator_id}',
-        'processing_continue': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue --output-dir .powerpacks/search-index',
-        'build_local_duckdb_shim': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {args.operator_id} --force',
+        'processing_run': processing_run_command_text(args.operator_id),
+        'processing_continue': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue --ledger .powerpacks/search-index/ledger.json',
+        'build_local_duckdb_shim': build_local_duckdb_shim_command_text(args.operator_id),
     }
 
 
@@ -1283,23 +1466,19 @@ def run_setup(args: argparse.Namespace) -> int:
             'people_csv': '.powerpacks/network-import/merged/people.csv',
             'live_refresh': refresh,
         }
-        if refresh.get('network_changed'):
-            processing_estimate = run_processing_dry_run(args.operator_id)
-            ledger.setdefault('phases', {})['index'] = {
-                'status': 'needs_processing',
-                'reason': 'network_changed_after_live_refresh',
-                'requires_approval': ['provider_spend', 'provider_allow_flags'],
-                'plan_command': processing_plan_command_text(),
-                'dry_run_command': processing_dry_run_command_text(args.operator_id),
-                'processing_estimate': processing_estimate,
-            }
-            ledger['status'] = 'needs_index_processing'
-        else:
-            idx = indexing_readiness(args.operator_id)
-            if idx.get('status') == 'search_ready':
-                ledger.setdefault('phases', {})['index'] = {'status': 'ready', 'duckdb': idx.get('duckdb', ''), 'ledger': idx.get('ledger', '')}
-                ledger['status'] = 'ready'
+        ledger['status'] = 'ready'
         save_setup_ledger(ledger, ledger_path)
+
+    ledger = load_setup_ledger(ledger_path)
+    index_payload, index_code = run_processing_index(args, ledger, ledger_path)
+    if index_code:
+        emit({
+            'status': index_payload.get('status'),
+            'operator_id': args.operator_id,
+            'bootstrap': bootstrap_payload,
+            'index': index_payload,
+        })
+        return index_code
 
     final_status = status_payload(status_args)
     save_setup_ledger(final_status['setup_ledger'], ledger_path)
@@ -1360,6 +1539,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--force-bootstrap', action='store_true')
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
+    s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
     s.set_defaults(func=run_setup)
     return p
 

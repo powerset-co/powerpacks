@@ -46,6 +46,15 @@ def _first(mapping: dict[str, Any], *fields: str) -> str:
     return ""
 
 
+def _first_list_value(value: Any) -> str:
+    values = _json_list(value)
+    if values:
+        return _clean(values[0])
+    if isinstance(value, list) and value:
+        return _clean(value[0])
+    return ""
+
+
 def _int_or_none(value: Any) -> int | None:
     if value in (None, ""):
         return None
@@ -313,7 +322,7 @@ def build_location_corpus(people_rows: list[dict[str, Any]]) -> list[dict[str, A
             "state": _first(row, "state"),
             "country": _first(row, "country"),
             "location_raw": _first(row, "location_raw", "location"),
-            "metro_area": _first(row, "metro_area"),
+            "metro_area": _first(row, "metro_area") or _first_list_value(row.get("metro_areas")),
             "macro_region": _first(row, "macro_region"),
         }
         if not any(loc.values()):

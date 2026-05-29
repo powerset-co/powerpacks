@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import shutil
@@ -148,6 +149,14 @@ def check_artifact_paths(ledger: dict[str, Any]) -> dict[str, Any]:
         else:
             missing.append(path_text)
     return {"checked": len(seen), "existing": existing, "missing": missing[:50], "missing_count": len(missing)}
+
+
+def sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def completed_no_work_payload(ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
@@ -467,6 +476,7 @@ def default_ledger(
         "status": "pending",
         "run_dir": str(rd),
         "input": str(input_path),
+        "input_sha256": sha256_file(input_path) if input_path.exists() else "",
         "default_operator_id": default_operator_id,
         "limit": limit,
         "checkpoint_every": checkpoint_every,

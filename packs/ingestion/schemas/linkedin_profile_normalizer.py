@@ -87,6 +87,16 @@ def _as_list(value: Any) -> list[Any]:
     return [value]
 
 
+def _split_city_state(value: Any) -> tuple[str, str]:
+    text = _string(value)
+    if not text:
+        return "", ""
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    return text, ""
+
+
 def _date_dict(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -218,7 +228,19 @@ def normalize_linkedin_profile(data: dict[str, Any]) -> dict[str, Any]:
         full = f"{first} {last}".strip()
 
     location = profile.get("location") if isinstance(profile.get("location"), dict) else {}
+    geo = profile.get("geo") if isinstance(profile.get("geo"), dict) else {}
     location_text = profile.get("location") if isinstance(profile.get("location"), str) else ""
+    geo_city, geo_state = _split_city_state(geo.get("city"))
+
+    location_str = (
+        _string(_first(profile, "location_str", "locationName"))
+        or _string(location_text)
+        or _string(location.get("location"))
+        or _string(geo.get("full"))
+    )
+    city = _string(_first(profile, "city")) or _string(location.get("city")) or geo_city
+    state = _string(_first(profile, "state")) or _string(location.get("state")) or geo_state
+    country = _string(_first(profile, "country")) or _string(location.get("country")) or _string(geo.get("country"))
 
     experiences = _first(profile, "experiences", "work_experience", "workExperience", "experience")
     if not experiences:
@@ -251,10 +273,10 @@ def normalize_linkedin_profile(data: dict[str, Any]) -> dict[str, Any]:
             "full_name": full,
             "headline": _string(_first(profile, "headline", "occupation")),
             "summary": _string(_first(profile, "summary", "about")),
-            "location_str": _string(_first(profile, "location_str", "locationName")) or _string(location_text) or _string(location.get("location")),
-            "city": _string(_first(profile, "city")) or _string(location.get("city")),
-            "state": _string(_first(profile, "state")) or _string(location.get("state")),
-            "country": _string(_first(profile, "country")) or _string(location.get("country")),
+            "location_str": location_str,
+            "city": city,
+            "state": state,
+            "country": country,
             "profile_pic_url": _string(_first(profile, "profile_pic_url", "profilePicUrl", "profilePicture", "profile_picture_url")),
             "linkedin_url": _string(_first(profile, "linkedin_url", "profile_url", "profileURL", "url")),
             "connections": _string(_first(profile, "connections", "connection_count", "connectionCount")),
