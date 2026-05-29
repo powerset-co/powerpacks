@@ -1,15 +1,15 @@
 # Powerpacks agent guidance
 
-## Vorflux PR identity guardrail
+## Vorflux GitHub integration guardrail
 
 For pull-request actions, prefer the Vorflux PR tools over raw `gh` commands:
 
 - Use Vorflux PR tools for PR creation, editing, commenting, reviewing, and merging whenever available.
-- Confirm Vorflux reports `used_user_token: true` for PR creation when the user expects their connected GitHub account to be used.
-- Do not use the default shell `gh`/`GITHUB_TOKEN` for mutating PR actions unless you first verify the active GitHub identity is the intended connected account.
-- If raw GitHub CLI/API calls are unavoidable, run `gh api user --jq .login` before mutating anything and include the verified login in your status update.
+- When a Vorflux-provided GitHub integration is available, use it instead of the default shell `gh` / `GITHUB_TOKEN` identity. This may be a Vorflux GitHub App token or a connected user token; do not hard-code or assume a specific GitHub username.
+- For PR creation, confirm the Vorflux tool reports that an integrated token was used, such as `used_user_token: true` or an equivalent indicator.
+- Do not use raw GitHub CLI/API calls for mutating PR actions unless unavoidable. If unavoidable, first run `gh api user --jq .login`, verify the active identity is appropriate for the requested action, and include the verified login in your status update.
 
-This keeps PR authorship, merge attribution, and repository permissions aligned with the user's Vorflux GitHub integration.
+This keeps PR authorship, merge attribution, and repository permissions aligned with whichever Vorflux GitHub integration is available for the session.
 
 
 This file is the canonical bootup instruction sheet for any coding agent
