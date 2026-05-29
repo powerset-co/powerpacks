@@ -29,7 +29,7 @@ from packs.indexing.lib.text import dense_text  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_MODEL = "gpt-5.1"
-DEFAULT_MAX_COMPLETION_TOKENS = 700
+DEFAULT_MAX_COMPLETION_TOKENS = 2000
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
 DEFAULT_OPENAI_CONCURRENCY = 8
 CHAT_MODEL_PRICES_PER_1K_USD = {
@@ -150,7 +150,8 @@ def role_prompt(role: dict[str, Any]) -> list[dict[str, str]]:
             "content": (
                 "Enrich a professional role for Aleph people search. Return only JSON with keys: "
                 "role_ids (array of stable snake_case taxonomy IDs), seniority_band, role_track, role_type, "
-                "specialization, cluster, doc2query (array of search expansions), inferred_skills (array)."
+                "specialization, cluster, doc2query (array of search expansions), inferred_skills (array). "
+                "Keep JSON compact: doc2query max 5 strings and inferred_skills max 12 strings."
             ),
         },
         {"role": "user", "content": json.dumps(role, ensure_ascii=False, sort_keys=True)},
@@ -200,6 +201,10 @@ async def call_openai_role_enrichment_async(
                     continue
                 raise RuntimeError(f"OpenAI role enrichment failed: network: {exc}") from exc
             except json.JSONDecodeError as exc:
+                if attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
                 raise RuntimeError(f"OpenAI role enrichment returned invalid JSON: {exc}") from exc
 
 

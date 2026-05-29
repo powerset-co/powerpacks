@@ -34,7 +34,7 @@ from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E40
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_MODEL = "gpt-5.1"
-DEFAULT_MAX_COMPLETION_TOKENS = 1200
+DEFAULT_MAX_COMPLETION_TOKENS = 2500
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
 DEFAULT_OPENAI_CONCURRENCY = 8
 WORD_RE = re.compile(r"[a-z0-9]+")
@@ -379,7 +379,8 @@ def openai_classification_payload(local: dict[str, Any]) -> dict[str, Any]:
                     "d2q_text, doc2query, semantic_text, confidence_score. "
                     f"Prefer observed entity_types={sorted(OBSERVED_ENTITY_TYPES)} and sector_types={sorted(OBSERVED_SECTOR_TYPES)}. "
                     f"customer_type must be one of {sorted(OBSERVED_CUSTOMER_TYPES)} when known. "
-                    "Use arrays for *_types, accelerators, yc_batches, and doc2query."
+                    "Use arrays for *_types, accelerators, yc_batches, and doc2query. "
+                    "Keep JSON compact: doc2query max 6 strings and text fields under 800 characters each."
                 ),
             },
             {"role": "user", "content": json.dumps(local, ensure_ascii=False, sort_keys=True)},
@@ -428,6 +429,10 @@ async def call_openai_company_classifier_async(
                     continue
                 raise RuntimeError(f"OpenAI company classifier failed: network: {exc}") from exc
             except json.JSONDecodeError as exc:
+                if attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
                 raise RuntimeError(f"OpenAI company classifier returned invalid JSON: {exc}") from exc
 
 
