@@ -130,6 +130,10 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             self.assertEqual(payload["writes_made"], 0)
             self.assertGreater(payload["estimated_paid_calls"]["role_enrichment"], 0)
             self.assertGreater(payload["estimated_paid_calls"]["company_enrichment"], 0)
+            self.assertIsInstance(payload["estimated_cost_usd"], float)
+            self.assertGreater(payload["estimated_cost_usd"], 0)
+            self.assertGreater(payload["estimated_costs"]["stages"]["role_enrichment"]["estimated_usd"], 0)
+            self.assertGreater(payload["estimated_costs"]["stages"]["summary_embeddings"]["estimated_tokens"], 0)
             self.assertFalse(output.exists(), "dry-run must not create run directories or pretend artifacts")
 
     def test_embed_records_openai_boundary_checkpoint_resume(self) -> None:

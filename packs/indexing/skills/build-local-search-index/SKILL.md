@@ -28,11 +28,17 @@ uv run --project . python packs/ingestion/primitives/merge_network_sources/merge
 
 ## Run locally
 
-Plan/status inspection is local-only and safe to run before asking for provider
-spend approval:
+Plan/status inspection and dry-run cost estimates are local-only and safe to
+run before asking for provider spend approval:
 
 ```bash
 uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index
+```
+
+Estimate processing spend without writing artifacts or calling providers:
+
+```bash
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --dry-run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index
 ```
 
 Run:
@@ -45,10 +51,11 @@ The run is single-index and idempotent: a partial index resumes from
 `.powerpacks/search-index/ledger.json`; a completed index refreshes the same
 directory instead of creating a new one.
 
-If the plan reports that real provider stages are needed, do not run them by
+If the dry run reports that real provider stages are needed, do not run them by
 default. Continue only when precomputed/restored artifacts are already present
-or the user has explicitly approved the relevant provider allow flags/spend.
-Do not treat `plan` or `status` as approval to call providers.
+or the user has explicitly approved the relevant provider allow flags/spend and
+the reported cost. Do not treat `plan`, `status`, or `run --dry-run` as
+approval to call providers.
 
 Materialize the local search DuckDB:
 
@@ -80,7 +87,7 @@ Artifacts are written under `.powerpacks/search-index/`. The local DuckDB is
 ## Constraints
 
 - local files only
-- `plan` and `status` are local inspection only
+- `plan`, `status`, and `run --dry-run` are local inspection only
 - no LLM/provider calls unless the user explicitly approves the required allow flags
 - no network calls unless explicitly approved by the generated plan
 - no Supabase/Postgres calls

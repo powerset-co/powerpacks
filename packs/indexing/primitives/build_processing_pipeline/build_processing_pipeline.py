@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import shutil
 import sys
 from argparse import Namespace
@@ -48,6 +49,17 @@ STEPS = [
     "build_vectors",
     "validate_contracts",
 ]
+
+CHAT_MODEL_PRICES_PER_1K_USD = {
+    "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},
+    "gpt-4o-mini-2024-07-18": {"input": 0.00015, "output": 0.00060},
+}
+EMBEDDING_MODEL_PRICES_PER_1K_USD = {
+    "text-embedding-3-small": 0.00002,
+}
+DEFAULT_ROLE_OUTPUT_TOKENS = 250
+DEFAULT_COMPANY_OUTPUT_TOKENS = 350
+DEFAULT_EMBEDDING_API_BATCH_SIZE = 128
 
 
 def run_dir(output_dir: Path) -> Path:
@@ -141,8 +153,210 @@ def completed_no_work_payload(ledger_path: Path, ledger: dict[str, Any]) -> dict
             "company_embeddings": 0,
             "summary_embeddings": 0,
         },
+        "estimated_cost_usd": 0.0,
+        "estimated_costs": {
+            "currency": "USD",
+            "total_estimated_usd": 0.0,
+            "known_pricing": True,
+            "stages": {},
+        },
         "artifact_check": check_artifact_paths(ledger),
         "artifacts": ledger.get("artifacts", {}),
+    }
+
+
+def _estimated_tokens(value: Any) -> int:
+    return max(1, (len(str(value)) + 3) // 4)
+
+
+def _round_usd(value: float) -> float:
+    return round(float(value), 6)
+
+
+def _chat_cost_stage(
+    *,
+    provider: str,
+    model: str,
+    calls: int,
+    input_tokens: int,
+    output_tokens: int,
+    precomputed: bool,
+) -> dict[str, Any]:
+    if precomputed or calls == 0:
+        return {
+            "provider": "precomputed_artifact" if precomputed else provider,
+            "model": model,
+            "calls": 0,
+            "estimated_input_tokens": 0,
+            "estimated_output_tokens": 0,
+            "estimated_usd": 0.0,
+            "known_pricing": True,
+        }
+    prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
+    estimated = None
+    if prices:
+        estimated = _round_usd((input_tokens / 1000.0) * prices["input"] + (output_tokens / 1000.0) * prices["output"])
+    return {
+        "provider": provider,
+        "model": model,
+        "calls": calls,
+        "estimated_input_tokens": input_tokens,
+        "estimated_output_tokens": output_tokens,
+        "estimated_usd": estimated,
+        "known_pricing": estimated is not None,
+    }
+
+
+def _embedding_cost_stage(
+    *,
+    provider: str,
+    model: str,
+    rows: list[dict[str, Any]],
+    id_field: str,
+    text_fields: str,
+    input_embeddings: bool,
+) -> dict[str, Any]:
+    if input_embeddings:
+        return {
+            "provider": "precomputed_artifact",
+            "model": model,
+            "calls": 0,
+            "rows": 0,
+            "estimated_tokens": 0,
+            "estimated_api_batches": 0,
+            "estimated_usd": 0.0,
+            "known_pricing": True,
+        }
+    fields = [field for field in str(text_fields).split(",") if field]
+    tokens = 0
+    embeddable_rows = 0
+    for record in rows:
+        rid = str(record.get(id_field) or "").strip()
+        if not rid:
+            continue
+        embeddable_rows += 1
+        text = embed_records_checkpointed.text_for_record(record, fields) or rid
+        tokens += embed_records_checkpointed.estimate_tokens(text)
+    price = EMBEDDING_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
+    estimated = _round_usd((tokens / 1000.0) * price) if price is not None else None
+    return {
+        "provider": provider,
+        "model": model,
+        "calls": embeddable_rows,
+        "rows": embeddable_rows,
+        "estimated_tokens": tokens,
+        "estimated_api_batches": (embeddable_rows + DEFAULT_EMBEDDING_API_BATCH_SIZE - 1) // DEFAULT_EMBEDDING_API_BATCH_SIZE,
+        "estimated_usd": estimated,
+        "known_pricing": estimated is not None,
+    }
+
+
+def _role_inputs_for_estimate(people: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    roles: dict[str, dict[str, Any]] = {}
+    for person in people:
+        for position in enrich_roles_checkpointed.get_positions(person):
+            title_hash = str(position.get("title_hash") or person.get("title_hash") or "").strip()
+            if not title_hash:
+                continue
+            role = enrich_roles_checkpointed.role_input(person, position)
+            if role:
+                roles.setdefault(str(role["title_hash"]), role)
+    return [roles[key] for key in sorted(roles)]
+
+
+def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], companies: list[dict[str, Any]]) -> dict[str, Any]:
+    role_input = _arg_artifact(args, "role_input_classifications", "unified/roles/roles_with_dense_text_remapped.jsonl")
+    role_emb = _arg_artifact(args, "role_input_embeddings", "unified/roles/roles_with_embeddings.jsonl")
+    company_input = _arg_artifact(args, "company_input_classifications", "company/companies_corpus_v3.jsonl")
+    company_emb = _arg_artifact(args, "company_input_embeddings", "company/company_embeddings_v3.jsonl")
+    summary_emb = _arg_artifact(args, "summary_input_embeddings", "unified/summary_embeddings.jsonl")
+    role_provider = str(getattr(args, "role_provider", "openai") or "openai")
+    company_provider = "openai" if str(getattr(args, "company_provider", "openai") or "openai") == "llm" else str(getattr(args, "company_provider", "openai") or "openai")
+    embedding_provider = str(getattr(args, "embedding_provider", "openai") or "openai")
+    role_model = str(getattr(args, "role_openai_model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", enrich_roles_checkpointed.DEFAULT_MODEL))
+    company_model = str(getattr(args, "company_openai_model", None) or os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", "gpt-4o-mini"))
+    embedding_model = str(getattr(args, "embedding_openai_model", None) or os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", embed_records_checkpointed.DEFAULT_MODEL))
+
+    role_inputs = _role_inputs_for_estimate(people)
+    role_input_tokens = 0
+    for role in role_inputs:
+        payload = {
+            "model": role_model,
+            "response_format": {"type": "json_object"},
+            "messages": enrich_roles_checkpointed.role_prompt(role),
+            "temperature": 0,
+        }
+        role_input_tokens += _estimated_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    role_stage = _chat_cost_stage(
+        provider=role_provider,
+        model=role_model,
+        calls=len(role_inputs),
+        input_tokens=role_input_tokens,
+        output_tokens=len(role_inputs) * DEFAULT_ROLE_OUTPUT_TOKENS,
+        precomputed=bool(role_input),
+    )
+
+    company_rows = read_jsonl(Path(company_input)) if company_input else companies
+    company_payload_rows = [enrich_companies_checkpointed.shape_company(row) for row in company_rows]
+    company_input_tokens = 0
+    for row in company_payload_rows:
+        payload = enrich_companies_checkpointed.openai_classification_payload(row)
+        payload["model"] = company_model
+        company_input_tokens += _estimated_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    company_stage = _chat_cost_stage(
+        provider=company_provider,
+        model=company_model,
+        calls=len(company_payload_rows),
+        input_tokens=company_input_tokens,
+        output_tokens=len(company_payload_rows) * DEFAULT_COMPANY_OUTPUT_TOKENS,
+        precomputed=bool(company_input),
+    )
+
+    profile_rows = build_unified_profiles(people)
+    summary_rows = build_summary_records(profile_rows, getattr(args, "default_operator_id", None))["internal_text"]
+    stages = {
+        "role_enrichment": role_stage,
+        "role_embeddings": _embedding_cost_stage(
+            provider=embedding_provider,
+            model=embedding_model,
+            rows=role_inputs,
+            id_field="title_hash",
+            text_fields="dense_text,raw_title,description",
+            input_embeddings=bool(role_emb),
+        ),
+        "company_enrichment": company_stage,
+        "company_embeddings": _embedding_cost_stage(
+            provider=embedding_provider,
+            model=embedding_model,
+            rows=company_rows,
+            id_field="company_urn",
+            text_fields="semantic_text,word_text,d2q_text,company_name,description",
+            input_embeddings=bool(company_emb),
+        ),
+        "summary_embeddings": _embedding_cost_stage(
+            provider=embedding_provider,
+            model=embedding_model,
+            rows=summary_rows,
+            id_field="person_id",
+            text_fields="text",
+            input_embeddings=bool(summary_emb),
+        ),
+    }
+    known = all(stage.get("known_pricing") for stage in stages.values())
+    total = None
+    if known:
+        total = _round_usd(sum(float(stage.get("estimated_usd") or 0.0) for stage in stages.values()))
+    return {
+        "currency": "USD",
+        "total_estimated_usd": total,
+        "known_pricing": known,
+        "stages": stages,
+        "pricing_assumptions": [
+            "OpenAI gpt-4o-mini: $0.15/M input tokens and $0.60/M output tokens.",
+            "OpenAI text-embedding-3-small: $0.02/M tokens.",
+            "Role enrichment output is estimated at 250 tokens per role; company enrichment output is estimated at 350 tokens per company.",
+            "Token counts use a local dry-run approximation and actual provider billing can vary.",
+        ],
     }
 
 
@@ -1084,6 +1298,7 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
     company_input = _arg_artifact(args, "company_input_classifications", "company/companies_corpus_v3.jsonl")
     company_emb = _arg_artifact(args, "company_input_embeddings", "company/company_embeddings_v3.jsonl")
     summary_emb = _arg_artifact(args, "summary_input_embeddings", "unified/summary_embeddings.jsonl")
+    cost_estimate = estimate_costs(args, people, companies)
     return {
         "status": "dry_run" if getattr(args, "dry_run", False) else "estimate",
         "stage": "build_processing_pipeline",
@@ -1112,6 +1327,8 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
             "company_embeddings": 0 if company_emb else len(companies),
             "summary_embeddings": 0 if summary_emb else len(people),
         },
+        "estimated_cost_usd": cost_estimate.get("total_estimated_usd"),
+        "estimated_costs": cost_estimate,
         "paid_calls_made": 0,
         "writes_made": 0,
         "will_write_artifacts": False,
@@ -1184,11 +1401,6 @@ def main() -> None:
     if args.cmd == "run":
         rd = run_dir(Path(args.output_dir))
         ledger_path = paths(rd)["ledger"]
-        if (args.dry_run or args.estimate) and ledger_path.exists():
-            ledger = load_ledger(ledger_path)
-            if ledger.get("status") == "completed":
-                emit_json({**completed_no_work_payload(ledger_path, ledger), "status": "dry_run", "would_run_steps": []})
-                return
         if args.dry_run or args.estimate:
             emit_json(estimate_run(args))
             return

@@ -218,8 +218,8 @@ The main thread owns these approvals. Never let workers approve them silently:
 - `$import-contacts` research/review/upload or any upload/prod write.
 
 Local status, msgvault account listing, import-network dry-run, processing
-`plan`, local merge, and local DuckDB materialization may run without spend
-approval.
+`plan`, processing `run --dry-run`, local merge, and local DuckDB
+materialization may run without spend approval.
 
 ## Index phase
 
@@ -234,6 +234,9 @@ uv run --project . python scripts/build-local-duckdb-shim.py \
   --force
 ```
 
-If only `.powerpacks/network-import/merged/people.csv` exists, run
-`build_processing_pipeline.py plan` first. Real provider stages require
-precomputed artifacts or explicit paid/provider approval flags.
+If only `.powerpacks/network-import/merged/people.csv` exists,
+`build_processing_pipeline.py plan` is safe for structure inspection, but run
+`build_processing_pipeline.py run --dry-run` before any paid provider flags so
+the user sees the total estimated cost and per-stage cost breakdown. Real
+provider stages require precomputed artifacts or explicit paid/provider approval
+flags.

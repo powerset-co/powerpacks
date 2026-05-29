@@ -159,6 +159,9 @@ class SetupPipelineTests(unittest.TestCase):
         plan_command = setup.status_payload(ns)['search_index_readiness']['plan_command']
         self.assertIn('build_processing_pipeline.py plan', plan_command)
         self.assertNotIn('--default-operator-id', plan_command)
+        dry_run_command = setup.status_payload(ns)['search_index_readiness']['dry_run_command']
+        self.assertIn('build_processing_pipeline.py run --dry-run', dry_run_command)
+        self.assertIn(f'--default-operator-id {OPERATOR_ID}', dry_run_command)
 
     def test_status_marks_restored_bootstrap_import_refresh_due_until_live_sync(self):
         tmp = self.temp_workspace()
@@ -348,7 +351,7 @@ class SetupPipelineTests(unittest.TestCase):
         (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
             calls.append(cmd)
             joined = ' '.join(cmd)
             if 'import_contacts_pipeline.py' in joined:
@@ -384,6 +387,8 @@ class SetupPipelineTests(unittest.TestCase):
                         'duckdb_manifest': str(manifest),
                     },
                 }, ''
+            if 'build_processing_pipeline.py' in joined:
+                return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.25, 'estimated_costs': {'total_estimated_usd': 0.25}}, ''
             raise AssertionError(f'unexpected command: {cmd}')
 
         args = argparse.Namespace(
@@ -412,6 +417,8 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(saved['phases']['import']['live_refresh']['status'], 'completed')
         self.assertTrue(saved['phases']['import']['live_refresh']['network_changed'])
         self.assertEqual(saved['phases']['index']['status'], 'needs_processing')
+        self.assertIn('dry_run_command', saved['phases']['index'])
+        self.assertEqual(saved['phases']['index']['processing_estimate']['estimated_cost_usd'], 0.25)
 
     def test_run_forces_network_refresh_when_import_artifact_hash_drifts(self):
         tmp = self.temp_workspace()
@@ -449,9 +456,12 @@ class SetupPipelineTests(unittest.TestCase):
         (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
             calls.append(cmd)
-            self.assertIn('import_network_pipeline.py', ' '.join(cmd))
+            joined = ' '.join(cmd)
+            if 'build_processing_pipeline.py' in joined:
+                return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.5}, ''
+            self.assertIn('import_network_pipeline.py', joined)
             run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
             merged_dir = run_dir / 'merged'
             merged_dir.mkdir(parents=True)
@@ -604,6 +614,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertTrue(payload['worker_groups']['import']['parallel'])
         self.assertIn('import_network_fan_in', payload['commands'])
         self.assertIn('processing_plan', payload['commands'])
+        self.assertIn('processing_dry_run', payload['commands'])
         self.assertIn('--include-existing-artifacts', payload['commands']['import_network_run'])
         self.assertIn('--include-existing-artifacts', payload['commands']['import_network_dry_run'])
         jobs = payload['worker_groups']['import']['jobs']

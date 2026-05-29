@@ -28,6 +28,9 @@ from packs.indexing.lib.text import dense_text  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_MODEL = "gpt-4o-mini"
+OPENAI_PRICE_PER_1K_INPUT_TOKENS_USD = 0.00015
+OPENAI_PRICE_PER_1K_OUTPUT_TOKENS_USD = 0.00060
+DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE = 250
 ROLE_FIELDS = ["title_hash", "raw_title", "description", "cluster", "role_ids", "seniority_band", "role_type", "role_track", "specialization", "doc2query", "inferred_skills", "dense_text"]
 
 
@@ -287,8 +290,37 @@ def collect_role_inputs(flattened: Path) -> list[dict[str, Any]]:
 
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     roles = collect_role_inputs(Path(args.flattened))
-    tokens = sum(estimate_tokens(json.dumps(role, sort_keys=True)) for role in roles)
-    return {"status": "dry-run", "stage": "enrich_roles_checkpointed", "provider": "input-classifications" if getattr(args, "input_classifications", None) else args.provider, "unique_roles": len(roles), "estimated_tokens": tokens, "estimated_calls": 0 if getattr(args, "input_classifications", None) else len(roles), "would_write": [str(Path(args.output_dir) / "checkpoint.json"), str(Path(args.output_dir) / "roles_with_dense_text_remapped.jsonl")]}
+    provider = "input-classifications" if getattr(args, "input_classifications", None) else args.provider
+    input_tokens = 0
+    for role in roles:
+        payload = {
+            "model": getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", DEFAULT_MODEL),
+            "response_format": {"type": "json_object"},
+            "messages": role_prompt(role),
+            "temperature": 0,
+        }
+        input_tokens += estimate_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    output_tokens = 0 if provider == "input-classifications" else len(roles) * DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE
+    estimated_cost = 0.0
+    if provider == "openai":
+        estimated_cost = round(
+            (input_tokens / 1000.0) * OPENAI_PRICE_PER_1K_INPUT_TOKENS_USD
+            + (output_tokens / 1000.0) * OPENAI_PRICE_PER_1K_OUTPUT_TOKENS_USD,
+            6,
+        )
+    return {
+        "status": "dry-run",
+        "stage": "enrich_roles_checkpointed",
+        "provider": provider,
+        "unique_roles": len(roles),
+        "estimated_tokens": input_tokens,
+        "estimated_input_tokens": input_tokens,
+        "estimated_output_tokens": output_tokens,
+        "estimated_calls": 0 if getattr(args, "input_classifications", None) else len(roles),
+        "estimated_openai_cost_usd": estimated_cost,
+        "pricing_assumption": "gpt-4o-mini $0.15/M input, $0.60/M output; output tokens estimated",
+        "would_write": [str(Path(args.output_dir) / "checkpoint.json"), str(Path(args.output_dir) / "roles_with_dense_text_remapped.jsonl")],
+    }
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:

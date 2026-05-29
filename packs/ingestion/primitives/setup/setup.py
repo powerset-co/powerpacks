@@ -709,6 +709,36 @@ def normal_setup_gmail_sync_after(ledger: dict[str, Any], accounts: dict[str, An
     return bounded.date().isoformat()
 
 
+def processing_plan_command_text() -> str:
+    return 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index'
+
+
+def processing_dry_run_command_text(operator_id: str) -> str:
+    return f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --dry-run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {operator_id}'
+
+
+def processing_dry_run_command_args(operator_id: str) -> list[str]:
+    return [
+        sys.executable,
+        'packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py',
+        'run',
+        '--dry-run',
+        '--input',
+        '.powerpacks/network-import/merged/people.csv',
+        '--output-dir',
+        '.powerpacks/search-index',
+        '--default-operator-id',
+        operator_id,
+    ]
+
+
+def run_processing_dry_run(operator_id: str) -> dict[str, Any]:
+    code, payload, stderr = run_json_command(processing_dry_run_command_args(operator_id), timeout=60 * 60)
+    if code != 0:
+        return {'status': 'failed', 'command': processing_dry_run_command_text(operator_id), 'error': tail(stderr) or payload}
+    return payload
+
+
 def import_refresh_due(
     ledger: dict[str, Any],
     accounts: dict[str, Any],
@@ -767,7 +797,13 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
     if records.exists() and any(records.glob('*.records.jsonl')) and not duck.exists():
         return {'status': 'records_only_duckdb_missing', 'repair_command': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'}
     if people.exists():
-        return {'status': 'people_csv_ready_for_processing', 'people_csv': str(people), 'plan_command': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index', 'requires_approval': ['provider_spend', 'provider_allow_flags']}
+        return {
+            'status': 'people_csv_ready_for_processing',
+            'people_csv': str(people),
+            'plan_command': processing_plan_command_text(),
+            'dry_run_command': processing_dry_run_command_text(operator_id),
+            'requires_approval': ['provider_spend', 'provider_allow_flags'],
+        }
     return {'status': 'not_ready', 'missing': ['.powerpacks/network-import/merged/people.csv']}
 
 
@@ -856,7 +892,7 @@ def status_payload(args: argparse.Namespace) -> dict[str, Any]:
     if idx['status'] == 'records_only_duckdb_missing':
         next_actions.append(idx['repair_command'])
     elif idx['status'] == 'people_csv_ready_for_processing':
-        next_actions.append(idx['plan_command'])
+        next_actions.append(idx.get('dry_run_command') or idx['plan_command'])
     if ledger.get('phases', {}).get('import', {}).get('status') == 'refresh_due':
         next_actions.append('run setup refresh')
     return {
@@ -889,7 +925,8 @@ def setup_commands(args: argparse.Namespace) -> dict[str, str]:
         'import_network_status': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py status',
         'import_network_continue': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue',
         'import_network_approve': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve',
-        'processing_plan': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index',
+        'processing_plan': processing_plan_command_text(),
+        'processing_dry_run': processing_dry_run_command_text(args.operator_id),
         'processing_run': f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {args.operator_id}',
         'processing_continue': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue --output-dir .powerpacks/search-index',
         'build_local_duckdb_shim': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {args.operator_id} --force',
@@ -964,6 +1001,7 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
             'import_network_dry_run',
             'import_network_status',
             'processing_plan',
+            'processing_dry_run',
             'build_local_duckdb_shim',
         ],
     }
@@ -1227,11 +1265,14 @@ def run_setup(args: argparse.Namespace) -> int:
             'live_refresh': refresh,
         }
         if refresh.get('network_changed'):
+            processing_estimate = run_processing_dry_run(args.operator_id)
             ledger.setdefault('phases', {})['index'] = {
                 'status': 'needs_processing',
                 'reason': 'network_changed_after_live_refresh',
                 'requires_approval': ['provider_spend', 'provider_allow_flags'],
-                'plan_command': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index',
+                'plan_command': processing_plan_command_text(),
+                'dry_run_command': processing_dry_run_command_text(args.operator_id),
+                'processing_estimate': processing_estimate,
             }
             ledger['status'] = 'needs_index_processing'
         else:

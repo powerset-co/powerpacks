@@ -64,6 +64,8 @@ class IndexingPipelineTests(unittest.TestCase):
             result = run_cli("run", "--dry-run", "--output-dir", str(base / "search-index"), "--input", str(FIXTURE_PEOPLE))
             self.assertIn(result["status"], {"dry-run", "dry_run"})
             self.assertGreater(result["counts"]["positions_missing_upstream_title_hash"], 0)
+            self.assertIn("estimated_costs", result)
+            self.assertEqual(result["estimated_costs"]["currency"], "USD")
             self.assertFalse((base / "search-index/ledger.json").exists())
 
     def test_run_blocks_before_paid_stage_without_approval_or_precomputed_inputs(self) -> None:
