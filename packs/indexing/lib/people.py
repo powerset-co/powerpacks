@@ -88,7 +88,9 @@ PEOPLE_NAMESPACE_COLUMNS = [
     "id", "base_id", "position_title", "word_tokens", "char_tokens", "d2q_tokens", "phrase_tokens", "city",
     "state", "country", "macro_region", "metro_areas", "seniority_band", "company_id", "is_current",
     "total_years_experience", "start_date_epoch", "end_date_epoch", "tenure_years", "role_track", "allowed_operator_ids",
-    "role_ids", "inferred_birth_year",
+    "role_ids", "inferred_birth_year", "description", "dense_text", "company_domain", "company_linkedin_url",
+    "company_description", "company_sector_types", "company_entity_types", "company_headcount", "company_funding_total",
+    "company_stage", "investor_names",
 ]
 
 _ZERO_EPOCH = 0
@@ -529,11 +531,14 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             company_id = stable_company_id(company_key) if company_key else ""
             company_name = _company_name(exp)
             description = _first(exp, ("description", "summary"))
+            dense_text = " ".join(part for part in [title, company_name, description] if part)
             word_tokens = _tokens(title, company_name, description, person.get("headline"))
             row = {
                 "id": position_uuid(person["id"], _string(exp.get("id") or exp.get("position_id") or exp.get("urn")) or idx),
                 "base_id": person["id"],
                 "position_title": title,
+                "description": description,
+                "dense_text": dense_text,
                 "word_tokens": word_tokens,
                 "char_tokens": _ngrams(title, 3),
                 "d2q_tokens": word_tokens,
@@ -554,6 +559,15 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "allowed_operator_ids": [],
                 "role_ids": _role_ids(title),
                 "inferred_birth_year": _int_or_zero(person.get("inferred_birth_year")),
+                "company_domain": _first(exp, ("company_domain", "domain", "website_domain")),
+                "company_linkedin_url": _first(exp, ("company_linkedin_url", "linkedin_url", "company_url")),
+                "company_description": _first(exp, ("company_description",)),
+                "company_sector_types": exp.get("company_sector_types") or [],
+                "company_entity_types": exp.get("company_entity_types") or [],
+                "company_headcount": _int_or_zero(exp.get("company_headcount")),
+                "company_funding_total": _int_or_zero(exp.get("company_funding_total")),
+                "company_stage": _first(exp, ("company_stage", "stage")),
+                "investor_names": exp.get("investor_names") or [],
             }
             records.append(row)
     return records

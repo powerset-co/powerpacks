@@ -561,6 +561,8 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
             emb = role_embeddings.get(th) or {}
             position = row.get("position") if isinstance(row.get("position"), dict) else {}
             raw_title = clean(row.get("raw_title") or position.get("title"))
+            description = clean(dense.get("description") or row.get("description") or position.get("description") or position.get("summary"))
+            dense_text = clean(dense.get("dense_text") or " ".join(part for part in [raw_title, clean(row.get("company_name") or position.get("company_name") or position.get("company")), description] if part))
             role_track = clean(dense.get("role_track") or row.get("role_track"))
             role_ids = [clean(v) for v in listify(dense.get("role_ids") or row.get("role_ids")) if clean(v)]
             d2q_parts = [clean(v) for v in listify(dense.get("doc2query")) + listify(dense.get("inferred_skills")) if clean(v)]
@@ -569,12 +571,21 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
             if clean(row.get("id")) in founders and "founder" not in role_ids:
                 role_ids.append("founder")
             base_id = clean(row.get("base_person_id"))
-            word_text = f"{raw_title} {clean(dense.get('seniority_band') or row.get('seniority_band'))}".strip()
+            word_text = f"{raw_title} {description} {clean(dense.get('seniority_band') or row.get('seniority_band'))}".strip()
             yield {
                 "id": clean(row.get("id")), "position_id": clean(row.get("id")), "person_id": base_id, "base_id": base_id,
-                "vector": emb.get("dense_embedding"), "position_title": raw_title,
+                "vector": emb.get("dense_embedding"), "position_title": raw_title, "description": description, "dense_text": dense_text,
                 "word_tokens": word_tokenize(word_text), "char_tokens": char_tokenize(word_text), "d2q_tokens": word_tokenize(" ".join(d2q_parts)), "phrase_tokens": phrase_tokenize(word_text),
                 "seniority_band": clean(dense.get("seniority_band") or row.get("seniority_band")), "company_id": company_id_map.get(clean(row.get("company_id")), ""),
+                "company_domain": clean(position.get("company_domain") or position.get("domain") or position.get("website_domain")),
+                "company_linkedin_url": clean(position.get("company_linkedin_url") or position.get("linkedin_url") or position.get("company_url")),
+                "company_description": clean(position.get("company_description")),
+                "company_sector_types": listify(position.get("company_sector_types")),
+                "company_entity_types": listify(position.get("company_entity_types")),
+                "company_headcount": int(position.get("company_headcount") or 0),
+                "company_funding_total": float(position.get("company_funding_total") or 0),
+                "company_stage": clean(position.get("company_stage") or position.get("stage")),
+                "investor_names": listify(position.get("investor_names")),
                 "city": clean(row.get("city")), "state": clean(row.get("state")), "country": clean(row.get("country")), "macro_region": clean(row.get("macro_region")),
                 "is_current": bool(row.get("is_current")), "total_years_experience": float(row.get("total_years_experience") or 0),
                 "start_date_epoch": epoch(row.get("start_date")), "end_date_epoch": epoch(row.get("end_date")), "tenure_years": float(row.get("tenure_years") or 0),

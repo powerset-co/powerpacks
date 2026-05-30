@@ -29,6 +29,7 @@ apply_prefilters = load_module("apply_prefilters", ROOT / "packs/search/primitiv
 resolve_education = load_module("resolve_education", ROOT / "packs/search/primitives/resolve_education" / "resolve_education.py")
 execute_role_search = load_module("execute_role_search", ROOT / "packs/search/primitives/execute_role_search" / "execute_role_search.py")
 resolve_companies = load_module("resolve_companies", ROOT / "packs/search/primitives/resolve_companies" / "resolve_companies.py")
+hydrate_people = load_module("hydrate_people", ROOT / "packs/search/primitives/hydrate_people" / "hydrate_people.py")
 build_local_duckdb_shim = load_module("build_local_duckdb_shim", ROOT / "scripts" / "build-local-duckdb-shim.py")
 
 
@@ -151,6 +152,44 @@ class LocalDuckDBFixtureMixin:
                 ),
             ]
             con.executemany("insert into local_people_positions values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", people_rows)
+            for ddl in [
+                "alter table local_people_positions add column description varchar",
+                "alter table local_people_positions add column dense_text varchar",
+                "alter table local_people_positions add column company_domain varchar",
+                "alter table local_people_positions add column company_linkedin_url varchar",
+                "alter table local_people_positions add column company_description varchar",
+                "alter table local_people_positions add column company_sector_types varchar[]",
+                "alter table local_people_positions add column company_entity_types varchar[]",
+                "alter table local_people_positions add column company_headcount bigint",
+                "alter table local_people_positions add column company_funding_total double",
+                "alter table local_people_positions add column company_stage varchar",
+                "alter table local_people_positions add column investor_names varchar[]",
+            ]:
+                con.execute(ddl)
+            con.execute(
+                """
+                update local_people_positions
+                set description = case
+                        when id = 'person-engineer-0' then 'Built Python APIs and distributed database services.'
+                        when id = 'person-founder-0' then 'Founded the company and led fundraising.'
+                        else 'Managed product roadmap and experiments.'
+                    end,
+                    dense_text = case
+                        when id = 'person-engineer-0' then 'Backend Engineer InfraDB Built Python APIs and distributed database services.'
+                        when id = 'person-founder-0' then 'Founder and CEO Acme AI Founded the company and led fundraising.'
+                        else 'Product Manager Box Managed product roadmap and experiments.'
+                    end,
+                    company_domain = case when company_id = 'company-infra' then 'infradb.example' else 'acme.example' end,
+                    company_linkedin_url = case when company_id = 'company-infra' then 'https://www.linkedin.com/company/infradb' else 'https://www.linkedin.com/company/acme-ai' end,
+                    company_description = case when company_id = 'company-infra' then 'Database infrastructure for software teams.' else 'AI products for teams.' end,
+                    company_sector_types = case when company_id = 'company-infra' then ['developer_tools'] else ['ai'] end,
+                    company_entity_types = case when company_id = 'company-infra' then ['developer_tool'] else ['company'] end,
+                    company_headcount = case when company_id = 'company-infra' then 120 else 40 end,
+                    company_funding_total = case when company_id = 'company-infra' then 25000000 else 5000000 end,
+                    company_stage = case when company_id = 'company-infra' then 'growth' else 'seed' end,
+                    investor_names = case when company_id = 'company-infra' then ['OpenAI Startup Fund'] else [] end
+                """
+            )
 
             con.execute(
                 """
@@ -984,6 +1023,19 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(candidate["position_id"], "pos-engineer-current")
         self.assertIn("hybrid", candidate["vertical_sources"])
         self.assertIn("matched_position_ids", candidate)
+
+    def test_local_hydration_projects_profile_fields_without_vectors(self) -> None:
+        rows = hydrate_people.fetch_local_person_rows(["person-engineer"], workers=2, batch_size=1)
+        self.assertEqual(len(rows), 1)
+        context = rows[0]["hydrated_context"]
+        position = context["positions"][0]
+        self.assertEqual(position["position_title"], "Backend Engineer")
+        self.assertIn("Python APIs", position["description"])
+        self.assertIn("distributed database", position["dense_text"])
+        self.assertEqual(position["company_domain"], "infradb.example")
+        self.assertEqual(position["company_sector_types"], ["developer_tools"])
+        self.assertNotIn("vector", position)
+        self.assertNotIn("word_tokens", position)
 
     def test_local_store_lazy_import_and_clear_namespace_errors(self) -> None:
         import local_duckdb_store

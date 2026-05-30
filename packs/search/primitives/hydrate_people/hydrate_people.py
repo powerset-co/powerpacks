@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,65 @@ from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 
 
 DEFAULT_ENV_FILE = Path(os.getenv("POWERPACKS_ENV_FILE", ".env"))
+DEFAULT_LOCAL_BATCH_SIZE = 1000
+DEFAULT_LOCAL_WORKERS = min(8, max(1, os.cpu_count() or 1))
+LOCAL_POSITION_HYDRATE_COLUMNS = [
+    "id",
+    "position_id",
+    "person_id",
+    "base_id",
+    "position_title",
+    "raw_title",
+    "description",
+    "dense_text",
+    "company_name",
+    "company_id",
+    "company_domain",
+    "company_linkedin_url",
+    "company_description",
+    "company_sector_types",
+    "company_entity_types",
+    "company_headcount",
+    "company_funding_total",
+    "company_stage",
+    "investor_names",
+    "city",
+    "state",
+    "country",
+    "is_current",
+    "start_date_epoch",
+    "end_date_epoch",
+    "tenure_years",
+    "seniority_band",
+    "role_track",
+    "total_years_experience",
+    "x_twitter_followers",
+    "linkedin_followers",
+    "linkedin_connections",
+    "ig_followers",
+    "inferred_birth_year",
+]
+LOCAL_SUMMARY_HYDRATE_COLUMNS = [
+    "id",
+    "person_id",
+    "base_id",
+    "summary",
+    "tech_skills",
+]
+LOCAL_EDUCATION_HYDRATE_COLUMNS = [
+    "id",
+    "person_id",
+    "base_id",
+    "education_id",
+    "school_name",
+    "degree",
+    "degree_normalized",
+    "field_of_study",
+    "start_year",
+    "end_year",
+    "graduation_year",
+    "canonical_education_id",
+]
 
 
 def now_iso() -> str:
@@ -210,20 +270,39 @@ def table_columns(conn: Any, table: str) -> list[str]:
     return [str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
 
 
-def local_rows(conn: Any, table: str, person_ids: list[str]) -> list[dict[str, Any]]:
+def quote_ident(value: str) -> str:
+    if not value.replace("_", "").isalnum() or not (value[0].isalpha() or value[0] == "_"):
+        raise RuntimeError(f"unsafe DuckDB identifier: {value!r}")
+    return f'"{value}"'
+
+
+def prepare_requested_ids(conn: Any, person_ids: list[str]) -> None:
+    conn.execute("drop table if exists temp._hydrate_requested_ids")
+    conn.execute("create temporary table _hydrate_requested_ids(id varchar)")
+    if person_ids:
+        conn.executemany("insert into _hydrate_requested_ids values (?)", [(pid,) for pid in person_ids])
+
+
+def local_rows(conn: Any, table: str, person_ids: list[str] | None = None, select_columns: list[str] | None = None) -> list[dict[str, Any]]:
     columns = table_columns(conn, table)
     if not columns:
         return []
     id_fields = [field for field in ["person_id", "base_id"] if field in columns]
     if not id_fields:
         return []
-    conn.execute("drop table if exists temp._hydrate_requested_ids")
-    conn.execute("create temporary table _hydrate_requested_ids(id varchar)")
-    conn.executemany("insert into _hydrate_requested_ids values (?)", [(pid,) for pid in person_ids])
-    predicates = " or ".join(f"cast(t.{field} as varchar) = r.id" for field in id_fields)
-    rows = conn.execute(f"select distinct t.* from {table} t join _hydrate_requested_ids r on {predicates}").fetchall()
+    selected_columns = [field for field in (select_columns or columns) if field in columns]
+    for field in id_fields:
+        if field not in selected_columns:
+            selected_columns.append(field)
+    if not selected_columns:
+        return []
+    if person_ids is not None:
+        prepare_requested_ids(conn, person_ids)
+    predicates = " or ".join(f"cast(t.{quote_ident(field)} as varchar) = r.id" for field in id_fields)
+    selected_sql = ", ".join(f"t.{quote_ident(field)}" for field in selected_columns)
+    rows = conn.execute(f"select distinct {selected_sql} from {quote_ident(table)} t join _hydrate_requested_ids r on {predicates}").fetchall()
     return [
-        {columns[index]: normalize_local_value(value) for index, value in enumerate(row)}
+        {selected_columns[index]: normalize_local_value(value) for index, value in enumerate(row)}
         for row in rows
     ]
 
@@ -249,9 +328,24 @@ def local_position(row: dict[str, Any]) -> dict[str, Any]:
         "position_id": row.get("position_id") or row.get("id"),
         "title": row.get("position_title") or row.get("raw_title"),
         "position_title": row.get("position_title") or row.get("raw_title"),
+        "description": row.get("description"),
+        "dense_text": row.get("dense_text") or " ".join(
+            str(part)
+            for part in [row.get("position_title") or row.get("raw_title"), row.get("company_name"), row.get("description")]
+            if part
+        ) or None,
         "company": row.get("company_name"),
         "company_name": row.get("company_name"),
         "company_id": row.get("company_id"),
+        "company_domain": row.get("company_domain"),
+        "company_linkedin_url": row.get("company_linkedin_url"),
+        "company_description": row.get("company_description"),
+        "company_sector_types": row.get("company_sector_types") or [],
+        "company_entity_types": row.get("company_entity_types") or [],
+        "company_headcount": row.get("company_headcount"),
+        "company_funding_total": row.get("company_funding_total"),
+        "company_stage": row.get("company_stage"),
+        "investor_names": row.get("investor_names") or [],
         "city": row.get("city"),
         "state": row.get("state"),
         "country": row.get("country"),
@@ -287,21 +381,12 @@ def first_present(rows: list[dict[str, Any]], field: str) -> Any:
     return None
 
 
-def fetch_local_person_rows(person_ids: list[str], env_file: Path | None = None) -> list[dict[str, Any]] | None:
-    load_env_file(env_file)
-    db_path = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
-    if not db_path:
-        return None
-    try:
-        import duckdb  # type: ignore
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("duckdb is required for local DuckDB search") from exc
-
-    with duckdb.connect(str(db_path), read_only=True) as conn:
-        position_rows = local_rows(conn, "local_people_positions", person_ids)
-        summary_rows = local_rows(conn, "local_summaries", person_ids)
-        education_rows = local_rows(conn, "local_people_education", person_ids)
-
+def build_local_person_rows(
+    person_ids: list[str],
+    position_rows: list[dict[str, Any]],
+    summary_rows: list[dict[str, Any]],
+    education_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     positions_by_person: dict[str, list[dict[str, Any]]] = {}
     for row in position_rows:
         pid = str(row.get("person_id") or row.get("base_id") or "")
@@ -364,6 +449,64 @@ def fetch_local_person_rows(person_ids: list[str], env_file: Path | None = None)
             "ig_followers": first_present(position_source, "ig_followers"),
             "inferred_birth_year": first_present(position_source, "inferred_birth_year"),
         })
+    return rows
+
+
+def fetch_local_person_batch(db_path: str, person_ids: list[str]) -> list[dict[str, Any]]:
+    import duckdb  # type: ignore
+
+    with duckdb.connect(str(db_path), read_only=True) as conn:
+        prepare_requested_ids(conn, person_ids)
+        position_rows = local_rows(conn, "local_people_positions", select_columns=LOCAL_POSITION_HYDRATE_COLUMNS)
+        summary_rows = local_rows(conn, "local_summaries", select_columns=LOCAL_SUMMARY_HYDRATE_COLUMNS)
+        education_rows = local_rows(conn, "local_people_education", select_columns=LOCAL_EDUCATION_HYDRATE_COLUMNS)
+    return build_local_person_rows(person_ids, position_rows, summary_rows, education_rows)
+
+
+def chunked(values: list[str], size: int) -> list[list[str]]:
+    return [values[index:index + size] for index in range(0, len(values), max(1, size))]
+
+
+def positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def fetch_local_person_rows(
+    person_ids: list[str],
+    env_file: Path | None = None,
+    *,
+    workers: int | None = None,
+    batch_size: int | None = None,
+) -> list[dict[str, Any]] | None:
+    load_env_file(env_file)
+    db_path = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
+    if not db_path:
+        return None
+    if not person_ids:
+        return []
+    try:
+        import duckdb  # noqa: F401  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("duckdb is required for local DuckDB search") from exc
+
+    effective_batch_size = batch_size or positive_int(os.getenv("POWERPACKS_LOCAL_HYDRATE_BATCH_SIZE"), DEFAULT_LOCAL_BATCH_SIZE)
+    requested_workers = workers or positive_int(os.getenv("POWERPACKS_LOCAL_HYDRATE_WORKERS"), DEFAULT_LOCAL_WORKERS)
+    batches = chunked(person_ids, effective_batch_size)
+    effective_workers = min(max(1, requested_workers), len(batches))
+    if effective_workers <= 1:
+        rows: list[dict[str, Any]] = []
+        for batch in batches:
+            rows.extend(fetch_local_person_batch(db_path, batch))
+        return rows
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=effective_workers) as pool:
+        for batch_rows in pool.map(lambda batch: fetch_local_person_batch(db_path, batch), batches):
+            rows.extend(batch_rows)
     return rows
 
 
@@ -447,7 +590,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         return
 
     env_file = Path(args.env_file) if args.env_file else None
-    rows = fetch_local_person_rows(requested, env_file=env_file)
+    rows = fetch_local_person_rows(requested, env_file=env_file, workers=args.local_workers, batch_size=args.local_batch_size)
     if rows is None:
         rows = fetch_person_rows(requested, env_file=env_file)
         interaction_counts = fetch_interaction_counts(requested, env_file=env_file)
@@ -462,6 +605,8 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
             "type": "local_duckdb",
             "backend": "duckdb",
             "duckdb": os.getenv("POWERPACKS_LOCAL_SEARCH_DB"),
+            "batch_size": args.local_batch_size or positive_int(os.getenv("POWERPACKS_LOCAL_HYDRATE_BATCH_SIZE"), DEFAULT_LOCAL_BATCH_SIZE),
+            "workers": args.local_workers or positive_int(os.getenv("POWERPACKS_LOCAL_HYDRATE_WORKERS"), DEFAULT_LOCAL_WORKERS),
         }
     metadata = candidate_metadata(state)
     profiles = []
@@ -510,6 +655,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--dump-profiles", action="store_true", help="Write full hydration inspection artifacts for debugging")
     parser.add_argument("--no-compress-profiles", action="store_true", help="Write raw profiles.jsonl instead of the default profiles.jsonl.gz")
+    parser.add_argument("--local-workers", type=int, help="Read-only DuckDB hydration worker count for local backend")
+    parser.add_argument("--local-batch-size", type=int, help="Candidate IDs per read-only DuckDB hydration batch")
     args = parser.parse_args()
     cmd_hydrate(args)
 
