@@ -40,6 +40,14 @@ RERANK_PY = (
 )
 
 
+def load_rerank_module(name: str = "llm_rerank_candidates_test"):
+    spec = importlib.util.spec_from_file_location(name, RERANK_PY)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
 # ---------------------------------------------------------------------------
 # Mock OpenAI server (stdlib only)
 # ---------------------------------------------------------------------------
@@ -296,6 +304,169 @@ class FanOutVerdictShapeTests(unittest.TestCase):
                 self.assertIsNone(r["error"])
 
 
+class ExplicitSeniorityGuardrailTests(unittest.TestCase):
+    def test_explicit_senior_query_caps_cto_and_preserves_senior_swe(self) -> None:
+        items = [
+            {
+                "id": "p_senior",
+                "headline": "Senior Software Engineer at OpenAI",
+                "positions": [
+                    {
+                        "position_title": "Senior Software Engineer",
+                        "company_name": "OpenAI",
+                        "seniority_band": "senior",
+                        "is_current": True,
+                    }
+                ],
+            },
+            {
+                "id": "p_cto_advisor",
+                "headline": "CTO and Tech Advisor at OpenAI",
+                "positions": [
+                    {
+                        "position_title": "CTO / Tech Advisor",
+                        "company_name": "OpenAI",
+                        "seniority_band": "c-suite",
+                        "is_current": True,
+                    }
+                ],
+            },
+        ]
+        with _MockServer(latency_sec=0) as mock:
+            rc, results, stderr = run_rerank(
+                items=items,
+                query="Senior SWE in SF",
+                traits=["senior software engineer"],
+                api_base=mock.url,
+                concurrency=2,
+            )
+        self.assertEqual(rc, 0, stderr)
+        by_id = {r["id"]: r for r in results}
+        self.assertEqual(by_id["p_senior"]["verdict"], "include")
+        self.assertGreaterEqual(by_id["p_senior"]["score"], 0.8)
+        self.assertEqual(by_id["p_cto_advisor"]["verdict"], "exclude")
+        self.assertEqual(by_id["p_cto_advisor"]["score"], 0.25)
+        self.assertEqual(by_id["p_cto_advisor"]["trait_scores"]["Seniority fit"], 0.0)
+
+    def test_inferred_default_role_query_does_not_cap_executive_title(self) -> None:
+        items = [
+            {
+                "id": "p_cto",
+                "headline": "CTO at OpenAI",
+                "positions": [
+                    {
+                        "position_title": "CTO",
+                        "company_name": "OpenAI",
+                        "seniority_band": "c-suite",
+                        "is_current": True,
+                    }
+                ],
+            }
+        ]
+        with _MockServer(latency_sec=0) as mock:
+            rc, results, stderr = run_rerank(
+                items=items,
+                query="software engineers in SF",
+                traits=["software engineer"],
+                api_base=mock.url,
+                concurrency=1,
+            )
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(results[0]["score"], 0.9)
+        self.assertNotIn("Seniority fit", results[0]["trait_scores"])
+
+    def test_explicit_senior_consultant_query_preserves_senior_consultant(self) -> None:
+        items = [
+            {
+                "id": "p_consultant",
+                "headline": "Senior Consultant at OpenAI",
+                "positions": [
+                    {
+                        "position_title": "Senior Consultant",
+                        "company_name": "OpenAI",
+                        "seniority_band": "senior",
+                        "is_current": True,
+                    }
+                ],
+            }
+        ]
+        with _MockServer(latency_sec=0) as mock:
+            rc, results, stderr = run_rerank(
+                items=items,
+                query="Senior consultants in SF",
+                traits=["senior consultant"],
+                api_base=mock.url,
+                concurrency=1,
+            )
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(results[0]["verdict"], "include")
+        self.assertEqual(results[0]["score"], 0.9)
+        self.assertNotIn("Seniority fit", results[0]["trait_scores"])
+
+    def test_explicit_senior_swe_query_caps_unrelated_senior_consultant(self) -> None:
+        items = [
+            {
+                "id": "p_tech_consultant",
+                "headline": "Senior Tech Consultant at OpenAI",
+                "positions": [
+                    {
+                        "position_title": "Senior Tech Consultant",
+                        "company_name": "OpenAI",
+                        "seniority_band": "senior",
+                        "is_current": True,
+                    }
+                ],
+            }
+        ]
+        with _MockServer(latency_sec=0) as mock:
+            rc, results, stderr = run_rerank(
+                items=items,
+                query="Senior SWE in SF",
+                traits=["senior software engineer"],
+                api_base=mock.url,
+                concurrency=1,
+            )
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(results[0]["verdict"], "exclude")
+        self.assertEqual(results[0]["score"], 0.25)
+        self.assertEqual(results[0]["trait_scores"]["Seniority fit"], 0.0)
+
+    def test_explicit_senior_consultant_query_still_caps_founder_consultant(self) -> None:
+        items = [
+            {
+                "id": "p_founder_consultant",
+                "headline": "Founder / Senior Consultant at OpenAI",
+                "positions": [
+                    {
+                        "position_title": "Founder / Senior Consultant",
+                        "company_name": "OpenAI",
+                        "seniority_band": "senior",
+                        "is_current": True,
+                    }
+                ],
+            }
+        ]
+        with _MockServer(latency_sec=0) as mock:
+            rc, results, stderr = run_rerank(
+                items=items,
+                query="Senior consultants in SF",
+                traits=["senior consultant"],
+                api_base=mock.url,
+                concurrency=1,
+            )
+        self.assertEqual(rc, 0, stderr)
+        self.assertEqual(results[0]["verdict"], "exclude")
+        self.assertEqual(results[0]["score"], 0.25)
+        self.assertEqual(results[0]["trait_scores"]["Seniority fit"], 0.0)
+
+    def test_prompt_contract_mentions_explicit_seniority_examples(self) -> None:
+        mod = load_rerank_module("llm_rerank_candidates_prompt_contract")
+        self.assertIn("Explicit seniority is a hiring target band", mod.SYSTEM_PROMPT)
+        self.assertIn("senior software engineer", mod.SYSTEM_PROMPT)
+        self.assertIn("CTO, VP Engineering, Director, Founder, Tech Advisor", mod.SYSTEM_PROMPT)
+        self.assertIn("Staff/principal are not synonyms", mod.SYSTEM_PROMPT)
+
+
 class StateModeQueryResultsCsvTests(unittest.TestCase):
     def test_state_mode_writes_query_results_csv_schema_artifact(self) -> None:
         profile = {
@@ -466,12 +637,7 @@ if __name__ == "__main__":
 
 class RerankEstimateTests(unittest.TestCase):
     def test_estimate_has_minimum_and_scales_by_waves(self):
-        import importlib.util
-        import sys
-        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_est", RERANK_PY)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["llm_rerank_candidates_est"] = mod
-        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        mod = load_rerank_module("llm_rerank_candidates_est")
 
         self.assertEqual(mod.estimate_rerank_seconds(0, 200), 0)
         self.assertEqual(mod.estimate_rerank_seconds(100, 200), 180)

@@ -68,6 +68,29 @@ DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-4o-mini")
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", "200"))
 DEFAULT_ESTIMATE_SECONDS = int(os.environ.get("LLM_RERANK_ESTIMATE_SECONDS", "180"))
+EXPLICIT_SENIORITY_RE = re.compile(
+    r"\b("
+    r"entry[- ]level|junior|mid[- ]level|senior|staff|principal|"
+    r"manager|director|vp|vice president|c[- ]level|c[- ]suite|"
+    r"founder|co[- ]founder|partner|owner|lead"
+    r")\b",
+    re.I,
+)
+IC_SENIORITY_TERMS = {"junior", "mid", "senior", "staff", "principal", "lead"}
+LEADERSHIP_SENIORITY_RE = re.compile(
+    r"\b(manager|director|vp|vice president|c[- ]level|c[- ]suite|founder|co[- ]founder|partner|owner)\b",
+    re.I,
+)
+OUT_OF_BAND_IC_TITLE_RE = re.compile(
+    r"\b("
+    r"cto|chief\s+technology\s+officer|chief\s+technical\s+officer|"
+    r"ceo|coo|cfo|cpo|cio|ciso|chief\b|"
+    r"vp\b|vice\s+president|head\s+of|director|founder|co[- ]founder|"
+    r"advisor|adviser|consultant"
+    r")\b",
+    re.I,
+)
+SENIORITY_MISMATCH_SCORE_CAP = 0.25
 
 
 SYSTEM_PROMPT = """You are an expert recruiter reranking people-search results.
@@ -100,7 +123,8 @@ Critical rules:
 3. If a trait has no evidence, its trait score should be low.
 4. Recency matters. Current/recent roles beat old roles unless the user asks for past experience.
 5. Explicit exclusions are hard gates: excluded candidates score 0.0.
-6. Output JSON only. No markdown fences. No commentary.
+6. Explicit seniority is a hiring target band, not a loose "or above" signal. For "senior software engineer", strongly prefer Senior SWE/current senior IC profiles and score obvious out-of-band titles like CTO, VP Engineering, Director, Founder, Tech Advisor, Advisor, or Consultant low/out unless the query asks for those leadership/founder/advisor/consultant levels. Staff/principal are not synonyms for "senior" unless the query says senior+ or names those bands.
+7. Output JSON only. No markdown fences. No commentary.
 """
 
 
@@ -177,6 +201,108 @@ Candidate (JSON):
 
 Return the JSON verdict object only.
 """
+
+
+def requested_ic_seniority_terms(query: str, traits: list[dict[str, str]]) -> set[str]:
+    """Return explicit requested IC seniority terms, preserving inferred-default behavior."""
+    text = " ".join([query, *[str(t.get("value", "")) for t in traits]]).lower()
+    if not EXPLICIT_SENIORITY_RE.search(text) or LEADERSHIP_SENIORITY_RE.search(text):
+        return set()
+
+    requested: set[str] = set()
+    if re.search(r"\b(entry[- ]level|junior)\b", text):
+        requested.add("junior")
+    if re.search(r"\bmid[- ]level\b", text):
+        requested.add("mid")
+    if re.search(r"\b(senior|lead)\b", text):
+        requested.add("senior")
+    if re.search(r"\bsenior\s*(\+|or above)\b", text):
+        requested.update({"staff", "principal"})
+    if re.search(r"\bstaff\b", text):
+        requested.add("staff")
+    if re.search(r"\bprincipal\b", text):
+        requested.add("principal")
+    return requested & IC_SENIORITY_TERMS
+
+
+def requested_advisory_terms(query: str, traits: list[dict[str, str]]) -> set[str]:
+    text = " ".join([query, *[str(t.get("value", "")) for t in traits]])
+    allowed = set()
+    if re.search(r"\bconsultants?\b", text, re.I):
+        allowed.add("consultant")
+    if re.search(r"\badvis[oe]rs?\b", text, re.I):
+        allowed.add("advisor")
+    return allowed
+
+
+def _candidate_evidence_positions(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    positions = payload.get("positions")
+    if isinstance(positions, list) and positions:
+        current = [p for p in positions if isinstance(p, dict) and p.get("is_current")]
+        if current:
+            return current
+        return [p for p in positions[:2] if isinstance(p, dict)]
+
+    title = payload.get("headline") or payload.get("title") or payload.get("position_title")
+    if title:
+        return [{"position_title": title, "is_current": True}]
+    return []
+
+
+def _is_out_of_band_ic_title(title: str, advisory_terms_allowed: set[str]) -> bool:
+    title_for_check = title
+    if "consultant" in advisory_terms_allowed:
+        title_for_check = re.sub(r"\bconsultants?\b", " ", title_for_check, flags=re.I)
+    if "advisor" in advisory_terms_allowed:
+        title_for_check = re.sub(r"\badvis[oe]rs?\b", " ", title_for_check, flags=re.I)
+    return bool(OUT_OF_BAND_IC_TITLE_RE.search(title_for_check))
+
+
+def _position_matches_requested_ic_band(pos: dict[str, Any], requested_terms: set[str], advisory_terms_allowed: set[str]) -> bool:
+    title = str(pos.get("position_title") or pos.get("title") or "")
+    seniority_band = str(pos.get("seniority_band") or "").lower()
+    haystack = f"{title} {seniority_band}".lower()
+    if _is_out_of_band_ic_title(title, advisory_terms_allowed):
+        return False
+    return any(term in haystack for term in requested_terms)
+
+
+def apply_explicit_seniority_guardrail(
+    query: str,
+    traits: list[dict[str, str]],
+    payload: dict[str, Any],
+    score: float,
+    verdict: str,
+    reason: str,
+    trait_scores: dict[str, float],
+) -> tuple[float, str, str, dict[str, float]]:
+    """Cap obvious out-of-band executive/advisor profiles for explicit IC seniority queries."""
+    requested_terms = requested_ic_seniority_terms(query, traits)
+    if not requested_terms:
+        return score, verdict, reason, trait_scores
+    advisory_terms_allowed = requested_advisory_terms(query, traits)
+
+    evidence_positions = _candidate_evidence_positions(payload)
+    if not evidence_positions:
+        return score, verdict, reason, trait_scores
+    if any(_position_matches_requested_ic_band(pos, requested_terms, advisory_terms_allowed) for pos in evidence_positions):
+        return score, verdict, reason, trait_scores
+
+    has_out_of_band_title = any(
+        _is_out_of_band_ic_title(str(pos.get("position_title") or pos.get("title") or ""), advisory_terms_allowed)
+        for pos in evidence_positions
+    )
+    if not has_out_of_band_title or score <= SENIORITY_MISMATCH_SCORE_CAP:
+        return score, verdict, reason, trait_scores
+
+    capped_traits = {key: min(value, SENIORITY_MISMATCH_SCORE_CAP) for key, value in trait_scores.items()}
+    capped_traits["Seniority fit"] = 0.0
+    guardrail_reason = (
+        "Explicit IC seniority was requested, but the current/recent title is clearly "
+        "out of band for that hiring level."
+    )
+    reason = f"{reason} {guardrail_reason}".strip()
+    return SENIORITY_MISMATCH_SCORE_CAP, "exclude", reason, capped_traits
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +428,15 @@ async def rerank_one(
                     timeout,
                 )
                 score, verdict, reason, confidence, trait_scores = parse_verdict(raw_response, traits)
+                score, verdict, reason, trait_scores = apply_explicit_seniority_guardrail(
+                    query=query,
+                    traits=traits,
+                    payload=item.payload,
+                    score=score,
+                    verdict=verdict,
+                    reason=reason,
+                    trait_scores=trait_scores,
+                )
                 error = None
                 break
             except urllib.error.HTTPError as e:
