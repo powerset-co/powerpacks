@@ -24,6 +24,13 @@ def load_module():
 
 
 class PackageOperatorBootstrapTests(unittest.TestCase):
+    def test_restore_path_filter_excludes_referenced_duckdb_outputs(self) -> None:
+        mod = load_module()
+        self.assertTrue(mod.should_copy_referenced_restore_path(".powerpacks/network-import/network-runs/run-1/merged/people.csv"))
+        self.assertTrue(mod.should_copy_referenced_restore_path(".powerpacks/network-import/profile_cache_v2/person.json"))
+        self.assertFalse(mod.should_copy_referenced_restore_path(".powerpacks/network-import/network-runs/run-1/duckdb/network.run-1.duckdb"))
+        self.assertFalse(mod.should_copy_referenced_restore_path(".powerpacks/search-index/local-search.duckdb"))
+
     def test_packages_import_enrich_processing_without_raw_sync_data(self) -> None:
         mod = load_module()
         with tempfile.TemporaryDirectory() as td:

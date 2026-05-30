@@ -356,6 +356,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
 
         async def fake_filter_only_rows(filters, include_attributes, *, page_size=10000, max_results=0):
             self.assertEqual(filters, ("company_id", "In", ["urn:harmonic:company:meta"]))
+            self.assertEqual(max_results, 10)
             return [{"id": "base-uuid-0", "base_id": "base-uuid", "position_title": "Engineer"}]
 
         turbopuffer_client.filter_only_rows = fake_filter_only_rows

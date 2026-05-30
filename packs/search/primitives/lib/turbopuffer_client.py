@@ -1003,6 +1003,7 @@ def is_filter_only_payload(payload: dict[str, Any]) -> bool:
 async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
     if filters is None:
         raise ValueError("filter-only search requires at least one TurboPuffer filter")
+    max_results = top_k if top_k and top_k > 0 else 0
     if is_local_backend():
         rows = await asyncio.to_thread(
             local_store().filter_only_rows_for_namespace,
@@ -1010,10 +1011,10 @@ async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_a
             filters,
             include_attributes,
             10000,
-            0,
+            max_results,
         )
     else:
-        rows = await filter_only_rows(filters, include_attributes, max_results=0)
+        rows = await filter_only_rows(filters, include_attributes, max_results=max_results)
     out: list[dict[str, Any]] = []
     for index, row in enumerate(rows, start=1):
         doc_id = str(row.get("id") or "")

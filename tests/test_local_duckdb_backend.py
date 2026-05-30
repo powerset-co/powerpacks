@@ -313,13 +313,19 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertTrue(turbopuffer_client.local_namespace_has_vectors("companies"))
 
     def test_local_rich_fields_are_filterable_and_projectable(self) -> None:
-        people = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
-            "people",
-            ("role_ids", "ContainsAny", ["backend_engineer"]),
-            ["base_id", "role_ids", "position_title"],
-            page_size=1000,
-            max_results=10,
-        ))
+        store = turbopuffer_client.local_store()
+        original_rows_for_namespace = store._rows_for_namespace
+        store._rows_for_namespace = lambda _logical_name: (_ for _ in ()).throw(AssertionError("filter path must query DuckDB SQL directly"))
+        try:
+            people = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+                "people",
+                ("role_ids", "ContainsAny", ["backend_engineer"]),
+                ["base_id", "role_ids", "position_title"],
+                page_size=1000,
+                max_results=10,
+            ))
+        finally:
+            store._rows_for_namespace = original_rows_for_namespace
         self.assertEqual([row["base_id"] for row in people], ["person-engineer"])
         self.assertIn("backend_engineer", people[0]["role_ids"])
 
@@ -692,6 +698,17 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             include_attributes=["base_id", "position_title"],
         ))
         self.assertEqual([row["person_id"] for row in rows], ["person-founder"])
+        self.assertEqual(rows[0]["retrieval_mode"], "filter_only")
+
+    def test_filter_only_role_search_respects_top_k_before_dedupe(self) -> None:
+        payload = {"countries": ["United States"], "is_current_role": True}
+        rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
+            payload,
+            turbopuffer_client.filters_from_role_payload(payload),
+            top_k=1,
+            include_attributes=["base_id", "position_title"],
+        ))
+        self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["retrieval_mode"], "filter_only")
 
     def test_tech_skill_prefilter(self) -> None:

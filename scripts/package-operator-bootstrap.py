@@ -453,6 +453,10 @@ SEARCH_INDEX_METADATA_FILES = [
 
 
 def should_copy_referenced_restore_path(path_text: str) -> bool:
+    lower = path_text.lower()
+    parts = {part.lower() for part in Path(path_text).parts}
+    if lower.endswith((".duckdb", ".db", ".sqlite", ".sqlite3")) or "duckdb" in parts:
+        return False
     return (
         path_text == ".powerpacks/network-import/merged"
         or path_text.startswith(".powerpacks/network-import/merged/")

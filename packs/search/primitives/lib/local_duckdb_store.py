@@ -17,12 +17,29 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 from uuid import UUID
 
-from local_filter_eval import filter_rows
-
-
 K_RRF = 60
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 _STEMMER: Any | None = None
+ARRAY_FILTER_FIELDS = {
+    "accelerators",
+    "allowed_operator_ids",
+    "customer_type",
+    "d2q_tokens",
+    "doc2query",
+    "entity_types",
+    "investor_urns",
+    "metro_areas",
+    "phrase_tokens",
+    "role_ids",
+    "school_name_tokens",
+    "sector_types",
+    "summary_tokens",
+    "tech_skills",
+    "technology_types",
+    "word_tokens",
+    "yc_batches",
+}
+COMPARISON_OPS = {"Eq", "NotEq", "In", "NotIn", "Gt", "Gte", "Lt", "Lte", "ContainsAny", "ContainsAllTokens", "IGlob"}
 
 
 class LocalDuckDBError(RuntimeError):
@@ -129,6 +146,9 @@ class LocalDuckDBSearchStore:
             raise LocalDuckDBError(f"failed reading local DuckDB table {table!r} for namespace {logical_name!r}: {exc}") from exc
         return [self._normalize_row(dict(zip(columns, row))) for row in rows]
 
+    def _table_columns(self, table: str) -> dict[str, str]:
+        return {str(row[1]): str(row[2]).upper() for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
     def has_nonempty_vectors(self, logical_name: str, field: str = "vector") -> bool:
         table = self._table_for_namespace(logical_name)
         columns = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -180,6 +200,176 @@ class LocalDuckDBSearchStore:
                 return row[alias]
         return None
 
+    def _quote_ident(self, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise LocalDuckDBError(f"unsafe DuckDB identifier: {value!r}")
+        return f'"{value}"'
+
+    def _sql_field(self, field: str, columns: dict[str, str]) -> str | None:
+        candidates = [field, f"{field}_tokens", *self.FIELD_ALIASES.get(field, [])]
+        for candidate in candidates:
+            if candidate in columns:
+                return candidate
+        return None
+
+    def _is_array_sql_field(self, field: str, columns: dict[str, str]) -> bool:
+        column_type = columns.get(field, "")
+        return field in ARRAY_FILTER_FIELDS or "[]" in column_type or column_type.startswith("LIST")
+
+    def _value_list(self, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, (str, bytes, bytearray, dict)):
+            return [value]
+        if isinstance(value, Iterable):
+            return list(value)
+        return [value]
+
+    def _string_list(self, value: Any) -> list[str]:
+        return [str(item) for item in self._value_list(value)]
+
+    def _tokenize_filter_value(self, value: Any) -> list[str]:
+        if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, dict)):
+            tokens: list[str] = []
+            for item in value:
+                tokens.extend(TOKEN_RE.findall(str(item).lower()))
+            return tokens
+        return TOKEN_RE.findall(str(value or "").lower())
+
+    def _sql_in_list(self, values: list[Any]) -> str:
+        return "(" + ", ".join("?" for _ in values) + ")"
+
+    def _sql_contains_any(self, sql_field: str, values: list[Any], *, array_field: bool) -> tuple[str, list[Any]]:
+        if not values:
+            return "false", []
+        column = self._quote_ident(sql_field)
+        params = self._string_list(values)
+        if array_field:
+            return (
+                f"exists (select 1 from unnest({column}) as _pp_u(value) "
+                f"where cast(_pp_u.value as varchar) in {self._sql_in_list(params)})",
+                params,
+            )
+        return f"cast({column} as varchar) in {self._sql_in_list(params)}", params
+
+    def _sql_contains_all_tokens(self, sql_field: str, expected: Any, options: dict[str, Any] | None, *, array_field: bool) -> tuple[str, list[Any]]:
+        tokens = self._tokenize_filter_value(expected)
+        if not tokens:
+            return "true", []
+        column = self._quote_ident(sql_field)
+        last_as_prefix = bool((options or {}).get("last_as_prefix"))
+        exact_tokens = tokens[:-1] if last_as_prefix else tokens
+        clauses: list[str] = []
+        params: list[Any] = []
+        if array_field:
+            for token in exact_tokens:
+                clauses.append(f"list_contains({column}, ?)")
+                params.append(token)
+            if last_as_prefix:
+                clauses.append(f"exists (select 1 from unnest({column}) as _pp_u(value) where cast(_pp_u.value as varchar) like ?)")
+                params.append(f"{tokens[-1]}%")
+            return " and ".join(clauses) if clauses else "true", params
+
+        text_expr = f"lower(cast({column} as varchar))"
+        for token in exact_tokens:
+            clauses.append(f"regexp_matches({text_expr}, ?)")
+            params.append(rf"(^|[^a-z0-9]){re.escape(token)}([^a-z0-9]|$)")
+        if last_as_prefix:
+            clauses.append(f"regexp_matches({text_expr}, ?)")
+            params.append(rf"(^|[^a-z0-9]){re.escape(tokens[-1])}")
+        return " and ".join(clauses) if clauses else "true", params
+
+    def _sql_like_pattern(self, pattern: Any) -> str:
+        text = str(pattern or "").lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return text.replace("*", "%").replace("?", "_")
+
+    def _compile_filter_sql(self, filters: Any, columns: dict[str, str]) -> tuple[str, list[Any]]:
+        if filters is None:
+            return "true", []
+        if not isinstance(filters, (list, tuple)) or not filters:
+            raise ValueError(f"invalid filter tuple: {filters!r}")
+
+        op_or_field = filters[0]
+        if op_or_field in {"And", "Or"}:
+            if len(filters) != 2 or not isinstance(filters[1], (list, tuple)):
+                raise ValueError(f"{op_or_field} filter must be a 2-tuple containing a list of clauses")
+            joiner = " and " if op_or_field == "And" else " or "
+            clauses: list[str] = []
+            params: list[Any] = []
+            for clause in filters[1]:
+                clause_sql, clause_params = self._compile_filter_sql(clause, columns)
+                clauses.append(f"({clause_sql})")
+                params.extend(clause_params)
+            if not clauses:
+                return ("true" if op_or_field == "And" else "false"), []
+            return joiner.join(clauses), params
+
+        if len(filters) not in {3, 4}:
+            raise ValueError(f"invalid comparison filter tuple: {filters!r}")
+        field, operator, expected = filters[0], filters[1], filters[2]
+        if not isinstance(field, str) or not isinstance(operator, str) or operator not in COMPARISON_OPS:
+            raise ValueError(f"unsupported comparison filter tuple: {filters!r}")
+        if len(filters) == 4 and operator != "ContainsAllTokens":
+            raise ValueError(f"operator {operator!r} does not accept filter options")
+
+        sql_field = self._sql_field(field, columns)
+        if sql_field is None:
+            return ("true", []) if operator in {"NotEq", "NotIn"} else ("false", [])
+        column = self._quote_ident(sql_field)
+        array_field = self._is_array_sql_field(sql_field, columns)
+
+        if operator == "Eq":
+            return f"{column} = ?", [expected]
+        if operator == "NotEq":
+            return f"({column} is null or {column} <> ?)", [expected]
+        if operator == "In":
+            values = self._value_list(expected)
+            return self._sql_contains_any(sql_field, values, array_field=array_field)
+        if operator == "NotIn":
+            values = self._value_list(expected)
+            if not values:
+                return "true", []
+            clause, params = self._sql_contains_any(sql_field, values, array_field=array_field)
+            return f"not ({clause})", params
+        if operator in {"Gt", "Gte", "Lt", "Lte"}:
+            op = {"Gt": ">", "Gte": ">=", "Lt": "<", "Lte": "<="}[operator]
+            return f"{column} {op} ?", [expected]
+        if operator == "ContainsAny":
+            return self._sql_contains_any(sql_field, self._value_list(expected), array_field=array_field)
+        if operator == "ContainsAllTokens":
+            options = filters[3] if len(filters) == 4 else None
+            if options is not None and not isinstance(options, dict):
+                raise ValueError("ContainsAllTokens options must be a dict")
+            return self._sql_contains_all_tokens(sql_field, expected, options, array_field=array_field)
+        if operator == "IGlob":
+            pattern = self._sql_like_pattern(expected)
+            return f"lower(cast({column} as varchar)) like ? escape '\\\\'", [pattern]
+
+        raise ValueError(f"unsupported filter operator: {operator!r}")
+
+    def _row_id_order_sql(self, columns: dict[str, str]) -> str:
+        for field in ("id", "company_urn", "position_id", "person_id", "canonical_education_id", "base_id"):
+            if field in columns:
+                return self._quote_ident(field)
+        return "1"
+
+    def _filtered_rows_sql(self, logical_name: str, filters: Any, *, limit: int = 0, order_by_id: bool = False) -> list[dict[str, Any]]:
+        table = self._table_for_namespace(logical_name)
+        columns = self._table_columns(table)
+        where_sql, params = self._compile_filter_sql(filters, columns)
+        sql = f"select * from {self._quote_ident(table)} where {where_sql}"
+        if order_by_id:
+            sql += f" order by {self._row_id_order_sql(columns)}"
+        if limit and limit > 0:
+            sql += " limit ?"
+            params.append(limit)
+        try:
+            rows = self.conn.execute(sql, params).fetchall()
+            result_columns = [desc[0] for desc in self.conn.description or []]
+        except Exception as exc:
+            raise LocalDuckDBError(f"failed querying local DuckDB table {table!r} for namespace {logical_name!r}: {exc}") from exc
+        return [self._normalize_row(dict(zip(result_columns, row))) for row in rows]
+
     def _project_row_object(self, row: dict[str, Any], include_attributes: list[str]) -> LocalQueryRow:
         row_id = self._row_id(row)
         attrs = {key: self._field_value(row, key) for key in include_attributes if self._field_value(row, key) is not None}
@@ -196,7 +386,7 @@ class LocalDuckDBSearchStore:
         return out
 
     def _filtered_rows(self, logical_name: str, filters: Any) -> list[dict[str, Any]]:
-        return filter_rows(self._rows_for_namespace(logical_name), filters)
+        return self._filtered_rows_sql(logical_name, filters)
 
     def filter_only_rows_for_namespace(
         self,
@@ -206,9 +396,7 @@ class LocalDuckDBSearchStore:
         page_size: int = 10000,
         max_results: int = 0,
     ) -> list[dict[str, Any]]:
-        rows = sorted(self._filtered_rows(logical_name, filters), key=lambda row: self._row_id(row))
-        if max_results and max_results > 0:
-            rows = rows[:max_results]
+        rows = self._filtered_rows_sql(logical_name, filters, limit=max_results, order_by_id=True)
         return [self._project_dict(row, include_attributes) for row in rows]
 
     def query_namespace(
@@ -397,6 +585,8 @@ class LocalDuckDBSearchStore:
         has_explicit_query_embedding = payload.get("query_embedding") is not None
         if len(semantic_query) < 80 and not has_explicit_query_embedding:
             rows = sorted(self._filtered_rows("people", filters), key=lambda row: self._row_id(row))
+            if top_k and top_k > 0:
+                rows = rows[:top_k]
             return [self._role_output_row(row, include_attributes, 1.0, "filter_only") for row in rows]
 
         candidates = self._filtered_rows("people", filters)
