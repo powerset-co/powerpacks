@@ -809,6 +809,50 @@ def estimate_has_known_pricing(estimate: dict[str, Any]) -> bool:
 
 def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledger_path: Path) -> tuple[dict[str, Any], int]:
     people = ROOT / '.powerpacks/network-import/merged/people.csv'
+    idx = indexing_readiness(args.operator_id)
+    account_state = accounts_summary(Path(args.accounts))
+    if idx.get('status') == 'search_ready' and not linked_sources(account_state):
+        payload = {
+            'status': 'ready',
+            'people_csv': '.powerpacks/network-import/merged/people.csv',
+            'people_sha256': idx.get('people_sha256') or (sha256_file(people) if people.exists() else ''),
+            'duckdb': idx.get('duckdb', '.powerpacks/search-index/local-search.duckdb'),
+            'ledger': idx.get('ledger', ''),
+            'manifest': idx.get('manifest', ''),
+            'updated_at': now(),
+        }
+        ledger.setdefault('phases', {})['index'] = payload
+        ledger['status'] = 'ready'
+        save_setup_ledger(ledger, ledger_path)
+        return payload, 0
+
+    if idx.get('status') == 'records_only_duckdb_missing':
+        code, duckdb_payload, duckdb_stderr = run_json_command(build_local_duckdb_shim_command_args(args.operator_id), timeout=60 * 60)
+        if code != 0:
+            payload = {
+                'status': 'failed',
+                'step': 'local_duckdb',
+                'local_duckdb': duckdb_payload,
+                'error': tail(duckdb_stderr) or duckdb_payload,
+            }
+            ledger.setdefault('phases', {})['index'] = payload
+            ledger['status'] = 'failed'
+            save_setup_ledger(ledger, ledger_path)
+            return payload, 1
+        payload = {
+            'status': 'ready',
+            'people_csv': '.powerpacks/network-import/merged/people.csv',
+            'people_sha256': sha256_file(people) if people.exists() else '',
+            'local_duckdb': duckdb_payload,
+            'duckdb': duckdb_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb') if isinstance(duckdb_payload, dict) else '.powerpacks/search-index/local-search.duckdb',
+            'manifest': duckdb_payload.get('manifest', '') if isinstance(duckdb_payload, dict) else '',
+            'updated_at': now(),
+        }
+        ledger.setdefault('phases', {})['index'] = payload
+        ledger['status'] = 'ready'
+        save_setup_ledger(ledger, ledger_path)
+        return payload, 0
+
     if not people.exists():
         payload = {'status': 'not_ready', 'reason': 'missing_people_csv', 'missing': ['.powerpacks/network-import/merged/people.csv']}
         ledger.setdefault('phases', {})['index'] = payload
@@ -950,6 +994,7 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
     si = ROOT / '.powerpacks/search-index'
     duck = si / 'local-search.duckdb'
     ledger = si / 'ledger.json'
+    manifest = si / 'manifest.json'
     records = si / 'records'
     people = ROOT / '.powerpacks/network-import/merged/people.csv'
     people_hash = sha256_file(people) if people.exists() else ''
@@ -972,6 +1017,16 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
                     'index_input_sha256': index_input_hash,
                 }
             return {'status': 'search_ready', 'duckdb': str(duck), 'ledger': str(ledger), 'people_sha256': people_hash, 'index_input_sha256': index_input_hash}
+    if duck.exists() and manifest.exists():
+        mf = read_json(manifest)
+        if mf.get('status') == 'ok' and (not operator_id or mf.get('operator_id') in (None, operator_id)):
+            return {
+                'status': 'search_ready',
+                'duckdb': str(duck),
+                'manifest': str(manifest),
+                'people_sha256': people_hash,
+                'index_input_sha256': people_hash,
+            }
     if records.exists() and any(records.glob('*.records.jsonl')) and not duck.exists():
         return {'status': 'records_only_duckdb_missing', 'repair_command': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'}
     if people.exists():

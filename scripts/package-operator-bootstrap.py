@@ -452,6 +452,16 @@ SEARCH_INDEX_METADATA_FILES = [
 ]
 
 
+def should_copy_referenced_restore_path(path_text: str) -> bool:
+    return (
+        path_text == ".powerpacks/network-import/merged"
+        or path_text.startswith(".powerpacks/network-import/merged/")
+        or path_text.startswith(".powerpacks/network-import/network-runs/")
+        or path_text == ".powerpacks/network-import/profile_cache_v2"
+        or path_text.startswith(".powerpacks/network-import/profile_cache_v2/")
+    )
+
+
 def write_processing_restore_ledger(restore_powerpacks_root: Path, operator: dict[str, Any], source_dir: Path) -> None:
     ledger_path = restore_powerpacks_root / "search-index/ledger.json"
     stats_path = source_dir / "stats/bootstrap_from_aleph.json"
@@ -510,12 +520,16 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
 
     copied: list[str] = []
     missing: list[str] = []
+    skipped: list[str] = []
 
     import_ledger_path = operator_dir / "import/outputs/import-network.ledger.json"
     import_ledger = read_json(import_ledger_path) if import_ledger_path.exists() else {}
     run_dir_text = clean(import_ledger.get("run_dir"))
     if import_ledger:
         for path_text in sorted(set(collect_stage_paths(import_ledger))):
+            if not should_copy_referenced_restore_path(path_text):
+                skipped.append(path_text)
+                continue
             copied_path = copy_stage_path(ROOT / path_text, restore_powerpacks_root)
             if copied_path:
                 copied.append(copied_path)
@@ -550,6 +564,7 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
         "restore_root": str(restore_powerpacks_root),
         "normal_pipeline_outputs": copied,
         "missing_referenced_outputs": missing,
+        "skipped_referenced_outputs": skipped,
         "excluded_heavy_outputs": [
             ".powerpacks/search-index/local-search.duckdb",
             ".powerpacks/search-index/roles",

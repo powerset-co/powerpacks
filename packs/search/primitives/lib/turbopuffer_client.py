@@ -403,6 +403,9 @@ def comparison(field: str, op: str, value: Any) -> tuple:
 
 
 def allowed_operator_ids_from_payload(payload: dict[str, Any]) -> list[str]:
+    if is_local_backend():
+        return []
+
     explicit = payload.get("operator_ids") or payload.get("allowed_operator_ids")
     if explicit:
         return list(dict.fromkeys(str(value) for value in explicit if value))

@@ -68,6 +68,8 @@ def fake_local_duckdb_payload(tmp: Path):
     db = tmp / '.powerpacks/search-index/local-search.duckdb'
     db.parent.mkdir(parents=True, exist_ok=True)
     db.write_text('duckdb', encoding='utf-8')
+    manifest = db.parent / 'manifest.json'
+    manifest.write_text(json.dumps({'status': 'ok', 'operator_id': OPERATOR_ID, 'duckdb': str(db)}), encoding='utf-8')
     return 0, {'status': 'ok', 'duckdb': str(db), 'tables': {'local_people_positions': 1}}, ''
 
 
@@ -169,6 +171,22 @@ class SetupPipelineTests(unittest.TestCase):
         dry_run_command = setup.status_payload(ns)['search_index_readiness']['dry_run_command']
         self.assertIn('build_processing_pipeline.py run --dry-run', dry_run_command)
         self.assertIn(f'--default-operator-id {OPERATOR_ID}', dry_run_command)
+
+    def test_status_accepts_local_duckdb_manifest_when_processing_ledger_is_not_completed(self):
+        tmp = self.temp_workspace()
+        ns = argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(tmp / 'accounts.json'), setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'), refresh_interval_hours=168)
+        people = tmp / '.powerpacks/network-import/merged/people.csv'
+        people.parent.mkdir(parents=True)
+        people.write_text('id\np1\n', encoding='utf-8')
+        si = tmp / '.powerpacks/search-index'
+        si.mkdir(parents=True)
+        (si / 'local-search.duckdb').write_text('db', encoding='utf-8')
+        (si / 'ledger.json').write_text(json.dumps({'status': 'running', 'default_operator_id': OPERATOR_ID}), encoding='utf-8')
+        (si / 'manifest.json').write_text(json.dumps({'status': 'ok', 'operator_id': OPERATOR_ID}), encoding='utf-8')
+
+        payload = setup.status_payload(ns)
+        self.assertEqual(payload['search_index_readiness']['status'], 'search_ready')
+        self.assertEqual(payload['search_index_readiness']['manifest'], str(si / 'manifest.json'))
 
     def test_status_marks_restored_bootstrap_import_refresh_due_until_live_sync(self):
         tmp = self.temp_workspace()
@@ -432,6 +450,119 @@ class SetupPipelineTests(unittest.TestCase):
         processing_cmd = next(cmd for cmd in calls if 'build_processing_pipeline.py' in ' '.join(cmd) and '--dry-run' not in cmd)
         self.assertIn('--allow-paid-role-provider', processing_cmd)
         self.assertTrue(any('build-local-duckdb-shim.py' in ' '.join(cmd) for cmd in calls))
+
+    def test_run_materializes_restored_records_without_paid_processing(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        accounts.parent.mkdir(parents=True, exist_ok=True)
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+            'gmail': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'selected_accounts': [], 'account_emails': []}},
+            'linkedin_csv': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
+            'messages': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'imessage': {'status': 'skipped'}, 'whatsapp': {'status': 'skipped'}}},
+            'twitter': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
+        }}), encoding='utf-8')
+        summary = setup.accounts_summary(accounts)
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'pending',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'ready'},
+                'import': {'status': 'ready', 'live_refresh': {
+                    'status': 'completed',
+                    'completed_at': setup.now(),
+                    'source_fingerprint': setup.linked_source_fingerprint(summary),
+                }},
+                'index': {'status': 'pending'},
+            },
+        }), encoding='utf-8')
+        people = tmp / '.powerpacks/network-import/merged/people.csv'
+        people.parent.mkdir(parents=True)
+        people.write_text('id\np1\n', encoding='utf-8')
+        records = tmp / '.powerpacks/search-index/records'
+        records.mkdir(parents=True)
+        (records / 'people.records.jsonl').write_text('{}\n', encoding='utf-8')
+        calls = []
+
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            joined = ' '.join(cmd)
+            self.assertIn('build-local-duckdb-shim.py', joined)
+            return fake_local_duckdb_payload(tmp)
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            refresh_interval_hours=168,
+        )
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            code = setup.run_setup(args)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertIn('build-local-duckdb-shim.py', ' '.join(calls[0]))
+        saved = json.loads(ledger.read_text(encoding='utf-8'))
+        self.assertEqual(saved['status'], 'ready')
+        self.assertEqual(saved['phases']['index']['status'], 'ready')
+        self.assertTrue((tmp / '.powerpacks/search-index/local-search.duckdb').exists())
+
+    def test_run_materializes_records_even_without_people_csv(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / 'accounts.json'
+        accounts.parent.mkdir(parents=True, exist_ok=True)
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+            'gmail': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'selected_accounts': [], 'account_emails': []}},
+            'linkedin_csv': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
+            'messages': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'imessage': {'status': 'skipped'}, 'whatsapp': {'status': 'skipped'}}},
+            'twitter': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
+        }}), encoding='utf-8')
+        summary = setup.accounts_summary(accounts)
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'pending',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'ready'},
+                'import': {'status': 'ready', 'live_refresh': {
+                    'status': 'completed',
+                    'completed_at': setup.now(),
+                    'source_fingerprint': setup.linked_source_fingerprint(summary),
+                }},
+                'index': {'status': 'pending'},
+            },
+        }), encoding='utf-8')
+        records = tmp / '.powerpacks/search-index/records'
+        records.mkdir(parents=True)
+        (records / 'people.records.jsonl').write_text('{}\n', encoding='utf-8')
+        calls = []
+
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            self.assertIn('build-local-duckdb-shim.py', ' '.join(cmd))
+            return fake_local_duckdb_payload(tmp)
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            refresh_interval_hours=168,
+        )
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            code = setup.run_setup(args)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 1)
+        saved = json.loads(ledger.read_text(encoding='utf-8'))
+        self.assertEqual(saved['status'], 'ready')
+        self.assertEqual(saved['phases']['index']['status'], 'ready')
+        self.assertEqual(saved['phases']['index']['people_sha256'], '')
 
     def test_run_forces_network_refresh_when_import_artifact_hash_drifts(self):
         tmp = self.temp_workspace()

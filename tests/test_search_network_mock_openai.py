@@ -3,13 +3,13 @@
 This test exercises the real CLI boundary that harnesses should use:
 
     search_network_pipeline.py prepare -> expand_search_request -> OpenAI chat API
-    search_network_pipeline.py run --search-only -> local search + fixture hydration
+    search_network_pipeline.py run --search-only -> local search + local hydration
 
 The HTTP server below is intentionally tiny but OpenAI-compatible enough for the
-SDK calls made by the parallel extractors and embedding client. The component
-test combines it with the local DuckDB search backend and a JSON Postgres
-fixture, so it validates the no-live-API happy path that replaced the legacy
-harness-composed extraction skill.
+SDK calls made by the parallel extractors and query embedding client. The
+component test combines it with the local DuckDB search backend, so it validates
+the no-live-API search path that replaced the legacy harness-composed extraction
+skill.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
+LOCAL_PIPELINE = ROOT / "packs/search/primitives/local_search_pipeline/local_search_pipeline.py"
 PERSON_1 = "00000000-0000-0000-0000-000000000001"
 PERSON_2 = "00000000-0000-0000-0000-000000000002"
 PERSON_3 = "00000000-0000-0000-0000-000000000003"
@@ -193,54 +194,6 @@ def write_local_search_db(path: Path) -> None:
     conn.close()
 
 
-def write_postgres_fixture(path: Path) -> None:
-    def person(pid: str, name: str, title: str, company: str) -> dict[str, object]:
-        return {
-            "id": pid,
-            "public_identifier": name.lower().replace(" ", "-"),
-            "public_profile_url": f"https://linkedin.com/in/{name.lower().replace(' ', '-')}",
-            "full_name": name,
-            "headline": f"{title} at {company}",
-            "summary": f"{name} builds production backend systems.",
-            "profile_picture_url": None,
-            "location_raw": "San Francisco, CA",
-            "city": "San Francisco",
-            "state": "CA",
-            "country": "United States",
-            "hydrated_context": {
-                "name": name,
-                "headline": f"{title} at {company}",
-                "location": "San Francisco, CA",
-                "linkedin_url": f"https://linkedin.com/in/{name.lower().replace(' ', '-')}",
-                "positions": [{"id": f"{pid}-1", "title": title, "company": company, "company_id": company.lower(), "is_current": True}],
-                "education": [],
-                "tech_skills": ["Python", "Distributed Systems"],
-            },
-            "x_twitter_handle": None,
-            "x_twitter_followers": 0,
-            "linkedin_followers": 100,
-            "linkedin_connections": 500,
-            "ig_handle": None,
-            "ig_followers": 0,
-            "inferred_birth_year": 1990,
-        }
-
-    fixture = {
-        "sets": [{"id": SET_ID, "name": "Component Test Set", "created_by": "auth0|component", "is_active": True, "is_personal": True, "created_at": "2026-01-01T00:00:00Z"}],
-        "users": [{"id": OPERATOR_ID, "user_id": "auth0|component", "email": "component@example.com", "name": "Component Tester"}],
-        "set_members": [{"set_id": SET_ID, "user_id": "auth0|component", "role": "owner", "joined_at": "2026-01-01T00:00:00Z"}],
-        "persons": [
-            person(PERSON_1, "Ada Backend", "Senior Software Engineer", "Company One"),
-            person(PERSON_2, "Grace Systems", "Backend Engineer", "Company Two"),
-        ],
-        "person_source_summary": [
-            {"person_id": PERSON_1, "operator_id": OPERATOR_ID, "total_interactions": 7},
-            {"person_id": PERSON_2, "operator_id": OPERATOR_ID, "total_interactions": 3},
-        ],
-    }
-    path.write_text(json.dumps(fixture, indent=2, sort_keys=True), encoding="utf-8")
-
-
 def read_jsonl(path: Path) -> list[dict[str, object]]:
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt") as handle:
@@ -273,7 +226,7 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         self.assertGreaterEqual(MockOpenAIHandler.request_count, 8)
         self.assertTrue(all(path.endswith("/chat/completions") for path in MockOpenAIHandler.request_paths))
 
-    def test_component_prepare_run_search_only_with_local_search_and_postgres_fixture(self) -> None:
+    def test_component_prepare_run_search_only_with_local_duckdb(self) -> None:
         MockOpenAIHandler.request_count = 0
         MockOpenAIHandler.request_paths = []
         server = ThreadingHTTPServer(("127.0.0.1", 0), MockOpenAIHandler)
@@ -283,17 +236,14 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp_raw:
                 tmp = Path(tmp_raw)
                 local_db = tmp / "local-search.duckdb"
-                pg_fixture = tmp / "postgres-fixture.json"
                 env_file = tmp / "component.env"
                 write_local_search_db(local_db)
-                write_postgres_fixture(pg_fixture)
                 env_file.write_text("", encoding="utf-8")
                 component_env = {
                     "OPENAI_API_KEY": "test-key",
                     "OPENAI_API_BASE": f"http://127.0.0.1:{server.server_port}",
                     "OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
                     "POWERPACKS_LOCAL_SEARCH_DB": str(local_db),
-                    "POWERPACKS_POSTGRES_FIXTURE_JSON": str(pg_fixture),
                     "POWERPACKS_DEFAULT_SET_ID": SET_ID,
                     "POWERSET_DEFAULT_SET_ID": SET_ID,
                     "DATABASE_URL": "",
@@ -307,18 +257,17 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 run_proc = subprocess.run(
                     [
                         sys.executable,
-                        str(PIPELINE),
+                        str(LOCAL_PIPELINE),
                         "run",
+                        "--db",
+                        str(local_db),
                         "--ledger",
-                        str(prepare["ledger"]),
+                        str(tmp / "local-pipeline.ledger.json"),
                         "--query",
                         "software engineers in sf",
                         "--payload-json",
                         str(prepare["payload_json"]),
-                        "--env-file",
-                        str(env_file),
                         "--search-only",
-                        "--execute-approved",
                         "--limit",
                         "10",
                         "--top-k",
@@ -348,11 +297,14 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 self.assertTrue(jsonl_path.exists())
                 self.assertTrue(manifest_path.exists())
                 self.assertEqual(read_jsonl(jsonl_path)[0]["person_id"], PERSON_1)
+                hydrate_step = next(step for step in state["steps"] if step["id"] == "hydrate_people")
+                self.assertEqual(hydrate_step["output"]["source"]["backend"], "duckdb")
+                self.assertEqual(hydrate_step["output"]["source"]["type"], "local_duckdb")
                 with csv_path.open(newline="") as handle:
                     self.assertEqual(len(list(csv.DictReader(handle))), 2)
 
                 step_ids = [step["id"] for step in state["steps"]]
-                self.assertIn("resolve_set_operators", step_ids)
+                self.assertNotIn("resolve_set_operators", step_ids)
                 self.assertIn("execute_role_search", step_ids)
                 self.assertIn("hydrate_people", step_ids)
                 self.assertNotIn("llm_filter_candidates", step_ids)

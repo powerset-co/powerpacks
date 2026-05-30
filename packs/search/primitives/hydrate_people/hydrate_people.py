@@ -12,12 +12,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 
 LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 sys.path.insert(0, str(LIB_DIR))
 
-from postgres_client import fetch_interaction_counts, fetch_person_rows  # noqa: E402
+from postgres_client import fetch_interaction_counts, fetch_person_rows, load_env_file  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 
 
@@ -178,6 +179,194 @@ def base_person_id(value: str) -> str:
     return str(value)
 
 
+def normalize_local_value(value: Any) -> Any:
+    if hasattr(value, "tolist"):
+        try:
+            value = value.tolist()
+        except Exception:
+            pass
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, tuple):
+        return [normalize_local_value(item) for item in value]
+    if isinstance(value, list):
+        return [normalize_local_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): normalize_local_value(item) for key, item in value.items()}
+    return value
+
+
+def table_exists(conn: Any, table: str) -> bool:
+    row = conn.execute(
+        "select count(*) from information_schema.tables where table_schema in ('main', 'temp') and table_name = ?",
+        [table],
+    ).fetchone()
+    return bool(row and row[0])
+
+
+def table_columns(conn: Any, table: str) -> list[str]:
+    if not table_exists(conn, table):
+        return []
+    return [str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+
+
+def local_rows(conn: Any, table: str, person_ids: list[str]) -> list[dict[str, Any]]:
+    columns = table_columns(conn, table)
+    if not columns:
+        return []
+    id_fields = [field for field in ["person_id", "base_id"] if field in columns]
+    if not id_fields:
+        return []
+    conn.execute("drop table if exists temp._hydrate_requested_ids")
+    conn.execute("create temporary table _hydrate_requested_ids(id varchar)")
+    conn.executemany("insert into _hydrate_requested_ids values (?)", [(pid,) for pid in person_ids])
+    predicates = " or ".join(f"cast(t.{field} as varchar) = r.id" for field in id_fields)
+    rows = conn.execute(f"select distinct t.* from {table} t join _hydrate_requested_ids r on {predicates}").fetchall()
+    return [
+        {columns[index]: normalize_local_value(value) for index, value in enumerate(row)}
+        for row in rows
+    ]
+
+
+def epoch_date(value: Any) -> str | None:
+    try:
+        ts = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    if ts <= 0:
+        return None
+    return datetime.fromtimestamp(ts, timezone.utc).date().isoformat()
+
+
+def compact_location(row: dict[str, Any]) -> str | None:
+    parts = [str(row.get(key)) for key in ["city", "state", "country"] if row.get(key)]
+    return ", ".join(parts) if parts else None
+
+
+def local_position(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("position_id") or row.get("id"),
+        "position_id": row.get("position_id") or row.get("id"),
+        "title": row.get("position_title") or row.get("raw_title"),
+        "position_title": row.get("position_title") or row.get("raw_title"),
+        "company": row.get("company_name"),
+        "company_name": row.get("company_name"),
+        "company_id": row.get("company_id"),
+        "city": row.get("city"),
+        "state": row.get("state"),
+        "country": row.get("country"),
+        "location": compact_location(row),
+        "is_current": row.get("is_current"),
+        "start_date": epoch_date(row.get("start_date_epoch")),
+        "end_date": epoch_date(row.get("end_date_epoch")),
+        "tenure_years": row.get("tenure_years"),
+        "seniority_band": row.get("seniority_band"),
+        "role_track": row.get("role_track"),
+    }
+
+
+def local_education(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("education_id") or row.get("id"),
+        "school_name": row.get("school_name"),
+        "degree": row.get("degree"),
+        "degree_normalized": row.get("degree_normalized"),
+        "field_of_study": row.get("field_of_study"),
+        "start_year": row.get("start_year") or None,
+        "end_year": row.get("end_year") or None,
+        "graduation_year": row.get("graduation_year") or None,
+        "canonical_education_id": row.get("canonical_education_id"),
+    }
+
+
+def first_present(rows: list[dict[str, Any]], field: str) -> Any:
+    for row in rows:
+        value = row.get(field)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def fetch_local_person_rows(person_ids: list[str], env_file: Path | None = None) -> list[dict[str, Any]] | None:
+    load_env_file(env_file)
+    db_path = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
+    if not db_path:
+        return None
+    try:
+        import duckdb  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("duckdb is required for local DuckDB search") from exc
+
+    with duckdb.connect(str(db_path), read_only=True) as conn:
+        position_rows = local_rows(conn, "local_people_positions", person_ids)
+        summary_rows = local_rows(conn, "local_summaries", person_ids)
+        education_rows = local_rows(conn, "local_people_education", person_ids)
+
+    positions_by_person: dict[str, list[dict[str, Any]]] = {}
+    for row in position_rows:
+        pid = str(row.get("person_id") or row.get("base_id") or "")
+        if pid:
+            positions_by_person.setdefault(pid, []).append(row)
+    for rows in positions_by_person.values():
+        rows.sort(key=lambda row: (not bool(row.get("is_current")), -(int(row.get("start_date_epoch") or 0))))
+
+    summaries_by_person = {
+        str(row.get("person_id") or row.get("base_id")): row
+        for row in summary_rows
+        if row.get("person_id") or row.get("base_id")
+    }
+    education_by_person: dict[str, list[dict[str, Any]]] = {}
+    for row in education_rows:
+        pid = str(row.get("person_id") or row.get("base_id") or "")
+        if pid:
+            education_by_person.setdefault(pid, []).append(row)
+
+    rows: list[dict[str, Any]] = []
+    for pid in person_ids:
+        position_source = positions_by_person.get(pid, [])
+        summary = summaries_by_person.get(pid, {})
+        education_source = education_by_person.get(pid, [])
+        if not position_source and not summary and not education_source:
+            continue
+
+        positions = [local_position(row) for row in position_source]
+        education = [local_education(row) for row in education_source]
+        current = next((row for row in position_source if row.get("is_current")), position_source[0] if position_source else {})
+        title = current.get("position_title") or current.get("raw_title")
+        company = current.get("company_name")
+        headline = " at ".join(str(part) for part in [title, company] if part) or title
+        location = compact_location(current) if current else None
+        years = first_present(position_source, "total_years_experience")
+
+        context = {
+            "person_id": pid,
+            "name": "",
+            "headline": headline,
+            "location": location,
+            "positions": positions,
+            "education": education,
+            "tech_skills": summary.get("tech_skills") or [],
+            "years_of_experience": years,
+        }
+        rows.append({
+            "id": pid,
+            "full_name": "",
+            "headline": headline,
+            "summary": summary.get("summary"),
+            "location_raw": location,
+            "city": current.get("city") if current else None,
+            "state": current.get("state") if current else None,
+            "country": current.get("country") if current else None,
+            "hydrated_context": context,
+            "x_twitter_followers": first_present(position_source, "x_twitter_followers"),
+            "linkedin_followers": first_present(position_source, "linkedin_followers"),
+            "linkedin_connections": first_present(position_source, "linkedin_connections"),
+            "ig_followers": first_present(position_source, "ig_followers"),
+            "inferred_birth_year": first_present(position_source, "inferred_birth_year"),
+        })
+    return rows
+
+
 def artifact_dir(state_path: Path, state: dict[str, Any]) -> Path:
     existing = state.get("artifacts") or {}
     if existing.get("artifact_dir"):
@@ -258,8 +447,22 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         return
 
     env_file = Path(args.env_file) if args.env_file else None
-    rows = fetch_person_rows(requested, env_file=env_file)
-    interaction_counts = fetch_interaction_counts(requested, env_file=env_file)
+    rows = fetch_local_person_rows(requested, env_file=env_file)
+    if rows is None:
+        rows = fetch_person_rows(requested, env_file=env_file)
+        interaction_counts = fetch_interaction_counts(requested, env_file=env_file)
+        source = {
+            "type": "postgres_contract",
+            "backend": "postgres_supabase",
+            "env_file": str(env_file) if env_file else None,
+        }
+    else:
+        interaction_counts = {}
+        source = {
+            "type": "local_duckdb",
+            "backend": "duckdb",
+            "duckdb": os.getenv("POWERPACKS_LOCAL_SEARCH_DB"),
+        }
     metadata = candidate_metadata(state)
     profiles = []
     for row in rows:
@@ -290,11 +493,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         "llm_profiles_path": str(llm_profiles_jsonl),
         "profiles_compressed": not args.no_compress_profiles,
         "artifacts": artifacts,
-        "source": {
-            "type": "postgres_contract",
-            "backend": "postgres_supabase",
-            "env_file": str(env_file) if env_file else None,
-        },
+        "source": source,
     }
     elapsed_ms = int((time.time() - started) * 1000)
     if args.write_state:
