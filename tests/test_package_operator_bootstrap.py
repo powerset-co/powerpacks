@@ -60,7 +60,7 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
             source_dir.mkdir()
             uploads: list[list[str]] = []
 
-            def fake_run(cmd, cwd=ROOT):
+            def fake_run(cmd, cwd=ROOT, **kwargs):
                 if cmd[:2] == [mod.sys.executable, "packs/ingestion/primitives/bootstrap_network_from_exports/bootstrap_network_from_exports.py"]:
                     out = Path(cmd[cmd.index("--output-root") + 1])
                     operator_dir = out / "operators/patrick"
@@ -114,13 +114,15 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                         encoding="utf-8",
                     )
                     return json.dumps({"status": "ok", "run_dir": str(out)})
-                if cmd[:3] == ["gcloud", "storage", "cp"]:
+                if cmd[:4] == ["gcloud", "--quiet", "storage", "cp"]:
                     uploads.append(cmd)
                     return ""
                 raise AssertionError(f"unexpected command: {cmd}")
 
             original = mod.run_command
+            original_upload = mod.run_streaming_command
             mod.run_command = fake_run
+            mod.run_streaming_command = fake_run
             try:
                 code = mod.main(
                     [
@@ -146,6 +148,7 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                 )
             finally:
                 mod.run_command = original
+                mod.run_streaming_command = original_upload
 
             self.assertEqual(code, 0)
             manifest = json.loads((tmp / "out/operators/patrick/manifest.json").read_text(encoding="utf-8"))

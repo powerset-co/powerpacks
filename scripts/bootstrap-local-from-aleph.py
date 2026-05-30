@@ -572,19 +572,21 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
                 role_ids.append("founder")
             base_id = clean(row.get("base_person_id"))
             word_text = f"{raw_title} {description} {clean(dense.get('seniority_band') or row.get('seniority_band'))}".strip()
+            company_id = company_id_map.get(clean(row.get("company_id")), "")
+            company_row = company_rows_by_local.get(company_id, {}) if company_id else {}
             yield {
                 "id": clean(row.get("id")), "position_id": clean(row.get("id")), "person_id": base_id, "base_id": base_id,
                 "vector": emb.get("dense_embedding"), "position_title": raw_title, "description": description, "dense_text": dense_text,
                 "word_tokens": word_tokenize(word_text), "char_tokens": char_tokenize(word_text), "d2q_tokens": word_tokenize(" ".join(d2q_parts)), "phrase_tokens": phrase_tokenize(word_text),
-                "seniority_band": clean(dense.get("seniority_band") or row.get("seniority_band")), "company_id": company_id_map.get(clean(row.get("company_id")), ""),
-                "company_domain": clean(position.get("company_domain") or position.get("domain") or position.get("website_domain")),
-                "company_linkedin_url": clean(position.get("company_linkedin_url") or position.get("linkedin_url") or position.get("company_url")),
-                "company_description": clean(position.get("company_description")),
-                "company_sector_types": listify(position.get("company_sector_types")),
-                "company_entity_types": listify(position.get("company_entity_types")),
-                "company_headcount": int(position.get("company_headcount") or 0),
-                "company_funding_total": float(position.get("company_funding_total") or 0),
-                "company_stage": clean(position.get("company_stage") or position.get("stage")),
+                "seniority_band": clean(dense.get("seniority_band") or row.get("seniority_band")), "company_id": company_id,
+                "company_domain": clean(position.get("company_domain") or position.get("domain") or position.get("website_domain") or company_row.get("website_domain")),
+                "company_linkedin_url": clean(position.get("company_linkedin_url") or position.get("linkedin_url") or position.get("company_url") or company_row.get("linkedin_url")),
+                "company_description": clean(position.get("company_description") or company_row.get("description")),
+                "company_sector_types": listify(position.get("company_sector_types") or company_row.get("sector_types")),
+                "company_entity_types": listify(position.get("company_entity_types") or company_row.get("entity_types")),
+                "company_headcount": to_int(position.get("company_headcount") or company_row.get("headcount")),
+                "company_funding_total": to_float(position.get("company_funding_total") or company_row.get("funding_total")),
+                "company_stage": clean(position.get("company_stage") or position.get("stage") or company_row.get("funding_stage") or company_row.get("stage")),
                 "investor_names": listify(position.get("investor_names")),
                 "city": clean(row.get("city")), "state": clean(row.get("state")), "country": clean(row.get("country")), "macro_region": clean(row.get("macro_region")),
                 "is_current": bool(row.get("is_current")), "total_years_experience": float(row.get("total_years_experience") or 0),

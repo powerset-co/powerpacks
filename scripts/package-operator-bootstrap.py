@@ -144,6 +144,12 @@ def run_command(cmd: list[str], *, cwd: Path = ROOT) -> str:
     return completed.stdout
 
 
+def run_streaming_command(cmd: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
+    completed = subprocess.run(cmd, cwd=cwd, env=env, text=True, check=False)
+    if completed.returncode != 0:
+        raise SystemExit(completed.returncode)
+
+
 def db_url_from_env(args: argparse.Namespace) -> str:
     load_dotenv()
     return clean(args.database_url or os.getenv("DATABASE_URL"))
@@ -668,17 +674,30 @@ def python_gcs_upload(local_path: Path, destination: str) -> None:
             tmp_key.unlink(missing_ok=True)
 
 
+def gcloud_gcs_upload(local_path: Path, destination: str) -> None:
+    tracker_dir = Path(tempfile.mkdtemp(prefix="powerpacks-gcloud-trackers-", dir="/var/tmp"))
+    env = os.environ.copy()
+    env["CLOUDSDK_STORAGE_PARALLEL_COMPOSITE_UPLOAD_ENABLED"] = "False"
+    env["CLOUDSDK_STORAGE_PROCESS_COUNT"] = "1"
+    env["CLOUDSDK_STORAGE_THREAD_COUNT"] = "1"
+    env["CLOUDSDK_STORAGE_TRACKER_FILES_DIRECTORY"] = str(tracker_dir)
+    try:
+        run_streaming_command(["gcloud", "--quiet", "storage", "cp", str(local_path), destination], env=env)
+    finally:
+        shutil.rmtree(tracker_dir, ignore_errors=True)
+
+
 def upload_one(local_path: Path, destination: str, backend: str) -> str:
     if backend == "python":
         python_gcs_upload(local_path, destination)
         return "python-google-cloud-storage"
     if backend == "gcloud":
-        run_command(["gcloud", "storage", "cp", str(local_path), destination])
+        gcloud_gcs_upload(local_path, destination)
         return "gcloud"
     if backend == "auto":
         if shutil.which("gcloud"):
             try:
-                run_command(["gcloud", "storage", "cp", str(local_path), destination])
+                gcloud_gcs_upload(local_path, destination)
                 return "gcloud"
             except SystemExit:
                 python_gcs_upload(local_path, destination)
