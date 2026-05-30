@@ -25,6 +25,107 @@
     "plan": {
       "type": "object"
     },
+    "search_plan_revisions": {
+      "type": "array",
+      "description": "Append-only search-plan versions created from user feedback or agent refinement.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["recorded_at", "revision_id"],
+        "properties": {
+          "recorded_at": { "type": "string" },
+          "revision_id": { "type": "string" },
+          "revision": { "type": "integer" },
+          "reason": { "type": "string" },
+          "user_feedback": { "type": "string" },
+          "criteria_delta": { "type": "object" },
+          "plan": { "type": "object" }
+        }
+      }
+    },
+    "candidate_feedback": {
+      "type": "array",
+      "description": "Append-only candidate labels and feedback supplied by the user or reviewer.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["recorded_at", "feedback_id"],
+        "properties": {
+          "recorded_at": { "type": "string" },
+          "feedback_id": { "type": "string" },
+          "person_id": { "type": "string" },
+          "label": { "type": "string" },
+          "reason": { "type": "string" },
+          "applied_to_next_search": { "type": "boolean" }
+        }
+      }
+    },
+    "criteria_mutations": {
+      "type": "array",
+      "description": "Append-only changes to hard filters, soft filters, reject criteria, budget, or fan-out strategy.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["recorded_at", "mutation_id"],
+        "properties": {
+          "recorded_at": { "type": "string" },
+          "mutation_id": { "type": "string" },
+          "source_feedback_ids": { "type": "array", "items": { "type": "string" } },
+          "mutation": { "type": "object" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "run_lineage": {
+      "type": "array",
+      "description": "Links between this run, parent runs, child fan-outs, and artifact/state paths.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["recorded_at", "lineage_id"],
+        "properties": {
+          "recorded_at": { "type": "string" },
+          "lineage_id": { "type": "string" },
+          "relationship": { "type": "string" },
+          "task_id": { "type": "string" },
+          "state": { "type": "string" },
+          "artifact_dir": { "type": "string" }
+        }
+      }
+    },
+    "exemplar_sets": {
+      "type": "array",
+      "description": "Candidate exemplars selected for clustering/fan-out.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["recorded_at", "exemplar_set_id"],
+        "properties": {
+          "recorded_at": { "type": "string" },
+          "exemplar_set_id": { "type": "string" },
+          "name": { "type": "string" },
+          "person_ids": { "type": "array", "items": { "type": "string" } },
+          "selection_reason": { "type": "string" }
+        }
+      }
+    },
+    "fanout_threads": {
+      "type": "array",
+      "description": "Clustered fan-out threads, their criteria, budgets, state paths, and results.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["recorded_at", "thread_id"],
+        "properties": {
+          "recorded_at": { "type": "string" },
+          "thread_id": { "type": "string" },
+          "cluster_label": { "type": "string" },
+          "criteria": { "type": "object" },
+          "state": { "type": "string" },
+          "artifact_dir": { "type": "string" }
+        }
+      }
+    },
     "steps": {
       "type": "array",
       "items": {

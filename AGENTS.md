@@ -153,15 +153,17 @@ application-default credentials are not needed for normal Powerpacks workflows.
   `.powerpacks/network-import/merged/people.csv` and writes
   `.powerpacks/search-index/`; do not run LLM, network, Supabase,
   Postgres, or TurboPuffer calls for this workflow.
-- **Search pack** (search-network, search-company): requires `.env` with
-  TurboPuffer + Postgres credentials. If `.env` is present, run the search
-  primitive directly and use its error to diagnose; use the doctor only if env
-  or auth looks broken and the cause is unclear. For `$search-network`, after
+- **Search pack** (search-network, search-company):
+  `$search-network` and `$search-company` require `.env` with TurboPuffer +
+  Postgres credentials. If `.env` is present, run the search
+  primitive directly and use its error to diagnose; use the doctor only if env or
+  auth looks broken and the cause is unclear. For `$search-network`, after
   loading `packs/search/skills/search-network/SKILL.md`, use its documented
-  company-directory MCP fast path for company-only people lookups; otherwise
-  start with `search_network_pipeline.py prepare --query ...`. Do not
-  grep/search/read search docs, schemas, primitive source, or prior artifacts on
-  the happy path.
+  company-directory MCP fast path for company-only people lookups; use the
+  normal `search_network_pipeline.py prepare --query ...` path for ordinary
+  role searches; and use the complex-JD recruiter loop when a pasted JD or broad
+  role brief needs bounded multi-query execution. Do not grep/search/read
+  search docs, schemas, primitive source, or prior artifacts on the happy path.
 
 Don't run pack-specific checks pre-emptively. Only when the user's request
 implies that pack.
@@ -177,7 +179,8 @@ internals, primitive sequences, or orchestration details.
 Routes:
 
 - `$search-network`, people search, network search, role/title/location/school
-  searches, "who is...", "find people...", company-directory queries →
+  searches, "who is...", "find people...", complex JD plan-and-execute,
+  company-directory queries →
   `packs/search/skills/search-network/SKILL.md`
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`

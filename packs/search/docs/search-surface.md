@@ -16,6 +16,14 @@ The intended user-facing entrypoints are:
 
 ## Supported User Stories
 
+Search planning:
+
+- "turn this JD into multiple network-search queries"
+- "plan 5 small high-precision recruiting probes, review with an LLM, cluster survivors, then fan out K searches"
+- "plan parallel searches for someone founder-capable but not necessarily a founder"
+- "split this role into founder, founding engineer, elite-domain-builder, and fractional CTO angles"
+- "make the tech stack a soft filter and separate OR-style experience traits"
+
 People search:
 
 - "who are software engineers in sf"
@@ -43,8 +51,13 @@ Company lookup:
 ## Public Execution Model
 
 - `people_by_role`
-  Start with role/title intent and optional location/company constraints.
-  This is the only public execution vertical in V1.
+  Start with role/title intent and optional location/company constraints. For a
+  complex JD or broad role brief, this entrypoint should produce a multi-query
+  recruiter-loop plan internally, then orchestrate bounded searches, review,
+  clustering, fan-out, and export after one approval. Complex recruiting plans
+  use about 5 small diversified initial probes, count/budget gates before LLM
+  review, a default `score >= 0.3` usable-candidate cutoff, 10-20 exemplars, and
+  K thread-specific fan-outs.
 - `companies`
   Resolve exact company names, aliases, vertical/domain descriptions, sectors,
   funding/headcount constraints, geography, YC batch, and investor-backed
@@ -60,18 +73,37 @@ company schema.
 
 ## Public Primitive Flow
 
+Search planning:
+
+1. read the JD/brief
+2. identify hard constraints, soft traits, and OR-equivalent experience families
+3. produce about 5 narrow, high-precision `/search-network` initial probes that
+   cover different retrieval dimensions with small candidate limits
+4. plan high-reasoning LLM review/rerank as the default reviewer, with HITL as
+   an optional checkpoint
+5. require count/budget gates before LLM review and `score >= 0.3` as the
+   default usable-candidate cutoff
+6. explain how to cluster 10-20 exemplars into K differentiated threads and
+   use those threads for K bounded fan-out searches
+7. explain dedupe/review guidance for merging final result sets
+
 People search:
 
-1. `expand_search_request`
-2. `decide_search_strategy`
-3. optionally `plan_adjacency_search`
-4. run direct search, count-first search, or slice search
-5. `assess_frontier`
-6. `plan_candidate_review`
-7. `hydrate_people` for the full candidate frontier
-8. optionally `llm_filter_candidates` to remove clear non-matches
-9. `persist_search_results`
-10. host UI or CLI tooling reads persisted artifacts for review/refinement
+1. Detect company-only fast path, ordinary role search, or complex-JD recruiter
+   loop.
+2. Ordinary role search uses `expand_search_request`, `decide_search_strategy`,
+   optional `plan_adjacency_search`, direct/count-first/slice retrieval,
+   `assess_frontier`, `plan_candidate_review`, `hydrate_people`, optional LLM
+   filtering/reranking, and `persist_search_results`.
+3. Complex-JD recruiter loop uses an internal planning step, then orchestrates
+   the approved plan: initial probes, count/retrieval gates,
+   merged dedupe, LLM review/rerank within budget, `score >= 0.3` cutoff,
+   exemplar clustering, K bounded fan-outs, final review, and persisted exports.
+4. Host UI or CLI tooling reads persisted artifacts for review/refinement.
+
+The complex-JD loop may be an agent/harness orchestration across multiple normal
+`search-network` runs and artifacts; do not imply there is one monolithic
+pipeline command unless such a primitive exists.
 
 Company lookup:
 

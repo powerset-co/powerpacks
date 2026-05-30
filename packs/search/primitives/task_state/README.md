@@ -46,6 +46,23 @@ python powerpacks/packs/search/primitives/task_state/task_state.py record-step \
 
 The state file should validate against `schemas/task-run.schema.json`.
 
+Use `append-lineage` to preserve feedback-driven refinement over multiple
+rounds instead of overwriting criteria invisibly. Supported `--kind` values are
+`candidate_feedback`, `criteria_mutation`, `search_plan_revision`,
+`run_lineage`, `exemplar_set`, and `fanout_thread`:
+
+```bash
+python powerpacks/packs/search/primitives/task_state/task_state.py append-lineage \
+  --state .powerpacks/runs/search-network-<uuid>-cto-search.json \
+  --kind candidate_feedback \
+  --payload-json '{"person_id":"abc","label":"false_positive","reason":"not technical","applied_to_next_search":true}'
+```
+
+Each lineage append updates the matching top-level array in the state file and
+writes an `append_lineage` row to the `.events.jsonl` audit log. The helper
+generates stable ids such as `feedback_id` / `mutation_id` when omitted and
+auto-increments `search_plan_revision.revision` when omitted.
+
 Approval records both execution approval and whether post-hydration agentic
 review should run:
 

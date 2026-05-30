@@ -20,3 +20,11 @@ Do not run doctor checks, MCP set listing, network refreshes, or skill workflows
 for that narrow question unless the user asks to verify live or change the set.
 
 Never paste secret env values into chat.
+
+## Powerpacks Skill Routing
+
+- `$search-network`, people search, network search, role/title/location/school
+  searches, complex JD plan-and-execute, or company-directory people lookups →
+  `packs/search/skills/search-network/SKILL.md`
+- `$search-company`, company lookup, company IDs, investor/funding/sector or
+  company-set resolution → `packs/search/skills/search-company/SKILL.md`

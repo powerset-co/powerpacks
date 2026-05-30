@@ -12,6 +12,16 @@ from typing import Any
 from uuid import uuid4
 
 
+LINEAGE_CONFIG = {
+    "search_plan_revision": ("search_plan_revisions", "revision_id"),
+    "candidate_feedback": ("candidate_feedback", "feedback_id"),
+    "criteria_mutation": ("criteria_mutations", "mutation_id"),
+    "run_lineage": ("run_lineage", "lineage_id"),
+    "exemplar_set": ("exemplar_sets", "exemplar_set_id"),
+    "fanout_thread": ("fanout_threads", "thread_id"),
+}
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -130,6 +140,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         },
         "plan": load_json_arg(args.plan_json) or {},
         "steps": [],
+        **{field: [] for field, _id_field in LINEAGE_CONFIG.values()},
     }
     write_state(out_path, state)
     append_event(out_path, {
@@ -290,6 +301,44 @@ def cmd_request_changes(args: argparse.Namespace) -> None:
     print(json.dumps({"state": str(path), "event_log": str(event_log_path(path)), "status": "paused"}, indent=2))
 
 
+def cmd_append_lineage(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    state = read_state(path)
+    now = now_iso()
+    payload = load_json_arg(args.payload_json) or {}
+    if not isinstance(payload, dict):
+        raise TypeError("lineage payload must be a JSON object")
+    field, id_field = LINEAGE_CONFIG[args.kind]
+    item = dict(payload)
+    item.setdefault(id_field, f"{args.kind}-{uuid4()}")
+    if args.kind == "search_plan_revision":
+        item.setdefault("revision", len(state.get(field, [])) + 1)
+    item.setdefault("recorded_at", now)
+    item.setdefault("source", args.source)
+    state.setdefault(field, []).append(item)
+    state["updated_at"] = now
+    write_state(path, state)
+    append_event(path, {
+        "event": "append_lineage",
+        "task_id": state.get("task_id"),
+        "state": str(path),
+        "timestamp": now,
+        "kind": args.kind,
+        "field": field,
+        "count": len(state.get(field, [])),
+        "source": args.source,
+        id_field: item.get(id_field),
+    })
+    print(json.dumps({
+        "state": str(path),
+        "event_log": str(event_log_path(path)),
+        "kind": args.kind,
+        "field": field,
+        "count": len(state.get(field, [])),
+        id_field: item.get(id_field),
+    }, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manage a Powerpacks JSON task run")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -336,6 +385,13 @@ def main() -> None:
     changes.add_argument("--requested-by", default="user")
     changes.add_argument("--note", required=True)
     changes.set_defaults(func=cmd_request_changes)
+
+    lineage = sub.add_parser("append-lineage")
+    lineage.add_argument("--state", required=True)
+    lineage.add_argument("--kind", required=True, choices=sorted(LINEAGE_CONFIG))
+    lineage.add_argument("--payload-json", required=True)
+    lineage.add_argument("--source", default="user")
+    lineage.set_defaults(func=cmd_append_lineage)
 
     args = parser.parse_args()
     args.func(args)

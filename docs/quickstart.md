@@ -36,9 +36,16 @@ Homebrew is available, setup installs `uv` automatically.
 
 ### `search-network` / `search-company`
 
-These hit Powerset infrastructure, so you need a working `.env`. Run
-`$powerset setup` (below) to populate it, or copy `packs/powerset/templates/env.example` to
-`.env` and fill it in manually.
+Use `$search-network <jd-or-brief>` when you want the agent to do the work. For
+complex JDs, it plans the recruiter loop internally, shows one search-plan approval, then
+orchestrates the planned searches against Powerset infrastructure. The default
+LLM review budget is 100 unique profiles across initial probes plus fan-out; this
+limits expensive review/rerank volume, not retrieval/count checks or final found
+count.
+
+`$search-network` and `$search-company` hit Powerset infrastructure, so you need
+a working `.env`. Run `$powerset setup` (below) to populate it, or copy
+`packs/powerset/templates/env.example` to `.env` and fill it in manually.
 
 ### `$powerset setup` (recommended setup path)
 
@@ -181,7 +188,10 @@ $search-network senior infra engineers at fintech infra startups in NYC, Stanfor
 ```
 
 The skill walks you through decomposition → plan → user approval → retrieval →
-hydration → CSV/JSONL artifact. Outputs land under `.powerpacks/runs/...`.
+hydration → CSV/JSONL artifact. For complex JDs it may plan multiple probes,
+review up to the approved LLM budget, cluster above-cutoff exemplars, and fan out
+bounded follow-up searches before exporting. Outputs land under
+`.powerpacks/runs/...`.
 
 See `packs/search/docs/task-flow.md` for the full lifecycle and the
 `expand_search_request` parallel extractor boundary.
