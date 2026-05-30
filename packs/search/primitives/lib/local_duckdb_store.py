@@ -407,6 +407,10 @@ class LocalDuckDBSearchStore:
         top_k: int,
         include_attributes: list[str],
     ) -> LocalQueryResponse:
+        if isinstance(rank_by, (list, tuple)) and len(rank_by) >= 3 and str(rank_by[1]) == "kNN":
+            rows = self._vector_rank_sql(logical_name, filters, str(rank_by[0]), rank_by[2], top_k)
+            return LocalQueryResponse([self._project_row_object(row, include_attributes) for row in rows])
+
         rows = self._filtered_rows(logical_name, filters)
         ranked = self._rank_rows(logical_name, rows, rank_by)
         if top_k and top_k > 0:
@@ -549,6 +553,57 @@ class LocalDuckDBSearchStore:
                 scored.append((row, score))
         return sorted(scored, key=lambda item: (-item[1], self._row_id(item[0])))
 
+    def _vector_rank_sql(
+        self,
+        logical_name: str,
+        filters: Any,
+        field: str,
+        query_vector: Any,
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        query = self._vector_values(query_vector)
+        if not query:
+            return []
+
+        table = self._table_for_namespace(logical_name)
+        columns = self._table_columns(table)
+        sql_field = self._sql_field(field, columns)
+        if sql_field is None:
+            return []
+
+        where_sql, params = self._compile_filter_sql(filters, columns)
+        vector_column = self._quote_ident(sql_field)
+        order_column = self._row_id_order_sql(columns)
+        sql = f"""
+            with filtered as (
+                select *
+                from {self._quote_ident(table)}
+                where {where_sql}
+            ), scored as (
+                select
+                    *,
+                    list_cosine_similarity({vector_column}, ?::DOUBLE[]) as score
+                from filtered
+                where {vector_column} is not null
+                  and len({vector_column}) = ?
+            )
+            select *
+            from scored
+            where score > 0.0
+            order by score desc, {order_column}
+        """
+        query_params = [*params, query, len(query)]
+        if top_k and top_k > 0:
+            sql += " limit ?"
+            query_params.append(top_k)
+
+        try:
+            rows = self.conn.execute(sql, query_params).fetchall()
+            result_columns = [desc[0] for desc in self.conn.description or []]
+        except Exception as exc:
+            raise LocalDuckDBError(f"failed vector-ranking local DuckDB table {table!r} for namespace {logical_name!r}: {exc}") from exc
+        return [self._normalize_row(dict(zip(result_columns, row))) for row in rows]
+
     def _rrf(self, result_lists: list[list[dict[str, Any]]], weights: list[float]) -> list[tuple[str, float]]:
         scores: dict[str, float] = {}
         for rows, weight in zip(result_lists, weights):
@@ -589,7 +644,6 @@ class LocalDuckDBSearchStore:
                 rows = rows[:top_k]
             return [self._role_output_row(row, include_attributes, 1.0, "filter_only") for row in rows]
 
-        candidates = self._filtered_rows("people", filters)
         bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
         result_lists: list[list[dict[str, Any]]] = []
         weights: list[float] = []
@@ -599,11 +653,14 @@ class LocalDuckDBSearchStore:
         for query in bm25_queries:
             phrase_tokens.extend(self._phrase_query_tokens(query))
             word_tokens.extend(self._word_query_tokens(query))
+        candidates: list[dict[str, Any]] | None = None
         for field, tokens, weight in [
             ("phrase_tokens", list(dict.fromkeys(phrase_tokens)), 1.5),
             ("word_tokens", list(dict.fromkeys(word_tokens)), 1.0),
         ]:
             if tokens:
+                if candidates is None:
+                    candidates = self._filtered_rows("people", filters)
                 result_lists.append([row for row, _score in self._bm25_rank(candidates, field, tokens)[:top_k]])
                 weights.append(weight)
 
@@ -612,7 +669,7 @@ class LocalDuckDBSearchStore:
             maybe = embedding_fn(semantic_query)
             query_embedding = await maybe if asyncio.iscoroutine(maybe) else maybe
         if query_embedding is not None:
-            result_lists.append([row for row, _score in self._vector_rank(candidates, "vector", query_embedding)[:top_k]])
+            result_lists.append(self._vector_rank_sql("people", filters, "vector", query_embedding, top_k))
             weights.append(0.6)
 
         by_id = {self._row_id(row): row for rows in result_lists for row in rows}

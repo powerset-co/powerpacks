@@ -855,6 +855,57 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(response.rows[0].id, "person-founder-0")
         self.assertGreater(response.rows[0].score, 0.0)
 
+    def test_vector_rank_pushes_filters_and_cosine_into_duckdb(self) -> None:
+        store = turbopuffer_client.local_store()
+        original_filtered_rows = store._filtered_rows
+
+        def fail_filtered_rows(*_args, **_kwargs):
+            raise AssertionError("vector search must not materialize filtered rows in Python")
+
+        store._filtered_rows = fail_filtered_rows
+        try:
+            response = store.query_namespace(
+                "people",
+                ("vector", "kNN", [0.0, 1.0, 0.0]),
+                ("And", [
+                    ("country", "Eq", "United States"),
+                    ("is_current", "Eq", True),
+                ]),
+                1,
+                ["base_id", "position_title"],
+            )
+        finally:
+            store._filtered_rows = original_filtered_rows
+
+        self.assertEqual(response.rows[0].id, "person-engineer-0")
+        self.assertEqual(response.rows[0].base_id, "person-engineer")
+        self.assertGreater(response.rows[0].score, 0.99)
+
+    def test_vector_only_hybrid_role_search_uses_duckdb_sql(self) -> None:
+        store = turbopuffer_client.local_store()
+        original_filtered_rows = store._filtered_rows
+
+        def fail_filtered_rows(*_args, **_kwargs):
+            raise AssertionError("vector-only hybrid search must not materialize filtered rows in Python")
+
+        store._filtered_rows = fail_filtered_rows
+        try:
+            rows = asyncio.run(store.hybrid_role_rows(
+                {"semantic_query": "backend", "query_embedding": [0.0, 1.0, 0.0]},
+                ("And", [
+                    ("country", "Eq", "United States"),
+                    ("is_current", "Eq", True),
+                ]),
+                top_k=1,
+                include_attributes=["base_id", "position_title"],
+            ))
+        finally:
+            store._filtered_rows = original_filtered_rows
+
+        self.assertEqual(rows[0]["person_id"], "person-engineer")
+        self.assertEqual(rows[0]["position_title"], "Backend Engineer")
+        self.assertEqual(rows[0]["retrieval_mode"], "hybrid")
+
     def test_light_semantic_bm25_role_search_with_deterministic_embedding(self) -> None:
         original_embedding = turbopuffer_client.embedding
 
