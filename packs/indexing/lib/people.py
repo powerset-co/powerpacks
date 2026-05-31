@@ -90,7 +90,7 @@ PEOPLE_NAMESPACE_COLUMNS = [
     "total_years_experience", "start_date_epoch", "end_date_epoch", "tenure_years", "role_track", "allowed_operator_ids",
     "role_ids", "inferred_birth_year", "description", "dense_text", "company_domain", "company_linkedin_url",
     "company_description", "company_sector_types", "company_entity_types", "company_headcount", "company_funding_total",
-    "company_stage", "investor_names",
+    "company_stage", "investor_names", "x_twitter_followers", "linkedin_followers", "linkedin_connections", "ig_followers",
 ]
 
 _ZERO_EPOCH = 0
@@ -140,6 +140,34 @@ def _json_list(value: Any) -> list[Any]:
 def _json_object(value: Any) -> dict[str, Any]:
     parsed = parse_jsonish(value, {})
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _social_counts(person: dict[str, Any]) -> dict[str, int]:
+    rapid = person.get("rapidapi_response") if isinstance(person.get("rapidapi_response"), dict) else {}
+    twitter = person.get("twitter_response") if isinstance(person.get("twitter_response"), dict) else {}
+    return {
+        "x_twitter_followers": _int_or_zero(
+            person.get("x_twitter_followers")
+            or person.get("twitter_followers")
+            or twitter.get("followers")
+            or twitter.get("followers_count")
+        ),
+        "linkedin_followers": _int_or_zero(
+            person.get("linkedin_followers")
+            or rapid.get("follower_count")
+            or rapid.get("followers")
+        ),
+        "linkedin_connections": _int_or_zero(
+            person.get("linkedin_connections")
+            or rapid.get("connection_count")
+            or rapid.get("connections")
+        ),
+        "ig_followers": _int_or_zero(
+            person.get("ig_followers")
+            or person.get("instagram_followers")
+            or rapid.get("instagram_followers")
+        ),
+    }
 
 
 def _date_parts(value: Any) -> tuple[int, int, int] | None:
@@ -525,6 +553,7 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     for person in people:
         experiences = person.get("work_experiences") or []
         total_years = _years_of_experience([exp for exp in experiences if isinstance(exp, dict)])
+        social = _social_counts(person)
         for idx, exp in enumerate(exp for exp in experiences if isinstance(exp, dict)):
             title = _title(exp)
             company_key = _company_key(exp)
@@ -568,6 +597,10 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "company_funding_total": _int_or_zero(exp.get("company_funding_total")),
                 "company_stage": _first(exp, ("company_stage", "stage")),
                 "investor_names": exp.get("investor_names") or [],
+                "x_twitter_followers": social["x_twitter_followers"],
+                "linkedin_followers": social["linkedin_followers"],
+                "linkedin_connections": social["linkedin_connections"],
+                "ig_followers": social["ig_followers"],
             }
             records.append(row)
     return records
@@ -578,7 +611,7 @@ def _hydrated_context(person: dict[str, Any]) -> dict[str, Any]:
     education = [edu for edu in (_education_to_profile(item) for item in person.get("education") or []) if edu]
     location = person.get("location_raw") or ", ".join(part for part in [person.get("city"), person.get("state"), person.get("country")] if part) or None
     rapid = person.get("rapidapi_response") or {}
-    twitter = person.get("twitter_response") or {}
+    social = _social_counts(person)
     return {
         "person_id": person.get("id", ""),
         "name": person.get("full_name", ""),
@@ -591,11 +624,11 @@ def _hydrated_context(person: dict[str, Any]) -> dict[str, Any]:
         "linkedin_url": person.get("linkedin_url") or None,
         "profile_picture_url": person.get("profile_picture_url") or None,
         "x_twitter_handle": person.get("x_twitter_handle") or None,
-        "x_twitter_followers": _int_or_zero(twitter.get("followers") or twitter.get("followers_count")),
-        "linkedin_followers": _int_or_zero(rapid.get("follower_count") or rapid.get("followers")),
-        "linkedin_connections": _int_or_zero(rapid.get("connection_count") or rapid.get("connections")),
+        "x_twitter_followers": social["x_twitter_followers"],
+        "linkedin_followers": social["linkedin_followers"],
+        "linkedin_connections": social["linkedin_connections"],
         "instagram_handle": rapid.get("instagram_handle") or None,
-        "instagram_followers": _int_or_zero(rapid.get("instagram_followers")),
+        "instagram_followers": social["ig_followers"],
         "years_of_experience": _years_of_experience([exp for exp in person.get("work_experiences") or [] if isinstance(exp, dict)]),
         "matched_position_indexes": [],
         "trait_scores": {},

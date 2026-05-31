@@ -30,6 +30,7 @@ from turbopuffer_client import (  # noqa: E402
     filters_from_role_payload,
     get_adjacency_queries,
     has_role_constraint,
+    is_local_backend,
     is_non_operational_title,
     load_env_file,
     merge_adjacency_queries,
@@ -155,6 +156,8 @@ def social_base_ids(payload: dict[str, Any], *, env_file: Path | None, max_ids: 
     ]
     active = {key: payload.get(key) for key in keys if payload.get(key) is not None}
     if not active:
+        return None
+    if is_local_backend():
         return None
     ids = fetch_social_filter_person_ids(payload, env_file=env_file)
     return ids[:max_ids], {"stage": "social", "filters": active, "matched": len(ids)}

@@ -13,6 +13,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/package-operator-bootstrap.py"
+ALEPH_BOOTSTRAP_SCRIPT = ROOT / "scripts/bootstrap-local-from-aleph.py"
 
 
 def load_module():
@@ -23,7 +24,31 @@ def load_module():
     return module
 
 
+def load_aleph_bootstrap_module():
+    spec = importlib.util.spec_from_file_location("bootstrap_local_from_aleph", ALEPH_BOOTSTRAP_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 class PackageOperatorBootstrapTests(unittest.TestCase):
+    def test_aleph_bootstrap_social_counts_extract_from_cached_rows(self) -> None:
+        mod = load_aleph_bootstrap_module()
+
+        counts = mod.social_counts_from_rows(
+            {
+                "rapidapi_response": json.dumps({"follower_count": 1234, "connection_count": 4321}),
+                "twitter_response": json.dumps({"followers_count": 77}),
+            },
+            {"linkedin_followers": "9999"},
+            {"x_followers": "12345"},
+        )
+
+        self.assertEqual(counts["x_twitter_followers"], 12345)
+        self.assertEqual(counts["linkedin_followers"], 9999)
+        self.assertEqual(counts["linkedin_connections"], 4321)
+
     def test_restore_path_filter_excludes_referenced_duckdb_outputs(self) -> None:
         mod = load_module()
         self.assertTrue(mod.should_copy_referenced_restore_path(".powerpacks/network-import/network-runs/run-1/merged/people.csv"))

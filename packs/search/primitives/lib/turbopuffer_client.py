@@ -508,6 +508,17 @@ def apply_role_shortcuts(payload: dict[str, Any], query: str | None = None) -> d
     return payload
 
 
+def location_filter_from_payload(payload: dict[str, Any], mapping: list[tuple[str, str, str]]) -> tuple | None:
+    clauses: list[tuple] = []
+    for payload_key, field, op in mapping:
+        values = payload.get(payload_key)
+        if values:
+            clauses.append(comparison(field, op, values))
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else ("Or", clauses)
+
+
 def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
     payload = apply_role_shortcuts(payload)
     hard = filter_expression_to_tuple(payload.get("hard_filters"))
@@ -515,17 +526,15 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
         return hard
 
     filters: list[tuple] = []
-    field_map = {
-        "cities": ("city", "In"),
-        "states": ("state", "In"),
-        "countries": ("country", "In"),
-        "macro_regions": ("macro_region", "In"),
-        "metro_areas": ("metro_areas", "ContainsAny"),
-    }
-    for payload_key, (field, op) in field_map.items():
-        values = payload.get(payload_key)
-        if values:
-            filters.append(comparison(field, op, values))
+    location_filter = location_filter_from_payload(payload, [
+        ("cities", "city", "In"),
+        ("states", "state", "In"),
+        ("countries", "country", "In"),
+        ("macro_regions", "macro_region", "In"),
+        ("metro_areas", "metro_areas", "ContainsAny"),
+    ])
+    if location_filter is not None:
+        filters.append(location_filter)
 
     if payload.get("seniority_bands"):
         filters.append(comparison("seniority_band", "In", payload["seniority_bands"]))
@@ -567,19 +576,18 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
     if payload.get("age_max") is not None:
         # age_max means born on/after this year.
         filters.append(comparison("inferred_birth_year", "Gte", _birth_year_for_age(int(payload["age_max"]))))
-    if not payload.get("base_candidate_ids"):
-        for payload_key, field, op in [
-            ("x_followers_min", "x_twitter_followers", "Gte"),
-            ("x_followers_max", "x_twitter_followers", "Lte"),
-            ("li_followers_min", "linkedin_followers", "Gte"),
-            ("li_followers_max", "linkedin_followers", "Lte"),
-            ("li_connections_min", "linkedin_connections", "Gte"),
-            ("li_connections_max", "linkedin_connections", "Lte"),
-            ("ig_followers_min", "ig_followers", "Gte"),
-            ("ig_followers_max", "ig_followers", "Lte"),
-        ]:
-            if payload.get(payload_key) is not None:
-                filters.append(comparison(field, op, payload[payload_key]))
+    for payload_key, field, op in [
+        ("x_followers_min", "x_twitter_followers", "Gte"),
+        ("x_followers_max", "x_twitter_followers", "Lte"),
+        ("li_followers_min", "linkedin_followers", "Gte"),
+        ("li_followers_max", "linkedin_followers", "Lte"),
+        ("li_connections_min", "linkedin_connections", "Gte"),
+        ("li_connections_max", "linkedin_connections", "Lte"),
+        ("ig_followers_min", "ig_followers", "Gte"),
+        ("ig_followers_max", "ig_followers", "Lte"),
+    ]:
+        if payload.get(payload_key) is not None:
+            filters.append(comparison(field, op, payload[payload_key]))
 
     if not filters:
         return None
@@ -678,16 +686,36 @@ def has_company_constraint(payload: dict[str, Any]) -> bool:
         "company_semantic_queries",
         "sector_types",
         "entity_types",
+        "technology_types",
+        "customer_types",
+        "customer_type",
         "company_locations",
         "company_cities",
         "company_states",
         "company_countries",
+        "company_metro_areas",
+        "company_macro_regions",
         "funding_stage",
         "funding_stages",
+        "funding_stage_min",
+        "funding_stage_max",
+        "funding_amount_min",
+        "funding_amount_max",
         "headcount_min",
         "headcount_max",
         "employee_count_min",
         "employee_count_max",
+        "valuation_min",
+        "valuation_max",
+        "founded_year_min",
+        "founded_year_max",
+        "last_funding_before",
+        "last_funding_after",
+        "yc_batches",
+        "accelerators",
+        "stages",
+        "company_stages",
+        "stage",
         "investors",
         "investor_names",
     ])
@@ -1023,7 +1051,7 @@ async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_a
         row = dict(row)
         row["score"] = 1.0
         row["person_id"] = row.get("base_id") or base_person_id(doc_id)
-        row["position_id"] = doc_id
+        row["position_id"] = row.get("position_id") or doc_id
         row["retrieval_mode"] = "filter_only"
         row["filter_rank"] = index
         out.append(row)

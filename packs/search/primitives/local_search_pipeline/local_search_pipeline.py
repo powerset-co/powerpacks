@@ -31,15 +31,54 @@ UNSUPPORTED_LOCAL_FILTERS = {
     "operator_interaction_max",
     "set_interaction_min",
     "set_interaction_max",
-    "x_followers_min",
-    "x_followers_max",
-    "li_followers_min",
-    "li_followers_max",
-    "li_connections_min",
-    "li_connections_max",
-    "ig_followers_min",
-    "ig_followers_max",
 }
+COMPANY_RESOLVE_FILTER_KEYS = {
+    "company_names",
+    "company_ids",
+    "current_company_names",
+    "company_semantic_queries",
+    "sector_types",
+    "entity_types",
+    "technology_types",
+    "customer_types",
+    "customer_type",
+    "company_cities",
+    "company_states",
+    "company_countries",
+    "company_metro_areas",
+    "company_macro_regions",
+    "funding_stage_min",
+    "funding_stage_max",
+    "funding_amount_min",
+    "funding_amount_max",
+    "headcount_min",
+    "headcount_max",
+    "valuation_min",
+    "valuation_max",
+    "founded_year_min",
+    "founded_year_max",
+    "last_funding_after",
+    "last_funding_before",
+    "yc_batches",
+    "accelerators",
+    "stages",
+    "company_stages",
+    "stage",
+}
+PREVIEW_FILTER_KEYS = [
+    "company_names", "company_ids", "company_semantic_queries", "education_names", "education_ids",
+    "metro_areas", "cities", "states", "countries", "macro_regions", "seniority_bands",
+    "years_experience_min", "years_experience_max", "position_after_date", "position_before_date",
+    "is_current_role", "is_current_company", "tech_skills",
+    "sector_types", "entity_types", "technology_types", "customer_types", "customer_type",
+    "company_cities", "company_states", "company_countries", "company_metro_areas", "company_macro_regions",
+    "funding_stage_min", "funding_stage_max", "funding_amount_min", "funding_amount_max",
+    "headcount_min", "headcount_max", "valuation_min", "valuation_max", "founded_year_min",
+    "founded_year_max", "last_funding_after", "last_funding_before", "yc_batches", "accelerators",
+    "stages", "company_stages", "stage", "x_followers_min", "x_followers_max",
+    "li_followers_min", "li_followers_max", "li_connections_min", "li_connections_max",
+    "ig_followers_min", "ig_followers_max",
+]
 ARTIFACT_KEYS = {"state", "retrieval_artifact", "profiles_path", "llm_profiles_path", "csv", "jsonl", "manifest", "artifact_dir"}
 COUNT_KEYS = {
     "resolved_count",
@@ -317,12 +356,7 @@ def payload_quality_issues(payload: dict[str, Any]) -> list[str]:
 def compact_preview(payload: dict[str, Any], payload_json: Path, db_path: Path, removed_scope_keys: list[str]) -> dict[str, Any]:
     filters = payload_filters(payload)
     visible_filters = {}
-    for key in [
-        "company_names", "company_ids", "company_semantic_queries", "education_names", "education_ids",
-        "metro_areas", "cities", "states", "countries", "macro_regions", "seniority_bands",
-        "years_experience_min", "years_experience_max", "position_after_date", "position_before_date",
-        "is_current_role", "is_current_company", "tech_skills",
-    ]:
+    for key in PREVIEW_FILTER_KEYS:
         value = filters.get(key)
         if is_present(value):
             visible_filters[key] = value
@@ -434,7 +468,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     child_env_file = "/dev/null"
 
     steps: list[tuple[str, list[str]]] = []
-    if any(is_present(filters.get(key)) for key in ["company_names", "company_ids", "current_company_names", "company_semantic_queries", "sector_types"]):
+    if any(is_present(filters.get(key)) for key in COMPANY_RESOLVE_FILTER_KEYS):
         steps.append((
             "resolve_companies",
             [sys.executable, str(ROOT / "packs/search/primitives/resolve_companies/resolve_companies.py"), "--state", str(state), "--env-file", child_env_file, "--write-state"],

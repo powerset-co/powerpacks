@@ -100,6 +100,23 @@ def write_local_search_db(path: Path) -> None:
             ),
         ],
     )
+    for ddl in [
+        "ALTER TABLE local_people_positions ADD COLUMN x_twitter_followers BIGINT",
+        "ALTER TABLE local_people_positions ADD COLUMN linkedin_followers BIGINT",
+        "ALTER TABLE local_people_positions ADD COLUMN linkedin_connections BIGINT",
+        "ALTER TABLE local_people_positions ADD COLUMN ig_followers BIGINT",
+    ]:
+        conn.execute(ddl)
+    conn.execute(
+        """
+        UPDATE local_people_positions
+        SET x_twitter_followers = CASE WHEN base_id = ? THEN 1000 ELSE 100 END,
+            linkedin_followers = CASE WHEN base_id = ? THEN 5000 ELSE 500 END,
+            linkedin_connections = CASE WHEN base_id = ? THEN 3000 ELSE 400 END,
+            ig_followers = CASE WHEN base_id = ? THEN 100 ELSE 10 END
+        """,
+        [PERSON_STANFORD, PERSON_STANFORD, PERSON_STANFORD, PERSON_STANFORD],
+    )
     conn.execute(
         """
         CREATE TABLE local_people_education (
@@ -209,6 +226,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     "metro_areas": ["San Francisco Bay Area"],
                     "role_tracks": ["engineering"],
                     "is_current_role": True,
+                    "li_followers_min": 1000,
                 },
             }
             payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

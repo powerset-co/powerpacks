@@ -367,6 +367,12 @@ def load_by_ids(path: Path, ids: set[str], key: str) -> tuple[dict[str, dict[str
     return out, scanned
 
 
+def load_optional_by_ids(path: Path, ids: set[str], key: str) -> tuple[dict[str, dict[str, Any]], int]:
+    if not path.exists():
+        return {}, 0
+    return load_by_ids(path, ids, key)
+
+
 def iter_csv_dicts(path: Path) -> Iterable[dict[str, str]]:
     csv.field_size_limit(sys.maxsize)
     with path.open("rb") as raw:
@@ -398,6 +404,52 @@ def parse_json_object(value: Any) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def first_present(*values: Any) -> Any:
+    for value in values:
+        if clean(value):
+            return value
+    return ""
+
+
+def social_counts_from_rows(*rows: dict[str, Any]) -> dict[str, int]:
+    sources = [row for row in rows if isinstance(row, dict)]
+    rapidapi: dict[str, Any] = {}
+    twitter: dict[str, Any] = {}
+    for source in sources:
+        rapidapi.update(parse_json_object(source.get("rapidapi_response")))
+        twitter.update(parse_json_object(source.get("twitter_response")))
+
+    def field(*names: str) -> Any:
+        for source in sources:
+            for name in names:
+                value = source.get(name)
+                if clean(value):
+                    return value
+        return ""
+
+    return {
+        "x_twitter_followers": to_int(first_present(
+            field("x_twitter_followers", "twitter_followers", "x_followers"),
+            twitter.get("followers"),
+            twitter.get("followers_count"),
+        )),
+        "linkedin_followers": to_int(first_present(
+            field("linkedin_followers", "follower_count", "followers"),
+            rapidapi.get("follower_count"),
+            rapidapi.get("followers"),
+        )),
+        "linkedin_connections": to_int(first_present(
+            field("linkedin_connections", "connection_count", "connections"),
+            rapidapi.get("connection_count"),
+            rapidapi.get("connections"),
+        )),
+        "ig_followers": to_int(first_present(
+            field("ig_followers", "instagram_followers"),
+            rapidapi.get("instagram_followers"),
+        )),
+    }
 
 
 def parse_website_domain(value: Any) -> str:
@@ -495,19 +547,20 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     role_dense_rows = [role_dense[th] for th in sorted(role_dense)]
     role_embedding_rows = [role_embeddings[th] for th in sorted(role_embeddings)]
 
-    write_jsonl(run_dir / "roles/roles_with_dense_text_remapped.jsonl", role_dense_rows)
-    shutil.copy2(run_dir / "roles/roles_with_dense_text_remapped.jsonl", run_dir / "roles/roles_with_dense_text.jsonl")
-    write_jsonl(run_dir / "unified/roles/roles_with_dense_text_remapped.jsonl", role_dense_rows)
-    write_jsonl(run_dir / "roles/roles_with_embeddings.jsonl", role_embedding_rows)
-    write_jsonl(run_dir / "unified/roles/roles_with_embeddings.jsonl", role_embedding_rows)
-    write_jsonl(run_dir / "roles/raw_titles.jsonl", ({"title_hash": r.get("title_hash"), "raw_title": r.get("raw_title", ""), "description": r.get("description", "")} for r in role_dense_rows))
-    with (run_dir / "roles/role_mapping.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["title_hash", "raw_title", "expanded_title", "seniority_band", "role_track"])
-        writer.writeheader()
-        for row in role_dense_rows:
-            writer.writerow({key: row.get(key, "") for key in writer.fieldnames or []})
-    write_stage_chunks(run_dir / "roles", "roles", role_dense_rows, args.checkpoint_every, "title_hash", "input-classifications", run_dir / "roles/roles_with_dense_text_remapped.jsonl")
-    write_stage_chunks(run_dir / "roles/embedding_checkpoints", "embeddings", [{"id": r.get("title_hash"), "embedding": r.get("dense_embedding"), **{k: v for k, v in r.items() if k != "dense_embedding"}} for r in role_embedding_rows], args.checkpoint_every, "id", "input-embeddings", run_dir / "roles/roles_with_embeddings.jsonl")
+    if not args.restore_records_only:
+        write_jsonl(run_dir / "roles/roles_with_dense_text_remapped.jsonl", role_dense_rows)
+        shutil.copy2(run_dir / "roles/roles_with_dense_text_remapped.jsonl", run_dir / "roles/roles_with_dense_text.jsonl")
+        write_jsonl(run_dir / "unified/roles/roles_with_dense_text_remapped.jsonl", role_dense_rows)
+        write_jsonl(run_dir / "roles/roles_with_embeddings.jsonl", role_embedding_rows)
+        write_jsonl(run_dir / "unified/roles/roles_with_embeddings.jsonl", role_embedding_rows)
+        write_jsonl(run_dir / "roles/raw_titles.jsonl", ({"title_hash": r.get("title_hash"), "raw_title": r.get("raw_title", ""), "description": r.get("description", "")} for r in role_dense_rows))
+        with (run_dir / "roles/role_mapping.csv").open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["title_hash", "raw_title", "expanded_title", "seniority_band", "role_track"])
+            writer.writeheader()
+            for row in role_dense_rows:
+                writer.writerow({key: row.get(key, "") for key in writer.fieldnames or []})
+        write_stage_chunks(run_dir / "roles", "roles", role_dense_rows, args.checkpoint_every, "title_hash", "input-classifications", run_dir / "roles/roles_with_dense_text_remapped.jsonl")
+        write_stage_chunks(run_dir / "roles/embedding_checkpoints", "embeddings", [{"id": r.get("title_hash"), "embedding": r.get("dense_embedding"), **{k: v for k, v in r.items() if k != "dense_embedding"}} for r in role_embedding_rows], args.checkpoint_every, "id", "input-embeddings", run_dir / "roles/roles_with_embeddings.jsonl")
 
     company_corpus, company_scanned = load_by_ids(seed / "company/companies_corpus_v3.jsonl", company_ids, "company_urn")
     company_harmonic, company_harmonic_scanned = load_company_harmonic_csv(company_csv_path, company_ids)
@@ -532,24 +585,31 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
         row["company_urn"] = local_id
         company_embedding_by_local[local_id] = row
     company_embedding_rows = [company_embedding_by_local[key] for key in sorted(company_embedding_by_local)]
-    write_jsonl(run_dir / "company/companies_corpus_v3.jsonl", company_rows_seed)
-    write_jsonl(run_dir / "company/company_embeddings_v3.jsonl", company_embedding_rows)
-    write_stage_chunks(run_dir / "company/enrichment_checkpoints", "companies", company_rows_seed, args.checkpoint_every, "company_urn", "input-classifications", run_dir / "company/companies_corpus_v3.jsonl")
-    write_stage_chunks(run_dir / "company/embedding_checkpoints", "embeddings", [{"id": r.get("company_urn"), "embedding": r.get("embedding"), **r} for r in company_embedding_rows], args.checkpoint_every, "id", "input-embeddings", run_dir / "company/company_embeddings_v3.jsonl")
+    if not args.restore_records_only:
+        write_jsonl(run_dir / "company/companies_corpus_v3.jsonl", company_rows_seed)
+        write_jsonl(run_dir / "company/company_embeddings_v3.jsonl", company_embedding_rows)
+        write_stage_chunks(run_dir / "company/enrichment_checkpoints", "companies", company_rows_seed, args.checkpoint_every, "company_urn", "input-classifications", run_dir / "company/companies_corpus_v3.jsonl")
+        write_stage_chunks(run_dir / "company/embedding_checkpoints", "embeddings", [{"id": r.get("company_urn"), "embedding": r.get("embedding"), **r} for r in company_embedding_rows], args.checkpoint_every, "id", "input-embeddings", run_dir / "company/company_embeddings_v3.jsonl")
 
     unified_rows, unified_scanned = load_csv_by_ids(seed / "unified/unified_person.csv", selected_person_ids)
     summary_embeddings, summary_emb_scanned = load_by_ids(seed / "unified/summary_embeddings.jsonl", selected_person_ids, "person_id")
     tech_skills, tech_scanned = load_by_ids(seed / "unified/person_tech_skills.jsonl", selected_person_ids, "person_id")
-    write_jsonl(run_dir / "unified/flattened_people.jsonl", flattened)
-    write_jsonl(run_dir / "unified/summary_embeddings.jsonl", [summary_embeddings[pid] for pid in sorted(summary_embeddings)])
-    write_jsonl(run_dir / "unified/person_tech_skills.jsonl", [tech_skills[pid] for pid in sorted(tech_skills)])
-    write_stage_chunks(run_dir / "summaries/embedding_checkpoints", "embeddings", [{"id": r.get("person_id"), "embedding": r.get("embedding"), **r} for r in summary_embeddings.values()], args.checkpoint_every, "id", "input-embeddings", run_dir / "unified/summary_embeddings.jsonl")
-    with (run_dir / "unified/unified_person.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = sorted({k for row in unified_rows.values() for k in row}) or ["id"]
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        for pid in sorted(unified_rows):
-            writer.writerow(unified_rows[pid])
+    linkedin_counts, linkedin_counts_scanned = load_optional_by_ids(seed / "unified/linkedin_counts.jsonl", selected_person_ids, "person_id")
+    public_identifiers = {clean(row.get("public_identifier")).lower() for row in unified_rows.values() if clean(row.get("public_identifier"))}
+    x_twitter_counts, x_twitter_counts_scanned = load_optional_by_ids(seed / "unified/x_twitter_counts.jsonl", public_identifiers, "public_identifier")
+    if not args.restore_records_only:
+        write_jsonl(run_dir / "unified/flattened_people.jsonl", flattened)
+        write_jsonl(run_dir / "unified/summary_embeddings.jsonl", [summary_embeddings[pid] for pid in sorted(summary_embeddings)])
+        write_jsonl(run_dir / "unified/person_tech_skills.jsonl", [tech_skills[pid] for pid in sorted(tech_skills)])
+        write_jsonl(run_dir / "unified/linkedin_counts.jsonl", [linkedin_counts[pid] for pid in sorted(linkedin_counts)])
+        write_jsonl(run_dir / "unified/x_twitter_counts.jsonl", [x_twitter_counts[pid] for pid in sorted(x_twitter_counts)])
+        write_stage_chunks(run_dir / "summaries/embedding_checkpoints", "embeddings", [{"id": r.get("person_id"), "embedding": r.get("embedding"), **r} for r in summary_embeddings.values()], args.checkpoint_every, "id", "input-embeddings", run_dir / "unified/summary_embeddings.jsonl")
+        with (run_dir / "unified/unified_person.csv").open("w", newline="", encoding="utf-8") as handle:
+            fields = sorted({k for row in unified_rows.values() for k in row}) or ["id"]
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            for pid in sorted(unified_rows):
+                writer.writerow(unified_rows[pid])
 
     ages, _ = load_birth_years(seed / "unified/inferred_ages.jsonl", selected_person_ids)
     founders, _ = load_founder_position_ids(seed / "unified/roles/founder_enrichment.jsonl", position_ids)
@@ -571,6 +631,15 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
             if clean(row.get("id")) in founders and "founder" not in role_ids:
                 role_ids.append("founder")
             base_id = clean(row.get("base_person_id"))
+            unified_row = unified_rows.get(base_id) or {}
+            public_id = clean(unified_row.get("public_identifier")).lower()
+            social = social_counts_from_rows(
+                unified_row,
+                linkedin_counts.get(base_id) or {},
+                x_twitter_counts.get(public_id) or {},
+                row,
+                position,
+            )
             word_text = f"{raw_title} {description} {clean(dense.get('seniority_band') or row.get('seniority_band'))}".strip()
             company_id = company_id_map.get(clean(row.get("company_id")), "")
             company_row = company_rows_by_local.get(company_id, {}) if company_id else {}
@@ -593,6 +662,8 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
                 "start_date_epoch": epoch(row.get("start_date")), "end_date_epoch": epoch(row.get("end_date")), "tenure_years": float(row.get("tenure_years") or 0),
                 "inferred_birth_year": ages.get(base_id, int(row.get("inferred_birth_year") or 0)), "role_track": role_track, "role_type_category": clean(row.get("role_type_category")),
                 "metro_areas": listify(row.get("metro_areas")), "allowed_operator_ids": [operator_id], "role_ids": role_ids, "title_hash": th, "raw_title": raw_title,
+                "x_twitter_followers": social["x_twitter_followers"], "linkedin_followers": social["linkedin_followers"],
+                "linkedin_connections": social["linkedin_connections"], "ig_followers": social["ig_followers"],
             }
 
     people_count = write_jsonl(records_dir / "people.records.jsonl", people_records())
@@ -631,7 +702,7 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     vector_counts = {"people": people_count, "summaries": summaries_count, "companies": companies_count}
     write_json(run_dir / "vectors/checkpoint.json", {"status": "completed", "provider": "input-embeddings", "dimension": 1536, "counts": vector_counts, "updated_at": now_iso()})
 
-    stats = {"status": "ok", "mode": mode, "operator_id": operator_id, "operator_email": operator_email, "run_dir": str(run_dir), "id_scheme": "company_harmonic_csv_linkedin_first_no_harmonic_ids", "company_source": str(company_csv_path), "counts": {"people_records": people_count, "summaries_records": summaries_count, "companies_records": companies_count, "education_records": education_count, "schools_records": schools_count, "selected_people": len(selected_person_ids), "selected_positions": len(flattened), "roles": len(role_dense_rows), "role_embeddings": len(role_embedding_rows), "companies_from_company_harmonic_csv": len(company_harmonic), "companies_with_enrichment_cache": len(company_corpus)}, "id_backfill_needed": {"companies_without_linkedin_url": sum(1 for row in company_source.values() if not clean(row.get("linkedin_url"))), "schools_without_linkedin_url": sum(1 for row in schools.values() if not clean(row.get("linkedin_url")))}, "scanned_rows": {"flattened_people": flattened_scanned, "roles_dense": role_dense_scanned, "role_embeddings": role_emb_scanned, "companies_corpus_enrichment_cache": company_scanned, "company_harmonic_all_csv": company_harmonic_scanned, "company_embeddings": company_emb_scanned, "unified_person_csv": unified_scanned, "summary_embeddings": summary_emb_scanned, "tech_skills": tech_scanned, "people_education": people_education_scanned, "schools": schools_scanned}, "duckdb": duckdb_payload.get("duckdb"), "duckdb_tables": duckdb_payload.get("tables", {}), "elapsed_seconds": round(time.time() - started, 3)}
+    stats = {"status": "ok", "mode": mode, "operator_id": operator_id, "operator_email": operator_email, "run_dir": str(run_dir), "id_scheme": "company_harmonic_csv_linkedin_first_no_harmonic_ids", "company_source": str(company_csv_path), "counts": {"people_records": people_count, "summaries_records": summaries_count, "companies_records": companies_count, "education_records": education_count, "schools_records": schools_count, "selected_people": len(selected_person_ids), "selected_positions": len(flattened), "roles": len(role_dense_rows), "role_embeddings": len(role_embedding_rows), "companies_from_company_harmonic_csv": len(company_harmonic), "companies_with_enrichment_cache": len(company_corpus), "linkedin_counts": len(linkedin_counts), "x_twitter_counts": len(x_twitter_counts)}, "id_backfill_needed": {"companies_without_linkedin_url": sum(1 for row in company_source.values() if not clean(row.get("linkedin_url"))), "schools_without_linkedin_url": sum(1 for row in schools.values() if not clean(row.get("linkedin_url")))}, "scanned_rows": {"flattened_people": flattened_scanned, "roles_dense": role_dense_scanned, "role_embeddings": role_emb_scanned, "companies_corpus_enrichment_cache": company_scanned, "company_harmonic_all_csv": company_harmonic_scanned, "company_embeddings": company_emb_scanned, "unified_person_csv": unified_scanned, "summary_embeddings": summary_emb_scanned, "tech_skills": tech_scanned, "linkedin_counts": linkedin_counts_scanned, "x_twitter_counts": x_twitter_counts_scanned, "people_education": people_education_scanned, "schools": schools_scanned}, "duckdb": duckdb_payload.get("duckdb"), "duckdb_tables": duckdb_payload.get("tables", {}), "elapsed_seconds": round(time.time() - started, 3)}
     write_json(stats_dir / "bootstrap_from_aleph.json", stats)
     return stats
 
@@ -686,6 +757,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-every", type=int, default=1000)
     parser.add_argument("--education-limit", type=int, default=5000)
     parser.add_argument("--skip-duckdb", action="store_true")
+    parser.add_argument("--restore-records-only", action="store_true", help="Write only records, stats, and DuckDB outputs needed by operator bootstrap restore bundles.")
     parser.add_argument("--force", action="store_true")
     return parser
 

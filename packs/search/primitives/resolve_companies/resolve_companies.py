@@ -117,14 +117,26 @@ def expanded_company_names(names: list[str]) -> list[str]:
     return list(dict.fromkeys(name for name in expanded if name))
 
 
-def company_attribute_filters(payload: dict[str, Any], *, include_soft: bool = True, only_soft: bool = False) -> tuple | None:
-    filters: list[tuple] = []
-    mapping = [
+def company_location_filter(payload: dict[str, Any]) -> tuple | None:
+    clauses: list[tuple] = []
+    for payload_key, field, op in [
         ("company_cities", "city", "In"),
         ("company_states", "state", "In"),
         ("company_countries", "country", "In"),
         ("company_metro_areas", "metro_area", "In"),
         ("company_macro_regions", "macro_region", "In"),
+    ]:
+        values = payload.get(payload_key)
+        if values:
+            clauses.append(comparison(field, op, values))
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else ("Or", clauses)
+
+
+def company_attribute_filters(payload: dict[str, Any], *, include_soft: bool = True, only_soft: bool = False) -> tuple | None:
+    filters: list[tuple] = []
+    mapping = [
         ("entity_types", "entity_types", "ContainsAny"),
         ("technology_types", "technology_types", "ContainsAny"),
         ("customer_types", "customer_type", "ContainsAny"),
@@ -140,6 +152,10 @@ def company_attribute_filters(payload: dict[str, Any], *, include_soft: bool = T
     soft_mapping = [
         ("sector_types", "sector_types", "ContainsAny"),
     ]
+    if not only_soft:
+        loc_filter = company_location_filter(payload)
+        if loc_filter is not None:
+            filters.append(loc_filter)
     active_mapping = soft_mapping if only_soft else mapping + (soft_mapping if include_soft else [])
     for payload_key, field, op in active_mapping:
         values = payload.get(payload_key)
@@ -152,6 +168,15 @@ def company_attribute_filters(payload: dict[str, Any], *, include_soft: bool = T
 
     if only_soft:
         return None if not filters else filters[0] if len(filters) == 1 else ("And", filters)
+
+    for field, min_key, max_key in [
+        ("funding_total", "funding_amount_min", "funding_amount_max"),
+        ("headcount", "headcount_min", "headcount_max"),
+        ("valuation", "valuation_min", "valuation_max"),
+        ("founded_year", "founded_year_min", "founded_year_max"),
+    ]:
+        if payload.get(min_key) is not None or payload.get(max_key) is not None:
+            filters.append(comparison(field, "Gt", 0))
 
     for payload_key, field, op in [
         ("funding_amount_min", "funding_total", "Gte"),
@@ -175,6 +200,8 @@ def company_attribute_filters(payload: dict[str, Any], *, include_soft: bool = T
 
     min_stage = normalize_stage(payload.get("funding_stage_min"))
     max_stage = normalize_stage(payload.get("funding_stage_max"))
+    if min_stage is not None or max_stage is not None:
+        filters.append(comparison("funding_stage", "Gt", 0))
     if min_stage is not None:
         filters.append(comparison("funding_stage", "Gte", min_stage))
     if max_stage is not None:

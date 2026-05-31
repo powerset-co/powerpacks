@@ -723,6 +723,59 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         engineer_rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace("people", engineer_filters, ["base_id", "position_title"]))
         self.assertEqual([row["base_id"] for row in engineer_rows], ["person-engineer"])
 
+    def test_person_location_fields_are_or_grouped(self) -> None:
+        payload = {
+            "cities": ["San Francisco"],
+            "metro_areas": ["New York City Metropolitan Area"],
+            "is_current_role": True,
+        }
+        filters = turbopuffer_client.filters_from_role_payload(payload)
+
+        self.assertEqual(filters[0], "And")
+        location = next(clause for clause in filters[1] if clause[0] == "Or")
+        self.assertIn(("city", "In", ["San Francisco"]), location[1])
+        self.assertIn(("metro_areas", "ContainsAny", ["New York City Metropolitan Area"]), location[1])
+
+        rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+            "people",
+            filters,
+            ["base_id", "position_title"],
+        ))
+        self.assertEqual({row["base_id"] for row in rows}, {"person-founder", "person-engineer"})
+
+    def test_social_filters_are_duckdb_sql_and_combine_with_base_ids(self) -> None:
+        store = turbopuffer_client.local_store()
+        original_rows_for_namespace = store._rows_for_namespace
+        store._rows_for_namespace = lambda _logical_name: (_ for _ in ()).throw(AssertionError("social filters must query DuckDB SQL directly"))
+        try:
+            high_linkedin_filters = turbopuffer_client.filters_from_role_payload({
+                "base_candidate_ids": ["person-founder", "person-engineer"],
+                "li_followers_min": 4000,
+                "is_current_role": True,
+            })
+            high_rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+                "people",
+                high_linkedin_filters,
+                ["base_id", "position_title", "linkedin_followers"],
+            ))
+            low_x_filters = turbopuffer_client.filters_from_role_payload({
+                "base_candidate_ids": ["person-founder", "person-engineer"],
+                "x_followers_max": 200,
+                "is_current_role": True,
+            })
+            low_rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+                "people",
+                low_x_filters,
+                ["base_id", "position_title", "x_twitter_followers"],
+            ))
+        finally:
+            store._rows_for_namespace = original_rows_for_namespace
+
+        self.assertEqual([row["base_id"] for row in high_rows], ["person-founder"])
+        self.assertEqual(high_rows[0]["linkedin_followers"], 5000)
+        self.assertEqual([row["base_id"] for row in low_rows], ["person-engineer"])
+        self.assertEqual(low_rows[0]["x_twitter_followers"], 120)
+
     def test_education_prefilter_feeds_role_search(self) -> None:
         payload = {"education_ids": ["school-stanford"], "degree_levels": ["bachelors"], "fields_of_study": ["computer science"]}
         base_ids, meta = asyncio.run(apply_prefilters.education_base_ids(payload, page_size=1000, max_ids=10))
@@ -1023,6 +1076,34 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(candidate["position_id"], "pos-engineer-current")
         self.assertIn("hybrid", candidate["vertical_sources"])
         self.assertIn("matched_position_ids", candidate)
+
+    def test_local_person_attribution_marks_non_current_matched_position(self) -> None:
+        out = asyncio.run(execute_role_search.run(SimpleNamespace(
+            state=None,
+            payload_json=json.dumps({
+                "company_ids": ["company-product"],
+                "search_mode": "COMPANY_INTERSECTION",
+                "is_current_role": False,
+            }),
+            env_file=None,
+            top_k=10,
+            limit=0,
+            write_state=False,
+            write_artifact=False,
+        )))
+        self.assertEqual(out["candidate_ids"], ["person-founder"])
+        self.assertEqual(out["candidates"][0]["position_id"], "pos-founder-past-product")
+
+        state = {"steps": [{"id": "execute_role_search", "output": out}]}
+        rows = hydrate_people.fetch_local_person_rows(["person-founder"], workers=1, batch_size=1)
+        profile = hydrate_people.normalize_hydrated_context(rows[0])
+        enriched = hydrate_people.apply_candidate_metadata(
+            profile,
+            hydrate_people.candidate_metadata(state)["person-founder"],
+        )
+
+        self.assertEqual(enriched["matched_position_indexes"], [1])
+        self.assertIn("filter_only", enriched["vertical_sources"])
 
     def test_local_hydration_projects_profile_fields_without_vectors(self) -> None:
         rows = hydrate_people.fetch_local_person_rows(["person-engineer"], workers=2, batch_size=1)

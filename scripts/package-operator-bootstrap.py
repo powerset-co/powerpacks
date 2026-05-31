@@ -394,6 +394,7 @@ def build_processing(args: argparse.Namespace, operator_access: Path, operator: 
         str(args.checkpoint_every),
         "--education-limit",
         str(args.education_limit),
+        "--restore-records-only",
         "--force",
     ]
     if args.company_csv:

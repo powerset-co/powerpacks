@@ -52,9 +52,9 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         )
 
         self.assertEqual(filters[0], "And")
-        self.assertIn(("city", "In", ["San Francisco"]), filters[1])
-        self.assertIn(("state", "In", ["California"]), filters[1])
-        self.assertFalse(any(clause[0] == "Or" and ("state", "In", ["California"]) in clause[1] for clause in filters[1]))
+        location = next(clause for clause in filters[1] if clause[0] == "Or")
+        self.assertIn(("city", "In", ["San Francisco"]), location[1])
+        self.assertIn(("state", "In", ["California"]), location[1])
         self.assertIn(("role_track", "In", ["engineering"]), filters[1])
         self.assertIn(("is_current", "Eq", True), filters[1])
         self.assertIn(("total_years_experience", "Gte", 3), filters[1])
@@ -87,7 +87,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
 
         self.assertEqual(filters[0], "And")
         self.assertIn(("base_id", "In", ["p1", "p2"]), filters[1])
-        self.assertNotIn(("linkedin_followers", "Gte", 1000), filters[1])
+        self.assertIn(("linkedin_followers", "Gte", 1000), filters[1])
 
     def test_currentness_uses_split_fields_only(self) -> None:
         legacy_filters = turbopuffer_client.filters_from_role_payload({
@@ -236,6 +236,32 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIn(("entity_types", "ContainsAny", ["venture_backed_startup"]), combined[1])
         self.assertIn(("sector_types", "ContainsAny", ["data"]), combined[1])
         self.assertEqual(resolve_companies.sector_strategy({"company_sector_strategy": "staged"}, "soft_union"), "staged")
+
+    def test_company_location_and_numeric_filters_match_remote_shape(self) -> None:
+        filters = resolve_companies.company_attribute_filters({
+            "company_cities": ["San Francisco"],
+            "company_metro_areas": ["New York City Metropolitan Area"],
+            "headcount_max": 50,
+            "funding_amount_max": 10_000_000,
+            "valuation_max": 50_000_000,
+            "founded_year_max": 2022,
+            "funding_stage_max": "series_a",
+        })
+
+        self.assertEqual(filters[0], "And")
+        location = next(clause for clause in filters[1] if clause[0] == "Or")
+        self.assertIn(("city", "In", ["San Francisco"]), location[1])
+        self.assertIn(("metro_area", "In", ["New York City Metropolitan Area"]), location[1])
+        self.assertIn(("headcount", "Gt", 0), filters[1])
+        self.assertIn(("headcount", "Lte", 50), filters[1])
+        self.assertIn(("funding_total", "Gt", 0), filters[1])
+        self.assertIn(("funding_total", "Lte", 10_000_000), filters[1])
+        self.assertIn(("valuation", "Gt", 0), filters[1])
+        self.assertIn(("valuation", "Lte", 50_000_000), filters[1])
+        self.assertIn(("founded_year", "Gt", 0), filters[1])
+        self.assertIn(("founded_year", "Lte", 2022), filters[1])
+        self.assertIn(("funding_stage", "Gt", 0), filters[1])
+        self.assertIn(("funding_stage", "Lte", 3), filters[1])
 
     def test_frontier_ids_read_execute_role_search(self) -> None:
         state = {

@@ -139,6 +139,9 @@ class IndexingTransformTests(unittest.TestCase):
         self.assertEqual(founder["macro_region"], "Americas")
         self.assertEqual(founder["metro_areas"], ["San Francisco Bay Area"])
         self.assertTrue(founder["company_id"])
+        self.assertEqual(founder["x_twitter_followers"], 77)
+        self.assertEqual(founder["linkedin_followers"], 1234)
+        self.assertEqual(founder["linkedin_connections"], 500)
         old = roles[1]
         self.assertEqual(old["end_date_epoch"], int(datetime(2019, 12, 1, tzinfo=timezone.utc).timestamp()))
         self.assertFalse(old["is_current"])
@@ -169,6 +172,9 @@ class IndexingTransformTests(unittest.TestCase):
         self.assertEqual(profile["positions"][0]["role_track"], "engineering")
         self.assertEqual(profile["education"][0]["school_name"], "Stanford University")
         self.assertEqual(profile["tech_skills"], ["python", "ml"])
+        self.assertEqual(profile["x_twitter_followers"], 77)
+        self.assertEqual(profile["linkedin_followers"], 1234)
+        self.assertEqual(profile["linkedin_connections"], 500)
         self.assertGreater(profile["years_of_experience"], 4)
         self.assertIn("linkedin_csv", profile["vertical_sources"])
 
