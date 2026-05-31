@@ -80,7 +80,9 @@ install_skill import-network "$REPO_ROOT/packs/ingestion/skills/import-network/S
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
-if uv run --project "$REPO_ROOT" python "$REPO_ROOT/bin/agent-bootstrap"; then
+if [[ "${POWERPACKS_SKIP_AGENT_BOOTSTRAP:-}" == "1" ]]; then
+  echo "skipped local Codex profile generation (POWERPACKS_SKIP_AGENT_BOOTSTRAP=1)"
+elif uv run --project "$REPO_ROOT" python "$REPO_ROOT/bin/agent-bootstrap"; then
   echo "generated local Codex profile in $REPO_ROOT/.codex/AGENTS.md from $REPO_ROOT/PROFILE.md"
 else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2

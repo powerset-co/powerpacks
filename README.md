@@ -28,6 +28,21 @@ For direct/manual installs, run the adapter install for your harness:
 ./install.sh codex
 ```
 
+### Docker heartbeat worker
+
+For a long-running Codex heartbeat under Docker, run:
+
+```bash
+scripts/run-codex-heartbeat-docker.sh start
+```
+
+The worker mounts this checkout, installs/refreshes Powerpacks inside the
+container, and loops on `codex exec` with Docker `--restart unless-stopped`.
+By default it shares the host Codex login safely by mounting
+`${CODEX_HOME:-$HOME/.codex}` read-only and copying that snapshot into a
+separate writable container volume. See
+[`docs/codex-heartbeat-docker.md`](docs/codex-heartbeat-docker.md).
+
 The install flow runs `bin/setup-python`, which installs `uv` on macOS when
 Homebrew is available, then installs Python project dependencies from
 `pyproject.toml` / `uv.lock`.
