@@ -426,6 +426,7 @@ class SetupPipelineTests(unittest.TestCase):
             setup_ledger=str(ledger),
             bootstrap_bundle='',
             force_bootstrap=False,
+            skip_powerset_setup_check=True,
             refresh_interval_hours=168,
         )
         with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
@@ -498,6 +499,7 @@ class SetupPipelineTests(unittest.TestCase):
             setup_ledger=str(ledger),
             bootstrap_bundle='',
             force_bootstrap=False,
+            skip_powerset_setup_check=True,
             refresh_interval_hours=168,
         )
         with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
@@ -553,6 +555,7 @@ class SetupPipelineTests(unittest.TestCase):
             setup_ledger=str(ledger),
             bootstrap_bundle='',
             force_bootstrap=False,
+            skip_powerset_setup_check=True,
             refresh_interval_hours=168,
         )
         with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
@@ -647,6 +650,7 @@ class SetupPipelineTests(unittest.TestCase):
             setup_ledger=str(ledger),
             bootstrap_bundle='',
             force_bootstrap=False,
+            skip_powerset_setup_check=True,
             refresh_interval_hours=168,
         )
         with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
@@ -742,6 +746,7 @@ class SetupPipelineTests(unittest.TestCase):
             setup_ledger=str(ledger),
             bootstrap_bundle='',
             force_bootstrap=False,
+            skip_powerset_setup_check=True,
             refresh_interval_hours=168,
         )
         with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
@@ -832,6 +837,7 @@ class SetupPipelineTests(unittest.TestCase):
             setup_ledger=str(ledger),
             bootstrap_bundle='',
             force_bootstrap=False,
+            skip_powerset_setup_check=True,
             refresh_interval_hours=168,
             gmail_sync_lookback_days=14,
         )
@@ -929,6 +935,7 @@ class SetupPipelineTests(unittest.TestCase):
             setup_ledger=str(ledger),
             bootstrap_bundle='',
             force_bootstrap=False,
+            skip_powerset_setup_check=True,
             refresh_interval_hours=168,
             gmail_sync_lookback_days=14,
             auto_spend_limit_usd=10.0,
@@ -1154,6 +1161,144 @@ class SetupPipelineTests(unittest.TestCase):
                     with mock.patch.object(setup, 'run_python_gcs_download', side_effect=fake_python_download):
                         self.assertEqual(setup.run_pull(args), 0)
         self.assertTrue(out.exists())
+
+    def test_setup_auto_downloads_matching_remote_bootstrap(self):
+        tmp = self.temp_workspace()
+        remote_bundle = tmp / 'remote.operator-bootstrap.tar.gz'
+        make_bundle(remote_bundle)
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        summary = {
+            'status': 'ok',
+            'operators': [{
+                'operator': 'patrick',
+                'operator_id': OPERATOR_ID,
+                'gcs': {
+                    'bundle': 'gs://bucket/bootstrap/users/patrick/operators/op-123/operator-bootstrap.tar.gz',
+                    'manifest': 'gs://bucket/bootstrap/users/patrick/operators/op-123/manifest.json',
+                },
+            }],
+        }
+
+        def fake_download(uri, output, download_backend='auto'):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            if uri == 'gs://bucket/bootstrap/summary.json':
+                output.write_text(json.dumps(summary), encoding='utf-8')
+                return 0, {'status': 'ok', 'download_backend': 'gcloud', 'output': str(output)}
+            if uri == summary['operators'][0]['gcs']['bundle']:
+                import shutil
+                shutil.copy2(remote_bundle, output)
+                return 0, {
+                    'status': 'ok',
+                    'download_backend': 'gcloud',
+                    'output': str(output),
+                    'bundle_sha256': setup.sha256_file(output),
+                }
+            raise AssertionError(uri)
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            setup_ledger=str(ledger),
+            bootstrap_summary_uri='gs://bucket/bootstrap/summary.json',
+            bootstrap_download_backend='auto',
+            disable_remote_bootstrap=False,
+        )
+        with mock.patch.object(setup, 'download_gcs_object', side_effect=fake_download):
+            with mock.patch.object(setup, 'gcs_auth_discovery', return_value={'gcloud_installed': True, 'gcloud_active_account': 'me@example.com'}):
+                payload, code = setup.maybe_apply_bootstrap(args, setup.load_setup_ledger(ledger))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['status'], 'ok')
+        self.assertEqual(payload['remote_bootstrap']['status'], 'downloaded')
+        self.assertTrue((tmp / '.powerpacks/operator-bootstrap/bundles/patrick.operator-bootstrap.tar.gz').exists())
+        self.assertTrue((tmp / '.powerpacks/search-index/records/people.records.jsonl').exists())
+
+    def test_setup_remote_bootstrap_discovery_blocks_without_gcs_auth(self):
+        tmp = self.temp_workspace()
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+
+        def fake_download(uri, output, download_backend='auto'):
+            return 2, {
+                'status': 'needs_user_action',
+                'reason': 'gcloud storage cp failed',
+                'stderr': 'problem refreshing your current auth tokens',
+            }
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            setup_ledger=str(ledger),
+            bootstrap_summary_uri='gs://bucket/bootstrap/summary.json',
+            bootstrap_download_backend='auto',
+            disable_remote_bootstrap=False,
+        )
+        with mock.patch.object(setup, 'download_gcs_object', side_effect=fake_download):
+            with mock.patch.object(setup, 'gcs_auth_discovery', return_value={'gcloud_installed': False, 'gcloud_active_account': ''}):
+                payload, code = setup.maybe_apply_bootstrap(args, setup.load_setup_ledger(ledger))
+
+        self.assertEqual(code, 20)
+        self.assertEqual(payload['status'], 'blocked_user_action')
+        self.assertEqual(payload['step'], 'bootstrap')
+        self.assertEqual(payload['setup_command'], '$powerset setup')
+        self.assertEqual(payload['reauth_command'], 'gcloud auth login --no-launch-browser')
+        self.assertEqual(payload['remote_bootstrap']['reason'], 'remote_bootstrap_summary_download_failed')
+        self.assertEqual(payload['remote_bootstrap']['auth']['gcloud_installed'], False)
+
+    def test_powerset_setup_check_blocks_with_reauth_action(self):
+        tmp = self.temp_workspace()
+        doctor = tmp / 'packs/powerset/primitives/doctor/doctor.py'
+        doctor.parent.mkdir(parents=True)
+        doctor.write_text('', encoding='utf-8')
+        report = {
+            'overall': 'needs_setup',
+            'profile': 'search-core',
+            'env_file': '.env',
+            'gcp_project': 'powerset-search',
+            'checks': [{
+                'id': 'user_secrets',
+                'status': 'missing',
+                'message': 'gcloud credentials need reauthentication before Secret Manager can be probed',
+                'fix_kind': 'interactive',
+                'fix_command': 'gcloud auth login',
+            }],
+        }
+        args = argparse.Namespace(
+            skip_powerset_setup_check=False,
+            powerset_profile='search-core',
+            powerset_env_file='.env',
+            powerset_gcp_project='powerset-search',
+        )
+        with mock.patch.object(setup, 'run_json_command', return_value=(1, report, '')):
+            payload, code = setup.check_powerset_setup(args)
+
+        self.assertEqual(code, 20)
+        self.assertEqual(payload['status'], 'blocked_user_action')
+        self.assertEqual(payload['step'], 'powerset_setup')
+        self.assertEqual(payload['setup_command'], '$powerset setup')
+        self.assertEqual(payload['reauth_command'], 'gcloud auth login --no-launch-browser')
+
+    def test_run_setup_blocks_until_powerset_setup_ready(self):
+        tmp = self.temp_workspace()
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        args = argparse.Namespace(
+            setup_ledger=str(ledger),
+            skip_powerset_setup_check=False,
+        )
+        blocker = {
+            'status': 'blocked_user_action',
+            'step': 'powerset_setup',
+            'reason': 'Powerset login and local runtime env must be ready before setup continues.',
+            'setup_command': '$powerset setup',
+        }
+        with mock.patch.object(setup, 'check_powerset_setup', return_value=(blocker, 20)):
+            code = setup.run_setup(args)
+
+        self.assertEqual(code, 20)
+        saved = json.loads(ledger.read_text(encoding='utf-8'))
+        self.assertEqual(saved['status'], 'blocked_user_action')
+        self.assertEqual(saved['powerset_setup']['setup_command'], '$powerset setup')
 
 
 if __name__ == '__main__':

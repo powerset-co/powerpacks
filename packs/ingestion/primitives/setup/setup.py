@@ -22,6 +22,13 @@ DEFAULT_REFRESH_INTERVAL_HOURS = 168
 DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS = int(os.environ.get('POWERPACKS_SETUP_GMAIL_SYNC_LOOKBACK_DAYS', '14'))
 DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS', '900'))
 DEFAULT_AUTO_SPEND_LIMIT_USD = float(os.environ.get('POWERPACKS_SETUP_AUTO_SPEND_LIMIT_USD', '10'))
+DEFAULT_BOOTSTRAP_SUMMARY_URI = os.environ.get(
+    'POWERPACKS_OPERATOR_BOOTSTRAP_SUMMARY_URI',
+    'gs://powerset-search-processing-artifacts/powerpacks/operator-bootstrap/summary.json',
+)
+DEFAULT_POWERSET_SETUP_PROFILE = os.environ.get('POWERPACKS_SETUP_PROFILE', 'search-core')
+DEFAULT_POWERSET_SETUP_ENV_FILE = os.environ.get('POWERPACKS_SETUP_ENV_FILE', '.env')
+DEFAULT_POWERSET_SETUP_GCP_PROJECT = os.environ.get('POWERPACKS_GCP_PROJECT', 'powerset-search')
 SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/import-network-run.setup-refresh.json')
 SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
 REQUIRED_PRIVACY = [
@@ -45,6 +52,7 @@ APPROVALS = [
     ('browser_auth', 'Browser/Gmail OAuth authorization requires user approval.'),
     ('gcp_console_oauth_app', 'GCP Console/OAuth app automation requires user approval.'),
     ('oauth_test_users', 'OAuth test-user changes require user approval.'),
+    ('powerset_setup', 'Powerset login/env setup may require browser or gcloud reauthorization.'),
     ('gcs_download', 'GCS bootstrap download requires --allow-gcs-download and user approval.'),
     ('destructive_restore_overwrite', 'Destructive bootstrap overwrite requires --force and user approval.'),
     ('provider_spend', 'RapidAPI/Parallel/OpenAI spend requires explicit allow flags.'),
@@ -308,6 +316,10 @@ def parse_exact_gcs_uri(uri: str) -> tuple[str, str]:
     return bucket, object_name
 
 
+def slugify(value: Any, fallback: str = 'operator') -> str:
+    return re.sub(r'[^A-Za-z0-9._-]+', '-', str(value or '')).strip('-') or fallback
+
+
 def materialize_raw_google_credentials(env: dict[str, str], *, needs_config: bool) -> tuple[dict[str, str], Path | None, Path | None]:
     tmp_key = None
     cfg = None
@@ -369,26 +381,138 @@ def run_python_gcs_download(gcs_uri: str, out: Path, env: dict[str, str]) -> tup
     return 0, {'status': 'ok', 'download_backend': 'python-google-cloud-storage'}
 
 
-def run_pull(args: argparse.Namespace) -> int:
-    if not args.allow_gcs_download:
-        emit({
-            'status': 'needs_user_action',
-            'reason': 'GCS download requires --allow-gcs-download',
-            'requires_approval': [{'id': 'gcs_download'}],
+def gcs_auth_discovery() -> dict[str, Any]:
+    info: dict[str, Any] = {
+        'gcloud_installed': bool(shutil.which('gcloud')),
+        'gcloud_active_account': '',
+        'google_application_credentials_present': bool(os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')),
+    }
+    if info['gcloud_installed']:
+        proc = subprocess.run(
+            ['gcloud', 'auth', 'list', '--filter=status:ACTIVE', '--format=value(account)'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            info['gcloud_active_account'] = (proc.stdout or '').strip().splitlines()[0] if (proc.stdout or '').strip() else ''
+        else:
+            info['gcloud_error'] = redacted_error(proc.stderr)
+    return info
+
+
+def powerset_setup_check_enabled(args: argparse.Namespace) -> bool:
+    return not bool(getattr(args, 'skip_powerset_setup_check', False))
+
+
+def powerset_doctor_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    checks = []
+    for check in payload.get('checks') or []:
+        if not isinstance(check, dict):
+            continue
+        if check.get('status') not in ('missing', 'fail', 'warn'):
+            continue
+        checks.append({
+            'id': check.get('id'),
+            'status': check.get('status'),
+            'message': check.get('message'),
+            'fix_kind': check.get('fix_kind'),
+            'fix_command': check.get('fix_command'),
         })
-        return 2
+    return {
+        'overall': payload.get('overall'),
+        'profile': payload.get('profile'),
+        'env_file': payload.get('env_file'),
+        'gcp_project': payload.get('gcp_project'),
+        'checks': checks,
+        'next_actions': payload.get('next_actions') or [],
+    }
+
+
+def needs_gcloud_reauth(payload: dict[str, Any], stderr: str = '') -> bool:
+    text = (json.dumps(payload, sort_keys=True) + '\n' + (stderr or '')).lower()
+    return any(
+        marker in text
+        for marker in [
+            'problem refreshing your current auth tokens',
+            'reauthentication failed',
+            'gcloud credentials need reauthentication',
+            'cannot prompt during non-interactive execution',
+        ]
+    )
+
+
+def powerset_setup_action(payload: dict[str, Any], stderr: str = '') -> dict[str, str]:
+    if needs_gcloud_reauth(payload, stderr):
+        return {
+            'command': 'gcloud auth login --no-launch-browser',
+            'then': '$powerset setup',
+            'reason': 'gcloud credentials need reauthentication',
+        }
+    return {
+        'command': '$powerset setup',
+        'reason': 'Powerset login and local runtime env must be ready before setup continues.',
+    }
+
+
+def check_powerset_setup(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    if not powerset_setup_check_enabled(args):
+        return {'status': 'skipped', 'reason': 'powerset_setup_check_disabled'}, 0
+    doctor = ROOT / 'packs/powerset/primitives/doctor/doctor.py'
+    if not doctor.exists():
+        return {
+            'status': 'blocked_user_action',
+            'step': 'powerset_setup',
+            'reason': 'powerset setup checker is unavailable',
+            'setup_command': '$powerset setup',
+            'requires_approval': [{'id': 'powerset_setup'}],
+        }, 20
+    cmd = [
+        sys.executable,
+        str(doctor),
+        'run',
+        '--profile',
+        str(getattr(args, 'powerset_profile', DEFAULT_POWERSET_SETUP_PROFILE) or DEFAULT_POWERSET_SETUP_PROFILE),
+        '--env-file',
+        str(getattr(args, 'powerset_env_file', DEFAULT_POWERSET_SETUP_ENV_FILE) or DEFAULT_POWERSET_SETUP_ENV_FILE),
+        '--gcp-project',
+        str(getattr(args, 'powerset_gcp_project', DEFAULT_POWERSET_SETUP_GCP_PROJECT) or DEFAULT_POWERSET_SETUP_GCP_PROJECT),
+        '--skip-mcp',
+    ]
+    code, payload, stderr = run_json_command(cmd, timeout=120)
+    if code == 0 and payload.get('overall') == 'ok':
+        return {
+            'status': 'ok',
+            'step': 'powerset_setup',
+            'profile': payload.get('profile'),
+            'env_file': payload.get('env_file'),
+            'gcp_project': payload.get('gcp_project'),
+        }, 0
+    action = powerset_setup_action(payload, stderr)
+    return {
+        'status': 'blocked_user_action',
+        'step': 'powerset_setup',
+        'reason': action.get('reason'),
+        'setup_command': '$powerset setup',
+        'reauth_command': action.get('command') if action.get('command', '').startswith('gcloud ') else '',
+        'then': action.get('then', ''),
+        'requires_approval': [{'id': 'powerset_setup'}],
+        'check': powerset_doctor_summary(payload),
+        'stderr': tail(redacted_error(stderr), 1000),
+    }, 20
+
+
+def download_gcs_object(gcs_uri: str, output: Path, *, download_backend: str = 'auto') -> tuple[int, dict[str, Any]]:
     try:
-        parse_exact_gcs_uri(str(args.gcs_uri))
-    except ValueError as exc:
-        emit({'status': 'rejected', 'reason': 'gcs-uri must be an exact object gs:// URI'})
-        return 2
-    out = Path(args.output)
-    out.parent.mkdir(parents=True, exist_ok=True)
+        parse_exact_gcs_uri(str(gcs_uri))
+    except ValueError:
+        return 2, {'status': 'rejected', 'reason': 'gcs-uri must be an exact object gs:// URI'}
+    output.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     tmp_key = None
     cfg = None
     try:
-        backend = getattr(args, 'download_backend', 'auto')
+        backend = download_backend
         use_gcloud = backend == 'gcloud' or (backend == 'auto' and shutil.which('gcloud'))
         env, tmp_key, cfg = materialize_raw_google_credentials(env, needs_config=use_gcloud)
         if use_gcloud and tmp_key:
@@ -401,36 +525,33 @@ def run_pull(args: argparse.Namespace) -> int:
             )
             if auth.returncode != 0:
                 if backend == 'auto':
-                    code, payload = run_python_gcs_download(args.gcs_uri, out, env)
+                    code, payload = run_python_gcs_download(gcs_uri, output, env)
                     payload['gcloud_fallback_reason'] = 'gcloud service-account activation failed'
                     payload['gcloud_stderr'] = redacted_error(auth.stderr)
                     if code == 0:
-                        payload.update({'output': str(out), 'bundle_sha256': sha256_file(out) if out.exists() else ''})
-                    emit(payload)
-                    return code
-                emit({
+                        payload.update({'output': str(output), 'bundle_sha256': sha256_file(output) if output.exists() else ''})
+                    return code, payload
+                return 2, {
                     'status': 'needs_user_action',
                     'reason': 'gcloud service-account activation failed',
                     'guidance': 'Run gcloud auth login --no-launch-browser or provide a valid service account.',
                     'stderr': redacted_error(auth.stderr),
-                })
-                return 2
+                }
         if use_gcloud:
-            code, payload = run_gcloud_download(args.gcs_uri, out, env)
+            code, payload = run_gcloud_download(gcs_uri, output, env)
             if code != 0 and backend == 'auto':
                 gcloud_payload = payload
-                code, payload = run_python_gcs_download(args.gcs_uri, out, env)
+                code, payload = run_python_gcs_download(gcs_uri, output, env)
                 payload['gcloud_fallback_reason'] = gcloud_payload.get('reason')
                 if gcloud_payload.get('stderr'):
                     payload['gcloud_stderr'] = gcloud_payload.get('stderr')
         elif backend in ('auto', 'python'):
-            code, payload = run_python_gcs_download(args.gcs_uri, out, env)
+            code, payload = run_python_gcs_download(gcs_uri, output, env)
         else:
             code, payload = 2, {'status': 'rejected', 'reason': f'unsupported download backend: {backend}'}
         if code == 0:
-            payload.update({'output': str(out), 'bundle_sha256': sha256_file(out) if out.exists() else ''})
-        emit(payload)
-        return code
+            payload.update({'output': str(output), 'bundle_sha256': sha256_file(output) if output.exists() else ''})
+        return code, payload
     finally:
         if tmp_key:
             try:
@@ -439,6 +560,23 @@ def run_pull(args: argparse.Namespace) -> int:
                 pass
         if cfg:
             shutil.rmtree(cfg, ignore_errors=True)
+
+
+def run_pull(args: argparse.Namespace) -> int:
+    if not args.allow_gcs_download:
+        emit({
+            'status': 'needs_user_action',
+            'reason': 'GCS download requires --allow-gcs-download',
+            'requires_approval': [{'id': 'gcs_download'}],
+        })
+        return 2
+    code, payload = download_gcs_object(
+        str(args.gcs_uri),
+        Path(args.output),
+        download_backend=getattr(args, 'download_backend', 'auto'),
+    )
+    emit(payload)
+    return code
 
 
 def copy_replace(src: Path, dst: Path, force: bool, backup_root: Path, overwritten: list[str]) -> None:
@@ -1375,24 +1513,168 @@ def matching_bootstrap_bundle(operator_id: str) -> Path | None:
     return None
 
 
+def iter_bootstrap_operator_entries(payload: Any) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        operators = payload.get('operators')
+        if isinstance(operators, list):
+            entries.extend(item for item in operators if isinstance(item, dict))
+        for value in payload.values():
+            if isinstance(value, (dict, list)):
+                entries.extend(iter_bootstrap_operator_entries(value))
+    elif isinstance(payload, list):
+        for value in payload:
+            if isinstance(value, (dict, list)):
+                entries.extend(iter_bootstrap_operator_entries(value))
+    return entries
+
+
+def matching_remote_bootstrap_entry(summary: dict[str, Any], operator_id: str) -> dict[str, Any] | None:
+    for entry in iter_bootstrap_operator_entries(summary):
+        if str(entry.get('operator_id') or '') != str(operator_id):
+            continue
+        gcs = entry.get('gcs') if isinstance(entry.get('gcs'), dict) else {}
+        bundle = str(gcs.get('bundle') or '')
+        if bundle.startswith('gs://'):
+            return entry
+    return None
+
+
+def maybe_download_remote_bootstrap(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any] | None]:
+    summary_uri = str(getattr(args, 'bootstrap_summary_uri', '') or DEFAULT_BOOTSTRAP_SUMMARY_URI).strip()
+    if not summary_uri:
+        return None, {'status': 'skipped', 'reason': 'remote_bootstrap_summary_not_configured'}
+    if getattr(args, 'disable_remote_bootstrap', False):
+        return None, {'status': 'skipped', 'reason': 'remote_bootstrap_disabled'}
+
+    backend = str(getattr(args, 'bootstrap_download_backend', 'auto') or 'auto')
+    auth = gcs_auth_discovery()
+    registry_dir = ROOT / '.powerpacks/operator-bootstrap/registry'
+    summary_path = registry_dir / 'summary.json'
+    code, summary_pull = download_gcs_object(summary_uri, summary_path, download_backend=backend)
+    if code != 0:
+        summary_pull.update({
+            'status': 'skipped',
+            'reason': 'remote_bootstrap_summary_download_failed',
+            'summary_uri': summary_uri,
+            'auth': auth,
+        })
+        return None, summary_pull
+
+    try:
+        summary = read_json(summary_path)
+    except Exception as exc:
+        return None, {
+            'status': 'skipped',
+            'reason': 'remote_bootstrap_summary_invalid',
+            'summary_uri': summary_uri,
+            'summary_path': str(summary_path),
+            'error': str(exc),
+            'auth': auth,
+        }
+    if not isinstance(summary, dict):
+        return None, {
+            'status': 'skipped',
+            'reason': 'remote_bootstrap_summary_invalid',
+            'summary_uri': summary_uri,
+            'summary_path': str(summary_path),
+            'auth': auth,
+        }
+
+    entry = matching_remote_bootstrap_entry(summary, args.operator_id)
+    if not entry:
+        return None, {
+            'status': 'skipped',
+            'reason': 'no_matching_remote_bootstrap',
+            'summary_uri': summary_uri,
+            'summary_path': str(summary_path),
+            'operator_id': args.operator_id,
+            'auth': auth,
+        }
+
+    gcs = entry.get('gcs') if isinstance(entry.get('gcs'), dict) else {}
+    bundle_uri = str(gcs.get('bundle') or '')
+    bundle_slug = slugify(entry.get('operator') or args.operator_id)
+    bundle_path = ROOT / '.powerpacks/operator-bootstrap/bundles' / f'{bundle_slug}.operator-bootstrap.tar.gz'
+    code, bundle_pull = download_gcs_object(bundle_uri, bundle_path, download_backend=backend)
+    if code != 0:
+        bundle_pull.update({
+            'status': 'skipped',
+            'reason': 'remote_bootstrap_bundle_download_failed',
+            'summary_uri': summary_uri,
+            'summary_path': str(summary_path),
+            'bundle_uri': bundle_uri,
+            'operator_id': args.operator_id,
+            'auth': auth,
+        })
+        return None, bundle_pull
+
+    return bundle_path, {
+        'status': 'downloaded',
+        'source': 'remote_operator_bootstrap',
+        'summary_uri': summary_uri,
+        'summary_path': str(summary_path),
+        'bundle_uri': bundle_uri,
+        'bundle': str(bundle_path),
+        'bundle_sha256': bundle_pull.get('bundle_sha256', ''),
+        'download_backend': bundle_pull.get('download_backend', ''),
+        'operator': entry.get('operator'),
+        'operator_id': entry.get('operator_id'),
+        'auth': auth,
+    }
+
+
+def remote_bootstrap_auth_block(remote_payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not remote_payload:
+        return None
+    if remote_payload.get('reason') not in (
+        'remote_bootstrap_summary_download_failed',
+        'remote_bootstrap_bundle_download_failed',
+    ):
+        return None
+    action = powerset_setup_action(remote_payload, str(remote_payload.get('stderr') or remote_payload.get('error') or ''))
+    return {
+        'status': 'blocked_user_action',
+        'step': 'bootstrap',
+        'reason': 'operator bootstrap download needs Powerset setup or refreshed gcloud auth',
+        'setup_command': '$powerset setup',
+        'reauth_command': action.get('command') if action.get('command', '').startswith('gcloud ') else '',
+        'then': action.get('then', ''),
+        'requires_approval': [{'id': 'powerset_setup'}],
+        'remote_bootstrap': remote_payload,
+    }
+
+
 def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> tuple[dict[str, Any] | None, int]:
     if ledger.get('phases', {}).get('bootstrap', {}).get('status') != 'pending':
         return None, 0
     bundle = Path(args.bootstrap_bundle) if getattr(args, 'bootstrap_bundle', '') else matching_bootstrap_bundle(args.operator_id)
+    remote_payload = None
+    if not bundle and not getattr(args, 'bootstrap_bundle', ''):
+        bundle, remote_payload = maybe_download_remote_bootstrap(args)
     if not bundle:
-        return {'status': 'skipped', 'reason': 'no_matching_bootstrap_bundle'}, 0
+        auth_block = remote_bootstrap_auth_block(remote_payload)
+        if auth_block:
+            return auth_block, 20
+        return remote_payload or {'status': 'skipped', 'reason': 'no_matching_bootstrap_bundle'}, 0
     inspected = inspect_bundle(bundle)
     if inspected.get('status') != 'ok':
-        return {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected}, 20
+        payload = {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected}
+        if remote_payload:
+            payload['remote_bootstrap'] = remote_payload
+        return payload, 20
     force = bool(getattr(args, 'force_bootstrap', False))
     if inspected.get('would_overwrite') and not force:
-        return {
+        payload = {
             'status': 'blocked_user_action',
             'step': 'bootstrap',
             'reason': 'bootstrap restore would overwrite existing artifacts',
             'requires_approval': [{'id': 'destructive_restore_overwrite'}],
             'inspect': inspected,
-        }, 20
+        }
+        if remote_payload:
+            payload['remote_bootstrap'] = remote_payload
+        return payload, 20
     apply_args = argparse.Namespace(
         bundle=str(bundle),
         operator_id=args.operator_id,
@@ -1402,6 +1684,8 @@ def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> t
         allow_legacy_bootstrap_manifest=False,
     )
     payload = apply_bundle(apply_args)
+    if remote_payload:
+        payload['remote_bootstrap'] = remote_payload
     if payload.get('status') != 'ok':
         return payload, 20 if payload.get('requires_approval') else 1
     return payload, 0
@@ -1463,6 +1747,13 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
 def run_setup(args: argparse.Namespace) -> int:
     ledger_path = Path(args.setup_ledger)
     ledger = load_setup_ledger(ledger_path)
+    powerset_payload, powerset_code = check_powerset_setup(args)
+    if powerset_code:
+        ledger['powerset_setup'] = powerset_payload
+        ledger['status'] = powerset_payload.get('status', 'blocked_user_action')
+        save_setup_ledger(ledger, ledger_path)
+        emit(powerset_payload)
+        return powerset_code
     bootstrap_payload, bootstrap_code = maybe_apply_bootstrap(args, ledger)
     if bootstrap_code:
         emit(bootstrap_payload or {'status': 'failed', 'step': 'bootstrap'})
@@ -1540,6 +1831,7 @@ def run_setup(args: argparse.Namespace) -> int:
     emit({
         'status': final_status['setup_ledger'].get('status'),
         'operator_id': args.operator_id,
+        'powerset_setup': powerset_payload,
         'bootstrap': bootstrap_payload,
         'setup_ledger': final_status['setup_ledger'],
         'search_index_readiness': final_status['search_index_readiness'],
@@ -1592,6 +1884,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--bootstrap-bundle', default='')
     s.add_argument('--force-bootstrap', action='store_true')
+    s.add_argument('--bootstrap-summary-uri', default=DEFAULT_BOOTSTRAP_SUMMARY_URI)
+    s.add_argument('--bootstrap-download-backend', choices=['auto', 'gcloud', 'python'], default='auto')
+    s.add_argument('--disable-remote-bootstrap', action='store_true')
+    s.add_argument('--powerset-profile', default=DEFAULT_POWERSET_SETUP_PROFILE, help=argparse.SUPPRESS)
+    s.add_argument('--powerset-env-file', default=DEFAULT_POWERSET_SETUP_ENV_FILE, help=argparse.SUPPRESS)
+    s.add_argument('--powerset-gcp-project', default=DEFAULT_POWERSET_SETUP_GCP_PROJECT, help=argparse.SUPPRESS)
+    s.add_argument('--skip-powerset-setup-check', action='store_true', help=argparse.SUPPRESS)
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
     s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)

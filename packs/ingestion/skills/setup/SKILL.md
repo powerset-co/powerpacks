@@ -84,7 +84,18 @@ agent to execute a precise command.
 
 Use the setup runner as the normal entry point. It is idempotent: it restores a
 safe matching bootstrap when needed, links are read from the account registry,
-imports refresh automatically, and completed recent work is reused.
+imports refresh automatically, and completed recent work is reused. Setup first
+verifies the local Powerset login/runtime env readiness that `$powerset setup`
+establishes, including Auth0 login, the local `.env`, and usable `gcloud` access
+for per-user runtime secrets. If that check fails, tell the user to run
+`$powerset setup`; if the failure is expired `gcloud` credentials, tell them to
+reauth with `gcloud auth login --no-launch-browser` and then run `$powerset setup`.
+
+On a fresh clone, setup first looks for a local matching bundle; if none exists,
+it discovers the published operator bootstrap registry from GCS, checks
+available GCS auth (`gcloud` active account or Google application credentials),
+downloads only the bundle for the current operator ID, then applies it through
+the same safe restore path.
 
 ```bash
 uv run --project . python packs/ingestion/primitives/setup/setup.py run \
@@ -92,6 +103,18 @@ uv run --project . python packs/ingestion/primitives/setup/setup.py run \
   --accounts .powerpacks/ingestion/accounts.json \
   --setup-ledger .powerpacks/setup/setup-run.json
 ```
+
+The default remote registry is:
+
+```text
+gs://powerset-search-processing-artifacts/powerpacks/operator-bootstrap/summary.json
+```
+
+Operators should not need a per-person bootstrap URI when their environment can
+read that registry. If GCS auth is missing or expired while setup needs the
+remote registry, setup stops with the same `$powerset setup` / `gcloud auth
+login --no-launch-browser` action instead of requiring harness-side bootstrap
+instructions.
 
 For inspection without running refresh work, use local status:
 
@@ -118,7 +141,8 @@ uv run --project . python packs/ingestion/primitives/setup/setup.py apply-bootst
   --force
 ```
 
-Remote GCS bootstrap pulls require explicit approval and an exact object URI:
+Manual GCS bootstrap pulls outside the default registry require explicit approval
+and an exact object URI:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/setup/setup.py pull-bootstrap \
@@ -223,7 +247,7 @@ The main thread owns these approvals. Never let workers approve them silently:
 - GCP Desktop OAuth app creation and OAuth test-user additions;
 - adding/authing each extra Gmail account;
 - WhatsApp QR/device linking;
-- exact-object GCS bootstrap download;
+- manual exact-object GCS bootstrap download outside the default registry;
 - destructive bootstrap restore/overwrite (`--force`);
 - RapidAPI, Parallel, OpenAI/TLM, embedding, or other provider spend;
 - `$import-contacts` research/review/upload or any upload/prod write.

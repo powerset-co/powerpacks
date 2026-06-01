@@ -112,6 +112,29 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIn(("company_id", "In", ["urn:harmonic:company:meta"]), company_filters[1])
         self.assertIn(("is_current", "Eq", True), company_filters[1])
 
+    def test_role_payload_from_state_derives_currentness_from_traits(self) -> None:
+        state = {
+            "steps": [{
+                "id": "expand_search_request",
+                "output": {
+                    "traits": [
+                        {"meaning": "role", "temporal": "current", "value": "Software engineer"},
+                        {"meaning": "company", "temporal": "past", "value": "Worked at Google"},
+                    ],
+                    "role_search_filters": {
+                        "semantic_query": "Builds software systems in production with hands-on coding responsibilities.",
+                        "is_current_role": False,
+                        "is_current_company": True,
+                    },
+                },
+            }],
+        }
+
+        payload = turbopuffer_client.role_payload_from_state(state)
+
+        self.assertIs(payload["is_current_role"], True)
+        self.assertIs(payload["is_current_company"], False)
+
     def test_founder_shortcut_adds_role_id_and_preserves_intersection(self) -> None:
         state = {
             "query": "founders at fintech startups",

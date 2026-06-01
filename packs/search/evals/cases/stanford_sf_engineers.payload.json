@@ -1,0 +1,45 @@
+{
+  "intent_type": "role_search",
+  "source_type": "local_duckdb",
+  "normalized_query": "software engineers in SF that went to Stanford",
+  "vertical": "people",
+  "role_search_filters": {
+    "semantic_query": "Software engineers who build production software systems, backend services, frontend applications, infrastructure, developer tools, distributed systems, machine learning platforms, APIs, or full stack products with hands-on programming responsibilities.",
+    "bm25_queries": [
+      "software engineer",
+      "backend engineer",
+      "frontend engineer",
+      "full stack engineer",
+      "infrastructure engineer"
+    ],
+    "role_tracks": [
+      "engineering"
+    ],
+    "education_names": [
+      "Stanford University"
+    ],
+    "metro_areas": [
+      "San Francisco Bay Area"
+    ]
+  },
+  "traits": [
+    {
+      "value": "Software engineer",
+      "temporal": "current",
+      "meaning": "role"
+    },
+    {
+      "value": "Based in San Francisco",
+      "temporal": "current",
+      "meaning": "location"
+    },
+    {
+      "value": "Attended Stanford",
+      "temporal": "all",
+      "meaning": "education"
+    }
+  ],
+  "notes": [
+    "No LLM reranking. Local DuckDB retrieval/hydration only."
+  ]
+}

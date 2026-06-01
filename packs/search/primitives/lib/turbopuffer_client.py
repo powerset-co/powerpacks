@@ -347,6 +347,63 @@ def base_person_id(value: str) -> str:
     return str(value)
 
 
+def _trait_value(trait: Any, key: str) -> str:
+    if isinstance(trait, dict):
+        return str(trait.get(key) or "").strip().lower()
+    return str(getattr(trait, key, "") or "").strip().lower()
+
+
+def _temporal_from_traits(traits: list[Any], meaning: str) -> bool | None:
+    matching = [trait for trait in traits if _trait_value(trait, "meaning") == meaning]
+    if not matching:
+        return None
+    non_all = {_trait_value(trait, "temporal") for trait in matching if _trait_value(trait, "temporal") != "all"}
+    if non_all == {"current"}:
+        return True
+    if non_all == {"past"}:
+        return False
+    return None
+
+
+def _single_trait_temporal(traits: list[Any]) -> bool | None:
+    if len(traits) != 1:
+        return None
+    temporal = _trait_value(traits[0], "temporal")
+    if temporal == "current":
+        return True
+    if temporal == "past":
+        return False
+    return None
+
+
+def _derive_role_current_from_traits(traits: list[Any]) -> bool | None:
+    single = _single_trait_temporal(traits)
+    if single is not None:
+        return single
+    role_temporal = _temporal_from_traits(traits, "role")
+    if role_temporal is not None:
+        return role_temporal
+    company_temporal = _temporal_from_traits(traits, "company")
+    role_and_company = [trait for trait in traits if _trait_value(trait, "meaning") in {"role", "company"}]
+    if company_temporal is not None and len(role_and_company) == len([trait for trait in traits if _trait_value(trait, "meaning") == "company"]):
+        return company_temporal
+    return None
+
+
+def _derive_company_current_from_traits(traits: list[Any]) -> bool | None:
+    single = _single_trait_temporal(traits)
+    if single is not None:
+        return single
+    company_temporal = _temporal_from_traits(traits, "company")
+    if company_temporal is not None:
+        return company_temporal
+    role_temporal = _temporal_from_traits(traits, "role")
+    role_and_company = [trait for trait in traits if _trait_value(trait, "meaning") in {"role", "company"}]
+    if role_temporal is not None and len(role_and_company) == len([trait for trait in traits if _trait_value(trait, "meaning") == "role"]):
+        return role_temporal
+    return None
+
+
 def row_attrs(row: Any, include_attributes: list[str]) -> dict[str, Any]:
     attrs: dict[str, Any] = {"id": str(row.id)}
     extra = getattr(row, "model_extra", {}) or {}
@@ -646,6 +703,16 @@ def role_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("state does not contain expand_search_request.output.role_search_filters")
     payload = dict(payload)
+    traits = expansion.get("traits") if isinstance(expansion, dict) else []
+    if isinstance(traits, list) and traits:
+        payload.pop("is_current_role", None)
+        payload.pop("is_current_company", None)
+        role_current = _derive_role_current_from_traits(traits)
+        company_current = _derive_company_current_from_traits(traits)
+        if role_current is not None:
+            payload["is_current_role"] = role_current
+        if company_current is not None:
+            payload["is_current_company"] = company_current
 
     resolved_companies = latest_step_output(state, "resolve_companies")
     if isinstance(resolved_companies, dict) and resolved_companies.get("company_ids"):
