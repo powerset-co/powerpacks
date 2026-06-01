@@ -97,7 +97,8 @@ Critical rules:
 3. If a trait has no evidence, its trait score should be low.
 4. Recency matters. Current/recent roles beat old roles unless the user asks for past experience.
 5. Explicit exclusions are hard gates: excluded candidates score 0.0.
-6. Output JSON only. No markdown fences. No commentary.
+6. Explicit seniority is a hiring target band, not a loose "or above" signal. For "senior software engineer", strongly prefer Senior SWE/current senior IC profiles and score obvious out-of-band titles like CTO, VP Engineering, Director, Founder, Tech Advisor, Advisor, or Consultant low/out unless the query asks for those leadership/founder/advisor/consultant levels. Staff/principal are not synonyms for "senior" unless the query says senior+ or names those bands.
+7. Output JSON only. No markdown fences. No commentary.
 """
 
 
