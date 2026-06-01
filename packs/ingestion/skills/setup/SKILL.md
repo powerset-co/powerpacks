@@ -91,12 +91,53 @@ syncs it into `.powerpacks/operator-bootstrap/bundles/` first; `$setup` then
 treats that local bundle like any other previous-run artifact. If no local
 matching bundle exists, setup simply continues with source linking/import.
 
+`$setup` is the product command. Keep it simple for users. For debugging,
+operator testing, or resuming after a blocker, use the deterministic phase
+entrypoints below instead of rerunning the full product command blindly.
+
 ```bash
 uv run --project . python packs/ingestion/primitives/setup/setup.py run \
   --operator-id <operator-id> \
   --accounts .powerpacks/ingestion/accounts.json \
   --setup-ledger .powerpacks/setup/setup-run.json
 ```
+
+The read-only next-action command tells agents exactly which phase should run
+next and returns the concrete command to run:
+
+```bash
+uv run --project . python packs/ingestion/primitives/setup/setup.py next \
+  --operator-id <operator-id> \
+  --accounts .powerpacks/ingestion/accounts.json \
+  --setup-ledger .powerpacks/setup/setup-run.json
+```
+
+Phase entrypoints use the same underlying logic as `run`; they only narrow the
+scope so agents can test or resume one layer at a time:
+
+```bash
+uv run --project . python packs/ingestion/primitives/setup/setup.py bootstrap \
+  --operator-id <operator-id> \
+  --setup-ledger .powerpacks/setup/setup-run.json
+
+uv run --project . python packs/ingestion/primitives/setup/setup.py link \
+  --operator-id <operator-id> \
+  --accounts .powerpacks/ingestion/accounts.json
+
+uv run --project . python packs/ingestion/primitives/setup/setup.py import \
+  --operator-id <operator-id> \
+  --accounts .powerpacks/ingestion/accounts.json \
+  --setup-ledger .powerpacks/setup/setup-run.json
+
+uv run --project . python packs/ingestion/primitives/setup/setup.py index \
+  --operator-id <operator-id> \
+  --accounts .powerpacks/ingestion/accounts.json \
+  --setup-ledger .powerpacks/setup/setup-run.json
+```
+
+Do not change the product behavior by default: when `setup.py run` has linked
+sources, it should still run the setup refresh path. Use phase commands to
+avoid repeating completed or unrelated phases during debugging.
 
 For inspection without running refresh work, use local status:
 

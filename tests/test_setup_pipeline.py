@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import importlib.util
 import io
 import json
@@ -1154,6 +1155,191 @@ class SetupPipelineTests(unittest.TestCase):
                     with mock.patch.object(setup, 'run_python_gcs_download', side_effect=fake_python_download):
                         self.assertEqual(setup.run_pull(args), 0)
         self.assertTrue(out.exists())
+
+    def test_next_returns_link_phase_when_accounts_are_missing(self):
+        tmp = self.temp_workspace()
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(tmp / '.powerpacks/ingestion/accounts.json'),
+            setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'),
+            refresh_interval_hours=168,
+        )
+        payload = setup.next_action_payload(args)
+
+        self.assertEqual(payload['status'], 'ok')
+        self.assertEqual(payload['next']['phase'], 'link')
+        self.assertEqual(payload['next']['status'], 'run_command')
+        self.assertIn('setup.py link', payload['next']['command'])
+        self.assertIn(str(tmp / '.powerpacks/ingestion/accounts.json'), payload['next']['command'])
+        self.assertIn(str(tmp / '.powerpacks/setup/setup-run.json'), payload['next']['command'])
+
+        index_command = setup.setup_phase_command(args, 'index')
+        self.assertIn(str(tmp / '.powerpacks/ingestion/accounts.json'), index_command)
+        self.assertIn(str(tmp / '.powerpacks/setup/setup-run.json'), index_command)
+
+    def test_bootstrap_phase_applies_matching_local_bundle_only(self):
+        tmp = self.temp_workspace()
+        bundle = tmp / '.powerpacks/operator-bootstrap/bundles/patrick.operator-bootstrap.tar.gz'
+        bundle.parent.mkdir(parents=True)
+        make_bundle(bundle)
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(tmp / '.powerpacks/ingestion/accounts.json'),
+            setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'),
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            refresh_interval_hours=168,
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = setup.run_bootstrap_phase(args)
+        payload = json.loads(buf.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['phase'], 'bootstrap')
+        self.assertEqual(payload['bootstrap']['status'], 'ok')
+        self.assertTrue((tmp / '.powerpacks/search-index/records/people.records.jsonl').exists())
+        self.assertEqual(payload['next']['phase'], 'link')
+
+    def test_link_phase_wraps_onboarding_without_importing(self):
+        tmp = self.temp_workspace()
+        calls = []
+
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            accounts = tmp / '.powerpacks/ingestion/accounts.json'
+            accounts.parent.mkdir(parents=True)
+            accounts.write_text(json.dumps({'version': 2, 'accounts': {
+                'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+            }}), encoding='utf-8')
+            return 0, {'status': 'ok', 'linked_sources': ['gmail']}, ''
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(tmp / '.powerpacks/ingestion/accounts.json'),
+            setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'),
+            refresh_interval_hours=168,
+            gmail_db='',
+            gmail_account=['me@example.com'],
+            gmail_add_email=[],
+            gmail_authorized_email=[],
+            gmail_all=False,
+            skip_source=[],
+            linkedin_csv='',
+            linkedin_source_user='',
+            twitter_handle='',
+        )
+        buf = io.StringIO()
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            with contextlib.redirect_stdout(buf):
+                code = setup.run_link_phase(args)
+        payload = json.loads(buf.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['phase'], 'link')
+        self.assertIn('onboarding/onboarding.py', ' '.join(calls[0]))
+        self.assertIn('--gmail-account', calls[0])
+        self.assertEqual(payload['next']['phase'], 'import')
+        self.assertFalse(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+
+    def test_import_phase_refreshes_linked_sources_without_indexing(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / '.powerpacks/ingestion/accounts.json'
+        accounts.parent.mkdir(parents=True)
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+            'linkedin_csv': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
+        }}), encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        summary = setup.accounts_summary(accounts)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'ready',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'ready'},
+                'import': {'status': 'ready', 'live_refresh': {
+                    'status': 'completed',
+                    'completed_at': setup.now(),
+                    'source_fingerprint': setup.linked_source_fingerprint(summary),
+                }},
+                'index': {'status': 'ready'},
+            },
+        }), encoding='utf-8')
+        calls = []
+
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            joined = ' '.join(cmd)
+            self.assertIn('import_network_pipeline.py', joined)
+            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            merged_dir = run_dir / 'merged'
+            merged_dir.mkdir(parents=True)
+            for name, content in {
+                'people.csv': 'id\nnew\n',
+                'network_contacts.csv': 'id\nc1\n',
+                'network_contact_sources.csv': 'id\ns1\n',
+                'network_companies.csv': 'id\nco1\n',
+                'merge_manifest.json': '{}\n',
+            }.items():
+                (merged_dir / name).write_text(content, encoding='utf-8')
+            return 0, {
+                'status': 'completed',
+                'run_id': 'setup-refresh-test',
+                'artifacts': {'merged_people_csv': str(merged_dir / 'people.csv')},
+            }, ''
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            refresh_interval_hours=168,
+            gmail_sync_lookback_days=14,
+            only_if_due=False,
+        )
+        buf = io.StringIO()
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            with contextlib.redirect_stdout(buf):
+                code = setup.run_import_phase(args)
+        payload = json.loads(buf.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['phase'], 'import')
+        self.assertEqual(payload['status'], 'completed')
+        self.assertTrue(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+        self.assertFalse(any('build_processing_pipeline.py' in ' '.join(cmd) for cmd in calls))
+
+    def test_index_phase_materializes_records_without_importing(self):
+        tmp = self.temp_workspace()
+        records = tmp / '.powerpacks/search-index/records'
+        records.mkdir(parents=True)
+        (records / 'people.records.jsonl').write_text('{}\n', encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        calls = []
+
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            return fake_local_duckdb_payload(tmp)
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(tmp / '.powerpacks/ingestion/accounts.json'),
+            setup_ledger=str(ledger),
+            refresh_interval_hours=168,
+            auto_spend_limit_usd=10.0,
+        )
+        buf = io.StringIO()
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            with contextlib.redirect_stdout(buf):
+                code = setup.run_index_phase(args)
+        payload = json.loads(buf.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['phase'], 'index')
+        self.assertEqual(payload['status'], 'ready')
+        self.assertTrue(any('build-local-duckdb-shim.py' in ' '.join(cmd) for cmd in calls))
+        self.assertFalse(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
 
     def test_setup_skips_bootstrap_when_no_local_bundle_matches(self):
         tmp = self.temp_workspace()

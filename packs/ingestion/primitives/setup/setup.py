@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1183,6 +1184,285 @@ def run_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def quote_arg(value: Any) -> str:
+    return shlex.quote(str(value))
+
+
+def setup_phase_command(args: argparse.Namespace, phase: str) -> str:
+    cmd = [
+        'uv', 'run', '--project', '.', 'python',
+        'packs/ingestion/primitives/setup/setup.py',
+        phase,
+        '--operator-id', args.operator_id,
+    ]
+    if phase in ('bootstrap', 'link', 'import', 'index', 'next', 'status'):
+        cmd.extend(['--accounts', args.accounts])
+    if phase in ('bootstrap', 'link', 'import', 'index', 'next', 'status'):
+        cmd.extend(['--setup-ledger', args.setup_ledger])
+    return ' '.join(quote_arg(part) for part in cmd)
+
+
+def next_action_payload(args: argparse.Namespace) -> dict[str, Any]:
+    payload = status_payload(args)
+    ledger = payload['setup_ledger']
+    phases = ledger.get('phases') or {}
+    bootstrap = phases.get('bootstrap') if isinstance(phases.get('bootstrap'), dict) else {}
+    link = phases.get('link') if isinstance(phases.get('link'), dict) else {}
+    import_phase = phases.get('import') if isinstance(phases.get('import'), dict) else {}
+    index = phases.get('index') if isinstance(phases.get('index'), dict) else {}
+    idx = payload.get('search_index_readiness') if isinstance(payload.get('search_index_readiness'), dict) else {}
+
+    action: dict[str, Any]
+    if bootstrap.get('status') == 'pending' and payload.get('bootstrap_bundle_candidates'):
+        action = {
+            'status': 'run_command',
+            'phase': 'bootstrap',
+            'auto_safe': True,
+            'reason': 'matching bootstrap bundle can be restored',
+            'command': setup_phase_command(args, 'bootstrap'),
+        }
+    elif link.get('status') != 'ready':
+        action = {
+            'status': 'run_command',
+            'phase': 'link',
+            'auto_safe': False,
+            'reason': 'account/source linking is not complete',
+            'command': setup_phase_command(args, 'link'),
+        }
+    elif import_phase.get('status') == 'refresh_due':
+        action = {
+            'status': 'run_command',
+            'phase': 'import',
+            'auto_safe': True,
+            'reason': (import_phase.get('refresh_due') or {}).get('reason') or 'refresh_due',
+            'command': setup_phase_command(args, 'import'),
+        }
+    elif idx.get('status') in ('records_only_duckdb_missing', 'people_csv_ready_for_processing') or index.get('status') == 'needs_processing':
+        action = {
+            'status': 'run_command',
+            'phase': 'index',
+            'auto_safe': True,
+            'reason': idx.get('status') or index.get('reason') or 'index_not_ready',
+            'command': setup_phase_command(args, 'index'),
+        }
+    else:
+        action = {
+            'status': 'done',
+            'phase': 'ready',
+            'auto_safe': True,
+            'reason': ledger.get('status') or 'ready',
+        }
+
+    return {
+        'status': 'ok',
+        'operator_id': args.operator_id,
+        'next': action,
+        'setup_status': ledger.get('status'),
+        'phases': phases,
+        'next_actions': payload.get('next_actions') or [],
+        'search_index_readiness': idx,
+    }
+
+
+def run_next(args: argparse.Namespace) -> int:
+    payload = next_action_payload(args)
+    emit(payload)
+    return 0
+
+
+def run_bootstrap_phase(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.setup_ledger)
+    ledger = load_setup_ledger(ledger_path)
+    bootstrap_payload, bootstrap_code = maybe_apply_bootstrap(args, ledger)
+    if bootstrap_payload is None:
+        bootstrap_payload = {'status': 'skipped', 'reason': 'bootstrap_already_completed'}
+    if bootstrap_code:
+        emit({'status': bootstrap_payload.get('status', 'failed'), 'phase': 'bootstrap', 'bootstrap': bootstrap_payload})
+        return bootstrap_code
+    status_args = argparse.Namespace(
+        operator_id=args.operator_id,
+        accounts=getattr(args, 'accounts', '.powerpacks/ingestion/accounts.json'),
+        setup_ledger=args.setup_ledger,
+        refresh_interval_hours=getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS),
+    )
+    final_status = status_payload(status_args)
+    save_setup_ledger(final_status['setup_ledger'], ledger_path)
+    emit({
+        'status': bootstrap_payload.get('status', 'ok'),
+        'phase': 'bootstrap',
+        'operator_id': args.operator_id,
+        'bootstrap': bootstrap_payload,
+        'setup_ledger': final_status['setup_ledger'],
+        'next': next_action_payload(status_args)['next'],
+    })
+    return 0
+
+
+def onboarding_step_command(args: argparse.Namespace) -> list[str]:
+    cmd = [
+        sys.executable,
+        'packs/ingestion/primitives/onboarding/onboarding.py',
+        'step',
+        '--accounts',
+        args.accounts,
+        '--operator-id',
+        args.operator_id,
+    ]
+    for email in getattr(args, 'gmail_account', []) or []:
+        cmd.extend(['--gmail-account', email])
+    for email in getattr(args, 'gmail_add_email', []) or []:
+        cmd.extend(['--gmail-add-email', email])
+    for email in getattr(args, 'gmail_authorized_email', []) or []:
+        cmd.extend(['--gmail-authorized-email', email])
+    for source in getattr(args, 'skip_source', []) or []:
+        cmd.extend(['--skip-source', source])
+    if getattr(args, 'gmail_all', False):
+        cmd.append('--gmail-all')
+    if getattr(args, 'gmail_db', ''):
+        cmd.extend(['--gmail-db', args.gmail_db])
+    if getattr(args, 'linkedin_csv', ''):
+        cmd.extend(['--linkedin-csv', args.linkedin_csv])
+    if getattr(args, 'linkedin_source_user', ''):
+        cmd.extend(['--linkedin-source-user', args.linkedin_source_user])
+    if getattr(args, 'twitter_handle', ''):
+        cmd.extend(['--twitter-handle', args.twitter_handle])
+    return cmd
+
+
+def run_link_phase(args: argparse.Namespace) -> int:
+    cmd = onboarding_step_command(args)
+    code, payload, stderr = run_json_command(cmd, timeout=120)
+    out = {
+        'status': payload.get('status') or ('ok' if code == 0 else 'failed'),
+        'phase': 'link',
+        'operator_id': args.operator_id,
+        'command': cmd,
+        'payload': payload,
+        'stderr': tail(stderr),
+    }
+    if code == 0:
+        status_args = argparse.Namespace(
+            operator_id=args.operator_id,
+            accounts=args.accounts,
+            setup_ledger=args.setup_ledger,
+            refresh_interval_hours=getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS),
+        )
+        final_status = status_payload(status_args)
+        save_setup_ledger(final_status['setup_ledger'], Path(args.setup_ledger))
+        out['setup_ledger'] = final_status['setup_ledger']
+        out['next'] = next_action_payload(status_args)['next']
+    emit(out)
+    return code
+
+
+def run_import_phase(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.setup_ledger)
+    ledger = load_setup_ledger(ledger_path)
+    accounts = accounts_summary(Path(args.accounts))
+    due = import_refresh_due(
+        ledger,
+        accounts,
+        int(getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS)),
+        force_refresh=not getattr(args, 'only_if_due', False),
+    )
+    if not due.get('due'):
+        status_args = argparse.Namespace(
+            operator_id=args.operator_id,
+            accounts=args.accounts,
+            setup_ledger=args.setup_ledger,
+            refresh_interval_hours=getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS),
+        )
+        final_status = status_payload(status_args)
+        save_setup_ledger(final_status['setup_ledger'], ledger_path)
+        emit({
+            'status': 'skipped',
+            'phase': 'import',
+            'operator_id': args.operator_id,
+            'reason': due.get('reason'),
+            'refresh_due': due,
+            'setup_ledger': final_status['setup_ledger'],
+            'next': next_action_payload(status_args)['next'],
+        })
+        return 0
+
+    import_phase = {
+        'status': 'refresh_due',
+        'source': 'explicit_import_phase',
+        'people_csv': '.powerpacks/network-import/merged/people.csv'
+        if (ROOT / '.powerpacks/network-import/merged/people.csv').exists()
+        else '',
+        'refresh_due': due,
+        'live_refresh': ((ledger.get('phases') or {}).get('import') or {}).get('live_refresh', {}),
+    }
+    ledger.setdefault('phases', {})['import'] = import_phase
+    ledger['status'] = 'refresh_due'
+    save_setup_ledger(ledger, ledger_path)
+
+    refresh_payload, refresh_code = run_live_refresh(args, ledger, accounts, due)
+    ledger = load_setup_ledger(ledger_path)
+    if refresh_code:
+        ledger.setdefault('phases', {}).setdefault('import', {})['live_refresh'] = {
+            'status': refresh_payload.get('status'),
+            'updated_at': now(),
+            'payload': refresh_payload,
+        }
+        ledger['status'] = refresh_payload.get('status', 'blocked')
+        save_setup_ledger(ledger, ledger_path)
+        emit({'status': refresh_payload.get('status'), 'phase': 'import', **refresh_payload})
+        return refresh_code
+
+    refresh = refresh_payload['refresh']
+    ledger.setdefault('phases', {})['import'] = {
+        'status': 'ready',
+        'source': 'live_refresh',
+        'people_csv': '.powerpacks/network-import/merged/people.csv',
+        'live_refresh': refresh,
+    }
+    ledger['status'] = 'ready'
+    save_setup_ledger(ledger, ledger_path)
+    status_args = argparse.Namespace(
+        operator_id=args.operator_id,
+        accounts=args.accounts,
+        setup_ledger=args.setup_ledger,
+        refresh_interval_hours=getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS),
+    )
+    final_status = status_payload(status_args)
+    save_setup_ledger(final_status['setup_ledger'], ledger_path)
+    emit({
+        'status': 'completed',
+        'phase': 'import',
+        'operator_id': args.operator_id,
+        'refresh': refresh,
+        'results': refresh_payload.get('results', {}),
+        'setup_ledger': final_status['setup_ledger'],
+        'next': next_action_payload(status_args)['next'],
+    })
+    return 0
+
+
+def run_index_phase(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.setup_ledger)
+    ledger = load_setup_ledger(ledger_path)
+    index_payload, index_code = run_processing_index(args, ledger, ledger_path)
+    status_args = argparse.Namespace(
+        operator_id=args.operator_id,
+        accounts=getattr(args, 'accounts', '.powerpacks/ingestion/accounts.json'),
+        setup_ledger=args.setup_ledger,
+        refresh_interval_hours=getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS),
+    )
+    final_status = status_payload(status_args)
+    save_setup_ledger(final_status['setup_ledger'], ledger_path)
+    emit({
+        'status': index_payload.get('status'),
+        'phase': 'index',
+        'operator_id': args.operator_id,
+        'index': index_payload,
+        'setup_ledger': final_status['setup_ledger'],
+        'next': next_action_payload(status_args)['next'],
+    })
+    return index_code
+
+
 def setup_commands(args: argparse.Namespace) -> dict[str, str]:
     return {
         'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
@@ -1568,6 +1848,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.set_defaults(func=run_status)
 
+    s = sub.add_parser('next')
+    s.add_argument('--operator-id', required=True)
+    s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
+    s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
+    s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
+    s.set_defaults(func=run_next)
+
     s = sub.add_parser('inspect-bootstrap')
     s.add_argument('--bundle', required=True)
     s.add_argument('--allow-legacy-bootstrap-manifest', action='store_true')
@@ -1588,6 +1875,48 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--allow-legacy-bootstrap-manifest', action='store_true')
     s.set_defaults(func=run_apply)
+
+    s = sub.add_parser('bootstrap')
+    s.add_argument('--operator-id', required=True)
+    s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
+    s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
+    s.add_argument('--bootstrap-bundle', default='')
+    s.add_argument('--force-bootstrap', action='store_true')
+    s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
+    s.set_defaults(func=run_bootstrap_phase)
+
+    s = sub.add_parser('link')
+    s.add_argument('--operator-id', required=True)
+    s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
+    s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
+    s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
+    s.add_argument('--gmail-db', default='')
+    s.add_argument('--gmail-account', action='append', default=[])
+    s.add_argument('--gmail-add-email', action='append', default=[])
+    s.add_argument('--gmail-authorized-email', action='append', default=[])
+    s.add_argument('--gmail-all', action='store_true')
+    s.add_argument('--skip-source', action='append', choices=['messages', 'gmail', 'linkedin_csv', 'twitter'], default=[])
+    s.add_argument('--linkedin-csv', default='')
+    s.add_argument('--linkedin-source-user', default='')
+    s.add_argument('--twitter-handle', default='')
+    s.set_defaults(func=run_link_phase)
+
+    s = sub.add_parser('import')
+    s.add_argument('--operator-id', required=True)
+    s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
+    s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
+    s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
+    s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
+    s.add_argument('--only-if-due', action='store_true')
+    s.set_defaults(func=run_import_phase)
+
+    s = sub.add_parser('index')
+    s.add_argument('--operator-id', required=True)
+    s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
+    s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
+    s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
+    s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
+    s.set_defaults(func=run_index_phase)
 
     s = sub.add_parser('handoff')
     s.add_argument('--operator-id', required=True)
