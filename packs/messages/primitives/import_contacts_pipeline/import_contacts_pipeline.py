@@ -1738,6 +1738,36 @@ def open_raw_contacts_review_server(args: argparse.Namespace, ledger_path: Path,
     mark_step(ledger_path, ledger, "review_contacts_web_fallback", "completed", summary={"url": raw_review_url(args), "pid": proc.pid, "log": str(log_path)}, command=cmd)
 
 
+def raw_contacts_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    if not completed(ledger, "build_raw_review_csv") or not Path(args.review_csv).exists() or args.force_build_review:
+        build_raw_review_csv(args, ledger_path, ledger)
+        migrate_review_schema(args, ledger_path, ledger)
+        if has_research_review(args):
+            reapply_previous_review_state(args, ledger_path, ledger)
+
+    if args.no_open_review:
+        return
+
+    if completed(ledger, "review_research_web") and not args.stop_before_upload:
+        return
+
+    open_review_server(args, ledger_path, ledger)
+    if selective_step_mode(args) and not step_enabled(args, "include_upload"):
+        message = f"Review opened: {review_url(args)}. When done, say: done with review"
+    else:
+        message = f"Review opened: {review_url(args)}. When done, say: done with review, upload"
+    payload = {
+        "primitive": "import_contacts_pipeline",
+        "status": "blocked_user_action",
+        "message": message,
+        "review_url": review_url(args),
+        "ledger": str(ledger_path),
+    }
+    ledger["current_block"] = payload
+    save_ledger(ledger_path, ledger)
+    raise PipelineBlocked(payload, code=21)
+
+
 def digits_only(value: str) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
 
@@ -2349,6 +2379,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     llm_review(args, ledger_path, ledger)
     if selective_mode and not step_enabled(args, "include_research"):
+        if step_enabled(args, "include_review"):
+            raw_contacts_review(args, ledger_path, ledger)
         return selected_steps_completed(args, ledger_path, ledger)
 
     prepare_queue(args, ledger_path, ledger)
@@ -2376,21 +2408,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             save_ledger(ledger_path, ledger)
             raise PipelineBlocked(payload, code=21)
     else:
-        if completed(ledger, "review_contacts_web_fallback") or args.no_open_review:
-            build_raw_review_csv(args, ledger_path, ledger)
-            migrate_review_schema(args, ledger_path, ledger)
-        else:
-            open_raw_contacts_review_server(args, ledger_path, ledger)
-            payload = {
-                "primitive": "import_contacts_pipeline",
-                "status": "blocked_user_action",
-                "message": f"Review the web UI at {raw_review_url(args)}. When you're done, tell the agent: 'done with review, upload'. The agent will summarize counts and ask for explicit upload/datalake approval before syncing anything.",
-                "review_url": raw_review_url(args),
-                "ledger": str(ledger_path),
-            }
-            ledger["current_block"] = payload
-            save_ledger(ledger_path, ledger)
-            raise PipelineBlocked(payload, code=21)
+        raw_contacts_review(args, ledger_path, ledger)
     if has_research_review(args):
         migrate_review_schema(args, ledger_path, ledger)
         reapply_previous_review_state(args, ledger_path, ledger)

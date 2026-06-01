@@ -42,6 +42,16 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             writer.writeheader()
             writer.writerow(row)
 
+    def write_people_row(self, path: Path, row: dict[str, str]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fields = merge_network_sources.PEOPLE_SCHEMA_COLUMNS
+        out = {col: "" for col in fields}
+        out.update(row)
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerow(out)
+
     def test_discovery_prefers_people_csv_and_writes_canonical_merge_alias(self):
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()
@@ -106,6 +116,78 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["input_rows"], 0)
                 self.assertEqual(payload["merged_rows"], 0)
+            finally:
+                os.chdir(old_cwd)
+
+    def test_non_linkedin_email_identity_ignores_run_specific_artifact_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                old_people = Path(".powerpacks/network-import/gmail/setup-refresh-old/people.csv")
+                new_people = Path(".powerpacks/network-import/gmail/setup-refresh-new/people.csv")
+                base = {
+                    "id": "gmail:stable-jane",
+                    "full_name": "Jane Email",
+                    "primary_email": "Jane@Example.com",
+                    "all_emails": json.dumps(["jane@example.com"]),
+                    "source_channels": "gmail_msgvault",
+                }
+                self.write_people_row(old_people, {**base, "source_artifacts": json.dumps([".powerpacks/network-import/gmail/setup-refresh-old/source.csv"])})
+                self.write_people_row(new_people, {**base, "source_artifacts": json.dumps([".powerpacks/network-import/gmail/setup-refresh-new/source.csv"])})
+
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke([
+                    "run",
+                    "--no-discover",
+                    "--output-dir", str(out_dir),
+                    "--input", str(old_people),
+                    "--input", str(new_people),
+                ])
+
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["input_rows"], 2)
+                self.assertEqual(payload["merged_rows"], 1)
+                with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                self.assertEqual(rows[0]["merge_key"], "email:jane@example.com")
+                self.assertEqual(rows[0]["merged_row_count"], "2")
+            finally:
+                os.chdir(old_cwd)
+
+    def test_non_linkedin_phone_identity_ignores_run_specific_artifact_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                old_people = Path(".powerpacks/network-import/messages/setup-refresh-old/people.csv")
+                new_people = Path(".powerpacks/network-import/messages/setup-refresh-new/people.csv")
+                base = {
+                    "id": "message:stable-jane",
+                    "full_name": "Jane Phone",
+                    "primary_phone": "+1 (555) 123-4567",
+                    "all_phones": json.dumps(["+15551234567"]),
+                    "source_channels": "imessage",
+                }
+                self.write_people_row(old_people, {**base, "source_artifacts": ".powerpacks/network-import/network-runs/setup-refresh-old/source-inputs/messages/contacts.csv"})
+                self.write_people_row(new_people, {**base, "source_artifacts": ".powerpacks/network-import/network-runs/setup-refresh-new/source-inputs/messages/contacts.csv"})
+
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke([
+                    "run",
+                    "--no-discover",
+                    "--output-dir", str(out_dir),
+                    "--input", str(old_people),
+                    "--input", str(new_people),
+                ])
+
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["input_rows"], 2)
+                self.assertEqual(payload["merged_rows"], 1)
+                with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                self.assertEqual(rows[0]["merge_key"], "phone:+15551234567")
+                self.assertEqual(rows[0]["merged_row_count"], "2")
             finally:
                 os.chdir(old_cwd)
 

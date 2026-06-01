@@ -115,6 +115,52 @@ def row_name(row: dict[str, str]) -> str:
     return row.get("full_name") or " ".join(x for x in [row.get("first_name", ""), row.get("last_name", "")] if x).strip() or row.get("name", "") or row.get("display_name", "")
 
 
+def listish_values(value: str) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, list):
+        return [str(item) for item in parsed if str(item).strip()]
+    return [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
+
+
+def normalize_email(value: str) -> str:
+    return (value or "").strip().lower()
+
+
+def normalize_phone(value: str) -> str:
+    phone = (value or "").strip()
+    if not phone:
+        return ""
+    digits = re.sub(r"\D+", "", phone)
+    return f"+{digits}" if phone.startswith("+") and digits else digits
+
+
+def stable_source_key(row: dict[str, str]) -> str:
+    for email in [row.get("primary_email", ""), *listish_values(row.get("all_emails", ""))]:
+        email = normalize_email(email)
+        if email:
+            return f"email:{email}"
+    for phone in [row.get("primary_phone", ""), *listish_values(row.get("all_phones", ""))]:
+        phone = normalize_phone(phone)
+        if phone:
+            return f"phone:{phone}"
+    handle = (row.get("twitter_handle") or "").strip().lower().lstrip("@")
+    if handle:
+        return f"twitter:{handle}"
+    source_id = (row.get("id") or "").strip()
+    if source_id and not source_id.startswith("merged:"):
+        return f"id:{source_id}"
+    name = normalize_name(row_name(row))
+    channel = ",".join(row_source_channels(row))
+    if name:
+        return f"name:{sha(channel + ':' + name, 16)}"
+    return f"row:{sha(json.dumps({col: row.get(col, '') for col in PEOPLE_SCHEMA_COLUMNS if col != 'source_artifacts'}, sort_keys=True), 16)}"
+
+
 def discover_inputs(base: Path) -> list[Path]:
     paths_by_dir: dict[Path, Path] = {}
     for p in base.glob("network-import/*/*/people.csv"):
@@ -324,7 +370,7 @@ def build_groups(rows: list[dict[str, str]]) -> tuple[dict[str, list[dict[str, s
     groups: dict[str, list[dict[str, str]]] = {}
     singletons: list[dict[str, str]] = []
     for row in rows:
-        key = stable_linkedin_key(row)
+        key = stable_linkedin_key(row) or stable_source_key(row)
         if key:
             groups.setdefault(key, []).append(row)
         else:
@@ -386,7 +432,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     for row in singletons:
         normalized = normalize_people_row(row)
         normalized.update({
-            "merge_key": f"source:{sha((row.get('source_artifacts','') or '') + row_name(row) + row.get('primary_phone','') + row.get('primary_email',''))}",
+            "merge_key": stable_source_key(normalized),
             "merge_confidence": "0.0",
             "merge_sources": normalized.get("source_channels", ""),
             "merged_row_count": 1,

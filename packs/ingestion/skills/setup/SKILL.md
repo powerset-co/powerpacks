@@ -28,15 +28,14 @@ before they read the local msgvault DB.
 Messages onboarding checks iMessage/Contacts permissions and WhatsApp auth/link
 state only. WhatsApp link uses `import_whatsapp_wacli.py auth`; it must not run
 WhatsApp sync or export contacts in the link phase. Messages import workers
-later call `import_contacts_pipeline.py run` with explicit include flags, for
-example `--include-imessage --include-whatsapp --include-contact-merge`, instead
-of using stop-before/stop-after flags. Those setup-only message steps produce
-local contact metadata for the reviewed `$import-contacts` workflow; they must
-not be merged into network `people.csv`, local DuckDB, research, upload, or
-datalake sync without the `$import-contacts` review/approval gates. When a
-messages `research_review.csv` exists, network fan-in may use only rows with
-explicit approval markers such as `exclude=no`, `approved=true`, or an include
-upload decision; bucket defaults alone are not approval.
+later call `import_contacts_pipeline.py run` with explicit include flags: local
+iMessage/WhatsApp extraction, contact merge, Powerset candidate match, LLM
+ENRICH/SKIP triage, and the reviewed contacts UI. Setup must not include
+messages deep research, retarget research, upload, or datalake sync flags.
+Those setup-only message steps produce a reviewed local `research_review.csv`
+artifact. Network fan-in may use only rows with explicit approval markers such
+as `exclude=no`, `approved=true`, or an include upload decision; bucket defaults
+alone are not approval.
 
 ## How to explain setup to the user
 
@@ -253,10 +252,10 @@ possible:
 - Twitter worker only when explicitly linked/approved.
 - Messages/iMessage/WhatsApp contacts worker using explicit include flags.
   WhatsApp may require a QR/device-linking approval before contacts exist.
-  These unreviewed contact outputs are not fan-in inputs for network DuckDB;
-  run `$import-contacts` to research/review/upload approved message contacts.
-  If a reviewed messages CSV is present, only explicitly approved rows can join
-  the network fan-in.
+  Setup should run local match, LLM triage, and the reviewed contacts UI, then
+  stop before deep research, retargeting, upload, or datalake sync. Raw contacts
+  are not fan-in inputs for network DuckDB. If a reviewed messages CSV is
+  present, only explicitly approved rows can join the network fan-in.
 
 Workers must use isolated ledgers/run ids for `--only-source` source jobs and
 must return blocked approvals to the main thread. Merge/network DuckDB fan-in

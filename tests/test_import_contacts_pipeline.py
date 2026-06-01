@@ -1240,11 +1240,13 @@ class ImportContactsPipelineTests(unittest.TestCase):
 
             with self.patch_pipeline_steps(calls):
                 with mock.patch.object(mod, "has_research_review", return_value=False):
-                    with mock.patch.object(mod, "open_raw_contacts_review_server", side_effect=lambda *_args, **_kwargs: calls.append("open_raw_contacts_review_server")):
-                        with self.assertRaises(mod.PipelineBlocked):
-                            mod.run_pipeline(args)
+                    with mock.patch.object(mod, "build_raw_review_csv", side_effect=lambda *_args, **_kwargs: calls.append("build_raw_review_csv")):
+                        with mock.patch.object(mod, "open_review_server", side_effect=lambda *_args, **_kwargs: calls.append("open_review_server")):
+                            with self.assertRaises(mod.PipelineBlocked):
+                                mod.run_pipeline(args)
             self.assertEqual(calls[:5], ["extract_imessage", "normalize_imessage", "extract_whatsapp", "normalize_whatsapp", "ensure_contacts"])
-            self.assertIn("open_raw_contacts_review_server", calls)
+            self.assertIn("build_raw_review_csv", calls)
+            self.assertIn("open_review_server", calls)
 
     def test_run_pipeline_include_flags_run_only_selected_contact_steps(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1279,6 +1281,132 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertFalse(payload["privacy"]["ran_research"])
             self.assertFalse(payload["privacy"]["uploaded"])
 
+    def test_include_review_without_research_opens_raw_review_after_llm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                processor="core2x",
+                contacts=Path(tmp) / "contacts.csv",
+                candidates=Path(tmp) / "powerset_contacts.csv",
+                research_queue=Path(tmp) / "research_queue.csv",
+                research_dir=Path(tmp) / "research",
+                review_csv=Path(tmp) / "research_review.csv",
+                model="anthropic/claude-sonnet-4-6",
+                no_open_review=False,
+                stop_before_upload=False,
+                review_host="127.0.0.1",
+                review_port=8766,
+                force_imessage=False,
+                force_whatsapp=False,
+                force_build_review=False,
+                include_imessage=True,
+                include_whatsapp=True,
+                include_contact_merge=True,
+                include_powerset_candidates=True,
+                include_local_match=True,
+                include_llm_review=True,
+                include_review=True,
+            )
+            calls = []
+
+            with self.patch_pipeline_steps(calls):
+                with mock.patch.object(mod, "has_research_review", return_value=False):
+                    with mock.patch.object(mod, "build_raw_review_csv", side_effect=lambda *_args, **_kwargs: calls.append("build_raw_review_csv")):
+                        with mock.patch.object(mod, "open_review_server", side_effect=lambda *_args, **_kwargs: calls.append("open_review_server")):
+                            with self.assertRaises(mod.PipelineBlocked):
+                                mod.run_pipeline(args)
+
+            self.assertEqual(calls[:8], [
+                "extract_imessage",
+                "normalize_imessage",
+                "extract_whatsapp",
+                "normalize_whatsapp",
+                "ensure_contacts",
+                "sync_candidates",
+                "match_contacts",
+                "llm_review",
+            ])
+            self.assertIn("build_raw_review_csv", calls)
+            self.assertIn("open_review_server", calls)
+            self.assertNotIn("prepare_queue", calls)
+            self.assertNotIn("parallel_research", calls)
+            self.assertNotIn("retarget_research_after_review", calls)
+
+    def test_include_review_without_research_stops_after_user_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.json"
+            contacts = Path(tmp) / "contacts.csv"
+            contacts.write_text(
+                ",".join(mod.CONTACT_CSV_HEADERS + ["enrich_decision"]) + "\n"
+                "+15550000001,Ada Lovelace,imessage,false,,3,3,,2026-01-01,2026-01-01,,,,,,,,,yes\n",
+                encoding="utf-8",
+            )
+            ledger = mod.load_ledger(ledger_path)
+            review_csv = Path(tmp) / "research_review.csv"
+            with review_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=mod.REVIEW_CSV_HEADERS)
+                writer.writeheader()
+                writer.writerow({
+                    "bucket": "yes",
+                    "handle": "phone-5550000001",
+                    "full_name": "Ada Lovelace",
+                    "phone_e164": "+15550000001",
+                    "area_code": "555",
+                    "total_messages": "3",
+                    "imessage_message_count": "3",
+                    "message_source": "imessage",
+                    "last_message": "2026-01-01",
+                    "imessage_last_message": "2026-01-01",
+                    "short_reason": "Raw contact review fallback",
+                    "exclude": "false",
+                    "enrich_decision": "yes",
+                })
+            ledger["steps"]["build_raw_review_csv"] = {"id": "build_raw_review_csv", "status": "completed"}
+            ledger["steps"]["review_research_web"] = {"id": "review_research_web", "status": "completed"}
+            mod.save_ledger(ledger_path, ledger)
+            args = SimpleNamespace(
+                ledger=ledger_path,
+                processor="core2x",
+                contacts=contacts,
+                candidates=Path(tmp) / "powerset_contacts.csv",
+                research_queue=Path(tmp) / "research_queue.csv",
+                research_dir=Path(tmp) / "research",
+                review_csv=review_csv,
+                model="anthropic/claude-sonnet-4-6",
+                no_open_review=False,
+                stop_before_upload=False,
+                review_host="127.0.0.1",
+                review_port=8766,
+                force_imessage=False,
+                force_whatsapp=False,
+                force_build_review=False,
+                include_imessage=False,
+                include_whatsapp=False,
+                include_contact_merge=True,
+                include_powerset_candidates=True,
+                include_local_match=True,
+                include_llm_review=True,
+                include_review=True,
+            )
+            calls = []
+
+            with self.patch_pipeline_steps(calls):
+                payload = mod.run_pipeline(args)
+
+            self.assertEqual(payload["status"], "selected_steps_completed")
+            self.assertIn("sync_candidates", calls)
+            self.assertIn("match_contacts", calls)
+            self.assertIn("llm_review", calls)
+            self.assertNotIn("build_raw_review_csv", calls)
+            self.assertNotIn("prepare_queue", calls)
+            self.assertNotIn("parallel_research", calls)
+            self.assertTrue(args.review_csv.exists())
+            with args.review_csv.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[0]["full_name"], "Ada Lovelace")
+            self.assertEqual(rows[0]["exclude"], "false")
+
     def test_raw_review_continue_builds_review_csv_then_uploads(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"
@@ -1289,7 +1417,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 encoding="utf-8",
             )
             ledger = mod.load_ledger(ledger_path)
-            ledger["steps"]["review_contacts_web_fallback"] = {"id": "review_contacts_web_fallback", "status": "completed"}
+            ledger["steps"]["review_research_web"] = {"id": "review_research_web", "status": "completed"}
             mod.save_ledger(ledger_path, ledger)
             args = SimpleNamespace(
                 ledger=ledger_path,

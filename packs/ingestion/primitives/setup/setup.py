@@ -1515,6 +1515,12 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
                 if whatsapp_cfg.get('status') == 'linked' or whatsapp_cfg.get('authenticated') is True:
                     include_flags.append('--include-whatsapp')
                 include_flags.append('--include-contact-merge')
+                include_flags.extend([
+                    '--include-powerset-candidates',
+                    '--include-local-match',
+                    '--include-llm-review',
+                    '--include-review',
+                ])
                 command = (
                     'uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run'
                     ' --ledger .powerpacks/messages/import-run.setup-messages.json'
@@ -1575,6 +1581,12 @@ def message_refresh_command(accounts: dict[str, Any], ledger_path: Path, *, forc
     if whatsapp_cfg.get('status') == 'linked' or whatsapp_cfg.get('authenticated') is True:
         include_flags.append('--include-whatsapp')
     include_flags.append('--include-contact-merge')
+    include_flags.extend([
+        '--include-powerset-candidates',
+        '--include-local-match',
+        '--include-llm-review',
+        '--include-review',
+    ])
     cmd = [
         sys.executable,
         'packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py',
@@ -1590,6 +1602,8 @@ def message_refresh_command(accounts: dict[str, Any], ledger_path: Path, *, forc
         cmd.append('--force-imessage')
     if force and '--include-whatsapp' in include_flags:
         cmd.append('--force-whatsapp')
+    if force:
+        cmd.extend(['--force-match', '--rerun-llm'])
     return cmd
 
 
