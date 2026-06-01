@@ -30,7 +30,13 @@ state only. WhatsApp link uses `import_whatsapp_wacli.py auth`; it must not run
 WhatsApp sync or export contacts in the link phase. Messages import workers
 later call `import_contacts_pipeline.py run` with explicit include flags, for
 example `--include-imessage --include-whatsapp --include-contact-merge`, instead
-of using stop-before/stop-after flags.
+of using stop-before/stop-after flags. Those setup-only message steps produce
+local contact metadata for the reviewed `$import-contacts` workflow; they must
+not be merged into network `people.csv`, local DuckDB, research, upload, or
+datalake sync without the `$import-contacts` review/approval gates. When a
+messages `research_review.csv` exists, network fan-in may use only rows with
+explicit approval markers such as `exclude=no`, `approved=true`, or an include
+upload decision; bucket defaults alone are not approval.
 
 ## How to explain setup to the user
 
@@ -199,10 +205,15 @@ possible:
 - Twitter worker only when explicitly linked/approved.
 - Messages/iMessage/WhatsApp contacts worker using explicit include flags.
   WhatsApp may require a QR/device-linking approval before contacts exist.
+  These unreviewed contact outputs are not fan-in inputs for network DuckDB;
+  run `$import-contacts` to research/review/upload approved message contacts.
+  If a reviewed messages CSV is present, only explicitly approved rows can join
+  the network fan-in.
 
 Workers must use isolated ledgers/run ids for `--only-source` source jobs and
 must return blocked approvals to the main thread. Merge/network DuckDB fan-in
-runs only after all selected source workers complete or block.
+runs only after all selected network source workers complete or block; message
+contact metadata stays outside that fan-in until it has passed review.
 
 ## Consent boundaries
 

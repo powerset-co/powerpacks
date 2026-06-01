@@ -4,7 +4,13 @@
 Sources handled here:
 - LinkedIn Connections.csv -> linkedin_network_import
 - Gmail msgvault SQLite -> gmail_network_import msgvault
-- Existing message contacts and Twitter artifacts are picked up by merge discovery
+- Existing Twitter artifacts may be picked up by merge discovery
+
+Message contacts are intentionally not auto-merged from
+`.powerpacks/messages/contacts.csv`. That file is a local extraction artifact
+owned by `$import-contacts`; message contacts must pass that reviewed,
+approval-gated flow before they are uploaded or promoted into a searchable
+network index.
 
 This orchestrator is local-first. It does not upload or mutate production. Child
 primitives remain responsible for their own approval confirmations.
@@ -48,6 +54,13 @@ GMAIL_LABEL_QUERY_TERMS = {
 
 
 SOURCE_NAMES = ["gmail", "linkedin_csv", "twitter", "messages"]
+MESSAGES_REVIEW_GATE_REASON = (
+    "messages contacts require the reviewed $import-contacts flow before they can be merged into local network search"
+)
+TRUTHY = {"1", "true", "yes", "y", "on"}
+FALSY = {"0", "false", "no", "n", "off"}
+INCLUDE_DECISIONS = {"include", "approved", "approve", "yes", "true", "1"}
+EXCLUDE_DECISIONS = {"exclude", "excluded", "skip", "skipped", "no", "false", "0"}
 
 
 def now_iso() -> str:
@@ -74,6 +87,31 @@ def read_json(path: Path, default: Any = None) -> Any:
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    import csv
+
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        reader = csv.DictReader(handle)
+        fields = list(reader.fieldnames or [])
+        rows = [{str(key): value or "" for key, value in row.items() if key is not None} for row in reader]
+    return fields, rows
+
+
+def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
+    import csv
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
+def default_messages_review_csv() -> Path:
+    return DEFAULT_BASE_DIR.parent / "messages" / "research_review.csv"
 
 
 def collect_artifact_paths(value: Any) -> list[str]:
@@ -131,6 +169,80 @@ def source_slug(value: str) -> str:
 
 def truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_bool(value: Any) -> bool | None:
+    raw = str(value or "").strip().lower()
+    if raw in TRUTHY:
+        return True
+    if raw in FALSY:
+        return False
+    return None
+
+
+def normalize_include_decision(value: Any) -> bool | None:
+    raw = str(value or "").strip().lower()
+    if raw in INCLUDE_DECISIONS:
+        return True
+    if raw in EXCLUDE_DECISIONS:
+        return False
+    return None
+
+
+def normalize_exclude_decision(value: Any) -> bool | None:
+    raw = str(value or "").strip().lower()
+    if raw in TRUTHY:
+        return False
+    if raw in FALSY:
+        return True
+    return None
+
+
+def explicitly_approved_message_review_row(row: dict[str, str]) -> bool:
+    """Return True only for explicit human/upload approval, never bucket defaults."""
+    approved = normalize_bool(row.get("approved", ""))
+    upload_decision = normalize_include_decision(row.get("upload_decision", ""))
+    exclude_decision = normalize_exclude_decision(row.get("exclude", ""))
+    if approved is False or upload_decision is False or exclude_decision is False:
+        return False
+    return approved is True or upload_decision is True or exclude_decision is True
+
+
+def review_row_to_messages_contact(row: dict[str, str]) -> dict[str, str]:
+    name = row.get("network_name") or row.get("full_name") or ""
+    return {
+        "name": name,
+        "phone": row.get("phone_e164", ""),
+        "source": row.get("message_source") or "messages_review",
+        "message_count": row.get("total_messages", ""),
+        "last_message": row.get("last_message", ""),
+        "matched_linkedin_url": row.get("network_linkedin_url", ""),
+        "matched_name": name,
+        "matched_person_id": row.get("network_person_id", ""),
+        "match_method": row.get("network_match_method") or row.get("review_source") or "messages_review_approved",
+    }
+
+
+def materialize_approved_messages_review(review_csv: Path, scratch: Path) -> dict[str, Any] | None:
+    if not review_csv.exists():
+        return None
+    _fields, rows = read_csv_rows(review_csv)
+    approved_rows = [review_row_to_messages_contact(row) for row in rows if explicitly_approved_message_review_row(row)]
+    if not approved_rows:
+        return {
+            "review_csv": str(review_csv),
+            "approved_rows": 0,
+            "total_rows": len(rows),
+            "contacts_csv": "",
+        }
+    fields = ["name", "phone", "source", "message_count", "last_message", "matched_linkedin_url", "matched_name", "matched_person_id", "match_method"]
+    write_csv_rows(scratch, fields, approved_rows)
+    return {
+        "review_csv": str(review_csv),
+        "approved_rows": len(approved_rows),
+        "total_rows": len(rows),
+        "contacts_csv": str(scratch),
+    }
 
 
 def skip_msgvault_sync(input_cfg: dict[str, Any]) -> bool:
@@ -590,10 +702,8 @@ def apply_account_sources(args: argparse.Namespace) -> argparse.Namespace:
         args.twitter_handle = str(twitter_cfg.get("handle") or "")
         if not args.twitter_handle and twitter.get("usernames"):
             args.twitter_handle = str((twitter.get("usernames") or [""])[0])
-    if not getattr(args, "messages_contacts_csv", ""):
-        args.messages_contacts_csv = str(messages_cfg.get("contacts_csv") or "")
-        if not args.messages_contacts_csv and messages.get("artifacts"):
-            args.messages_contacts_csv = str((messages.get("artifacts") or [""])[0])
+    if not getattr(args, "messages_review_csv", ""):
+        args.messages_review_csv = str(messages_cfg.get("review_csv") or "")
     return args
 
 
@@ -933,15 +1043,18 @@ def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any
             "requires_approval": ["rapidapi_twitter", "openai_moe", "rapidapi_linkedin_validation"],
             "status": "existing_artifacts_or_explicit_import_required",
         })
-    if input_cfg.get("messages_contacts_csv") or input_cfg.get("include_existing_artifacts"):
+    default_review_csv = default_messages_review_csv()
+    messages_review_csv = input_cfg.get("messages_review_csv") or (str(default_review_csv) if input_cfg.get("include_existing_artifacts") and default_review_csv.exists() else "")
+    if input_cfg.get("messages_contacts_csv") or messages_review_csv or input_cfg.get("include_existing_artifacts"):
         jobs.append({
             "id": "messages",
             "source": "messages",
+            "review_csv": messages_review_csv,
             "contacts_csv": input_cfg.get("messages_contacts_csv") or ".powerpacks/messages/contacts.csv",
             "parallelizable": True,
-            "reason": "messages/iMessage/WhatsApp artifacts are merged when present; research/upload is not implicit",
-            "requires_approval": ["whatsapp_qr", "messages_research_upload"],
-            "status": "existing_artifacts_only",
+            "reason": "approved rows from messages research_review.csv are merged when present; raw contacts remain review-gated" if messages_review_csv else MESSAGES_REVIEW_GATE_REASON,
+            "requires_approval": [] if messages_review_csv else ["messages_review_flow"],
+            "status": "approved_review_artifact" if messages_review_csv else "review_required",
         })
     return {"parallel": True, "fan_in": "merge_network_sources_then_duckdb_after_nonblocked_workers", "jobs": jobs}
 
@@ -995,13 +1108,20 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
         if not selected or source in selected:
             if source == "twitter" and not input_cfg.get("twitter_handle"):
                 continue
-            if source == "messages" and not (input_cfg.get("messages_contacts_csv") or input_cfg.get("include_existing_artifacts")):
+            if source == "messages" and not (input_cfg.get("messages_contacts_csv") or input_cfg.get("messages_review_csv") or input_cfg.get("include_existing_artifacts")):
+                continue
+            if source == "messages" and input_cfg.get("messages_review_csv"):
+                ledger.setdefault("artifacts", {})["messages_review_csv"] = input_cfg.get("messages_review_csv")
+                mark_step(ledger, source, "completed", reason="approved rows from reviewed messages CSV will be included in fan-in merge", review_csv=input_cfg.get("messages_review_csv"))
                 continue
             if source == "messages" and input_cfg.get("messages_contacts_csv"):
-                ledger.setdefault("artifacts", {})["messages_contacts_csv"] = input_cfg.get("messages_contacts_csv")
-                mark_step(ledger, source, "completed", reason="linked contacts CSV will be included in fan-in merge", contacts_csv=input_cfg.get("messages_contacts_csv"))
+                if input_cfg.get("allow_unreviewed_messages"):
+                    ledger.setdefault("artifacts", {})["messages_contacts_csv"] = input_cfg.get("messages_contacts_csv")
+                    mark_step(ledger, source, "completed", reason="explicit unreviewed messages override; contacts CSV will be included in fan-in merge", contacts_csv=input_cfg.get("messages_contacts_csv"))
+                else:
+                    mark_step(ledger, source, "skipped", reason=MESSAGES_REVIEW_GATE_REASON, contacts_csv=input_cfg.get("messages_contacts_csv"))
             else:
-                mark_step(ledger, source, "skipped", reason="existing artifacts only; dedicated import skill owns crawl/research/upload")
+                mark_step(ledger, source, "skipped", reason=MESSAGES_REVIEW_GATE_REASON)
     mark_step(ledger, "source_imports", "completed", worker_group=group)
     save_ledger(ledger_path, ledger)
     return True
@@ -1221,11 +1341,19 @@ def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
     elif artifacts.get("gmail_people_csv"):
         explicit_inputs.append(str(artifacts["gmail_people_csv"]))
 
-    messages_contacts = artifacts.get("messages_contacts_csv") or input_cfg.get("messages_contacts_csv")
-    if not messages_contacts and include_existing:
-        candidate = DEFAULT_BASE_DIR.parent / "messages" / "contacts.csv"
-        if candidate.exists():
-            messages_contacts = str(candidate)
+    messages_review = artifacts.get("messages_review_csv") or input_cfg.get("messages_review_csv")
+    default_review_csv = default_messages_review_csv()
+    if not messages_review and include_existing and default_review_csv.exists():
+        messages_review = str(default_review_csv)
+    if messages_review:
+        scratch = merge_dir / "source-inputs" / "messages" / "contacts.csv"
+        materialized = materialize_approved_messages_review(Path(messages_review), scratch)
+        if materialized and materialized.get("contacts_csv"):
+            explicit_inputs.append(str(scratch))
+
+    messages_contacts = ""
+    if input_cfg.get("allow_unreviewed_messages"):
+        messages_contacts = artifacts.get("messages_contacts_csv") or input_cfg.get("messages_contacts_csv")
     if messages_contacts:
         message_input = Path(messages_contacts)
         # `merge_network_sources` recognizes message contact CSVs by a
@@ -1389,7 +1517,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             "only_sources": unique_strings(getattr(args, "only_source", [])),
             "fan_in_only": args.fan_in_only,
             "twitter_handle": getattr(args, "twitter_handle", ""),
+            "messages_review_csv": getattr(args, "messages_review_csv", ""),
             "messages_contacts_csv": getattr(args, "messages_contacts_csv", ""),
+            "allow_unreviewed_messages": bool(getattr(args, "allow_unreviewed_messages", False)),
         },
         "steps": {},
         "artifacts": {},
@@ -1552,7 +1682,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--include-existing-artifacts", action="store_true", help="Merge all discovered existing LinkedIn/Gmail/Twitter/message artifacts instead of only artifacts produced by this run")
     run.add_argument("--skip-msgvault-sync", action="store_true", help="Skip import-time msgvault sync-full and read the existing DB as-is")
     run.add_argument("--twitter-handle", default="", help=argparse.SUPPRESS)
+    run.add_argument("--messages-review-csv", default="", help=argparse.SUPPRESS)
     run.add_argument("--messages-contacts-csv", default="", help=argparse.SUPPRESS)
+    run.add_argument("--allow-unreviewed-messages", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--only-source", action="append", default=[], choices=SOURCE_NAMES, help="Run only a source import worker; skips fan-in merge unless --fan-in-only is set separately")
     run.add_argument("--fan-in-only", action="store_true", help="Skip source import workers and run merge/DuckDB fan-in from existing artifacts")
     run.add_argument("--dry-run", action="store_true", help="Inspect existing ledger/stage outputs and report work that would run")

@@ -93,6 +93,22 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_discovery_skips_unreviewed_messages_contacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                contacts = Path(".powerpacks/messages/contacts.csv")
+                contacts.parent.mkdir(parents=True, exist_ok=True)
+                contacts.write_text("name,phone,source,message_count,last_message\nJane,+15551234567,imessage,3,2026-01-01\n", encoding="utf-8")
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke(["run", "--base-dir", ".powerpacks", "--output-dir", str(out_dir)])
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["input_rows"], 0)
+                self.assertEqual(payload["merged_rows"], 0)
+            finally:
+                os.chdir(old_cwd)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -143,7 +143,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                     "gmail": {"linked": True, "usernames": ["old@example.com"], "artifacts": [], "config": {"msgvault_db": str(db), "selected_accounts": ["me@example.com", "work@example.com"]}},
                     "linkedin_csv": {"linked": True, "usernames": ["me"], "artifacts": [], "config": {"csv_path": str(linkedin), "source_label": "me"}},
                     "twitter": {"linked": True, "usernames": ["arthur"], "artifacts": [], "config": {"handle": "arthur"}},
-                    "messages": {"linked": True, "usernames": [], "artifacts": [str(contacts)], "config": {"contacts_csv": str(contacts)}},
+                    "messages": {"linked": True, "usernames": [], "artifacts": [str(contacts)], "config": {"contacts_csv": str(contacts), "review_csv": str(tmp / "research_review.csv")}},
                 },
             }), encoding="utf-8")
             args = import_network_pipeline.build_parser().parse_args(["run", "--from-accounts", str(accounts), "--dry-run"])
@@ -153,10 +153,11 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(args.linkedin_csv, str(linkedin))
             self.assertEqual(args.linkedin_source_user, "me")
             self.assertEqual(args.twitter_handle, "arthur")
-            self.assertEqual(args.messages_contacts_csv, str(contacts))
+            self.assertEqual(args.messages_review_csv, str(tmp / "research_review.csv"))
+            self.assertEqual(args.messages_contacts_csv, "")
             payload = import_network_pipeline.dry_run_plan(args, tmp / "ledger.json", "network-test", tmp / "run")
             jobs = payload["worker_groups"]["import"]["jobs"]
-            self.assertEqual({job["source"] for job in jobs}, {"gmail", "linkedin_csv", "twitter", "messages"})
+            self.assertEqual({job["source"] for job in jobs}, {"gmail", "linkedin_csv", "twitter"})
             self.assertEqual([job["account_email"] for job in jobs if job["source"] == "gmail"], ["me@example.com", "work@example.com"])
             self.assertTrue(all(job["parallelizable"] for job in jobs))
 
@@ -193,7 +194,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(args.gmail_account_emails, ["me@example.com"])
             self.assertEqual(args.linkedin_csv, str(linkedin))
             self.assertEqual(args.linkedin_source_user, "me")
-            self.assertEqual(args.messages_contacts_csv, str(contacts))
+            self.assertEqual(args.messages_contacts_csv, "")
             self.assertEqual(args.twitter_handle, "")
 
     def test_pending_gmail_accounts_are_not_import_ready_until_linked(self) -> None:
@@ -383,7 +384,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             input_values = [cmd[i + 1] for i, part in enumerate(cmd) if part == "--input"]
             self.assertEqual(input_values, [str(tmp / "linkedin.csv"), str(tmp / "gmail-a.csv"), str(tmp / "gmail-b.csv")])
 
-    def test_include_existing_artifacts_uses_only_expected_paths(self) -> None:
+    def test_include_existing_artifacts_skips_unreviewed_messages_contacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             base = tmp / ".powerpacks/network-import"
@@ -410,10 +411,45 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertIn(str(current_gmail), paths)
             self.assertNotIn(str(stale_discovered), paths)
             message_inputs = [path for path in paths if path.endswith("source-inputs/messages/contacts.csv")]
-            self.assertEqual(len(message_inputs), 1)
-            self.assertTrue(Path(message_inputs[0]).exists())
+            self.assertEqual(message_inputs, [])
 
-    def test_merge_includes_linked_messages_contacts_csv(self) -> None:
+    def test_include_existing_artifacts_uses_only_explicitly_approved_messages_review_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            base = tmp / ".powerpacks/network-import"
+            review = tmp / ".powerpacks/messages/research_review.csv"
+            review.parent.mkdir(parents=True, exist_ok=True)
+            fields = [
+                "bucket", "full_name", "phone_e164", "total_messages", "message_source", "last_message",
+                "exclude", "approved", "upload_decision", "enrich_decision", "network_name",
+                "network_linkedin_url", "network_person_id", "network_match_method", "review_source",
+            ]
+            rows = [
+                {"bucket": "yes", "full_name": "Bucket Only", "phone_e164": "+100", "total_messages": "1", "message_source": "imessage", "exclude": "", "approved": "", "upload_decision": "", "enrich_decision": ""},
+                {"bucket": "maybe", "full_name": "Exclude No", "phone_e164": "+101", "total_messages": "2", "message_source": "whatsapp", "exclude": "no", "approved": "", "upload_decision": "", "enrich_decision": ""},
+                {"bucket": "maybe", "full_name": "Approved True", "phone_e164": "+102", "total_messages": "3", "message_source": "imessage", "exclude": "", "approved": "true", "upload_decision": "", "enrich_decision": ""},
+                {"bucket": "maybe", "full_name": "Upload Include", "phone_e164": "+103", "total_messages": "4", "message_source": "imessage", "exclude": "", "approved": "", "upload_decision": "include", "enrich_decision": ""},
+                {"bucket": "maybe", "full_name": "Rejected", "phone_e164": "+104", "total_messages": "5", "message_source": "imessage", "exclude": "yes", "approved": "true", "upload_decision": "", "enrich_decision": ""},
+                {"bucket": "maybe", "full_name": "Enrich Only", "phone_e164": "+105", "total_messages": "6", "message_source": "imessage", "exclude": "", "approved": "", "upload_decision": "", "enrich_decision": "yes"},
+            ]
+            with review.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            ledger = {"input": {"include_existing_artifacts": True}, "artifacts": {}}
+            merge_dir = tmp / "run/merged"
+            with mock.patch.object(import_network_pipeline, "DEFAULT_BASE_DIR", base):
+                paths = import_network_pipeline.merge_input_paths(ledger, merge_dir)
+
+            message_inputs = [Path(path) for path in paths if path.endswith("source-inputs/messages/contacts.csv")]
+            self.assertEqual(len(message_inputs), 1)
+            with message_inputs[0].open(newline="", encoding="utf-8") as handle:
+                materialized = list(csv.DictReader(handle))
+            self.assertEqual([row["name"] for row in materialized], ["Exclude No", "Approved True", "Upload Include"])
+            self.assertEqual([row["phone"] for row in materialized], ["+101", "+102", "+103"])
+
+    def test_merge_skips_explicit_messages_contacts_without_review_override(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             contacts = tmp / "contacts.csv"
@@ -423,6 +459,28 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 "run_id": "network-test",
                 "run_dir": str(tmp / "network-test"),
                 "input": {"include_existing_artifacts": False, "messages_contacts_csv": str(contacts)},
+                "steps": {},
+                "artifacts": {},
+            }
+            seen_cmds = []
+            def fake_run_cmd(cmd, timeout=None):
+                seen_cmds.append(cmd)
+                return 0, {"people_csv": str(tmp / "merged.csv"), "network_contacts_csv": "contacts.csv", "network_contact_sources_csv": "sources.csv", "network_companies_csv": "companies.csv", "manifest": "manifest.json", "merged_rows": 1}, ""
+            with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                self.assertTrue(import_network_pipeline.run_merge(ledger_path, ledger))
+            input_values = [cmd[i + 1] for cmd in seen_cmds for i, part in enumerate(cmd) if part == "--input"]
+            self.assertEqual(input_values, [])
+
+    def test_merge_allows_explicit_messages_contacts_only_with_override(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            contacts = tmp / "contacts.csv"
+            contacts.write_text("name,phone,source,message_count,last_message\nJane,+15551234567,imessage,3,2026-01-01\n", encoding="utf-8")
+            ledger_path = tmp / "ledger.json"
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {"include_existing_artifacts": False, "messages_contacts_csv": str(contacts), "allow_unreviewed_messages": True},
                 "steps": {},
                 "artifacts": {},
             }

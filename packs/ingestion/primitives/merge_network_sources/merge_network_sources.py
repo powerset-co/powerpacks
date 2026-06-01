@@ -121,10 +121,7 @@ def discover_inputs(base: Path) -> list[Path]:
         paths_by_dir[p.parent] = p
     for p in base.glob("network-import/*/*/people_harmonic_all.csv"):
         paths_by_dir.setdefault(p.parent, p)
-    msg = base / "messages" / "contacts.csv"
     paths = list(paths_by_dir.values())
-    if msg.exists():
-        paths.append(msg)
     return sorted(set(paths))
 
 
