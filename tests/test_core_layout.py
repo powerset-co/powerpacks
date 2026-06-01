@@ -154,9 +154,10 @@ class CoreLayoutTests(unittest.TestCase):
     def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()
         self.assertIn("$powerset setup [--profile <profile>]", text)
-        self.assertIn("$powerset setup                 log in, pull env, and install/refresh MCP", text)
+        self.assertIn("$powerset setup                 log in, pull env, sync bootstrap, and install/refresh MCP", text)
         self.assertIn("packs/powerset/primitives/auth/auth.py login", text)
         self.assertIn("packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull", text)
+        self.assertIn("packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py sync", text)
         self.assertIn("packs/powerset/primitives/mcp_install/mcp_install.py install --host all", text)
         self.assertIn("Powerset setup complete. Please restart Codex", text)
 

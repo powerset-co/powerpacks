@@ -6,17 +6,18 @@ description: Unified Powerset command surface. Use for `$powerset setup`, `$powe
 # Powerset
 
 Use this skill when the user asks for `$powerset ...` or wants Powerset setup,
-status, identity, MCP registration, runtime env provisioning, or default set
-selection. `$powerset setup` is the preferred one-command first-run path: it
-does login, runtime env pull, and MCP registration so users do not need to run
-multiple smaller commands.
+status, identity, MCP registration, runtime env provisioning, operator bootstrap
+sync, or default set selection. `$powerset setup` is the preferred one-command
+first-run path: it
+does login, runtime env pull, published operator bootstrap sync, and MCP
+registration so users do not need to run multiple smaller commands.
 
 ## Command routing
 
 | User command | Do this |
 | --- | --- |
 | `$powerset`, `$powerset help` | Print the supported subcommands below. |
-| `$powerset setup [--profile <profile>]` | Run the setup workflow below: ensure login, pull env, and install/refresh MCP. The explicit command is consent to write `.env`. |
+| `$powerset setup [--profile <profile>]` | Run the setup workflow below: ensure login, pull env, sync any matching operator bootstrap, and install/refresh MCP. The explicit command is consent to write `.env`. |
 | `$powerset login` | Run the login workflow below. |
 | `$powerset status` | Run the setup check quietly and summarize only blockers. |
 | `$powerset whoami` | Run the Auth0 `whoami` primitive. |
@@ -37,7 +38,7 @@ plain `$setup` routed to the ingestion/product setup skill, not this command.
 When asked for help, respond with:
 
 ```text
-$powerset setup                 log in, pull env, and install/refresh MCP
+$powerset setup                 log in, pull env, sync bootstrap, and install/refresh MCP
 $powerset login                 refresh Auth0 credentials and MCP config
 $powerset status                check local setup
 $powerset whoami                show current Powerset/Auth0 identity
@@ -56,7 +57,8 @@ Resolve primitive paths from the current environment:
 - From the Powerpacks repo root, use `packs/powerset/primitives/...`.
 - From an installed skill bundle, use `powerpacks/packs/powerset/primitives/...`.
 - If a path does not exist, locate it with `rg --files -g 'doctor.py' -g
-  'auth.py' -g 'provision_runtime_env.py' -g 'mcp_install.py'`.
+  'auth.py' -g 'provision_runtime_env.py' -g 'operator_bootstrap.py' -g
+  'mcp_install.py'`.
 
 Prefer `python3` if `python` is not on PATH.
 
@@ -67,7 +69,8 @@ people otherwise had to run separately:
 
 1. ensure Powerset/Auth0 login is present;
 2. pull allowlisted runtime env keys into local `.env`;
-3. install/refresh the `powerset-search` MCP for local hosts.
+3. sync any published operator bootstrap bundle into local `.powerpacks/`;
+4. install/refresh the `powerset-search` MCP for local hosts.
 
 Default profile is `search-core` unless the user specifies `--profile <name>`.
 The explicit `$powerset setup` request is consent to write `.env`; do not ask
@@ -124,6 +127,24 @@ gcloud auth login --no-launch-browser
 ```
 
 Relay the URL/code prompt tersely, then rerun the env pull command.
+
+Then sync the operator bootstrap:
+
+```bash
+uv run --project powerpacks python powerpacks/packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py sync \
+  --env-file .env
+```
+
+If this reports expired gcloud credentials, immediately run:
+
+```bash
+gcloud auth login --no-launch-browser
+```
+
+Relay the URL/code prompt tersely, then rerun the env pull command and the
+operator bootstrap sync command. If bootstrap sync reports `skipped` because no
+matching bundle is published or the registry is not available, continue with MCP
+installation; `$setup` can still proceed from local account linking/import.
 
 Then install/refresh MCP:
 
