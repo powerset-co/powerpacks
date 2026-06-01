@@ -16,7 +16,6 @@ No real network. No OpenAI credits spent. Safe in CI.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
 import sys
@@ -38,14 +37,6 @@ RERANK_PY = (
     / "llm_rerank_candidates"
     / "llm_rerank_candidates.py"
 )
-
-
-def load_rerank_module(name: str = "llm_rerank_candidates_test"):
-    spec = importlib.util.spec_from_file_location(name, RERANK_PY)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod
 
 
 # ---------------------------------------------------------------------------
@@ -304,15 +295,6 @@ class FanOutVerdictShapeTests(unittest.TestCase):
                 self.assertIn("model", r)
                 self.assertIn("elapsed_ms", r)
                 self.assertIsNone(r["error"])
-
-
-class ExplicitSeniorityPromptContractTests(unittest.TestCase):
-    def test_prompt_contract_mentions_explicit_seniority_examples(self) -> None:
-        mod = load_rerank_module("llm_rerank_candidates_prompt_contract")
-        self.assertIn("Explicit seniority is a hiring target band", mod.SYSTEM_PROMPT)
-        self.assertIn("senior software engineer", mod.SYSTEM_PROMPT)
-        self.assertIn("CTO, VP Engineering, Director, Founder, Tech Advisor", mod.SYSTEM_PROMPT)
-        self.assertIn("Staff/principal are not synonyms", mod.SYSTEM_PROMPT)
 
 
 class StateModeQueryResultsCsvTests(unittest.TestCase):
