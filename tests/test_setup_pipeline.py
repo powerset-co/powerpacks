@@ -1521,6 +1521,107 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertTrue(any('build-local-duckdb-shim.py' in ' '.join(cmd) for cmd in calls))
         self.assertFalse(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
 
+    def test_index_phase_restores_bootstrap_records_when_local_records_are_empty(self):
+        tmp = self.temp_workspace()
+        bundle = tmp / '.powerpacks/operator-bootstrap/bundles/patrick.operator-bootstrap.tar.gz'
+        bundle.parent.mkdir(parents=True)
+        make_bundle(bundle)
+        people = tmp / '.powerpacks/network-import/merged/people.csv'
+        people.parent.mkdir(parents=True)
+        people.write_text('id\nnew-local-person\n', encoding='utf-8')
+        search_index = tmp / '.powerpacks/search-index'
+        records = search_index / 'records'
+        records.mkdir(parents=True)
+        (records / 'people.records.jsonl').write_text('', encoding='utf-8')
+        (search_index / 'local-search.duckdb').write_text('empty-duckdb', encoding='utf-8')
+        (search_index / 'ledger.json').write_text(json.dumps({
+            'status': 'completed',
+            'default_operator_id': OPERATOR_ID,
+            'input_sha256': 'stale-input',
+        }), encoding='utf-8')
+        accounts = tmp / '.powerpacks/ingestion/accounts.json'
+        accounts.parent.mkdir(parents=True)
+        accounts.write_text(json.dumps(resolved_accounts()), encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        calls = []
+
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            joined = ' '.join(cmd)
+            self.assertIn('build-local-duckdb-shim.py', joined)
+            return fake_local_duckdb_payload(tmp)
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            refresh_interval_hours=168,
+            auto_spend_limit_usd=10.0,
+            approve_provider_spend=False,
+        )
+        buf = io.StringIO()
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            with contextlib.redirect_stdout(buf):
+                code = setup.run_index_phase(args)
+        payload = json.loads(buf.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['status'], 'ready')
+        self.assertEqual(payload['index']['source'], 'operator_bootstrap')
+        self.assertEqual(payload['index']['bootstrap_records_restore']['status'], 'restored')
+        self.assertGreater((records / 'people.records.jsonl').stat().st_size, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(any('build_processing_pipeline.py' in ' '.join(cmd) for cmd in calls))
+
+    def test_index_phase_approved_provider_spend_runs_processing(self):
+        tmp = self.temp_workspace()
+        people = tmp / '.powerpacks/network-import/merged/people.csv'
+        people.parent.mkdir(parents=True)
+        people.write_text('id\np1\n', encoding='utf-8')
+        accounts = tmp / '.powerpacks/ingestion/accounts.json'
+        accounts.parent.mkdir(parents=True)
+        accounts.write_text(json.dumps(resolved_accounts()), encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        calls = []
+
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            joined = ' '.join(cmd)
+            if 'build_processing_pipeline.py' in joined and '--dry-run' in cmd:
+                return 0, {
+                    'status': 'dry_run',
+                    'estimated_cost_usd': 25.0,
+                    'estimated_paid_calls': {'role_enrichment': 40},
+                    'estimated_costs': {'known_pricing': True, 'total_estimated_usd': 25.0},
+                }, ''
+            if 'build_processing_pipeline.py' in joined:
+                self.assertIn('--allow-paid-role-provider', cmd)
+                self.assertIn('--allow-paid-embeddings', cmd)
+                self.assertIn('--allow-paid-company-provider', cmd)
+                return 0, {'status': 'completed'}, ''
+            if 'build-local-duckdb-shim.py' in joined:
+                return fake_local_duckdb_payload(tmp)
+            return 1, {'status': 'unexpected'}, joined
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            refresh_interval_hours=168,
+            auto_spend_limit_usd=10.0,
+            approve_provider_spend=True,
+        )
+        buf = io.StringIO()
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            with contextlib.redirect_stdout(buf):
+                code = setup.run_index_phase(args)
+        payload = json.loads(buf.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['status'], 'ready')
+        self.assertTrue(payload['index']['provider_spend_approved'])
+        self.assertTrue(any('build_processing_pipeline.py' in ' '.join(cmd) and '--dry-run' not in cmd for cmd in calls))
+
     def test_setup_skips_bootstrap_when_no_local_bundle_matches(self):
         tmp = self.temp_workspace()
         ledger = tmp / '.powerpacks/setup/setup-run.json'

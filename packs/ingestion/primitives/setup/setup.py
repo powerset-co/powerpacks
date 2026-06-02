@@ -23,6 +23,7 @@ DEFAULT_REFRESH_INTERVAL_HOURS = 168
 DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS = int(os.environ.get('POWERPACKS_SETUP_GMAIL_SYNC_LOOKBACK_DAYS', '14'))
 DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS', '900'))
 DEFAULT_AUTO_SPEND_LIMIT_USD = float(os.environ.get('POWERPACKS_SETUP_AUTO_SPEND_LIMIT_USD', '10'))
+EMPTY_LOCAL_SEARCH_DUCKDB_MAX_BYTES = int(os.environ.get('POWERPACKS_SETUP_EMPTY_DUCKDB_MAX_BYTES', str(1024 * 1024)))
 SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/import-network-run.setup-refresh.json')
 SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
 SETUP_SOURCE_CHANNELS = ['gmail', 'linkedin_csv', 'messages', 'twitter']
@@ -43,6 +44,15 @@ ALLOWED_ROOTS = [
     PurePosixPath('.powerpacks/network-import/profile_cache_v2'),
     PurePosixPath('.powerpacks/operator-bootstrap/restore-manifest.json'),
 ]
+SEARCH_BOOTSTRAP_PREFIX_MEMBERS = [
+    PurePosixPath('.powerpacks/search-index/records'),
+]
+SEARCH_BOOTSTRAP_EXACT_MEMBERS = {
+    PurePosixPath('.powerpacks/search-index/ledger.json'),
+    PurePosixPath('.powerpacks/search-index/manifest.json'),
+    PurePosixPath('.powerpacks/search-index/stats/bootstrap_from_aleph.json'),
+    PurePosixPath('.powerpacks/search-index/vectors/checkpoint.json'),
+}
 APPROVALS = [
     ('browser_auth', 'Browser/Gmail OAuth authorization requires user approval.'),
     ('gcp_console_oauth_app', 'GCP Console/OAuth app automation requires user approval.'),
@@ -807,6 +817,100 @@ def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
     ]
 
 
+def search_record_summary() -> dict[str, Any]:
+    records = ROOT / '.powerpacks/search-index/records'
+    files = sorted(records.glob('*.records.jsonl')) if records.exists() else []
+    nonempty = []
+    for path in files:
+        try:
+            if path.stat().st_size > 0:
+                nonempty.append(path)
+        except OSError:
+            continue
+    return {
+        'records_dir': str(records),
+        'record_files': len(files),
+        'nonempty_record_files': len(nonempty),
+        'empty_record_files': max(0, len(files) - len(nonempty)),
+    }
+
+
+def search_records_have_data() -> bool:
+    return bool(search_record_summary().get('nonempty_record_files'))
+
+
+def search_records_missing_or_empty() -> bool:
+    return not search_records_have_data()
+
+
+def local_search_duckdb_missing_or_tiny() -> bool:
+    duckdb = ROOT / '.powerpacks/search-index/local-search.duckdb'
+    if not duckdb.exists():
+        return True
+    try:
+        return duckdb.stat().st_size <= EMPTY_LOCAL_SEARCH_DUCKDB_MAX_BYTES
+    except OSError:
+        return True
+
+
+def should_restore_bootstrap_search_records() -> bool:
+    return search_records_missing_or_empty() and local_search_duckdb_missing_or_tiny()
+
+
+def allowed_search_bootstrap_member(pp: PurePosixPath) -> bool:
+    if pp in SEARCH_BOOTSTRAP_EXACT_MEMBERS:
+        return True
+    for root in SEARCH_BOOTSTRAP_PREFIX_MEMBERS:
+        if pp == root or str(pp).startswith(str(root) + '/'):
+            return True
+    return False
+
+
+def restore_search_index_from_bootstrap(bundle: Path, operator_id: str) -> dict[str, Any]:
+    inspected = inspect_bundle(bundle)
+    if inspected.get('status') != 'ok':
+        return {'status': 'rejected', 'reason': 'bootstrap bundle is not restorable', 'inspect': inspected}
+    if inspected.get('operator_id') != operator_id:
+        return {'status': 'rejected', 'reason': 'operator_id mismatch', 'inspect': inspected}
+
+    restored: list[str] = []
+    with tarfile.open(bundle, 'r:*') as tf:
+        members = {member.name: member for member in tf.getmembers()}
+        validate_tar_members(tf)
+        for name in sorted(members):
+            member = members[name]
+            pp = safe_member_name(member.name)
+            if not allowed_search_bootstrap_member(pp):
+                continue
+            if member.isdir():
+                continue
+            src = tf.extractfile(member)
+            if src is None:
+                continue
+            dst = ROOT / str(pp)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            with dst.open('wb') as out:
+                shutil.copyfileobj(src, out)
+            restored.append(str(pp))
+
+    summary = search_record_summary()
+    if not summary.get('nonempty_record_files'):
+        return {
+            'status': 'skipped',
+            'reason': 'bootstrap_search_records_empty',
+            'bundle': str(bundle),
+            'restored': restored,
+            'record_summary': summary,
+        }
+    return {
+        'status': 'restored',
+        'bundle': str(bundle),
+        'bundle_sha256': inspected.get('bundle_sha256', ''),
+        'restored': restored,
+        'record_summary': summary,
+    }
+
+
 def run_processing_dry_run(operator_id: str) -> dict[str, Any]:
     code, payload, stderr = run_json_command(processing_dry_run_command_args(operator_id), timeout=60 * 60)
     if code != 0:
@@ -845,6 +949,51 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
     people = ROOT / '.powerpacks/network-import/merged/people.csv'
     idx = indexing_readiness(args.operator_id)
     account_state = accounts_summary(Path(args.accounts))
+    if should_restore_bootstrap_search_records():
+        bundle = matching_bootstrap_bundle(args.operator_id)
+        if bundle:
+            restore_payload = restore_search_index_from_bootstrap(bundle, args.operator_id)
+            if restore_payload.get('status') == 'restored':
+                code, duckdb_payload, duckdb_stderr = run_json_command(build_local_duckdb_shim_command_args(args.operator_id), timeout=60 * 60)
+                if code != 0:
+                    payload = {
+                        'status': 'failed',
+                        'step': 'local_duckdb',
+                        'source': 'operator_bootstrap',
+                        'bootstrap_records_restore': restore_payload,
+                        'local_duckdb': duckdb_payload,
+                        'error': tail(duckdb_stderr) or duckdb_payload,
+                    }
+                    ledger.setdefault('phases', {})['index'] = payload
+                    ledger['status'] = 'failed'
+                    save_setup_ledger(ledger, ledger_path)
+                    return payload, 1
+                payload = {
+                    'status': 'ready',
+                    'source': 'operator_bootstrap',
+                    'people_csv': '.powerpacks/network-import/merged/people.csv' if people.exists() else '',
+                    'people_sha256': sha256_file(people) if people.exists() else '',
+                    'bootstrap_records_restore': restore_payload,
+                    'local_duckdb': duckdb_payload,
+                    'duckdb': duckdb_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb') if isinstance(duckdb_payload, dict) else '.powerpacks/search-index/local-search.duckdb',
+                    'manifest': duckdb_payload.get('manifest', '') if isinstance(duckdb_payload, dict) else '',
+                    'updated_at': now(),
+                }
+                ledger.setdefault('phases', {})['index'] = payload
+                ledger['status'] = 'ready'
+                save_setup_ledger(ledger, ledger_path)
+                return payload, 0
+            if restore_payload.get('status') != 'skipped':
+                payload = {
+                    'status': 'failed',
+                    'step': 'bootstrap_search_records_restore',
+                    'bootstrap_records_restore': restore_payload,
+                }
+                ledger.setdefault('phases', {})['index'] = payload
+                ledger['status'] = 'failed'
+                save_setup_ledger(ledger, ledger_path)
+                return payload, 1
+
     if idx.get('status') == 'search_ready' and not linked_sources(account_state):
         payload = {
             'status': 'ready',
@@ -906,11 +1055,12 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
     paid_calls = estimated_paid_calls(estimate)
     total_cost = estimated_cost_usd(estimate)
     known_pricing = estimate_has_known_pricing(estimate)
+    approve_provider_spend = bool(getattr(args, 'approve_provider_spend', False))
     needs_paid_approval = paid_calls > 0 and (not known_pricing or total_cost is None or total_cost >= spend_limit)
     if total_cost is not None and total_cost >= spend_limit:
         needs_paid_approval = True
 
-    if needs_paid_approval:
+    if needs_paid_approval and not approve_provider_spend:
         payload = {
             'status': 'blocked_approval',
             'step': 'index_processing',
@@ -927,7 +1077,7 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         save_setup_ledger(ledger, ledger_path)
         return payload, 20
 
-    allow_paid = paid_calls > 0 or bool(total_cost and total_cost > 0)
+    allow_paid = approve_provider_spend or paid_calls > 0 or bool(total_cost and total_cost > 0)
     code, processing_payload, processing_stderr = run_json_command(
         processing_run_command_args(args.operator_id, allow_paid=allow_paid),
         timeout=6 * 60 * 60,
@@ -966,6 +1116,7 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         'people_sha256': sha256_file(people),
         'auto_spend_limit_usd': spend_limit,
         'auto_approved_paid_calls': paid_calls if allow_paid else 0,
+        'provider_spend_approved': approve_provider_spend,
         'estimated_cost_usd': total_cost,
         'processing_estimate': estimate,
         'processing': processing_payload,
@@ -1061,7 +1212,7 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
                 'people_sha256': people_hash,
                 'index_input_sha256': people_hash,
             }
-    if records.exists() and any(records.glob('*.records.jsonl')) and not duck.exists():
+    if search_records_have_data() and not duck.exists():
         return {'status': 'records_only_duckdb_missing', 'repair_command': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'}
     if people.exists():
         return processing_needed
@@ -2092,6 +2243,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
+    s.add_argument('--approve-provider-spend', action='store_true')
     s.set_defaults(func=run_index_phase)
 
     s = sub.add_parser('handoff')

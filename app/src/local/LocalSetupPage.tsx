@@ -916,6 +916,7 @@ function IndexTab({ status, onRun }: { status: SetupStatusResponse; onRun: (body
   const paidCalls = paidCallTotal(estimate.estimatedPaidCalls);
   const cost = money(estimate.totalEstimatedUsd);
   const counts = estimate.counts || {};
+  const requiresProviderSpend = paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0;
   const updateAvailable = ["needs_processing", "people_csv_ready_for_processing"].includes(String(readiness || "").toLowerCase())
     || status.index.reason === "search_index_stale_for_people_csv";
 
@@ -986,8 +987,8 @@ function IndexTab({ status, onRun }: { status: SetupStatusResponse; onRun: (body
               </div>
             </div>
           </div>
-          <Button onClick={() => onRun({ action: "index" })}>
-            <Play className="h-4 w-4" /> {paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0 ? "Approve & Update" : "Update Index"}
+          <Button onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
+            <Play className="h-4 w-4" /> {requiresProviderSpend ? "Approve & Update" : "Update Index"}
           </Button>
         </div>
       </section>

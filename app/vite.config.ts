@@ -1445,19 +1445,31 @@ async function setupStatus() {
   const operator = resolveOperator(setupLedger, accounts);
   const importSources = buildImportSources(accounts, operator.id);
   const enrichmentSources = buildEnrichmentSources(sources);
+  const bootstrap = bootstrapSummary(operator);
   const setupFile = fileSummary(setupLedgerPath);
   const importFile = fileSummary(importRefreshLedgerPath);
   const indexPhase = phases.index || {};
   const peopleCsvPath = path.join(powerpacksStateRoot, "network-import", "merged", "people.csv");
   const duckdbPath = path.join(powerpacksStateRoot, "search-index", "local-search.duckdb");
   const peopleSha256 = String(indexPhase.people_sha256 || sha256File(peopleCsvPath) || "");
-  const processingEstimate = indexDryRunEstimate(operator.id, peopleSha256);
   const duckdbFile = fileSummary(duckdbPath);
+  const duckdbTables = localDuckdbTableCounts(duckdbPath);
+  const duckdbHasRows = duckdbTables.some((table) => Number(table.rows || 0) > 0);
+  const bootstrapRestorePreferred = Number(bootstrap.peopleRecords || 0) > 0
+    && (!duckdbFile.exists || !duckdbHasRows);
+  const processingEstimate = bootstrapRestorePreferred ? {
+    status: "local_records_restore",
+    totalEstimatedUsd: 0,
+    estimatedPaidCalls: {},
+    counts: { people: Number(bootstrap.peopleRecords || 0) },
+    providers: {},
+    error: "",
+  } : indexDryRunEstimate(operator.id, peopleSha256);
   const importLiveRefresh = phases.import?.live_refresh || importRefreshLedger.refresh || importRefreshLedger;
 
   return {
     operator,
-    bootstrap: bootstrapSummary(operator),
+    bootstrap,
     setup: {
       ...setupFile,
       status: setupLedger.status || "unknown",
@@ -1507,7 +1519,7 @@ async function setupStatus() {
       duckdbExists: duckdbFile.exists,
       duckdbUpdatedAt: duckdbFile.updatedAt || null,
       duckdbSizeBytes: duckdbFile.sizeBytes || 0,
-      duckdbTables: localDuckdbTableCounts(duckdbPath),
+      duckdbTables,
       peopleCsv: indexPhase.people_csv || ".powerpacks/network-import/merged/people.csv",
       peopleRecords: csvPathCount(".powerpacks/network-import/merged/people.csv"),
       peopleSha256,
@@ -1547,7 +1559,12 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     return startSetupJob(action, setupCommandArgs(operator.id, "import"), 6 * 60 * 60 * 1000);
   }
 
-  if (["bootstrap", "link", "index", "run"].includes(action)) {
+  if (action === "index") {
+    const extra = body.approveProviderSpend === true ? ["--approve-provider-spend"] : [];
+    return startSetupJob(action, setupCommandArgs(operator.id, "index", extra));
+  }
+
+  if (["bootstrap", "link", "run"].includes(action)) {
     return startSetupJob(action, setupCommandArgs(operator.id, action as any));
   }
 

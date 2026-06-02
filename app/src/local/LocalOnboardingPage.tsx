@@ -275,6 +275,7 @@ export function LocalOnboardingPage({ onOpenSetupTab, onOpenMessagesReview }: Lo
 
   const estimate = status.index.processingEstimate || {};
   const paidCalls = paidCallTotal(estimate.estimatedPaidCalls);
+  const requiresProviderSpend = paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0;
   const currentBlock = status.messages.currentBlock || null;
   const pendingReview = Number(status.review.counts.undecided || 0);
   const blockMessage = String(currentBlock?.message || "").trim();
@@ -379,8 +380,8 @@ export function LocalOnboardingPage({ onOpenSetupTab, onOpenMessagesReview }: Lo
         icon={HardDrive}
       >
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => runAction({ action: "index" })} disabled={running}>
-            <HardDrive className="h-4 w-4" /> {paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0 ? "Approve & Update" : "Update Index"}
+          <Button size="sm" onClick={() => runAction({ action: "index", approveProviderSpend: requiresProviderSpend })} disabled={running}>
+            <HardDrive className="h-4 w-4" /> {requiresProviderSpend ? "Approve & Update" : "Update Index"}
           </Button>
         </div>
       </GuideStep>
