@@ -131,7 +131,7 @@ function refreshLabel(status: SetupStatusResponse): string {
   const value = status.import.updatedAt || status.setup.updatedAt;
   const label = updatedLabel(value);
   if (!label) return "";
-  return `${status.import.updatedAt ? "Last refresh" : "Last setup update"} ${label}`;
+  return `Last refreshed ${label}`;
 }
 
 function tailText(value?: string, limit = 3500): string {
@@ -1022,7 +1022,7 @@ function ActionStepCard({
           <div className="flex items-center gap-2">
             <CircleAlert className="h-4 w-4" />
             <h3 className="text-base font-semibold">Action needed</h3>
-            <StatusBadge status={stringValue(block.status) || "blocked"} />
+            <StatusBadge status={stringValue(block?.status) || "blocked"} />
           </div>
           <p className="mt-1 text-sm">{message}</p>
         </div>
@@ -1189,7 +1189,6 @@ export function LocalSetupPage({ onOpenMessagesReview }: { onOpenMessagesReview:
         <div>
           <h2 className="text-2xl font-semibold">Setup</h2>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            {status.operator.email && <span>{status.operator.email}</span>}
             {refreshLabel(status) && (
               <span>{refreshLabel(status)}</span>
             )}

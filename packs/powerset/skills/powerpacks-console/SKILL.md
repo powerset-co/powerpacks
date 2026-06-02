@@ -18,6 +18,19 @@ From the Powerpacks repo root, run:
 scripts/run-powerpacks-console.sh start
 ```
 
+If the current Codex cwd is not the Powerpacks repo, resolve the installed
+bundle first:
+
+```bash
+if [[ -n "${POWERPACKS_REPO_ROOT:-}" ]]; then
+  "$POWERPACKS_REPO_ROOT/scripts/run-powerpacks-console.sh" start
+elif [[ -x "scripts/run-powerpacks-console.sh" && -d "packs" ]]; then
+  scripts/run-powerpacks-console.sh start
+else
+  "$HOME/.codex/powerpacks/scripts/run-powerpacks-console.sh" start
+fi
+```
+
 The script:
 
 - installs `app/` npm dependencies if needed
@@ -56,7 +69,7 @@ To point the console at a different Powerpacks checkout or artifact directory
 layout, set `POWERPACKS_REPO_ROOT`:
 
 ```bash
-POWERPACKS_REPO_ROOT=/path/to/powerpacks scripts/run-powerpacks-console.sh start
+POWERPACKS_REPO_ROOT=/path/to/powerpacks /path/to/powerpacks/scripts/run-powerpacks-console.sh start
 ```
 
 The app expects content in:

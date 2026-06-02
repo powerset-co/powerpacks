@@ -744,6 +744,28 @@ function reviewDecision(row: Record<string, string>): "include" | "skip" | "unde
   return isReviewSelected(row) ? "include" : "skip";
 }
 
+function hasUsefulReviewIdentity(row: Record<string, string>): boolean {
+  const named = [
+    row.full_name,
+    row.display_name,
+    row.network_name,
+    row.matched_name,
+  ].some((value) => Boolean(String(value || "").trim()));
+  const matched = isInNetwork(row) || [
+    row.network_person_id,
+    row.network_linkedin_url,
+    row.matched_person_id,
+    row.matched_linkedin_url,
+  ].some((value) => Boolean(String(value || "").trim()));
+  return named && matched;
+}
+
+function reviewableRows(rows: Record<string, string>[]) {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => hasUsefulReviewIdentity(row));
+}
+
 function summarizeReview(rows: Record<string, string>[]) {
   const out = {
     total: rows.length,
@@ -814,8 +836,7 @@ function resolveReviewCsvPath(): string | null {
 
 function filterReviewRows(rows: Record<string, string>[], filter: string, query: string) {
   const q = query.trim().toLowerCase();
-  return rows
-    .map((row, index) => ({ row, index }))
+  return reviewableRows(rows)
     .filter(({ row }) => {
       const explicit = explicitReviewDecision(row);
       const tab = reviewTab(row);
@@ -847,7 +868,7 @@ function reviewResponse(csvPath: string, document: CsvDocument, filter: string, 
   return {
     ...file,
     rows: windowRows,
-    counts: summarizeReview(document.rows),
+    counts: summarizeReview(reviewableRows(document.rows).map(({ row }) => row)),
     filteredCount: filtered.length,
     offset,
     limit,
@@ -1464,7 +1485,7 @@ async function setupStatus() {
     },
     review: {
       ...fileSummary(reviewPath),
-      counts: summarizeReview(reviewDocument.rows),
+      counts: summarizeReview(reviewableRows(reviewDocument.rows).map(({ row }) => row)),
     },
     import: {
       ...importFile,

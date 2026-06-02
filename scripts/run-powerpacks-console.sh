@@ -3,15 +3,52 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT_DIR/app"
-STATE_DIR="$ROOT_DIR/.powerpacks/servers"
-PID_FILE="$STATE_DIR/powerpacks-console.pid"
-LOG_FILE="$STATE_DIR/powerpacks-console.log"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-5177}"
-POWERPACKS_REPO_ROOT="${POWERPACKS_REPO_ROOT:-$ROOT_DIR}"
 ACTION="start"
 APP_PATH="${APP_PATH:-/}"
 OPEN_BROWSER="${OPEN_BROWSER:-0}"
+
+is_powerpacks_root() {
+  local candidate="$1"
+  [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]
+}
+
+has_powerpacks_state() {
+  local candidate="$1"
+  [[ -f "$candidate/.powerpacks/setup/setup-run.json" ]] \
+    || [[ -f "$candidate/.powerpacks/ingestion/accounts.json" ]] \
+    || [[ -f "$candidate/.powerpacks/network-import/merged/people.csv" ]] \
+    || [[ -f "$candidate/.powerpacks/messages/research_review.csv" ]] \
+    || [[ -f "$candidate/.powerpacks/search-index/local-search.duckdb" ]] \
+    || [[ -f "$candidate/.powerpacks/operator-bootstrap/restore-manifest.json" ]]
+}
+
+resolve_repo_root() {
+  if [[ -n "${POWERPACKS_REPO_ROOT:-}" ]]; then
+    printf "%s\n" "$POWERPACKS_REPO_ROOT"
+    return
+  fi
+  if is_powerpacks_root "$PWD"; then
+    printf "%s\n" "$PWD"
+    return
+  fi
+
+  local candidates=("$ROOT_DIR" "$HOME/.codex/powerpacks" "$HOME/workspace/powerpacks" "$HOME/powerpacks")
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if is_powerpacks_root "$candidate" && has_powerpacks_state "$candidate"; then
+      printf "%s\n" "$candidate"
+      return
+    fi
+  done
+  printf "%s\n" "$ROOT_DIR"
+}
+
+POWERPACKS_REPO_ROOT="$(resolve_repo_root)"
+STATE_DIR="$POWERPACKS_REPO_ROOT/.powerpacks/servers"
+PID_FILE="$STATE_DIR/powerpacks-console.pid"
+LOG_FILE="$STATE_DIR/powerpacks-console.log"
 
 mkdir -p "$STATE_DIR"
 
@@ -85,6 +122,7 @@ case "$ACTION" in
   start)
     if is_running; then
       echo "Powerpacks Console already running (pid $(cat "$PID_FILE"))."
+      echo "Repo: $POWERPACKS_REPO_ROOT"
       echo "Log: $LOG_FILE"
       print_or_open_url
       exit 0
@@ -96,14 +134,38 @@ case "$ACTION" in
     fi
 
     echo "Starting Powerpacks Console on http://$HOST:$PORT"
-    (
-      cd "$APP_DIR"
-      POWERPACKS_REPO_ROOT="$POWERPACKS_REPO_ROOT" nohup npm run dev -- --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 &
-      echo $! > "$PID_FILE"
-    )
+    echo "Repo: $POWERPACKS_REPO_ROOT"
+    PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || true)}"
+    if [[ -z "$PYTHON_BIN" ]]; then
+      echo "python3 is required to launch the console in the background." >&2
+      exit 1
+    fi
+    "$PYTHON_BIN" - "$APP_DIR" "$LOG_FILE" "$PID_FILE" "$POWERPACKS_REPO_ROOT" "$HOST" "$PORT" <<'PY'
+import os
+import subprocess
+import sys
+
+app_dir, log_file, pid_file, repo_root, host, port = sys.argv[1:]
+env = os.environ.copy()
+env["POWERPACKS_REPO_ROOT"] = repo_root
+log = open(log_file, "ab", buffering=0)
+proc = subprocess.Popen(
+    ["npm", "run", "dev", "--", "--host", host, "--port", port],
+    cwd=app_dir,
+    env=env,
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    close_fds=True,
+    start_new_session=True,
+)
+with open(pid_file, "w", encoding="utf-8") as handle:
+    handle.write(str(proc.pid))
+PY
     sleep 2
     if is_running; then
       echo "Powerpacks Console running (pid $(cat "$PID_FILE"))."
+      echo "Repo: $POWERPACKS_REPO_ROOT"
       echo "Log: $LOG_FILE"
       grep -E "Local:|Network:" "$LOG_FILE" || true
       print_or_open_url
@@ -126,10 +188,12 @@ case "$ACTION" in
   status)
     if is_running; then
       echo "Powerpacks Console running (pid $(cat "$PID_FILE"))."
+      echo "Repo: $POWERPACKS_REPO_ROOT"
       echo "Log: $LOG_FILE"
       grep -E "Local:|Network:" "$LOG_FILE" || true
       print_or_open_url
     else
+      echo "Repo: $POWERPACKS_REPO_ROOT"
       echo "Powerpacks Console is not running."
       exit 1
     fi

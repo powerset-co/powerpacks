@@ -91,12 +91,23 @@ on the guided onboarding page and let the user click through linking, import,
 enrichment, and indexing from the app:
 
 ```bash
-scripts/run-powerpacks-console.sh start --path /onboarding --open
+if [[ -n "${POWERPACKS_REPO_ROOT:-}" ]]; then
+  "$POWERPACKS_REPO_ROOT/scripts/run-powerpacks-console.sh" start --path /onboarding --open
+elif [[ -x "scripts/run-powerpacks-console.sh" && -d "packs" ]]; then
+  scripts/run-powerpacks-console.sh start --path /onboarding --open
+else
+  "$HOME/.codex/powerpacks/scripts/run-powerpacks-console.sh" start --path /onboarding --open
+fi
 ```
 
 If the script reports that the app is already running, use the printed `Open:`
 URL. If macOS cannot open the browser from the current shell, tell the user the
 printed URL instead of falling back to `setup.py run`.
+
+Do not run `scripts/run-powerpacks-console.sh` relative to an arbitrary Codex
+cwd. If the user starts `$setup` from `~/` or another non-repo directory, invoke
+the installed launcher at `$HOME/.codex/powerpacks/scripts/run-powerpacks-console.sh`.
+That launcher resolves the actual repo/state root and prints it as `Repo: ...`.
 
 The app uses the same setup primitives through `/local-api/setup/*`, so this
 still runs the real setup flow. It just avoids one giant Codex-driven chain and
@@ -121,6 +132,7 @@ blindly.
 `$setup cli`:
 
 ```bash
+cd "${POWERPACKS_REPO_ROOT:-$HOME/.codex/powerpacks}"
 uv run --project . python packs/ingestion/primitives/setup/setup.py run \
   --operator-id <operator-id> \
   --accounts .powerpacks/ingestion/accounts.json \
@@ -131,6 +143,7 @@ The read-only next-action command tells agents exactly which phase should run
 next and returns the concrete command to run:
 
 ```bash
+cd "${POWERPACKS_REPO_ROOT:-$HOME/.codex/powerpacks}"
 uv run --project . python packs/ingestion/primitives/setup/setup.py next \
   --operator-id <operator-id> \
   --accounts .powerpacks/ingestion/accounts.json \
@@ -141,6 +154,7 @@ Phase entrypoints use the same underlying logic as `run`; they only narrow the
 scope so agents can test or resume one layer at a time:
 
 ```bash
+cd "${POWERPACKS_REPO_ROOT:-$HOME/.codex/powerpacks}"
 uv run --project . python packs/ingestion/primitives/setup/setup.py bootstrap \
   --operator-id <operator-id> \
   --setup-ledger .powerpacks/setup/setup-run.json
@@ -170,6 +184,7 @@ unrelated phases during debugging.
 For inspection without running refresh work, use local status:
 
 ```bash
+cd "${POWERPACKS_REPO_ROOT:-$HOME/.codex/powerpacks}"
 uv run --project . python packs/ingestion/primitives/setup/setup.py status \
   --operator-id <operator-id> \
   --accounts .powerpacks/ingestion/accounts.json \

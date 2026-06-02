@@ -28,6 +28,19 @@ install_powerpacks_bundle() {
   # Domain packs (powerset, search, messages, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$tmp/packs"
+  # The setup product path launches the local Powerpacks Console from the
+  # installed bundle, so users can run $setup from any Codex cwd.
+  mkdir -p "$tmp/scripts"
+  cp "$REPO_ROOT/scripts/run-powerpacks-console.sh" "$tmp/scripts/run-powerpacks-console.sh"
+  chmod +x "$tmp/scripts/run-powerpacks-console.sh"
+  mkdir -p "$tmp/app"
+  for file in README.md components.json index.html package-lock.json package.json postcss.config.js tailwind.config.ts tsconfig.app.json tsconfig.json tsconfig.node.json vite.config.ts; do
+    if [[ -f "$REPO_ROOT/app/$file" ]]; then
+      cp "$REPO_ROOT/app/$file" "$tmp/app/$file"
+    fi
+  done
+  cp -R "$REPO_ROOT/app/public" "$tmp/app/public"
+  cp -R "$REPO_ROOT/app/src" "$tmp/app/src"
   # Keep only the top-level skill entrypoint; avoid nested skill duplication
   # from copied packs during discovery.
   find "$tmp/packs" -type f -path "*/SKILL.md" -delete
@@ -42,7 +55,16 @@ $REPO_ROOT/adapters/codex/install.sh
 \`\`\`
 
 Installed Powerpacks skills link their local \`powerpacks/\` directory here.
+The bundle includes the local setup console app and launcher so \`\$setup\` can
+run from any Codex working directory.
 EOF
+
+  if [[ -d "$BUNDLE_DIR/.powerpacks" ]]; then
+    mv "$BUNDLE_DIR/.powerpacks" "$tmp/.powerpacks"
+  fi
+  if [[ -f "$BUNDLE_DIR/.env" ]]; then
+    cp "$BUNDLE_DIR/.env" "$tmp/.env"
+  fi
 
   rm -rf "$BUNDLE_DIR"
   mv "$tmp" "$BUNDLE_DIR"
