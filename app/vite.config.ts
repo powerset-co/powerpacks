@@ -829,6 +829,30 @@ function summarizeReview(rows: Record<string, string>[]) {
   return out;
 }
 
+function reviewResearchSelectionCount(rows: Record<string, string>[]): number {
+  return rows.filter((row) => explicitReviewDecision(row) === "include" && !isInNetwork(row)).length;
+}
+
+function messagesCurrentBlockForUi(
+  messagesLedger: Record<string, any>,
+  reviewDocument: CsvDocument,
+) {
+  const block = messagesLedger.current_block || null;
+  if (!block) return null;
+  const approvalType = String(block.approval_type || "").trim().toLowerCase();
+  if (approvalType !== "parallel") return block;
+
+  const prepareInput = String(messagesLedger.steps?.prepare_research_queue?.summary?.input || "");
+  const appReviewCompleted = messagesLedger.steps?.review_research_web?.summary?.source === "powerpacks_setup_app";
+  const selectedForResearch = reviewResearchSelectionCount(reviewDocument.rows);
+
+  // App review decisions supersede the old pre-review queue. If no unmatched
+  // rows were explicitly included, there is no Parallel research approval to show.
+  if (appReviewCompleted && !prepareInput.includes("research_review.csv")) return null;
+  if (selectedForResearch === 0) return null;
+  return block;
+}
+
 function normalizeReviewRow(row: Record<string, string>, index: number) {
   return {
     index,
@@ -1613,6 +1637,7 @@ async function setupStatus() {
     error: "",
   } : indexDryRunEstimate(operator.id, peopleSha256);
   const importLiveRefresh = phases.import?.live_refresh || importRefreshLedger.refresh || importRefreshLedger;
+  const messagesCurrentBlock = messagesCurrentBlockForUi(messagesLedger, reviewDocument);
 
   return {
     operator,
@@ -1639,7 +1664,7 @@ async function setupStatus() {
     messages: {
       ...fileSummary(messagesLedgerPath),
       status: messagesLedger.status || "unknown",
-      currentBlock: messagesLedger.current_block || null,
+      currentBlock: messagesCurrentBlock,
       steps: Object.fromEntries(Object.entries(messagesLedger.steps || {}).map(([key, value]: [string, any]) => [key, value?.status || "unknown"])),
     },
     review: {
