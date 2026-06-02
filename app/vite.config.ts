@@ -1346,9 +1346,10 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
 
   const sumArtifacts = (artifactsList: Record<string, any>[], key: string) =>
     artifactsList.reduce((total, artifacts) => total + csvPathCount(artifacts[key]), 0);
-  const gmailQueueCount = csvPathCount(refreshArtifacts.gmail_linkedin_resolution_queue_csvs || refreshArtifacts.gmail_linkedin_resolution_queue_csv);
+  const gmailQueueArtifact = refreshArtifacts.gmail_linkedin_resolution_queue_csvs || refreshArtifacts.gmail_linkedin_resolution_queue_csv;
+  const gmailQueueCount = csvRowsForArtifact(gmailQueueArtifact, ["queue_csv", "linkedin_resolution_queue_csv"]).length;
   const gmailDirectoryMatches = artifactRowsDirectoryMatchCount(
-    refreshArtifacts.gmail_linkedin_resolution_queue_csvs || refreshArtifacts.gmail_linkedin_resolution_queue_csv,
+    gmailQueueArtifact,
     directoryRows,
     ["queue_csv", "linkedin_resolution_queue_csv"],
   );
