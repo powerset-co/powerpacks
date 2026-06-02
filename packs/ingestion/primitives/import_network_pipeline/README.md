@@ -20,7 +20,7 @@ agent to a `SKILL.md`, and that skill calls this script.
 - LinkedIn CSV: LinkedIn `Connections.csv`, handled by `linkedin_network_import`.
 - Gmail: local msgvault SQLite (`~/.msgvault/msgvault.db`), handled by `gmail_network_import msgvault`; multiple selected accounts from onboarding are imported with isolated Gmail child run ids.
 - Setup/account state: `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` fills in LinkedIn CSV/source label, msgvault DB, selected Gmail accounts, Twitter handle, and message contacts artifacts unless explicit CLI flags override them.
-- Messages: existing `.powerpacks/messages/contacts.csv`, produced by `$import-contacts`; include with `--include-existing-artifacts`.
+- Messages: existing `.powerpacks/messages/research_review.csv`, produced by `$import-contacts`; include with `--include-existing-artifacts`. Reviewed rows with usable LinkedIn `/in/` URLs are materialized into a local people CSV and hydrated through `enrich_people.py` before merge. Raw `.powerpacks/messages/contacts.csv` remains review-gated.
 - Twitter/X: existing `.powerpacks/network-import/twitter/*/people.csv`, produced by `twitter_network_import`; include with `--include-existing-artifacts`.
 
 ## Run
@@ -37,9 +37,12 @@ Gmail accounts, LinkedIn CSV import/enrichment, Twitter, and messages artifacts
 are independent and marked with `parallelizable` plus a reason. Gmail account
 imports use one deterministic child run id per account and isolated output
 directories, so they can run concurrently. LinkedIn uses its own child ledger and
-may pause for an existing RapidAPI approval confirmation. Twitter and messages remain
-existing-artifact or dedicated-skill workers unless explicitly approved; this
-orchestrator never runs `$import-contacts` research/upload implicitly.
+hydrates LinkedIn profiles through the shared RapidAPI cache/fetch path.
+Messages uses reviewed
+local research artifacts only, then delegates LinkedIn profile hydration to
+`enrich_people.py`.
+Twitter remains an existing-artifact or dedicated-skill worker unless explicitly
+approved; this orchestrator never runs `$import-contacts` research/upload implicitly.
 
 Fan-in (`merge_network_sources.py` and `build_network_duckdb.py`) runs only after
 selected source workers complete or return a blocked approval. Manual fan-out can
@@ -50,36 +53,54 @@ the produced artifacts.
 Optional email LinkedIn resolution/enrichment bridge:
 
 ```bash
-# prepare local harness prompts, no spend/network
+# first applies .powerpacks/network-import/directory.csv;
+# then prepares local harness prompts only for still-unresolved rows, no spend/network
 uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run \
   --gmail-account-email arthur@powerset.co \
   --gmail-linkedin-provider harness
 
-# or use an existing linkedin_resolutions.csv and feed resolved rows into shared enrich_people
+# or add an existing linkedin_resolutions.csv to the same apply/enrich pass
 uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run \
   --gmail-account-email arthur@powerset.co \
   --gmail-resolutions-csv .powerpacks/network-import/gmail/<run-id>/linkedin-resolution/linkedin_resolutions.csv
 ```
 
+The bridge maintains `.powerpacks/network-import/directory.csv`, a reusable
+checkpoint keyed by `source_key` with `source`, `email`, `phone`, `name`,
+`linkedin_url`, `public_identifier`, confidence, evidence, and source artifact
+metadata. It imports existing `linkedin_candidates*.csv` and
+`linkedin_resolutions*.csv` rows from operator/bootstrap artifacts, applies
+matching directory rows to Gmail contacts first, writes filtered unresolved
+queues for optional harness/Parallel resolution, and combines directory plus
+provider resolutions before delegating resolved LinkedIn rows to
+`enrich_people.py`.
+
 The pipeline writes:
 
 - per-source artifacts under `.powerpacks/network-import/{linkedin,gmail,...}`
+- `.powerpacks/network-import/directory.csv` for reusable email/phone/name to LinkedIn mappings
 - merged CSVs under `.powerpacks/network-import/network-runs/<run-id>/merged/` (`people.csv`, `network_contacts.csv`, `network_contact_sources.csv`, `network_companies.csv`)
 - DuckDB under `.powerpacks/network-import/network-runs/<run-id>/duckdb/`
 
 ## Approval behavior
 
-The orchestrator does not bypass child confirmations. If LinkedIn enrichment needs paid
-RapidAPI calls, it returns `blocked_approval`; use:
+RapidAPI profile hydration does not require an approval step. It runs when
+`RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` is configured and fails clearly when
+neither key is available.
+
+The orchestrator still does not bypass non-RapidAPI child confirmations. If an
+optional provider such as Parallel returns `blocked_approval`, use:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve
 uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue
 ```
 
-Gmail msgvault import, merge, and DuckDB loading are local-only. Gmail
-email-to-LinkedIn resolution is optional: `--gmail-linkedin-provider harness`
-only prepares prompts; `--gmail-linkedin-provider parallel` is spend-bearing and
-requires approval. RapidAPI profile hydration only happens after resolutions are
-applied and is delegated to `enrich_people.py` with its normal approval/cache
-behavior.
+Gmail msgvault import, directory application, Messages materialization, merge,
+and DuckDB loading are local-only. Gmail email-to-LinkedIn provider resolution
+is optional and only receives rows not already matched by `directory.csv`:
+`--gmail-linkedin-provider harness` only prepares prompts;
+`--gmail-linkedin-provider parallel` is spend-bearing and requires approval.
+RapidAPI profile hydration only happens after resolutions are applied, or after
+reviewed Messages LinkedIn rows are materialized, and is delegated to
+`enrich_people.py` with its normal cache/fetch behavior.

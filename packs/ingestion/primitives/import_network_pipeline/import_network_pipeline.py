@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import copy
+import csv
+import hashlib
 import json
 import os
 import re
@@ -37,13 +39,31 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.ingestion.schemas.people_schema import (
+        PEOPLE_SCHEMA_COLUMNS,
+        extract_public_identifier,
+        normalize_linkedin_url,
+        normalize_people_row,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.ingestion.schemas.people_schema import (
+        PEOPLE_SCHEMA_COLUMNS,
+        extract_public_identifier,
+        normalize_linkedin_url,
+        normalize_people_row,
+    )
+
 DEFAULT_LEDGER = Path(".powerpacks/network-import/import-network-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
+DEFAULT_DIRECTORY_CSV = DEFAULT_BASE_DIR / "directory.csv"
 DEFAULT_MSGVAULT_DB = Path.home() / ".msgvault" / "msgvault.db"
 DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS", str(6 * 60 * 60)))
 DEFAULT_GMAIL_ESTIMATE_MAX_PAGES = int(os.environ.get("POWERPACKS_GMAIL_ESTIMATE_MAX_PAGES", "0"))
 DEFAULT_GMAIL_EXCLUDED_LABELS = ("CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES")
 DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 GMAIL_ESTIMATE_LABEL_IDS = ("INBOX", "SENT", "CATEGORY_PERSONAL", "CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES", "SPAM", "TRASH")
 GMAIL_LABEL_QUERY_TERMS = {
     "CATEGORY_SOCIAL": "-category:social",
@@ -53,6 +73,35 @@ GMAIL_LABEL_QUERY_TERMS = {
     "SPAM": "-in:spam",
     "TRASH": "-in:trash",
 }
+DIRECTORY_COLUMNS = [
+    "source",
+    "source_key",
+    "email",
+    "phone",
+    "name",
+    "linkedin_url",
+    "public_identifier",
+    "confidence",
+    "matched_name",
+    "matched_headline",
+    "evidence",
+    "reasoning",
+    "source_artifact",
+    "updated_at",
+]
+LINKEDIN_RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
+LINKEDIN_URL_COLUMNS = [
+    "confirmed_linkedin_url",
+    "human_confirmed_linkedin",
+    "final_linkedin_url",
+    "proposed_linkedin_url",
+    "linkedin_url",
+    "linkedin_profile_url",
+    "profile_url",
+    "pass1_linkedin_url",
+    "llm_selected_linkedin",
+]
+HIGH_CONFIDENCE_URL_COLUMNS = {"confirmed_linkedin_url", "human_confirmed_linkedin", "final_linkedin_url"}
 
 
 SOURCE_NAMES = ["gmail", "linkedin_csv", "twitter", "messages"]
@@ -72,10 +121,10 @@ SOURCE_ARTIFACT_PREFIXES = {
     "messages": ("messages_",),
 }
 SOURCE_STEP_PREFIXES = {
-    "gmail": ("gmail_msgvault", "gmail_linkedin_resolution", "gmail_apply_enrich"),
+    "gmail": ("gmail_msgvault", "gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich"),
     "linkedin_csv": ("linkedin",),
     "twitter": ("twitter",),
-    "messages": ("messages",),
+    "messages": ("messages", "messages_enrich_people"),
 }
 MESSAGES_REVIEW_GATE_REASON = (
     "messages contacts require the reviewed $import-contacts flow before they can be merged into local network search"
@@ -84,6 +133,7 @@ TRUTHY = {"1", "true", "yes", "y", "on"}
 FALSY = {"0", "false", "no", "n", "off"}
 INCLUDE_DECISIONS = {"include", "approved", "approve", "yes", "true", "1"}
 EXCLUDE_DECISIONS = {"exclude", "excluded", "skip", "skipped", "no", "false", "0"}
+RESEARCH_REVIEW_SOURCES = {"llm_network_review", "retarget_research", "retarget_refresh", "deep_research"}
 
 
 def now_iso() -> str:
@@ -113,8 +163,6 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
-    import csv
-
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
         reader = csv.DictReader(handle)
         fields = list(reader.fieldnames or [])
@@ -123,14 +171,530 @@ def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
-    import csv
-
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
+def csv_row_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    _, rows = read_csv_rows(path)
+    return len(rows)
+
+
+def parse_jsonish(value: Any, default: Any) -> Any:
+    if value in (None, ""):
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(str(value))
+    except Exception:
+        return default
+
+
+def emails_from_value(value: Any) -> list[str]:
+    parsed = parse_jsonish(value, None)
+    found: list[str] = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            found.extend(emails_from_value(item))
+    elif isinstance(parsed, dict):
+        for item in parsed.values():
+            found.extend(emails_from_value(item))
+    else:
+        found.extend(match.group(0).lower() for match in EMAIL_RE.finditer(str(value or "")))
+    return sorted(set(found))
+
+
+def emails_from_row(row: dict[str, str]) -> list[str]:
+    emails: list[str] = []
+    for key in ("primary_email", "email", "handle", "all_emails", "emails"):
+        emails.extend(emails_from_value(row.get(key, "")))
+    return sorted(set(emails))
+
+
+def normalize_phone(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    plus = text.startswith("+")
+    digits = re.sub(r"\D+", "", text)
+    if len(digits) < 7:
+        return ""
+    return f"+{digits}" if plus else digits
+
+
+def phones_from_value(value: Any) -> list[str]:
+    parsed = parse_jsonish(value, None)
+    found: list[str] = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            found.extend(phones_from_value(item))
+    elif isinstance(parsed, dict):
+        for item in parsed.values():
+            found.extend(phones_from_value(item))
+    else:
+        phone = normalize_phone(value)
+        if phone:
+            found.append(phone)
+    return sorted(set(found))
+
+
+def phones_from_row(row: dict[str, str]) -> list[str]:
+    phones: list[str] = []
+    for key in ("primary_phone", "phone", "phone_e164", "all_phones", "phones"):
+        phones.extend(phones_from_value(row.get(key, "")))
+    return sorted(set(phones))
+
+
+def directory_name(row: dict[str, str]) -> str:
+    full = row.get("display_name") or row.get("full_name") or row.get("matched_name") or row.get("name") or row.get("harmonic_full_name") or ""
+    if full:
+        return full.strip()
+    return f"{row.get('first_name', '').strip()} {row.get('last_name', '').strip()}".strip()
+
+
+def normalize_name_key(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+
+def choose_linkedin_url(row: dict[str, str]) -> tuple[str, str]:
+    for column in LINKEDIN_URL_COLUMNS:
+        url = normalize_linkedin_url(row.get(column) or "")
+        if extract_public_identifier(url):
+            return url, column
+    return "", ""
+
+
+def parse_confidence(value: Any, default: float = 0.0) -> float:
+    raw = str(value or "").strip().lower()
+    if raw in {"high", "confirmed", "exact"}:
+        return 0.95
+    if raw in {"medium", "med"}:
+        return 0.8
+    if raw == "low":
+        return 0.5
+    try:
+        parsed = float(raw)
+        return parsed / 100.0 if parsed > 1 else parsed
+    except ValueError:
+        return default
+
+
+def directory_confidence(row: dict[str, str], url_col: str) -> float:
+    if url_col in HIGH_CONFIDENCE_URL_COLUMNS:
+        return 1.0
+    for key in ("confidence", "llm_confidence", "basis.linkedin_url.confidence"):
+        if row.get(key):
+            return parse_confidence(row.get(key), 0.0)
+    status = (row.get("status") or "").strip().lower()
+    return 0.9 if status in {"completed", "found", "success"} else 0.8
+
+
+def directory_source_kind(path: Path) -> str:
+    name = path.name
+    if name.startswith("linkedin_resolutions"):
+        return "linkedin_resolutions"
+    if name.startswith("linkedin_candidates"):
+        return "linkedin_candidates"
+    if name.startswith("parallel_enriched"):
+        return "parallel_enriched"
+    if name.startswith("confirmed_candidates"):
+        return "confirmed_candidates"
+    if name.startswith("llm_reviewed"):
+        return "llm_reviewed"
+    if name == "directory.csv":
+        return "directory"
+    return "other"
+
+
+def directory_source_priority(source: str, url_col: str) -> int:
+    if source == "directory":
+        return 85
+    if url_col in {"confirmed_linkedin_url", "human_confirmed_linkedin"}:
+        return 100
+    if source == "confirmed_candidates":
+        return 90
+    if source == "linkedin_resolutions":
+        return 88
+    if source == "parallel_enriched":
+        return 80
+    if url_col in {"final_linkedin_url", "linkedin_url"}:
+        return 70
+    if url_col in {"pass1_linkedin_url", "llm_selected_linkedin"}:
+        return 60
+    return 50
+
+
+def directory_identity_key(email: str, phone: str, name: str, public_identifier: str, source_key: str = "") -> str:
+    if email:
+        return f"email:{email.lower()}"
+    if phone:
+        return f"phone:{normalize_phone(phone)}"
+    if source_key:
+        return f"source:{source_key.strip().lower()}"
+    name_key = normalize_name_key(name)
+    if name_key and public_identifier:
+        return f"name:{name_key}|linkedin:{public_identifier}"
+    return ""
+
+
+def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", source: str = "", updated_at: str = "") -> dict[str, str]:
+    linkedin_url = normalize_linkedin_url(str(row.get("linkedin_url") or ""))
+    public_identifier = extract_public_identifier(linkedin_url)
+    email = (str(row.get("email") or row.get("primary_email") or "").strip().lower())
+    phone = normalize_phone(row.get("phone") or row.get("primary_phone") or "")
+    name = str(row.get("name") or row.get("matched_name") or row.get("display_name") or row.get("full_name") or "").strip()
+    source_key = str(row.get("source_key") or "").strip()
+    if not source_key:
+        source_key = directory_identity_key(email, phone, name, public_identifier)
+    if not linkedin_url or not public_identifier or not source_key:
+        return {}
+    confidence = parse_confidence(row.get("confidence"), 0.0)
+    output = {
+        "source": str(row.get("source") or source or "directory"),
+        "source_key": source_key,
+        "email": email,
+        "phone": phone,
+        "name": name,
+        "linkedin_url": linkedin_url,
+        "public_identifier": public_identifier,
+        "confidence": f"{confidence:.2f}",
+        "matched_name": str(row.get("matched_name") or name),
+        "matched_headline": str(row.get("matched_headline") or ""),
+        "evidence": str(row.get("evidence") or ""),
+        "reasoning": str(row.get("reasoning") or ""),
+        "source_artifact": str(row.get("source_artifact") or source_artifact),
+        "updated_at": str(row.get("updated_at") or updated_at),
+    }
+    priority = row.get("_priority")
+    output["_priority"] = str(priority if priority is not None else directory_source_priority(output["source"], str(row.get("_url_column") or "")))
+    return output
+
+
+def directory_rows_from_resolutions(path: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    source = directory_source_kind(path)
+    for row in read_csv_rows(path)[1]:
+        status = (row.get("status") or "").strip().lower()
+        linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or "")
+        public_identifier = extract_public_identifier(linkedin_url)
+        if status != "found" or not public_identifier:
+            continue
+        confidence = parse_confidence(row.get("confidence"), 0.0)
+        if confidence < 0.75:
+            continue
+        handle = (row.get("handle") or "").strip().lower()
+        emails = emails_from_value(handle)
+        phones = phones_from_value(handle)
+        name = row.get("matched_name") or ""
+        identities = [(email, "", directory_identity_key(email, "", name, public_identifier)) for email in emails]
+        identities.extend(("", phone, directory_identity_key("", phone, name, public_identifier)) for phone in phones)
+        if not identities:
+            identities = [("", "", directory_identity_key("", "", name, public_identifier, handle))]
+        for email, phone, source_key in identities:
+            rows.append(normalized_directory_row({
+                "source": source,
+                "source_key": source_key,
+                "email": email,
+                "phone": phone,
+                "name": name,
+                "linkedin_url": linkedin_url,
+                "confidence": f"{confidence:.2f}",
+                "matched_name": name,
+                "matched_headline": row.get("matched_headline") or "",
+                "evidence": row.get("evidence") or "",
+                "reasoning": row.get("reasoning") or "",
+                "_priority": directory_source_priority(source, "linkedin_url"),
+            }, source_artifact=str(path)))
+    return [row for row in rows if row]
+
+
+def directory_rows_from_candidates(path: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    source = directory_source_kind(path)
+    if source not in {"confirmed_candidates", "linkedin_candidates", "llm_reviewed", "parallel_enriched"}:
+        return rows
+    for row in read_csv_rows(path)[1]:
+        linkedin_url, url_col = choose_linkedin_url(row)
+        public_identifier = extract_public_identifier(linkedin_url)
+        if not public_identifier:
+            continue
+        confidence = directory_confidence(row, url_col)
+        if confidence < 0.75:
+            continue
+        name = directory_name(row)
+        emails = emails_from_row(row)
+        phones = phones_from_row(row)
+        identities = [(email, "", directory_identity_key(email, "", name, public_identifier)) for email in emails]
+        identities.extend(("", phone, directory_identity_key("", phone, name, public_identifier)) for phone in phones)
+        if not identities:
+            identities = [("", "", directory_identity_key("", "", name, public_identifier))]
+        evidence = {
+            "source_file": str(path.resolve()),
+            "source_kind": source,
+            "url_column": url_col,
+            "public_identifier": public_identifier,
+        }
+        for email, phone, source_key in identities:
+            rows.append(normalized_directory_row({
+                "source": source,
+                "source_key": source_key,
+                "email": email,
+                "phone": phone,
+                "name": name,
+                "linkedin_url": linkedin_url,
+                "confidence": f"{confidence:.2f}",
+                "matched_name": name,
+                "matched_headline": row.get("matched_headline") or row.get("headline") or row.get("harmonic_headline") or "",
+                "evidence": json.dumps(evidence, sort_keys=True),
+                "reasoning": row.get("llm_reasoning") or row.get("basis.linkedin_url.reasoning") or "",
+                "_priority": directory_source_priority(source, url_col),
+                "_url_column": url_col,
+            }, source_artifact=str(path)))
+    return [row for row in rows if row]
+
+
+def default_directory_source_paths() -> list[Path]:
+    root = DEFAULT_BASE_DIR.parent
+    patterns = [
+        "operator-bootstrap/import/resolution/linkedin_resolutions*.csv",
+        "network-bootstrap/operators/*/resolution/linkedin_resolutions*.csv",
+        "operator-bootstrap/import/linkedin_candidates/linkedin_candidates*.csv",
+        "network-bootstrap/operators/*/inputs/linkedin_candidates/linkedin_candidates*.csv",
+        "network-import/network-runs/*/gmail-linkedin-resolution-*/linkedin_resolutions.csv",
+    ]
+    paths: list[Path] = []
+    for pattern in patterns:
+        paths.extend(root.glob(pattern))
+    return sorted({path for path in paths if path.is_file()})
+
+
+def directory_source_paths(input_cfg: dict[str, Any], artifacts: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    for value in unique_strings(input_cfg.get("linkedin_directory_source_csvs")):
+        path = Path(value)
+        if path.exists():
+            paths.append(path)
+    for value in unique_strings(input_cfg.get("gmail_resolutions_csv")):
+        path = Path(value)
+        if path.exists():
+            paths.append(path)
+    for record in artifacts.get("gmail_linkedin_resolutions_csvs") or []:
+        if isinstance(record, dict) and record.get("resolutions_csv"):
+            path = Path(record["resolutions_csv"])
+            if path.exists():
+                paths.append(path)
+    if input_cfg.get("linkedin_directory_use_defaults", True):
+        paths.extend(default_directory_source_paths())
+    return list(dict.fromkeys(paths))
+
+
+def merge_directory_rows(rows: list[dict[str, str]], existing_by_key: dict[str, dict[str, str]] | None = None) -> list[dict[str, str]]:
+    best: dict[str, dict[str, str]] = dict(existing_by_key or {})
+    for row in rows:
+        normalized = normalized_directory_row(row)
+        if not normalized:
+            continue
+        key = normalized["source_key"]
+        current = best.get(key)
+        confidence = parse_confidence(normalized.get("confidence"), 0.0)
+        priority = int(normalized.get("_priority") or 0)
+        if current:
+            current_confidence = parse_confidence(current.get("confidence"), 0.0)
+            current_priority = int(current.get("_priority") or 0)
+            if (confidence, priority) <= (current_confidence, current_priority):
+                continue
+        best[key] = normalized
+    output = []
+    for row in sorted(best.values(), key=lambda item: item.get("source_key", "")):
+        output.append({col: row.get(col, "") for col in DIRECTORY_COLUMNS})
+    return output
+
+
+def build_directory_checkpoint(input_cfg: dict[str, Any], artifacts: dict[str, Any], *, extra_sources: list[Path] | None = None) -> dict[str, Any]:
+    directory_csv = Path(input_cfg.get("linkedin_directory_csv") or artifacts.get("directory_csv") or DEFAULT_DIRECTORY_CSV)
+    existing: dict[str, dict[str, str]] = {}
+    if directory_csv.exists():
+        for row in read_csv_rows(directory_csv)[1]:
+            normalized = normalized_directory_row(row, source="directory")
+            if normalized:
+                existing[normalized["source_key"]] = normalized
+    source_paths: list[Path] = []
+    for path_text in directory_source_paths(input_cfg, artifacts):
+        path = Path(path_text)
+        if path.exists() and path != directory_csv:
+            source_paths.append(path)
+    for path in extra_sources or []:
+        if path.exists() and path != directory_csv:
+            source_paths.append(path)
+    source_paths = list(dict.fromkeys(source_paths))
+    imported_rows: list[dict[str, str]] = []
+    for path in source_paths:
+        kind = directory_source_kind(path)
+        if kind == "linkedin_resolutions" or path.name.startswith("linkedin_resolutions"):
+            imported_rows.extend(directory_rows_from_resolutions(path))
+        else:
+            imported_rows.extend(directory_rows_from_candidates(path))
+    merged = merge_directory_rows(imported_rows, existing)
+    write_csv_rows(directory_csv, DIRECTORY_COLUMNS, merged)
+    return {
+        "directory_csv": str(directory_csv),
+        "existing_rows": len(existing),
+        "imported_rows": len(imported_rows),
+        "rows": len(merged),
+        "source_csvs": [str(path) for path in source_paths],
+    }
+
+
+def load_directory_lookup(directory_csv: Path, min_confidence: float = 0.75) -> dict[str, dict[str, dict[str, str]]]:
+    lookup: dict[str, dict[str, dict[str, str]]] = {"email": {}, "phone": {}, "source_key": {}, "name": {}}
+    if not directory_csv.exists():
+        return lookup
+    name_candidates: dict[str, list[dict[str, str]]] = {}
+    for row in read_csv_rows(directory_csv)[1]:
+        normalized = normalized_directory_row(row, source="directory")
+        if not normalized or parse_confidence(normalized.get("confidence"), 0.0) < min_confidence:
+            continue
+        if normalized.get("email"):
+            lookup["email"][normalized["email"].lower()] = normalized
+        if normalized.get("phone"):
+            lookup["phone"][normalize_phone(normalized["phone"])] = normalized
+        if normalized.get("source_key"):
+            lookup["source_key"][normalized["source_key"]] = normalized
+        name_key = normalize_name_key(normalized.get("name") or normalized.get("matched_name") or "")
+        if name_key:
+            name_candidates.setdefault(name_key, []).append(normalized)
+    for name_key, rows in name_candidates.items():
+        urls = {row.get("linkedin_url") for row in rows}
+        if len(urls) == 1:
+            lookup["name"][name_key] = rows[0]
+    return lookup
+
+
+def directory_match_for_queue_row(row: dict[str, str], lookup: dict[str, dict[str, dict[str, str]]]) -> dict[str, str] | None:
+    emails = emails_from_row(row)
+    for email in emails:
+        if email in lookup["email"]:
+            return lookup["email"][email]
+    phones = phones_from_row(row)
+    for phone in phones:
+        if phone in lookup["phone"]:
+            return lookup["phone"][phone]
+    name_key = normalize_name_key(directory_name(row))
+    if name_key and name_key in lookup["name"]:
+        return lookup["name"][name_key]
+    return None
+
+
+def resolution_from_directory_match(queue_row: dict[str, str], directory_row: dict[str, str]) -> dict[str, str]:
+    handle = (queue_row.get("handle") or queue_row.get("primary_email") or directory_row.get("email") or directory_row.get("source_key") or "").strip().lower()
+    evidence = {
+        "source": "directory",
+        "directory_source": directory_row.get("source", ""),
+        "source_key": directory_row.get("source_key", ""),
+        "source_artifact": directory_row.get("source_artifact", ""),
+    }
+    return {
+        "handle": handle,
+        "status": "found",
+        "linkedin_url": directory_row.get("linkedin_url", ""),
+        "confidence": directory_row.get("confidence", ""),
+        "matched_name": directory_row.get("matched_name") or directory_row.get("name") or queue_row.get("display_name") or "",
+        "matched_headline": directory_row.get("matched_headline", ""),
+        "evidence": json.dumps(evidence, sort_keys=True),
+        "reasoning": directory_row.get("reasoning") or "Matched from Powerpacks directory.csv",
+    }
+
+
+def apply_directory_to_gmail_queue(record: dict[str, Any], directory_csv: Path, output_dir: Path) -> dict[str, Any]:
+    queue_csv = Path(str(record.get("queue_csv") or ""))
+    fields, rows = read_csv_rows(queue_csv)
+    lookup = load_directory_lookup(directory_csv)
+    resolved: list[dict[str, str]] = []
+    unresolved: list[dict[str, str]] = []
+    for row in rows:
+        match = directory_match_for_queue_row(row, lookup)
+        if match:
+            resolved.append(resolution_from_directory_match(row, match))
+        else:
+            unresolved.append(row)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    resolutions_csv = output_dir / "directory_linkedin_resolutions.csv"
+    unresolved_csv = output_dir / "unresolved_linkedin_resolution_queue.csv"
+    write_csv_rows(resolutions_csv, LINKEDIN_RESOLUTION_COLUMNS, resolved)
+    write_csv_rows(unresolved_csv, fields, unresolved)
+    result = dict(record)
+    result.update({
+        "directory_csv": str(directory_csv),
+        "directory_resolutions_csv": str(resolutions_csv),
+        "unresolved_queue_csv": str(unresolved_csv),
+        "input_rows": len(rows),
+        "resolved": len(resolved),
+        "unresolved": len(unresolved),
+    })
+    return result
+
+
+def merge_resolution_rows(resolution_paths: list[Path]) -> list[dict[str, str]]:
+    best: dict[str, dict[str, str]] = {}
+    for path in resolution_paths:
+        if not path.exists():
+            continue
+        for row in read_csv_rows(path)[1]:
+            status = (row.get("status") or "").strip().lower()
+            linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or "")
+            public_identifier = extract_public_identifier(linkedin_url)
+            handle = (row.get("handle") or "").strip().lower()
+            confidence = parse_confidence(row.get("confidence"), 0.0)
+            if status != "found" or not public_identifier or not handle or confidence < 0.75:
+                continue
+            candidate = {col: row.get(col, "") for col in LINKEDIN_RESOLUTION_COLUMNS}
+            candidate["handle"] = handle
+            candidate["linkedin_url"] = linkedin_url
+            candidate["confidence"] = f"{confidence:.2f}"
+            current = best.get(handle)
+            if current and parse_confidence(current.get("confidence"), 0.0) >= confidence:
+                continue
+            best[handle] = candidate
+    return [best[key] for key in sorted(best)]
+
+
+def combine_gmail_resolution_records(records: list[dict[str, Any]], run_dir: Path) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, dict) or not record.get("people_csv") or not record.get("resolutions_csv"):
+            continue
+        slug = source_slug(record.get("account_email") or record.get("slug") or record.get("people_csv") or "all")
+        key = (slug, str(record["people_csv"]))
+        group = grouped.setdefault(key, {"account_email": record.get("account_email", ""), "slug": slug, "people_csv": record["people_csv"], "resolution_paths": []})
+        group["resolution_paths"].append(Path(str(record["resolutions_csv"])))
+    combined: list[dict[str, Any]] = []
+    for (slug, people_csv), group in sorted(grouped.items(), key=lambda item: item[0]):
+        rows = merge_resolution_rows(group["resolution_paths"])
+        if not rows:
+            continue
+        out_dir = run_dir / f"gmail-combined-resolutions-{slug}"
+        out_path = out_dir / "linkedin_resolutions.csv"
+        write_csv_rows(out_path, LINKEDIN_RESOLUTION_COLUMNS, rows)
+        combined.append({
+            "account_email": group.get("account_email", ""),
+            "slug": slug,
+            "people_csv": people_csv,
+            "resolutions_csv": str(out_path),
+            "resolution_sources": [str(path) for path in group["resolution_paths"]],
+            "resolved": len(rows),
+        })
+    return combined
+
+
+def sha(value: str, length: int = 12) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
 
 
 def default_messages_review_csv() -> Path:
@@ -266,6 +830,210 @@ def materialize_approved_messages_review(review_csv: Path, scratch: Path) -> dic
         "total_rows": len(rows),
         "contacts_csv": str(scratch),
     }
+
+
+def messages_review_linkedin_url(row: dict[str, str]) -> str:
+    for key in ("retarget_linkedin_url", "linkedin_url", "network_linkedin_url"):
+        normalized = normalize_linkedin_url(row.get(key, ""))
+        if extract_public_identifier(normalized):
+            return normalized
+    return ""
+
+
+def messages_review_row_rejected(row: dict[str, str]) -> bool:
+    approved = normalize_bool(row.get("approved", ""))
+    upload_decision = normalize_include_decision(row.get("upload_decision", ""))
+    exclude_decision = normalize_exclude_decision(row.get("exclude", ""))
+    enrich_decision = normalize_include_decision(row.get("enrich_decision", ""))
+    return approved is False or upload_decision is False or exclude_decision is False or enrich_decision is False
+
+
+def messages_review_row_in_network(row: dict[str, str]) -> bool:
+    raw = normalize_bool(row.get("in_network", ""))
+    if raw is not None:
+        return raw
+    return bool((row.get("network_person_id") or "").strip())
+
+
+def messages_review_row_approved_for_local(row: dict[str, str]) -> bool:
+    if messages_review_row_rejected(row):
+        return False
+    if explicitly_approved_message_review_row(row):
+        return True
+    return (row.get("bucket") or "").strip().lower() in {"yes", "confident"}
+
+
+def messages_review_row_researched(row: dict[str, str]) -> bool:
+    review_source = (row.get("review_source") or "").strip().lower()
+    if review_source in RESEARCH_REVIEW_SOURCES:
+        return True
+    if review_source and review_source != "in_network_match":
+        return True
+    return any((row.get(key) or "").strip() for key in ("top_title_company_pairs", "top_titles", "top_companies", "schools", "short_reason"))
+
+
+def messages_review_people_selection_reason(row: dict[str, str]) -> str:
+    if messages_review_row_rejected(row):
+        return ""
+    if not messages_review_linkedin_url(row):
+        return ""
+    if messages_review_row_in_network(row):
+        return "in_network"
+    if messages_review_row_approved_for_local(row):
+        return "approved"
+    if normalize_include_decision(row.get("enrich_decision", "")) is True:
+        return "enrich_decision"
+    if messages_review_row_researched(row):
+        return "researched"
+    return ""
+
+
+def split_full_name(full_name: str) -> tuple[str, str]:
+    parts = (full_name or "").strip().split(None, 1)
+    if not parts:
+        return "", ""
+    return parts[0], parts[1] if len(parts) > 1 else ""
+
+
+def split_title_company(pair_text: str) -> tuple[str, str]:
+    first = next((part.strip() for part in re.split(r"\s*\|\s*", pair_text or "") if part.strip()), "")
+    for marker in (" at ", " @ ", " - "):
+        if marker in first:
+            title, company = first.split(marker, 1)
+            return title.strip(), company.strip()
+    return first.strip(), ""
+
+
+def messages_source_channels(row: dict[str, str]) -> list[str]:
+    channels: list[str] = []
+    raw = (row.get("message_source") or "").strip().lower()
+    for token in re.split(r"[,|+/;\s]+", raw):
+        if token in {"imessage", "whatsapp"} and token not in channels:
+            channels.append(token)
+    for key, channel in (("imessage_message_count", "imessage"), ("whatsapp_message_count", "whatsapp")):
+        try:
+            count = int(float(row.get(key) or 0))
+        except ValueError:
+            count = 0
+        if count > 0 and channel not in channels:
+            channels.append(channel)
+    return channels or ["messages"]
+
+
+def review_row_to_messages_people(row: dict[str, str], review_csv: Path, reason: str) -> dict[str, str]:
+    linkedin_url = messages_review_linkedin_url(row)
+    public_identifier = extract_public_identifier(linkedin_url)
+    full_name = (row.get("network_name") if reason == "in_network" else "") or row.get("full_name") or row.get("network_name") or ""
+    first_name, last_name = split_full_name(full_name)
+    current_title, current_company = split_title_company(row.get("top_title_company_pairs") or row.get("top_titles", ""))
+    phone = (row.get("phone_e164") or "").strip()
+    channels = messages_source_channels(row)
+    summary_parts = [
+        f"messages_total={row.get('total_messages') or '0'}",
+        f"selection={reason}",
+    ]
+    if row.get("last_message"):
+        summary_parts.append(f"last_message={row.get('last_message')}")
+    if row.get("short_reason"):
+        summary_parts.append(f"review_reason={row.get('short_reason')}")
+    people = {
+        "id": row.get("network_person_id") or f"message-linkedin:{sha(public_identifier or linkedin_url, 16)}",
+        "public_identifier": public_identifier,
+        "linkedin_url": linkedin_url,
+        "first_name": first_name,
+        "last_name": last_name,
+        "full_name": full_name,
+        "headline": row.get("top_title_company_pairs") or row.get("top_titles", ""),
+        "summary": "; ".join(part for part in summary_parts if part),
+        "city": row.get("location_city", ""),
+        "country": row.get("location_country", ""),
+        "current_title": current_title,
+        "current_company": current_company,
+        "primary_phone": phone,
+        "all_phones": json.dumps([phone], ensure_ascii=False) if phone else "",
+        "source_channels": ",".join(channels),
+        "source_artifacts": str(review_csv),
+        "enrichment_provider": f"messages_review:{reason}",
+    }
+    return normalize_people_row(people)
+
+
+def merge_messages_people_candidate(existing: dict[str, str], incoming: dict[str, str]) -> dict[str, str]:
+    merged = dict(existing)
+    for key in ("primary_phone", "full_name", "first_name", "last_name", "headline", "summary", "city", "country", "current_title", "current_company"):
+        if not merged.get(key) and incoming.get(key):
+            merged[key] = incoming[key]
+    phones = unique_strings([merged.get("primary_phone", ""), incoming.get("primary_phone", "")])
+    if phones:
+        merged["primary_phone"] = merged.get("primary_phone") or phones[0]
+        merged["all_phones"] = json.dumps(phones, ensure_ascii=False)
+    channels = unique_strings((merged.get("source_channels", "").split(",") if merged.get("source_channels") else []) + (incoming.get("source_channels", "").split(",") if incoming.get("source_channels") else []))
+    if channels:
+        merged["source_channels"] = ",".join(channels)
+    providers = unique_strings([merged.get("enrichment_provider", ""), incoming.get("enrichment_provider", "")])
+    if providers:
+        merged["enrichment_provider"] = ",".join(providers)
+    return normalize_people_row(merged)
+
+
+def materialize_messages_review_people(review_csv: Path, output_csv: Path, manifest_path: Path | None = None) -> dict[str, Any]:
+    if not review_csv.exists():
+        return {
+            "review_csv": str(review_csv),
+            "people_csv": "",
+            "total_rows": 0,
+            "eligible_rows": 0,
+            "rows_written": 0,
+            "selection_counts": {},
+            "skipped": {"missing_review_csv": 1},
+        }
+    _fields, rows = read_csv_rows(review_csv)
+    by_public_identifier: dict[str, dict[str, str]] = {}
+    selection_counts: dict[str, int] = {}
+    skipped = {
+        "rejected": 0,
+        "missing_linkedin_url": 0,
+        "not_selected": 0,
+        "duplicate_public_identifier": 0,
+    }
+    eligible_rows = 0
+    for row in rows:
+        linkedin_url = messages_review_linkedin_url(row)
+        if not linkedin_url:
+            skipped["missing_linkedin_url"] += 1
+            continue
+        if messages_review_row_rejected(row):
+            skipped["rejected"] += 1
+            continue
+        reason = messages_review_people_selection_reason(row)
+        if not reason:
+            skipped["not_selected"] += 1
+            continue
+        eligible_rows += 1
+        selection_counts[reason] = selection_counts.get(reason, 0) + 1
+        candidate = review_row_to_messages_people(row, review_csv, reason)
+        public_identifier = candidate.get("public_identifier", "")
+        if public_identifier in by_public_identifier:
+            skipped["duplicate_public_identifier"] += 1
+            by_public_identifier[public_identifier] = merge_messages_people_candidate(by_public_identifier[public_identifier], candidate)
+        else:
+            by_public_identifier[public_identifier] = candidate
+    output_rows = [by_public_identifier[key] for key in sorted(by_public_identifier)]
+    if output_rows:
+        write_csv_rows(output_csv, PEOPLE_SCHEMA_COLUMNS, output_rows)
+    summary = {
+        "review_csv": str(review_csv),
+        "people_csv": str(output_csv) if output_rows else "",
+        "total_rows": len(rows),
+        "eligible_rows": eligible_rows,
+        "rows_written": len(output_rows),
+        "selection_counts": selection_counts,
+        "skipped": skipped,
+    }
+    if manifest_path:
+        write_json(manifest_path, summary)
+        summary["manifest"] = str(manifest_path)
+    return summary
 
 
 def skip_msgvault_sync(input_cfg: dict[str, Any]) -> bool:
@@ -1167,6 +1935,8 @@ def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any
         })
     default_review_csv = default_messages_review_csv()
     messages_review_csv = input_cfg.get("messages_review_csv") or (str(default_review_csv) if input_cfg.get("include_existing_artifacts") and default_review_csv.exists() else "")
+    if messages_review_csv and not Path(str(messages_review_csv)).exists():
+        messages_review_csv = ""
     if input_cfg.get("messages_contacts_csv") or messages_review_csv or input_cfg.get("include_existing_artifacts"):
         jobs.append({
             "id": "messages",
@@ -1174,8 +1944,8 @@ def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any
             "review_csv": messages_review_csv,
             "contacts_csv": input_cfg.get("messages_contacts_csv") or ".powerpacks/messages/contacts.csv",
             "parallelizable": True,
-            "reason": "approved rows from messages research_review.csv are merged when present; raw contacts remain review-gated" if messages_review_csv else MESSAGES_REVIEW_GATE_REASON,
-            "requires_approval": [] if messages_review_csv else ["messages_review_flow"],
+            "reason": "reviewed Messages LinkedIn rows are materialized locally, then hydrated through enrich_people before fan-in" if messages_review_csv else MESSAGES_REVIEW_GATE_REASON,
+            "requires_approval": ["rapidapi_linkedin_profile_enrichment"] if messages_review_csv else ["messages_review_flow"],
             "status": "approved_review_artifact" if messages_review_csv else "review_required",
         })
     return {"parallel": True, "fan_in": "merge_network_sources_then_duckdb_after_nonblocked_workers", "jobs": jobs}
@@ -1249,17 +2019,80 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
     return True
 
 
+def gmail_queue_records(artifacts: dict[str, Any]) -> list[dict[str, Any]]:
+    queue_records = artifacts.get("gmail_linkedin_resolution_queue_csvs") or []
+    if not queue_records and artifacts.get("gmail_linkedin_resolution_queue_csv"):
+        queue_records = [{"account_email": "", "queue_csv": artifacts.get("gmail_linkedin_resolution_queue_csv"), "people_csv": artifacts.get("gmail_people_csv"), "slug": "all"}]
+    return [record for record in queue_records if isinstance(record, dict) and record.get("queue_csv")]
+
+
+def run_gmail_directory(ledger_path: Path, ledger: dict[str, Any]) -> bool:
+    input_cfg = ledger.get("input", {})
+    artifacts = ledger.setdefault("artifacts", {})
+    queue_records = ordered_records(gmail_queue_records(artifacts), unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
+    if not queue_records:
+        checkpoint = build_directory_checkpoint(input_cfg, artifacts)
+        artifacts["directory_csv"] = checkpoint["directory_csv"]
+        mark_step(ledger, "gmail_directory", "skipped", reason="no Gmail LinkedIn queue", checkpoint=checkpoint)
+        return True
+    begin_step(ledger_path, ledger, "gmail_directory", f"Applying directory LinkedIn mappings to {len(queue_records)} Gmail queue(s).")
+    checkpoint = build_directory_checkpoint(input_cfg, artifacts)
+    directory_csv = Path(checkpoint["directory_csv"])
+    artifacts["directory_csv"] = str(directory_csv)
+    by_slug = artifacts.setdefault("gmail_directory_by_slug", {})
+    artifacts["gmail_directory_resolution_records"] = []
+    artifacts["gmail_unresolved_linkedin_resolution_queue_csvs"] = []
+    results = []
+    total_resolved = 0
+    total_unresolved = 0
+    for index, record in enumerate(queue_records):
+        slug = source_slug(record.get("account_email") or record.get("slug") or f"queue-{index}")
+        existing = by_slug.get(slug) if isinstance(by_slug.get(slug), dict) else {}
+        if existing.get("unresolved_queue_csv") and existing.get("directory_resolutions_csv"):
+            result = existing
+        else:
+            out_dir = Path(ledger["run_dir"]) / f"gmail-directory-{slug}"
+            result = apply_directory_to_gmail_queue(record, directory_csv, out_dir)
+            result["slug"] = slug
+            by_slug[slug] = result
+        total_resolved += int(result.get("resolved") or 0)
+        total_unresolved += int(result.get("unresolved") or 0)
+        if int(result.get("resolved") or 0) > 0:
+            artifacts["gmail_directory_resolution_records"].append({
+                "account_email": record.get("account_email", ""),
+                "resolutions_csv": result.get("directory_resolutions_csv"),
+                "people_csv": record.get("people_csv"),
+                "slug": slug,
+                "source": "directory",
+                "resolved": result.get("resolved"),
+            })
+        if int(result.get("unresolved") or 0) > 0:
+            artifacts["gmail_unresolved_linkedin_resolution_queue_csvs"].append({
+                "account_email": record.get("account_email", ""),
+                "queue_csv": result.get("unresolved_queue_csv"),
+                "people_csv": record.get("people_csv"),
+                "slug": slug,
+                "source": "directory_unresolved",
+                "unresolved": result.get("unresolved"),
+            })
+        results.append(result)
+    mark_step(ledger, "gmail_directory", "completed", checkpoint=checkpoint, resolved=total_resolved, unresolved=total_unresolved, payload={"results": results})
+    emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_unresolved} unresolved.")
+    return True
+
+
 def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     input_cfg = ledger.get("input", {})
     provider = input_cfg.get("gmail_linkedin_provider") or "off"
     artifacts = ledger.setdefault("artifacts", {})
-    queue_records = artifacts.get("gmail_linkedin_resolution_queue_csvs") or []
-    if not queue_records and artifacts.get("gmail_linkedin_resolution_queue_csv"):
-        queue_records = [{"account_email": "", "queue_csv": artifacts.get("gmail_linkedin_resolution_queue_csv"), "people_csv": artifacts.get("gmail_people_csv"), "slug": "all"}]
+    queue_records = artifacts.get("gmail_unresolved_linkedin_resolution_queue_csvs") or gmail_queue_records(artifacts)
     if provider == "off" or not queue_records:
         mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="provider off or no queue")
         return True
-    queue_records = ordered_records([record for record in queue_records if isinstance(record, dict)], unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
+    queue_records = ordered_records([record for record in queue_records if isinstance(record, dict) and record.get("queue_csv") and csv_row_count(Path(str(record.get("queue_csv")))) > 0], unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
+    if not queue_records:
+        mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="all Gmail queue rows resolved by directory")
+        return True
     by_slug = artifacts.setdefault("gmail_linkedin_resolutions_by_slug", {})
     artifacts["gmail_linkedin_resolutions_csvs"] = []
     artifacts["gmail_linkedin_resolution_ledgers"] = []
@@ -1313,6 +2146,8 @@ def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> 
             artifacts.setdefault("gmail_linkedin_resolutions_csvs", []).append(result)
             if "gmail_linkedin_resolutions_csv" not in artifacts:
                 artifacts["gmail_linkedin_resolutions_csv"] = payload.get("output")
+            checkpoint = build_directory_checkpoint(input_cfg, artifacts, extra_sources=[Path(str(payload.get("output")))])
+            artifacts["directory_csv"] = checkpoint["directory_csv"]
         if payload.get("prompts_jsonl"):
             artifacts.setdefault("gmail_linkedin_harness_prompts_jsonls", []).append(payload.get("prompts_jsonl"))
             artifacts.setdefault("gmail_linkedin_harness_prompts_jsonl", payload.get("prompts_jsonl"))
@@ -1326,7 +2161,7 @@ def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> 
 def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     input_cfg = ledger.get("input", {})
     artifacts = ledger.setdefault("artifacts", {})
-    resolution_records = []
+    raw_resolution_records: list[dict[str, Any]] = []
     if input_cfg.get("gmail_resolutions_csv"):
         people_records = [
             record for record in ordered_records(
@@ -1338,25 +2173,27 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
         if not people_records:
             people_csvs = unique_strings(artifacts.get("gmail_final_people_csvs") or artifacts.get("gmail_people_csvs") or artifacts.get("gmail_people_csv"))
             people_records = [{"account_email": "", "people_csv": path, "slug": "all" if len(people_csvs) == 1 else f"account-{index}"} for index, path in enumerate(people_csvs)]
-        resolution_records = [
+        raw_resolution_records.extend([
             {
                 "account_email": record.get("account_email", ""),
                 "resolutions_csv": input_cfg.get("gmail_resolutions_csv"),
                 "people_csv": record.get("people_csv"),
                 "slug": record.get("slug") or record.get("account_email") or f"account-{index}",
+                "source": "explicit",
             }
             for index, record in enumerate(people_records)
-        ]
-    else:
-        resolution_records = artifacts.get("gmail_linkedin_resolutions_csvs") or []
-        if not resolution_records and artifacts.get("gmail_linkedin_resolutions_csv"):
-            resolution_records = [{
-                "account_email": "",
-                "resolutions_csv": artifacts.get("gmail_linkedin_resolutions_csv"),
-                "people_csv": artifacts.get("gmail_people_csv"),
-                "slug": "all",
-            }]
-    resolution_records = [record for record in resolution_records if isinstance(record, dict) and record.get("resolutions_csv") and record.get("people_csv")]
+        ])
+    raw_resolution_records.extend(record for record in artifacts.get("gmail_directory_resolution_records") or [] if isinstance(record, dict))
+    raw_resolution_records.extend(record for record in artifacts.get("gmail_linkedin_resolutions_csvs") or [] if isinstance(record, dict))
+    if not raw_resolution_records and artifacts.get("gmail_linkedin_resolutions_csv"):
+        raw_resolution_records.append({
+            "account_email": "",
+            "resolutions_csv": artifacts.get("gmail_linkedin_resolutions_csv"),
+            "people_csv": artifacts.get("gmail_people_csv"),
+            "slug": "all",
+            "source": "provider",
+        })
+    resolution_records = combine_gmail_resolution_records(raw_resolution_records, Path(ledger["run_dir"]))
     if not resolution_records:
         mark_step(ledger, "gmail_apply_enrich", "skipped", reason="no gmail resolutions")
         return True
@@ -1365,6 +2202,7 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     artifacts["gmail_resolved_people_csvs"] = []
     artifacts["gmail_enrich_people_ledgers"] = []
     artifacts["gmail_final_people_csvs"] = []
+    artifacts["gmail_combined_resolutions_csvs"] = resolution_records
     begin_step(ledger_path, ledger, "gmail_apply_enrich", f"Applying Gmail LinkedIn matches for {len(resolution_records)} account file(s).")
     results = []
     final_people_csvs = []
@@ -1441,6 +2279,89 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     return True
 
 
+def resolve_messages_review_csv(ledger: dict[str, Any]) -> str:
+    input_cfg = ledger.get("input", {}) or {}
+    artifacts = ledger.get("artifacts", {}) or {}
+    review_csv = artifacts.get("messages_review_csv") or input_cfg.get("messages_review_csv") or ""
+    default_review_csv = default_messages_review_csv()
+    if not review_csv and input_cfg.get("include_existing_artifacts") and default_review_csv.exists():
+        review_csv = str(default_review_csv)
+    return str(review_csv or "")
+
+
+def enrich_people_payload_from_ledger(child_ledger: Path) -> dict[str, Any]:
+    child = read_json(child_ledger, {}) or {}
+    if child.get("status") != "completed":
+        return {}
+    return {"status": "completed", "ledger": str(child_ledger), "run_dir": child.get("run_dir"), "artifacts": child.get("artifacts", {})}
+
+
+def run_messages_enrichment(ledger_path: Path, ledger: dict[str, Any]) -> bool:
+    artifacts = ledger.setdefault("artifacts", {})
+    review_csv_text = resolve_messages_review_csv(ledger)
+    if not review_csv_text:
+        mark_step(ledger, "messages_enrich_people", "skipped", reason="no messages research_review.csv")
+        return True
+    review_csv = Path(review_csv_text)
+    artifacts["messages_review_csv"] = str(review_csv)
+    run_dir = Path(ledger["run_dir"]) / "messages"
+    input_people = run_dir / "people.input.csv"
+    manifest_path = run_dir / "people_manifest.json"
+    begin_step(ledger_path, ledger, "messages_enrich_people", "Preparing reviewed Messages LinkedIn rows for local profile enrichment.")
+    materialized = materialize_messages_review_people(review_csv, input_people, manifest_path)
+    artifacts["messages_people_input_manifest"] = str(manifest_path)
+    if materialized.get("people_csv"):
+        artifacts["messages_people_input_csv"] = materialized["people_csv"]
+    if not materialized.get("rows_written"):
+        mark_step(ledger, "messages_enrich_people", "skipped", summary=materialized, reason="no eligible reviewed Messages LinkedIn rows")
+        save_ledger(ledger_path, ledger)
+        emit_progress("No reviewed Messages LinkedIn rows need local enrichment.")
+        return True
+
+    child_ledger = Path(ledger["run_dir"]) / "messages-enrich-people.ledger.json"
+    artifacts["messages_enrich_people_ledger"] = str(child_ledger)
+    existing_payload = enrich_people_payload_from_ledger(child_ledger)
+    if existing_payload:
+        enrich_payload = existing_payload
+        code = 0
+        stderr = ""
+    else:
+        child_state = read_json(child_ledger, {}) or {}
+        if child_ledger.exists() and child_state.get("status") not in {"completed", "failed"}:
+            enrich_cmd = py_cmd("packs/ingestion/primitives/enrich_people/enrich_people.py", "continue", "--ledger", str(child_ledger))
+        else:
+            enrich_cmd = py_cmd(
+                "packs/ingestion/primitives/enrich_people/enrich_people.py",
+                "run",
+                "--input", str(input_people),
+                "--ledger", str(child_ledger),
+                "--run-id", f"{ledger['run_id']}-messages-enrich",
+            )
+        code, enrich_payload, stderr = run_cmd(enrich_cmd)
+    if code == 20 or enrich_payload.get("status") == "blocked_approval":
+        ledger["blocked"] = {"step_id": "messages_enrich_people", "child_ledger": str(child_ledger), "child": enrich_payload}
+        mark_step(ledger, "messages_enrich_people", "blocked", summary=materialized, payload=enrich_payload)
+        save_ledger(ledger_path, ledger)
+        emit({"status": "blocked_approval", "step_id": "messages_enrich_people", "ledger": str(ledger_path), "child": enrich_payload})
+        return False
+    if code != 0:
+        mark_step(ledger, "messages_enrich_people", "failed", summary=materialized, error=stderr or enrich_payload)
+        ledger["status"] = "failed"
+        save_ledger(ledger_path, ledger)
+        emit({"status": "failed", "step_id": "messages_enrich_people", "error": stderr or enrich_payload})
+        return False
+    for key, value in (enrich_payload.get("artifacts") or {}).items():
+        artifacts[f"messages_enriched_{key}"] = value
+    enriched_people = enrich_payload.get("artifacts", {}).get("people_csv") or materialized.get("people_csv")
+    artifacts["messages_people_csv"] = enriched_people
+    artifacts.setdefault("messages_people_csvs", [])
+    if enriched_people and enriched_people not in artifacts["messages_people_csvs"]:
+        artifacts["messages_people_csvs"].append(enriched_people)
+    mark_step(ledger, "messages_enrich_people", "completed", summary=materialized, payload=enrich_payload)
+    emit_progress(f"Messages profile enrichment completed: {materialized.get('rows_written', 0)} LinkedIn rows prepared.")
+    return True
+
+
 def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
     input_cfg = ledger.get("input", {}) or {}
     artifacts = ledger.get("artifacts", {}) or {}
@@ -1465,6 +2386,11 @@ def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
         explicit_inputs.extend(str(path) for path in gmail_inputs if path)
     elif artifacts.get("gmail_people_csv"):
         explicit_inputs.append(str(artifacts["gmail_people_csv"]))
+
+    messages_people_inputs = artifacts.get("messages_people_csvs") or []
+    if not messages_people_inputs and artifacts.get("messages_people_csv"):
+        messages_people_inputs = [artifacts.get("messages_people_csv")]
+    explicit_inputs.extend(str(path) for path in messages_people_inputs if path)
 
     messages_review = artifacts.get("messages_review_csv") or input_cfg.get("messages_review_csv")
     default_review_csv = default_messages_review_csv()
@@ -1559,16 +2485,28 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
     if ledger.get("input", {}).get("only_sources") and not ledger.get("input", {}).get("fan_in_only"):
+        if "messages" in set(unique_strings(ledger.get("input", {}).get("only_sources"))) and ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
+            if not run_messages_enrichment(ledger_path, ledger):
+                return 20 if ledger.get("blocked") else 1
+            save_ledger(ledger_path, ledger)
         ledger["status"] = "source_import_completed"
         save_ledger(ledger_path, ledger)
         emit({"status": "source_import_completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
+    if ledger.get("steps", {}).get("gmail_directory", {}).get("status") not in {"completed", "skipped"}:
+        if not run_gmail_directory(ledger_path, ledger):
+            return 1
+        save_ledger(ledger_path, ledger)
     if ledger.get("steps", {}).get("gmail_linkedin_resolution", {}).get("status") not in {"completed", "skipped"}:
         if not run_gmail_linkedin_resolution(ledger_path, ledger):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
     if ledger.get("steps", {}).get("gmail_apply_enrich", {}).get("status") not in {"completed", "skipped"}:
         if not run_gmail_apply_and_enrich(ledger_path, ledger):
+            return 20 if ledger.get("blocked") else 1
+        save_ledger(ledger_path, ledger)
+    if ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
+        if not run_messages_enrichment(ledger_path, ledger):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
     if not run_merge(ledger_path, ledger):
@@ -1676,6 +2614,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             "gmail_linkedin_provider": args.gmail_linkedin_provider,
             "gmail_linkedin_limit": args.gmail_linkedin_limit,
             "gmail_resolutions_csv": args.gmail_resolutions_csv,
+            "linkedin_directory_csv": args.linkedin_directory_csv,
+            "linkedin_directory_source_csvs": unique_strings(getattr(args, "linkedin_directory_source_csv", [])),
+            "linkedin_directory_use_defaults": not bool(getattr(args, "no_default_linkedin_directory_sources", False)),
             "include_existing_artifacts": args.include_existing_artifacts,
             "skip_msgvault_sync": args.skip_msgvault_sync,
             "from_accounts": args.from_accounts,
@@ -1704,10 +2645,13 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
     if ledger_path.exists():
         ledger = load_ledger(ledger_path)
         steps = ledger.get("steps", {}) or {}
-        would_run = [
-            step for step in ["linkedin", "gmail_msgvault", "gmail_linkedin_resolution", "gmail_apply_enrich", "merge", "duckdb"]
-            if (steps.get(step) or {}).get("status") not in {"completed", "skipped"}
-        ]
+        if ledger.get("status") == "completed":
+            would_run = []
+        else:
+            would_run = [
+                step for step in ["linkedin", "gmail_msgvault", "gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich", "messages_enrich_people", "merge", "duckdb"]
+                if (steps.get(step) or {}).get("status") not in {"completed", "skipped"}
+            ]
         child_paid = {}
         for name, path_text in (ledger.get("artifacts") or {}).items():
             if not name.endswith("ledger") or not path_text:
@@ -1730,6 +2674,11 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
     would_run = []
     if args.linkedin_csv:
         would_run.append("linkedin")
+    messages_review_csv = getattr(args, "messages_review_csv", "")
+    if not messages_review_csv and getattr(args, "include_existing_artifacts", False) and default_messages_review_csv().exists():
+        messages_review_csv = str(default_messages_review_csv())
+    if messages_review_csv and not Path(str(messages_review_csv)).exists():
+        messages_review_csv = ""
     input_cfg = {
         "linkedin_csv": args.linkedin_csv,
         "msgvault_db": resolve_msgvault_db(args),
@@ -1742,17 +2691,24 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
         "skip_gmail_estimate": bool(getattr(args, "skip_gmail_estimate", False)),
         "gmail_estimate_max_pages": int(getattr(args, "gmail_estimate_max_pages", DEFAULT_GMAIL_ESTIMATE_MAX_PAGES) or DEFAULT_GMAIL_ESTIMATE_MAX_PAGES),
         "twitter_handle": getattr(args, "twitter_handle", ""),
+        "messages_review_csv": messages_review_csv,
         "messages_contacts_csv": getattr(args, "messages_contacts_csv", ""),
         "include_existing_artifacts": getattr(args, "include_existing_artifacts", False),
+        "linkedin_directory_csv": getattr(args, "linkedin_directory_csv", str(DEFAULT_DIRECTORY_CSV)),
+        "linkedin_directory_source_csvs": unique_strings(getattr(args, "linkedin_directory_source_csv", [])),
+        "linkedin_directory_use_defaults": not bool(getattr(args, "no_default_linkedin_directory_sources", False)),
     }
     gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
     gmail_estimates = estimate_gmail_accounts_via_api(input_cfg, gmail_emails) if gmail_emails else []
     if args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args):
         would_run.append("gmail_msgvault")
+        would_run.append("gmail_directory")
     if getattr(args, "gmail_linkedin_provider", "off") != "off":
         would_run.append("gmail_linkedin_resolution")
     if getattr(args, "gmail_resolutions_csv", ""):
         would_run.append("gmail_apply_enrich")
+    if messages_review_csv:
+        would_run.append("messages_enrich_people")
     would_run.extend(["merge", "duckdb"])
     return {
         "status": "dry_run",
@@ -1807,6 +2763,15 @@ def cmd_approve(args: argparse.Namespace) -> int:
         save_ledger(ledger_path, ledger)
         emit({"status": "approved", "ledger": str(ledger_path), "child": payload})
         return 0
+    if blocked.get("step_id") == "messages_enrich_people" and blocked.get("child_ledger"):
+        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/enrich_people/enrich_people.py", "approve", "--ledger", blocked["child_ledger"]))
+        if code != 0:
+            emit({"status": "failed", "step_id": "approve", "error": stderr or payload})
+            return 1
+        ledger.pop("blocked", None)
+        save_ledger(ledger_path, ledger)
+        emit({"status": "approved", "ledger": str(ledger_path), "child": payload})
+        return 0
     emit({"status": "no_pending_approval", "ledger": str(ledger_path)})
     return 1
 
@@ -1850,6 +2815,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--gmail-linkedin-provider", choices=["off", "harness", "parallel"], default="off", help="Prepare/run Gmail email-to-LinkedIn resolution before merge. harness is local prompt prep; parallel is spend-bearing and requires approval.")
     run.add_argument("--gmail-linkedin-limit", type=int, help=argparse.SUPPRESS)
     run.add_argument("--gmail-resolutions-csv", default="", help="Existing linkedin_resolutions.csv to apply to Gmail people before shared enrich_people")
+    run.add_argument("--linkedin-directory-csv", default=str(DEFAULT_DIRECTORY_CSV), help=argparse.SUPPRESS)
+    run.add_argument("--linkedin-directory-source-csv", action="append", default=[], help=argparse.SUPPRESS)
+    run.add_argument("--no-default-linkedin-directory-sources", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--include-existing-artifacts", action="store_true", help="Merge all discovered existing LinkedIn/Gmail/Twitter/message artifacts instead of only artifacts produced by this run")
     run.add_argument("--skip-msgvault-sync", action="store_true", help="Skip import-time msgvault sync-full and read the existing DB as-is")
     run.add_argument("--twitter-handle", default="", help=argparse.SUPPRESS)

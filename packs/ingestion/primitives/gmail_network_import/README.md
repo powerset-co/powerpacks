@@ -33,8 +33,13 @@ canonical `people.csv` with `primary_email`, `all_emails`, `full_name`, and
 default; pass `--include-automated` to keep them.
 
 To recover the previous email → LinkedIn → profile-enrichment shape with msgvault
-as the sync source, run LinkedIn resolution over the emitted queue and apply the
-results before shared RapidAPI profile enrichment:
+as the sync source, prefer `import_network_pipeline.py run`. The orchestrator
+first applies the shared `.powerpacks/network-import/directory.csv` checkpoint,
+then runs optional LinkedIn resolution only for unresolved Gmail rows, and
+finally delegates resolved LinkedIn rows to `enrich_people.py`.
+
+For manual primitive-level debugging, run LinkedIn resolution over the emitted
+queue and apply the results before shared RapidAPI profile enrichment:
 
 ```bash
 # no spend: prepare harness/manual prompts
@@ -53,7 +58,7 @@ uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_
   --people-csv .powerpacks/network-import/gmail/<run-id>/people.csv \
   --resolutions-csv .powerpacks/network-import/gmail/<run-id>/linkedin-resolution/linkedin_resolutions.csv
 
-# then hydrate resolved LinkedIn profiles through the shared RapidAPI approval/cache flow
+# then hydrate resolved LinkedIn profiles through the shared RapidAPI cache/fetch flow
 uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run \
   --input .powerpacks/network-import/gmail-resolved/<resolved-run-id>/people.csv
 ```
@@ -95,5 +100,5 @@ Run artifacts live under `.powerpacks/network-import/gmail/<run-id>/`:
 - msgvault import itself does not call EnrichLayer/RapidAPI/Parallel/Harmonic.
 - Optional LinkedIn resolution can use `resolve_linkedin_queue.py` in harness or
   Parallel mode with approval, then shared `enrich_people.py` handles
-  RapidAPI LinkedIn profile hydration approval for resolved rows.
+  RapidAPI LinkedIn profile hydration for resolved rows.
 - Future Gmail sync should remain msgvault-backed unless explicitly redesigned.

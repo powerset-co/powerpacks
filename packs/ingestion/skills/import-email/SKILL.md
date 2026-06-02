@@ -41,7 +41,11 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
 
 The msgvault import writes `linkedin_resolution_queue.csv`. To recover the email
 pipeline shape (email metadata -> LinkedIn URL resolution -> RapidAPI profile
-enrichment), use the orchestrator bridge:
+enrichment), use the orchestrator bridge. It first applies the canonical
+`.powerpacks/network-import/directory.csv` checkpoint, which is built
+incrementally from existing `linkedin_candidates*.csv` and
+`linkedin_resolutions*.csv` artifacts. Only rows still unresolved by the
+directory are prepared for a LinkedIn-resolution provider.
 
 ```bash
 # no spend/network: prepare harness prompts
@@ -56,11 +60,14 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
 ```
 
 `--gmail-linkedin-provider parallel` is spend-bearing and must stop for explicit
-approval. `enrich_people.py` then asks for approval before RapidAPI LinkedIn
-cache misses.
+approval. `enrich_people.py` then hydrates resolved LinkedIn rows through the
+RapidAPI cache/fetch path; cache misses run immediately when a RapidAPI key is
+configured. Resolved directory/provider rows are combined per Gmail account
+before `enrich_people.py` runs.
 
 ## Expected outputs
 
+- `.powerpacks/network-import/directory.csv`
 - `.powerpacks/network-import/gmail/<run-id>-gmail/people.csv`
 - `.powerpacks/network-import/gmail/<run-id>-gmail/linkedin_resolution_queue.csv`
 - `.powerpacks/network-import/network-runs/<run-id>/merged/people.csv`

@@ -139,8 +139,9 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
   --ledger .powerpacks/network-import/import-network-run.json
 ```
 
-If the pipeline blocks on paid RapidAPI or another spend-bearing step, show the
-count and ask for approval before running `approve`.
+RapidAPI LinkedIn hydration now runs directly when a RapidAPI key is configured.
+If the pipeline blocks on another spend-bearing step, show the count and ask for
+approval before running `approve`.
 
 ## Outputs
 

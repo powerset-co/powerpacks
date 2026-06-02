@@ -18,7 +18,7 @@ The primitive is self-contained in Powerpacks. It does not import
      local profile cache.
    - Routes rows without LinkedIn to `needs_resolution_queue.csv`.
 2. `enrich_linkedin`
-   - Approval-gates only RapidAPI cache misses.
+   - Hydrates RapidAPI cache misses immediately when a RapidAPI key is present.
    - Hydrates cache hits and newly fetched profiles into `provider_enriched.csv`.
    - Saves raw RapidAPI responses locally.
 3. `merge_people`
@@ -30,9 +30,6 @@ The primitive is self-contained in Powerpacks. It does not import
 ```bash
 uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run \
   --input .powerpacks/network-import/merged/people.csv
-
-uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py approve
-uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py continue
 ```
 
 Options:
@@ -61,7 +58,7 @@ RapidAPI-only enrichment.
 
 ## Cache seeding
 
-To avoid paid RapidAPI calls, seed `--profile-cache-dir` before running. The
+To reduce RapidAPI fetches, seed `--profile-cache-dir` before running. The
 cache filename is the sanitized LinkedIn public identifier, for example:
 
 ```txt
@@ -81,8 +78,9 @@ Each cache file must contain:
 ```
 
 Rows with usable cache entries are written to `rapidapi_cache_hits.csv` and do
-not require `RAPIDAPI_*` keys or approval. Cache misses are listed in
-`rapidapi_cache_misses.csv` and are approval-gated before any external call.
+not require `RAPIDAPI_*` keys. Cache misses are listed in
+`rapidapi_cache_misses.csv` and fetched immediately when a RapidAPI key is
+configured.
 Failed provider lookups are cached with `last_checked_at`; recent failures are
 listed in `rapidapi_recent_failures.csv` and retried only after the TTL.
 

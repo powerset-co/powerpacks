@@ -7,7 +7,9 @@ aleph-mvp or network-search-api.
 Input: a shared people schema CSV, usually merge_network_sources output.
 Output: enriched people schema CSV plus raw provider responses.
 
-Spend-bearing provider calls are approval-gated.
+RapidAPI LinkedIn hydration runs directly when RAPIDAPI_LINKEDIN_KEY or
+RAPIDAPI_KEY is present. Missing keys fail clearly instead of opening an
+approval step.
 """
 
 from __future__ import annotations
@@ -617,7 +619,7 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
     ledger["recent_failure_count"] = len(recent_failures)
     emit_progress(
         "Prepared LinkedIn enrichment queue: "
-        f"{len(queue)} total, {len(cache_hits)} cached, {len(cache_misses)} paid lookups, "
+        f"{len(queue)} total, {len(cache_hits)} cached, {len(cache_misses)} RapidAPI fetches, "
         f"{len(recent_failures)} recent failures."
     )
     return {
@@ -803,9 +805,6 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
             paid_call_count = int(ledger.get("paid_call_count") or 0)
             if step_id == "enrich_linkedin" and paid_call_count > 0 and ledger.get("input", {}).get("use_rapidapi") is False:
                 raise PipelineFailed("RapidAPI provider is required for enrich_people")
-            if step_id == "enrich_linkedin" and paid_call_count > 0 and not is_approved(ledger, step_id):
-                ensure_keys(ledger)
-                block_for_approval(ledger_path, ledger, step_id, f"Run paid RapidAPI LinkedIn enrichment for {paid_call_count} people?")
             if step_id == "enrich_linkedin" and paid_call_count > 0:
                 ensure_keys(ledger)
             mark_step(ledger, step_id, "running")

@@ -87,20 +87,23 @@ class EnrichPeopleTests(unittest.TestCase):
             "normalized_profile": {"success": True},
         }
 
-    def test_prepare_queue_blocks_before_paid_enrichment(self):
+    def test_prepare_queue_runs_rapidapi_without_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
             self.write_people(people)
             ledger = Path(tmp) / "ledger.json"
+            cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger)])
-            self.assertEqual(code, 20)
-            self.assertEqual(payload["step_id"], "enrich_linkedin")
-            self.assertIn("1 people", payload["message"])
+                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
+                    code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger), "--profile-cache-dir", str(cache_dir)])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(mocked.call_count, 1)
             state = json.loads(ledger.read_text())
             self.assertEqual(state["queue_count"], 1)
             self.assertEqual(state["paid_call_count"], 1)
             self.assertEqual(state["cache_hit_count"], 0)
+            self.assertNotIn("blocked", state)
             for artifact in ("linkedin_enrichment_queue_csv", "rapidapi_cache_misses_csv", "rapidapi_cache_hits_csv"):
                 self.assertTrue(Path(state["artifacts"][artifact]).exists())
             with Path(state["artifacts"]["rapidapi_cache_misses_csv"]).open(newline="", encoding="utf-8") as handle:
@@ -122,17 +125,14 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["full_name"], "Jane Example")
 
-    def test_errors_without_key_after_approval_for_uncached_work(self):
+    def test_errors_without_key_for_uncached_work(self):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
             self.write_people(people)
             ledger = Path(tmp) / "ledger.json"
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                code, _ = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger)])
-            self.assertEqual(code, 20)
-            self.assertEqual(self.invoke(["approve", "--ledger", str(ledger)])[0], 0)
+            cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {}, clear=True):
-                code, payload = self.invoke(["continue", "--ledger", str(ledger)])
+                code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger), "--profile-cache-dir", str(cache_dir)])
             self.assertEqual(code, 1)
             self.assertIn("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY", payload["error"])
 
@@ -141,12 +141,10 @@ class EnrichPeopleTests(unittest.TestCase):
             people = Path(tmp) / "people.csv"
             self.write_people(people)
             ledger = Path(tmp) / "ledger.json"
+            cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "r"}, clear=True):
-                code, _ = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger)])
-                self.assertEqual(code, 20)
-                self.assertEqual(self.invoke(["approve", "--ledger", str(ledger)])[0], 0)
                 with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
-                    code, payload = self.invoke(["continue", "--ledger", str(ledger)])
+                    code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger), "--profile-cache-dir", str(cache_dir)])
             self.assertEqual(code, 0)
             self.assertFalse(any(name.endswith("_enrich") and name != "rapidapi_profile" for name in dir(enrich_people)))
             output = Path(payload["artifacts"]["people_csv"])
@@ -178,14 +176,18 @@ class EnrichPeopleTests(unittest.TestCase):
                 output_rows = list(csv.DictReader(handle))
             self.assertEqual(output_rows[0]["current_company"], "Acme")
 
-    def test_bad_cache_does_not_bypass_approval(self):
+    def test_bad_cache_does_not_bypass_rapidapi_refresh(self):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
             self.write_people(people, rapidapi_response={"success": False, "message": "not found"})
             ledger = Path(tmp) / "ledger.json"
+            cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger)])
-            self.assertEqual(code, 20)
+                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
+                    code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger), "--profile-cache-dir", str(cache_dir)])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(mocked.call_count, 1)
             state = json.loads(ledger.read_text())
             self.assertEqual(state["paid_call_count"], 1)
             self.assertEqual(state["cache_hit_count"], 0)
@@ -248,11 +250,12 @@ class EnrichPeopleTests(unittest.TestCase):
             (cache_dir / "jane-example.json").write_text(json.dumps(self.cache_entry()), encoding="utf-8")
             ledger = Path(tmp) / "ledger.json"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                code, _payload = self.invoke([
-                    "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
-                    "--ledger", str(ledger), "--profile-cache-dir", str(cache_dir), "--refresh-cache",
-                ])
-            self.assertEqual(code, 20)
+                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
+                    code, _payload = self.invoke([
+                        "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
+                        "--ledger", str(ledger), "--profile-cache-dir", str(cache_dir), "--refresh-cache",
+                    ])
+            self.assertEqual(code, 0)
             state = json.loads(ledger.read_text())
             self.assertEqual(state["cache_hit_count"], 0)
             self.assertEqual(state["paid_call_count"], 1)
@@ -277,19 +280,16 @@ class EnrichPeopleTests(unittest.TestCase):
             ])
             ledger = Path(tmp) / "ledger.json"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger)])
-                self.assertEqual(code, 20)
-                self.assertIn("1 people", payload["message"])
+                john_profile = self.profile(company_id="456")
+                john_profile["full_name"] = "John Example"
+                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": john_profile, "error": "", "from_cache": False}) as mocked:
+                    code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger)])
+                self.assertEqual(code, 0)
                 state = json.loads(ledger.read_text())
                 self.assertEqual(state["queue_count"], 2)
                 self.assertEqual(state["cache_hit_count"], 1)
                 self.assertEqual(state["paid_call_count"], 1)
                 self.assertEqual(enrich_people.count_rapidapi_cache_misses(Path(state["artifacts"]["rapidapi_cache_misses_csv"])), 1)
-                self.assertEqual(self.invoke(["approve", "--ledger", str(ledger)])[0], 0)
-                john_profile = self.profile(company_id="456")
-                john_profile["full_name"] = "John Example"
-                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": john_profile, "error": "", "from_cache": False}) as mocked:
-                    code, payload = self.invoke(["continue", "--ledger", str(ledger)])
             self.assertEqual(code, 0)
             self.assertEqual(mocked.call_count, 1)
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
@@ -301,13 +301,26 @@ class EnrichPeopleTests(unittest.TestCase):
             people = Path(tmp) / "people.csv"
             self.write_people(people)
             ledger = Path(tmp) / "ledger.json"
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                code, _ = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger)])
-            self.assertEqual(code, 20)
-            state = json.loads(ledger.read_text())
-            state["input"]["use_rapidapi"] = False
-            ledger.write_text(json.dumps(state), encoding="utf-8")
-            self.assertEqual(self.invoke(["approve", "--ledger", str(ledger)])[0], 0)
+            run_dir = Path(tmp) / "out" / "enrichment" / "legacy"
+            run_dir.mkdir(parents=True)
+            ledger.write_text(json.dumps({
+                "primitive": "enrich_people",
+                "status": "running",
+                "run_id": "legacy",
+                "run_dir": str(run_dir),
+                "input": {"input_csv": str(people), "use_rapidapi": False, "profile_cache_dir": str(Path(tmp) / "cache")},
+                "steps": {"prepare_queue": {"status": "completed"}},
+                "artifacts": {"rapidapi_cache_hits_csv": str(run_dir / "hits.csv"), "rapidapi_cache_misses_csv": str(run_dir / "misses.csv")},
+                "paid_call_count": 1,
+            }), encoding="utf-8")
+            enrich_people.write_csv(run_dir / "hits.csv", enrich_people.CACHE_COLUMNS, [])
+            enrich_people.write_csv(run_dir / "misses.csv", enrich_people.CACHE_COLUMNS, [{
+                "id": "person-1",
+                "public_identifier": "jane-example",
+                "linkedin_url": "https://www.linkedin.com/in/jane-example",
+                "full_name": "Jane Example",
+                "cache_status": "miss",
+            }])
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
                 code, payload = self.invoke(["continue", "--ledger", str(ledger)])
             self.assertEqual(code, 1)
@@ -405,12 +418,12 @@ class EnrichPeopleTests(unittest.TestCase):
                 "normalized_profile": {"success": False, "error": "not found"},
             }), encoding="utf-8")
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                code, payload = self.invoke([
-                    "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
-                    "--ledger", str(Path(tmp) / "ledger.json"), "--profile-cache-dir", str(cache_dir),
-                ])
-            self.assertEqual(code, 20)
-            self.assertIn("1 people", payload["message"])
+                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
+                    code, payload = self.invoke([
+                        "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
+                        "--ledger", str(Path(tmp) / "ledger.json"), "--profile-cache-dir", str(cache_dir),
+                    ])
+            self.assertEqual(code, 0)
             state = json.loads(Path(tmp, "ledger.json").read_text(encoding="utf-8"))
             self.assertEqual(state["paid_call_count"], 1)
             self.assertEqual(state["recent_failure_count"], 0)

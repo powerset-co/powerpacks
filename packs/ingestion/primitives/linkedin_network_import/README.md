@@ -18,15 +18,10 @@ uv run --project . python packs/ingestion/primitives/linkedin_network_import/lin
   --operator-id local
 ```
 
-`run` always performs the local CSV conversion first. If every LinkedIn profile
-has a usable seeded RapidAPI cache entry, the run completes without API keys or
-approval. If any profile is a cache miss, the delegated `enrich_people` step
-blocks before paid RapidAPI calls:
-
-```bash
-uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py approve
-uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py continue
-```
+`run` always performs the local CSV conversion first. Usable RapidAPI cache
+entries hydrate without API keys. Cache misses run immediately when
+`RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` is present; if no key is available,
+the run fails with a missing-key error instead of opening an approval step.
 
 ## Output contract
 
@@ -36,7 +31,7 @@ Canonical run-level artifacts:
 - `source_people.csv` — source-only rows in `packs/ingestion/schemas/people_schema.py` shape.
 - `linkedin_enrichment_queue.csv` — rows with LinkedIn identifiers that need enrichment.
 - `rapidapi_cache_hits.csv` — rows hydrated from local cache; no spend.
-- `rapidapi_cache_misses.csv` — rows that require approved RapidAPI calls.
+- `rapidapi_cache_misses.csv` — rows that require live RapidAPI fetches.
 - `rapidapi_recent_failures.csv` — recently failed provider lookups skipped until retry TTL.
 - `needs_resolution_queue.csv` — rows without LinkedIn identifiers, if any.
 - `provider_enriched.csv` — RapidAPI profile payload/status columns from `enrich_people`.
@@ -47,7 +42,7 @@ Canonical run-level artifacts:
 The top-level LinkedIn ledger exposes these paths in `artifacts`, including
 `people_csv` as the canonical interface.
 
-## Cache seeding to avoid RapidAPI spend
+## Cache seeding to reduce RapidAPI fetches
 
 Use the shared `enrich_people` cache format. By default, cache files are read
 from `.powerpacks/network-import/profile_cache_v2`; override with
@@ -72,7 +67,8 @@ with:
 ```
 
 Usable cache entries are counted in `cache_hit_count`; cache misses are counted
-in `paid_call_count` and block for operator approval before network calls.
+in `paid_call_count` for historical ledger compatibility and run as live
+RapidAPI fetches when a key is configured.
 Failed provider lookups are cached with `last_checked_at`; recent failures are
 not retried until `--failure-retry-hours` elapses.
 

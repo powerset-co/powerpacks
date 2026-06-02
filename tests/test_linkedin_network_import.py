@@ -57,24 +57,27 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             "normalized_profile": {"success": True},
         }
 
-    def test_run_converts_and_blocks_before_uncached_rapidapi_call(self):
+    def test_run_converts_and_enriches_uncached_rapidapi_call_without_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / "Connections.csv"
             self.write_connections(csv_path)
             ledger = Path(tmp) / "ledger.json"
+            cache_dir = Path(tmp) / "profile_cache"
             with patch.dict("os.environ", {"RAPIDAPI_KEY": "r"}, clear=True):
-                code, payload = self.invoke([
-                    "run",
-                    "--csv", str(csv_path),
-                    "--source-user", "arthur",
-                    "--operator-id", "operator-12345678",
-                    "--output-dir", str(Path(tmp) / "out"),
-                    "--ledger", str(ledger),
-                    "--run-id", "run-test",
-                    "--force",
-                ])
-            self.assertEqual(code, 20)
-            self.assertEqual(payload["step_id"], "enrich_people")
+                with patch.object(linkedin_network_import.people_enrichment, "rapidapi_profile", return_value={"status_code": 200, "data": self.cache_entry()["raw_response"], "error": "", "from_cache": False}):
+                    code, payload = self.invoke([
+                        "run",
+                        "--csv", str(csv_path),
+                        "--source-user", "arthur",
+                        "--operator-id", "operator-12345678",
+                        "--output-dir", str(Path(tmp) / "out"),
+                        "--ledger", str(ledger),
+                        "--run-id", "run-test",
+                        "--profile-cache-dir", str(cache_dir),
+                        "--force",
+                    ])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
             state = json.loads(ledger.read_text(encoding="utf-8"))
             out = Path(state["artifacts"]["source_people_csv"])
             self.assertTrue(out.exists())
@@ -83,7 +86,9 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["public_identifier"], "jane-example")
             self.assertEqual(rows[0]["source_channels"], "linkedin_csv")
-            self.assertIn("delegate_ledger", state["blocked"])
+            self.assertNotIn("blocked", state)
+            self.assertEqual(state["steps"]["enrich_people"]["summary"]["paid_call_count"], 1)
+            self.assertTrue(Path(state["artifacts"]["people_csv"]).exists())
 
     def test_seeded_cache_end_to_end_writes_people_csv_without_network_or_key(self):
         with tempfile.TemporaryDirectory() as tmp:
