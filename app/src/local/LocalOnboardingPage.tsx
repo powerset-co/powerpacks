@@ -276,6 +276,7 @@ export function LocalOnboardingPage({ onOpenSetupTab, onOpenMessagesReview }: Lo
   const estimate = status.index.processingEstimate || {};
   const paidCalls = paidCallTotal(estimate.estimatedPaidCalls);
   const currentBlock = status.messages.currentBlock || null;
+  const pendingReview = Number(status.review.counts.undecided || 0);
   const blockMessage = String(currentBlock?.message || "").trim();
 
   return (
@@ -304,7 +305,7 @@ export function LocalOnboardingPage({ onOpenSetupTab, onOpenMessagesReview }: Lo
         </div>
       )}
 
-      {currentBlock && (
+      {(currentBlock || pendingReview > 0) && (
         <section className="rounded-md border border-amber-300 bg-amber-50 p-4 text-amber-950">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -312,15 +313,19 @@ export function LocalOnboardingPage({ onOpenSetupTab, onOpenMessagesReview }: Lo
                 <CircleAlert className="h-4 w-4" />
                 <h3 className="text-base font-semibold">Action needed</h3>
               </div>
-              <p className="mt-1 text-sm">{blockMessage || "A setup step is waiting for your input."}</p>
+              <p className="mt-1 text-sm">
+                {blockMessage || `${pendingReview.toLocaleString()} Messages contacts are pending review. Only explicitly included contacts are merged.`}
+              </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={onOpenMessagesReview}>
                 <MessageSquare className="h-4 w-4" /> Manage Review
               </Button>
-              <Button size="sm" variant="outline" onClick={() => runAction({ action: "messages-complete-review" })}>
-                <CheckCircle2 className="h-4 w-4" /> Complete
-              </Button>
+              {currentBlock && (
+                <Button size="sm" variant="outline" onClick={() => runAction({ action: "messages-complete-review" })}>
+                  <CheckCircle2 className="h-4 w-4" /> Complete
+                </Button>
+              )}
             </div>
           </div>
         </section>

@@ -29,8 +29,12 @@ def write_msgvault_db(path: Path) -> None:
         CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
         INSERT INTO sources (id, source_type, identifier, display_name) VALUES (1, 'gmail', 'me@example.com', 'Me');
         INSERT INTO participants (id, email_address, display_name, domain) VALUES (1, 'jane@example.com', 'Jane Example', 'example.com');
-        INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at) VALUES (1, 1, 10, 'email', '2026-01-01T00:00:00Z');
-        INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES (1, 1, 'from', 'Jane Example');
+        INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at) VALUES
+            (1, 1, 10, 'email', '2026-01-01T00:00:00Z'),
+            (2, 1, 11, 'email', '2026-01-02T00:00:00Z');
+        INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
+            (1, 1, 'from', 'Jane Example'),
+            (2, 1, 'to', 'Jane Example');
     """)
     con.commit()
     con.close()
@@ -381,8 +385,8 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
                     self.assertTrue(import_network_pipeline.run_source_import_workers(ledger_path, ledger))
             default_query = "-category:social -category:promotions -category:forums -category:updates"
-            self.assertIn(["msgvault", "--home", str(tmp), "sync-full", "me@example.com", "--after", "2026-01-01", "--query", default_query], calls)
-            self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_after"], "2026-01-01")
+            self.assertIn(["msgvault", "--home", str(tmp), "sync-full", "me@example.com", "--after", "2026-01-02", "--query", default_query], calls)
+            self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_after"], "2026-01-02")
             self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_after_source"], "msgvault.messages.sent_at")
 
     def test_gmail_category_mail_can_be_included_for_sync_and_import(self) -> None:

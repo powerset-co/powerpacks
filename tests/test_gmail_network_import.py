@@ -143,6 +143,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(rows[0]["display_name"], "Jane Example")
             self.assertEqual(rows[0]["total_sent"], "1")
             self.assertEqual(rows[0]["total_received"], "1")
+            self.assertEqual(payload["counts"]["one_way_filtered"], 0)
             self.assertNotIn("private subject", targeted.read_text(encoding="utf-8"))
             with people.open(newline="", encoding="utf-8") as handle:
                 people_rows = list(csv.DictReader(handle))
@@ -152,6 +153,60 @@ class GmailNetworkImportTests(unittest.TestCase):
                 queue_rows = list(csv.DictReader(handle))
             self.assertEqual(queue_rows[0]["handle"], "jane@example.com")
             self.assertEqual(queue_rows[0]["source"], "gmail_msgvault")
+
+    def test_msgvault_import_requires_round_trip_contacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgvault.db"
+            con = sqlite3.connect(db)
+            con.executescript("""
+                CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+                CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY,
+                    source_id INTEGER,
+                    conversation_id INTEGER,
+                    message_type TEXT,
+                    sent_at TEXT,
+                    received_at TEXT,
+                    internal_date TEXT,
+                    deleted_at TEXT,
+                    deleted_from_source_at TEXT
+                );
+                CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
+                INSERT INTO sources (id, source_type, identifier, display_name) VALUES (1, 'gmail', 'me@gmail.com', 'Me');
+                INSERT INTO participants (id, email_address, display_name, domain) VALUES
+                    (1, 'jane@example.com', 'Jane Example', 'example.com'),
+                    (2, 'sent-only@example.com', 'Sent Only', 'example.com'),
+                    (3, 'recv-only@example.com', 'Received Only', 'example.com');
+                INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at) VALUES
+                    (10, 1, 100, 'email', '2026-01-01T00:00:00Z'),
+                    (11, 1, 101, 'email', '2026-01-02T00:00:00Z'),
+                    (12, 1, 102, 'email', '2026-01-03T00:00:00Z'),
+                    (13, 1, 103, 'email', '2026-01-04T00:00:00Z');
+                INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
+                    (10, 1, 'from', 'Jane Example'),
+                    (11, 1, 'to', 'Jane Example'),
+                    (12, 2, 'to', 'Sent Only'),
+                    (13, 3, 'from', 'Received Only');
+            """)
+            con.commit()
+            con.close()
+
+            code, payload = self.invoke([
+                "msgvault",
+                "--db", str(db),
+                "--account-email", "me@gmail.com",
+                "--output-dir", str(Path(tmp) / "out"),
+                "--run-id", "round-trip",
+            ])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["counts"]["contacts_seen"], 3)
+            self.assertEqual(payload["counts"]["contacts_written"], 1)
+            self.assertEqual(payload["counts"]["one_way_filtered"], 2)
+            self.assertTrue(payload["counts"]["round_trip_required"])
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                people_rows = list(csv.DictReader(handle))
+            self.assertEqual([row["primary_email"] for row in people_rows], ["jane@example.com"])
 
     def test_msgvault_import_excludes_gmail_category_labels_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -180,12 +235,16 @@ class GmailNetworkImportTests(unittest.TestCase):
                     (2, 'promo.person@example.com', 'Promo Person', 'example.com');
                 INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at) VALUES
                     (10, 1, 100, 'email', '2026-01-01T00:00:00Z'),
-                    (11, 1, 101, 'email', '2026-01-02T00:00:00Z');
+                    (11, 1, 101, 'email', '2026-01-02T00:00:00Z'),
+                    (12, 1, 102, 'email', '2026-01-03T00:00:00Z'),
+                    (13, 1, 103, 'email', '2026-01-04T00:00:00Z');
                 INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
                     (10, 1, 'from', 'Jane Example'),
-                    (11, 2, 'from', 'Promo Person');
+                    (11, 1, 'to', 'Jane Example'),
+                    (12, 2, 'from', 'Promo Person'),
+                    (13, 2, 'to', 'Promo Person');
                 INSERT INTO labels (id, name) VALUES (1, 'CATEGORY_PROMOTIONS');
-                INSERT INTO message_labels (message_id, label_id) VALUES (11, 1);
+                INSERT INTO message_labels (message_id, label_id) VALUES (12, 1), (13, 1);
             """)
             con.commit()
             con.close()

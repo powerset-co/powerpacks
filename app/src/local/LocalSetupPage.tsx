@@ -383,7 +383,7 @@ function buildLinkRows(status: SetupStatusResponse): LinkTableRow[] {
   const messagesConfig = sourceConfig(messages);
   const iMessage = (messagesConfig.imessage || {}) as Record<string, unknown>;
   const whatsApp = (messagesConfig.whatsapp || {}) as Record<string, unknown>;
-  const iMessageReady = boolValue(iMessage.readable) || stringValue(iMessage.status) === "ready" || Boolean(messages?.linked);
+  const iMessageReady = boolValue(iMessage.readable) || stringValue(iMessage.status) === "ready";
   const whatsAppReady = boolValue(whatsApp.authenticated) || ["authenticated", "linked"].includes(stringValue(whatsApp.status));
 
   return [
@@ -412,7 +412,7 @@ function buildLinkRows(status: SetupStatusResponse): LinkTableRow[] {
       done: iMessageReady,
       skipped: Boolean(messages?.skipped),
       status: iMessageReady ? "linked" : stringValue(iMessage.status) || "available",
-      chips: [],
+      chips: iMessageReady ? ["Access to DB"] : [],
     },
     {
       id: "whatsapp",
@@ -421,7 +421,7 @@ function buildLinkRows(status: SetupStatusResponse): LinkTableRow[] {
       done: whatsAppReady,
       skipped: Boolean(messages?.skipped),
       status: whatsAppReady ? "linked" : stringValue(whatsApp.status) || "available",
-      chips: [],
+      chips: whatsAppReady ? ["Authenticated"] : [],
     },
     {
       id: "twitter",
@@ -454,14 +454,7 @@ function SourcePanel({
   const gmailAccounts = selected.length ? selected : accountEmails;
   const linkedInCsvPath = stringValue(source.config.csv_path) || source.artifacts[0] || "";
   const linkedInSourceLabel = stringValue(source.config.source_label) || source.usernames[0] || "";
-  const iMessage = (source.config.imessage || {}) as Record<string, unknown>;
-  const whatsApp = (source.config.whatsapp || {}) as Record<string, unknown>;
   const twitterHandle = stringValue(source.config.handle) || source.usernames[0] || "";
-  const iMessageReadable = boolValue(iMessage.readable) || stringValue(iMessage.status) === "ready";
-  const iMessageStatus = iMessageReadable ? "ready" : "permission_required";
-  const whatsAppAuthenticated = boolValue(whatsApp.authenticated)
-    || ["authenticated", "linked"].includes(stringValue(whatsApp.status));
-  const whatsAppStatus = whatsAppAuthenticated ? "authenticated" : "not_authenticated";
 
   return (
     <section className={cn(embedded ? "rounded-md border bg-background p-4" : "rounded-md border bg-card p-4")}>
@@ -548,53 +541,6 @@ function SourcePanel({
         </div>
       )}
 
-      {source.id === "messages" && (
-        <div className="mt-4 space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-md border bg-background p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium">iMessage</div>
-                <StatusBadge status={iMessageStatus} />
-              </div>
-              <KeyValue label="chat.db" value={stringValue(iMessage.chat_db)} />
-              {!iMessageReadable && (
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Full Disk Access is required before setup can read Messages account status.
-                </p>
-              )}
-            </div>
-            <div className="rounded-md border bg-background p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium">WhatsApp</div>
-                <StatusBadge status={whatsAppStatus} />
-              </div>
-              <KeyValue label="Account" value={whatsAppAuthenticated ? "authenticated" : "not authenticated"} />
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" onClick={() => onRun({ action: "messages-link" })}>
-              Check Messages
-            </Button>
-            {!iMessageReadable && (
-              <Button size="sm" variant="outline" onClick={() => onRun({ action: "open-message-permissions" })}>
-                Give Permission
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onRun({ action: "whatsapp-auth" })}
-              disabled={whatsAppAuthenticated}
-            >
-              {whatsAppAuthenticated ? "WhatsApp Authenticated" : "Authenticate WhatsApp"}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => onRun({ action: "messages-link", skipWhatsapp: true })}>
-              Use Messages Only
-            </Button>
-          </div>
-        </div>
-      )}
-
       {source.id === "twitter" && (
         <div className="mt-4 space-y-3">
           <KeyValue label="Linked handle" value={twitterHandle ? `@${twitterHandle}` : ""} />
@@ -611,6 +557,85 @@ function SourcePanel({
           </div>
         </div>
       )}
+    </section>
+  );
+}
+
+function MessagesChannelPanel({
+  source,
+  channel,
+  onRun,
+}: {
+  source: SetupSourceStatus;
+  channel: "imessage" | "whatsapp";
+  onRun: (body: Record<string, unknown>) => void;
+}) {
+  const iMessage = (source.config.imessage || {}) as Record<string, unknown>;
+  const whatsApp = (source.config.whatsapp || {}) as Record<string, unknown>;
+  const iMessageReadable = boolValue(iMessage.readable) || stringValue(iMessage.status) === "ready";
+  const whatsAppAuthenticated = boolValue(whatsApp.authenticated)
+    || ["authenticated", "linked"].includes(stringValue(whatsApp.status));
+
+  if (channel === "imessage") {
+    return (
+      <section className="rounded-md border bg-background p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-semibold">iMessage</h3>
+              {iMessageReadable ? (
+                <Badge variant="default" className="gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Access to DB
+                </Badge>
+              ) : (
+                <StatusBadge status="permission_required" />
+              )}
+            </div>
+            <KeyValue label="chat.db" value={stringValue(iMessage.chat_db)} />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {iMessageReadable ? (
+              <Button size="sm" variant="outline" onClick={() => onRun({ action: "messages-link", skipWhatsapp: true })}>
+                Check Access
+              </Button>
+            ) : (
+              <Button size="sm" className="bg-amber-600 text-white hover:bg-amber-700" onClick={() => onRun({ action: "open-message-permissions" })}>
+                Grant Access to DB
+              </Button>
+            )}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-md border bg-background p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-base font-semibold">WhatsApp</h3>
+            {whatsAppAuthenticated ? (
+              <Badge variant="default" className="gap-1">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Authenticated
+              </Badge>
+            ) : (
+              <StatusBadge status="not_authenticated" />
+            )}
+          </div>
+          <KeyValue label="Account" value={whatsAppAuthenticated ? "authenticated" : "not authenticated"} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant={whatsAppAuthenticated ? "outline" : "default"}
+            onClick={() => onRun({ action: "whatsapp-auth" })}
+            disabled={whatsAppAuthenticated}
+          >
+            {whatsAppAuthenticated ? "Authenticated" : "Authenticate WhatsApp"}
+          </Button>
+        </div>
+      </div>
     </section>
   );
 }
@@ -690,7 +715,11 @@ function AccountLinkingTab({
                 </div>
                 {expanded && source && (
                   <div className="border-t bg-muted/20 p-4">
-                    <SourcePanel source={source} onRun={onRun} embedded />
+                    {row.id === "imessage" || row.id === "whatsapp" ? (
+                      <MessagesChannelPanel source={source} channel={row.id} onRun={onRun} />
+                    ) : (
+                      <SourcePanel source={source} onRun={onRun} embedded />
+                    )}
                   </div>
                 )}
               </div>
@@ -976,11 +1005,15 @@ function ActionStepCard({
   onOpenMessagesReview: () => void;
 }) {
   const block = status.messages.currentBlock || null;
-  if (!block) return null;
-  const message = stringValue(block.message) || "Setup is waiting for your action.";
-  const reviewUrl = stringValue(block.review_url);
-  const qrPage = stringValue(block.qr_page);
-  const isMessagesReview = stringValue(block.primitive) === "import_contacts_pipeline" && Boolean(reviewUrl);
+  const pendingReview = Number(status.review.counts.undecided || 0);
+  if (!block && pendingReview <= 0) return null;
+  const message = block
+    ? stringValue(block.message) || "Setup is waiting for your action."
+    : `${pendingReview.toLocaleString()} Messages contacts are pending review. Only explicitly included contacts are merged into your local network.`;
+  const reviewUrl = stringValue(block?.review_url);
+  const qrPage = stringValue(block?.qr_page);
+  const isMessagesReview = stringValue(block?.primitive) === "import_contacts_pipeline" && Boolean(reviewUrl);
+  const isPendingMessagesReview = !block && pendingReview > 0;
 
   return (
     <section className="rounded-md border border-amber-300 bg-amber-50 p-4 text-amber-950">
@@ -994,7 +1027,7 @@ function ActionStepCard({
           <p className="mt-1 text-sm">{message}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {isMessagesReview && (
+          {(isMessagesReview || isPendingMessagesReview) && (
             <Button size="sm" onClick={onOpenMessagesReview}>
               <MessageSquare className="h-4 w-4" /> Manage Review
             </Button>

@@ -1874,11 +1874,11 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
             return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': tail(stderr) or payload}, 1
 
     force_network = refresh_reason in force_reasons
-    gmail_sync_after = normal_setup_gmail_sync_after(
-        ledger,
-        accounts,
-        int(getattr(args, 'gmail_sync_lookback_days', DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)),
-    )
+    # Leave Gmail mailbox cursoring to import_network_pipeline. That layer can
+    # inspect msgvault per account and pass sync-full --after from the newest
+    # local source/message timestamp. The setup wrapper should not replace that
+    # with a broad run-level lookback.
+    gmail_sync_after = ''
     code, payload, stderr = run_json_command(network_refresh_command(args, run_id, force=force_network, gmail_sync_after=gmail_sync_after))
     results['network'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
     if code == 20 or payload.get('status') == 'blocked_approval':

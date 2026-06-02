@@ -759,8 +759,15 @@ def apply_linkedin_resolutions_to_people(people_csv: Path, resolutions_csv: Path
     }
 
 
+def has_round_trip_interaction(row: dict[str, Any]) -> bool:
+    return int(row.get("total_sent") or 0) > 0 and int(row.get("total_received") or 0) > 0
+
+
 def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_email: str = "", operator_id: str = "local", *, include_automated: bool = False, limit: int | None = None, excluded_labels: Iterable[str] | None = None) -> dict[str, Any]:
-    filtered = [row for row in rows if include_automated or not row.get("automated_filtered")]
+    automated_filtered = [row for row in rows if row.get("automated_filtered") and not include_automated]
+    non_automated = [row for row in rows if include_automated or not row.get("automated_filtered")]
+    one_way_filtered = [row for row in non_automated if not has_round_trip_interaction(row)]
+    filtered = [row for row in non_automated if has_round_trip_interaction(row)]
     if limit is not None:
         filtered = filtered[: max(0, int(limit))]
     account_short = short_hash(account_email or "all", 8)
@@ -845,7 +852,9 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "counts": {
             "contacts_seen": len(rows),
             "contacts_written": len(filtered),
-            "automated_filtered": len([row for row in rows if row.get("automated_filtered") and not include_automated]),
+            "automated_filtered": len(automated_filtered),
+            "one_way_filtered": len(one_way_filtered),
+            "round_trip_required": True,
             "accounts": len(account_rows),
             "excluded_labels": normalize_label_names(excluded_labels),
         },
