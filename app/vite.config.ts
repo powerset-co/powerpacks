@@ -1231,8 +1231,7 @@ function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[n
     "--include-contact-merge",
     "--include-powerset-candidates",
     "--include-local-match",
-    "--include-llm-review",
-    "--include-review"
+    "--include-llm-review"
   );
   const refreshFlags = [];
   if (includeFlags.includes("--include-imessage")) refreshFlags.push("--force-imessage");
@@ -1331,7 +1330,23 @@ function messageChannelFlags(accounts: RunState | null, ledger: RunState | null)
 
 function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
   const ledger = readJsonSync(messagesLedgerPath) || {};
-  return [
+  const markAppReviewComplete = [
+    "uv", "run", "--project", ".", "python", "-c",
+    [
+      "import datetime, json",
+      "from pathlib import Path",
+      "p = Path('.powerpacks/messages/import-run.setup-messages.json')",
+      "now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')",
+      "data = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}",
+      "step = data.setdefault('steps', {}).setdefault('review_research_web', {'id': 'review_research_web'})",
+      "step.update({'status': 'completed', 'finished_at': now, 'summary': {'source': 'powerpacks_setup_app', 'url': '/setup/imessage/review'}})",
+      "data.pop('current_block', None)",
+      "data['updated_at'] = now",
+      "p.parent.mkdir(parents=True, exist_ok=True)",
+      "p.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
+    ].join("; "),
+  ];
+  const continueAfterReview = [
     "uv", "run", "--project", ".", "python",
     "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
     "continue",
@@ -1349,6 +1364,7 @@ function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
     "--include-upload",
     "--include-datalake-sync",
   ];
+  return ["/bin/zsh", "-lc", `${shellJoin(markAppReviewComplete)} && ${shellJoin(continueAfterReview)}`];
 }
 
 function messagesApproveAndContinueCommand(accounts: RunState | null): string[] {
@@ -1797,7 +1813,6 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
       "--include-powerset-candidates",
       "--include-local-match",
       "--include-llm-review",
-      "--include-review",
     ], 30 * 60 * 1000);
   }
 

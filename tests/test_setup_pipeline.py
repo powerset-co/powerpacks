@@ -1119,6 +1119,7 @@ class SetupPipelineTests(unittest.TestCase):
             self.assertIn(required, body)
         self.assertIn('includeFlags.includes("--include-imessage")', body)
         self.assertIn('includeFlags.includes("--include-whatsapp")', body)
+        self.assertNotIn('"--include-review"', body)
 
     def test_pull_refuses_without_allow_flag(self):
         args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output='out.tar.gz', allow_gcs_download=False)

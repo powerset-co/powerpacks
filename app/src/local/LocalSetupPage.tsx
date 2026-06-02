@@ -791,6 +791,7 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
   const canRun = source.linked && !source.skipped && source.runnable !== false;
   const updated = source.linked && !source.skipped ? updatedLabel(source.updatedAt) : "";
   const needsApproval = source.sourceId === "messages" && String(source.status || "").toLowerCase() === "blocked_approval";
+  const canReview = source.sourceId === "messages" && source.linked && !source.skipped;
   return (
     <div className="grid gap-3 border-b px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_140px_auto] md:items-center">
       <div className="flex min-w-0 items-start gap-3">
@@ -808,7 +809,12 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
         </div>
       </div>
       <KeyValue label="Updated" value={updated} />
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {canReview && (
+          <Button size="sm" variant="outline" onClick={() => { window.location.href = "/setup/imessage/review"; }}>
+            <MessageSquare className="h-4 w-4" /> Review
+          </Button>
+        )}
         <Button
           size="sm"
           onClick={() => onRun(needsApproval ? { action: "messages-approve-continue" } : { action: "import-source", source: source.id })}
