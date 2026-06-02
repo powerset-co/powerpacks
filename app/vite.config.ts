@@ -415,11 +415,32 @@ function shellStage(label: string, command: string[]): string {
 }
 
 function importAndFanInCommand(importCommand: string[], fanInCommand: string[], label: string): string[] {
+  const importNetworkApprove = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py",
+    "approve",
+    "--ledger", importRefreshLedgerPath,
+  ];
+  const importNetworkContinue = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py",
+    "continue",
+    "--ledger", importRefreshLedgerPath,
+  ];
   return [
     "/bin/zsh",
     "-lc",
     [
-      shellStage(label, importCommand),
+      `printf '%s\\n' ${shellQuote(`setup: ${label}`)}`,
+      `${shellJoin(importCommand)}; code=$?`,
+      [
+        "if [[ $code -eq 20 ]]; then",
+        `  printf '%s\\n' ${shellQuote("setup: approving network import spend")}`,
+        `  ${shellJoin(importNetworkApprove)} && ${shellJoin(importNetworkContinue)}`,
+        "elif [[ $code -ne 0 ]]; then",
+        "  exit $code",
+        "fi",
+      ].join("\n"),
       shellStage("merging local network", fanInCommand),
     ].join(" && "),
   ];
