@@ -2495,6 +2495,28 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertEqual([row["exclude"] for row in rows], ["no", "no", ""])
         self.assertEqual(self.mod.summarize(rows), {"in_network": 2, "yes": 0, "maybe": 1, "no": 0})
 
+    def test_json_api_counts_research_selection_separately_from_in_network(self) -> None:
+        rows = [
+            {"bucket": "maybe", "exclude": "", "full_name": "Matched Person", "in_network": "true", "network_person_id": "p1"},
+            {"bucket": "maybe", "exclude": "no", "full_name": "Research Person", "phone_e164": "+14155550101"},
+            {"bucket": "maybe", "exclude": "", "full_name": "Undecided Person", "phone_e164": "+14155550202"},
+        ]
+        response = self.mod.review_api_response(
+            Path("research_review.csv"),
+            rows,
+            filter_name="all",
+            query="",
+            offset=0,
+            limit=10,
+            research_dir=None,
+        )
+        self.assertEqual(response["counts"]["inNetwork"], 1)
+        self.assertEqual(response["counts"]["included"], 2)
+        self.assertEqual(response["counts"]["researchSelected"], 1)
+        self.assertEqual(response["filteredCount"], 3)
+        self.assertEqual(response["rows"][0]["tab"], "in_network")
+        self.assertTrue(response["rows"][0]["selected"])
+
     def test_retargeted_cards_blank_feedback_without_new_profile_badge(self) -> None:
         row = {
             "bucket": "yes",

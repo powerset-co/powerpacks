@@ -85,50 +85,6 @@ const SETUP_SOURCE_LABELS: Record<string, string> = {
   twitter: "Twitter/X",
 };
 
-const REVIEW_COLUMNS = [
-  "bucket",
-  "handle",
-  "full_name",
-  "phone_e164",
-  "area_code",
-  "total_messages",
-  "imessage_message_count",
-  "whatsapp_message_count",
-  "message_source",
-  "last_message",
-  "imessage_last_message",
-  "whatsapp_last_message",
-  "group_names",
-  "location_city",
-  "location_country",
-  "top_titles",
-  "top_companies",
-  "top_title_company_pairs",
-  "schools",
-  "short_reason",
-  "identity_risk",
-  "signals",
-  "retarget_hint",
-  "retarget_status",
-  "retarget_handle",
-  "retarget_researched_at",
-  "retarget_linkedin_url",
-  "retarget_name_confidence",
-  "retarget_notes",
-  "retarget_profile_status",
-  "exclude",
-  "enrich_decision",
-  "in_network",
-  "network_match_status",
-  "network_person_id",
-  "network_name",
-  "network_linkedin_url",
-  "network_match_confidence",
-  "network_match_method",
-  "network_match_reason",
-  "review_source",
-];
-
 function sendJson(res: any, data: unknown, status = 200) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -695,196 +651,6 @@ function parseCsvDocument(text: string): CsvDocument {
   return { headers, rows };
 }
 
-function csvEscape(value: unknown): string {
-  const text = String(value ?? "");
-  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
-}
-
-function writeCsvDocument(filePath: string, document: CsvDocument) {
-  const headers = document.headers.length ? document.headers : REVIEW_COLUMNS;
-  const lines = [
-    headers.map(csvEscape).join(","),
-    ...document.rows.map((row) => headers.map((header) => csvEscape(row[header] ?? "")).join(",")),
-  ];
-  const tmp = `${filePath}.tmp`;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(tmp, `${lines.join("\n")}\n`, "utf8");
-  fs.renameSync(tmp, filePath);
-}
-
-function readReviewCsv(): { csvPath: string; document: CsvDocument } {
-  const csvPath = resolveReviewCsvPath();
-  if (!csvPath || !fs.existsSync(csvPath)) {
-    return { csvPath: messagesReviewCsvPath, document: { headers: REVIEW_COLUMNS.slice(), rows: [] } };
-  }
-  const document = parseCsvDocument(fs.readFileSync(csvPath, "utf8"));
-  for (const column of REVIEW_COLUMNS) {
-    if (!document.headers.includes(column)) document.headers.push(column);
-    for (const row of document.rows) {
-      if (row[column] == null) row[column] = "";
-    }
-  }
-  return { csvPath, document };
-}
-
-function truthy(value: string | undefined): boolean {
-  return String(value || "").trim().toLowerCase() === "true"
-    || ["1", "yes", "y", "on"].includes(String(value || "").trim().toLowerCase());
-}
-
-function falsy(value: string | undefined): boolean {
-  return ["0", "false", "no", "n", "off"].includes(String(value || "").trim().toLowerCase());
-}
-
-function bucketLabel(bucket: string | undefined): "yes" | "maybe" | "no" {
-  const raw = String(bucket || "").trim().toLowerCase();
-  if (raw === "yes" || raw === "confident") return "yes";
-  if (raw === "maybe" || raw === "medium" || raw === "review") return "maybe";
-  return "no";
-}
-
-function isInNetwork(row: Record<string, string>): boolean {
-  const raw = String(row.in_network || "").trim().toLowerCase();
-  if (truthy(raw)) return true;
-  if (falsy(raw)) return false;
-  return Boolean(String(row.network_person_id || "").trim());
-}
-
-function reviewTab(row: Record<string, string>): "in_network" | "yes" | "maybe" | "no" {
-  if (isInNetwork(row)) return "in_network";
-  if (truthy(row.exclude)) return "no";
-  if (falsy(row.exclude)) return "yes";
-  return bucketLabel(row.bucket);
-}
-
-function explicitReviewDecision(row: Record<string, string>): "include" | "skip" | "undecided" {
-  if (truthy(row.exclude)) return "skip";
-  if (falsy(row.exclude)) return "include";
-  if (String(row.enrich_decision || "").trim().toLowerCase() === "yes") return "include";
-  if (String(row.enrich_decision || "").trim().toLowerCase() === "no") return "skip";
-  return "undecided";
-}
-
-function isReviewSelected(row: Record<string, string>): boolean {
-  const explicit = explicitReviewDecision(row);
-  if (explicit === "include") return true;
-  if (explicit === "skip") return false;
-  if (isInNetwork(row)) return true;
-  return bucketLabel(row.bucket) === "yes";
-}
-
-function reviewDecision(row: Record<string, string>): "include" | "skip" | "undecided" {
-  const explicit = explicitReviewDecision(row);
-  if (explicit !== "undecided") return explicit;
-  return isReviewSelected(row) ? "include" : "skip";
-}
-
-function hasUsefulReviewIdentity(row: Record<string, string>): boolean {
-  const named = [
-    row.full_name,
-    row.display_name,
-    row.network_name,
-    row.matched_name,
-  ].some((value) => Boolean(String(value || "").trim()));
-  const matched = isInNetwork(row) || [
-    row.network_person_id,
-    row.network_linkedin_url,
-    row.matched_person_id,
-    row.matched_linkedin_url,
-  ].some((value) => Boolean(String(value || "").trim()));
-  return named && matched;
-}
-
-function reviewableRows(rows: Record<string, string>[]) {
-  return rows
-    .map((row, index) => ({ row, index }))
-    .filter(({ row }) => hasUsefulReviewIdentity(row));
-}
-
-function summarizeReview(rows: Record<string, string>[]) {
-  const out = {
-    total: rows.length,
-    included: 0,
-    skipped: 0,
-    undecided: 0,
-    yes: 0,
-    maybe: 0,
-    no: 0,
-    inNetwork: 0,
-    retargetFeedback: 0,
-  };
-  for (const row of rows) {
-    const explicit = explicitReviewDecision(row);
-    if (isReviewSelected(row)) out.included += 1;
-    else out.skipped += 1;
-    if (explicit === "undecided") out.undecided += 1;
-    if (String(row.retarget_hint || "").trim()) out.retargetFeedback += 1;
-    const tab = reviewTab(row);
-    if (tab === "in_network") {
-      if (isReviewSelected(row)) out.inNetwork += 1;
-    }
-    else out[tab] += 1;
-  }
-  return out;
-}
-
-function reviewResearchSelectionCount(rows: Record<string, string>[]): number {
-  return rows.filter((row) => explicitReviewDecision(row) === "include" && !isInNetwork(row)).length;
-}
-
-function messagesCurrentBlockForUi(
-  messagesLedger: Record<string, any>,
-  reviewDocument: CsvDocument,
-) {
-  const block = messagesLedger.current_block || null;
-  if (!block) return null;
-  const approvalType = String(block.approval_type || "").trim().toLowerCase();
-  if (approvalType !== "parallel") return block;
-
-  const prepareInput = String(messagesLedger.steps?.prepare_research_queue?.summary?.input || "");
-  const appReviewCompleted = messagesLedger.steps?.review_research_web?.summary?.source === "powerpacks_setup_app";
-  const selectedForResearch = reviewResearchSelectionCount(reviewDocument.rows);
-
-  // App review decisions supersede the old pre-review queue. If no unmatched
-  // rows were explicitly included, there is no Parallel research approval to show.
-  if (appReviewCompleted && !prepareInput.includes("research_review.csv")) return null;
-  if (selectedForResearch === 0) return null;
-  return block;
-}
-
-function normalizeReviewRow(row: Record<string, string>, index: number) {
-  return {
-    index,
-    bucket: row.bucket || "",
-    tab: reviewTab(row),
-    decision: reviewDecision(row),
-    selected: isReviewSelected(row),
-    handle: row.handle || "",
-    fullName: row.full_name || row.network_name || "Unknown",
-    phone: row.phone_e164 || "",
-    messageSource: row.message_source || "",
-    totalMessages: Number(row.total_messages || 0) || 0,
-    imessageMessages: Number(row.imessage_message_count || 0) || 0,
-    whatsappMessages: Number(row.whatsapp_message_count || 0) || 0,
-    groupNames: row.group_names || "",
-    networkName: row.network_name || "",
-    networkLinkedInUrl: row.network_linkedin_url || "",
-    networkMatchStatus: row.network_match_status || "",
-    networkMatchConfidence: row.network_match_confidence || "",
-    titleCompanyPairs: row.top_title_company_pairs || "",
-    schools: row.schools || "",
-    signals: row.signals || "",
-    identityRisk: row.identity_risk || "",
-    shortReason: row.short_reason || "",
-    retargetHint: row.retarget_hint || "",
-    retargetStatus: row.retarget_status || "",
-    retargetLinkedInUrl: row.retarget_linkedin_url || "",
-    retargetNotes: row.retarget_notes || "",
-    reviewSource: row.review_source || "",
-  };
-}
-
 function resolveReviewCsvPath(): string | null {
   if (fs.existsSync(messagesReviewCsvPath)) return messagesReviewCsvPath;
   const ledger = readJsonSync(messagesLedgerPath) || {};
@@ -894,86 +660,49 @@ function resolveReviewCsvPath(): string | null {
   return fs.existsSync(messagesReviewCsvPath) ? messagesReviewCsvPath : null;
 }
 
-function filterReviewRows(rows: Record<string, string>[], filter: string, query: string) {
-  const q = query.trim().toLowerCase();
-  return reviewableRows(rows)
-    .filter(({ row }) => {
-      const explicit = explicitReviewDecision(row);
-      const tab = reviewTab(row);
-      if (filter === "included" && !isReviewSelected(row)) return false;
-      if (filter === "skipped" && isReviewSelected(row)) return false;
-      if (filter === "undecided" && explicit !== "undecided") return false;
-      if (filter === "feedback" && !String(row.retarget_hint || "").trim()) return false;
-      if (["yes", "maybe", "no", "in_network"].includes(filter) && tab !== filter) return false;
-      if (!q) return true;
-      const haystack = [
-        row.full_name,
-        row.phone_e164,
-        row.network_name,
-        row.network_linkedin_url,
-        row.top_title_company_pairs,
-        row.schools,
-        row.short_reason,
-        row.retarget_hint,
-        row.retarget_notes,
-      ].join(" ").toLowerCase();
-      return haystack.includes(q);
-    });
-}
-
-function reviewResponse(csvPath: string, document: CsvDocument, filter: string, query: string, offset: number, limit: number) {
-  const filtered = filterReviewRows(document.rows, filter, query);
-  const windowRows = filtered.slice(offset, offset + limit).map(({ row, index }) => normalizeReviewRow(row, index));
-  const file = fileSummary(csvPath);
-  return {
-    ...file,
-    rows: windowRows,
-    counts: summarizeReview(reviewableRows(document.rows).map(({ row }) => row)),
-    filteredCount: filtered.length,
-    offset,
-    limit,
-    hasMore: offset + windowRows.length < filtered.length,
-  };
-}
-
-function requireReviewRowIndex(value: unknown, rows: Record<string, string>[]): number {
-  const row = Number(value);
-  if (!Number.isInteger(row) || row < 0 || row >= rows.length) {
-    throw new Error("review row is out of range");
+function messagesReviewPrimitive(command: string, args: string[] = []): Record<string, any> {
+  const csvPath = resolveReviewCsvPath() || messagesReviewCsvPath;
+  const result = spawnSync("uv", [
+    "run", "--project", ".", "python",
+    "packs/messages/primitives/review_research_web/review_research_web.py",
+    command,
+    "--csv", csvPath,
+    "--research-dir", path.join(powerpacksStateRoot, "messages", "research"),
+    ...args,
+  ], {
+    cwd: powerpacksRepoRoot,
+    env: setupProcessEnv(),
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `review primitive failed: ${command}`).trim());
   }
-  return row;
+  return JSON.parse(result.stdout || "{}");
 }
 
-function updateReviewToggle(body: Record<string, any>) {
-  const { csvPath, document } = readReviewCsv();
-  const index = requireReviewRowIndex(body.row ?? body.index, document.rows);
-  const selected = body.selected === true || String(body.selected).toLowerCase() === "true";
-  if (!document.headers.includes("exclude")) document.headers.push("exclude");
-  document.rows[index].exclude = selected ? "no" : "yes";
-  writeCsvDocument(csvPath, document);
-  return reviewResponse(csvPath, document, "all", "", 0, 100);
+function messagesReviewResponse(filter = "all", query = "", offset = 0, limit = 100): Record<string, any> {
+  return messagesReviewPrimitive("json", [
+    "--filter", filter,
+    "--query", query,
+    "--offset", String(offset),
+    "--limit", String(limit),
+  ]);
 }
 
-function updateReviewHint(body: Record<string, any>) {
-  const { csvPath, document } = readReviewCsv();
-  const index = requireReviewRowIndex(body.row ?? body.index, document.rows);
-  if (!document.headers.includes("retarget_hint")) document.headers.push("retarget_hint");
-  document.rows[index].retarget_hint = String(body.hint || "").trim();
-  writeCsvDocument(csvPath, document);
-  return reviewResponse(csvPath, document, "all", "", 0, 100);
-}
+function messagesCurrentBlockForUi(messagesLedger: Record<string, any>, reviewCounts: Record<string, any>) {
+  const block = messagesLedger.current_block || null;
+  if (!block) return null;
+  const approvalType = String(block.approval_type || "").trim().toLowerCase();
+  if (approvalType !== "parallel") return block;
 
-function updateReviewBulkToggle(body: Record<string, any>) {
-  const { csvPath, document } = readReviewCsv();
-  const tab = String(body.tab || "").trim().toLowerCase();
-  if (tab !== "in_network") throw new Error("only in-network bulk review updates are supported");
-  const selected = body.selected === true || String(body.selected).toLowerCase() === "true";
-  if (!document.headers.includes("exclude")) document.headers.push("exclude");
-  for (const row of document.rows) {
-    if (isInNetwork(row)) row.exclude = selected ? "no" : "yes";
-  }
-  writeCsvDocument(csvPath, document);
-  return reviewResponse(csvPath, document, "in_network", "", 0, 100);
+  const prepareInput = String(messagesLedger.steps?.prepare_research_queue?.summary?.input || "");
+  const appReviewCompleted = messagesLedger.steps?.review_research_web?.summary?.source === "powerpacks_setup_app";
+  const selectedForResearch = Number(reviewCounts.researchSelected || 0);
+
+  if (appReviewCompleted && !prepareInput.includes("research_review.csv")) return null;
+  if (selectedForResearch === 0) return null;
+  return block;
 }
 
 async function readRequestText(req: any): Promise<string> {
@@ -1605,9 +1334,7 @@ async function setupStatus() {
   const importRefreshLedger = readJsonSync(importRefreshLedgerPath) || {};
   const messagesLedger = readJsonSync(messagesLedgerPath) || {};
   const reviewPath = resolveReviewCsvPath() || messagesReviewCsvPath;
-  const reviewDocument = fs.existsSync(reviewPath)
-    ? parseCsvDocument(fs.readFileSync(reviewPath, "utf8"))
-    : { headers: REVIEW_COLUMNS.slice(), rows: [] };
+  const reviewApi = messagesReviewResponse("all", "", 0, 1);
   const phases = setupLedger.phases || {};
   const sources = normalizeSetupSources(accounts);
   const linkedSources = sources.filter((source) => source.linked).map((source) => source.id);
@@ -1637,7 +1364,7 @@ async function setupStatus() {
     error: "",
   } : indexDryRunEstimate(operator.id, peopleSha256);
   const importLiveRefresh = phases.import?.live_refresh || importRefreshLedger.refresh || importRefreshLedger;
-  const messagesCurrentBlock = messagesCurrentBlockForUi(messagesLedger, reviewDocument);
+  const messagesCurrentBlock = messagesCurrentBlockForUi(messagesLedger, reviewApi.counts || {});
 
   return {
     operator,
@@ -1669,7 +1396,7 @@ async function setupStatus() {
     },
     review: {
       ...fileSummary(reviewPath),
-      counts: summarizeReview(reviewableRows(reviewDocument.rows).map(({ row }) => row)),
+      counts: reviewApi.counts,
     },
     import: {
       ...importFile,
@@ -2005,24 +1732,35 @@ function powerpacksLocalApiPlugin(): Plugin {
           }
 
           if (url.pathname === "/local-api/messages/review") {
-            const { csvPath, document } = readReviewCsv();
             const offset = Math.max(0, Number(url.searchParams.get("offset") || 0) || 0);
             const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") || 100) || 100));
             const filter = (url.searchParams.get("filter") || "all").trim().toLowerCase();
             const query = url.searchParams.get("q") || "";
-            return sendJson(res, reviewResponse(csvPath, document, filter, query, offset, limit));
+            return sendJson(res, messagesReviewResponse(filter, query, offset, limit));
           }
 
           if (url.pathname === "/local-api/messages/review/toggle" && req.method === "POST") {
-            return sendJson(res, updateReviewToggle(await readRequestJson(req)));
+            const body = await readRequestJson(req);
+            return sendJson(res, messagesReviewPrimitive("toggle", [
+              "--row", String(body.row ?? body.index ?? ""),
+              "--selected", body.selected === true || String(body.selected).toLowerCase() === "true" ? "true" : "false",
+            ]));
           }
 
           if (url.pathname === "/local-api/messages/review/hint" && req.method === "POST") {
-            return sendJson(res, updateReviewHint(await readRequestJson(req)));
+            const body = await readRequestJson(req);
+            return sendJson(res, messagesReviewPrimitive("hint", [
+              "--row", String(body.row ?? body.index ?? ""),
+              "--hint", String(body.hint || ""),
+            ]));
           }
 
           if (url.pathname === "/local-api/messages/review/bulk-toggle" && req.method === "POST") {
-            return sendJson(res, updateReviewBulkToggle(await readRequestJson(req)));
+            const body = await readRequestJson(req);
+            return sendJson(res, messagesReviewPrimitive("bulk-toggle", [
+              "--tab", String(body.tab || "in_network"),
+              "--selected", body.selected === true || String(body.selected).toLowerCase() === "true" ? "true" : "false",
+            ]));
           }
 
           const match = url.pathname.match(/^\/local-api\/runs\/([^/]+)\/results$/);

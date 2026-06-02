@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import hashlib
 import html
 import json
@@ -226,6 +227,20 @@ def is_selected(row: dict[str, str]) -> bool:
     return bucket_label(row.get("bucket", "")) == "yes"
 
 
+def explicit_decision(row: dict[str, str]) -> str:
+    exclude = (row.get("exclude") or "").strip().lower()
+    if truthy(exclude):
+        return "skip"
+    if falsy(exclude):
+        return "include"
+    enrich = (row.get("enrich_decision") or "").strip().lower()
+    if enrich in {"yes", "include"}:
+        return "include"
+    if enrich in {"no", "skip"}:
+        return "skip"
+    return "undecided"
+
+
 def read_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     if not path.exists():
         return DEFAULT_COLUMNS[:], []
@@ -266,6 +281,13 @@ def load_profile(research_dir: Path | None, handle: str) -> dict[str, Any]:
 
 def split_pipe(value: str, limit: int = 4) -> list[str]:
     return [part.strip() for part in (value or "").split("|") if part.strip()][:limit]
+
+
+def parse_int(value: str) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def positions_from_profile(profile: dict[str, Any]) -> str:
@@ -365,6 +387,39 @@ def summarize(rows: list[dict[str, str]]) -> dict[str, int]:
     return out
 
 
+def app_summary(rows: list[dict[str, str]]) -> dict[str, int]:
+    out = {
+        "total": len(rows),
+        "included": 0,
+        "skipped": 0,
+        "undecided": 0,
+        "yes": 0,
+        "maybe": 0,
+        "no": 0,
+        "inNetwork": 0,
+        "retargetFeedback": 0,
+        "researchSelected": 0,
+    }
+    for row in rows:
+        if explicit_decision(row) == "include" and not is_in_network(row):
+            out["researchSelected"] += 1
+        if is_selected(row):
+            out["included"] += 1
+        else:
+            out["skipped"] += 1
+        if explicit_decision(row) == "undecided":
+            out["undecided"] += 1
+        if (row.get("retarget_hint") or "").strip():
+            out["retargetFeedback"] += 1
+        tab = row_tab(row)
+        if tab == "in_network":
+            if is_selected(row):
+                out["inNetwork"] += 1
+        else:
+            out[tab] += 1
+    return out
+
+
 def apply_bulk_selection(rows: list[dict[str, str]], tab: str, selected: bool) -> int:
     """Apply an include/exclude decision to every CSV row in a logical tab.
 
@@ -384,6 +439,162 @@ def apply_bulk_selection(rows: list[dict[str, str]], tab: str, selected: bool) -
             changed += 1
         row["exclude"] = next_exclude
     return changed
+
+
+def app_row(row: dict[str, str], index: int, research_dir: Path | None) -> dict[str, Any]:
+    view = row_view(row, research_dir)
+    linkedin = view["linkedin_url"] or row.get("network_linkedin_url", "")
+    return {
+        "index": index,
+        "bucket": row.get("bucket", ""),
+        "tab": row_tab(row),
+        "decision": explicit_decision(row),
+        "selected": is_selected(row),
+        "handle": row.get("handle", ""),
+        "fullName": view["name"] or row.get("full_name", "") or "Unknown",
+        "phone": row.get("phone_e164", ""),
+        "messageSource": row.get("message_source", ""),
+        "totalMessages": parse_int(row.get("total_messages", "")),
+        "imessageMessages": parse_int(row.get("imessage_message_count", "")),
+        "whatsappMessages": parse_int(row.get("whatsapp_message_count", "")),
+        "groupNames": row.get("group_names", ""),
+        "networkName": row.get("network_name", ""),
+        "networkLinkedInUrl": linkedin,
+        "networkMatchStatus": row.get("network_match_status", ""),
+        "networkMatchConfidence": row.get("network_match_confidence", ""),
+        "titleCompanyPairs": view["title_pairs"] or row.get("top_title_company_pairs", ""),
+        "schools": view["schools"] or row.get("schools", ""),
+        "signals": row.get("signals", ""),
+        "identityRisk": row.get("identity_risk", ""),
+        "shortReason": row.get("short_reason", ""),
+        "retargetHint": row.get("retarget_hint", ""),
+        "retargetStatus": row.get("retarget_status", ""),
+        "retargetLinkedInUrl": row.get("retarget_linkedin_url", ""),
+        "retargetNotes": row.get("retarget_notes", ""),
+        "reviewSource": row.get("review_source", ""),
+    }
+
+
+def matches_app_filter(row: dict[str, str], filter_name: str, query: str, research_dir: Path | None) -> bool:
+    tab = row_tab(row)
+    if filter_name in VALID_TABS and tab != filter_name:
+        return False
+    if filter_name == "included" and not is_selected(row):
+        return False
+    if filter_name == "skipped" and is_selected(row):
+        return False
+    if filter_name == "undecided" and explicit_decision(row) != "undecided":
+        return False
+    if filter_name == "feedback" and not (row.get("retarget_hint") or "").strip():
+        return False
+    if filter_name not in {*VALID_TABS, "all", "included", "skipped", "undecided", "feedback"}:
+        return False
+    q = query.strip().lower()
+    if not q:
+        return True
+    view = row_view(row, research_dir)
+    haystack = " ".join([
+        view["name"],
+        row.get("phone_e164", ""),
+        row.get("network_name", ""),
+        view["linkedin_url"],
+        view["title_pairs"],
+        view["schools"],
+        row.get("short_reason", ""),
+        row.get("retarget_hint", ""),
+        row.get("retarget_notes", ""),
+    ]).lower()
+    return q in haystack
+
+
+def review_api_response(
+    csv_path: Path,
+    rows: list[dict[str, str]],
+    *,
+    filter_name: str,
+    query: str,
+    offset: int,
+    limit: int,
+    research_dir: Path | None,
+) -> dict[str, Any]:
+    filtered = [
+        (idx, row)
+        for idx, row in enumerate(rows)
+        if matches_app_filter(row, filter_name, query, research_dir)
+    ]
+    window = filtered[offset:offset + limit]
+    stat = csv_path.stat() if csv_path.exists() else None
+    return {
+        "path": str(csv_path),
+        "exists": csv_path.exists(),
+        "updatedAt": None if not stat else datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "sizeBytes": None if not stat else stat.st_size,
+        "rows": [app_row(row, idx, research_dir) for idx, row in window],
+        "counts": app_summary(rows),
+        "filteredCount": len(filtered),
+        "offset": offset,
+        "limit": limit,
+        "hasMore": offset + len(window) < len(filtered),
+    }
+
+
+def cmd_json(args: argparse.Namespace) -> None:
+    csv_path = Path(args.csv)
+    _, rows = read_rows(csv_path)
+    research_dir = Path(args.research_dir) if args.research_dir else None
+    print(json.dumps(review_api_response(
+        csv_path,
+        rows,
+        filter_name=args.filter,
+        query=args.query,
+        offset=max(0, args.offset),
+        limit=max(1, args.limit),
+        research_dir=research_dir,
+    )))
+
+
+def cmd_toggle(args: argparse.Namespace) -> None:
+    csv_path = Path(args.csv)
+    fieldnames, rows = read_rows(csv_path)
+    if args.row < 0 or args.row >= len(rows):
+        raise SystemExit(f"row out of range: {args.row}")
+    if "exclude" not in fieldnames:
+        fieldnames.append("exclude")
+    rows[args.row]["exclude"] = "no" if args.selected else "yes"
+    atomic_write(csv_path, fieldnames, rows)
+    cmd_json(args)
+
+
+def cmd_hint(args: argparse.Namespace) -> None:
+    csv_path = Path(args.csv)
+    fieldnames, rows = read_rows(csv_path)
+    if args.row < 0 or args.row >= len(rows):
+        raise SystemExit(f"row out of range: {args.row}")
+    if "retarget_hint" not in fieldnames:
+        fieldnames.append("retarget_hint")
+    rows[args.row]["retarget_hint"] = args.hint.strip()
+    atomic_write(csv_path, fieldnames, rows)
+    cmd_json(args)
+
+
+def cmd_bulk_toggle(args: argparse.Namespace) -> None:
+    csv_path = Path(args.csv)
+    fieldnames, rows = read_rows(csv_path)
+    if "exclude" not in fieldnames:
+        fieldnames.append("exclude")
+    changed = apply_bulk_selection(rows, args.tab, args.selected)
+    atomic_write(csv_path, fieldnames, rows)
+    response = review_api_response(
+        csv_path,
+        rows,
+        filter_name=args.filter,
+        query=args.query,
+        offset=max(0, args.offset),
+        limit=max(1, args.limit),
+        research_dir=Path(args.research_dir) if args.research_dir else None,
+    )
+    response["changed"] = changed
+    print(json.dumps(response))
 
 
 def render_info_panel(active_tab: str) -> str:
@@ -642,6 +853,37 @@ def main() -> None:
     serve.add_argument("--port", type=int, default=0)
     serve.add_argument("--open", action="store_true")
     serve.set_defaults(func=cmd_serve)
+
+    def add_api_args(api: argparse.ArgumentParser) -> None:
+        api.add_argument("--csv", default=".powerpacks/messages/research_review.csv")
+        api.add_argument("--research-dir", default=".powerpacks/messages/research")
+        api.add_argument("--filter", default="all")
+        api.add_argument("--query", default="")
+        api.add_argument("--offset", type=int, default=0)
+        api.add_argument("--limit", type=int, default=100)
+
+    json_cmd = sub.add_parser("json", help="Return review rows/counts as JSON for the setup app")
+    add_api_args(json_cmd)
+    json_cmd.set_defaults(func=cmd_json)
+
+    toggle = sub.add_parser("toggle", help="Persist one include/exclude decision and return JSON")
+    add_api_args(toggle)
+    toggle.add_argument("--row", type=int, required=True)
+    toggle.add_argument("--selected", choices=["true", "false"], required=True)
+    toggle.set_defaults(func=lambda args: (setattr(args, "selected", args.selected == "true"), cmd_toggle(args))[1])
+
+    hint = sub.add_parser("hint", help="Persist one retarget hint and return JSON")
+    add_api_args(hint)
+    hint.add_argument("--row", type=int, required=True)
+    hint.add_argument("--hint", default="")
+    hint.set_defaults(func=cmd_hint)
+
+    bulk = sub.add_parser("bulk-toggle", help="Persist a tab-level include/exclude decision and return JSON")
+    add_api_args(bulk)
+    bulk.add_argument("--tab", choices=sorted(VALID_TABS), required=True)
+    bulk.add_argument("--selected", choices=["true", "false"], required=True)
+    bulk.set_defaults(func=lambda args: (setattr(args, "selected", args.selected == "true"), cmd_bulk_toggle(args))[1])
+
     args = parser.parse_args()
     args.func(args)
 
