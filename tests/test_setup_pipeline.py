@@ -40,15 +40,14 @@ def add_file(tf: tarfile.TarFile, name: str, data: bytes) -> None:
     tf.addfile(info, io.BytesIO(data))
 
 
-def make_bundle(path: Path, *, privacy=True, restore_paths=None, traversal=False, include_candidates=False) -> None:
+def make_bundle(path: Path, *, privacy=True, restore_paths=None, traversal=False, include_directory=False) -> None:
     normal_pipeline_outputs = restore_paths or [
         '.powerpacks/search-index',
+        '.powerpacks/network-import/directory.csv',
         '.powerpacks/network-import/merged',
         '.powerpacks/network-import/profile_cache_v2',
         '.powerpacks/network-import/network-runs/run-1/import-network.ledger.json',
     ]
-    if include_candidates and '.powerpacks/operator-bootstrap/import/linkedin_candidates' not in normal_pipeline_outputs:
-        normal_pipeline_outputs.append('.powerpacks/operator-bootstrap/import/linkedin_candidates')
     manifest = {
         'schema_version': 1,
         'operator': 'patrick',
@@ -74,14 +73,15 @@ def make_bundle(path: Path, *, privacy=True, restore_paths=None, traversal=False
         add_file(tf, '.powerpacks/search-index/records/people.records.jsonl', b'{}\n')
         add_file(tf, '.powerpacks/search-index/ledger.json', json.dumps({'status': 'completed', 'default_operator_id': OPERATOR_ID, 'steps': [{'id': 'x', 'status': 'completed'}]}).encode())
         add_file(tf, '.powerpacks/network-import/merged/people.csv', b'id\np1\n')
-        add_file(tf, '.powerpacks/network-import/profile_cache_v2/a.json', b'{}')
-        add_file(tf, '.powerpacks/network-import/network-runs/run-1/import-network.ledger.json', json.dumps({'status': 'completed', 'steps': {'merge': {'status': 'completed'}}}).encode())
-        if include_candidates:
+        if include_directory:
             add_file(
                 tf,
-                '.powerpacks/operator-bootstrap/import/linkedin_candidates/linkedin_candidates_merged_test.csv',
-                b'primary_email,display_name,confirmed_linkedin_url\njane@example.com,Jane Example,https://www.linkedin.com/in/jane-example\n',
+                '.powerpacks/network-import/directory.csv',
+                b'source_key,email,phone,name,linkedin_url,public_identifier,confidence,source,source_artifact,matched_name,matched_headline,evidence,reasoning,updated_at\n'
+                b'email:jane@example.com,jane@example.com,,Jane Example,https://www.linkedin.com/in/jane-example,jane-example,1.0,linkedin_candidates,,,,,,\n',
             )
+        add_file(tf, '.powerpacks/network-import/profile_cache_v2/a.json', b'{}')
+        add_file(tf, '.powerpacks/network-import/network-runs/run-1/import-network.ledger.json', json.dumps({'status': 'completed', 'steps': {'merge': {'status': 'completed'}}}).encode())
         if traversal:
             add_file(tf, '../evil.txt', b'evil')
 
@@ -143,7 +143,7 @@ class SetupPipelineTests(unittest.TestCase):
     def test_apply_refuses_overwrite_without_force_and_backs_up_with_force(self):
         tmp = self.temp_workspace()
         bundle = tmp / 'bundle.tar.gz'
-        make_bundle(bundle, include_candidates=True)
+        make_bundle(bundle, include_directory=True)
         (tmp / '.powerpacks/search-index').mkdir(parents=True)
         (tmp / '.powerpacks/search-index/old.txt').write_text('old', encoding='utf-8')
         args = argparse.Namespace(bundle=str(bundle), operator_id=OPERATOR_ID, force=False, inspect_file='', setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'), allow_legacy_bootstrap_manifest=False)
@@ -161,7 +161,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertTrue(directory.exists())
         self.assertIn('jane@example.com', directory.read_text(encoding='utf-8'))
         self.assertEqual(payload['directory_bootstrap']['status'], 'ok')
-        self.assertEqual(payload['directory_bootstrap']['rows'], 1)
+        self.assertEqual(payload['directory_bootstrap']['source'], 'restored_directory_csv')
 
     def test_inspect_apply_hash_rebinding(self):
         tmp = self.temp_workspace()

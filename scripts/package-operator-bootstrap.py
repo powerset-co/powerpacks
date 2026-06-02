@@ -414,8 +414,9 @@ def make_readme(operator: dict[str, Any], manifest: dict[str, Any]) -> str:
             "",
             "Contents:",
             "- sync/: metadata-only sync status; no raw msgvault DB, raw mail, attachments, secrets, or message bodies.",
-            "- import/: contact/source metadata needed by import-network.",
+            "- import/: source metadata used to build the canonical directory.",
             "- enrich/: LinkedIn resolution and local profile cache checkpoints.",
+            "- .powerpacks/network-import/directory.csv: reusable source-to-LinkedIn mappings.",
             "- .powerpacks/search-index/: reusable processing artifacts, records, and vectors.",
             "",
             "Local search:",
@@ -556,36 +557,34 @@ def copy_processing_restore_payload(source_dir: Path, restore_powerpacks_root: P
 
 
 def copy_import_restore_payload(operator_dir: Path, restore_powerpacks_root: Path) -> list[str]:
-    dst = restore_powerpacks_root / "operator-bootstrap/import"
-    if dst.exists():
-        shutil.rmtree(dst)
-    dst.mkdir(parents=True, exist_ok=True)
-
     copied: list[str] = []
-    resolution_src = operator_dir / "enrich/resolution"
-    if resolution_src.exists():
-        shutil.copytree(resolution_src, dst / "resolution")
-        copied.append(".powerpacks/operator-bootstrap/import/resolution")
-
-    candidates_src = operator_dir / "import/inputs/linkedin_candidates"
-    if candidates_src.exists():
-        shutil.copytree(candidates_src, dst / "linkedin_candidates")
-        copied.append(".powerpacks/operator-bootstrap/import/linkedin_candidates")
-
-    for rel in [
-        Path("import/inputs/linkedin_candidates_manifest.csv"),
-        Path("import/inputs/source_files_manifest.csv"),
-        Path("import/inputs/contact_rows_min.csv"),
-        Path("import/counts.json"),
-        Path("import/network-bootstrap-manifest.json"),
-    ]:
-        src = operator_dir / rel
-        if src.exists():
-            target = dst / rel.name
-            shutil.copy2(src, target)
-            copied.append(str(Path(".powerpacks/operator-bootstrap/import") / rel.name))
-
+    directory_src = operator_dir / "import/directory.csv"
+    if directory_src.exists():
+        target = restore_powerpacks_root / "network-import/directory.csv"
+        copy_file(directory_src, target)
+        copied.append(".powerpacks/network-import/directory.csv")
     return copied
+
+
+def materialize_operator_directory(operator_dir: Path) -> dict[str, Any]:
+    candidates_dir = operator_dir / "import/inputs/linkedin_candidates"
+    candidate_paths = sorted(candidates_dir.glob("linkedin_candidates*.csv")) if candidates_dir.exists() else []
+    if not candidate_paths:
+        return {"status": "skipped", "reason": "no linkedin candidate inputs"}
+    try:
+        from packs.ingestion.primitives.import_network_pipeline import import_network_pipeline
+    except ModuleNotFoundError:
+        sys.path.insert(0, str(ROOT))
+        from packs.ingestion.primitives.import_network_pipeline import import_network_pipeline
+    checkpoint = import_network_pipeline.build_directory_checkpoint(
+        {
+            "linkedin_directory_csv": str(operator_dir / "import/directory.csv"),
+            "linkedin_directory_source_csvs": [str(path) for path in candidate_paths],
+            "linkedin_directory_use_defaults": False,
+        },
+        {},
+    )
+    return {"status": "ok", **checkpoint}
 
 
 def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_root: Path, output_root: Path) -> dict[str, Any]:
@@ -674,6 +673,9 @@ def package_bundle(operator_dir: Path, restore_powerpacks_root: Path, bundles_di
         # The restore tree already carries the heavy search-index payload. Keep
         # the operator section lightweight so bundles do not store it twice.
         cmd.extend(["--exclude", f"{operator_dir.name}/processing"])
+        cmd.extend(["--exclude", f"{operator_dir.name}/import/inputs/linkedin_candidates"])
+        cmd.extend(["--exclude", f"{operator_dir.name}/import/inputs/linkedin_candidates_manifest.csv"])
+        cmd.extend(["--exclude", f"{operator_dir.name}/enrich/resolution"])
     cmd.extend(["-C", str(operator_dir.parent.resolve()), operator_dir.name])
     if restore_powerpacks_root.exists():
         cmd.extend(["-C", str(restore_powerpacks_root.parent.resolve()), ".powerpacks"])
@@ -812,6 +814,7 @@ def assemble_operator(
     copy_dir(network_dir / "outputs", operator_dir / "import/outputs")
     copy_dir(network_dir / "resolution", operator_dir / "enrich/resolution")
     copy_dir(network_dir / "enrichment", operator_dir / "enrich/enrichment")
+    directory_payload = materialize_operator_directory(operator_dir)
 
     network_manifest_path = network_dir / "manifest.json"
     network_counts = read_counts(network_manifest_path)
@@ -845,6 +848,7 @@ def assemble_operator(
                 "dir": str(operator_dir / "import"),
                 "counts": network_counts,
                 "commands": str(operator_dir / "import/outputs/commands.txt"),
+                "directory": directory_payload,
             },
             "enrich": {
                 "status": "ok",
@@ -874,6 +878,7 @@ def assemble_operator(
             "bundle": "",
             "manifest": str(manifest_path),
             "local_search_db": str(operator_dir / "processing/search-index/local-search.duckdb"),
+            "directory_csv": str(operator_dir / "import/directory.csv"),
         },
         "privacy": {
             "operator_scoped": True,

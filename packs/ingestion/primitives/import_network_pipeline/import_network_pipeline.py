@@ -461,15 +461,7 @@ def directory_rows_from_candidates(path: Path) -> list[dict[str, str]]:
 
 
 def default_directory_source_paths() -> list[Path]:
-    root = DEFAULT_BASE_DIR.parent
-    patterns = [
-        "operator-bootstrap/import/linkedin_candidates/linkedin_candidates*.csv",
-        "network-bootstrap/operators/*/inputs/linkedin_candidates/linkedin_candidates*.csv",
-    ]
-    paths: list[Path] = []
-    for pattern in patterns:
-        paths.extend(root.glob(pattern))
-    return sorted({path for path in paths if path.is_file()})
+    return []
 
 
 def directory_source_paths(input_cfg: dict[str, Any], artifacts: dict[str, Any]) -> list[Path]:

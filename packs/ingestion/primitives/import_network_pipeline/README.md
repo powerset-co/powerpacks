@@ -68,8 +68,8 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
 The bridge maintains `.powerpacks/network-import/directory.csv`, a reusable
 checkpoint keyed by `source_key` with `source`, `email`, `phone`, `name`,
 `linkedin_url`, `public_identifier`, confidence, evidence, and source artifact
-metadata. At bootstrap time it seeds from operator `linkedin_candidates*.csv`
-exports only. Gmail/provider stages may write their own intermediate
+metadata. Operator bootstrap restores this file directly from the bundle.
+Gmail/provider stages may write their own intermediate
 `linkedin_resolutions.csv` files, but only the final combined stage output is
 folded back into the canonical `directory.csv`. Gmail then applies matching
 directory rows first, writes filtered unresolved queues for optional

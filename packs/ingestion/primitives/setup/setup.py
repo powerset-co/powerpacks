@@ -40,9 +40,9 @@ PRIVACY_ALIASES = {
 }
 ALLOWED_ROOTS = [
     PurePosixPath('.powerpacks/search-index'),
+    PurePosixPath('.powerpacks/network-import/directory.csv'),
     PurePosixPath('.powerpacks/network-import/merged'),
     PurePosixPath('.powerpacks/network-import/profile_cache_v2'),
-    PurePosixPath('.powerpacks/operator-bootstrap/import'),
     PurePosixPath('.powerpacks/operator-bootstrap/restore-manifest.json'),
 ]
 SEARCH_BOOTSTRAP_PREFIX_MEMBERS = [
@@ -512,33 +512,19 @@ def mark_restored_ledgers(paths: list[Path], operator_id: str) -> list[str]:
 
 
 def materialize_bootstrap_directory() -> dict[str, Any]:
-    candidates_dir = ROOT / '.powerpacks/operator-bootstrap/import/linkedin_candidates'
-    candidate_paths = sorted(candidates_dir.glob('linkedin_candidates*.csv')) if candidates_dir.exists() else []
-    if not candidate_paths:
-        return {'status': 'skipped', 'reason': 'no operator linkedin_candidates bootstrap files'}
-    try:
-        from packs.ingestion.primitives.import_network_pipeline import import_network_pipeline
-    except ModuleNotFoundError:
-        sys.path.insert(0, str(ROOT))
-        from packs.ingestion.primitives.import_network_pipeline import import_network_pipeline
-    checkpoint = import_network_pipeline.build_directory_checkpoint(
-        {
-            'linkedin_directory_csv': str(ROOT / '.powerpacks/network-import/directory.csv'),
-            'linkedin_directory_source_csvs': [str(path) for path in candidate_paths],
-            'linkedin_directory_use_defaults': False,
-        },
-        {},
-    )
-    return {'status': 'ok', **checkpoint}
+    directory_csv = ROOT / '.powerpacks/network-import/directory.csv'
+    if directory_csv.exists():
+        return {'status': 'ok', 'directory_csv': str(directory_csv), 'source': 'restored_directory_csv'}
+    return {'status': 'skipped', 'reason': 'no restored directory.csv'}
 
 
 def restore_candidates(wanted: set[str]) -> list[str]:
     candidates: list[str] = []
     restore_roots = [
+        '.powerpacks/network-import/directory.csv',
         '.powerpacks/search-index',
         '.powerpacks/network-import/merged',
         '.powerpacks/network-import/profile_cache_v2',
-        '.powerpacks/operator-bootstrap/import',
     ]
     for root_rel in restore_roots:
         if any(p == root_rel or p.startswith(root_rel + '/') for p in wanted):
