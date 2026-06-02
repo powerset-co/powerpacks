@@ -322,6 +322,56 @@ def save_link_config(channel: str, path: Path, *, config: dict[str, Any], userna
     return registry
 
 
+def gmail_record_account_emails(record: dict[str, Any]) -> list[str]:
+    config = record.get("config", {}) if isinstance(record.get("config"), dict) else {}
+    values: list[str] = []
+    for key in ("selected_accounts", "account_emails", "available_accounts", "pending_accounts"):
+        items = config.get(key) or []
+        if isinstance(items, list):
+            values.extend(str(item).strip().lower() for item in items if str(item).strip())
+    usernames = record.get("usernames") or []
+    if isinstance(usernames, list):
+        values.extend(str(item).strip().lower() for item in usernames if str(item).strip())
+    return list(dict.fromkeys(values))
+
+
+def should_auto_link_empty_skipped_gmail(record: dict[str, Any]) -> bool:
+    if not record.get("skipped") or gmail_record_account_emails(record):
+        return False
+    notes = str(record.get("notes") or "").lower()
+    return "bootstrap" in notes or "local search pipeline" in notes
+
+
+def save_gmail_msgvault_accounts(
+    args: argparse.Namespace,
+    path: Path,
+    discovered: dict[str, Any],
+    selected: list[str],
+    existing_config: dict[str, Any] | None = None,
+    *,
+    notes: str = "Linked local msgvault Gmail source accounts; no network import run during onboarding.",
+) -> dict[str, Any]:
+    db_path = Path(args.gmail_db).expanduser()
+    existing = existing_config if isinstance(existing_config, dict) else {}
+    available = [row.get("account_email", "") for row in discovered.get("accounts", []) if row.get("account_email")]
+    account_emails = list(dict.fromkeys([*(existing.get("account_emails") or []), *available, *selected]))
+    pending = [email for email in (existing.get("pending_accounts") or []) if email not in selected]
+    return save_link_config(
+        "gmail",
+        path,
+        config={
+            "msgvault_db": str(db_path),
+            "account_emails": account_emails,
+            "available_accounts": available,
+            "selected_accounts": selected,
+            "pending_accounts": pending,
+        },
+        usernames=selected,
+        artifacts=[],
+        notes=notes,
+    )
+
+
 def messages_open_privacy_command() -> str:
     return shell_join([
         "uv", "run", "--project", ".", "python",
@@ -651,8 +701,9 @@ def cmd_step(args: argparse.Namespace) -> int:
         return run_twitter_link(args, path, updates)
 
     gmail_record = accounts.get("gmail", {})
+    auto_link_skipped_gmail = should_auto_link_empty_skipped_gmail(gmail_record)
     gmail_action_requested = bool(args.gmail_account or args.gmail_all or args.gmail_add_email or getattr(args, "gmail_authorized_email", []))
-    if (not gmail_record.get("linked", False) and not gmail_record.get("skipped", False)) or gmail_action_requested:
+    if (not gmail_record.get("linked", False) and not gmail_record.get("skipped", False)) or gmail_action_requested or auto_link_skipped_gmail:
         try:
             extra_emails = list(dict.fromkeys(normalize_email(email) for email in (args.gmail_add_email or [])))
         except ValueError as exc:
@@ -780,7 +831,7 @@ def cmd_step(args: argparse.Namespace) -> int:
             })
             return 20
 
-        selected = discovered_accounts if args.gmail_all else [email.strip().lower() for email in args.gmail_account if email.strip()]
+        selected = discovered_accounts if (args.gmail_all or auto_link_skipped_gmail) else [email.strip().lower() for email in args.gmail_account if email.strip()]
         if not selected:
             emit({
                 "status": "needs_input",
@@ -808,28 +859,27 @@ def cmd_step(args: argparse.Namespace) -> int:
             })
             return 20
 
-        available = [row.get("account_email", "") for row in discovered.get("accounts", []) if row.get("account_email")]
         existing = accounts.get("gmail", {}).get("config", {})
-        account_emails = list(dict.fromkeys([*(existing.get("account_emails") or []), *available, *selected]))
-        pending = [email for email in (existing.get("pending_accounts") or []) if email not in selected]
-        registry = save_link_config(
-            "gmail",
+        registry = save_gmail_msgvault_accounts(
+            args,
             path,
-            config={
-                "msgvault_db": str(db_path),
-                "account_emails": account_emails,
-                "available_accounts": available,
-                "selected_accounts": selected,
-                "pending_accounts": pending,
-            },
-            usernames=selected,
-            artifacts=[],
-            notes="Linked local msgvault Gmail source accounts; no network import run during onboarding.",
+            discovered,
+            selected,
+            existing,
+            notes=(
+                "Auto-linked Gmail accounts already present in local msgvault; no Gmail sync or import was run."
+                if auto_link_skipped_gmail
+                else "Linked local msgvault Gmail source accounts; no network import run during onboarding."
+            ),
         )
         emit({
             "status": "progressed",
             "channel": "gmail",
-            "message": "Recorded selected Gmail msgvault source accounts in accounts.json. No Gmail network import was run.",
+            "message": (
+                "Auto-linked Gmail accounts already present in local msgvault. No Gmail sync or import was run."
+                if auto_link_skipped_gmail
+                else "Recorded selected Gmail msgvault source accounts in accounts.json. No Gmail network import was run."
+            ),
             "linked_accounts": selected,
             "discovered_accounts": discovered.get("accounts", []),
             "accounts_path": args.accounts,

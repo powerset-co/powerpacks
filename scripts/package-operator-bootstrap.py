@@ -394,7 +394,6 @@ def build_processing(args: argparse.Namespace, operator_access: Path, operator: 
         str(args.checkpoint_every),
         "--education-limit",
         str(args.education_limit),
-        "--restore-records-only",
         "--force",
     ]
     if args.company_csv:
@@ -417,10 +416,10 @@ def make_readme(operator: dict[str, Any], manifest: dict[str, Any]) -> str:
             "- sync/: metadata-only sync status; no raw msgvault DB, raw mail, attachments, secrets, or message bodies.",
             "- import/: contact/source metadata needed by import-network.",
             "- enrich/: LinkedIn resolution and local profile cache checkpoints.",
-            "- .powerpacks/search-index/records/: restore-ready local search records with vectors.",
+            "- .powerpacks/search-index/: reusable processing artifacts, records, and vectors.",
             "",
             "Local search:",
-            "local-search.duckdb is intentionally not bundled. Rebuild it from .powerpacks/search-index/records/ after restore.",
+            "local-search.duckdb is intentionally not bundled. Rebuild it from .powerpacks/search-index/ after restore.",
             "",
             f"Generated: {manifest['generated_at']}",
         ]
@@ -458,6 +457,21 @@ SEARCH_INDEX_METADATA_FILES = [
     Path("vectors/checkpoint.json"),
 ]
 
+SEARCH_INDEX_INCREMENTAL_FILES = [
+    Path("unified/flattened_people.jsonl"),
+    Path("unified/unified_person.csv"),
+    Path("unified/summary_embeddings.jsonl"),
+    Path("unified/person_tech_skills.jsonl"),
+    Path("unified/linkedin_counts.jsonl"),
+    Path("unified/x_twitter_counts.jsonl"),
+    Path("unified/roles/roles_with_dense_text_remapped.jsonl"),
+    Path("unified/roles/roles_with_embeddings.jsonl"),
+    Path("company/companies_corpus_v3.jsonl"),
+    Path("company/company_embeddings_v3.jsonl"),
+]
+
+SEARCH_INDEX_INCREMENTAL_DIRS: list[Path] = []
+
 
 def should_copy_referenced_restore_path(path_text: str) -> bool:
     lower = path_text.lower()
@@ -484,7 +498,14 @@ def write_processing_restore_ledger(restore_powerpacks_root: Path, operator: dic
         "schools": ".powerpacks/search-index/records/schools.records.jsonl",
         "education": ".powerpacks/search-index/records/education.records.jsonl",
         "summaries": ".powerpacks/search-index/records/summaries.records.jsonl",
-        "local_search_db": ".powerpacks/search-index/local-search.duckdb",
+        "flattened_people": ".powerpacks/search-index/unified/flattened_people.jsonl",
+        "unified_person": ".powerpacks/search-index/unified/unified_person.csv",
+        "role_classifications": ".powerpacks/search-index/unified/roles/roles_with_dense_text_remapped.jsonl",
+        "role_embeddings": ".powerpacks/search-index/unified/roles/roles_with_embeddings.jsonl",
+        "company_classifications": ".powerpacks/search-index/company/companies_corpus_v3.jsonl",
+        "company_embeddings": ".powerpacks/search-index/company/company_embeddings_v3.jsonl",
+        "summary_embeddings": ".powerpacks/search-index/unified/summary_embeddings.jsonl",
+        "person_tech_skills": ".powerpacks/search-index/unified/person_tech_skills.jsonl",
     }
     for key, path_text in list(artifacts.items()):
         if not (restore_powerpacks_root / Path(path_text).relative_to(".powerpacks")).exists():
@@ -519,6 +540,17 @@ def copy_processing_restore_payload(source_dir: Path, restore_powerpacks_root: P
             copied.append(str(Path(".powerpacks/search-index") / rel))
     for rel in SEARCH_INDEX_METADATA_FILES:
         if copy_file(source_dir / rel, dst / rel):
+            copied.append(str(Path(".powerpacks/search-index") / rel))
+    for rel in SEARCH_INDEX_INCREMENTAL_FILES:
+        if link_or_copy_file(source_dir / rel, dst / rel):
+            copied.append(str(Path(".powerpacks/search-index") / rel))
+    for rel in SEARCH_INDEX_INCREMENTAL_DIRS:
+        source = source_dir / rel
+        target = dst / rel
+        if source.exists():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source, target, symlinks=True)
             copied.append(str(Path(".powerpacks/search-index") / rel))
     return copied
 
@@ -568,7 +600,7 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
 
     restore_manifest = {
         "status": "ok",
-        "bundle_mode": "restore_records_only",
+        "bundle_mode": "restore_processing_artifacts",
         "operator": operator["slug"],
         "operator_id": operator["operator_id"],
         "generated_at": now_iso(),
@@ -579,10 +611,8 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
         "excluded_heavy_outputs": [
             ".powerpacks/search-index/local-search.duckdb",
             ".powerpacks/search-index/roles",
-            ".powerpacks/search-index/company",
-            ".powerpacks/search-index/unified",
-            ".powerpacks/search-index/roles/embedding_checkpoints",
-            ".powerpacks/search-index/company/embedding_checkpoints",
+            ".powerpacks/search-index/company/*_checkpoints",
+            ".powerpacks/search-index/summaries/embedding_checkpoints",
         ],
         "commands": {
             "import_dry_run": f"uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --ledger {run_dir_text}/import-network.ledger.json --run-id {Path(run_dir_text).name if run_dir_text else 'network-bootstrap'} --dry-run" if run_dir_text else "",

@@ -476,6 +476,36 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertFalse(Path(tmp, ".powerpacks/network-import/import-network-run.json").exists())
             self.assertFalse(Path(tmp, ".powerpacks/network-import/linkedin/import-run.json").exists())
 
+    def test_onboarding_step_auto_links_empty_bootstrap_skipped_gmail_from_msgvault(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                db = Path(tmp) / "msgvault.db"
+                self.create_msgvault_db(db)
+                path = Path(tmp) / "accounts.json"
+                registry = accounts.default_registry()
+                registry["accounts"]["gmail"]["linked"] = False
+                registry["accounts"]["gmail"]["skipped"] = True
+                registry["accounts"]["gmail"]["notes"] = "Skipped for bootstrap-only local search pipeline test."
+                accounts.save_registry(registry, path)
+                code, payload = self.invoke(onboarding, ["step", "--accounts", str(path), "--gmail-db", str(db)])
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "progressed")
+            self.assertEqual(payload["channel"], "gmail")
+            self.assertEqual(payload["linked_accounts"], ["me@gmail.com", "work@example.com"])
+            self.assertIn("Auto-linked", payload["message"])
+            self.assertNotIn("sync-full", json.dumps(payload))
+            registry = accounts.load_registry(path)
+            gmail = registry["accounts"]["gmail"]
+            self.assertTrue(gmail["linked"])
+            self.assertFalse(gmail["skipped"])
+            self.assertEqual(gmail["usernames"], ["me@gmail.com", "work@example.com"])
+            self.assertEqual(gmail["config"]["selected_accounts"], ["me@gmail.com", "work@example.com"])
+
     def test_onboarding_completed_emits_subagent_handoff(self):
         old_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:

@@ -150,6 +150,13 @@ function readJsonSync(filePath: string): RunState | null {
   }
 }
 
+function writeJsonSync(filePath: string, data: unknown) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  fs.renameSync(tmp, filePath);
+}
+
 function readEnvSummary(): Record<string, string> {
   const envPath = path.join(powerpacksRepoRoot, ".env");
   if (!fs.existsSync(envPath)) return {};
@@ -935,6 +942,100 @@ function accountRecords(accounts: RunState | null): Record<string, any> {
   return records && typeof records === "object" ? records : {};
 }
 
+function uniqueStrings(values: unknown[]): string[] {
+  return [...new Set(values.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean))];
+}
+
+function configuredMsgvaultDb(accounts: RunState | null): string {
+  const gmail = accountRecords(accounts).gmail || {};
+  const config = gmail.config && typeof gmail.config === "object" ? gmail.config : {};
+  const configured = String(config.msgvault_db || "").trim();
+  if (configured) return path.resolve(configured.replace(/^~(?=\/|$)/, process.env.HOME || ""));
+  const home = process.env.MSGVAULT_HOME ? path.resolve(process.env.MSGVAULT_HOME) : path.join(process.env.HOME || "", ".msgvault");
+  return path.join(home, "msgvault.db");
+}
+
+function localGmailAccountsFromRecord(record: Record<string, any>): string[] {
+  const config = record.config && typeof record.config === "object" ? record.config : {};
+  return uniqueStrings([
+    ...((Array.isArray(config.selected_accounts) ? config.selected_accounts : []) as unknown[]),
+    ...((Array.isArray(config.account_emails) ? config.account_emails : []) as unknown[]),
+    ...((Array.isArray(record.usernames) ? record.usernames : []) as unknown[]),
+  ]);
+}
+
+function shouldAutoLinkGmailRecord(record: Record<string, any>): boolean {
+  if (localGmailAccountsFromRecord(record).length > 0) return false;
+  if (record.linked === true && record.skipped !== true) return false;
+  if (record.skipped !== true) return true;
+  const notes = String(record.notes || "").toLowerCase();
+  return notes.includes("bootstrap") || notes.includes("local search pipeline");
+}
+
+function discoverMsgvaultAccounts(dbPath: string): { accounts: string[]; rows: Record<string, any>[]; error?: string } {
+  if (!dbPath || !fs.existsSync(dbPath)) return { accounts: [], rows: [], error: dbPath ? "msgvault database not found" : "msgvault database path is empty" };
+  try {
+    const result = spawnSync("uv", [
+      "run", "--project", ".", "python",
+      "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
+      "msgvault-accounts",
+      "--db", dbPath,
+    ], {
+      cwd: powerpacksRepoRoot,
+      env: process.env,
+      encoding: "utf8",
+      timeout: 15000,
+    });
+    const payload = parseJsonFragment(result.stdout || "");
+    const rows = Array.isArray(payload?.accounts) ? payload.accounts as Record<string, any>[] : [];
+    const accounts = uniqueStrings(rows.map((row) => row.account_email));
+    const error = result.status === 0 ? "" : (result.stderr || result.error?.message || "msgvault account discovery failed");
+    return { accounts, rows, error: error || undefined };
+  } catch (err) {
+    return { accounts: [], rows: [], error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function autoLinkGmailFromMsgvault(accounts: RunState | null): RunState {
+  const records = accountRecords(accounts);
+  const gmail = records.gmail || {};
+  if (!shouldAutoLinkGmailRecord(gmail)) return accounts || {};
+  const dbPath = configuredMsgvaultDb(accounts);
+  const discovered = discoverMsgvaultAccounts(dbPath);
+  if (discovered.accounts.length === 0) return accounts || {};
+
+  const now = new Date().toISOString();
+  const config = gmail.config && typeof gmail.config === "object" ? gmail.config : {};
+  const next: RunState = accounts && typeof accounts === "object" ? { ...accounts } : { version: 2 };
+  const nextRecords = { ...records };
+  nextRecords.gmail = {
+    ...gmail,
+    linked: true,
+    skipped: false,
+    usernames: discovered.accounts,
+    artifacts: Array.isArray(gmail.artifacts) ? gmail.artifacts : [],
+    config: {
+      ...config,
+      msgvault_db: dbPath,
+      account_emails: uniqueStrings([...(Array.isArray(config.account_emails) ? config.account_emails : []), ...discovered.accounts]),
+      available_accounts: discovered.accounts,
+      selected_accounts: discovered.accounts,
+      pending_accounts: [],
+    },
+    last_checked_at: now,
+    last_success_at: now,
+    notes: "Auto-linked Gmail accounts already present in local msgvault; no Gmail sync or import was run.",
+  };
+  next.accounts = nextRecords;
+  next.updated_at = now;
+  try {
+    writeJsonSync(accountsPath, next);
+  } catch {
+    return next;
+  }
+  return next;
+}
+
 function imessagePermissionStatus(): Record<string, any> {
   const base = {
     status: "permission_required",
@@ -1430,7 +1531,7 @@ function deriveNextAction(setupLedger: RunState | null, sources: ReturnType<type
 
 async function setupStatus() {
   const setupLedger = readJsonSync(setupLedgerPath) || {};
-  const accounts = readJsonSync(accountsPath) || {};
+  const accounts = autoLinkGmailFromMsgvault(readJsonSync(accountsPath) || {});
   const importRefreshLedger = readJsonSync(importRefreshLedgerPath) || {};
   const messagesLedger = readJsonSync(messagesLedgerPath) || {};
   const reviewPath = resolveReviewCsvPath() || messagesReviewCsvPath;
@@ -1566,7 +1667,7 @@ function saveLinkedInCsvUpload(body: Record<string, any>) {
 
 function buildSetupActionJob(body: Record<string, any>): SetupJob {
   const setupLedger = readJsonSync(setupLedgerPath) || {};
-  const accounts = readJsonSync(accountsPath) || {};
+  const accounts = autoLinkGmailFromMsgvault(readJsonSync(accountsPath) || {});
   const operator = resolveOperator(setupLedger, accounts);
   const action = requireString(body.action, "action");
 
