@@ -9,7 +9,6 @@ import {
   CircleDot,
   CircleSlash,
   Database,
-  ExternalLink,
   FileText,
   HardDrive,
   Link2,
@@ -29,6 +28,7 @@ import { cn } from "@/lib/utils";
 import {
   fetchSetupStatus,
   runSetupAction,
+  uploadLinkedInCsv,
 } from "./powerpacksApi";
 import type {
   SetupEnrichmentSource,
@@ -448,6 +448,9 @@ function SourcePanel({
   const [csvPath, setCsvPath] = useState("");
   const [sourceLabel, setSourceLabel] = useState("");
   const [handle, setHandle] = useState("");
+  const [isLinkedInUploading, setIsLinkedInUploading] = useState(false);
+  const [linkedinUploadError, setLinkedinUploadError] = useState("");
+  const [selectedLinkedInFile, setSelectedLinkedInFile] = useState("");
   const selected = stringList(source.config.selected_accounts);
   const pending = stringList(source.config.pending_accounts);
   const accountEmails = stringList(source.config.account_emails);
@@ -455,6 +458,34 @@ function SourcePanel({
   const linkedInCsvPath = stringValue(source.config.csv_path) || source.artifacts[0] || "";
   const linkedInSourceLabel = stringValue(source.config.source_label) || source.usernames[0] || "";
   const twitterHandle = stringValue(source.config.handle) || source.usernames[0] || "";
+
+  useEffect(() => {
+    if (source.id !== "linkedin_csv") return;
+    if (!csvPath && linkedInCsvPath) {
+      setCsvPath(linkedInCsvPath);
+    }
+    if (!sourceLabel && linkedInSourceLabel) {
+      setSourceLabel(linkedInSourceLabel);
+    }
+  }, [csvPath, linkedInCsvPath, linkedInSourceLabel, source.id, sourceLabel]);
+
+  const chooseLinkedInCsvFile = async (file?: File) => {
+    if (!file) return;
+    setSelectedLinkedInFile(file.name);
+    setLinkedinUploadError("");
+    setIsLinkedInUploading(true);
+    try {
+      const uploaded = await uploadLinkedInCsv(file);
+      setCsvPath(uploaded.path);
+      if (!sourceLabel.trim()) {
+        setSourceLabel(linkedInSourceLabel || "linkedin");
+      }
+    } catch (err) {
+      setLinkedinUploadError(err instanceof Error ? err.message : "Failed to copy LinkedIn CSV");
+    } finally {
+      setIsLinkedInUploading(false);
+    }
+  };
 
   return (
     <section className={cn(embedded ? "rounded-md border bg-background p-4" : "rounded-md border bg-card p-4")}>
@@ -521,19 +552,43 @@ function SourcePanel({
             <KeyValue label="Linked file" value={linkedInCsvPath} />
             <KeyValue label="Import name" value={linkedInSourceLabel} />
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Input
-              value={csvPath}
-              onChange={(event) => setCsvPath(event.target.value)}
-              placeholder={linkedInCsvPath || "/path/to/Connections.csv"}
-              className="w-full min-w-72 flex-1"
-            />
-            <Input
-              value={sourceLabel}
-              onChange={(event) => setSourceLabel(event.target.value)}
-              placeholder={linkedInSourceLabel || "name"}
-              className="w-full sm:w-48"
-            />
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto] md:items-end">
+            <div className="min-w-0">
+              <div className="mb-1 text-xs font-medium text-muted-foreground">LinkedIn export</div>
+              <div className="flex flex-wrap gap-2">
+                <label className={cn(
+                  "inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground",
+                  isLinkedInUploading && "pointer-events-none opacity-60",
+                )}>
+                  {isLinkedInUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                  {isLinkedInUploading ? "Copying..." : "Choose CSV"}
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="sr-only"
+                    disabled={isLinkedInUploading}
+                    onChange={(event) => chooseLinkedInCsvFile(event.currentTarget.files?.[0])}
+                  />
+                </label>
+                <Input
+                  value={csvPath}
+                  readOnly
+                  placeholder="No CSV selected"
+                  className="min-w-72 flex-1"
+                />
+              </div>
+              {selectedLinkedInFile && <div className="mt-1 text-xs text-muted-foreground">Selected {selectedLinkedInFile}</div>}
+              {linkedinUploadError && <div className="mt-1 text-xs text-destructive">{linkedinUploadError}</div>}
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-muted-foreground">Import name</div>
+              <Input
+                value={sourceLabel}
+                onChange={(event) => setSourceLabel(event.target.value)}
+                placeholder={linkedInSourceLabel || "name"}
+                className="w-full"
+              />
+            </div>
             <Button size="sm" onClick={() => onRun({ action: "linkedin-csv", csvPath, sourceLabel })} disabled={!csvPath.trim() || !sourceLabel.trim()}>
               Record
             </Button>
@@ -735,6 +790,7 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
   const Icon = SOURCE_ICONS[source.sourceId as SetupSourceId] || Database;
   const canRun = source.linked && !source.skipped && source.runnable !== false;
   const updated = source.linked && !source.skipped ? updatedLabel(source.updatedAt) : "";
+  const needsApproval = source.sourceId === "messages" && String(source.status || "").toLowerCase() === "blocked_approval";
   return (
     <div className="grid gap-3 border-b px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_140px_auto] md:items-center">
       <div className="flex min-w-0 items-start gap-3">
@@ -753,8 +809,12 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
       </div>
       <KeyValue label="Updated" value={updated} />
       <div className="flex justify-end">
-        <Button size="sm" onClick={() => onRun({ action: "import-source", source: source.id })} disabled={!canRun}>
-          <Play className="h-4 w-4" /> Import
+        <Button
+          size="sm"
+          onClick={() => onRun(needsApproval ? { action: "messages-approve-continue" } : { action: "import-source", source: source.id })}
+          disabled={!canRun}
+        >
+          <Play className="h-4 w-4" /> {needsApproval ? "Approve & Continue" : "Import"}
         </Button>
       </div>
     </div>
@@ -764,37 +824,13 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
 function ImportTab({
   status,
   onRun,
-  onOpenMessagesReview,
 }: {
   status: SetupStatusResponse;
   onRun: (body: Record<string, unknown>) => void;
-  onOpenMessagesReview: () => void;
 }) {
   const importSources = status.import.sources || [];
-  const runnableCount = importSources.filter((source) => source.linked && !source.skipped && source.runnable !== false).length;
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-3">
-        <section className="rounded-md border bg-card p-4">
-          <div className="text-sm font-medium">Import</div>
-          <div className="mt-2"><StatusBadge status={status.import.status} /></div>
-          <KeyValue label="Updated" value={updatedLabel(status.import.updatedAt)} />
-        </section>
-        <section className="rounded-md border bg-card p-4">
-          <div className="text-sm font-medium">Ready to import</div>
-          <div className="mt-2 text-2xl font-semibold">{runnableCount}</div>
-          <div className="mt-1 text-sm text-muted-foreground">{status.accounts.skippedSources.length} skipped</div>
-        </section>
-        <section className="rounded-md border bg-card p-4">
-          <div className="text-sm font-medium">Messages review</div>
-          <div className="mt-2 text-2xl font-semibold">{status.review.counts.total.toLocaleString()}</div>
-          <div className="mt-1 text-sm text-muted-foreground">{status.review.counts.undecided.toLocaleString()} undecided</div>
-          <Button className="mt-3" size="sm" variant="outline" onClick={onOpenMessagesReview} disabled={!status.review.exists && status.review.counts.total === 0}>
-            <MessageSquare className="h-4 w-4" /> Manage Review
-          </Button>
-        </section>
-      </div>
-
       <section className="rounded-md border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
           <div>
@@ -996,68 +1032,6 @@ function IndexTab({ status, onRun }: { status: SetupStatusResponse; onRun: (body
   );
 }
 
-function ActionStepCard({
-  status,
-  onRun,
-  onOpenMessagesReview,
-}: {
-  status: SetupStatusResponse;
-  onRun: (body: Record<string, unknown>) => void;
-  onOpenMessagesReview: () => void;
-}) {
-  const block = status.messages.currentBlock || null;
-  const pendingReview = Number(status.review.counts.undecided || 0);
-  if (!block && pendingReview <= 0) return null;
-  const message = block
-    ? stringValue(block.message) || "Setup is waiting for your action."
-    : `${pendingReview.toLocaleString()} Messages contacts are pending review. Only explicitly included contacts are merged into your local network.`;
-  const reviewUrl = stringValue(block?.review_url);
-  const qrPage = stringValue(block?.qr_page);
-  const isMessagesReview = stringValue(block?.primitive) === "import_contacts_pipeline" && Boolean(reviewUrl);
-  const isPendingMessagesReview = !block && pendingReview > 0;
-
-  return (
-    <section className="rounded-md border border-amber-300 bg-amber-50 p-4 text-amber-950">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <CircleAlert className="h-4 w-4" />
-            <h3 className="text-base font-semibold">Action needed</h3>
-            <StatusBadge status={stringValue(block?.status) || "blocked"} />
-          </div>
-          <p className="mt-1 text-sm">{message}</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {(isMessagesReview || isPendingMessagesReview) && (
-            <Button size="sm" onClick={onOpenMessagesReview}>
-              <MessageSquare className="h-4 w-4" /> Manage Review
-            </Button>
-          )}
-          {reviewUrl && !isMessagesReview && (
-            <Button size="sm" variant="outline" asChild>
-              <a href={reviewUrl} target="_blank" rel="noreferrer">
-                <ExternalLink className="h-4 w-4" /> Open Review
-              </a>
-            </Button>
-          )}
-          {qrPage && (
-            <Button size="sm" variant="outline" asChild>
-              <a href={qrPage} target="_blank" rel="noreferrer">
-                <ExternalLink className="h-4 w-4" /> Open QR
-              </a>
-            </Button>
-          )}
-          {isMessagesReview && (
-            <Button size="sm" variant="outline" onClick={() => onRun({ action: "messages-complete-review" })}>
-              <CheckCircle2 className="h-4 w-4" /> Complete
-            </Button>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function JobPanel({
   job,
   onRunCommand,
@@ -1107,7 +1081,7 @@ function JobPanel({
   );
 }
 
-export function LocalSetupPage({ onOpenMessagesReview }: { onOpenMessagesReview: () => void }) {
+export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
   const [activeTab, setActiveTab] = useState<SetupTabId>(() => setupTabFromLocation());
   const [status, setStatus] = useState<SetupStatusResponse | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -1208,12 +1182,11 @@ export function LocalSetupPage({ onOpenMessagesReview }: { onOpenMessagesReview:
         </div>
       )}
 
-      <ActionStepCard status={status} onRun={runAction} onOpenMessagesReview={onOpenMessagesReview} />
       <SetupTabs active={activeTab} onChange={changeTab} />
 
       {activeTab === "link" && <AccountLinkingTab status={status} onRun={runAction} />}
 
-      {activeTab === "import" && <ImportTab status={status} onRun={runAction} onOpenMessagesReview={onOpenMessagesReview} />}
+      {activeTab === "import" && <ImportTab status={status} onRun={runAction} />}
 
       {activeTab === "enrichment" && <EnrichmentTab status={status} onRun={runAction} />}
 

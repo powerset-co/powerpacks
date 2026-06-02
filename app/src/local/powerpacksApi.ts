@@ -56,6 +56,14 @@ export function runSetupAction(body: Record<string, unknown>): Promise<{ job: Se
   return postJson<{ job: SetupJob }>("/local-api/setup/run", body);
 }
 
+export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {
+  const content = await file.text();
+  return postJson<{ path: string }>("/local-api/setup/linkedin-csv-upload", {
+    filename: file.name,
+    content,
+  });
+}
+
 export function fetchMessageReview(
   options: { filter?: MessageReviewFilter; query?: string; offset?: number; limit?: number } = {}
 ): Promise<MessageReviewResponse> {

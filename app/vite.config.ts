@@ -1545,6 +1545,25 @@ function requireSource(value: unknown): string {
   return source;
 }
 
+function saveLinkedInCsvUpload(body: Record<string, any>) {
+  const filename = sourceSlug(path.basename(String(body.filename || "Connections.csv")) || "Connections.csv");
+  if (!filename.toLowerCase().endsWith(".csv")) throw new Error("LinkedIn export must be a CSV file");
+  const content = String(body.content || "");
+  if (!content.trim()) throw new Error("LinkedIn CSV is empty");
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > 25 * 1024 * 1024) throw new Error("LinkedIn CSV is too large");
+  const outputDir = path.join(powerpacksStateRoot, "ingestion", "uploads", "linkedin");
+  fs.mkdirSync(outputDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const output = path.join(outputDir, `${stamp}-${filename}`);
+  fs.writeFileSync(output, content, "utf8");
+  return {
+    status: "ok",
+    path: output,
+    sizeBytes: bytes,
+  };
+}
+
 function buildSetupActionJob(body: Record<string, any>): SetupJob {
   const setupLedger = readJsonSync(setupLedgerPath) || {};
   const accounts = readJsonSync(accountsPath) || {};
@@ -1796,6 +1815,10 @@ function powerpacksLocalApiPlugin(): Plugin {
 
           if (url.pathname === "/local-api/setup/jobs") {
             return sendJson(res, { jobs: setupJobsList() });
+          }
+
+          if (url.pathname === "/local-api/setup/linkedin-csv-upload" && req.method === "POST") {
+            return sendJson(res, saveLinkedInCsvUpload(await readRequestJson(req)));
           }
 
           const setupJobMatch = url.pathname.match(/^\/local-api\/setup\/jobs\/([^/]+)$/);
