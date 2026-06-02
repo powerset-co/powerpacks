@@ -697,10 +697,12 @@ function messagesCurrentBlockForUi(messagesLedger: Record<string, any>, reviewCo
   if (approvalType !== "parallel") return block;
 
   const prepareInput = String(messagesLedger.steps?.prepare_research_queue?.summary?.input || "");
-  const appReviewCompleted = messagesLedger.steps?.review_research_web?.summary?.source === "powerpacks_setup_app";
   const selectedForResearch = Number(reviewCounts.researchSelected || 0);
 
-  if (appReviewCompleted && !prepareInput.includes("research_review.csv")) return null;
+  // Once the setup app owns review decisions, approvals from the old
+  // contacts.csv queue are stale. Completing review recomputes the queue from
+  // research_review.csv and only then can a fresh Parallel approval be shown.
+  if (prepareInput && !prepareInput.includes("research_review.csv")) return null;
   if (selectedForResearch === 0) return null;
   return block;
 }
