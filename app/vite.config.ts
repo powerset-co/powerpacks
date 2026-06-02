@@ -1152,27 +1152,37 @@ function messagesApproveAndContinueCommand(accounts: RunState | null): string[] 
 }
 
 function csvPathCount(value: unknown): number {
+  return csvRowsForArtifact(value).length;
+}
+
+function csvRowsForArtifact(value: unknown, preferredKeys: string[] = []): Record<string, string>[] {
   const paths = new Set<string>();
   const visit = (item: unknown) => {
     if (Array.isArray(item)) {
       item.forEach(visit);
       return;
     }
+    if (item && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      const keys = preferredKeys.length ? preferredKeys : Object.keys(record);
+      for (const key of keys) visit(record[key]);
+      return;
+    }
     if (typeof item !== "string" || !item.trim()) return;
     paths.add(item.trim());
   };
   visit(value);
-  let count = 0;
+  const rows: Record<string, string>[] = [];
   for (const item of paths) {
     const resolved = safeJoinPowerpacks(item);
     if (!resolved || !fs.existsSync(resolved)) continue;
     try {
-      count += parseCsvDocument(fs.readFileSync(resolved, "utf8")).rows.length;
+      rows.push(...parseCsvDocument(fs.readFileSync(resolved, "utf8")).rows);
     } catch {
       // Ignore malformed or currently written artifacts in status summaries.
     }
   }
-  return count;
+  return rows;
 }
 
 function firstCsvCount(...values: unknown[]): number {
@@ -1181,6 +1191,57 @@ function firstCsvCount(...values: unknown[]): number {
     if (count > 0) return count;
   }
   return 0;
+}
+
+function normalizedDigits(value: unknown): string {
+  return String(value || "").replace(/\D+/g, "").slice(-10);
+}
+
+function artifactRowsDirectoryMatchCount(artifact: unknown, directoryRows: Record<string, string>[], preferredKeys: string[] = []): number {
+  const rows = csvRowsForArtifact(artifact, preferredKeys);
+  if (!rows.length || !directoryRows.length) return 0;
+  const emails = new Set(directoryRows.map((row) => String(row.email || "").trim().toLowerCase()).filter(Boolean));
+  const phones = new Set(directoryRows.map((row) => normalizedDigits(row.phone)).filter(Boolean));
+  let matched = 0;
+  for (const row of rows) {
+    const rowValues = Object.entries(row);
+    const hasEmailMatch = rowValues.some(([key, value]) => {
+      if (!key.toLowerCase().includes("email")) return false;
+      return emails.has(String(value || "").trim().toLowerCase());
+    });
+    const hasPhoneMatch = rowValues.some(([key, value]) => {
+      const lower = key.toLowerCase();
+      if (!lower.includes("phone") && lower !== "handle") return false;
+      const digits = normalizedDigits(value);
+      return Boolean(digits && phones.has(digits));
+    });
+    if (hasEmailMatch || hasPhoneMatch) matched += 1;
+  }
+  return matched;
+}
+
+function validLinkedInUrl(value: unknown): boolean {
+  const text = String(value || "").trim();
+  return /^https?:\/\/(?:[\w-]+\.)?linkedin\.com\/in\//i.test(text);
+}
+
+function messagesReviewStats(messagesLedger: RunState): { enrich: number; skipped: number; matched: number; profilesFound: number } {
+  const reviewRows = csvRowsForArtifact(".powerpacks/messages/research_review.csv");
+  const llmSummary = messagesLedger.steps?.llm_review?.summary || {};
+  const llmCounts = llmSummary.counts || {};
+  const matchStats = messagesLedger.steps?.match_local_contacts?.summary?.stats || {};
+  const reviewMatched = reviewRows.filter((row) => String(row.network_match_status || "").toLowerCase() === "matched").length;
+  const reviewProfiles = reviewRows.filter((row) =>
+    String(row.network_match_status || "").toLowerCase() === "matched"
+    && (validLinkedInUrl(row.linkedin_url) || validLinkedInUrl(row.network_linkedin_url))
+  ).length;
+  const matched = Math.max(Number(matchStats.matched || 0), reviewMatched);
+  return {
+    enrich: Number(llmCounts.enrich || 0),
+    skipped: Number(llmCounts.skip || 0),
+    matched,
+    profilesFound: Math.max(matched, reviewProfiles),
+  };
 }
 
 function sha256File(filePath: string): string {
@@ -1277,15 +1338,22 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
   const linkedInStep = setupRefreshLedger.steps?.linkedin || {};
   const sourceById = Object.fromEntries(setupSources.map((source) => [source.id, source]));
   const isSkipped = (id: string) => Boolean(sourceById[id]?.skipped);
-  const directoryMatches = firstCsvCount(".powerpacks/network-import/directory.csv");
+  const directoryRows = csvRowsForArtifact(".powerpacks/network-import/directory.csv");
 
   const messagesLedger = readJsonSync(messagesLedgerPath) || {};
   const messagesReview = messagesLedger.steps?.llm_review?.summary || {};
-  const messagesCounts = messagesReview.counts || {};
-  const messagesMatchStats = messagesLedger.steps?.match_local_contacts?.summary?.stats || {};
+  const messagesStats = messagesReviewStats(messagesLedger);
 
   const sumArtifacts = (artifactsList: Record<string, any>[], key: string) =>
     artifactsList.reduce((total, artifacts) => total + csvPathCount(artifacts[key]), 0);
+  const gmailQueueCount = csvPathCount(refreshArtifacts.gmail_linkedin_resolution_queue_csvs || refreshArtifacts.gmail_linkedin_resolution_queue_csv);
+  const gmailDirectoryMatches = artifactRowsDirectoryMatchCount(
+    refreshArtifacts.gmail_linkedin_resolution_queue_csvs || refreshArtifacts.gmail_linkedin_resolution_queue_csv,
+    directoryRows,
+    ["queue_csv", "linkedin_resolution_queue_csv"],
+  );
+  const gmailEnriched = sumArtifacts([refreshArtifacts], "gmail_final_people_csvs");
+  const gmailToEnrich = Math.max(0, gmailQueueCount - gmailDirectoryMatches - gmailEnriched);
 
   return [
     {
@@ -1307,20 +1375,20 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       id: "gmail",
       label: "Gmail",
       status: String(setupRefreshLedger.status || "unknown"),
-      candidates: sumArtifacts([refreshArtifacts], "gmail_people_csvs") || sumArtifacts([refreshArtifacts], "gmail_people_csv"),
-      enriched: sumArtifacts([refreshArtifacts], "gmail_final_people_csvs"),
+      candidates: gmailQueueCount > 0 ? gmailToEnrich : sumArtifacts([refreshArtifacts], "gmail_people_csvs") || sumArtifacts([refreshArtifacts], "gmail_people_csv"),
+      enriched: gmailEnriched,
       skipped: 0,
-      matched: sumArtifacts([refreshArtifacts], "gmail_resolved_people_csvs") || directoryMatches,
+      matched: sumArtifacts([refreshArtifacts], "gmail_resolved_people_csvs") || gmailDirectoryMatches,
       updatedAt: isSkipped("gmail") ? null : setupRefreshLedger.updated_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
     },
     {
       id: "messages",
       label: "Messages",
       status: String(messagesReview.status || messagesLedger.status || "unknown"),
-      candidates: Number(messagesReview.candidate_count || messagesCounts.verdicts || 0) || 0,
-      enriched: 0,
-      skipped: Number(messagesCounts.skip || 0) || 0,
-      matched: Number(messagesMatchStats.matched || 0) || 0,
+      candidates: Math.max(0, messagesStats.enrich - messagesStats.matched),
+      enriched: messagesStats.profilesFound,
+      skipped: messagesStats.skipped,
+      matched: messagesStats.matched,
       updatedAt: isSkipped("messages") ? null : messagesLedger.updated_at || messagesReview.started_at || null,
     },
     {
