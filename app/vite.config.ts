@@ -173,6 +173,14 @@ function readEnvSummary(): Record<string, string> {
   return out;
 }
 
+function setupProcessEnv(): NodeJS.ProcessEnv {
+  return {
+    ...readEnvSummary(),
+    ...process.env,
+    POWERPACKS_REPO_ROOT: powerpacksRepoRoot,
+  };
+}
+
 function resolveOperator(setupLedger: RunState | null, accounts: RunState | null): SetupOperator {
   const restoreManifest = readJsonSync(path.join(powerpacksStateRoot, "operator-bootstrap", "restore-manifest.json"));
   const latestSync = readJsonSync(path.join(powerpacksStateRoot, "operator-bootstrap", "registry", "latest-sync.json"));
@@ -453,7 +461,7 @@ function startSetupJob(action: string, command: string[], timeoutMs = 6 * 60 * 6
 
   const child = spawn(command[0], command.slice(1), {
     cwd: powerpacksRepoRoot,
-    env: process.env,
+    env: setupProcessEnv(),
     shell: false,
   });
   const timer = setTimeout(() => {
@@ -982,7 +990,7 @@ function discoverMsgvaultAccounts(dbPath: string): { accounts: string[]; rows: R
       "--db", dbPath,
     ], {
       cwd: powerpacksRepoRoot,
-      env: process.env,
+      env: setupProcessEnv(),
       encoding: "utf8",
       timeout: 15000,
     });
@@ -1091,7 +1099,7 @@ function whatsappLinkStatus(): Record<string, any> {
       "--store", whatsAppStorePath,
     ], {
       cwd: powerpacksRepoRoot,
-      env: process.env,
+      env: setupProcessEnv(),
       encoding: "utf8",
       timeout: 8000,
     });
@@ -1395,7 +1403,7 @@ print(json.dumps(out))
 `;
   const result = spawnSync("uv", ["run", "--project", ".", "python", "-c", script], {
     cwd: powerpacksRepoRoot,
-    env: process.env,
+    env: setupProcessEnv(),
     encoding: "utf8",
     timeout: 10000,
   });
@@ -1432,7 +1440,7 @@ function indexDryRunEstimate(operatorId: string, peopleSha256: string): Record<s
     "--default-operator-id", operatorId,
   ], {
     cwd: powerpacksRepoRoot,
-    env: process.env,
+    env: setupProcessEnv(),
     encoding: "utf8",
     timeout: 45000,
   });

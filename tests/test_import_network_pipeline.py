@@ -432,6 +432,19 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(ledger["steps"]["source_imports"]["status"], "blocked")
             self.assertEqual(ledger["blocked"]["step_id"], "linkedin")
 
+    def test_linkedin_failure_prefers_structured_child_error_over_progress_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ledger_path = tmp / "ledger.json"
+            ledger = {"run_id": "network-test", "run_dir": str(tmp / "network-test"), "input": {"linkedin_csv": str(tmp / "Connections.csv"), "linkedin_source_user": "me"}, "steps": {}, "artifacts": {}}
+            stderr = "[enrich-people] Prepared LinkedIn enrichment queue: 289 total, 0 cached, 289 paid lookups, 0 recent failures.\n"
+            payload = {"status": "failed", "step_id": "enrich_people", "error": "RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set"}
+            with mock.patch.object(import_network_pipeline, "run_cmd", return_value=(1, payload, stderr)):
+                ok = import_network_pipeline.run_source_import_workers(ledger_path, ledger)
+            self.assertFalse(ok)
+            self.assertEqual(ledger["steps"]["linkedin"]["error"], "RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
+            self.assertEqual(ledger["steps"]["source_imports"]["status"], "failed")
+
     def test_merge_includes_all_gmail_people_csvs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

@@ -887,6 +887,17 @@ def run_cmd(cmd: list[str], *, timeout: int | None = None) -> tuple[int, dict[st
     return code, parse_last_json("".join(stdout_chunks)), "".join(stderr_chunks)
 
 
+def child_error(payload: dict[str, Any], stderr: str) -> Any:
+    """Prefer structured child failures; stderr is often progress logging."""
+    if payload:
+        for key in ("error", "message", "reason"):
+            value = payload.get(key)
+            if value:
+                return value
+        return payload
+    return stderr
+
+
 def py_cmd(script: str, *args: str) -> list[str]:
     return [sys.executable, script, *args]
 
@@ -959,10 +970,11 @@ def record_linkedin_worker_result(ledger_path: Path, ledger: dict[str, Any], res
         emit({"status": "blocked_approval", "step_id": "linkedin", "ledger": str(ledger_path), "child": payload})
         return False
     if code != 0:
-        mark_step(ledger, "linkedin", "failed", error=stderr or payload.get("error") or payload)
+        error = child_error(payload, stderr)
+        mark_step(ledger, "linkedin", "failed", error=error)
         ledger["status"] = "failed"
         save_ledger(ledger_path, ledger)
-        emit({"status": "failed", "step_id": "linkedin", "error": stderr or payload})
+        emit({"status": "failed", "step_id": "linkedin", "error": error})
         return False
     mark_step(ledger, "linkedin", "completed", payload=payload)
     for key, value in (payload.get("artifacts") or {}).items():
