@@ -961,6 +961,24 @@ function ledgerStatus(filePath: string, fallback: string) {
   };
 }
 
+function messagesLedgerStatus(fallback: string) {
+  const ledger = readJsonSync(messagesLedgerPath) || {};
+  const summary = fileSummary(messagesLedgerPath);
+  let reviewCounts: Record<string, any> = {};
+  try {
+    reviewCounts = messagesReviewResponse("all", "", 0, 1).counts || {};
+  } catch {
+    reviewCounts = {};
+  }
+  const block = messagesCurrentBlockForUi(ledger, reviewCounts);
+  const rawStatus = String(block?.status || ledger.status || fallback);
+  return {
+    status: rawStatus === "selected_steps_completed" ? "completed" : rawStatus,
+    updatedAt: ledger.updated_at || ledger.completed_at || summary.updatedAt || null,
+    runId: ledger.run_id || "",
+  };
+}
+
 function importNetworkCommand(operatorId: string, extra: string[] = []) {
   return [
     "uv", "run", "--project", ".", "python",
@@ -1040,7 +1058,7 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
     const source = byId[id];
     const ledger = id === "messages" ? ".powerpacks/messages/import-run.setup-messages.json" : setupRefreshLedger;
     const state = id === "messages"
-      ? ledgerStatus(path.join(powerpacksRepoRoot, ledger), source?.linked ? "ready" : source?.skipped ? "skipped" : "not_linked")
+      ? messagesLedgerStatus(source?.linked ? "ready" : source?.skipped ? "skipped" : "not_linked")
       : refreshState;
     rows.push({
       id,
