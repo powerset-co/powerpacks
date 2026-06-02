@@ -1,5 +1,5 @@
 import { format, isSameYear, isToday, isYesterday } from "date-fns";
-import { Search, Database, Loader2 } from "lucide-react";
+import { Search, Database, Loader2, Settings2, History, Route } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -7,11 +7,15 @@ import { cn } from "@/lib/utils";
 import type { LocalRunSummary } from "./types";
 
 interface LocalRunSidebarProps {
+  activeView: "onboarding" | "setup" | "runs";
   runs: LocalRunSummary[];
   selectedTaskId?: string | null;
   isLoading?: boolean;
   search: string;
   onSearchChange: (value: string) => void;
+  onSelectOnboarding: () => void;
+  onSelectSetup: () => void;
+  onSelectRuns: () => void;
   onSelect: (run: LocalRunSummary) => void;
 }
 
@@ -27,11 +31,15 @@ function groupLabel(date: Date): string {
 }
 
 export function LocalRunSidebar({
+  activeView,
   runs,
   selectedTaskId,
   isLoading,
   search,
   onSearchChange,
+  onSelectOnboarding,
+  onSelectSetup,
+  onSelectRuns,
   onSelect,
 }: LocalRunSidebarProps) {
   const grouped = runs.reduce<Record<string, LocalRunSummary[]>>((acc, run) => {
@@ -52,6 +60,41 @@ export function LocalRunSidebar({
             <h1 className="truncate text-base font-semibold">Powerpacks Viewer</h1>
             <p className="text-xs text-muted-foreground">../powerpacks/.powerpacks</p>
           </div>
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={onSelectOnboarding}
+            className={cn(
+              "flex h-9 items-center justify-center gap-2 rounded-md border px-2 text-sm font-medium transition-colors",
+              activeView === "onboarding" ? "border-primary bg-primary/5 text-primary" : "border-input hover:bg-accent"
+            )}
+          >
+            <Route className="h-4 w-4" />
+            Onboard
+          </button>
+          <button
+            type="button"
+            onClick={onSelectSetup}
+            className={cn(
+              "flex h-9 items-center justify-center gap-2 rounded-md border px-2 text-sm font-medium transition-colors",
+              activeView === "setup" ? "border-primary bg-primary/5 text-primary" : "border-input hover:bg-accent"
+            )}
+          >
+            <Settings2 className="h-4 w-4" />
+            Setup
+          </button>
+          <button
+            type="button"
+            onClick={onSelectRuns}
+            className={cn(
+              "flex h-9 items-center justify-center gap-2 rounded-md border px-2 text-sm font-medium transition-colors",
+              activeView === "runs" ? "border-primary bg-primary/5 text-primary" : "border-input hover:bg-accent"
+            )}
+          >
+            <History className="h-4 w-4" />
+            Runs
+          </button>
         </div>
         <div className="relative mt-3">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />

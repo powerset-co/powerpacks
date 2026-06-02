@@ -22,6 +22,18 @@ SPEC.loader.exec_module(setup)
 OPERATOR_ID = 'op-123'
 
 
+def resolved_accounts(overrides=None):
+    accounts = {
+        'gmail': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'selected_accounts': [], 'account_emails': []}},
+        'linkedin_csv': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
+        'messages': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'imessage': {'status': 'skipped'}, 'whatsapp': {'status': 'skipped'}}},
+        'twitter': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
+    }
+    for channel, record in (overrides or {}).items():
+        accounts[channel] = record
+    return {'version': 2, 'accounts': accounts}
+
+
 def add_file(tf: tarfile.TarFile, name: str, data: bytes) -> None:
     info = tarfile.TarInfo(name)
     info.size = len(data)
@@ -192,10 +204,9 @@ class SetupPipelineTests(unittest.TestCase):
     def test_status_marks_restored_bootstrap_import_refresh_due_until_live_sync(self):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
-        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+        accounts.write_text(json.dumps(resolved_accounts({
             'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {}},
-            'twitter': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
-        }}), encoding='utf-8')
+        })), encoding='utf-8')
         ledger = tmp / '.powerpacks/setup/setup-run.json'
         ledger.parent.mkdir(parents=True)
         ledger.write_text(json.dumps({
@@ -226,10 +237,9 @@ class SetupPipelineTests(unittest.TestCase):
     def test_status_ready_after_live_refresh_for_same_sources(self):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
-        account_payload = {'version': 2, 'accounts': {
+        account_payload = resolved_accounts({
             'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
-            'twitter': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
-        }}
+        })
         accounts.write_text(json.dumps(account_payload), encoding='utf-8')
         accounts_summary = setup.accounts_summary(accounts)
         ledger = tmp / '.powerpacks/setup/setup-run.json'
@@ -262,9 +272,9 @@ class SetupPipelineTests(unittest.TestCase):
     def test_status_marks_completed_live_refresh_due_when_people_hash_drifts(self):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
-        account_payload = {'version': 2, 'accounts': {
+        account_payload = resolved_accounts({
             'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
-        }}
+        })
         accounts.write_text(json.dumps(account_payload), encoding='utf-8')
         accounts_summary = setup.accounts_summary(accounts)
         people = tmp / '.powerpacks/network-import/merged/people.csv'
@@ -346,7 +356,7 @@ class SetupPipelineTests(unittest.TestCase):
     def test_run_refreshes_linked_sources_and_marks_index_stale_when_network_changes(self):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
-        account_payload = {'version': 2, 'accounts': {
+        account_payload = resolved_accounts({
             'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
             'messages': {
                 'linked': True,
@@ -355,7 +365,7 @@ class SetupPipelineTests(unittest.TestCase):
                 'artifacts': [],
                 'config': {'imessage': {'status': 'ready'}},
             },
-        }}
+        })
         accounts.parent.mkdir(parents=True, exist_ok=True)
         accounts.write_text(json.dumps(account_payload), encoding='utf-8')
         ledger = tmp / '.powerpacks/setup/setup-run.json'
@@ -463,12 +473,7 @@ class SetupPipelineTests(unittest.TestCase):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
         accounts.parent.mkdir(parents=True, exist_ok=True)
-        accounts.write_text(json.dumps({'version': 2, 'accounts': {
-            'gmail': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'selected_accounts': [], 'account_emails': []}},
-            'linkedin_csv': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
-            'messages': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'imessage': {'status': 'skipped'}, 'whatsapp': {'status': 'skipped'}}},
-            'twitter': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
-        }}), encoding='utf-8')
+        accounts.write_text(json.dumps(resolved_accounts()), encoding='utf-8')
         summary = setup.accounts_summary(accounts)
         ledger = tmp / '.powerpacks/setup/setup-run.json'
         ledger.parent.mkdir(parents=True)
@@ -522,12 +527,7 @@ class SetupPipelineTests(unittest.TestCase):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
         accounts.parent.mkdir(parents=True, exist_ok=True)
-        accounts.write_text(json.dumps({'version': 2, 'accounts': {
-            'gmail': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'selected_accounts': [], 'account_emails': []}},
-            'linkedin_csv': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
-            'messages': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {'imessage': {'status': 'skipped'}, 'whatsapp': {'status': 'skipped'}}},
-            'twitter': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
-        }}), encoding='utf-8')
+        accounts.write_text(json.dumps(resolved_accounts()), encoding='utf-8')
         summary = setup.accounts_summary(accounts)
         ledger = tmp / '.powerpacks/setup/setup-run.json'
         ledger.parent.mkdir(parents=True)
@@ -575,9 +575,9 @@ class SetupPipelineTests(unittest.TestCase):
     def test_run_forces_network_refresh_when_import_artifact_hash_drifts(self):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
-        account_payload = {'version': 2, 'accounts': {
+        account_payload = resolved_accounts({
             'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
-        }}
+        })
         accounts.write_text(json.dumps(account_payload), encoding='utf-8')
         accounts_summary = setup.accounts_summary(accounts)
         people = tmp / '.powerpacks/network-import/merged/people.csv'
@@ -671,9 +671,9 @@ class SetupPipelineTests(unittest.TestCase):
     def test_run_marks_network_changed_when_missing_people_csv_is_recreated(self):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
-        account_payload = {'version': 2, 'accounts': {
+        account_payload = resolved_accounts({
             'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
-        }}
+        })
         accounts.write_text(json.dumps(account_payload), encoding='utf-8')
         accounts_summary = setup.accounts_summary(accounts)
         people = tmp / '.powerpacks/network-import/merged/people.csv'
@@ -764,9 +764,9 @@ class SetupPipelineTests(unittest.TestCase):
     def test_run_forces_refresh_even_when_recent_import_is_intact(self):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
-        account_payload = {'version': 2, 'accounts': {
+        account_payload = resolved_accounts({
             'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
-        }}
+        })
         accounts.write_text(json.dumps(account_payload), encoding='utf-8')
         accounts_summary = setup.accounts_summary(accounts)
         people = tmp / '.powerpacks/network-import/merged/people.csv'
@@ -861,9 +861,9 @@ class SetupPipelineTests(unittest.TestCase):
     def test_run_blocks_index_when_processing_cost_hits_limit(self):
         tmp = self.temp_workspace()
         accounts = tmp / 'accounts.json'
-        account_payload = {'version': 2, 'accounts': {
+        account_payload = resolved_accounts({
             'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
-        }}
+        })
         accounts.write_text(json.dumps(account_payload), encoding='utf-8')
         accounts_summary = setup.accounts_summary(accounts)
         people = tmp / '.powerpacks/network-import/merged/people.csv'
@@ -962,15 +962,23 @@ class SetupPipelineTests(unittest.TestCase):
         payload = setup.handoff_payload(ns)
         self.assertEqual(payload['status'], 'ok')
         self.assertIn('import', payload['worker_groups'])
-        self.assertTrue(payload['worker_groups']['import']['parallel'])
+        self.assertFalse(payload['worker_groups']['import']['parallel'])
         self.assertIn('import_network_fan_in', payload['commands'])
         self.assertIn('processing_plan', payload['commands'])
         self.assertIn('processing_dry_run', payload['commands'])
         self.assertIn('--include-existing-artifacts', payload['commands']['import_network_run'])
         self.assertIn('--include-existing-artifacts', payload['commands']['import_network_dry_run'])
         jobs = payload['worker_groups']['import']['jobs']
-        self.assertEqual([job['id'] for job in jobs if job['source'] == 'gmail'], ['gmail:me@example.com', 'gmail:work@example.com'])
-        self.assertTrue(all('--ledger .powerpacks/network-import/import-network-run.' in job['command'] for job in jobs))
+        gmail_jobs = [job for job in jobs if job['source'] == 'gmail']
+        self.assertEqual([job['id'] for job in gmail_jobs], ['gmail'])
+        self.assertEqual(gmail_jobs[0]['account_count'], 2)
+        self.assertEqual(gmail_jobs[0]['account_emails'], ['me@example.com', 'work@example.com'])
+        self.assertIn('--only-source gmail', gmail_jobs[0]['command'])
+        self.assertIn('--force', gmail_jobs[0]['command'])
+        linkedin_jobs = [job for job in jobs if job['source'] == 'linkedin_csv']
+        self.assertEqual(len(linkedin_jobs), 1)
+        self.assertIn('--only-source linkedin_csv', linkedin_jobs[0]['command'])
+        self.assertTrue(all('--ledger .powerpacks/network-import/import-network-run.setup-refresh.json' in job['command'] for job in jobs if job.get('command')))
         self.assertNotIn('twitter', {job['source'] for job in jobs})
         ids = {x['id'] for x in payload['requires_approval']}
         for required in ['browser_auth', 'gcs_download', 'destructive_restore_overwrite', 'provider_spend']:
@@ -1076,8 +1084,8 @@ class SetupPipelineTests(unittest.TestCase):
             'I won’t upload anything automatically',
             'Use jargon only in hidden/internal notes',
             'Use normal user language',
-            'refresh anything that is missing or stale',
-            'include existing artifacts',
+            'refresh the sources you have connected',
+            'existing artifacts',
         ]:
             self.assertIn(required, setup_text)
         for required in [
@@ -1094,6 +1102,24 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertIn('legacy direct onboarding worker phases', onboard_text)
         self.assertNotIn('worker_phases[0]', onboard_text)
         self.assertNotIn('worker_phases[1]', onboard_text)
+
+    def test_setup_ui_messages_import_command_forces_live_refresh(self):
+        text = (ROOT / 'app/vite.config.ts').read_text(encoding='utf-8')
+        start = text.index('function messageImportCommand')
+        end = text.index('\nfunction buildImportSources', start)
+        body = text[start:end]
+        for required in [
+            '"--reuse-existing-artifacts"',
+            '"--force-imessage"',
+            '"--force-whatsapp"',
+            '"--force-sync-candidates"',
+            '"--force-match"',
+            '"--rerun-llm"',
+            '"--force-build-review"',
+        ]:
+            self.assertIn(required, body)
+        self.assertIn('includeFlags.includes("--include-imessage")', body)
+        self.assertIn('includeFlags.includes("--include-whatsapp")', body)
 
     def test_pull_refuses_without_allow_flag(self):
         args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output='out.tar.gz', allow_gcs_download=False)
@@ -1187,9 +1213,13 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['status'], 'ok')
         self.assertEqual(payload['next']['phase'], 'link')
         self.assertEqual(payload['next']['status'], 'run_command')
+        self.assertEqual(payload['next']['reason'], 'no linked sources or local network artifacts yet')
         self.assertIn('setup.py link', payload['next']['command'])
         self.assertIn(str(tmp / '.powerpacks/ingestion/accounts.json'), payload['next']['command'])
         self.assertIn(str(tmp / '.powerpacks/setup/setup-run.json'), payload['next']['command'])
+        self.assertEqual(payload['phases']['link']['status'], 'no_linked_sources')
+        self.assertEqual(payload['phases']['link']['optional_unlinked_sources'], ['gmail', 'linkedin_csv', 'messages', 'twitter'])
+        self.assertNotIn('unresolved_sources', payload['phases']['link'])
 
         index_command = setup.setup_phase_command(args, 'index')
         self.assertIn(str(tmp / '.powerpacks/ingestion/accounts.json'), index_command)
@@ -1217,7 +1247,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['phase'], 'bootstrap')
         self.assertEqual(payload['bootstrap']['status'], 'ok')
         self.assertTrue((tmp / '.powerpacks/search-index/records/people.records.jsonl').exists())
-        self.assertEqual(payload['next']['phase'], 'link')
+        self.assertEqual(payload['next']['phase'], 'index')
 
     def test_link_phase_wraps_onboarding_without_importing(self):
         tmp = self.temp_workspace()
@@ -1258,16 +1288,66 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertIn('onboarding/onboarding.py', ' '.join(calls[0]))
         self.assertIn('--gmail-account', calls[0])
         self.assertEqual(payload['next']['phase'], 'import')
+        self.assertEqual(payload['setup_ledger']['phases']['link']['status'], 'ready')
+        self.assertEqual(payload['setup_ledger']['phases']['link']['optional_unlinked_sources'], ['linkedin_csv', 'messages', 'twitter'])
+        self.assertNotIn('unresolved_sources', payload['setup_ledger']['phases']['link'])
         self.assertFalse(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+
+    def test_run_setup_after_partial_gmail_link_points_to_import(self):
+        tmp = self.temp_workspace()
+        calls = []
+
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            accounts = tmp / '.powerpacks/ingestion/accounts.json'
+            accounts.parent.mkdir(parents=True)
+            accounts.write_text(json.dumps({'version': 2, 'accounts': {
+                'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+            }}), encoding='utf-8')
+            return 0, {'status': 'progressed', 'channel': 'gmail'}, ''
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(tmp / '.powerpacks/ingestion/accounts.json'),
+            setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'),
+            bootstrap_bundle='',
+            force_bootstrap=False,
+            refresh_interval_hours=168,
+            gmail_sync_lookback_days=14,
+            auto_spend_limit_usd=10.0,
+            gmail_db='',
+            gmail_account=['me@example.com'],
+            gmail_add_email=[],
+            gmail_authorized_email=[],
+            gmail_all=False,
+            skip_source=[],
+            linkedin_csv='',
+            linkedin_source_user='',
+            twitter_handle='',
+        )
+        buf = io.StringIO()
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            with contextlib.redirect_stdout(buf):
+                code = setup.run_setup(args)
+        payload = json.loads(buf.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['phase'], 'link')
+        self.assertEqual(payload['next']['phase'], 'import')
+        self.assertEqual(payload['setup_ledger']['status'], 'refresh_due')
+        self.assertEqual(payload['setup_ledger']['phases']['link']['status'], 'ready')
+        self.assertEqual(payload['setup_ledger']['phases']['link']['optional_unlinked_sources'], ['linkedin_csv', 'messages', 'twitter'])
+        self.assertNotIn('unresolved_sources', payload['setup_ledger']['phases']['link'])
+        self.assertFalse(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+        self.assertFalse(any('sync-full' in ' '.join(cmd) for cmd in calls))
 
     def test_import_phase_refreshes_linked_sources_without_indexing(self):
         tmp = self.temp_workspace()
         accounts = tmp / '.powerpacks/ingestion/accounts.json'
         accounts.parent.mkdir(parents=True)
-        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+        accounts.write_text(json.dumps(resolved_accounts({
             'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
-            'linkedin_csv': {'linked': False, 'skipped': True, 'usernames': [], 'artifacts': [], 'config': {}},
-        }}), encoding='utf-8')
+        })), encoding='utf-8')
         ledger = tmp / '.powerpacks/setup/setup-run.json'
         ledger.parent.mkdir(parents=True)
         summary = setup.accounts_summary(accounts)
@@ -1327,6 +1407,89 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['status'], 'completed')
         self.assertTrue(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
         self.assertFalse(any('build_processing_pipeline.py' in ' '.join(cmd) for cmd in calls))
+
+    def test_import_phase_refreshes_partial_linked_sources(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / '.powerpacks/ingestion/accounts.json'
+        accounts.parent.mkdir(parents=True)
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {
+            'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
+        }}), encoding='utf-8')
+        ledger = tmp / '.powerpacks/setup/setup-run.json'
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text(json.dumps({
+            'schema_version': 1,
+            'status': 'pending',
+            'phases': {
+                'bootstrap': {'status': 'restored'},
+                'link': {'status': 'pending'},
+                'import': {'status': 'pending'},
+                'index': {'status': 'pending'},
+            },
+        }), encoding='utf-8')
+        calls = []
+
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(ledger),
+            refresh_interval_hours=168,
+            gmail_sync_lookback_days=14,
+            only_if_due=False,
+        )
+        buf = io.StringIO()
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+            calls.append(cmd)
+            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-partial'
+            merged_dir = run_dir / 'merged'
+            merged_dir.mkdir(parents=True)
+            for name, content in {
+                'people.csv': 'id\npartial\n',
+                'network_contacts.csv': 'id\nc1\n',
+                'network_contact_sources.csv': 'id\ns1\n',
+                'network_companies.csv': 'id\nco1\n',
+                'merge_manifest.json': '{}\n',
+            }.items():
+                (merged_dir / name).write_text(content, encoding='utf-8')
+            return 0, {
+                'status': 'completed',
+                'run_id': 'setup-refresh-partial',
+                'artifacts': {'merged_people_csv': str(merged_dir / 'people.csv')},
+            }, ''
+
+        with mock.patch.object(setup, 'run_json_command', side_effect=fake_run_json_command):
+            with contextlib.redirect_stdout(buf):
+                code = setup.run_import_phase(args)
+        payload = json.loads(buf.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['status'], 'completed')
+        self.assertEqual(payload['phase'], 'import')
+        self.assertEqual(payload['refresh']['linked_sources'], ['gmail'])
+        self.assertEqual(payload['next']['phase'], 'index')
+        self.assertTrue(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+
+    def test_next_indexes_existing_people_csv_without_linked_sources(self):
+        tmp = self.temp_workspace()
+        accounts = tmp / '.powerpacks/ingestion/accounts.json'
+        accounts.parent.mkdir(parents=True)
+        accounts.write_text(json.dumps({'version': 2, 'accounts': {}}), encoding='utf-8')
+        people = tmp / '.powerpacks/network-import/merged/people.csv'
+        people.parent.mkdir(parents=True)
+        people.write_text('id\np1\n', encoding='utf-8')
+        args = argparse.Namespace(
+            operator_id=OPERATOR_ID,
+            accounts=str(accounts),
+            setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'),
+            refresh_interval_hours=168,
+        )
+
+        payload = setup.next_action_payload(args)
+
+        self.assertEqual(payload['next']['phase'], 'index')
+        self.assertEqual(payload['phases']['link']['status'], 'no_linked_sources')
+        self.assertEqual(payload['phases']['import']['status'], 'ready')
+        self.assertNotIn('link sources with onboarding', payload['next_actions'])
 
     def test_index_phase_materializes_records_without_importing(self):
         tmp = self.temp_workspace()

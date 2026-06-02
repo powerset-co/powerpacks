@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import copy
 import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -54,6 +56,27 @@ GMAIL_LABEL_QUERY_TERMS = {
 
 
 SOURCE_NAMES = ["gmail", "linkedin_csv", "twitter", "messages"]
+MERGED_ARTIFACT_KEYS = {
+    "merged_people_csv",
+    "network_contacts_csv",
+    "network_contact_sources_csv",
+    "network_companies_csv",
+    "merge_manifest",
+    "duckdb",
+    "duckdb_manifest",
+}
+SOURCE_ARTIFACT_PREFIXES = {
+    "gmail": ("gmail_",),
+    "linkedin_csv": ("linkedin_",),
+    "twitter": ("twitter_",),
+    "messages": ("messages_",),
+}
+SOURCE_STEP_PREFIXES = {
+    "gmail": ("gmail_msgvault", "gmail_linkedin_resolution", "gmail_apply_enrich"),
+    "linkedin_csv": ("linkedin",),
+    "twitter": ("twitter",),
+    "messages": ("messages",),
+}
 MESSAGES_REVIEW_GATE_REASON = (
     "messages contacts require the reviewed $import-contacts flow before they can be merged into local network search"
 )
@@ -287,6 +310,87 @@ def gmail_sync_query(input_cfg: dict[str, Any]) -> str:
 def gmail_sync_after(input_cfg: dict[str, Any]) -> str:
     value = str(input_cfg.get("gmail_sync_after") or "").strip()
     return value if DATE_ONLY_RE.fullmatch(value) else ""
+
+
+def parse_msgvault_sync_date(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if DATE_ONLY_RE.fullmatch(text[:10]):
+        return text[:10]
+    try:
+        numeric = float(text)
+    except ValueError:
+        numeric = None
+    if numeric is not None:
+        if numeric > 10_000_000_000:
+            numeric = numeric / 1000
+        try:
+            return datetime.fromtimestamp(numeric, tz=timezone.utc).date().isoformat()
+        except (OSError, OverflowError, ValueError):
+            return ""
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return ""
+
+
+def sqlite_table_columns(con: sqlite3.Connection, table: str) -> set[str]:
+    try:
+        return {str(row[1]) for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    except sqlite3.Error:
+        return set()
+
+
+def infer_msgvault_sync_after(db: str, email: str) -> dict[str, str]:
+    path = Path(db or DEFAULT_MSGVAULT_DB).expanduser()
+    if not email or not path.exists():
+        return {}
+    uri = f"file:{urllib.parse.quote(str(path), safe='/')}?mode=ro"
+    try:
+        con = sqlite3.connect(uri, uri=True, timeout=1)
+    except sqlite3.Error:
+        return {}
+    try:
+        source_cols = sqlite_table_columns(con, "sources")
+        if not {"id", "source_type", "identifier"}.issubset(source_cols):
+            return {}
+        select_cols = ["id"]
+        if "last_sync_at" in source_cols:
+            select_cols.append("last_sync_at")
+        source = con.execute(
+            f"SELECT {', '.join(select_cols)} FROM sources WHERE lower(source_type) = 'gmail' AND lower(identifier) = lower(?) ORDER BY id DESC LIMIT 1",
+            (email,),
+        ).fetchone()
+        if not source:
+            return {}
+        source_id = source[0]
+        if "last_sync_at" in source_cols:
+            source_date = parse_msgvault_sync_date(source[1])
+            if source_date:
+                return {"sync_after": source_date, "source": "msgvault.sources.last_sync_at"}
+
+        message_cols = sqlite_table_columns(con, "messages")
+        if "source_id" not in message_cols:
+            return {}
+        candidates: list[tuple[str, str]] = []
+        for column in ("internal_date", "sent_at", "received_at"):
+            if column not in message_cols:
+                continue
+            row = con.execute(f"SELECT max({column}) FROM messages WHERE source_id = ?", (source_id,)).fetchone()
+            date = parse_msgvault_sync_date(row[0] if row else "")
+            if date:
+                candidates.append((date, f"msgvault.messages.{column}"))
+        if not candidates:
+            return {}
+        date, source_name = max(candidates, key=lambda item: item[0])
+        return {"sync_after": date, "source": source_name}
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
 
 
 def msgvault_home_for_db(db: str) -> Path:
@@ -883,6 +987,11 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
     excluded_labels = gmail_excluded_labels(input_cfg)
     sync_query = gmail_sync_query(input_cfg)
     sync_after = gmail_sync_after(input_cfg)
+    sync_after_source = "explicit" if sync_after else ""
+    if not sync_after and email:
+        inferred = infer_msgvault_sync_after(str(db), email)
+        sync_after = inferred.get("sync_after", "")
+        sync_after_source = inferred.get("source", "")
     existing_estimates = ledger.get("artifacts", {}).get("gmail_api_estimates") or []
     estimate = next((item for item in existing_estimates if isinstance(item, dict) and item.get("account_email") == email), None)
     if estimate is None:
@@ -917,6 +1026,7 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
                 "excluded_labels": excluded_labels,
                 "sync_query": sync_query,
                 "sync_after": sync_after,
+                "sync_after_source": sync_after_source,
                 "gmail_estimate": estimate,
                 "code": sync_code,
                 "payload": sync_payload,
@@ -943,7 +1053,7 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
     for label in excluded_labels:
         cmd.extend(["--exclude-label", label])
     code, payload, stderr = run_cmd(cmd)
-    return {"id": f"gmail:{email or 'all'}", "source": "gmail", "account_email": email, "run_id": run_id, "sync_command": sync_command, "sync_skipped_reason": sync_skipped_reason, "excluded_labels": excluded_labels, "sync_query": sync_query, "sync_after": sync_after, "gmail_estimate": estimate, "command": cmd, "code": code, "payload": payload, "stderr": stderr, "phase": "gmail_network_import"}
+    return {"id": f"gmail:{email or 'all'}", "source": "gmail", "account_email": email, "run_id": run_id, "sync_command": sync_command, "sync_skipped_reason": sync_skipped_reason, "excluded_labels": excluded_labels, "sync_query": sync_query, "sync_after": sync_after, "sync_after_source": sync_after_source, "gmail_estimate": estimate, "command": cmd, "code": code, "payload": payload, "stderr": stderr, "phase": "gmail_network_import"}
 
 
 def record_gmail_worker_result(ledger: dict[str, Any], result: dict[str, Any]) -> bool:
@@ -955,8 +1065,8 @@ def record_gmail_worker_result(ledger: dict[str, Any], result: dict[str, Any]) -
         mark_step(ledger, step_id, "failed", error=result.get("stderr") or payload.get("error") or payload, account_email=email, phase=result.get("phase"))
         ledger["status"] = "failed"
         return False
-    mark_step(ledger, step_id, "completed", payload=payload, account_email=email, sync_command=result.get("sync_command"), sync_skipped_reason=result.get("sync_skipped_reason"), excluded_labels=result.get("excluded_labels"), sync_query=result.get("sync_query"), sync_after=result.get("sync_after"), gmail_estimate=result.get("gmail_estimate"))
-    ledger.setdefault("source_imports", {})[step_id] = {"status": "completed", "source": "gmail", "account_email": email, "run_id": result.get("run_id"), "sync_command": result.get("sync_command"), "sync_skipped_reason": result.get("sync_skipped_reason"), "excluded_labels": result.get("excluded_labels"), "sync_query": result.get("sync_query"), "sync_after": result.get("sync_after"), "gmail_estimate": result.get("gmail_estimate")}
+    mark_step(ledger, step_id, "completed", payload=payload, account_email=email, sync_command=result.get("sync_command"), sync_skipped_reason=result.get("sync_skipped_reason"), excluded_labels=result.get("excluded_labels"), sync_query=result.get("sync_query"), sync_after=result.get("sync_after"), sync_after_source=result.get("sync_after_source"), gmail_estimate=result.get("gmail_estimate"))
+    ledger.setdefault("source_imports", {})[step_id] = {"status": "completed", "source": "gmail", "account_email": email, "run_id": result.get("run_id"), "sync_command": result.get("sync_command"), "sync_skipped_reason": result.get("sync_skipped_reason"), "excluded_labels": result.get("excluded_labels"), "sync_query": result.get("sync_query"), "sync_after": result.get("sync_after"), "sync_after_source": result.get("sync_after_source"), "gmail_estimate": result.get("gmail_estimate")}
     slug = source_slug(email)
     people_csv = ""
     for key, value in (payload.get("artifacts") or {}).items():
@@ -1320,11 +1430,6 @@ def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
     include_existing = bool(input_cfg.get("include_existing_artifacts"))
     explicit_inputs: list[str] = []
 
-    if include_existing:
-        canonical_people = DEFAULT_BASE_DIR / "merged" / "people.csv"
-        if canonical_people.exists():
-            explicit_inputs.append(str(canonical_people))
-
     account_order = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
     gmail_inputs = artifacts.get("gmail_final_people_csvs") or []
     if not gmail_inputs and artifacts.get("gmail_people_records"):
@@ -1458,6 +1563,44 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
     return 0
 
 
+def step_matches_source(step_id: str, selected_sources: set[str]) -> bool:
+    for source in selected_sources:
+        for prefix in SOURCE_STEP_PREFIXES.get(source, ()):
+            if step_id == prefix or step_id.startswith(f"{prefix}:"):
+                return True
+    return False
+
+
+def artifact_matches_source(key: str, selected_sources: set[str]) -> bool:
+    for source in selected_sources:
+        for prefix in SOURCE_ARTIFACT_PREFIXES.get(source, ()):
+            if key.startswith(prefix):
+                return True
+    return False
+
+
+def preserved_state_for_source_refresh(existing: dict[str, Any], selected_sources: set[str]) -> dict[str, Any]:
+    """Carry untouched source outputs across one-source refreshes on the shared setup ledger."""
+    if not existing:
+        return {}
+    artifacts = {
+        key: copy.deepcopy(value)
+        for key, value in (existing.get("artifacts") or {}).items()
+        if key not in MERGED_ARTIFACT_KEYS and not artifact_matches_source(key, selected_sources)
+    }
+    steps = {
+        key: copy.deepcopy(value)
+        for key, value in (existing.get("steps") or {}).items()
+        if key not in {"source_imports", "merge", "duckdb"} and not step_matches_source(key, selected_sources)
+    }
+    source_imports = {
+        key: copy.deepcopy(value)
+        for key, value in (existing.get("source_imports") or {}).items()
+        if not step_matches_source(key, selected_sources)
+    }
+    return {"artifacts": artifacts, "steps": steps, "source_imports": source_imports}
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     args = apply_account_sources(args)
     run_id = args.run_id or f"network-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
@@ -1466,8 +1609,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.dry_run or args.estimate:
         emit(dry_run_plan(args, ledger_path, run_id, run_dir))
         return 0
+    existing = load_ledger(ledger_path) if ledger_path.exists() else {}
     if ledger_path.exists() and not args.force:
-        existing = load_ledger(ledger_path)
         if existing.get("status") == "completed":
             emit({
                 "status": "completed",
@@ -1482,6 +1625,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         if existing.get("status") not in {"failed"}:
             emit({"status": "active_run_exists", "ledger": str(ledger_path), "message": "Use continue/approve or --force."})
             return 0
+    selected_sources = set(unique_strings(getattr(args, "only_source", [])))
+    preserved = preserved_state_for_source_refresh(existing, selected_sources) if args.force and selected_sources and not args.fan_in_only else {}
     ledger = {
         "primitive": "import_network_pipeline",
         "version": 1,
@@ -1524,6 +1669,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         "steps": {},
         "artifacts": {},
     }
+    if preserved:
+        ledger["steps"].update(preserved.get("steps") or {})
+        ledger["artifacts"].update(preserved.get("artifacts") or {})
+        if preserved.get("source_imports"):
+            ledger["source_imports"] = preserved["source_imports"]
     save_ledger(ledger_path, ledger)
     return run_pipeline(ledger_path, resume=False)
 

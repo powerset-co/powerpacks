@@ -35,6 +35,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             "linkedin_url": "https://www.linkedin.com/in/jane-example",
             "full_name": name,
             "current_company": "Acme AI",
+            "rapidapi_response": json.dumps({"full_name": name, "experiences": [{"title": "CEO", "company": "Acme AI"}]}),
             "source_channels": path.parent.parent.name,
         })
         with path.open("w", newline="", encoding="utf-8") as handle:
@@ -46,6 +47,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         fields = merge_network_sources.PEOPLE_SCHEMA_COLUMNS
         out = {col: "" for col in fields}
+        out["rapidapi_response"] = json.dumps({"full_name": row.get("full_name") or "Test Person", "experiences": [{"title": "Operator"}]})
         out.update(row)
         with path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
@@ -147,11 +149,14 @@ class MergeNetworkSourcesTests(unittest.TestCase):
 
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["input_rows"], 2)
-                self.assertEqual(payload["merged_rows"], 1)
+                self.assertEqual(payload["unfiltered_merged_rows"], 1)
+                self.assertEqual(payload["filtered_without_linkedin"], 1)
+                self.assertEqual(payload["filtered_people_csv_rows"], 1)
+                self.assertEqual(payload["merged_rows"], 0)
+                self.assertEqual(payload["filtered_without_rapidapi_payload"], 0)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))
-                self.assertEqual(rows[0]["merge_key"], "email:jane@example.com")
-                self.assertEqual(rows[0]["merged_row_count"], "2")
+                self.assertEqual(rows, [])
             finally:
                 os.chdir(old_cwd)
 
@@ -183,11 +188,81 @@ class MergeNetworkSourcesTests(unittest.TestCase):
 
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["input_rows"], 2)
+                self.assertEqual(payload["unfiltered_merged_rows"], 1)
+                self.assertEqual(payload["filtered_without_linkedin"], 1)
+                self.assertEqual(payload["filtered_people_csv_rows"], 1)
+                self.assertEqual(payload["merged_rows"], 0)
+                self.assertEqual(payload["filtered_without_rapidapi_payload"], 0)
+                with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                self.assertEqual(rows, [])
+            finally:
+                os.chdir(old_cwd)
+
+    def test_filters_rows_without_usable_rapidapi_payload_from_people_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                enriched = Path(".powerpacks/network-import/linkedin/run-1/people.csv")
+                contact_only = Path(".powerpacks/network-import/gmail/run-1/people.csv")
+                rapidapi_without_linkedin = Path(".powerpacks/network-import/gmail/run-2/people.csv")
+                failed = Path(".powerpacks/network-import/linkedin/run-2/people.csv")
+                self.write_people_row(enriched, {
+                    "id": "linkedin:keep",
+                    "public_identifier": "keep-example",
+                    "linkedin_url": "https://www.linkedin.com/in/keep-example",
+                    "full_name": "Keep Example",
+                    "source_channels": "linkedin_csv",
+                })
+                self.write_people_row(contact_only, {
+                    "id": "gmail:drop",
+                    "full_name": "Drop Contact",
+                    "primary_email": "drop@example.com",
+                    "source_channels": "gmail_msgvault",
+                    "rapidapi_response": "",
+                })
+                self.write_people_row(rapidapi_without_linkedin, {
+                    "id": "gmail:rapid-no-linkedin",
+                    "full_name": "Drop Rapid No LinkedIn",
+                    "primary_email": "rapid-no-linkedin@example.com",
+                    "source_channels": "gmail_msgvault",
+                })
+                self.write_people_row(failed, {
+                    "id": "linkedin:failed",
+                    "public_identifier": "failed-example",
+                    "linkedin_url": "https://www.linkedin.com/in/failed-example",
+                    "full_name": "Failed Example",
+                    "source_channels": "linkedin_csv",
+                    "rapidapi_response": json.dumps({"success": False, "message": "not found"}),
+                })
+
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke([
+                    "run",
+                    "--no-discover",
+                    "--output-dir", str(out_dir),
+                    "--input", str(enriched),
+                    "--input", str(contact_only),
+                    "--input", str(rapidapi_without_linkedin),
+                    "--input", str(failed),
+                ])
+
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["input_rows"], 4)
+                self.assertEqual(payload["unfiltered_merged_rows"], 4)
+                self.assertEqual(payload["filtered_without_rapidapi_payload"], 2)
+                self.assertEqual(payload["filtered_without_linkedin"], 2)
+                self.assertEqual(payload["filtered_people_csv_rows"], 3)
+                self.assertEqual(payload["rapidapi_payload_rows"], 1)
                 self.assertEqual(payload["merged_rows"], 1)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))
-                self.assertEqual(rows[0]["merge_key"], "phone:+15551234567")
-                self.assertEqual(rows[0]["merged_row_count"], "2")
+                self.assertEqual([row["full_name"] for row in rows], ["Keep Example"])
+                with Path(payload["network_contact_sources_csv"]).open(newline="", encoding="utf-8") as handle:
+                    source_rows = list(csv.DictReader(handle))
+                self.assertEqual(len(source_rows), 1)
+                self.assertEqual(source_rows[0]["merge_key"], "linkedin:keep-example")
             finally:
                 os.chdir(old_cwd)
 

@@ -29,6 +29,7 @@ try:
         stable_linkedin_key,
         extract_public_identifier,
     )
+    from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.people_schema import (
@@ -37,6 +38,7 @@ except ModuleNotFoundError:
         stable_linkedin_key,
         extract_public_identifier,
     )
+    from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
 MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources", "merged_row_count", "needs_review"]
@@ -125,6 +127,26 @@ def listish_values(value: str) -> list[str]:
     if isinstance(parsed, list):
         return [str(item) for item in parsed if str(item).strip()]
     return [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
+
+
+def usable_rapidapi_payload(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return False
+    if not isinstance(payload, dict) or not payload:
+        return False
+    return normalize_linkedin_profile(payload).get("success") is True
+
+
+def has_rapidapi_profile(row: dict[str, Any]) -> bool:
+    return usable_rapidapi_payload(str(row.get("rapidapi_response") or ""))
+
+
+def keep_people_csv_row(row: dict[str, Any]) -> bool:
+    return bool(stable_linkedin_key(row)) and has_rapidapi_profile(row)
 
 
 def normalize_email(value: str) -> str:
@@ -442,6 +464,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             normalized["id"] = f"merged:{sha(normalized['merge_key'])}"
         merged_rows.append(normalized)
         source_rows.extend(source_fact_rows(normalized, [normalized]))
+    unfiltered_merged_rows = len(merged_rows)
+    filtered_without_linkedin = sum(1 for row in merged_rows if not stable_linkedin_key(row))
+    filtered_without_rapidapi_payload = sum(1 for row in merged_rows if not has_rapidapi_profile(row))
+    merged_rows = [row for row in merged_rows if keep_people_csv_row(row)]
+    kept_merge_keys = {row.get("merge_key", "") for row in merged_rows}
+    source_rows = [row for row in source_rows if row.get("merge_key", "") in kept_merge_keys]
     review = similar_pairs(merged_rows, args.name_threshold)
     output_dir = Path(args.output_dir)
     output = output_dir / "people.csv"
@@ -462,7 +490,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         "created_at": now_iso(),
         "inputs": per_file,
         "input_rows": len(all_rows),
+        "unfiltered_merged_rows": unfiltered_merged_rows,
+        "filtered_without_linkedin": filtered_without_linkedin,
+        "filtered_without_rapidapi_payload": filtered_without_rapidapi_payload,
+        "filtered_people_csv_rows": unfiltered_merged_rows - len(merged_rows),
         "merged_rows": len(merged_rows),
+        "rapidapi_payload_rows": len(merged_rows),
         "linkedin_groups": len(groups),
         "review_pairs": len(review),
         "source_rows": len(source_rows),

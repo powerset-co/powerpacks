@@ -25,6 +25,7 @@ DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS
 DEFAULT_AUTO_SPEND_LIMIT_USD = float(os.environ.get('POWERPACKS_SETUP_AUTO_SPEND_LIMIT_USD', '10'))
 SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/import-network-run.setup-refresh.json')
 SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
+SETUP_SOURCE_CHANNELS = ['gmail', 'linkedin_csv', 'messages', 'twitter']
 REQUIRED_PRIVACY = [
     'raw_msgvault_db_copied', 'raw_mail_copied', 'message_bodies_copied',
     'attachments_copied', 'secrets_copied',
@@ -605,10 +606,15 @@ def run_apply(args: argparse.Namespace) -> int:
     return 0 if payload.get('status') == 'ok' else 2
 
 
+def empty_account_summary_channel() -> dict[str, Any]:
+    return {'status': 'unlinked', 'linked': False, 'skipped': False, 'usernames_count': 0, 'artifacts': [], 'config': {}}
+
+
 def accounts_summary(path: Path) -> dict[str, Any]:
-    if not path.exists(): return {'exists': False, 'channels': {}}
+    if not path.exists():
+        return {'exists': False, 'channels': {channel: empty_account_summary_channel() for channel in SETUP_SOURCE_CHANNELS}}
     try: data = read_json(path)
-    except Exception as exc: return {'exists': True, 'error': str(exc), 'channels': {}}
+    except Exception as exc: return {'exists': True, 'error': str(exc), 'channels': {channel: empty_account_summary_channel() for channel in SETUP_SOURCE_CHANNELS}}
     channels: dict[str, Any] = {}
     for k, v in (data.get('channels') or data.get('accounts') or {}).items():
         if isinstance(v, dict):
@@ -623,6 +629,8 @@ def accounts_summary(path: Path) -> dict[str, Any]:
             artifacts = v.get('artifacts') or []
             artifact_names = sorted(artifacts.keys()) if isinstance(artifacts, dict) else sorted(str(x) for x in artifacts)
             channels[k] = {'status': status, 'linked': bool(v.get('linked')), 'skipped': bool(v.get('skipped')), 'usernames_count': len(v.get('usernames') or []), 'artifacts': artifact_names, 'config': v.get('config') or {}}
+    for channel in SETUP_SOURCE_CHANNELS:
+        channels.setdefault(channel, empty_account_summary_channel())
     return {'exists': True, 'version': data.get('version'), 'channels': channels}
 
 
@@ -632,11 +640,10 @@ def linked_source_fingerprint(accounts: dict[str, Any]) -> str:
         ch: {
             'status': rec.get('status'),
             'linked': bool(rec.get('linked')),
-            'skipped': bool(rec.get('skipped')),
             'config': rec.get('config') or {},
         }
         for ch, rec in sorted(channels.items())
-        if isinstance(rec, dict) and (rec.get('linked') or rec.get('skipped'))
+        if isinstance(rec, dict) and rec.get('linked')
     }
     raw = json.dumps(linked, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]
@@ -645,6 +652,23 @@ def linked_source_fingerprint(accounts: dict[str, Any]) -> str:
 def linked_sources(accounts: dict[str, Any]) -> list[str]:
     channels = accounts.get('channels') or {}
     return sorted(ch for ch, rec in channels.items() if isinstance(rec, dict) and rec.get('linked'))
+
+
+def link_state(accounts: dict[str, Any]) -> dict[str, list[str] | bool]:
+    channels = accounts.get('channels') or {}
+    source_names = sorted(set(SETUP_SOURCE_CHANNELS) | set(channels.keys()))
+    linked = sorted(ch for ch in source_names if isinstance(channels.get(ch), dict) and channels[ch].get('linked'))
+    skipped = sorted(ch for ch in source_names if isinstance(channels.get(ch), dict) and channels[ch].get('skipped'))
+    unlinked = sorted(
+        ch for ch in source_names
+        if not (isinstance(channels.get(ch), dict) and (channels[ch].get('linked') or channels[ch].get('skipped')))
+    )
+    return {
+        'ready': bool(linked),
+        'linked': linked,
+        'skipped': skipped,
+        'unlinked': unlinked,
+    }
 
 
 def resolve_artifact_path(path_text: Any) -> Path:
@@ -1055,16 +1079,21 @@ def normalize_setup_phases(
     for phase in ['bootstrap', 'link', 'import', 'index']:
         phases.setdefault(phase, {'status': 'pending'})
 
-    channels = accounts.get('channels') or {}
-    if accounts.get('exists') and channels:
-        linked = sorted(ch for ch, rec in channels.items() if isinstance(rec, dict) and rec.get('linked'))
-        skipped = sorted(ch for ch, rec in channels.items() if isinstance(rec, dict) and rec.get('skipped'))
-        unresolved = sorted(
-            ch for ch, rec in channels.items()
-            if isinstance(rec, dict) and not rec.get('linked') and not rec.get('skipped')
-        )
-        if not unresolved and (linked or skipped):
-            phases['link'] = {'status': 'ready', 'linked_sources': linked, 'skipped_sources': skipped}
+    current_link = link_state(accounts)
+    if current_link['linked']:
+        phases['link'] = {
+            'status': 'ready',
+            'linked_sources': current_link['linked'],
+            'skipped_sources': current_link['skipped'],
+            'optional_unlinked_sources': current_link['unlinked'],
+        }
+    else:
+        phases['link'] = {
+            'status': 'no_linked_sources',
+            'linked_sources': current_link['linked'],
+            'skipped_sources': current_link['skipped'],
+            'optional_unlinked_sources': current_link['unlinked'],
+        }
 
     people_csv = ROOT / '.powerpacks/network-import/merged/people.csv'
     prior_import = dict(phases.get('import') or {})
@@ -1085,11 +1114,27 @@ def normalize_setup_phases(
             'people_csv': '.powerpacks/network-import/merged/people.csv',
             'live_refresh': live_refresh,
         }
-    elif people_csv.exists() and phases.get('bootstrap', {}).get('status') == 'restored':
+    elif people_csv.exists() and phases.get('bootstrap', {}).get('status') == 'restored' and current_link['linked']:
         phases['import'] = {
             'status': 'refresh_due',
             'source': 'operator_bootstrap',
             'people_csv': '.powerpacks/network-import/merged/people.csv',
+            'refresh_due': refresh_state,
+            'live_refresh': live_refresh,
+        }
+    elif people_csv.exists() and not current_link['linked']:
+        phases['import'] = {
+            'status': 'ready',
+            'source': 'existing_artifact',
+            'people_csv': '.powerpacks/network-import/merged/people.csv',
+            'refresh_due': refresh_state,
+            'live_refresh': live_refresh,
+        }
+    elif not current_link['linked']:
+        phases['import'] = {
+            'status': 'no_linked_sources',
+            'reason': 'no_linked_sources',
+            'people_csv': '',
             'refresh_due': refresh_state,
             'live_refresh': live_refresh,
         }
@@ -1132,12 +1177,16 @@ def normalize_setup_phases(
         }
 
     statuses = {phase: phases.get(phase, {}).get('status') for phase in ['bootstrap', 'link', 'import', 'index']}
-    if statuses['bootstrap'] == 'restored' and statuses['link'] == 'ready' and statuses['import'] in ('ready', 'completed') and statuses['index'] == 'ready':
+    if statuses['import'] in ('ready', 'completed') and statuses['index'] == 'ready':
+        ledger['status'] = 'ready'
+    elif not current_link['linked'] and statuses['index'] == 'ready' and idx.get('status') == 'search_ready':
         ledger['status'] = 'ready'
     elif statuses['import'] == 'refresh_due':
         ledger['status'] = 'refresh_due'
     elif statuses['index'] == 'needs_processing':
         ledger['status'] = 'needs_index_processing'
+    elif not current_link['linked'] and statuses['import'] == 'no_linked_sources' and idx.get('status') == 'not_ready':
+        ledger['status'] = 'needs_linking'
 
 
 def status_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -1154,14 +1203,18 @@ def status_payload(args: argparse.Namespace) -> dict[str, Any]:
     next_actions = []
     if bundles and ledger['phases']['bootstrap']['status'] == 'pending':
         next_actions.append('inspect-bootstrap')
-    if not Path(args.accounts).exists():
-        next_actions.append('link accounts with onboarding')
+    link_phase = ledger.get('phases', {}).get('link', {})
+    import_phase = ledger.get('phases', {}).get('import', {})
+    has_linked_sources = bool(link_phase.get('linked_sources'))
+    has_indexable_artifacts = idx['status'] in ('search_ready', 'records_only_duckdb_missing', 'people_csv_ready_for_processing')
     if idx['status'] == 'records_only_duckdb_missing':
         next_actions.append(idx['repair_command'])
     elif idx['status'] == 'people_csv_ready_for_processing':
         next_actions.append(idx.get('dry_run_command') or idx['plan_command'])
-    if ledger.get('phases', {}).get('import', {}).get('status') == 'refresh_due':
+    if import_phase.get('status') == 'refresh_due':
         next_actions.append('run setup refresh')
+    if not has_linked_sources and not has_indexable_artifacts and import_phase.get('status') != 'refresh_due':
+        next_actions.append('link sources with onboarding')
     return {
         'status': 'ok',
         'operator_id': args.operator_id,
@@ -1221,14 +1274,6 @@ def next_action_payload(args: argparse.Namespace) -> dict[str, Any]:
             'reason': 'matching bootstrap bundle can be restored',
             'command': setup_phase_command(args, 'bootstrap'),
         }
-    elif link.get('status') != 'ready':
-        action = {
-            'status': 'run_command',
-            'phase': 'link',
-            'auto_safe': False,
-            'reason': 'account/source linking is not complete',
-            'command': setup_phase_command(args, 'link'),
-        }
     elif import_phase.get('status') == 'refresh_due':
         action = {
             'status': 'run_command',
@@ -1244,6 +1289,14 @@ def next_action_payload(args: argparse.Namespace) -> dict[str, Any]:
             'auto_safe': True,
             'reason': idx.get('status') or index.get('reason') or 'index_not_ready',
             'command': setup_phase_command(args, 'index'),
+        }
+    elif not link.get('linked_sources') and import_phase.get('status') == 'no_linked_sources' and idx.get('status') == 'not_ready':
+        action = {
+            'status': 'run_command',
+            'phase': 'link',
+            'auto_safe': False,
+            'reason': 'no linked sources or local network artifacts yet',
+            'command': setup_phase_command(args, 'link'),
         }
     else:
         action = {
@@ -1324,6 +1377,10 @@ def onboarding_step_command(args: argparse.Namespace) -> list[str]:
         cmd.extend(['--linkedin-csv', args.linkedin_csv])
     if getattr(args, 'linkedin_source_user', ''):
         cmd.extend(['--linkedin-source-user', args.linkedin_source_user])
+    if getattr(args, 'messages_check', False):
+        cmd.append('--messages-check')
+    if getattr(args, 'skip_messages_whatsapp', False):
+        cmd.append('--skip-messages-whatsapp')
     if getattr(args, 'twitter_handle', ''):
         cmd.extend(['--twitter-handle', args.twitter_handle])
     return cmd
@@ -1359,6 +1416,7 @@ def run_import_phase(args: argparse.Namespace) -> int:
     ledger_path = Path(args.setup_ledger)
     ledger = load_setup_ledger(ledger_path)
     accounts = accounts_summary(Path(args.accounts))
+
     due = import_refresh_due(
         ledger,
         accounts,
@@ -1440,6 +1498,67 @@ def run_import_phase(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_fan_in_phase(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.setup_ledger)
+    ledger = load_setup_ledger(ledger_path)
+    accounts = accounts_summary(Path(args.accounts))
+
+    started_at = now()
+    run_id = f"setup-fan-in-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    before_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
+    code, payload, stderr = run_json_command(network_fan_in_command(args, run_id, force=bool(getattr(args, 'force', False))))
+    if code == 20 or payload.get('status') == 'blocked_approval':
+        emit({'status': 'blocked_approval', 'phase': 'fan-in', 'payload': payload, 'stderr': tail(stderr)})
+        return 20
+    if code != 0:
+        emit({'status': 'failed', 'phase': 'fan-in', 'payload': payload, 'stderr': tail(stderr)})
+        return 1
+
+    promoted = promote_network_artifacts(payload.get('artifacts') or {})
+    after_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
+    completed = {
+        'status': 'completed',
+        'started_at': started_at,
+        'completed_at': now(),
+        'run_id': payload.get('run_id') or run_id,
+        'ledger': str(SETUP_REFRESH_LEDGER),
+        'source_fingerprint': linked_source_fingerprint(accounts),
+        'linked_sources': linked_sources(accounts),
+        'network_changed': bool(after_hash and before_hash != after_hash),
+        'before_people_sha256': before_hash,
+        'after_people_sha256': after_hash,
+        'promoted': promoted,
+        'artifact_hashes': artifact_hashes(promoted),
+        'messages_ledger': str(SETUP_MESSAGES_LEDGER) if ((accounts.get('channels') or {}).get('messages') or {}).get('linked') else '',
+    }
+    ledger.setdefault('phases', {})['import'] = {
+        'status': 'ready',
+        'source': 'fan_in',
+        'people_csv': '.powerpacks/network-import/merged/people.csv',
+        'live_refresh': completed,
+    }
+    ledger['status'] = 'ready'
+    save_setup_ledger(ledger, ledger_path)
+    status_args = argparse.Namespace(
+        operator_id=args.operator_id,
+        accounts=args.accounts,
+        setup_ledger=args.setup_ledger,
+        refresh_interval_hours=getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS),
+    )
+    final_status = status_payload(status_args)
+    save_setup_ledger(final_status['setup_ledger'], ledger_path)
+    emit({
+        'status': 'completed',
+        'phase': 'fan-in',
+        'operator_id': args.operator_id,
+        'refresh': completed,
+        'payload': payload,
+        'setup_ledger': final_status['setup_ledger'],
+        'next': next_action_payload(status_args)['next'],
+    })
+    return 0
+
+
 def run_index_phase(args: argparse.Namespace) -> int:
     ledger_path = Path(args.setup_ledger)
     ledger = load_setup_ledger(ledger_path)
@@ -1467,7 +1586,7 @@ def setup_commands(args: argparse.Namespace) -> dict[str, str]:
     return {
         'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
         'import_network_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
-        'import_network_fan_in': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts --fan-in-only --ledger .powerpacks/network-import/import-network-run.fan-in.json --run-id setup-fan-in',
+        'import_network_fan_in': f'uv run --project . python packs/ingestion/primitives/setup/setup.py fan-in --operator-id {args.operator_id} --accounts {args.accounts} --setup-ledger {args.setup_ledger} --force',
         'import_network_status': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py status',
         'import_network_continue': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue',
         'import_network_approve': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve',
@@ -1491,21 +1610,16 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
         cfg = rec.get('config') if isinstance(rec.get('config'), dict) else {}
         if ch == 'gmail':
             emails = cfg.get('selected_accounts') or cfg.get('account_emails') or []
-            if not emails:
-                emails = ['']
-            for email in emails:
-                slug = re.sub(r'[^A-Za-z0-9._-]+', '-', str(email or 'all').lower()).strip('-') or 'all'
-                worker_jobs.append({
-                    'id': f'gmail:{email or "all"}',
-                    'source': 'gmail',
-                    'account_email': email,
-                    'parallelizable': True,
-                    'ledger': f'.powerpacks/network-import/import-network-run.gmail.{slug}.json',
-                    'run_id': f'setup-gmail-{slug}',
-                    'command': commands['import_network_run'] + f' --only-source gmail --ledger .powerpacks/network-import/import-network-run.gmail.{slug}.json --run-id setup-gmail-{slug}' + (f' --gmail-account-emails {email}' if email else ''),
-                })
+            worker_jobs.append({
+                'id': 'gmail',
+                'source': 'gmail',
+                'account_emails': emails,
+                'account_count': len(emails),
+                'parallelizable': False,
+                'ledger': str(SETUP_REFRESH_LEDGER),
+                'command': commands['import_network_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source gmail --force',
+            })
         else:
-            slug = re.sub(r'[^A-Za-z0-9._-]+', '-', ch.lower()).strip('-') or ch
             if ch == 'messages':
                 whatsapp_cfg = cfg.get('whatsapp') if isinstance(cfg.get('whatsapp'), dict) else {}
                 imessage_cfg = cfg.get('imessage') if isinstance(cfg.get('imessage'), dict) else {}
@@ -1527,19 +1641,29 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
                     f' {" ".join(include_flags)}'
                 )
                 requires_approval = ['whatsapp_qr'] if '--include-whatsapp' in include_flags else []
-            else:
-                command = commands['import_network_run'] + f' --only-source {ch} --ledger .powerpacks/network-import/import-network-run.{slug}.json --run-id setup-{slug}'
+                ledger = str(SETUP_MESSAGES_LEDGER)
+                run_id = ''
+            elif ch == 'twitter':
+                command = ''
                 requires_approval = []
+                ledger = ''
+                run_id = ''
+            else:
+                command = commands['import_network_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source {ch} --force'
+                requires_approval = []
+                ledger = str(SETUP_REFRESH_LEDGER)
+                run_id = ''
             worker_jobs.append({
                 'id': ch,
                 'source': ch,
-                'parallelizable': True,
-                'ledger': f'.powerpacks/messages/import-run.setup-messages.json' if ch == 'messages' else f'.powerpacks/network-import/import-network-run.{slug}.json',
-                'run_id': f'setup-{slug}',
+                'parallelizable': ch == 'messages',
+                'ledger': ledger,
+                'run_id': run_id,
                 'command': command,
                 'requires_approval': requires_approval,
+                **({'status': 'recorded_only', 'reason': 'Twitter/X handle is recorded; follower import is not wired into setup yet.'} if ch == 'twitter' else {}),
             })
-    worker_group = {'parallel': True, 'fan_in': 'run commands.import_network_fan_in after all nonblocked worker jobs complete', 'jobs': worker_jobs}
+    worker_group = {'parallel': False, 'fan_in': 'setup import uses the single setup refresh ledger', 'jobs': worker_jobs}
     if not worker_jobs:
         worker_group.update({'status': 'no_linked_sources', 'reason': 'No linked account sources were discovered; run the link phase before dispatching import workers.'})
     payload = {
@@ -1626,6 +1750,27 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
         cmd.append('--force')
     if gmail_sync_after:
         cmd.extend(['--gmail-sync-after', gmail_sync_after])
+    return cmd
+
+
+def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool) -> list[str]:
+    cmd = [
+        sys.executable,
+        'packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py',
+        'run',
+        '--from-accounts',
+        args.accounts,
+        '--operator-id',
+        args.operator_id,
+        '--include-existing-artifacts',
+        '--fan-in-only',
+        '--ledger',
+        str(SETUP_REFRESH_LEDGER),
+        '--run-id',
+        run_id,
+    ]
+    if force:
+        cmd.append('--force')
     return cmd
 
 
@@ -1782,6 +1927,12 @@ def run_setup(args: argparse.Namespace) -> int:
     ledger = status['setup_ledger']
     accounts = status['accounts']
     import_phase = ledger.get('phases', {}).get('import', {})
+    idx = status.get('search_index_readiness') if isinstance(status.get('search_index_readiness'), dict) else {}
+    has_linked_sources = bool(linked_sources(accounts))
+    has_indexable_artifacts = idx.get('status') in ('search_ready', 'records_only_duckdb_missing', 'people_csv_ready_for_processing')
+    if not has_linked_sources and not has_indexable_artifacts and import_phase.get('status') != 'refresh_due':
+        return run_link_phase(args)
+
     due = import_phase.get('refresh_due') if isinstance(import_phase.get('refresh_due'), dict) else {}
     forced_due = import_refresh_due(
         ledger,
@@ -1912,6 +2063,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--skip-source', action='append', choices=['messages', 'gmail', 'linkedin_csv', 'twitter'], default=[])
     s.add_argument('--linkedin-csv', default='')
     s.add_argument('--linkedin-source-user', default='')
+    s.add_argument('--messages-contacts-csv', default='', help=argparse.SUPPRESS)
+    s.add_argument('--messages-check', action='store_true')
+    s.add_argument('--skip-messages-whatsapp', action='store_true')
     s.add_argument('--twitter-handle', default='')
     s.set_defaults(func=run_link_phase)
 
@@ -1923,6 +2077,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
     s.add_argument('--only-if-due', action='store_true')
     s.set_defaults(func=run_import_phase)
+
+    s = sub.add_parser('fan-in')
+    s.add_argument('--operator-id', required=True)
+    s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
+    s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
+    s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
+    s.add_argument('--force', action='store_true')
+    s.set_defaults(func=run_fan_in_phase)
 
     s = sub.add_parser('index')
     s.add_argument('--operator-id', required=True)
@@ -1947,6 +2109,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
     s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
+    s.add_argument('--gmail-db', default='')
+    s.add_argument('--gmail-account', action='append', default=[])
+    s.add_argument('--gmail-add-email', action='append', default=[])
+    s.add_argument('--gmail-authorized-email', action='append', default=[])
+    s.add_argument('--gmail-all', action='store_true')
+    s.add_argument('--skip-source', action='append', choices=['messages', 'gmail', 'linkedin_csv', 'twitter'], default=[])
+    s.add_argument('--linkedin-csv', default='')
+    s.add_argument('--linkedin-source-user', default='')
+    s.add_argument('--messages-contacts-csv', default='', help=argparse.SUPPRESS)
+    s.add_argument('--messages-check', action='store_true')
+    s.add_argument('--skip-messages-whatsapp', action='store_true')
+    s.add_argument('--twitter-handle', default='')
     s.set_defaults(func=run_setup)
     return p
 

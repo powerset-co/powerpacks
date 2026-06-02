@@ -34,6 +34,13 @@ scripts/run-powerpacks-console.sh restart
 scripts/run-powerpacks-console.sh stop
 ```
 
+Open a specific app route:
+
+```bash
+scripts/run-powerpacks-console.sh start --path /onboarding --open
+scripts/run-powerpacks-console.sh start --path /setup
+```
+
 Default URL is usually:
 
 ```text
@@ -60,8 +67,12 @@ $POWERPACKS_REPO_ROOT/.powerpacks/
 
 ## Current scope
 
-Current implemented view:
+Current implemented views:
 
+- `/onboarding` guided setup flow for account linking, import, enrichment, and
+  local indexing
+- `/setup` detailed setup tables and stage controls
+- `/setup/imessage/review` local messages review
 - lists `.powerpacks/runs/search-network-*.json`
 - reads run state and `expand_search_request` query expansion
 - reads result JSONL in pages of 50
@@ -70,5 +81,5 @@ Current implemented view:
 - shows app-style person/results table with tags, trait scores, overall score,
   and reasoning
 
-Do not add contact review, Sales Nav review, or message review UI unless the
-user explicitly asks. Keep the current console as a read-only artifact browser.
+Do not add Sales Nav review or unrelated write flows unless the user explicitly
+asks. Setup and messages review are now first-class local console surfaces.

@@ -521,6 +521,36 @@ class ImportContactsPipelineTests(unittest.TestCase):
             with mock.patch.object(mod, "read_review_server_health", return_value=None):
                 self.assertFalse(mod.review_server_matches_current_csv(args))
 
+    def test_extract_imessage_force_refresh_ignores_existing_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            imessage_csv = tmp_path / "imessage.contacts.csv"
+            imessage_jsonl = tmp_path / "imessage.contacts.raw.jsonl"
+            imessage_manifest = tmp_path / "imessage.manifest.json"
+            imessage_csv.write_text(
+                ",".join(mod.CONTACT_CSV_HEADERS) + "\n"
+                "+15550000001,Ada,imessage,false,,3,2026-01-01,,,,,,,,\n",
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(force_imessage=True, timeout=30, env_file=".env")
+            payload = {"primitive": "extract_imessage_contacts", "status": "completed", "counts": {"contacts": 2}}
+            with mock.patch.object(mod, "DEFAULT_IMESSAGE_CONTACTS", imessage_csv), \
+                    mock.patch.object(mod, "DEFAULT_IMESSAGE_JSONL", imessage_jsonl), \
+                    mock.patch.object(mod, "DEFAULT_IMESSAGE_MANIFEST", imessage_manifest), \
+                    mock.patch.object(mod, "run_command", side_effect=[
+                        {"returncode": 0, "json": {"status": "ok"}},
+                        {"returncode": 0, "json": payload},
+                    ]) as run_command:
+                mod.extract_imessage(args, ledger_path, ledger)
+
+            self.assertEqual(run_command.call_count, 2)
+            extract_cmd = run_command.call_args_list[1].args[0]
+            self.assertIn("extract_imessage_contacts.py", extract_cmd[1])
+            self.assertIn("extract", extract_cmd)
+            self.assertEqual(mod.read_json(ledger_path)["steps"]["extract_imessage"]["summary"], payload)
+
     def test_extract_whatsapp_reuses_only_completed_active_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -546,6 +576,47 @@ class ImportContactsPipelineTests(unittest.TestCase):
             saved = mod.read_json(ledger_path)
             summary = saved["steps"]["extract_whatsapp"]["summary"]
             self.assertEqual(summary["reason"], "active_run_completed")
+
+    def test_extract_whatsapp_force_refresh_ignores_reuse_existing_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            ledger["steps"]["extract_whatsapp"] = {"id": "extract_whatsapp", "status": "completed"}
+            ledger.setdefault("artifacts", {})["whatsapp_provider"] = "wacli"
+            whatsapp_csv = tmp_path / "whatsapp.contacts.csv"
+            whatsapp_jsonl = tmp_path / "whatsapp.contacts.jsonl"
+            whatsapp_manifest = tmp_path / "whatsapp.contacts.csv.manifest.json"
+            whatsapp_csv.write_text(
+                ",".join(mod.CONTACT_CSV_HEADERS) + "\n"
+                "+15550000001,Ada,whatsapp,false,,3,2026-01-01,,,,,,,,\n",
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                force_whatsapp=True,
+                reuse_existing_artifacts=True,
+                whatsapp_provider="wacli",
+                wacli_max_messages=0,
+                wacli_max_group_participants=30,
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+            )
+            payload = {
+                "primitive": "import_whatsapp_wacli",
+                "status": "completed",
+                "counts": {"contacts": 2},
+            }
+            with mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", whatsapp_csv), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_JSONL", whatsapp_jsonl), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_MANIFEST", whatsapp_manifest), \
+                    mock.patch.object(mod, "run_command", return_value={"returncode": 0, "json": payload}) as run_command:
+                mod.extract_whatsapp(args, ledger_path, ledger)
+
+            run_command.assert_called_once()
+            cmd = run_command.call_args.args[0]
+            self.assertIn("import_whatsapp_wacli.py", cmd[1])
+            self.assertEqual(mod.read_json(ledger_path)["steps"]["extract_whatsapp"]["summary"], payload)
 
     def test_extract_whatsapp_does_not_reuse_legacy_provider_state(self):
         with tempfile.TemporaryDirectory() as tmp:

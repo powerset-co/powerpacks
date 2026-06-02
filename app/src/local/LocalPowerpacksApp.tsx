@@ -7,8 +7,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { fetchRunResults, fetchRuns } from "./powerpacksApi";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
+import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
+import { LocalOnboardingPage } from "./LocalOnboardingPage";
 import { LocalResultsTable } from "./LocalResultsTable";
 import { LocalRunSidebar } from "./LocalRunSidebar";
+import { LocalSetupPage } from "./LocalSetupPage";
 import type { LocalRunResultsResponse, LocalRunSummary } from "./types";
 import { toDatabaseRecord } from "./types";
 
@@ -19,11 +22,17 @@ function taskIdFromPath(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-function setConversationPath(taskId: string) {
-  const nextPath = `/conversation/${encodeURIComponent(taskId)}`;
-  if (window.location.pathname !== nextPath) {
-    window.history.pushState({}, "", nextPath);
-  }
+type LocalView = "onboarding" | "setup" | "messagesReview" | "runs";
+
+function viewFromPath(): LocalView {
+  if (window.location.pathname === "/onboarding") return "onboarding";
+  if (window.location.pathname === "/setup/imessage/review") return "messagesReview";
+  if (window.location.pathname === "/setup") return "setup";
+  return "runs";
+}
+
+function currentPathWithSearch(): string {
+  return `${window.location.pathname}${window.location.search}`;
 }
 
 function mergeResults(
@@ -49,6 +58,7 @@ function mergeResults(
 }
 
 export function LocalPowerpacksApp() {
+  const [activeView, setActiveView] = useState<LocalView>(() => viewFromPath());
   const [runs, setRuns] = useState<LocalRunSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -58,6 +68,14 @@ export function LocalPowerpacksApp() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  const navigate = useCallback((nextPath: string) => {
+    if (currentPathWithSearch() !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+    }
+    setActiveView(viewFromPath());
+    setSelectedTaskId(taskIdFromPath());
+  }, []);
 
   const refreshRuns = async () => {
     setRunsLoading(true);
@@ -92,16 +110,19 @@ export function LocalPowerpacksApp() {
   useEffect(() => {
     refreshRuns();
 
-    const handlePopState = () => setSelectedTaskId(taskIdFromPath());
+    const handlePopState = () => {
+      setActiveView(viewFromPath());
+      setSelectedTaskId(taskIdFromPath());
+    };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   useEffect(() => {
-    if (!selectedTaskId) return;
+    if (activeView !== "runs" || !selectedTaskId) return;
     setResultResponse(null);
     loadResultsPage(0, false);
-  }, [selectedTaskId, loadResultsPage]);
+  }, [activeView, selectedTaskId, loadResultsPage]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -139,21 +160,50 @@ export function LocalPowerpacksApp() {
     <TooltipProvider>
       <div className="flex min-h-dvh bg-background text-foreground">
         <LocalRunSidebar
+          activeView={activeView === "runs" ? "runs" : activeView === "onboarding" ? "onboarding" : "setup"}
           runs={filteredRuns}
           selectedTaskId={selectedTaskId}
           isLoading={runsLoading}
           search={search}
           onSearchChange={setSearch}
+          onSelectOnboarding={() => {
+            navigate("/onboarding");
+          }}
+          onSelectSetup={() => {
+            navigate("/setup");
+          }}
+          onSelectRuns={() => {
+            setActiveView("runs");
+            if (selectedTaskId) navigate(`/conversation/${encodeURIComponent(selectedTaskId)}`);
+            else if (runs[0]) {
+              const id = runs[0].conversationId || runs[0].taskId;
+              setSelectedTaskId(id);
+              navigate(`/conversation/${encodeURIComponent(id)}`);
+            } else {
+              navigate("/");
+            }
+          }}
           onSelect={(run) => {
             const id = run.conversationId || run.taskId;
             setSelectedTaskId(id);
-            setConversationPath(id);
+            navigate(`/conversation/${encodeURIComponent(id)}`);
           }}
         />
 
         <main className="min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-7xl space-y-4 p-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+            {activeView === "onboarding" ? (
+              <LocalOnboardingPage
+                onOpenSetupTab={(tab) => navigate(`/setup?tab=${encodeURIComponent(tab)}`)}
+                onOpenMessagesReview={() => navigate("/setup/imessage/review")}
+              />
+            ) : activeView === "setup" ? (
+              <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
+            ) : activeView === "messagesReview" ? (
+              <LocalMessagesReviewPage onBackToSetup={() => navigate("/setup?tab=import")} />
+            ) : (
+              <>
+                <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
                 <h2 className="truncate text-2xl font-semibold">{selectedRun?.query || "Select a search run"}</h2>
                 {selectedRun?.updatedAt && (
@@ -211,6 +261,8 @@ export function LocalPowerpacksApp() {
                   Select a run from the sidebar to view results.
                 </CardContent>
               </Card>
+            )}
+              </>
             )}
           </div>
         </main>

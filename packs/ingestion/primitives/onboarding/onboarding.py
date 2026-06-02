@@ -194,8 +194,8 @@ def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = Fa
             cmd.extend(["--linkedin-csv", args.linkedin_csv])
         if args.linkedin_source_user:
             cmd.extend(["--linkedin-source-user", args.linkedin_source_user])
-        if getattr(args, "messages_contacts_csv", ""):
-            cmd.extend(["--messages-contacts-csv", args.messages_contacts_csv])
+        if getattr(args, "messages_check", False):
+            cmd.append("--messages-check")
         if getattr(args, "skip_messages_whatsapp", False):
             cmd.append("--skip-messages-whatsapp")
         if getattr(args, "twitter_handle", ""):
@@ -431,9 +431,9 @@ def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> lis
                     "description": f"Authorize {email} in msgvault.",
                 })
         commands.append({
-            "label": "rerun_onboarding",
+            "label": "record_authorized_gmail",
             "command": onboarding_step_command(args, authorized_emails=emails),
-            "description": "Rerun onboarding after Gmail authorization succeeds. Import-time workers own msgvault sync.",
+            "description": "Record the authorized Gmail account in accounts.json. No Gmail sync or import is run.",
         })
         return commands
 
@@ -458,11 +458,153 @@ def gmail_add_email_commands(args: argparse.Namespace, emails: list[str]) -> lis
             "description": f"Authorize {email} in msgvault.",
         })
     commands.append({
-        "label": "rerun_onboarding",
+        "label": "record_authorized_gmail",
         "command": onboarding_step_command(args, authorized_emails=emails),
-        "description": "Rerun onboarding after Gmail authorization succeeds. Import-time workers own msgvault sync.",
+        "description": "Record the authorized Gmail account in accounts.json. No Gmail sync or import is run.",
     })
     return commands
+
+
+def run_linkedin_link(args: argparse.Namespace, path: Path, updates: list[str]) -> int:
+    if not args.linkedin_csv:
+        emit({
+            "status": "needs_input",
+            "channel": "linkedin_csv",
+            "prompt": "Export LinkedIn Connections.csv, then rerun with --linkedin-csv <path> --linkedin-source-user <label>.",
+            "next_command": onboarding_step_command(args, placeholders=True),
+            "accounts_path": args.accounts,
+            "updates": updates,
+        })
+        return 20
+    csv_path = Path(args.linkedin_csv).expanduser()
+    if not csv_path.exists():
+        emit({
+            "status": "waiting",
+            "channel": "linkedin_csv",
+            "message": f"Waiting for LinkedIn Connections.csv at {csv_path}.",
+            "repeat_command": onboarding_step_command(args),
+            "accounts_path": args.accounts,
+            "updates": updates,
+        })
+        return 20
+    if not args.linkedin_source_user:
+        emit({
+            "status": "needs_input",
+            "channel": "linkedin_csv",
+            "prompt": "Provide a non-secret source label for this LinkedIn export with --linkedin-source-user <label>.",
+            "next_command": onboarding_step_command(args, placeholders=True),
+            "accounts_path": args.accounts,
+            "updates": updates,
+        })
+        return 20
+
+    registry = save_link_config(
+        "linkedin_csv",
+        path,
+        config={"csv_path": str(csv_path), "source_label": args.linkedin_source_user},
+        usernames=[args.linkedin_source_user],
+        artifacts=[str(csv_path)],
+        notes="Linked LinkedIn Connections.csv export; no LinkedIn import run during onboarding.",
+    )
+    emit({
+        "status": "progressed",
+        "channel": "linkedin_csv",
+        "message": "Recorded LinkedIn CSV source link in accounts.json. No LinkedIn network import was run.",
+        "updates": updates,
+        "registry": registry,
+        "next_command": onboarding_step_command(args),
+    })
+    return 0
+
+
+def run_messages_link(args: argparse.Namespace, path: Path, updates: list[str]) -> int:
+    readiness = messages_link_status(args)
+    if readiness["imessage"]["status"] != "ready":
+        emit({
+            "status": "blocked_user_action",
+            "channel": "messages",
+            "message": "iMessage/Contacts permission check did not pass. Enable Full Disk Access and Contacts access for this terminal/Codex host, then rerun setup.",
+            "readiness": readiness,
+            "commands": [{
+                "label": "open_privacy_settings",
+                "command": messages_open_privacy_command(),
+                "description": "Open macOS privacy settings for Messages chat.db and Contacts access.",
+            }],
+            "repeat_command": onboarding_step_command(args),
+            "skip_command": onboarding_step_command(args) + " --skip-source messages",
+            "accounts_path": args.accounts,
+            "updates": updates,
+        })
+        return 20
+
+    whatsapp_linked = bool(readiness["whatsapp"].get("authenticated"))
+    if not whatsapp_linked and not args.skip_messages_whatsapp:
+        emit({
+            "status": "needs_agent_action",
+            "channel": "messages",
+            "message": "iMessage is ready. WhatsApp is not linked yet. Run the auth-only WhatsApp link command, or rerun with --skip-messages-whatsapp to continue without WhatsApp.",
+            "readiness": readiness,
+            "commands": [{
+                "label": "authorize_whatsapp",
+                "command": readiness["whatsapp"]["auth_command"],
+                "description": "Authenticate WhatsApp with QR/device linking only. This does not sync or export messages.",
+            }],
+            "repeat_command": onboarding_step_command(args),
+            "skip_whatsapp_command": onboarding_step_command(args) + " --skip-messages-whatsapp",
+            "accounts_path": args.accounts,
+            "updates": updates,
+        })
+        return 20
+
+    config = {
+        "contacts_csv": "",
+        "planned_contacts_csv": str(DEFAULT_MESSAGES_CONTACTS_CSV),
+        "imessage": {
+            "status": "ready",
+            "chat_db": (readiness["imessage"]["payload"].get("chat_db") or {}).get("path", ""),
+            "addressbook_matches": readiness["imessage"]["payload"].get("addressbook_matches", 0),
+        },
+        "whatsapp": {
+            "status": "linked" if whatsapp_linked else "skipped",
+            "store": str(DEFAULT_WACLI_STORE),
+            "authenticated": whatsapp_linked,
+        },
+    }
+    registry = save_link_config(
+        "messages",
+        path,
+        config=config,
+        usernames=["imessage", *(["whatsapp"] if whatsapp_linked else [])],
+        artifacts=[],
+        notes="Linked Messages readiness. Onboarding checked iMessage permissions and WhatsApp auth only; no iMessage extraction, WhatsApp sync, research, or upload ran.",
+    )
+    emit({
+        "status": "progressed",
+        "channel": "messages",
+        "message": "Recorded Messages readiness. No iMessage extraction, WhatsApp sync, research, or upload ran.",
+        "readiness": readiness,
+        "registry": registry,
+        "next_command": onboarding_step_command(args),
+    })
+    return 0
+
+
+def run_twitter_link(args: argparse.Namespace, path: Path, updates: list[str]) -> int:
+    handle = (args.twitter_handle or "").strip().lstrip("@")
+    if not handle:
+        emit({
+            "status": "needs_input",
+            "channel": "twitter",
+            "prompt": "Provide your Twitter/X handle with --twitter-handle <handle>, or skip Twitter. Onboarding will only record the handle.",
+            "next_command": onboarding_step_command(args) + " --twitter-handle <handle>",
+            "skip_command": onboarding_step_command(args) + " --skip-source twitter",
+            "accounts_path": args.accounts,
+            "updates": updates,
+        })
+        return 20
+    registry = save_link_config("twitter", path, config={"handle": handle}, usernames=[handle], notes="Linked Twitter/X handle; no Twitter crawl run during onboarding.")
+    emit({"status": "progressed", "channel": "twitter", "message": "Recorded Twitter/X handle. No Twitter crawl was run.", "registry": registry, "next_command": onboarding_step_command(args)})
+    return 0
 
 
 def cmd_step(args: argparse.Namespace) -> int:
@@ -497,6 +639,16 @@ def cmd_step(args: argparse.Namespace) -> int:
                 "next_command": onboarding_step_command(args),
             })
             return 0
+
+    linkedin_action_requested = bool(args.linkedin_csv or args.linkedin_source_user)
+    messages_action_requested = bool(args.skip_messages_whatsapp or getattr(args, "messages_check", False))
+    twitter_action_requested = bool((args.twitter_handle or "").strip())
+    if linkedin_action_requested:
+        return run_linkedin_link(args, path, updates)
+    if messages_action_requested:
+        return run_messages_link(args, path, updates)
+    if twitter_action_requested:
+        return run_twitter_link(args, path, updates)
 
     gmail_record = accounts.get("gmail", {})
     gmail_action_requested = bool(args.gmail_account or args.gmail_all or args.gmail_add_email or getattr(args, "gmail_authorized_email", []))
@@ -580,7 +732,7 @@ def cmd_step(args: argparse.Namespace) -> int:
                 "action_type": "user-action/linking",
                 "emails": extra_emails,
                 "commands": gmail_add_email_commands(args, extra_emails),
-                "repeat_command_after_authorization": onboarding_step_command(args, authorized_emails=extra_emails),
+                "record_command_after_authorization": onboarding_step_command(args, authorized_emails=extra_emails),
                 "accounts_path": args.accounts,
                 "updates": updates,
                 "registry": registry,
@@ -686,7 +838,11 @@ def cmd_step(args: argparse.Namespace) -> int:
         })
         return 0
 
-    if not accounts.get("linkedin_csv", {}).get("linked", False) and not accounts.get("linkedin_csv", {}).get("skipped", False):
+    linkedin_action_requested = bool(args.linkedin_csv or args.linkedin_source_user)
+    if (
+        not accounts.get("linkedin_csv", {}).get("linked", False)
+        and not accounts.get("linkedin_csv", {}).get("skipped", False)
+    ) or linkedin_action_requested:
         if not args.linkedin_csv:
             emit({
                 "status": "needs_input",
@@ -737,22 +893,11 @@ def cmd_step(args: argparse.Namespace) -> int:
         })
         return 0
 
-    if not accounts.get("messages", {}).get("linked", False) and not accounts.get("messages", {}).get("skipped", False):
-        if args.messages_contacts_csv:
-            contacts_csv = Path(args.messages_contacts_csv).expanduser()
-            if not contacts_csv.exists():
-                emit({"status": "waiting", "channel": "messages", "message": f"Waiting for contacts CSV at {contacts_csv}.", "repeat_command": onboarding_step_command(args)})
-                return 20
-            registry = save_link_config(
-                "messages",
-                path,
-                config={"contacts_csv": str(contacts_csv), "planned_contacts_csv": str(DEFAULT_MESSAGES_CONTACTS_CSV)},
-                artifacts=[str(contacts_csv)],
-                notes="Linked existing messages contacts CSV; no messages import/research run during onboarding.",
-            )
-            emit({"status": "progressed", "channel": "messages", "message": "Recorded existing messages contacts CSV source link. No messages import/research was run.", "registry": registry, "next_command": onboarding_step_command(args)})
-            return 0
-
+    messages_action_requested = bool(args.skip_messages_whatsapp or getattr(args, "messages_check", False))
+    if (
+        not accounts.get("messages", {}).get("linked", False)
+        and not accounts.get("messages", {}).get("skipped", False)
+    ) or messages_action_requested:
         readiness = messages_link_status(args)
         if readiness["imessage"]["status"] != "ready":
             emit({
@@ -823,7 +968,11 @@ def cmd_step(args: argparse.Namespace) -> int:
         })
         return 0
 
-    if not accounts.get("twitter", {}).get("linked", False) and not accounts.get("twitter", {}).get("skipped", False):
+    twitter_action_requested = bool((args.twitter_handle or "").strip())
+    if (
+        not accounts.get("twitter", {}).get("linked", False)
+        and not accounts.get("twitter", {}).get("skipped", False)
+    ) or twitter_action_requested:
         handle = (args.twitter_handle or "").strip().lstrip("@")
         if not handle:
             emit({
@@ -888,7 +1037,8 @@ def build_parser() -> argparse.ArgumentParser:
     step.add_argument("--gmail-output-dir", default=str(DEFAULT_NETWORK_IMPORT_DIR))
     step.add_argument("--linkedin-csv", default="", help="Path to LinkedIn Connections.csv export when available")
     step.add_argument("--linkedin-source-user", default="", help="Non-secret label for the LinkedIn export owner/source")
-    step.add_argument("--messages-contacts-csv", default="", help="Path to an existing messages contacts CSV to link without importing")
+    step.add_argument("--messages-contacts-csv", default="", help=argparse.SUPPRESS)
+    step.add_argument("--messages-check", action="store_true", help="Run Messages/iMessage and WhatsApp readiness checks even when another source is next in the default onboarding order")
     step.add_argument("--skip-messages-whatsapp", action="store_true", help="Record iMessage readiness and skip WhatsApp linking for this setup run")
     step.add_argument("--twitter-handle", default="", help="Twitter/X handle to record without crawling")
     step.add_argument("--operator-id", default="local")

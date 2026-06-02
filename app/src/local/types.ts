@@ -84,6 +84,223 @@ export interface LocalRunResultsResponse {
   totalRows: number;
 }
 
+export type SetupPhaseStatus = "ready" | "restored" | "completed" | "running" | "blocked" | "blocked_user_action" | "blocked_approval" | "skipped" | "unknown" | string;
+
+export type SetupSourceId = "gmail" | "linkedin_csv" | "messages" | "twitter";
+
+export interface SetupSourceStatus {
+  id: SetupSourceId;
+  label: string;
+  status: string;
+  linked: boolean;
+  skipped: boolean;
+  usernames: string[];
+  artifacts: string[];
+  notes?: string;
+  lastCheckedAt?: string | null;
+  lastSuccessAt?: string | null;
+  config: Record<string, unknown>;
+}
+
+export interface SetupNextAction {
+  status?: string;
+  phase?: string;
+  reason?: string;
+  command?: string;
+  auto_safe?: boolean;
+  [key: string]: unknown;
+}
+
+export interface SetupJob {
+  id: string;
+  action: string;
+  status: "running" | "completed" | "failed" | "blocked";
+  startedAt: string;
+  completedAt?: string | null;
+  command: string[];
+  code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  output?: Record<string, unknown> | null;
+}
+
+export interface SetupImportSource {
+  id: string;
+  sourceId: SetupSourceId | string;
+  label: string;
+  status: string;
+  linked: boolean;
+  skipped: boolean;
+  accountEmail?: string;
+  accountCount?: number;
+  runnable?: boolean;
+  disabledReason?: string;
+  updatedAt?: string | null;
+  runId?: string;
+}
+
+export interface SetupEnrichmentSource {
+  id: SetupSourceId | string;
+  label: string;
+  status: string;
+  candidates: number;
+  enriched: number;
+  skipped: number;
+  matched: number;
+  updatedAt?: string | null;
+}
+
+export interface SetupStatusResponse {
+  operator: {
+    id: string;
+    email?: string;
+    label: string;
+  };
+  bootstrap: {
+    status: string;
+    bundle?: string;
+    mode?: string;
+    bundleSha256?: string;
+    peopleRecords?: number;
+    selectedPeople?: number;
+    selectedPositions?: number;
+    linkedinCount?: number;
+    twitterCount?: number;
+    companyRecords?: number;
+  };
+  setup: {
+    path: string;
+    exists: boolean;
+    status: string;
+    updatedAt?: string | null;
+    sizeBytes?: number;
+    phases: Record<"bootstrap" | "link" | "import" | "index", SetupPhaseStatus>;
+  };
+  accounts: {
+    path: string;
+    exists: boolean;
+    operatorId?: string | null;
+    linkedSources: string[];
+    skippedSources: string[];
+    unresolvedSources: string[];
+    updatedAt?: string | null;
+    sources: SetupSourceStatus[];
+  };
+  messages: {
+    path: string;
+    exists: boolean;
+    status: string;
+    updatedAt?: string | null;
+    currentBlock?: Record<string, unknown> | null;
+    steps: Record<string, SetupPhaseStatus>;
+  };
+  review: {
+    path: string;
+    exists: boolean;
+    updatedAt?: string | null;
+    sizeBytes?: number;
+    counts: MessageReviewCounts;
+  };
+  import: {
+    path: string;
+    exists: boolean;
+    status: string;
+    updatedAt?: string | null;
+    runId?: string;
+    linkedSources: string[];
+    gmailSyncAfter?: string;
+    sources: SetupImportSource[];
+  };
+  enrichment: {
+    status: string;
+    totalCandidates: number;
+    totalEnriched: number;
+    sources: SetupEnrichmentSource[];
+  };
+  index: {
+    duckdb?: string;
+    duckdbExists?: boolean;
+    duckdbUpdatedAt?: string | null;
+    duckdbSizeBytes?: number;
+    duckdbTables?: Array<{ name: string; rows: number }>;
+    peopleCsv?: string;
+    peopleRecords?: number;
+    peopleSha256?: string;
+    readiness?: string;
+    reason?: string;
+    indexInputSha256?: string;
+    processingEstimate?: {
+      status?: string;
+      totalEstimatedUsd?: number;
+      estimatedPaidCalls?: Record<string, number>;
+      counts?: Record<string, number>;
+      providers?: Record<string, string>;
+      error?: string;
+    };
+  };
+  next?: SetupNextAction | null;
+  jobs: SetupJob[];
+}
+
+export interface MessageReviewCounts {
+  total: number;
+  included: number;
+  skipped: number;
+  undecided: number;
+  yes: number;
+  maybe: number;
+  no: number;
+  inNetwork: number;
+  retargetFeedback: number;
+}
+
+export type MessageReviewDecision = "include" | "skip" | "undecided";
+export type MessageReviewTab = "yes" | "maybe" | "no" | "in_network";
+export type MessageReviewFilter = MessageReviewTab | "all" | "included" | "skipped" | "undecided" | "feedback";
+
+export interface MessageReviewRow {
+  index: number;
+  bucket: string;
+  tab: MessageReviewTab;
+  decision: MessageReviewDecision;
+  selected: boolean;
+  handle: string;
+  fullName: string;
+  phone: string;
+  messageSource: string;
+  totalMessages: number;
+  imessageMessages: number;
+  whatsappMessages: number;
+  groupNames: string;
+  networkName: string;
+  networkLinkedInUrl: string;
+  networkMatchStatus: string;
+  networkMatchConfidence: string;
+  titleCompanyPairs: string;
+  schools: string;
+  signals: string;
+  identityRisk: string;
+  shortReason: string;
+  retargetHint: string;
+  retargetStatus: string;
+  retargetLinkedInUrl: string;
+  retargetNotes: string;
+  reviewSource: string;
+}
+
+export interface MessageReviewResponse {
+  path: string;
+  exists: boolean;
+  updatedAt?: string | null;
+  sizeBytes?: number;
+  rows: MessageReviewRow[];
+  counts: MessageReviewCounts;
+  filteredCount: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+}
+
 function firstNonEmpty(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();

@@ -267,6 +267,39 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(registry["accounts"]["messages"]["config"]["planned_contacts_csv"], ".powerpacks/messages/contacts.csv")
             self.assertEqual(registry["accounts"]["messages"]["config"]["whatsapp"]["status"], "skipped")
 
+    def test_onboarding_messages_contacts_csv_flag_is_not_linking_input(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                accounts.update_channel("gmail", path=path, skipped=True)
+                accounts.update_channel("linkedin_csv", path=path, skipped=True)
+                readiness = {
+                    "imessage": {"status": "ready", "payload": {"chat_db": {"path": "chat.db"}, "addressbook_matches": 3}},
+                    "whatsapp": {"status": "needs_auth", "authenticated": False, "auth_command": "whatsapp-auth", "payload": {}},
+                    "privacy": {"reads_message_bodies": False, "syncs_whatsapp": False, "exports_contacts": False},
+                }
+                with mock.patch.object(onboarding, "messages_link_status", return_value=readiness):
+                    code, payload = self.invoke(onboarding, [
+                        "step",
+                        "--accounts", str(path),
+                        "--messages-contacts-csv", str(Path(tmp) / "missing.csv"),
+                        "--skip-messages-whatsapp",
+                    ])
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "progressed")
+            self.assertEqual(payload["channel"], "messages")
+            self.assertNotIn("--messages-contacts-csv", payload["next_command"])
+            registry = accounts.load_registry(path)
+            self.assertTrue(registry["accounts"]["messages"]["linked"])
+            self.assertEqual(registry["accounts"]["messages"]["artifacts"], [])
+            self.assertEqual(registry["accounts"]["messages"]["config"]["contacts_csv"], "")
+
     def test_onboarding_step_discovers_gmail_msgvault_accounts(self):
         old_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
@@ -331,10 +364,10 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(commands[0]["label"], "add_oauth_test_users")
             self.assertIn("msgvault_setup.py add-test-users other@example.com", commands[0]["command"])
             self.assertIn("msgvault_setup.py add-account --email other@example.com", commands[1]["command"])
-            self.assertEqual(commands[2]["label"], "rerun_onboarding")
+            self.assertEqual(commands[2]["label"], "record_authorized_gmail")
             self.assertFalse(any("sync-full" in command["command"] for command in commands))
-            self.assertEqual(payload["repeat_command_after_authorization"].split()[0:4], ["uv", "run", "--project", "."])
-            self.assertIn("--gmail-authorized-email other@example.com", payload["repeat_command_after_authorization"])
+            self.assertEqual(payload["record_command_after_authorization"].split()[0:4], ["uv", "run", "--project", "."])
+            self.assertIn("--gmail-authorized-email other@example.com", payload["record_command_after_authorization"])
             registry = accounts.load_registry(path)
             self.assertFalse(registry["accounts"]["gmail"]["linked"])
             self.assertEqual(registry["accounts"]["gmail"]["usernames"], [])
@@ -390,7 +423,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertIn(f"--project {onboarding.gmail_oauth_project_id('other@example.com')}", commands[0]["command"])
             self.assertIn("--add-account", commands[0]["command"])
             self.assertIn("--home", commands[0]["command"])
-            self.assertEqual(commands[1]["label"], "rerun_onboarding")
+            self.assertEqual(commands[1]["label"], "record_authorized_gmail")
             self.assertIn("--gmail-authorized-email other@example.com", commands[1]["command"])
             self.assertFalse(any("sync-full" in command["command"] for command in commands))
 
@@ -468,6 +501,62 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertIn("Do not describe ledgers", handoff["codex_orchestration"]["user_summary"])
             self.assertNotIn("worker_phases", handoff)
             self.assertNotIn("preferred_handoff_command", handoff)
+
+    def test_onboarding_twitter_handle_replaces_skipped_state(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                accounts.update_channel("twitter", path=path, linked=False, skipped=True)
+                code, payload = self.invoke(onboarding, [
+                    "step",
+                    "--accounts", str(path),
+                    "--twitter-handle", "arthurchen",
+                ])
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "progressed")
+            self.assertEqual(payload["channel"], "twitter")
+            registry = accounts.load_registry(path)
+            twitter = registry["accounts"]["twitter"]
+            self.assertTrue(twitter["linked"])
+            self.assertFalse(twitter["skipped"])
+            self.assertEqual(twitter["usernames"], ["arthurchen"])
+            self.assertEqual(twitter["config"]["handle"], "arthurchen")
+
+    def test_onboarding_messages_check_bypasses_unresolved_gmail(self):
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                path = Path(tmp) / "accounts.json"
+                accounts.save_registry(accounts.default_registry(), path)
+                readiness = {
+                    "imessage": {"status": "ready", "payload": {"chat_db": {"path": "chat.db"}, "addressbook_matches": 3}},
+                    "whatsapp": {"status": "needs_auth", "authenticated": False, "auth_command": "whatsapp-auth", "payload": {}},
+                    "privacy": {"reads_message_bodies": False, "syncs_whatsapp": False, "exports_contacts": False},
+                }
+                with mock.patch.object(onboarding, "messages_link_status", return_value=readiness):
+                    code, payload = self.invoke(onboarding, [
+                        "step",
+                        "--accounts", str(path),
+                        "--messages-check",
+                        "--skip-messages-whatsapp",
+                    ])
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "progressed")
+            self.assertEqual(payload["channel"], "messages")
+            registry = accounts.load_registry(path)
+            self.assertFalse(registry["accounts"]["gmail"]["linked"])
+            self.assertTrue(registry["accounts"]["messages"]["linked"])
+            self.assertEqual(registry["accounts"]["messages"]["config"]["whatsapp"]["status"], "skipped")
 
     def test_onboarding_handoff_uses_recorded_linkedin_csv(self):
         old_cwd = Path.cwd()

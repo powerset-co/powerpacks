@@ -25,6 +25,11 @@ Onboarding must remain link-only. Do not run Gmail metadata import,
 phase. Gmail import workers own `msgvault sync-full` for selected accounts
 before they read the local msgvault DB.
 
+Sources are optional. The link phase records whatever the user has connected or
+explicitly skipped, but empty/unlinked source entries are not blockers. Setup
+imports and enriches linked sources only, and can use restored or existing local
+network/index artifacts even when no sources are currently linked.
+
 Messages onboarding checks iMessage/Contacts permissions and WhatsApp auth/link
 state only. WhatsApp link uses `import_whatsapp_wacli.py auth`; it must not run
 WhatsApp sync or export contacts in the link phase. Messages import workers
@@ -81,18 +86,39 @@ agent to execute a precise command.
 
 ## Commands
 
-Use the setup runner as the normal entry point. It is idempotent: it restores a
-safe matching bootstrap when needed, links are read from the account registry,
-imports refresh automatically, and completed recent work is reused. `$setup`
-does not do Powerset login, env pull, MCP registration, or remote GCS bootstrap
-discovery. If a published Powerset operator bootstrap exists, `$powerset setup`
-syncs it into `.powerpacks/operator-bootstrap/bundles/` first; `$setup` then
-treats that local bundle like any other previous-run artifact. If no local
-matching bundle exists, setup simply continues with source linking/import.
+`$setup` is the product command. By default, launch the local Powerpacks Console
+on the guided onboarding page and let the user click through linking, import,
+enrichment, and indexing from the app:
 
-`$setup` is the product command. Keep it simple for users. For debugging,
-operator testing, or resuming after a blocker, use the deterministic phase
-entrypoints below instead of rerunning the full product command blindly.
+```bash
+scripts/run-powerpacks-console.sh start --path /onboarding --open
+```
+
+If the script reports that the app is already running, use the printed `Open:`
+URL. If macOS cannot open the browser from the current shell, tell the user the
+printed URL instead of falling back to `setup.py run`.
+
+The app uses the same setup primitives through `/local-api/setup/*`, so this
+still runs the real setup flow. It just avoids one giant Codex-driven chain and
+makes user actions visible.
+
+Use the setup runner only when the user explicitly asks for `$setup cli`, a
+deterministic CLI run, or a specific phase. It is idempotent: it restores a safe
+matching bootstrap when needed, refreshes whatever sources are already linked,
+then reuses completed recent work. If no sources are linked and no local
+network/index artifacts exist yet, setup may suggest linking a source, but it
+must not require skip markers for every unused source. `$setup` does not do
+Powerset login, env pull, MCP registration, or remote GCS bootstrap discovery.
+If a published Powerset operator bootstrap exists, `$powerset setup` syncs it
+into `.powerpacks/operator-bootstrap/bundles/` first; `$setup` then treats that
+local bundle like any other previous-run artifact. If no local matching bundle
+exists, setup simply continues with source linking/import.
+
+For debugging, operator testing, or resuming after a blocker, use the
+deterministic phase entrypoints below instead of rerunning the product app flow
+blindly.
+
+`$setup cli`:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/setup/setup.py run \
@@ -134,9 +160,12 @@ uv run --project . python packs/ingestion/primitives/setup/setup.py index \
   --setup-ledger .powerpacks/setup/setup-run.json
 ```
 
-Do not change the product behavior by default: when `setup.py run` has linked
-sources, it should still run the setup refresh path. Use phase commands to
-avoid repeating completed or unrelated phases during debugging.
+Do not change the product behavior by default: when `setup.py run` sees linked
+sources, it should run the setup refresh path for those sources without asking
+about empty optional sources. If no sources are linked and no restored/existing
+local artifacts can be indexed, `setup.py run` can return the next link action
+as a first-source suggestion. Use phase commands to avoid repeating completed or
+unrelated phases during debugging.
 
 For inspection without running refresh work, use local status:
 
@@ -181,7 +210,7 @@ cp` when Google Cloud CLI is installed, and can fall back to the project
 `GOOGLE_APPLICATION_CREDENTIALS` is materialized to a temporary 0600 key and
 cleaned up after either backend.
 
-Then link sources:
+To link or add sources later:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
@@ -205,7 +234,7 @@ user-action/linking steps, not import steps:
 After msgvault is configured and local accounts are discoverable, ask once:
 
 ```text
-Which other Gmail accounts should we link before import?
+Which other Gmail accounts should we link now?
 ```
 
 Record selected accounts in `gmail.config.selected_accounts` /
@@ -213,24 +242,25 @@ Record selected accounts in `gmail.config.selected_accounts` /
 `gmail.config.pending_accounts` until the returned `--gmail-authorized-email
 <email>` rerun records them as linked. Do not create
 `.powerpacks/network-import/gmail` outputs or run `msgvault sync-full` during
-linking; Gmail sync/import starts only after the import confirmation.
+linking; Gmail sync/import runs later in the import phase for linked accounts.
 
 ## Import phase: automatic refresh, then fan-in
 
 Do not ask for a separate "continue import" confirmation after setup has linked
-sources. `$setup` should run the refresh when it is due, include existing artifacts
-by default, and complete without ceremony when there is no new work.
+sources available. `$setup` should run the refresh when it is due, include
+existing artifacts by default, and complete without ceremony when there is no
+new work.
 Use normal user language:
 
 ```text
-Your sources are linked. I’ll refresh anything that is missing or stale, reuse
-the current local data, and then combine everything into one local network.
+I’ll refresh the sources you have connected, reuse the current local data, and
+then combine everything into one local network.
 
 I won’t upload anything automatically. I’ll only interrupt you if a browser
 login, QR/device link, overwrite, or paid provider approval is needed.
 ```
 
-`setup.py run` is the default path. `setup.py handoff` remains available for
+`setup.py run` is the CLI path. `setup.py handoff` remains available for
 debugging or for agents that need to inspect worker commands:
 
 ```bash

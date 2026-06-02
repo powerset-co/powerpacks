@@ -85,16 +85,16 @@ class IndexingScaffoldTests(unittest.TestCase):
             input_dir.mkdir(parents=True)
             input_csv = input_dir / "people.csv"
             input_csv.write_text(
-                "id,public_identifier,linkedin_url,first_name,last_name,full_name,source_channels\n"
-                "1,ada-lovelace,https://www.linkedin.com/in/ada-lovelace,Ada,Lovelace,Ada Lovelace,linkedin\n",
+                "id,public_identifier,linkedin_url,first_name,last_name,full_name,source_channels,rapidapi_response\n"
+                "1,ada-lovelace,https://www.linkedin.com/in/ada-lovelace,Ada,Lovelace,Ada Lovelace,linkedin,\"{\"\"full_name\"\":\"\"Ada Lovelace\"\",\"\"experiences\"\":[{\"\"title\"\":\"\"Founder\"\"}]}\"\n",
                 encoding="utf-8",
             )
             old_dir = base / ".powerpacks/network-import/twitter/run-old"
             old_dir.mkdir(parents=True)
             old_csv = old_dir / "people.csv"
             old_csv.write_text(
-                "id,public_identifier,linkedin_url,first_name,last_name,full_name,source_channels\n"
-                "2,grace-hopper,https://www.linkedin.com/in/grace-hopper,Grace,Hopper,Grace Hopper,twitter\n",
+                "id,public_identifier,linkedin_url,first_name,last_name,full_name,source_channels,rapidapi_response\n"
+                "2,grace-hopper,https://www.linkedin.com/in/grace-hopper,Grace,Hopper,Grace Hopper,twitter,\"{\"\"full_name\"\":\"\"Grace Hopper\"\",\"\"experiences\"\":[{\"\"title\"\":\"\"Admiral\"\"}]}\"\n",
                 encoding="utf-8",
             )
             out_dir = base / ".powerpacks/network-import/merged"

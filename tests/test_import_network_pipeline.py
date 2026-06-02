@@ -316,6 +316,75 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_after"], "2026-05-15")
             self.assertEqual(ledger["source_imports"]["gmail_msgvault:me-example.com"]["sync_after"], "2026-05-15")
 
+    def test_gmail_sync_after_is_inferred_from_msgvault_last_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            db = tmp / "msgvault.db"
+            write_msgvault_db(db)
+            con = sqlite3.connect(db)
+            con.execute("ALTER TABLE sources ADD COLUMN last_sync_at TEXT")
+            con.execute("UPDATE sources SET last_sync_at = '2026-05-20 12:34:56' WHERE identifier = 'me@example.com'")
+            con.commit()
+            con.close()
+            ledger_path = tmp / "ledger.json"
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {
+                    "operator_id": "local",
+                    "msgvault_db": str(db),
+                    "gmail_account_emails": ["me@example.com"],
+                    "gmail_linkedin_provider": "off",
+                },
+                "steps": {},
+                "artifacts": {},
+            }
+            calls = []
+            def fake_run_cmd(cmd, timeout=None):
+                calls.append(cmd)
+                if cmd[0] == "msgvault" and "sync-full" in cmd:
+                    return 0, {"status": "completed"}, ""
+                return 0, {"status": "completed", "artifacts": {"people_csv": str(tmp / "gmail.csv")}, "counts": {"contacts_seen": 1, "contacts_written": 1}}, ""
+            with mock.patch.object(import_network_pipeline.shutil, "which", return_value="/usr/bin/msgvault"):
+                with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                    self.assertTrue(import_network_pipeline.run_source_import_workers(ledger_path, ledger))
+            default_query = "-category:social -category:promotions -category:forums -category:updates"
+            self.assertIn(["msgvault", "--home", str(tmp), "sync-full", "me@example.com", "--after", "2026-05-20", "--query", default_query], calls)
+            self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_after"], "2026-05-20")
+            self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_after_source"], "msgvault.sources.last_sync_at")
+
+    def test_gmail_sync_after_falls_back_to_latest_msgvault_message(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            db = tmp / "msgvault.db"
+            write_msgvault_db(db)
+            ledger_path = tmp / "ledger.json"
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {
+                    "operator_id": "local",
+                    "msgvault_db": str(db),
+                    "gmail_account_emails": ["me@example.com"],
+                    "gmail_linkedin_provider": "off",
+                },
+                "steps": {},
+                "artifacts": {},
+            }
+            calls = []
+            def fake_run_cmd(cmd, timeout=None):
+                calls.append(cmd)
+                if cmd[0] == "msgvault" and "sync-full" in cmd:
+                    return 0, {"status": "completed"}, ""
+                return 0, {"status": "completed", "artifacts": {"people_csv": str(tmp / "gmail.csv")}, "counts": {"contacts_seen": 1, "contacts_written": 1}}, ""
+            with mock.patch.object(import_network_pipeline.shutil, "which", return_value="/usr/bin/msgvault"):
+                with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                    self.assertTrue(import_network_pipeline.run_source_import_workers(ledger_path, ledger))
+            default_query = "-category:social -category:promotions -category:forums -category:updates"
+            self.assertIn(["msgvault", "--home", str(tmp), "sync-full", "me@example.com", "--after", "2026-01-01", "--query", default_query], calls)
+            self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_after"], "2026-01-01")
+            self.assertEqual(ledger["steps"]["gmail_msgvault:me-example.com"]["sync_after_source"], "msgvault.messages.sent_at")
+
     def test_gmail_category_mail_can_be_included_for_sync_and_import(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -406,7 +475,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             merge_dir = tmp / "run/merged"
             with mock.patch.object(import_network_pipeline, "DEFAULT_BASE_DIR", base):
                 paths = import_network_pipeline.merge_input_paths(ledger, merge_dir)
-            self.assertIn(str(canonical), paths)
+            self.assertNotIn(str(canonical), paths)
             self.assertIn(str(current_linkedin), paths)
             self.assertIn(str(current_gmail), paths)
             self.assertNotIn(str(stale_discovered), paths)
@@ -606,6 +675,40 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(payload["estimated_paid_calls"], 0)
             self.assertEqual(payload["artifact_check"]["missing_count"], 0)
 
+    def test_source_refresh_preserves_unselected_source_artifacts(self) -> None:
+        existing = {
+            "steps": {
+                "gmail_msgvault": {"status": "completed"},
+                "gmail_msgvault:me-example.com": {"status": "completed"},
+                "linkedin": {"status": "completed"},
+                "merge": {"status": "completed"},
+                "duckdb": {"status": "completed"},
+            },
+            "source_imports": {
+                "gmail_msgvault:me-example.com": {"status": "completed"},
+                "linkedin": {"status": "completed"},
+            },
+            "artifacts": {
+                "gmail_people_csvs": ["gmail.csv"],
+                "linkedin_people_csv": "linkedin.csv",
+                "messages_review_csv": "review.csv",
+                "merged_people_csv": "merged.csv",
+                "duckdb": "network.duckdb",
+            },
+        }
+
+        preserved = import_network_pipeline.preserved_state_for_source_refresh(existing, {"gmail"})
+
+        self.assertNotIn("gmail_msgvault", preserved["steps"])
+        self.assertNotIn("gmail_msgvault:me-example.com", preserved["source_imports"])
+        self.assertNotIn("gmail_people_csvs", preserved["artifacts"])
+        self.assertEqual(preserved["steps"]["linkedin"]["status"], "completed")
+        self.assertEqual(preserved["source_imports"]["linkedin"]["status"], "completed")
+        self.assertEqual(preserved["artifacts"]["linkedin_people_csv"], "linkedin.csv")
+        self.assertEqual(preserved["artifacts"]["messages_review_csv"], "review.csv")
+        self.assertNotIn("merged_people_csv", preserved["artifacts"])
+        self.assertNotIn("duckdb", preserved["artifacts"])
+
     def test_msgvault_to_merge_to_duckdb(self) -> None:
         try:
             import duckdb  # noqa: F401
@@ -640,9 +743,15 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertTrue(Path(artifacts["network_contacts_csv"]).exists())
             self.assertTrue(Path(artifacts["network_contact_sources_csv"]).exists())
             self.assertTrue(Path(artifacts["duckdb"]).exists())
+            with Path(artifacts["network_contacts_csv"]).open(newline="", encoding="utf-8") as handle:
+                contacts = list(csv.DictReader(handle))
+            self.assertEqual(contacts, [])
             with Path(artifacts["network_contact_sources_csv"]).open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual(rows[0]["source_channel"], "gmail_msgvault")
+            self.assertEqual(rows, [])
+            manifest = json.loads(Path(artifacts["merge_manifest"]).read_text(encoding="utf-8"))
+            self.assertEqual(manifest["filtered_without_linkedin"], 1)
+            self.assertEqual(manifest["merged_rows"], 0)
 
     def test_msgvault_can_prepare_gmail_linkedin_harness(self) -> None:
         try:
