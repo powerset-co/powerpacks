@@ -475,12 +475,31 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             merge_dir = tmp / "run/merged"
             with mock.patch.object(import_network_pipeline, "DEFAULT_BASE_DIR", base):
                 paths = import_network_pipeline.merge_input_paths(ledger, merge_dir)
-            self.assertNotIn(str(canonical), paths)
+            self.assertIn(str(canonical), paths)
             self.assertIn(str(current_linkedin), paths)
             self.assertIn(str(current_gmail), paths)
             self.assertNotIn(str(stale_discovered), paths)
             message_inputs = [path for path in paths if path.endswith("source-inputs/messages/contacts.csv")]
             self.assertEqual(message_inputs, [])
+
+    def test_include_existing_artifacts_uses_canonical_people_as_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            base = tmp / ".powerpacks/network-import"
+            canonical = base / "merged/people.csv"
+            current_linkedin = tmp / "current-linkedin.csv"
+            for path in (canonical, current_linkedin):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("id\nx\n", encoding="utf-8")
+            ledger = {
+                "input": {"include_existing_artifacts": True},
+                "artifacts": {"linkedin_people_csv": str(current_linkedin)},
+            }
+
+            with mock.patch.object(import_network_pipeline, "DEFAULT_BASE_DIR", base):
+                paths = import_network_pipeline.merge_input_paths(ledger, tmp / "run/merged")
+
+            self.assertEqual(paths[:2], [str(canonical), str(current_linkedin)])
 
     def test_include_existing_artifacts_uses_only_explicitly_approved_messages_review_rows(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -707,6 +726,41 @@ class ImportNetworkPipelineTests(unittest.TestCase):
         self.assertEqual(preserved["artifacts"]["linkedin_people_csv"], "linkedin.csv")
         self.assertEqual(preserved["artifacts"]["messages_review_csv"], "review.csv")
         self.assertNotIn("merged_people_csv", preserved["artifacts"])
+        self.assertNotIn("duckdb", preserved["artifacts"])
+
+    def test_fan_in_preserves_all_source_artifacts(self) -> None:
+        existing = {
+            "steps": {
+                "gmail_msgvault": {"status": "completed"},
+                "linkedin": {"status": "completed"},
+                "merge": {"status": "completed"},
+                "duckdb": {"status": "completed"},
+            },
+            "source_imports": {
+                "gmail_msgvault:me-example.com": {"status": "completed"},
+                "linkedin": {"status": "completed"},
+            },
+            "artifacts": {
+                "gmail_people_csvs": ["gmail.csv"],
+                "linkedin_people_csv": "linkedin.csv",
+                "messages_review_csv": "review.csv",
+                "merged_people_csv": "merged.csv",
+                "network_contacts_csv": "contacts.csv",
+                "duckdb": "network.duckdb",
+            },
+        }
+
+        preserved = import_network_pipeline.preserved_state_for_source_refresh(existing, set())
+
+        self.assertEqual(preserved["steps"]["gmail_msgvault"]["status"], "completed")
+        self.assertEqual(preserved["steps"]["linkedin"]["status"], "completed")
+        self.assertEqual(preserved["source_imports"]["gmail_msgvault:me-example.com"]["status"], "completed")
+        self.assertEqual(preserved["source_imports"]["linkedin"]["status"], "completed")
+        self.assertEqual(preserved["artifacts"]["gmail_people_csvs"], ["gmail.csv"])
+        self.assertEqual(preserved["artifacts"]["linkedin_people_csv"], "linkedin.csv")
+        self.assertEqual(preserved["artifacts"]["messages_review_csv"], "review.csv")
+        self.assertNotIn("merged_people_csv", preserved["artifacts"])
+        self.assertNotIn("network_contacts_csv", preserved["artifacts"])
         self.assertNotIn("duckdb", preserved["artifacts"])
 
     def test_msgvault_to_merge_to_duckdb(self) -> None:

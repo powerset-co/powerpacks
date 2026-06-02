@@ -1523,9 +1523,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   }
 
   if (action === "import") {
-    const importCommand = setupCommandArgs(operator.id, "import");
-    const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
-    return startSetupJob(action, importAndFanInCommand(importCommand, fanIn, "importing linked sources"), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, setupCommandArgs(operator.id, "import"), 6 * 60 * 60 * 1000);
   }
 
   if (["bootstrap", "link", "index", "run"].includes(action)) {
@@ -1533,9 +1531,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   }
 
   if (action === "enrich-all") {
-    const importCommand = setupCommandArgs(operator.id, "import");
-    const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
-    return startSetupJob(action, importAndFanInCommand(importCommand, fanIn, "running enrichment"), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, setupCommandArgs(operator.id, "import"), 6 * 60 * 60 * 1000);
   }
 
   if (action === "import-source") {

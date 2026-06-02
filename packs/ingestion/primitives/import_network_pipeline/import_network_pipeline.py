@@ -1429,6 +1429,9 @@ def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
     artifacts = ledger.get("artifacts", {}) or {}
     include_existing = bool(input_cfg.get("include_existing_artifacts"))
     explicit_inputs: list[str] = []
+    canonical_people = DEFAULT_BASE_DIR / "merged" / "people.csv"
+    if include_existing and canonical_people.exists():
+        explicit_inputs.append(str(canonical_people))
 
     account_order = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
     gmail_inputs = artifacts.get("gmail_final_people_csvs") or []
@@ -1626,7 +1629,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             emit({"status": "active_run_exists", "ledger": str(ledger_path), "message": "Use continue/approve or --force."})
             return 0
     selected_sources = set(unique_strings(getattr(args, "only_source", [])))
-    preserved = preserved_state_for_source_refresh(existing, selected_sources) if args.force and selected_sources and not args.fan_in_only else {}
+    preserve_sources = set() if args.fan_in_only else selected_sources
+    preserved = preserved_state_for_source_refresh(existing, preserve_sources) if args.force and (selected_sources or args.fan_in_only) else {}
     ledger = {
         "primitive": "import_network_pipeline",
         "version": 1,
