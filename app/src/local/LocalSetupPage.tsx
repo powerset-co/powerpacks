@@ -889,9 +889,9 @@ function EnrichmentSourceRow({
           </div>
         </div>
       </div>
-      <KeyValue label="To enrich" value={source.candidates.toLocaleString()} />
-      <KeyValue label="Profiles" value={source.enriched.toLocaleString()} />
-      <KeyValue label="Matched" value={source.matched.toLocaleString()} />
+      <KeyValue label="Candidates" value={source.candidates.toLocaleString()} />
+      <KeyValue label="Profiles found" value={source.enriched.toLocaleString()} />
+      <KeyValue label="Existing matches" value={source.matched.toLocaleString()} />
       <KeyValue label="Skipped" value={source.skipped.toLocaleString()} />
       <div className="flex justify-end">
         <Button
@@ -929,7 +929,7 @@ function EnrichmentTab({
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-base font-semibold">Enrichment</h3>
             <StatusBadge status={status.enrichment.status} />
-            <MetricChip label="To enrich" value={status.enrichment.totalCandidates} />
+            <MetricChip label="Candidates" value={status.enrichment.totalCandidates} />
             <MetricChip label="Profiles found" value={status.enrichment.totalEnriched} />
           </div>
           <div className="flex flex-wrap gap-2">

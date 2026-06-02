@@ -25,6 +25,7 @@ csv.field_size_limit(1024 * 1024 * 1024)
 RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
 CONTACT_COLUMNS = ["display_name", "primary_email", "all_emails", "total_sent", "total_received", "total_messages", "thread_count", "first_interaction", "last_interaction", "source_files"]
 SOURCE_COLUMNS = ["path", "kind", "rows", "size_bytes", "columns"]
+BOOTSTRAP_SOURCE_COLUMNS = ["file", "kind", "rows", "source_path"]
 URL_COLUMNS = [
     "confirmed_linkedin_url",
     "human_confirmed_linkedin",
@@ -259,6 +260,24 @@ def source_manifest(paths: list[Path]) -> list[dict[str, Any]]:
     for path in paths:
         rows.append({"path": str(path.resolve()), "kind": source_kind(path), "rows": csv_row_count(path), "size_bytes": path.stat().st_size, "columns": json.dumps(csv_header(path))})
     return rows
+
+
+def copy_bootstrap_source_files(paths: list[Path], target_dir: Path) -> list[dict[str, Any]]:
+    manifest: list[dict[str, Any]] = []
+    for path in paths:
+        kind = source_kind(path)
+        if kind != "linkedin_candidates":
+            continue
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / path.name
+        shutil.copy2(path, target)
+        manifest.append({
+            "file": str(target),
+            "kind": kind,
+            "rows": csv_row_count(path),
+            "source_path": str(path.resolve()),
+        })
+    return manifest
 
 
 def build_contacts(paths: list[Path]) -> list[dict[str, Any]]:
@@ -578,6 +597,7 @@ def build_bundle(args: argparse.Namespace, operator: dict[str, Any]) -> dict[str
 
     sources = discover_sources(Path(args.source_dir), operator)
     source_rows = source_manifest(sources)
+    bootstrap_source_rows = copy_bootstrap_source_files(sources, inputs_dir / "linkedin_candidates")
     contacts = build_contacts(sources)
     resolutions = build_resolutions(sources)
     cache_stats = write_profile_cache(sources, cache_dir)
@@ -586,6 +606,7 @@ def build_bundle(args: argparse.Namespace, operator: dict[str, Any]) -> dict[str
     linkedin_subset = write_cached_linkedin_subset(args.linkedin_csv, inputs_dir / "linkedin_connections_cached.csv", cached_ids)
 
     write_csv(inputs_dir / "source_files_manifest.csv", SOURCE_COLUMNS, source_rows)
+    write_csv(inputs_dir / "linkedin_candidates_manifest.csv", BOOTSTRAP_SOURCE_COLUMNS, bootstrap_source_rows)
     write_csv(inputs_dir / "contact_rows_min.csv", CONTACT_COLUMNS, contacts)
     write_csv(resolution_dir / "linkedin_resolutions.csv", RESOLUTION_COLUMNS, resolutions)
     write_csv(resolution_dir / "linkedin_resolutions_cached.csv", RESOLUTION_COLUMNS, cached_resolutions)
@@ -606,6 +627,8 @@ def build_bundle(args: argparse.Namespace, operator: dict[str, Any]) -> dict[str
         "source_root_fingerprint": {"file_count": len(sources), "sha": sha("\n".join(str(path.resolve()) for path in sources), 16)},
         "artifacts": {
             "source_files_manifest": str((inputs_dir / "source_files_manifest.csv").resolve()),
+            "linkedin_candidates_manifest": str((inputs_dir / "linkedin_candidates_manifest.csv").resolve()),
+            "linkedin_candidates_dir": str((inputs_dir / "linkedin_candidates").resolve()),
             "contact_rows_min": str((inputs_dir / "contact_rows_min.csv").resolve()),
             "linkedin_resolutions": str((resolution_dir / "linkedin_resolutions.csv").resolve()),
             "linkedin_resolutions_cached": str((resolution_dir / "linkedin_resolutions_cached.csv").resolve()),
@@ -616,6 +639,8 @@ def build_bundle(args: argparse.Namespace, operator: dict[str, Any]) -> dict[str
         },
         "counts": {
             "source_files": len(sources),
+            "linkedin_candidate_source_files": len(bootstrap_source_rows),
+            "linkedin_candidate_source_rows": sum(int(row.get("rows") or 0) for row in bootstrap_source_rows),
             "contact_min_rows": len(contacts),
             "linkedin_resolution_rows": len(resolutions),
             "linkedin_resolution_cached_rows": len(cached_resolutions),

@@ -91,9 +91,20 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                     operator_dir = out / "operators/patrick"
                     (operator_dir / "inputs").mkdir(parents=True)
                     (operator_dir / "outputs").mkdir(parents=True)
+                    (operator_dir / "inputs/linkedin_candidates").mkdir(parents=True)
                     (operator_dir / "resolution").mkdir(parents=True)
                     (operator_dir / "enrichment/profile_cache_v2").mkdir(parents=True)
                     (operator_dir / "inputs/contact_rows_min.csv").write_text("display_name,primary_email\nPat,pat@example.com\n", encoding="utf-8")
+                    (operator_dir / "inputs/linkedin_candidates/linkedin_candidates_merged_17d602f7.csv").write_text(
+                        "operator_id,primary_email,display_name,confirmed_linkedin_url\n"
+                        "17d602f7-f073-40b4-97a1-dba00c574442,pat@example.com,Pat,https://www.linkedin.com/in/pat\n",
+                        encoding="utf-8",
+                    )
+                    (operator_dir / "inputs/linkedin_candidates_manifest.csv").write_text(
+                        "file,kind,rows,source_path\n"
+                        "linkedin_candidates_merged_17d602f7.csv,linkedin_candidates,1,/source/linkedin_candidates_merged_17d602f7.csv\n",
+                        encoding="utf-8",
+                    )
                     (operator_dir / "outputs/commands.txt").write_text("import-network\n", encoding="utf-8")
                     (operator_dir / "outputs/counts.json").write_text(json.dumps({"contact_min_rows": 1}), encoding="utf-8")
                     (operator_dir / "resolution/linkedin_resolutions_cached.csv").write_text(
@@ -207,12 +218,17 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                 manifest["gcs"]["bundle"],
                 "gs://bucket/bootstrap/users/patrick/operators/17d602f7-f073-40b4-97a1-dba00c574442/operator-bootstrap.tar.gz",
             )
+            self.assertIn(".powerpacks/operator-bootstrap/import/resolution", manifest["restore"]["normal_pipeline_outputs"])
+            self.assertIn(".powerpacks/operator-bootstrap/import/linkedin_candidates", manifest["restore"]["normal_pipeline_outputs"])
             self.assertIn(".powerpacks/search-index", manifest["restore"]["normal_pipeline_outputs"])
             bundle = Path(manifest["artifacts"]["bundle"])
             with tarfile.open(bundle, "r:gz") as archive:
                 names = set(archive.getnames())
             self.assertIn("patrick/import/inputs/contact_rows_min.csv", names)
+            self.assertIn("patrick/import/inputs/linkedin_candidates/linkedin_candidates_merged_17d602f7.csv", names)
             self.assertIn("patrick/enrich/resolution/linkedin_resolutions_cached.csv", names)
+            self.assertIn(".powerpacks/operator-bootstrap/import/linkedin_candidates/linkedin_candidates_merged_17d602f7.csv", names)
+            self.assertIn(".powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions_cached.csv", names)
             self.assertNotIn("patrick/processing/search-index/local-search.duckdb", names)
             self.assertIn("patrick/sync/manifest.json", names)
             self.assertNotIn(".powerpacks/search-index/local-search.duckdb", names)

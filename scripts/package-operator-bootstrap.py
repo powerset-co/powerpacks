@@ -555,6 +555,39 @@ def copy_processing_restore_payload(source_dir: Path, restore_powerpacks_root: P
     return copied
 
 
+def copy_import_restore_payload(operator_dir: Path, restore_powerpacks_root: Path) -> list[str]:
+    dst = restore_powerpacks_root / "operator-bootstrap/import"
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.mkdir(parents=True, exist_ok=True)
+
+    copied: list[str] = []
+    resolution_src = operator_dir / "enrich/resolution"
+    if resolution_src.exists():
+        shutil.copytree(resolution_src, dst / "resolution")
+        copied.append(".powerpacks/operator-bootstrap/import/resolution")
+
+    candidates_src = operator_dir / "import/inputs/linkedin_candidates"
+    if candidates_src.exists():
+        shutil.copytree(candidates_src, dst / "linkedin_candidates")
+        copied.append(".powerpacks/operator-bootstrap/import/linkedin_candidates")
+
+    for rel in [
+        Path("import/inputs/linkedin_candidates_manifest.csv"),
+        Path("import/inputs/source_files_manifest.csv"),
+        Path("import/inputs/contact_rows_min.csv"),
+        Path("import/counts.json"),
+        Path("import/network-bootstrap-manifest.json"),
+    ]:
+        src = operator_dir / rel
+        if src.exists():
+            target = dst / rel.name
+            shutil.copy2(src, target)
+            copied.append(str(Path(".powerpacks/operator-bootstrap/import") / rel.name))
+
+    return copied
+
+
 def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_root: Path, output_root: Path) -> dict[str, Any]:
     restore_powerpacks_root = output_root / "restores" / operator["slug"] / ".powerpacks"
     if restore_powerpacks_root.exists():
@@ -578,19 +611,21 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
                 copied.append(copied_path)
             else:
                 missing.append(path_text)
-        if run_dir_text:
-            restored_ledger_path = restore_powerpacks_root / Path(run_dir_text).relative_to(".powerpacks") / "import-network.ledger.json"
-            restored_ledger = dict(import_ledger)
-            restored_ledger["ledger"] = str(Path(run_dir_text) / "import-network.ledger.json")
-            write_json(restored_ledger_path, restored_ledger)
-            copied.append(str(Path(run_dir_text) / "import-network.ledger.json"))
-            merged_dir = ROOT / run_dir_text / "merged"
-            if merged_dir.exists():
-                dst = restore_powerpacks_root / "network-import/merged"
-                if dst.exists():
-                    shutil.rmtree(dst)
-                shutil.copytree(merged_dir, dst)
-                copied.append(".powerpacks/network-import/merged")
+    if run_dir_text:
+        restored_ledger_path = restore_powerpacks_root / Path(run_dir_text).relative_to(".powerpacks") / "import-network.ledger.json"
+        restored_ledger = dict(import_ledger)
+        restored_ledger["ledger"] = str(Path(run_dir_text) / "import-network.ledger.json")
+        write_json(restored_ledger_path, restored_ledger)
+        copied.append(str(Path(run_dir_text) / "import-network.ledger.json"))
+        merged_dir = ROOT / run_dir_text / "merged"
+        if merged_dir.exists():
+            dst = restore_powerpacks_root / "network-import/merged"
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(merged_dir, dst)
+            copied.append(".powerpacks/network-import/merged")
+
+    copied.extend(copy_import_restore_payload(operator_dir, restore_powerpacks_root))
 
     processing_dir = operator_dir / "processing/search-index"
     if processing_dir.exists():

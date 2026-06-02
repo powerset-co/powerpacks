@@ -42,6 +42,7 @@ ALLOWED_ROOTS = [
     PurePosixPath('.powerpacks/search-index'),
     PurePosixPath('.powerpacks/network-import/merged'),
     PurePosixPath('.powerpacks/network-import/profile_cache_v2'),
+    PurePosixPath('.powerpacks/operator-bootstrap/import'),
     PurePosixPath('.powerpacks/operator-bootstrap/restore-manifest.json'),
 ]
 SEARCH_BOOTSTRAP_PREFIX_MEMBERS = [
@@ -1734,9 +1735,10 @@ def run_index_phase(args: argparse.Namespace) -> int:
 
 
 def setup_commands(args: argparse.Namespace) -> dict[str, str]:
+    gmail_resolution_arg = default_gmail_resolutions_arg()
     return {
-        'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
-        'import_network_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
+        'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts{gmail_resolution_arg}',
+        'import_network_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts{gmail_resolution_arg}',
         'import_network_fan_in': f'uv run --project . python packs/ingestion/primitives/setup/setup.py fan-in --operator-id {args.operator_id} --accounts {args.accounts} --setup-ledger {args.setup_ledger} --force',
         'import_network_status': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py status',
         'import_network_continue': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue',
@@ -1747,6 +1749,21 @@ def setup_commands(args: argparse.Namespace) -> dict[str, str]:
         'processing_continue': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue --ledger .powerpacks/search-index/ledger.json',
         'build_local_duckdb_shim': build_local_duckdb_shim_command_text(args.operator_id),
     }
+
+
+def default_gmail_resolutions_csv() -> str:
+    for path in [
+        ROOT / '.powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions.csv',
+        ROOT / '.powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions_cached.csv',
+    ]:
+        if path.exists() and path.stat().st_size > 0:
+            return str(path)
+    return ''
+
+
+def default_gmail_resolutions_arg() -> str:
+    path = default_gmail_resolutions_csv()
+    return f' --gmail-resolutions-csv {shlex.quote(path)}' if path else ''
 
 
 def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -1901,6 +1918,9 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
         cmd.append('--force')
     if gmail_sync_after:
         cmd.extend(['--gmail-sync-after', gmail_sync_after])
+    resolutions_csv = default_gmail_resolutions_csv()
+    if resolutions_csv:
+        cmd.extend(['--gmail-resolutions-csv', resolutions_csv])
     return cmd
 
 

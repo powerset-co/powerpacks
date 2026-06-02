@@ -983,7 +983,7 @@ function messagesLedgerStatus(fallback: string) {
 }
 
 function importNetworkCommand(operatorId: string, extra: string[] = []) {
-  return [
+  const command = [
     "uv", "run", "--project", ".", "python",
     "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py",
     "run",
@@ -991,8 +991,16 @@ function importNetworkCommand(operatorId: string, extra: string[] = []) {
     "--operator-id", operatorId,
     "--include-existing-artifacts",
     "--ledger", ".powerpacks/network-import/import-network-run.setup-refresh.json",
-    ...extra,
   ];
+  const resolutionsCsv = [
+    path.join(powerpacksStateRoot, "operator-bootstrap", "import", "resolution", "linkedin_resolutions.csv"),
+    path.join(powerpacksStateRoot, "operator-bootstrap", "import", "resolution", "linkedin_resolutions_cached.csv"),
+  ].find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).size > 0);
+  if (resolutionsCsv) {
+    command.push("--gmail-resolutions-csv", path.relative(powerpacksRepoRoot, resolutionsCsv));
+  }
+  command.push(...extra);
+  return command;
 }
 
 function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[number]) {
@@ -1276,6 +1284,10 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
   const linkedInStep = setupRefreshLedger.steps?.linkedin || {};
   const sourceById = Object.fromEntries(setupSources.map((source) => [source.id, source]));
   const isSkipped = (id: string) => Boolean(sourceById[id]?.skipped);
+  const restoredGmailMatches = firstCsvCount(
+    ".powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions.csv",
+    ".powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions_cached.csv",
+  );
 
   const messagesLedger = readJsonSync(messagesLedgerPath) || {};
   const messagesReview = messagesLedger.steps?.llm_review?.summary || {};
@@ -1291,9 +1303,14 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       label: "LinkedIn",
       status: String(linkedInStep.status || setupRefreshLedger.status || "unknown"),
       candidates: firstCsvCount(refreshArtifacts.linkedin_linkedin_enrichment_queue_csv, refreshArtifacts.linkedin_source_people_csv),
-      enriched: firstCsvCount(refreshArtifacts.linkedin_people_csv, refreshArtifacts.linkedin_enrich_people_people_csv, refreshArtifacts.linkedin_provider_enriched_csv),
-      skipped: firstCsvCount(refreshArtifacts.linkedin_skipped_enrichment_csv, refreshArtifacts.linkedin_enrich_people_skipped_enrichment_csv),
-      matched: csvPathCount(refreshArtifacts.linkedin_rapidapi_cache_hits_csv) + csvPathCount(refreshArtifacts.linkedin_provider_enriched_csv),
+      enriched: firstCsvCount(refreshArtifacts.linkedin_provider_enriched_csv, refreshArtifacts.linkedin_enrich_people_provider_enriched_csv),
+      skipped: firstCsvCount(
+        refreshArtifacts.linkedin_rapidapi_recent_failures_csv,
+        refreshArtifacts.linkedin_enrich_people_rapidapi_recent_failures_csv,
+        refreshArtifacts.linkedin_skipped_enrichment_csv,
+        refreshArtifacts.linkedin_enrich_people_skipped_enrichment_csv,
+      ),
+      matched: 0,
       updatedAt: isSkipped("linkedin_csv") ? null : linkedInStep.finished_at || setupRefreshLedger.updated_at || null,
     },
     {
@@ -1303,15 +1320,15 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       candidates: sumArtifacts([refreshArtifacts], "gmail_people_csvs") || sumArtifacts([refreshArtifacts], "gmail_people_csv"),
       enriched: sumArtifacts([refreshArtifacts], "gmail_final_people_csvs"),
       skipped: 0,
-      matched: sumArtifacts([refreshArtifacts], "gmail_resolved_people_csvs"),
+      matched: sumArtifacts([refreshArtifacts], "gmail_resolved_people_csvs") || restoredGmailMatches,
       updatedAt: isSkipped("gmail") ? null : setupRefreshLedger.updated_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
     },
     {
       id: "messages",
       label: "Messages",
       status: String(messagesReview.status || messagesLedger.status || "unknown"),
-      candidates: Number(messagesCounts.enrich || messagesReview.candidate_count || messagesCounts.verdicts || 0) || 0,
-      enriched: Number(messagesMatchStats.matched || 0) || 0,
+      candidates: Number(messagesReview.candidate_count || messagesCounts.verdicts || 0) || 0,
+      enriched: 0,
       skipped: Number(messagesCounts.skip || 0) || 0,
       matched: Number(messagesMatchStats.matched || 0) || 0,
       updatedAt: isSkipped("messages") ? null : messagesLedger.updated_at || messagesReview.started_at || null,

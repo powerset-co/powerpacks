@@ -1328,20 +1328,25 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     artifacts = ledger.setdefault("artifacts", {})
     resolution_records = []
     if input_cfg.get("gmail_resolutions_csv"):
-        people_csvs = unique_strings(artifacts.get("gmail_final_people_csvs") or artifacts.get("gmail_people_csvs") or artifacts.get("gmail_people_csv"))
-        if len(people_csvs) > 1:
-            message = "--gmail-resolutions-csv is ambiguous with multiple Gmail people CSVs; provide per-account resolution outputs or run Gmail LinkedIn resolution first."
-            mark_step(ledger, "gmail_apply_enrich", "failed", error=message)
-            ledger["status"] = "failed"
-            save_ledger(ledger_path, ledger)
-            emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": message})
-            return False
-        resolution_records = [{
-            "account_email": "",
-            "resolutions_csv": input_cfg.get("gmail_resolutions_csv"),
-            "people_csv": artifacts.get("gmail_people_csv"),
-            "slug": "all",
-        }]
+        people_records = [
+            record for record in ordered_records(
+                artifacts.get("gmail_people_records") or [],
+                unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")),
+            )
+            if isinstance(record, dict) and record.get("people_csv")
+        ]
+        if not people_records:
+            people_csvs = unique_strings(artifacts.get("gmail_final_people_csvs") or artifacts.get("gmail_people_csvs") or artifacts.get("gmail_people_csv"))
+            people_records = [{"account_email": "", "people_csv": path, "slug": "all" if len(people_csvs) == 1 else f"account-{index}"} for index, path in enumerate(people_csvs)]
+        resolution_records = [
+            {
+                "account_email": record.get("account_email", ""),
+                "resolutions_csv": input_cfg.get("gmail_resolutions_csv"),
+                "people_csv": record.get("people_csv"),
+                "slug": record.get("slug") or record.get("account_email") or f"account-{index}",
+            }
+            for index, record in enumerate(people_records)
+        ]
     else:
         resolution_records = artifacts.get("gmail_linkedin_resolutions_csvs") or []
         if not resolution_records and artifacts.get("gmail_linkedin_resolutions_csv"):

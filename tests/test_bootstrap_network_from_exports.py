@@ -42,6 +42,11 @@ class BootstrapNetworkFromExportsTests(unittest.TestCase):
                 "Pat Example,Acme,pat@example.com,https://www.linkedin.com/in/pat-example,completed,high,matched\n",
                 encoding="utf-8",
             )
+            (source_dir / "linkedin_candidates_merged_17d602f7.csv").write_text(
+                "operator_id,primary_email,display_name,confirmed_linkedin_url\n"
+                "17d602f7-f073-40b4-97a1-dba00c574442,pat@example.com,Pat Example,https://www.linkedin.com/in/pat-example\n",
+                encoding="utf-8",
+            )
             with (source_dir / "harmonic_enriched_17d602f7.csv").open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=["linkedin_url", "public_identifier", "harmonic_response", "harmonic_location"])
                 writer.writeheader()
@@ -75,6 +80,8 @@ class BootstrapNetworkFromExportsTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["linkedin_resolution_rows"], 1)
             self.assertEqual(manifest["counts"]["linkedin_connections_cached_rows"], 1)
             self.assertTrue((output_root / "operators/patrick/resolution/linkedin_resolutions_cached.csv").exists())
+            self.assertTrue((output_root / "operators/patrick/inputs/linkedin_candidates/linkedin_candidates_merged_17d602f7.csv").exists())
+            self.assertTrue((output_root / "operators/patrick/inputs/linkedin_candidates_manifest.csv").exists())
             with (output_root / "operators/patrick/resolution/linkedin_resolutions_cached.csv").open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows[0]["handle"], "pat@example.com")
