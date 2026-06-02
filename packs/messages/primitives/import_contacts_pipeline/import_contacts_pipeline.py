@@ -837,7 +837,7 @@ def previous_review_state_sources(
     configured = (ledger.get("artifacts") or {}).get("previous_research_review_csv")
     if configured:
         candidates.append(Path(configured))
-    if include_active_for_rebuild and getattr(args, "force_build_review", False):
+    if include_active_for_rebuild:
         candidates.append(active)
     candidates.extend(archived_review_candidates())
 
@@ -1819,7 +1819,11 @@ def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: di
         return
     contacts_path = Path(args.contacts)
     queue_by_phone = load_queue_rows_by_phone(Path(args.research_queue))
+    previous_sources = previous_review_state_sources(args, ledger, include_active_for_rebuild=True)
+    previous_by_handle, previous_by_phone, previous_state_rows = load_previous_review_states(previous_sources)
     rows: list[dict[str, str]] = []
+    previous_decisions_applied = 0
+    previous_feedback_applied = 0
     if contacts_path.exists():
         with contacts_path.open(newline="", encoding="utf-8-sig") as handle:
             for contact in csv.DictReader(handle):
@@ -1828,7 +1832,7 @@ def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: di
                 name = contact.get("matched_name") or contact.get("name") or ""
                 queue_row = queue_by_phone.get(digits_only(phone), {})
                 bucket, exclude, enrich_decision = raw_decision(contact)
-                rows.append({
+                row = {
                     "bucket": bucket,
                     "handle": queue_row.get("handle") or phone_handle(phone, name),
                     "full_name": queue_row.get("display_name") or name,
@@ -1863,7 +1867,27 @@ def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: di
                     "network_match_method": "",
                     "network_match_reason": "",
                     "review_source": "raw_review",
-                })
+                }
+                previous_state = previous_by_handle.get((row.get("handle") or "").strip()) \
+                    or previous_by_phone.get((row.get("phone_e164") or "").strip())
+                if previous_state:
+                    applied_decision = False
+                    if previous_state.get("exclude"):
+                        row["exclude"] = previous_state["exclude"]
+                        if truthy(row["exclude"]):
+                            row["bucket"] = "no"
+                        elif falsy(row["exclude"]):
+                            row["bucket"] = "yes"
+                        applied_decision = True
+                    if previous_state.get("enrich_decision"):
+                        row["enrich_decision"] = previous_state["enrich_decision"]
+                        applied_decision = True
+                    if previous_state.get("retarget_hint"):
+                        row["retarget_hint"] = previous_state["retarget_hint"]
+                        previous_feedback_applied += 1
+                    if applied_decision:
+                        previous_decisions_applied += 1
+                rows.append(row)
     review_csv = Path(args.review_csv)
     review_csv.parent.mkdir(parents=True, exist_ok=True)
     with review_csv.open("w", newline="", encoding="utf-8") as handle:
@@ -1881,7 +1905,11 @@ def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: di
             "yes": sum(1 for row in rows if row["bucket"] == "yes"),
             "maybe": sum(1 for row in rows if row["bucket"] == "maybe"),
             "no": sum(1 for row in rows if row["bucket"] == "no"),
+            "previous_review_state_rows": previous_state_rows,
+            "previous_review_decisions_applied": previous_decisions_applied,
+            "previous_review_feedback_applied": previous_feedback_applied,
         },
+        "previous_review_csvs": [str(path) for path in previous_sources],
         "status": "ok",
     }
     write_json(review_csv.with_suffix(review_csv.suffix + ".manifest.json"), manifest)

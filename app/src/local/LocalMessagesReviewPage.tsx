@@ -37,12 +37,13 @@ import type {
 const REVIEW_PAGE_SIZE = 100;
 
 const REVIEW_FILTERS: Array<{ id: MessageReviewFilter; label: string; countKey?: keyof MessageReviewResponse["counts"] }> = [
+  { id: "all", label: "All", countKey: "total" },
+  { id: "included", label: "Included", countKey: "included" },
+  { id: "in_network", label: "In Network", countKey: "inNetwork" },
   { id: "yes", label: "Yes", countKey: "yes" },
   { id: "maybe", label: "Maybe", countKey: "maybe" },
   { id: "no", label: "No", countKey: "no" },
-  { id: "in_network", label: "In Network", countKey: "inNetwork" },
   { id: "feedback", label: "Feedback", countKey: "retargetFeedback" },
-  { id: "all", label: "All", countKey: "total" },
 ];
 
 function stringValue(value: unknown): string {
@@ -267,7 +268,7 @@ function ReviewCard({
 }
 
 export function LocalMessagesReviewPage({ onBackToSetup }: { onBackToSetup: () => void }) {
-  const [filter, setFilter] = useState<MessageReviewFilter>("yes");
+  const [filter, setFilter] = useState<MessageReviewFilter>("all");
   const [query, setQuery] = useState("");
   const [response, setResponse] = useState<MessageReviewResponse | null>(null);
   const [status, setStatus] = useState<SetupStatusResponse | null>(null);

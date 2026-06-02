@@ -395,6 +395,21 @@ function parseLastJsonFragment(text: string): Record<string, any> | null {
   return last || parseJsonFragment(text);
 }
 
+function shellStage(label: string, command: string[]): string {
+  return `printf '%s\\n' ${shellQuote(`setup: ${label}`)} && ${shellJoin(command)}`;
+}
+
+function importAndFanInCommand(importCommand: string[], fanInCommand: string[], label: string): string[] {
+  return [
+    "/bin/zsh",
+    "-lc",
+    [
+      shellStage(label, importCommand),
+      shellStage("merging local network", fanInCommand),
+    ].join(" && "),
+  ];
+}
+
 function fileSummary(filePath: string) {
   if (!fs.existsSync(filePath)) {
     return { path: path.relative(powerpacksRepoRoot, filePath), exists: false };
@@ -1113,8 +1128,8 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
     skipped: Boolean(gmail?.skipped),
     accountEmail: gmailAccounts.length === 1 ? gmailAccounts[0] : undefined,
     accountCount: gmailAccounts.length,
-    updatedAt: refreshState.updatedAt,
-    runId: refreshState.runId,
+    updatedAt: gmail?.linked && !gmail?.skipped ? refreshState.updatedAt : null,
+    runId: gmail?.linked && !gmail?.skipped ? refreshState.runId : "",
     command: importNetworkCommand(operatorId, ["--only-source", "gmail", "--force"]),
   });
 
@@ -1131,8 +1146,8 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
       status: source?.skipped ? "skipped" : source?.linked ? state.status : "not_linked",
       linked: Boolean(source?.linked),
       skipped: Boolean(source?.skipped),
-      updatedAt: state.updatedAt,
-      runId: state.runId,
+      updatedAt: source?.linked && !source?.skipped ? state.updatedAt : null,
+      runId: source?.linked && !source?.skipped ? state.runId : "",
       runnable: id === "twitter" ? false : undefined,
       disabledReason: id === "twitter" ? "Twitter/X handle is recorded; follower import is not wired into setup yet." : undefined,
       command: id === "messages"
@@ -1316,10 +1331,12 @@ function readRelativeLedger(relativePath: string): RunState {
   return readJsonSync(path.join(powerpacksRepoRoot, relativePath)) || {};
 }
 
-function buildEnrichmentSources(): SetupEnrichmentSource[] {
+function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSources> = []): SetupEnrichmentSource[] {
   const setupRefreshLedger = readRelativeLedger(".powerpacks/network-import/import-network-run.setup-refresh.json");
   const refreshArtifacts = setupRefreshLedger.artifacts || {};
   const linkedInStep = setupRefreshLedger.steps?.linkedin || {};
+  const sourceById = Object.fromEntries(setupSources.map((source) => [source.id, source]));
+  const isSkipped = (id: string) => Boolean(sourceById[id]?.skipped);
 
   const messagesLedger = readJsonSync(messagesLedgerPath) || {};
   const messagesReview = messagesLedger.steps?.llm_review?.summary || {};
@@ -1338,7 +1355,7 @@ function buildEnrichmentSources(): SetupEnrichmentSource[] {
       enriched: firstCsvCount(refreshArtifacts.linkedin_people_csv, refreshArtifacts.linkedin_enrich_people_people_csv, refreshArtifacts.linkedin_provider_enriched_csv),
       skipped: firstCsvCount(refreshArtifacts.linkedin_skipped_enrichment_csv, refreshArtifacts.linkedin_enrich_people_skipped_enrichment_csv),
       matched: csvPathCount(refreshArtifacts.linkedin_rapidapi_cache_hits_csv) + csvPathCount(refreshArtifacts.linkedin_provider_enriched_csv),
-      updatedAt: linkedInStep.finished_at || setupRefreshLedger.updated_at || null,
+      updatedAt: isSkipped("linkedin_csv") ? null : linkedInStep.finished_at || setupRefreshLedger.updated_at || null,
     },
     {
       id: "gmail",
@@ -1348,7 +1365,7 @@ function buildEnrichmentSources(): SetupEnrichmentSource[] {
       enriched: sumArtifacts([refreshArtifacts], "gmail_final_people_csvs"),
       skipped: 0,
       matched: sumArtifacts([refreshArtifacts], "gmail_resolved_people_csvs"),
-      updatedAt: setupRefreshLedger.updated_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
+      updatedAt: isSkipped("gmail") ? null : setupRefreshLedger.updated_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
     },
     {
       id: "messages",
@@ -1358,17 +1375,17 @@ function buildEnrichmentSources(): SetupEnrichmentSource[] {
       enriched: Number(messagesMatchStats.matched || 0) || 0,
       skipped: Number(messagesCounts.skip || 0) || 0,
       matched: Number(messagesMatchStats.matched || 0) || 0,
-      updatedAt: messagesLedger.updated_at || messagesReview.started_at || null,
+      updatedAt: isSkipped("messages") ? null : messagesLedger.updated_at || messagesReview.started_at || null,
     },
     {
       id: "twitter",
       label: "Twitter/X",
-      status: String(setupRefreshLedger.steps?.twitter?.status || "unknown"),
+      status: isSkipped("twitter") ? "skipped" : String(setupRefreshLedger.steps?.twitter?.status || "unknown"),
       candidates: firstCsvCount(refreshArtifacts.twitter_people_csv, refreshArtifacts.people_csv),
       enriched: firstCsvCount(refreshArtifacts.twitter_people_csv, refreshArtifacts.people_csv),
       skipped: 0,
       matched: 0,
-      updatedAt: setupRefreshLedger.steps?.twitter?.finished_at || setupRefreshLedger.updated_at || null,
+      updatedAt: isSkipped("twitter") ? null : setupRefreshLedger.steps?.twitter?.finished_at || setupRefreshLedger.updated_at || null,
     },
   ];
 }
@@ -1406,7 +1423,7 @@ async function setupStatus() {
   const unresolvedSources = sources.filter((source) => !source.linked && !source.skipped).map((source) => source.id);
   const operator = resolveOperator(setupLedger, accounts);
   const importSources = buildImportSources(accounts, operator.id);
-  const enrichmentSources = buildEnrichmentSources();
+  const enrichmentSources = buildEnrichmentSources(sources);
   const setupFile = fileSummary(setupLedgerPath);
   const importFile = fileSummary(importRefreshLedgerPath);
   const indexPhase = phases.index || {};
@@ -1508,7 +1525,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   if (action === "import") {
     const importCommand = setupCommandArgs(operator.id, "import");
     const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
-    return startSetupJob(action, ["/bin/zsh", "-lc", `${shellJoin(importCommand)} && ${shellJoin(fanIn)}`], 6 * 60 * 60 * 1000);
+    return startSetupJob(action, importAndFanInCommand(importCommand, fanIn, "importing linked sources"), 6 * 60 * 60 * 1000);
   }
 
   if (["bootstrap", "link", "index", "run"].includes(action)) {
@@ -1518,7 +1535,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   if (action === "enrich-all") {
     const importCommand = setupCommandArgs(operator.id, "import");
     const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
-    return startSetupJob(action, ["/bin/zsh", "-lc", `${shellJoin(importCommand)} && ${shellJoin(fanIn)}`], 6 * 60 * 60 * 1000);
+    return startSetupJob(action, importAndFanInCommand(importCommand, fanIn, "running enrichment"), 6 * 60 * 60 * 1000);
   }
 
   if (action === "import-source") {
@@ -1531,7 +1548,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
       throw new Error(source.disabledReason || `source is not importable yet: ${sourceId}`);
     }
     const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
-    return startSetupJob(action, ["/bin/zsh", "-lc", `${shellJoin(source.command)} && ${shellJoin(fanIn)}`], 6 * 60 * 60 * 1000);
+    return startSetupJob(action, importAndFanInCommand(source.command, fanIn, `importing ${source.label}`), 6 * 60 * 60 * 1000);
   }
 
   if (action === "enrich-source") {
@@ -1544,7 +1561,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
       throw new Error(source.disabledReason || `source is not importable yet: ${sourceId}`);
     }
     const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
-    return startSetupJob(action, ["/bin/zsh", "-lc", `${shellJoin(source.command)} && ${shellJoin(fanIn)}`], 6 * 60 * 60 * 1000);
+    return startSetupJob(action, importAndFanInCommand(source.command, fanIn, `enriching ${source.label}`), 6 * 60 * 60 * 1000);
   }
 
   if (action === "skip-source") {

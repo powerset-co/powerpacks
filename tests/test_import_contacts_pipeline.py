@@ -1288,6 +1288,45 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertEqual(saved["steps"]["reapply_previous_review_state"]["summary"]["previous_run_count"], 2)
             self.assertEqual(saved["steps"]["reapply_previous_review_state"]["summary"]["matched_rows"], 2)
 
+    def test_force_raw_review_rebuild_preserves_active_review_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            contacts = tmp_path / "contacts.csv"
+            review_csv = tmp_path / "research_review.csv"
+            contacts.write_text(
+                ",".join(mod.CONTACT_CSV_HEADERS) + "\n"
+                "+14155550101,Rina Example,imessage,false,,3,3,,2026-01-01,2026-01-01,,,,,,,,,\n",
+                encoding="utf-8",
+            )
+            review_csv.write_text(
+                "bucket,handle,full_name,phone_e164,exclude,enrich_decision,retarget_hint\n"
+                "maybe,phone-4155550101,Rina Example,+14155550101,no,yes,https://linkedin.test/rina\n",
+                encoding="utf-8",
+            )
+            ledger = mod.load_ledger(ledger_path)
+            args = SimpleNamespace(
+                contacts=contacts,
+                research_queue=tmp_path / "research_queue.csv",
+                review_csv=review_csv,
+                force_build_review=True,
+            )
+
+            with mock.patch.object(mod, "archived_review_candidates", return_value=[]):
+                mod.build_raw_review_csv(args, ledger_path, ledger)
+
+            with review_csv.open(newline="", encoding="utf-8-sig") as handle:
+                row = next(csv.DictReader(handle))
+            self.assertEqual(row["bucket"], "yes")
+            self.assertEqual(row["exclude"], "no")
+            self.assertEqual(row["enrich_decision"], "yes")
+            self.assertEqual(row["retarget_hint"], "https://linkedin.test/rina")
+            saved = mod.read_json(ledger_path)
+            counts = saved["steps"]["build_raw_review_csv"]["summary"]["counts"]
+            self.assertEqual(counts["previous_review_state_rows"], 1)
+            self.assertEqual(counts["previous_review_decisions_applied"], 1)
+            self.assertEqual(counts["previous_review_feedback_applied"], 1)
+
     def test_run_pipeline_extracts_channels_before_merge(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"

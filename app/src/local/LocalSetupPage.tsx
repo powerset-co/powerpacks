@@ -158,6 +158,14 @@ function cleanJobText(value?: string): string {
   return String(value || "").replace(/\.powerpacks\/[^\s",}]+\.json/g, "local state file");
 }
 
+function latestJobLine(job: SetupJob): string {
+  return cleanJobText([job.stdout, job.stderr].filter(Boolean).join("\n"))
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-1)[0] || "";
+}
+
 function jobSummary(job: SetupJob): string {
   const output = job.output || {};
   const payload = (output.payload || output) as Record<string, unknown>;
@@ -168,6 +176,10 @@ function jobSummary(job: SetupJob): string {
       || stringValue(output.reason)
   );
   if (message) return message;
+  if (job.status === "running") {
+    const line = latestJobLine(job);
+    if (line) return line;
+  }
   if (job.status === "running") return `Started ${updatedLabel(job.startedAt) || "now"}`;
   if (job.completedAt) return `Finished ${updatedLabel(job.completedAt)}`;
   if (typeof job.code === "number") return `Exited with code ${job.code}`;
@@ -645,6 +657,7 @@ function AccountLinkingTab({
 function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: (body: Record<string, unknown>) => void }) {
   const Icon = SOURCE_ICONS[source.sourceId as SetupSourceId] || Database;
   const canRun = source.linked && !source.skipped && source.runnable !== false;
+  const updated = source.linked && !source.skipped ? updatedLabel(source.updatedAt) : "";
   return (
     <div className="grid gap-3 border-b px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_140px_auto] md:items-center">
       <div className="flex min-w-0 items-start gap-3">
@@ -657,11 +670,11 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
             <StatusBadge status={source.status} />
           </div>
           <div className="mt-1 truncate text-xs text-muted-foreground">
-            {source.disabledReason || (updatedLabel(source.updatedAt) ? `Last refreshed ${updatedLabel(source.updatedAt)}` : "No refresh yet")}
+            {source.disabledReason || (updated ? `Last refreshed ${updated}` : source.skipped ? "" : "No refresh yet")}
           </div>
         </div>
       </div>
-      <KeyValue label="Updated" value={updatedLabel(source.updatedAt)} />
+      <KeyValue label="Updated" value={updated} />
       <div className="flex justify-end">
         <Button size="sm" onClick={() => onRun({ action: "import-source", source: source.id })} disabled={!canRun}>
           <Play className="h-4 w-4" /> Import
@@ -739,6 +752,8 @@ function EnrichmentSourceRow({
 }) {
   const Icon = SOURCE_ICONS[source.id as SetupSourceId] || Sparkles;
   const canRun = Boolean(importSource?.linked && !importSource.skipped && importSource.runnable !== false);
+  const sourceSkipped = String(source.status || "").toLowerCase() === "skipped";
+  const updated = sourceSkipped ? "" : updatedLabel(source.updatedAt || importSource?.updatedAt);
   return (
     <div className="grid gap-3 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(0,1.4fr)_120px_120px_120px_120px_auto] lg:items-center">
       <div className="flex min-w-0 items-start gap-3">
@@ -751,7 +766,7 @@ function EnrichmentSourceRow({
             <StatusBadge status={source.status} />
           </div>
           <div className="mt-1 truncate text-xs text-muted-foreground">
-            {updatedLabel(source.updatedAt || importSource?.updatedAt) ? `Last refreshed ${updatedLabel(source.updatedAt || importSource?.updatedAt)}` : "No refresh yet"}
+            {updated ? `Last refreshed ${updated}` : sourceSkipped ? "" : "No refresh yet"}
           </div>
         </div>
       </div>
