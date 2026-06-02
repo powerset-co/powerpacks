@@ -93,6 +93,7 @@ NAME_CLEAN_RE = re.compile(r"[^A-Za-zÀ-ÿ'’\-\s]")
 MULTISPACE_RE = re.compile(r"\s+")
 BLOCKED_LAST_NAME_TOKENS = {"hinge", "raya", "tinder", "bumble"}
 REQUIRED_INPUT_HEADERS = {"phone", "name"}
+REVIEW_INPUT_HEADERS = {"phone_e164", "full_name"}
 SCHEMA_DOC = "packs/messages/schemas/contacts-csv.md"
 SCHEMA_JSON = "packs/messages/schemas/contacts-csv.schema.json"
 CANONICAL_HEADER = "phone,name,source,is_in_group_chats,group_names,message_count,imessage_message_count,whatsapp_message_count,last_message,imessage_last_message,whatsapp_last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason"
@@ -119,9 +120,14 @@ def schema_error(path: Path, fieldnames: list[str] | None) -> str:
     )
 
 
+def is_review_input(fieldnames: list[str] | None) -> bool:
+    names = {str(value or "").strip() for value in (fieldnames or [])}
+    return REVIEW_INPUT_HEADERS.issubset(names)
+
+
 def validate_input_headers(path: Path, fieldnames: list[str] | None) -> str | None:
     names = {str(value or "").strip() for value in (fieldnames or [])}
-    if not REQUIRED_INPUT_HEADERS.issubset(names):
+    if not REQUIRED_INPUT_HEADERS.issubset(names) and not REVIEW_INPUT_HEADERS.issubset(names):
         return schema_error(path, fieldnames)
     return None
 
@@ -187,6 +193,10 @@ def parse_int(value: str) -> int:
 
 def parse_bool(value: str) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def parse_false(value: str) -> bool:
+    return (value or "").strip().lower() in {"0", "false", "no", "n", "off"}
 
 
 def stable_handle(phone: str, name: str) -> str:
@@ -295,6 +305,52 @@ def transform_row(row: dict[str, str]) -> dict[str, str]:
     }
 
 
+def review_row_selected(row: dict[str, str]) -> bool:
+    exclude = (row.get("exclude") or "").strip()
+    enrich = (row.get("enrich_decision") or "").strip().lower()
+    if parse_bool(exclude):
+        return False
+    if parse_false(exclude):
+        return True
+    if enrich == "yes":
+        return True
+    return False
+
+
+def review_row_matched(row: dict[str, str]) -> bool:
+    return any((row.get(key) or "").strip() for key in [
+        "network_person_id",
+        "network_linkedin_url",
+        "matched_person_id",
+        "matched_linkedin_url",
+    ]) or parse_bool(row.get("in_network", ""))
+
+
+def normalize_review_row(row: dict[str, str]) -> dict[str, str]:
+    return {
+        "phone": row.get("phone_e164", ""),
+        "name": row.get("full_name", ""),
+        "source": row.get("message_source", ""),
+        "is_in_group_chats": row.get("is_in_group_chats", ""),
+        "group_names": row.get("group_names", ""),
+        "message_count": row.get("total_messages", ""),
+        "imessage_message_count": row.get("imessage_message_count", ""),
+        "whatsapp_message_count": row.get("whatsapp_message_count", ""),
+        "last_message": row.get("last_message", ""),
+        "imessage_last_message": row.get("imessage_last_message", ""),
+        "whatsapp_last_message": row.get("whatsapp_last_message", ""),
+        "skip": "" if review_row_selected(row) else "yes",
+        "match_status": "matched" if review_row_matched(row) else "unmatched",
+        "matched_person_id": row.get("network_person_id") or row.get("matched_person_id", ""),
+        "matched_name": row.get("network_name") or row.get("matched_name", ""),
+        "matched_linkedin_url": row.get("network_linkedin_url") or row.get("matched_linkedin_url", ""),
+        "match_confidence": row.get("network_match_confidence") or row.get("match_confidence", ""),
+        "match_method": row.get("network_match_method") or row.get("match_method", ""),
+        "match_reason": row.get("short_reason") or row.get("match_reason", ""),
+        "retarget_hint": row.get("retarget_hint", ""),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Subcommand
 # ---------------------------------------------------------------------------
@@ -327,6 +383,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "filtered_unsupported_status": 0,
         "filtered_low_messages": 0,
         "filtered_low_signal_group_chat": 0,
+        "filtered_review_unselected": 0,
+        "filtered_review_in_network": 0,
     }
     with input_path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -341,8 +399,19 @@ def cmd_prepare(args: argparse.Namespace) -> int:
                 "schema_json": SCHEMA_JSON,
             })
             return 2
-        for row in reader:
+        review_input = is_review_input(reader.fieldnames)
+        for raw_row in reader:
             counts["input_rows"] += 1
+            if review_input:
+                if not review_row_selected(raw_row):
+                    counts["filtered_review_unselected"] += 1
+                    continue
+                if review_row_matched(raw_row) and not args.include_matched:
+                    counts["filtered_review_in_network"] += 1
+                    continue
+                row = normalize_review_row(raw_row)
+            else:
+                row = raw_row
             raw_name = row.get("name") or ""
             name = normalize_name(raw_name)
             reason = bad_name_reason(raw_name, row.get("phone", ""))

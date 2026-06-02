@@ -102,6 +102,43 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 }],
             )
 
+    def test_prepare_queue_uses_review_csv_after_app_review_completed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            contacts = tmp_path / "contacts.csv"
+            review = tmp_path / "research_review.csv"
+            queue = tmp_path / "research_queue.csv"
+            contacts.write_text("phone,name\n+15550000001,Ada Lovelace\n", encoding="utf-8")
+            review.write_text("phone_e164,full_name,exclude\n+15550000001,Ada Lovelace,no\n", encoding="utf-8")
+            ledger = mod.load_ledger(ledger_path)
+            ledger["steps"]["review_research_web"] = {"id": "review_research_web", "status": "completed"}
+            args = SimpleNamespace(
+                contacts=contacts,
+                review_csv=review,
+                research_queue=queue,
+                timeout=30,
+                env_file=".env",
+                force_prepare_queue=True,
+            )
+
+            def fake_run_command(cmd, **_kwargs):
+                self.assertEqual(cmd[cmd.index("--input") + 1], str(review))
+                return {
+                    "cmd": cmd,
+                    "returncode": 0,
+                    "stdout": json.dumps({"status": "ok"}),
+                    "stderr": "",
+                    "json_objects": [{"status": "ok"}],
+                    "json": {"status": "ok"},
+                }
+
+            with mock.patch.object(mod, "run_command", side_effect=fake_run_command):
+                mod.prepare_queue(args, ledger_path, ledger)
+
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["steps"]["prepare_research_queue"]["status"], "completed")
+
     def test_imessage_import_status_is_collapsed(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger_path = Path(tmp) / "import-run.json"

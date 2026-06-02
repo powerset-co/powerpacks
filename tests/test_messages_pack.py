@@ -1004,6 +1004,47 @@ class PrepareResearchQueueTests(unittest.TestCase):
             self.assertEqual(len(queue), 10)
             self.assertTrue(all(r["total_messages"] == "200" for r in queue))
 
+    def test_review_csv_input_uses_explicit_review_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            review = tmp / "research_review.csv"
+            output = tmp / "queue.csv"
+            fields = [
+                "bucket",
+                "handle",
+                "full_name",
+                "phone_e164",
+                "total_messages",
+                "message_source",
+                "exclude",
+                "enrich_decision",
+                "in_network",
+                "network_person_id",
+            ]
+            with review.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                writer.writerow({"bucket": "maybe", "full_name": "Ada Lovelace", "phone_e164": "+14155550101", "total_messages": "4", "message_source": "imessage", "exclude": "no"})
+                writer.writerow({"bucket": "maybe", "full_name": "Grace Hopper", "phone_e164": "+14155550202", "total_messages": "5", "message_source": "whatsapp", "enrich_decision": "yes"})
+                writer.writerow({"bucket": "maybe", "full_name": "Skip Person", "phone_e164": "+14155550303", "total_messages": "6", "message_source": "imessage", "exclude": "yes"})
+                writer.writerow({"bucket": "maybe", "full_name": "Undecided Person", "phone_e164": "+14155550404", "total_messages": "7", "message_source": "imessage"})
+                writer.writerow({"bucket": "maybe", "full_name": "Matched Person", "phone_e164": "+14155550505", "total_messages": "8", "message_source": "imessage", "exclude": "no", "in_network": "true", "network_person_id": "p1"})
+            result = subprocess.run(
+                ["python3", str(self.PREPARE), "prepare", "-i", str(review), "-o", str(output)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            manifest = json.loads(result.stdout)
+            self.assertEqual(manifest["counts"]["input_rows"], 5)
+            self.assertEqual(manifest["counts"]["eligible_rows"], 2)
+            self.assertEqual(manifest["counts"]["filtered_review_unselected"], 2)
+            self.assertEqual(manifest["counts"]["filtered_review_in_network"], 1)
+            with output.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual([row["display_name"] for row in rows], ["Grace Hopper", "Ada Lovelace"])
+
 
 class PrepareRetargetQueueTests(unittest.TestCase):
     PREPARE = ROOT / "packs/messages/primitives/prepare_retarget_queue/prepare_retarget_queue.py"

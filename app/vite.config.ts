@@ -1360,6 +1360,7 @@ function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
     "--include-llm-review",
     "--include-research",
     "--include-review",
+    "--force-prepare-queue",
     "--include-retarget",
     "--include-upload",
     "--include-datalake-sync",

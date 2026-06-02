@@ -1390,11 +1390,12 @@ def estimate_network_review_scoring(args: argparse.Namespace) -> dict[str, Any]:
 def prepare_queue(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
     if completed(ledger, "prepare_research_queue") and not args.force_prepare_queue:
         return
+    queue_input = Path(args.review_csv) if completed(ledger, "review_research_web") and Path(args.review_csv).exists() else Path(args.contacts)
     cmd = [
         sys.executable,
         primitive_path("packs/messages/primitives/prepare_research_queue/prepare_research_queue.py"),
         "prepare",
-        "--input", str(args.contacts),
+        "--input", str(queue_input),
         "--output", str(args.research_queue),
     ]
     mark_step(ledger_path, ledger, "prepare_research_queue", "running", command=cmd)
