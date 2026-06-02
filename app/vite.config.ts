@@ -694,6 +694,7 @@ function messagesCurrentBlockForUi(messagesLedger: Record<string, any>, reviewCo
   const block = messagesLedger.current_block || null;
   if (!block) return null;
   const approvalType = String(block.approval_type || "").trim().toLowerCase();
+  if (approvalType === "upload") return null;
   if (approvalType !== "parallel") return block;
 
   const prepareInput = String(messagesLedger.steps?.prepare_research_queue?.summary?.input || "");
@@ -1134,9 +1135,6 @@ function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
     "--include-research",
     "--include-review",
     "--force-prepare-queue",
-    "--include-retarget",
-    "--include-upload",
-    "--include-datalake-sync",
   ];
   return ["/bin/zsh", "-lc", `${shellJoin(markAppReviewComplete)} && ${shellJoin(continueAfterReview)}`];
 }
