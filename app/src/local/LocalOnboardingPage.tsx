@@ -76,19 +76,45 @@ function stringList(value: unknown): string[] {
   return value.map(String).filter(Boolean);
 }
 
+function uniqueLabels(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
 function linkedLabels(source: SetupSourceStatus): string[] {
   if (source.id === "gmail") {
     const selected = stringList(source.config.selected_accounts);
     const accountEmails = stringList(source.config.account_emails);
-    return selected.length ? selected : accountEmails.length ? accountEmails : source.usernames;
+    return uniqueLabels(selected.length ? selected : accountEmails.length ? accountEmails : source.usernames);
   }
-  return source.usernames.length ? source.usernames : source.artifacts;
+  return uniqueLabels(source.usernames.length ? source.usernames : source.artifacts);
 }
 
 function sourceStatusSummary(source: SetupSourceStatus): string {
   if (source.linked) return "Linked";
   if (source.skipped) return "Skipped";
   return statusLabel(source.status || "available");
+}
+
+function SourceLabelPreview({ labels, fallback }: { labels: string[]; fallback: string }) {
+  if (!labels.length) {
+    return <div className="mt-2 text-xs text-muted-foreground">{fallback}</div>;
+  }
+  const visible = labels.slice(0, 4);
+  const hiddenCount = Math.max(0, labels.length - visible.length);
+  return (
+    <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-hidden">
+      {visible.map((label) => (
+        <Badge key={label} variant="secondary" className="max-w-full truncate" title={label}>
+          {label}
+        </Badge>
+      ))}
+      {hiddenCount > 0 && (
+        <Badge variant="outline" className="shrink-0">
+          +{hiddenCount} more
+        </Badge>
+      )}
+    </div>
+  );
 }
 
 function SourceChecklist({ sources }: { sources: SetupSourceStatus[] }) {
@@ -110,9 +136,7 @@ function SourceChecklist({ sources }: { sources: SetupSourceStatus[] }) {
             <div className="mt-2">
               <StatusBadge status={source.linked ? "linked" : source.skipped ? "skipped" : source.status} />
             </div>
-            <div className="mt-2 truncate text-xs text-muted-foreground">
-              {labels.length ? labels.slice(0, 2).join(", ") : sourceStatusSummary(source)}
-            </div>
+            <SourceLabelPreview labels={labels} fallback={sourceStatusSummary(source)} />
           </div>
         );
       })}

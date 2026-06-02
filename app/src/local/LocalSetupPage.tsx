@@ -332,15 +332,27 @@ function indexLabel(status?: string): string {
   return normalized.replace(/_/g, " ");
 }
 
-function SourcePills({ values }: { values: string[] }) {
-  if (!values.length) return <span className="text-sm text-muted-foreground">None</span>;
+function uniqueLabels(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function SourcePills({ values, maxVisible = 4 }: { values: string[]; maxVisible?: number }) {
+  const labels = uniqueLabels(values);
+  if (!labels.length) return <span className="text-sm text-muted-foreground">None</span>;
+  const visible = labels.slice(0, maxVisible);
+  const hiddenCount = Math.max(0, labels.length - visible.length);
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {values.map((value) => (
-        <Badge key={value} variant="secondary" className="max-w-full truncate">
+    <div className="flex max-h-24 flex-wrap gap-1.5 overflow-hidden">
+      {visible.map((value) => (
+        <Badge key={value} variant="secondary" className="max-w-full truncate" title={value}>
           {value}
         </Badge>
       ))}
+      {hiddenCount > 0 && (
+        <Badge variant="outline" className="shrink-0">
+          +{hiddenCount} more
+        </Badge>
+      )}
     </div>
   );
 }
@@ -349,7 +361,7 @@ function linkedGmailAccounts(source?: SetupSourceStatus): string[] {
   if (!source) return [];
   const selected = stringList(source.config.selected_accounts);
   const accountEmails = stringList(source.config.account_emails);
-  return selected.length ? selected : accountEmails.length ? accountEmails : source.usernames;
+  return uniqueLabels(selected.length ? selected : accountEmails.length ? accountEmails : source.usernames);
 }
 
 interface LinkTableRow {
