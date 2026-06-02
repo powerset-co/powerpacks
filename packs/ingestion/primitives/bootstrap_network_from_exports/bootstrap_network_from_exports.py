@@ -565,7 +565,6 @@ def build_commands(operator: dict[str, Any], bundle_dir: Path, linkedin_csv: str
         f"--operator-id {operator['operator_id']}",
         f"--run-id network-bootstrap-{operator['slug']}",
         f"--ledger {bundle_dir}/outputs/import-network.ledger.json",
-        f"--gmail-resolutions-csv {bundle_dir}/resolution/linkedin_resolutions_cached.csv",
         "--force",
     ]
     if linkedin_csv:

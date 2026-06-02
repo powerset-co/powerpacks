@@ -43,9 +43,9 @@ The msgvault import writes `linkedin_resolution_queue.csv`. To recover the email
 pipeline shape (email metadata -> LinkedIn URL resolution -> RapidAPI profile
 enrichment), use the orchestrator bridge. It first applies the canonical
 `.powerpacks/network-import/directory.csv` checkpoint, which is built
-incrementally from existing `linkedin_candidates*.csv` and
-`linkedin_resolutions*.csv` artifacts. Only rows still unresolved by the
-directory are prepared for a LinkedIn-resolution provider.
+incrementally from operator `linkedin_candidates*.csv` bootstrap artifacts and
+successful stage outputs. Only rows still unresolved by the directory are
+prepared for a LinkedIn-resolution provider.
 
 ```bash
 # no spend/network: prepare harness prompts

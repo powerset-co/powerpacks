@@ -463,11 +463,8 @@ def directory_rows_from_candidates(path: Path) -> list[dict[str, str]]:
 def default_directory_source_paths() -> list[Path]:
     root = DEFAULT_BASE_DIR.parent
     patterns = [
-        "operator-bootstrap/import/resolution/linkedin_resolutions*.csv",
-        "network-bootstrap/operators/*/resolution/linkedin_resolutions*.csv",
         "operator-bootstrap/import/linkedin_candidates/linkedin_candidates*.csv",
         "network-bootstrap/operators/*/inputs/linkedin_candidates/linkedin_candidates*.csv",
-        "network-import/network-runs/*/gmail-linkedin-resolution-*/linkedin_resolutions.csv",
     ]
     paths: list[Path] = []
     for pattern in patterns:
@@ -481,15 +478,6 @@ def directory_source_paths(input_cfg: dict[str, Any], artifacts: dict[str, Any])
         path = Path(value)
         if path.exists():
             paths.append(path)
-    for value in unique_strings(input_cfg.get("gmail_resolutions_csv")):
-        path = Path(value)
-        if path.exists():
-            paths.append(path)
-    for record in artifacts.get("gmail_linkedin_resolutions_csvs") or []:
-        if isinstance(record, dict) and record.get("resolutions_csv"):
-            path = Path(record["resolutions_csv"])
-            if path.exists():
-                paths.append(path)
     if input_cfg.get("linkedin_directory_use_defaults", True):
         paths.extend(default_directory_source_paths())
     return list(dict.fromkeys(paths))
@@ -2146,8 +2134,6 @@ def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> 
             artifacts.setdefault("gmail_linkedin_resolutions_csvs", []).append(result)
             if "gmail_linkedin_resolutions_csv" not in artifacts:
                 artifacts["gmail_linkedin_resolutions_csv"] = payload.get("output")
-            checkpoint = build_directory_checkpoint(input_cfg, artifacts, extra_sources=[Path(str(payload.get("output")))])
-            artifacts["directory_csv"] = checkpoint["directory_csv"]
         if payload.get("prompts_jsonl"):
             artifacts.setdefault("gmail_linkedin_harness_prompts_jsonls", []).append(payload.get("prompts_jsonl"))
             artifacts.setdefault("gmail_linkedin_harness_prompts_jsonl", payload.get("prompts_jsonl"))
@@ -2198,6 +2184,13 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
         mark_step(ledger, "gmail_apply_enrich", "skipped", reason="no gmail resolutions")
         return True
     resolution_records = ordered_records(resolution_records, unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
+    checkpoint = build_directory_checkpoint(
+        input_cfg,
+        artifacts,
+        extra_sources=[Path(str(record["resolutions_csv"])) for record in resolution_records if record.get("resolutions_csv")],
+    )
+    artifacts["directory_csv"] = checkpoint["directory_csv"]
+    artifacts["directory_checkpoint"] = checkpoint
     by_slug = artifacts.setdefault("gmail_apply_enrich_by_slug", {})
     artifacts["gmail_resolved_people_csvs"] = []
     artifacts["gmail_enrich_people_ledgers"] = []

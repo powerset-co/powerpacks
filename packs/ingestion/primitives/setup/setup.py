@@ -511,12 +511,34 @@ def mark_restored_ledgers(paths: list[Path], operator_id: str) -> list[str]:
     return touched
 
 
+def materialize_bootstrap_directory() -> dict[str, Any]:
+    candidates_dir = ROOT / '.powerpacks/operator-bootstrap/import/linkedin_candidates'
+    candidate_paths = sorted(candidates_dir.glob('linkedin_candidates*.csv')) if candidates_dir.exists() else []
+    if not candidate_paths:
+        return {'status': 'skipped', 'reason': 'no operator linkedin_candidates bootstrap files'}
+    try:
+        from packs.ingestion.primitives.import_network_pipeline import import_network_pipeline
+    except ModuleNotFoundError:
+        sys.path.insert(0, str(ROOT))
+        from packs.ingestion.primitives.import_network_pipeline import import_network_pipeline
+    checkpoint = import_network_pipeline.build_directory_checkpoint(
+        {
+            'linkedin_directory_csv': str(ROOT / '.powerpacks/network-import/directory.csv'),
+            'linkedin_directory_source_csvs': [str(path) for path in candidate_paths],
+            'linkedin_directory_use_defaults': False,
+        },
+        {},
+    )
+    return {'status': 'ok', **checkpoint}
+
+
 def restore_candidates(wanted: set[str]) -> list[str]:
     candidates: list[str] = []
     restore_roots = [
         '.powerpacks/search-index',
         '.powerpacks/network-import/merged',
         '.powerpacks/network-import/profile_cache_v2',
+        '.powerpacks/operator-bootstrap/import',
     ]
     for root_rel in restore_roots:
         if any(p == root_rel or p.startswith(root_rel + '/') for p in wanted):
@@ -581,6 +603,7 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
                     }
                 restored.append(rel)
     touched = mark_restored_ledgers(restored_ledger_paths(restored), args.operator_id)
+    directory_bootstrap = materialize_bootstrap_directory()
     op_slug = re.sub(r'[^A-Za-z0-9._-]+', '-', str(inspect.get('operator') or args.operator_id)).strip('-') or 'operator'
     provenance = {
         'applied_at': now(),
@@ -591,6 +614,7 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
         'restore_manifest_sha256': inspect['restore_manifest_sha256'],
         'restored': restored,
         'overwritten': overwritten,
+        'directory_bootstrap': directory_bootstrap,
     }
     write_json(ROOT / '.powerpacks/operator-bootstrap/applied' / op_slug / 'manifest.json', provenance)
     ledger = load_setup_ledger(Path(args.setup_ledger))
@@ -599,6 +623,7 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
         'status': 'restored',
         'bundle_sha256': inspect['bundle_sha256'],
         'restored': restored,
+        'directory_bootstrap': directory_bootstrap,
         'provenance': str(Path('.powerpacks/operator-bootstrap/applied') / op_slug / 'manifest.json'),
     }
     save_setup_ledger(ledger, Path(args.setup_ledger))
@@ -1735,10 +1760,9 @@ def run_index_phase(args: argparse.Namespace) -> int:
 
 
 def setup_commands(args: argparse.Namespace) -> dict[str, str]:
-    gmail_resolution_arg = default_gmail_resolutions_arg()
     return {
-        'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts{gmail_resolution_arg}',
-        'import_network_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts{gmail_resolution_arg}',
+        'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
+        'import_network_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
         'import_network_fan_in': f'uv run --project . python packs/ingestion/primitives/setup/setup.py fan-in --operator-id {args.operator_id} --accounts {args.accounts} --setup-ledger {args.setup_ledger} --force',
         'import_network_status': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py status',
         'import_network_continue': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue',
@@ -1748,22 +1772,7 @@ def setup_commands(args: argparse.Namespace) -> dict[str, str]:
         'processing_run': processing_run_command_text(args.operator_id),
         'processing_continue': 'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue --ledger .powerpacks/search-index/ledger.json',
         'build_local_duckdb_shim': build_local_duckdb_shim_command_text(args.operator_id),
-    }
-
-
-def default_gmail_resolutions_csv() -> str:
-    for path in [
-        ROOT / '.powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions.csv',
-        ROOT / '.powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions_cached.csv',
-    ]:
-        if path.exists() and path.stat().st_size > 0:
-            return str(path)
-    return ''
-
-
-def default_gmail_resolutions_arg() -> str:
-    path = default_gmail_resolutions_csv()
-    return f' --gmail-resolutions-csv {shlex.quote(path)}' if path else ''
+}
 
 
 def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -1918,9 +1927,6 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
         cmd.append('--force')
     if gmail_sync_after:
         cmd.extend(['--gmail-sync-after', gmail_sync_after])
-    resolutions_csv = default_gmail_resolutions_csv()
-    if resolutions_csv:
-        cmd.extend(['--gmail-resolutions-csv', resolutions_csv])
     return cmd
 
 

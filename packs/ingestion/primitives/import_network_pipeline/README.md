@@ -68,11 +68,12 @@ uv run --project . python packs/ingestion/primitives/import_network_pipeline/imp
 The bridge maintains `.powerpacks/network-import/directory.csv`, a reusable
 checkpoint keyed by `source_key` with `source`, `email`, `phone`, `name`,
 `linkedin_url`, `public_identifier`, confidence, evidence, and source artifact
-metadata. It imports existing `linkedin_candidates*.csv` and
-`linkedin_resolutions*.csv` rows from operator/bootstrap artifacts, applies
-matching directory rows to Gmail contacts first, writes filtered unresolved
-queues for optional harness/Parallel resolution, and combines directory plus
-provider resolutions before delegating resolved LinkedIn rows to
+metadata. At bootstrap time it seeds from operator `linkedin_candidates*.csv`
+exports only. Gmail/provider stages may write their own intermediate
+`linkedin_resolutions.csv` files, but only the final combined stage output is
+folded back into the canonical `directory.csv`. Gmail then applies matching
+directory rows first, writes filtered unresolved queues for optional
+harness/Parallel resolution, and delegates resolved LinkedIn rows to
 `enrich_people.py`.
 
 The pipeline writes:

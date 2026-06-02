@@ -740,7 +740,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             ledger = {
                 "run_id": "network-test",
                 "run_dir": str(tmp / "network-test"),
-                "input": {"gmail_linkedin_provider": "harness"},
+                "input": {"gmail_linkedin_provider": "harness", "linkedin_directory_csv": str(tmp / "directory.csv"), "linkedin_directory_use_defaults": False},
                 "steps": {},
                 "artifacts": {
                     "gmail_linkedin_resolution_queue_csvs": [
@@ -793,7 +793,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(sum(1 for cmd in calls if any("gmail_network_import.py" in part for part in cmd)), 2)
             self.assertEqual(sum(1 for cmd in calls if any("enrich_people.py" in part for part in cmd)), 2)
 
-    def test_build_directory_checkpoint_from_candidates_and_resolutions_is_idempotent(self) -> None:
+    def test_build_directory_checkpoint_bootstraps_from_candidates_only(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             candidates = tmp / "linkedin_candidates_merged_test.csv"
@@ -805,34 +805,19 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                     "display_name": "Jane Example",
                     "confirmed_linkedin_url": "linkedin.com/in/jane-example?trk=old",
                 })
-            resolutions = tmp / "linkedin_resolutions_cached.csv"
-            with resolutions.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=import_network_pipeline.LINKEDIN_RESOLUTION_COLUMNS)
-                writer.writeheader()
-                writer.writerow({
-                    "handle": "jim@example.com",
-                    "status": "found",
-                    "linkedin_url": "https://www.linkedin.com/in/jim-example/",
-                    "confidence": "0.91",
-                    "matched_name": "Jim Example",
-                    "matched_headline": "Builder",
-                    "evidence": "[]",
-                    "reasoning": "fixture",
-                })
             input_cfg = {
                 "linkedin_directory_csv": str(tmp / "directory.csv"),
-                "linkedin_directory_source_csvs": [str(candidates), str(resolutions)],
+                "linkedin_directory_source_csvs": [str(candidates)],
             }
             with mock.patch.object(import_network_pipeline, "default_directory_source_paths", return_value=[]):
                 first = import_network_pipeline.build_directory_checkpoint(input_cfg, {})
                 second = import_network_pipeline.build_directory_checkpoint(input_cfg, {})
-            self.assertEqual(first["rows"], 2)
-            self.assertEqual(second["rows"], 2)
+            self.assertEqual(first["rows"], 1)
+            self.assertEqual(second["rows"], 1)
             with (tmp / "directory.csv").open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual([row["source_key"] for row in rows], ["email:jane@example.com", "email:jim@example.com"])
+            self.assertEqual([row["source_key"] for row in rows], ["email:jane@example.com"])
             self.assertEqual(rows[0]["linkedin_url"], "https://www.linkedin.com/in/jane-example")
-            self.assertEqual(rows[1]["matched_headline"], "Builder")
 
     def test_gmail_directory_filters_provider_queue_to_unresolved_rows(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -914,7 +899,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             ledger = {
                 "run_id": "network-test",
                 "run_dir": str(tmp / "network-test"),
-                "input": {},
+                "input": {"linkedin_directory_csv": str(tmp / "directory.csv"), "linkedin_directory_use_defaults": False},
                 "steps": {},
                 "artifacts": {
                     "gmail_directory_resolution_records": [{"account_email": "me@example.com", "resolutions_csv": str(directory_resolutions), "people_csv": str(people), "slug": "me"}],
@@ -938,6 +923,9 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(sum(1 for cmd in calls if any("gmail_network_import.py" in part for part in cmd)), 1)
             self.assertEqual(sum(1 for cmd in calls if any("enrich_people.py" in part for part in cmd)), 1)
             self.assertEqual(ledger["artifacts"]["gmail_final_people_csvs"], [str(tmp / "enriched.csv")])
+            with (tmp / "directory.csv").open(newline="", encoding="utf-8") as handle:
+                directory_rows = list(csv.DictReader(handle))
+            self.assertEqual([row["source_key"] for row in directory_rows], ["email:alex@example.com", "email:jane@example.com"])
         self.assertEqual(
             import_network_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="", gmail_account_email="")),
             "",

@@ -992,13 +992,6 @@ function importNetworkCommand(operatorId: string, extra: string[] = []) {
     "--include-existing-artifacts",
     "--ledger", ".powerpacks/network-import/import-network-run.setup-refresh.json",
   ];
-  const resolutionsCsv = [
-    path.join(powerpacksStateRoot, "operator-bootstrap", "import", "resolution", "linkedin_resolutions.csv"),
-    path.join(powerpacksStateRoot, "operator-bootstrap", "import", "resolution", "linkedin_resolutions_cached.csv"),
-  ].find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).size > 0);
-  if (resolutionsCsv) {
-    command.push("--gmail-resolutions-csv", path.relative(powerpacksRepoRoot, resolutionsCsv));
-  }
   command.push(...extra);
   return command;
 }
@@ -1284,10 +1277,7 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
   const linkedInStep = setupRefreshLedger.steps?.linkedin || {};
   const sourceById = Object.fromEntries(setupSources.map((source) => [source.id, source]));
   const isSkipped = (id: string) => Boolean(sourceById[id]?.skipped);
-  const restoredGmailMatches = firstCsvCount(
-    ".powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions.csv",
-    ".powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions_cached.csv",
-  );
+  const directoryMatches = firstCsvCount(".powerpacks/network-import/directory.csv");
 
   const messagesLedger = readJsonSync(messagesLedgerPath) || {};
   const messagesReview = messagesLedger.steps?.llm_review?.summary || {};
@@ -1320,7 +1310,7 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       candidates: sumArtifacts([refreshArtifacts], "gmail_people_csvs") || sumArtifacts([refreshArtifacts], "gmail_people_csv"),
       enriched: sumArtifacts([refreshArtifacts], "gmail_final_people_csvs"),
       skipped: 0,
-      matched: sumArtifacts([refreshArtifacts], "gmail_resolved_people_csvs") || restoredGmailMatches,
+      matched: sumArtifacts([refreshArtifacts], "gmail_resolved_people_csvs") || directoryMatches,
       updatedAt: isSkipped("gmail") ? null : setupRefreshLedger.updated_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
     },
     {
