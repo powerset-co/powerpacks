@@ -186,7 +186,43 @@ function jobSummary(job: SetupJob): string {
   return "No output yet.";
 }
 
-function extractCommands(job?: SetupJob | null): Array<{ label: string; command: string; description?: string }> {
+interface ExtractedCommand {
+  label: string;
+  command: string;
+  description?: string;
+}
+
+function normalizedCommandLabel(label: string): string {
+  return label.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function commandSubject(label: string): string {
+  const normalized = normalizedCommandLabel(label);
+  return normalized.replace(/^(run|show|view|status|check)\s+/, "").trim() || normalized;
+}
+
+function isDisplayOnlyCommand(command: ExtractedCommand): boolean {
+  return /^(show|view|status|check)\b/.test(normalizedCommandLabel(command.label));
+}
+
+function collapseDisplayCommandDuplicates(commands: ExtractedCommand[]): ExtractedCommand[] {
+  const runnableSubjects = new Set(
+    commands
+      .filter((command) => !isDisplayOnlyCommand(command))
+      .map((command) => commandSubject(command.label))
+      .filter(Boolean),
+  );
+  const seenCommands = new Set<string>();
+  return commands.filter((command) => {
+    if (isDisplayOnlyCommand(command) && runnableSubjects.has(commandSubject(command.label))) return false;
+    const key = command.command.trim();
+    if (seenCommands.has(key)) return false;
+    seenCommands.add(key);
+    return true;
+  });
+}
+
+function extractCommands(job?: SetupJob | null): ExtractedCommand[] {
   const output = job?.output || {};
   const payload = (output.payload || output) as Record<string, any>;
   const hideLinkOnlyFollowups = job?.action === "gmail-link-emails";
@@ -201,14 +237,14 @@ function extractCommands(job?: SetupJob | null): Array<{ label: string; command:
       candidates.push({ label: key.replace(/_/g, " "), command: value });
     }
   }
-  return candidates
+  return collapseDisplayCommandDuplicates(candidates
     .map((command: any) => ({
       label: String(command.label || "run command"),
       command: String(command.command || ""),
       description: command.description ? String(command.description) : undefined,
     }))
     .filter((command) => command.command)
-    .filter((command) => !hideLinkOnlyFollowups || !/rerun[_ ]onboarding|repeat command|next command/i.test(command.label));
+    .filter((command) => !hideLinkOnlyFollowups || !/rerun[_ ]onboarding|repeat command|next command/i.test(command.label)));
 }
 
 function SetupTabs({

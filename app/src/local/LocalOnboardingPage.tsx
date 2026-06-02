@@ -326,9 +326,6 @@ export function LocalOnboardingPage({ onOpenSetupTab, onOpenMessagesReview }: Lo
           <Button size="sm" onClick={() => runAction({ action: "import" })} disabled={running}>
             <Play className="h-4 w-4" /> Run Import
           </Button>
-          <Button size="sm" variant="outline" onClick={() => onOpenSetupTab("import")}>
-            Import Details
-          </Button>
           <Button size="sm" variant="outline" onClick={onOpenMessagesReview} disabled={!status.review.exists && status.review.counts.total === 0}>
             <MessageSquare className="h-4 w-4" /> Review Messages
           </Button>
@@ -344,9 +341,6 @@ export function LocalOnboardingPage({ onOpenSetupTab, onOpenMessagesReview }: Lo
           <Button size="sm" onClick={() => runAction({ action: "enrich-all" })} disabled={running}>
             <Sparkles className="h-4 w-4" /> Run Enrichment
           </Button>
-          <Button size="sm" variant="outline" onClick={() => onOpenSetupTab("enrichment")}>
-            Enrichment Details
-          </Button>
         </div>
       </GuideStep>
 
@@ -358,9 +352,6 @@ export function LocalOnboardingPage({ onOpenSetupTab, onOpenMessagesReview }: Lo
         <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={() => runAction({ action: "index" })} disabled={running}>
             <HardDrive className="h-4 w-4" /> {paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0 ? "Approve & Update" : "Update Index"}
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => onOpenSetupTab("index")}>
-            Index Details
           </Button>
         </div>
       </GuideStep>
