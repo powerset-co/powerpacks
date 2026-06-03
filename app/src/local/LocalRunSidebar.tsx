@@ -1,5 +1,5 @@
 import { format, isSameYear, isToday, isYesterday } from "date-fns";
-import { Search, Database, Loader2, Settings2, History, Route } from "lucide-react";
+import { Search, Database, Loader2, Settings2, History } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -7,13 +7,12 @@ import { cn } from "@/lib/utils";
 import type { LocalRunSummary } from "./types";
 
 interface LocalRunSidebarProps {
-  activeView: "onboarding" | "setup" | "runs";
+  activeView: "setup" | "runs";
   runs: LocalRunSummary[];
   selectedTaskId?: string | null;
   isLoading?: boolean;
   search: string;
   onSearchChange: (value: string) => void;
-  onSelectOnboarding: () => void;
   onSelectSetup: () => void;
   onSelectRuns: () => void;
   onSelect: (run: LocalRunSummary) => void;
@@ -37,7 +36,6 @@ export function LocalRunSidebar({
   isLoading,
   search,
   onSearchChange,
-  onSelectOnboarding,
   onSelectSetup,
   onSelectRuns,
   onSelect,
@@ -61,18 +59,7 @@ export function LocalRunSidebar({
             <p className="text-xs text-muted-foreground">../powerpacks/.powerpacks</p>
           </div>
         </div>
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={onSelectOnboarding}
-            className={cn(
-              "flex h-9 items-center justify-center gap-2 rounded-md border px-2 text-sm font-medium transition-colors",
-              activeView === "onboarding" ? "border-primary bg-primary/5 text-primary" : "border-input hover:bg-accent"
-            )}
-          >
-            <Route className="h-4 w-4" />
-            Onboard
-          </button>
+        <div className="mt-4 grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={onSelectSetup}

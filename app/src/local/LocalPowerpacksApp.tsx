@@ -8,7 +8,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { fetchRunResults, fetchRuns } from "./powerpacksApi";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
-import { LocalOnboardingPage } from "./LocalOnboardingPage";
 import { LocalResultsTable } from "./LocalResultsTable";
 import { LocalRunSidebar } from "./LocalRunSidebar";
 import { LocalSetupPage } from "./LocalSetupPage";
@@ -22,10 +21,10 @@ function taskIdFromPath(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-type LocalView = "onboarding" | "setup" | "messagesReview" | "runs";
+type LocalView = "setup" | "messagesReview" | "runs";
 
 function viewFromPath(): LocalView {
-  if (window.location.pathname === "/onboarding") return "onboarding";
+  if (window.location.pathname === "/onboarding") return "setup";
   if (window.location.pathname === "/setup/imessage/review") return "messagesReview";
   if (window.location.pathname === "/setup") return "setup";
   return "runs";
@@ -108,6 +107,10 @@ export function LocalPowerpacksApp() {
   }, [selectedTaskId]);
 
   useEffect(() => {
+    if (window.location.pathname === "/onboarding") {
+      window.history.replaceState({}, "", "/setup");
+      setActiveView("setup");
+    }
     refreshRuns();
 
     const handlePopState = () => {
@@ -160,15 +163,12 @@ export function LocalPowerpacksApp() {
     <TooltipProvider>
       <div className="flex min-h-dvh bg-background text-foreground">
         <LocalRunSidebar
-          activeView={activeView === "runs" ? "runs" : activeView === "onboarding" ? "onboarding" : "setup"}
+          activeView={activeView === "runs" ? "runs" : "setup"}
           runs={filteredRuns}
           selectedTaskId={selectedTaskId}
           isLoading={runsLoading}
           search={search}
           onSearchChange={setSearch}
-          onSelectOnboarding={() => {
-            navigate("/onboarding");
-          }}
           onSelectSetup={() => {
             navigate("/setup");
           }}
@@ -192,12 +192,7 @@ export function LocalPowerpacksApp() {
 
         <main className="min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-7xl space-y-4 p-6">
-            {activeView === "onboarding" ? (
-              <LocalOnboardingPage
-                onOpenSetupTab={(tab) => navigate(`/setup?tab=${encodeURIComponent(tab)}`)}
-                onOpenMessagesReview={() => navigate("/setup/imessage/review")}
-              />
-            ) : activeView === "setup" ? (
+            {activeView === "setup" ? (
               <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
             ) : activeView === "messagesReview" ? (
               <LocalMessagesReviewPage onBackToSetup={() => navigate("/setup?tab=import")} />
