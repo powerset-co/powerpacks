@@ -76,7 +76,7 @@ const truncateText = (text: string | null | undefined, maxLength: number = 80): 
 // Deterministic color from operator name
 const AVATAR_COLORS = [
   "bg-blue-500/20 text-blue-600 dark:text-blue-400",
-  "bg-purple-500/20 text-purple-600 dark:text-purple-400",
+  "bg-amber-500/20 text-amber-600 dark:text-amber-400",
   "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400",
   "bg-orange-500/20 text-orange-600 dark:text-orange-400",
   "bg-pink-500/20 text-pink-600 dark:text-pink-400",
