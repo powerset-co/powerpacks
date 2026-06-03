@@ -207,6 +207,35 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertIn("--events", result["command"])
         update_qr_page.assert_called()
 
+    def test_auth_can_render_qr_without_opening_browser(self) -> None:
+        class FakeProc:
+            def __init__(self) -> None:
+                self.stdout = io.StringIO("2@qr-payload\n")
+                self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
+                self.returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def send_signal(self, sig: int) -> None:
+                self.returncode = 0
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+            def wait(self) -> int:
+                if self.returncode is None:
+                    self.returncode = 0
+                return self.returncode
+
+        fake = FakeProc()
+        with mock.patch.object(mod.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
+                mock.patch.object(mod.subprocess, "Popen", return_value=fake), \
+                mock.patch.object(mod, "update_qr_page") as update_qr_page:
+            mod.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s", open_qr_page=False)
+
+        self.assertFalse(update_qr_page.call_args.kwargs["open_page"])
+
     def test_export_reads_metadata_without_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

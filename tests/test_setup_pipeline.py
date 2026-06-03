@@ -459,13 +459,14 @@ class SetupPipelineTests(unittest.TestCase):
         message_cmd = next(cmd for cmd in calls if 'import_contacts_pipeline.py' in ' '.join(cmd))
         self.assertIn('--parallel-timeout', message_cmd)
         self.assertIn('--reuse-existing-artifacts', message_cmd)
-        self.assertIn('--include-powerset-candidates', message_cmd)
-        self.assertIn('--include-local-match', message_cmd)
-        self.assertIn('--include-llm-review', message_cmd)
-        self.assertIn('--include-review', message_cmd)
+        self.assertIn('--include-contact-merge', message_cmd)
+        self.assertNotIn('--include-powerset-candidates', message_cmd)
+        self.assertNotIn('--include-local-match', message_cmd)
+        self.assertNotIn('--include-llm-review', message_cmd)
+        self.assertNotIn('--include-review', message_cmd)
         self.assertIn('--force-imessage', message_cmd)
-        self.assertIn('--force-match', message_cmd)
-        self.assertIn('--rerun-llm', message_cmd)
+        self.assertNotIn('--force-match', message_cmd)
+        self.assertNotIn('--rerun-llm', message_cmd)
         self.assertNotIn('--force-build-review', message_cmd)
         self.assertNotIn('--force-whatsapp', message_cmd)
         network_cmd = next(cmd for cmd in calls if 'import_network_pipeline.py' in ' '.join(cmd))
@@ -1027,10 +1028,10 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(job['source'], 'messages')
         self.assertIn('import_contacts_pipeline/import_contacts_pipeline.py run', job['command'])
         self.assertIn('--include-imessage --include-contact-merge', job['command'])
-        self.assertIn('--include-powerset-candidates', job['command'])
-        self.assertIn('--include-local-match', job['command'])
-        self.assertIn('--include-llm-review', job['command'])
-        self.assertIn('--include-review', job['command'])
+        self.assertNotIn('--include-powerset-candidates', job['command'])
+        self.assertNotIn('--include-local-match', job['command'])
+        self.assertNotIn('--include-llm-review', job['command'])
+        self.assertNotIn('--include-review', job['command'])
         self.assertNotIn('--include-whatsapp', job['command'])
         self.assertNotIn('--include-research', job['command'])
         self.assertNotIn('--include-upload', job['command'])
@@ -1057,10 +1058,10 @@ class SetupPipelineTests(unittest.TestCase):
         payload = setup.handoff_payload(ns)
         job = payload['worker_groups']['import']['jobs'][0]
         self.assertIn('--include-imessage --include-whatsapp --include-contact-merge', job['command'])
-        self.assertIn('--include-powerset-candidates', job['command'])
-        self.assertIn('--include-local-match', job['command'])
-        self.assertIn('--include-llm-review', job['command'])
-        self.assertIn('--include-review', job['command'])
+        self.assertNotIn('--include-powerset-candidates', job['command'])
+        self.assertNotIn('--include-local-match', job['command'])
+        self.assertNotIn('--include-llm-review', job['command'])
+        self.assertNotIn('--include-review', job['command'])
         self.assertNotIn('--include-research', job['command'])
         self.assertEqual(job['requires_approval'], ['whatsapp_qr'])
 
@@ -1119,21 +1120,36 @@ class SetupPipelineTests(unittest.TestCase):
     def test_setup_ui_messages_import_command_forces_live_refresh(self):
         text = (ROOT / 'app/vite.config.ts').read_text(encoding='utf-8')
         start = text.index('function messageImportCommand')
-        end = text.index('\nfunction buildImportSources', start)
+        end = text.index('\nfunction messageEnrichmentCommand', start)
         body = text[start:end]
         for required in [
             '"--reuse-existing-artifacts"',
             '"--force-imessage"',
             '"--force-whatsapp"',
+        ]:
+            self.assertIn(required, body)
+        for enrichment_only in [
             '"--force-sync-candidates"',
             '"--force-match"',
             '"--rerun-llm"',
             '"--force-build-review"',
+            '"--include-powerset-candidates"',
+            '"--include-local-match"',
+            '"--include-llm-review"',
+            '"--include-review"',
         ]:
-            self.assertIn(required, body)
+            self.assertNotIn(enrichment_only, body)
         self.assertIn('includeFlags.includes("--include-imessage")', body)
         self.assertIn('includeFlags.includes("--include-whatsapp")', body)
-        self.assertNotIn('"--include-review"', body)
+
+    def test_setup_ui_import_row_does_not_resume_messages_approval(self):
+        text = (ROOT / 'app/src/local/LocalSetupPage.tsx').read_text(encoding='utf-8')
+        start = text.index('function ImportSourceRow')
+        end = text.index('\nfunction ImportTab', start)
+        body = text[start:end]
+        self.assertIn('action: "import-source"', body)
+        self.assertNotIn('messages-approve-continue', body)
+        self.assertNotIn('Approve & Continue', body)
 
     def test_pull_refuses_without_allow_flag(self):
         args = argparse.Namespace(gcs_uri='gs://bucket/object.tar.gz', output='out.tar.gz', allow_gcs_download=False)

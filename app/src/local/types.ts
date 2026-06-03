@@ -147,6 +147,9 @@ export interface SetupEnrichmentSource {
   enriched: number;
   skipped: number;
   matched: number;
+  unresolved: number;
+  estimatedCostUsd?: number | null;
+  blocked?: boolean;
   updatedAt?: string | null;
 }
 

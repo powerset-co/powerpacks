@@ -288,11 +288,21 @@ def wacli_json(store: Path, args: list[str], *, timeout: int = 300) -> dict[str,
 def auth_status(store: Path) -> dict[str, Any]:
     payload = wacli_json(store, ["auth", "status"], timeout=60)
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    return {
+    status = {
         "authenticated": bool(data.get("authenticated")),
         "raw_success": payload.get("success"),
         "error": payload.get("error"),
     }
+    if not status["authenticated"]:
+        if DEFAULT_QR_HTML.exists():
+            status["qr_page"] = str(DEFAULT_QR_HTML)
+        if DEFAULT_QR_PNG.exists():
+            status["qr_png"] = str(DEFAULT_QR_PNG)
+            status["qr_updated_at"] = datetime.fromtimestamp(
+                DEFAULT_QR_PNG.stat().st_mtime,
+                timezone.utc,
+            ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return status
 
 
 def linked_device_blocked(text: str) -> bool:
@@ -364,7 +374,7 @@ def update_qr_page(payload: str, png_path: Path, html_path: Path, *, open_page: 
         subprocess.run(["open", str(html_path)], check=False)
 
 
-def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str) -> dict[str, Any]:
+def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> dict[str, Any]:
     if not shutil.which("qrencode"):
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
@@ -414,7 +424,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str) -> dict[
             data = event.get("data") if isinstance(event.get("data"), dict) else {}
             code = data.get("code")
             if event_name == "qr_code" and isinstance(code, str) and code.startswith("2@"):
-                update_qr_page(code, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=not opened)
+                update_qr_page(code, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=open_qr_page and not opened)
                 opened = True
                 emit_status("Refreshed WhatsApp QR page.")
             elif event_name == "connected":
@@ -424,7 +434,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str) -> dict[
                     interrupted_bootstrap_sync = True
             return
         if source == "stdout" and text.startswith("2@"):
-            update_qr_page(text, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=not opened)
+            update_qr_page(text, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=open_qr_page and not opened)
             opened = True
             emit_status("Refreshed WhatsApp QR page.")
 
@@ -466,19 +476,21 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str) -> dict[
             "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-whatsapp.",
             "command": command_text(cmd),
             "qr_page": str(DEFAULT_QR_HTML),
+            "qr_png": str(DEFAULT_QR_PNG),
             "detail": joined[-2000:],
         })
     return {
         "command": command_text(cmd),
         "returncode": returncode,
         "qr_page": str(DEFAULT_QR_HTML),
+        "qr_png": str(DEFAULT_QR_PNG),
         "connected_event": connected,
         "auth_bootstrap_sync_interrupted": interrupted_bootstrap_sync,
     }
 
 
-def run_auth(store: Path, *, timeout: int, idle_exit: str) -> dict[str, Any]:
-    return run_auth_with_qr_page(store, timeout=timeout, idle_exit=idle_exit)
+def run_auth(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool = True) -> dict[str, Any]:
+    return run_auth_with_qr_page(store, timeout=timeout, idle_exit=idle_exit, open_qr_page=open_qr_page)
 
 
 def store_message_count(stats: dict[str, Any]) -> int | None:
@@ -1187,7 +1199,12 @@ def cmd_auth(args: argparse.Namespace) -> int:
             "exported_contacts": False,
         }
         if not status_before.get("authenticated"):
-            auth_summary.update(run_auth(store, timeout=args.auth_timeout, idle_exit=args.idle_exit))
+            auth_summary.update(run_auth(
+                store,
+                timeout=args.auth_timeout,
+                idle_exit=args.idle_exit,
+                open_qr_page=not getattr(args, "no_open_qr_page", False),
+            ))
         status_after = auth_status(store)
         auth_summary["authenticated_after"] = status_after.get("authenticated")
         linked = bool(status_after.get("authenticated"))
@@ -1204,6 +1221,8 @@ def cmd_auth(args: argparse.Namespace) -> int:
             "wacli": wacli_info,
             "doctor": doctor,
             "auth": auth_summary,
+            "qr_page": status_after.get("qr_page") or auth_summary.get("qr_page") or "",
+            "qr_png": status_after.get("qr_png") or auth_summary.get("qr_png") or "",
             "privacy": {
                 "reads_message_bodies": False,
                 "syncs_messages": False,
@@ -1292,7 +1311,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         status = auth_status(store)
         auth_summary: dict[str, Any] = {"authenticated_before": status.get("authenticated")}
         if not status.get("authenticated"):
-            auth_summary.update(run_auth(store, timeout=args.auth_timeout, idle_exit=args.idle_exit))
+            auth_summary.update(run_auth(
+                store,
+                timeout=args.auth_timeout,
+                idle_exit=args.idle_exit,
+                open_qr_page=not getattr(args, "no_open_qr_page", False),
+            ))
             status = auth_status(store)
             if not status.get("authenticated"):
                 raise PrimitiveBlocked({
@@ -1413,6 +1437,7 @@ def main() -> int:
     run.add_argument("--group-info-timeout", type=int, default=60)
     run.add_argument("--group-info-interval", type=float, default=0.2)
     run.add_argument("--no-install", action="store_true", help="fail instead of installing wacli with Homebrew")
+    run.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
     run.set_defaults(func=cmd_run)
 
     status = sub.add_parser("status", help="show wacli install/auth/store status")
@@ -1424,6 +1449,7 @@ def main() -> int:
     auth.add_argument("--idle-exit", default=DEFAULT_IDLE_EXIT)
     auth.add_argument("--auth-timeout", type=int, default=DEFAULT_AUTH_TIMEOUT)
     auth.add_argument("--no-install", action="store_true", help="fail instead of installing wacli with Homebrew")
+    auth.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
     auth.set_defaults(func=cmd_auth)
 
     export = sub.add_parser("export", help="export metadata from an existing wacli store without syncing")

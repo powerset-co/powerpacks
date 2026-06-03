@@ -590,7 +590,7 @@ function SourcePanel({
               />
             </div>
             <Button size="sm" onClick={() => onRun({ action: "linkedin-csv", csvPath, sourceLabel })} disabled={!csvPath.trim() || !sourceLabel.trim()}>
-              Record
+              Link
             </Button>
           </div>
         </div>
@@ -607,7 +607,7 @@ function SourcePanel({
               className="w-full sm:w-72"
             />
             <Button size="sm" onClick={() => onRun({ action: "twitter-handle", handle })} disabled={!handle.trim()}>
-              Record
+              Link
             </Button>
           </div>
         </div>
@@ -620,16 +620,25 @@ function MessagesChannelPanel({
   source,
   channel,
   onRun,
+  jobs = [],
 }: {
   source: SetupSourceStatus;
   channel: "imessage" | "whatsapp";
   onRun: (body: Record<string, unknown>) => void;
+  jobs?: SetupJob[];
 }) {
   const iMessage = (source.config.imessage || {}) as Record<string, unknown>;
   const whatsApp = (source.config.whatsapp || {}) as Record<string, unknown>;
   const iMessageReadable = boolValue(iMessage.readable) || stringValue(iMessage.status) === "ready";
   const whatsAppAuthenticated = boolValue(whatsApp.authenticated)
     || ["authenticated", "linked"].includes(stringValue(whatsApp.status));
+  const whatsAppQrPath = stringValue(whatsApp.qr_png);
+  const whatsAppQrPage = stringValue(whatsApp.qr_page);
+  const whatsAppQrUpdatedAt = stringValue(whatsApp.qr_updated_at);
+  const whatsAppQrSrc = whatsAppQrPath
+    ? `/local-api/setup/whatsapp-qr?path=${encodeURIComponent(whatsAppQrPath)}${whatsAppQrUpdatedAt ? `&t=${encodeURIComponent(whatsAppQrUpdatedAt)}` : ""}`
+    : "";
+  const isAuthenticating = jobs.some((job) => job.action === "whatsapp-auth" && job.status === "running");
 
   if (channel === "imessage") {
     return (
@@ -651,7 +660,7 @@ function MessagesChannelPanel({
           <div className="flex flex-wrap gap-2">
             {iMessageReadable ? (
               <Button size="sm" variant="outline" onClick={() => onRun({ action: "messages-link", skipWhatsapp: true })}>
-                Check Access
+                Link
               </Button>
             ) : (
               <Button size="sm" className="bg-amber-600 text-white hover:bg-amber-700" onClick={() => onRun({ action: "open-message-permissions" })}>
@@ -679,18 +688,42 @@ function MessagesChannelPanel({
             )}
           </div>
           <KeyValue label="Account" value={whatsAppAuthenticated ? "authenticated" : "not authenticated"} />
+          {!whatsAppAuthenticated && whatsAppQrPage && (
+            <KeyValue label="QR file" value={whatsAppQrPage} />
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
             variant={whatsAppAuthenticated ? "outline" : "default"}
             onClick={() => onRun({ action: "whatsapp-auth" })}
-            disabled={whatsAppAuthenticated}
+            disabled={whatsAppAuthenticated || isAuthenticating}
           >
-            {whatsAppAuthenticated ? "Authenticated" : "Authenticate WhatsApp"}
+            {isAuthenticating && !whatsAppQrSrc ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Generating QR…</>
+            ) : whatsAppAuthenticated ? "Authenticated" : whatsAppQrSrc ? "Refresh QR" : "Authenticate WhatsApp"}
           </Button>
         </div>
       </div>
+      {!whatsAppAuthenticated && isAuthenticating && !whatsAppQrSrc && (
+        <div className="mt-4 flex items-center gap-3 rounded-md border bg-muted/20 p-4 text-sm text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin shrink-0" />
+          <span>Starting WhatsApp link session — QR code will appear here shortly…</span>
+        </div>
+      )}
+      {!whatsAppAuthenticated && whatsAppQrSrc && (
+        <div className="mt-4 rounded-md border bg-muted/20 p-4">
+          <div className="mb-3">
+            <div className="text-sm font-medium">Scan in WhatsApp</div>
+            <div className="text-xs text-muted-foreground">WhatsApp &gt; Settings &gt; Linked Devices</div>
+          </div>
+          <img
+            src={whatsAppQrSrc}
+            alt="WhatsApp QR code"
+            className="mx-auto block w-full max-w-[360px] rounded-md border bg-white p-4"
+          />
+        </div>
+      )}
     </section>
   );
 }
@@ -771,7 +804,7 @@ function AccountLinkingTab({
                 {expanded && source && (
                   <div className="border-t bg-muted/20 p-4">
                     {row.id === "imessage" || row.id === "whatsapp" ? (
-                      <MessagesChannelPanel source={source} channel={row.id} onRun={onRun} />
+                      <MessagesChannelPanel source={source} channel={row.id} onRun={onRun} jobs={status.jobs} />
                     ) : (
                       <SourcePanel source={source} onRun={onRun} embedded />
                     )}
@@ -790,8 +823,6 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
   const Icon = SOURCE_ICONS[source.sourceId as SetupSourceId] || Database;
   const canRun = source.linked && !source.skipped && source.runnable !== false;
   const updated = source.linked && !source.skipped ? updatedLabel(source.updatedAt) : "";
-  const needsApproval = source.sourceId === "messages" && String(source.status || "").toLowerCase() === "blocked_approval";
-  const canReview = source.sourceId === "messages" && source.linked && !source.skipped;
   return (
     <div className="grid gap-3 border-b px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_140px_auto] md:items-center">
       <div className="flex min-w-0 items-start gap-3">
@@ -810,17 +841,12 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
       </div>
       <KeyValue label="Updated" value={updated} />
       <div className="flex justify-end gap-2">
-        {canReview && (
-          <Button size="sm" variant="outline" onClick={() => { window.location.href = "/setup/imessage/review"; }}>
-            <MessageSquare className="h-4 w-4" /> Review
-          </Button>
-        )}
         <Button
           size="sm"
-          onClick={() => onRun(needsApproval ? { action: "messages-approve-continue" } : { action: "import-source", source: source.id })}
+          onClick={() => onRun({ action: "import-source", source: source.id })}
           disabled={!canRun}
         >
-          <Play className="h-4 w-4" /> {needsApproval ? "Approve & Continue" : "Import"}
+          <Play className="h-4 w-4" /> Import
         </Button>
       </div>
     </div>
@@ -863,10 +889,12 @@ function ImportTab({
 function EnrichmentSourceRow({
   source,
   importSource,
+  messagesReviewReady = false,
   onRun,
 }: {
   source: SetupEnrichmentSource;
   importSource?: SetupImportSource;
+  messagesReviewReady?: boolean;
   onRun: (body: Record<string, unknown>) => void;
 }) {
   const Icon = SOURCE_ICONS[source.id as SetupSourceId] || Sparkles;
@@ -874,35 +902,60 @@ function EnrichmentSourceRow({
   const sourceSkipped = String(source.status || "").toLowerCase() === "skipped";
   const updated = sourceSkipped ? "" : updatedLabel(source.updatedAt || importSource?.updatedAt);
   const skippedLabel = source.id === "messages" ? "Skipped" : "Not found";
+  const hasUnresolved = (source.unresolved || 0) > 0;
+  const canReviewMessages = source.id === "messages" && canRun && messagesReviewReady;
+  const costLabel = source.estimatedCostUsd != null && source.estimatedCostUsd > 0
+    ? `~$${source.estimatedCostUsd.toFixed(2)}` : null;
   return (
-    <div className="grid gap-3 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(0,1.4fr)_120px_120px_120px_120px_auto] lg:items-center">
-      <div className="flex min-w-0 items-start gap-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-background">
-          <Icon className="h-4 w-4 text-muted-foreground" />
+    <div className="border-b px-4 py-3 last:border-b-0">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_120px_120px_120px_auto] lg:items-center">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-background">
+            <Icon className="h-4 w-4 text-muted-foreground" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="truncate text-sm font-medium">{source.label}</div>
+              <StatusBadge status={source.status} />
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              {updated ? `Last refreshed ${updated}` : sourceSkipped ? "" : "No refresh yet"}
+            </div>
+          </div>
         </div>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="truncate text-sm font-medium">{source.label}</div>
-            <StatusBadge status={source.status} />
-          </div>
-          <div className="mt-1 truncate text-xs text-muted-foreground">
-            {updated ? `Last refreshed ${updated}` : sourceSkipped ? "" : "No refresh yet"}
-          </div>
+        <KeyValue label="Candidates" value={source.candidates.toLocaleString()} />
+        <KeyValue label="Profiles found" value={source.enriched.toLocaleString()} />
+        <KeyValue label={skippedLabel} value={source.skipped.toLocaleString()} />
+        <div className="flex justify-end gap-2">
+          {canReviewMessages && (
+            <Button size="sm" variant="outline" onClick={() => { window.location.href = "/setup/imessage/review"; }}>
+              <MessageSquare className="h-4 w-4" /> Review
+            </Button>
+          )}
+          <Button
+            size="sm"
+            onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id })}
+            disabled={!canRun}
+          >
+            <Sparkles className="h-4 w-4" /> Enrich
+          </Button>
         </div>
       </div>
-      <KeyValue label="Candidates" value={source.candidates.toLocaleString()} />
-      <KeyValue label="Profiles found" value={source.enriched.toLocaleString()} />
-      <KeyValue label="Existing matches" value={source.matched.toLocaleString()} />
-      <KeyValue label={skippedLabel} value={source.skipped.toLocaleString()} />
-      <div className="flex justify-end">
-        <Button
-          size="sm"
-          onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id })}
-          disabled={!canRun}
-        >
-          <Sparkles className="h-4 w-4" /> Enrich
-        </Button>
-      </div>
+      {hasUnresolved && canRun && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-4 py-3">
+          <div className="flex-1 text-sm">
+            <span className="font-medium">{source.unresolved.toLocaleString()}</span>{" "}
+            <span className="text-muted-foreground">contacts need email→LinkedIn resolution via Parallel</span>
+            {costLabel && <span className="ml-2 text-muted-foreground">({costLabel} est.)</span>}
+          </div>
+          <Button
+            size="sm"
+            onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id, approveSpend: true })}
+          >
+            <Play className="h-4 w-4" /> Approve
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -922,6 +975,7 @@ function EnrichmentTab({
     }
     return status.import.sources.find((candidate) => candidate.id === source.id || candidate.sourceId === source.id);
   };
+  const messagesReviewReady = Boolean(status.review.exists && (status.review.counts?.total || 0) > 0);
 
   return (
     <div className="space-y-4">
@@ -942,7 +996,13 @@ function EnrichmentTab({
         <div>
           {sources.length ? (
             sources.map((source) => (
-              <EnrichmentSourceRow key={source.id} source={source} importSource={importSourceFor(source)} onRun={onRun} />
+              <EnrichmentSourceRow
+                key={source.id}
+                source={source}
+                importSource={importSourceFor(source)}
+                messagesReviewReady={source.id === "messages" && messagesReviewReady}
+                onRun={onRun}
+              />
             ))
           ) : (
             <div className="p-6 text-sm text-muted-foreground">No enrichment sources found.</div>
@@ -1075,7 +1135,7 @@ function JobPanel({
           ))}
         </div>
       )}
-      <details>
+      <details open={job.status === "running"}>
         <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-muted-foreground">Command and logs</summary>
         <div className="border-t px-4 py-3 text-xs text-muted-foreground">
           <div className="mb-2 font-mono">{cleanJobText(job.command.join(" "))}</div>

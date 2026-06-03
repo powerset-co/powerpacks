@@ -19,6 +19,10 @@ const accountsPath = path.join(powerpacksStateRoot, "ingestion", "accounts.json"
 const importRefreshLedgerPath = path.join(powerpacksStateRoot, "network-import", "import-network-run.setup-refresh.json");
 const messagesLedgerPath = path.join(powerpacksStateRoot, "messages", "import-run.setup-messages.json");
 const messagesReviewCsvPath = path.join(powerpacksStateRoot, "messages", "research_review.csv");
+const whatsAppQrPngRelativePath = ".powerpacks/messages/wacli-login-qr.png";
+const whatsAppQrHtmlRelativePath = ".powerpacks/messages/wacli-login-qr.html";
+const whatsAppQrPngPath = path.join(powerpacksStateRoot, "messages", "wacli-login-qr.png");
+const whatsAppQrHtmlPath = path.join(powerpacksStateRoot, "messages", "wacli-login-qr.html");
 const messagesChatDbPath = process.env.POWERPACKS_IMESSAGE_CHAT_DB
   ? path.resolve(process.env.POWERPACKS_IMESSAGE_CHAT_DB)
   : path.join(process.env.HOME || "", "Library", "Messages", "chat.db");
@@ -91,6 +95,13 @@ function sendJson(res: any, data: unknown, status = 200) {
   res.end(JSON.stringify(data));
 }
 
+function sendBinary(res: any, data: Buffer, contentType: string, status = 200) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Cache-Control", "no-store");
+  res.end(data);
+}
+
 function safeJoinPowerpacks(relativePath: string | undefined | null): string | null {
   if (!relativePath) return null;
   const resolved = path.resolve(powerpacksRepoRoot, relativePath);
@@ -134,6 +145,7 @@ function setupProcessEnv(): NodeJS.ProcessEnv {
     ...readEnvSummary(),
     ...process.env,
     POWERPACKS_REPO_ROOT: powerpacksRepoRoot,
+    PYTHONUNBUFFERED: "1",
   };
 }
 
@@ -889,10 +901,18 @@ function whatsappLinkStatus(): Record<string, any> {
     const payload = parseJsonFragment(result.stdout || "");
     const auth = payload?.auth && typeof payload.auth === "object" ? payload.auth : {};
     const authenticated = auth.authenticated === true;
+    const qrArtifacts = authenticated ? {} : {
+      qr_page: typeof auth.qr_page === "string" && auth.qr_page ? auth.qr_page : (fs.existsSync(whatsAppQrHtmlPath) ? whatsAppQrHtmlRelativePath : ""),
+      qr_png: typeof auth.qr_png === "string" && auth.qr_png ? auth.qr_png : (fs.existsSync(whatsAppQrPngPath) ? whatsAppQrPngRelativePath : ""),
+      qr_updated_at: typeof auth.qr_updated_at === "string" && auth.qr_updated_at
+        ? auth.qr_updated_at
+        : (fs.existsSync(whatsAppQrPngPath) ? fs.statSync(whatsAppQrPngPath).mtime.toISOString() : ""),
+    };
     value = {
       ...base,
       status: authenticated ? "authenticated" : "not_authenticated",
       authenticated,
+      ...qrArtifacts,
     };
     if (!authenticated) {
       const error = payload?.error || auth.error || result.error?.message || result.stderr;
@@ -988,6 +1008,40 @@ function messagesLedgerStatus(fallback: string) {
   };
 }
 
+function messagesImportLedgerStatus(fallback: string) {
+  const ledger = readJsonSync(messagesLedgerPath) || {};
+  const summary = fileSummary(messagesLedgerPath);
+  const steps = ledger.steps && typeof ledger.steps === "object" ? ledger.steps : {};
+  const importStepIds = [
+    "check_imessage",
+    "extract_imessage",
+    "normalize_imessage",
+    "extract_whatsapp",
+    "normalize_whatsapp",
+    "ensure_contacts",
+  ];
+  const importBlock = importStepIds
+    .map((id) => steps[id])
+    .find((step) => {
+      const status = String(step?.status || "").toLowerCase();
+      return status === "failed" || status === "blocked_user_action";
+    });
+  const contactsReady = Boolean(steps.ensure_contacts?.status === "completed" || ledger.artifacts?.contacts_csv || fs.existsSync(messagesContactsCsvPath));
+  const rawStatus = String(ledger.status || fallback);
+  const status = importBlock
+    ? String(importBlock.status)
+    : contactsReady || rawStatus === "selected_steps_completed"
+      ? "completed"
+      : rawStatus === "blocked_approval"
+        ? fallback
+        : rawStatus;
+  return {
+    status,
+    updatedAt: ledger.updated_at || ledger.completed_at || summary.updatedAt || null,
+    runId: ledger.run_id || "",
+  };
+}
+
 function importNetworkCommand(operatorId: string, extra: string[] = []) {
   const command = [
     "uv", "run", "--project", ".", "python",
@@ -1009,7 +1063,7 @@ function enrichmentNetworkCommand(operatorId: string, sourceId: string): string[
   return [];
 }
 
-function enrichmentFanInCommand(operatorId: string, sourceIds: string[] = []): string[] {
+function enrichmentFanInCommand(operatorId: string, sourceIds: string[] = [], options: { approveSpend?: boolean } = {}): string[] {
   const extra = ["--force"];
   for (const sourceId of sourceIds) {
     extra.push("--only-source", sourceId);
@@ -1017,6 +1071,11 @@ function enrichmentFanInCommand(operatorId: string, sourceIds: string[] = []): s
   if (!sourceIds.length || sourceIds.includes("gmail")) {
     extra.push("--resolve-gmail-linkedin");
   }
+  if (options.approveSpend) {
+    extra.push("--approve-parallel-spend");
+  }
+  // TODO: remove limit after testing
+  extra.push("--gmail-linkedin-limit", "3");
   return setupCommandArgs(operatorId, "fan-in", extra);
 }
 
@@ -1026,21 +1085,10 @@ function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[n
   const includeFlags = [];
   if (imessage.status !== "skipped") includeFlags.push("--include-imessage");
   if (whatsapp.status === "linked" || whatsapp.authenticated === true) includeFlags.push("--include-whatsapp");
-  includeFlags.push(
-    "--include-contact-merge",
-    "--include-powerset-candidates",
-    "--include-local-match",
-    "--include-llm-review"
-  );
+  includeFlags.push("--include-contact-merge");
   const refreshFlags = [];
   if (includeFlags.includes("--include-imessage")) refreshFlags.push("--force-imessage");
   if (includeFlags.includes("--include-whatsapp")) refreshFlags.push("--force-whatsapp");
-  refreshFlags.push(
-    "--force-sync-candidates",
-    "--force-match",
-    "--rerun-llm",
-    "--force-build-review"
-  );
   return [
     "uv", "run", "--project", ".", "python",
     "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
@@ -1053,12 +1101,41 @@ function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[n
   ];
 }
 
+function messageEnrichmentCommand(accounts: RunState | null): string[] {
+  const ledger = readJsonSync(messagesLedgerPath) || {};
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
+    "continue",
+    "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
+    "--parallel-timeout", String(process.env.POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS || "900"),
+    "--reuse-existing-artifacts",
+    ...messageChannelFlags(accounts, ledger),
+    "--include-contact-merge",
+    "--include-powerset-candidates",
+    "--include-local-match",
+    "--include-llm-review",
+    "--include-review",
+    "--no-open-review",
+    "--force-sync-candidates",
+    "--force-match",
+    "--rerun-llm",
+    "--force-build-review",
+  ];
+}
+
 function buildImportSources(accounts: RunState | null, operatorId: string): SetupImportSource[] {
   const sources = normalizeSetupSources(accounts);
   const byId = Object.fromEntries(sources.map((source) => [source.id, source]));
   const rows: SetupImportSource[] = [];
   const setupRefreshLedger = ".powerpacks/network-import/import-network-run.setup-refresh.json";
   const refreshState = ledgerStatus(path.join(powerpacksRepoRoot, setupRefreshLedger), "ready");
+  const refreshLedgerData = readJsonSync(path.join(powerpacksRepoRoot, setupRefreshLedger)) || {};
+  const refreshSteps = refreshLedgerData.steps || {};
+  const sourceUpdatedAt = (sourceKey: string): string | null => {
+    const step = refreshSteps[sourceKey];
+    return step?.finished_at || step?.started_at || null;
+  };
 
   const gmail = byId.gmail;
   const gmailAccounts = [
@@ -1077,7 +1154,7 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
     skipped: Boolean(gmail?.skipped),
     accountEmail: gmailAccounts.length === 1 ? gmailAccounts[0] : undefined,
     accountCount: gmailAccounts.length,
-    updatedAt: gmail?.linked && !gmail?.skipped ? refreshState.updatedAt : null,
+    updatedAt: gmail?.linked && !gmail?.skipped ? (sourceUpdatedAt("gmail_msgvault") || refreshState.updatedAt) : null,
     runId: gmail?.linked && !gmail?.skipped ? refreshState.runId : "",
     command: importNetworkCommand(operatorId, ["--only-source", "gmail", "--force"]),
   });
@@ -1086,7 +1163,7 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
     const source = byId[id];
     const ledger = id === "messages" ? ".powerpacks/messages/import-run.setup-messages.json" : setupRefreshLedger;
     const state = id === "messages"
-      ? messagesLedgerStatus(source?.linked ? "ready" : source?.skipped ? "skipped" : "not_linked")
+      ? messagesImportLedgerStatus(source?.linked ? "ready" : source?.skipped ? "skipped" : "not_linked")
       : refreshState;
     rows.push({
       id,
@@ -1095,7 +1172,9 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
       status: source?.skipped ? "skipped" : source?.linked ? state.status : "not_linked",
       linked: Boolean(source?.linked),
       skipped: Boolean(source?.skipped),
-      updatedAt: source?.linked && !source?.skipped ? state.updatedAt : null,
+      updatedAt: source?.linked && !source?.skipped
+        ? (id === "linkedin_csv" ? (sourceUpdatedAt("linkedin") || state.updatedAt) : state.updatedAt)
+        : null,
       runId: source?.linked && !source?.skipped ? state.runId : "",
       runnable: id === "twitter" ? false : undefined,
       disabledReason: id === "twitter" ? "Twitter/X handle is recorded; follower import is not wired into setup yet." : undefined,
@@ -1228,11 +1307,43 @@ function normalizedDigits(value: unknown): string {
   return String(value || "").replace(/\D+/g, "").slice(-10);
 }
 
-function artifactRowsDirectoryMatchCount(artifact: unknown, directoryRows: Record<string, string>[], preferredKeys: string[] = []): number {
+function normalizeNameKey(value: unknown): string {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function parseDirectoryConfidence(value: unknown, status: unknown): number {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) {
+    const normalizedStatus = String(status || "").trim().toLowerCase();
+    return ["completed", "found", "success"].includes(normalizedStatus) ? 0.9 : 0;
+  }
+  if (["high", "confirmed", "exact"].includes(raw)) return 0.95;
+  if (["medium", "med"].includes(raw)) return 0.8;
+  if (raw === "low") return 0.5;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 0;
+  return parsed > 1 ? parsed / 100 : parsed;
+}
+
+function directoryLookupMatchCount(artifact: unknown, directoryRows: Record<string, string>[], preferredKeys: string[] = []): number {
   const rows = csvRowsForArtifact(artifact, preferredKeys);
   if (!rows.length || !directoryRows.length) return 0;
-  const emails = new Set(directoryRows.map((row) => String(row.email || "").trim().toLowerCase()).filter(Boolean));
-  const phones = new Set(directoryRows.map((row) => normalizedDigits(row.phone)).filter(Boolean));
+  const eligibleDirectoryRows = directoryRows.filter((row) =>
+    validLinkedInUrl(row.linkedin_url)
+    && parseDirectoryConfidence(row.confidence, row.status) >= 0.75
+  );
+  if (!eligibleDirectoryRows.length) return 0;
+  const emails = new Set(eligibleDirectoryRows.map((row) => String(row.email || "").trim().toLowerCase()).filter(Boolean));
+  const phones = new Set(eligibleDirectoryRows.map((row) => normalizedDigits(row.phone)).filter(Boolean));
+  const names = new Map<string, Set<string>>();
+  for (const row of eligibleDirectoryRows) {
+    const nameKey = normalizeNameKey(row.name || row.matched_name || "");
+    const linkedinUrl = String(row.linkedin_url || "").trim().toLowerCase();
+    if (!nameKey || !linkedinUrl) continue;
+    const urls = names.get(nameKey) || new Set<string>();
+    urls.add(linkedinUrl);
+    names.set(nameKey, urls);
+  }
   let matched = 0;
   for (const row of rows) {
     const rowValues = Object.entries(row);
@@ -1246,7 +1357,15 @@ function artifactRowsDirectoryMatchCount(artifact: unknown, directoryRows: Recor
       const digits = normalizedDigits(value);
       return Boolean(digits && phones.has(digits));
     });
-    if (hasEmailMatch || hasPhoneMatch) matched += 1;
+    const nameKey = normalizeNameKey(
+      row.display_name
+      || row.full_name
+      || row.matched_name
+      || row.name
+      || `${row.first_name || ""} ${row.last_name || ""}`.trim()
+    );
+    const hasUniqueNameMatch = Boolean(nameKey && names.get(nameKey)?.size === 1);
+    if (hasEmailMatch || hasPhoneMatch || hasUniqueNameMatch) matched += 1;
   }
   return matched;
 }
@@ -1370,6 +1489,9 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
   const setupRefreshLedger = readRelativeLedger(".powerpacks/network-import/import-network-run.setup-refresh.json");
   const refreshArtifacts = setupRefreshLedger.artifacts || {};
   const linkedInStep = setupRefreshLedger.steps?.linkedin || {};
+  const gmailDirectoryStep = setupRefreshLedger.steps?.gmail_directory || {};
+  const gmailResolutionStep = setupRefreshLedger.steps?.gmail_linkedin_resolution || {};
+  const gmailApplyStep = setupRefreshLedger.steps?.gmail_apply_enrich || {};
   const sourceById = Object.fromEntries(setupSources.map((source) => [source.id, source]));
   const isSkipped = (id: string) => Boolean(sourceById[id]?.skipped);
   const directoryRows = csvRowsForArtifact(".powerpacks/network-import/directory.csv");
@@ -1384,7 +1506,7 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
   const gmailQueueCount = csvRowsForArtifact(gmailQueueArtifact, ["queue_csv", "linkedin_resolution_queue_csv"]).length;
   const gmailDirectoryEntries = Object.values((refreshArtifacts.gmail_directory_by_slug || {}) as Record<string, any>);
   const gmailDirectoryResolved = gmailDirectoryEntries.reduce((total, item) => total + Number(item?.resolved || 0), 0);
-  const gmailDirectoryMatches = gmailDirectoryResolved || artifactRowsDirectoryMatchCount(
+  const gmailExistingMatches = gmailDirectoryEntries.length > 0 ? gmailDirectoryResolved : directoryLookupMatchCount(
     gmailQueueArtifact,
     directoryRows,
     ["queue_csv", "linkedin_resolution_queue_csv"],
@@ -1393,23 +1515,27 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
     refreshArtifacts.gmail_linkedin_resolutions_csvs || refreshArtifacts.gmail_linkedin_resolutions_csv,
     ["resolutions_csv"],
   ).length;
-  const gmailResolvedByLookup = gmailProviderMatches > 0;
+  const gmailResolvedByLookup = gmailProviderMatches > 0 || Boolean(gmailResolutionStep.status || gmailApplyStep.status);
   const gmailProviderEnriched = csvCountForArtifactKeys(refreshArtifacts, /^gmail_.+_enriched_provider_enriched_csv$/);
   const gmailRapidFailures = csvCountForArtifactKeys(refreshArtifacts, /^gmail_.+_enriched_rapidapi_recent_failures_csv$/);
   const gmailUnresolvedRows = csvRowsForArtifact(refreshArtifacts.gmail_unresolved_linkedin_resolution_queue_csvs, ["queue_csv"]).length;
   const gmailRemainingUnresolved = gmailResolvedByLookup
     ? Math.max(0, gmailUnresolvedRows - gmailProviderMatches)
     : gmailUnresolvedRows;
-  const gmailFound = gmailProviderEnriched || gmailDirectoryMatches;
-  const gmailNotFound = gmailRemainingUnresolved + gmailRapidFailures;
+  const gmailFound = Math.min(gmailQueueCount || Number.MAX_SAFE_INTEGER, gmailExistingMatches + gmailProviderEnriched);
+  const gmailNotFound = gmailResolvedByLookup ? gmailRemainingUnresolved + gmailRapidFailures : 0;
   const linkedinCacheHits = firstCsvCount(
     refreshArtifacts.linkedin_rapidapi_cache_hits_csv,
     refreshArtifacts.linkedin_enrich_people_rapidapi_cache_hits_csv,
   );
   const linkedinEnriched = firstCsvCount(refreshArtifacts.linkedin_provider_enriched_csv, refreshArtifacts.linkedin_enrich_people_provider_enriched_csv);
 
-  return [
-    {
+  const gmailBlocked = gmailResolutionStep.status === "blocked" || gmailApplyStep.status === "blocked";
+  const COST_PER_1000_CORE2X = 50;
+  const gmailEstimatedCostUsd = gmailRemainingUnresolved > 0 ? Math.round(gmailRemainingUnresolved * COST_PER_1000_CORE2X) / 1000 : null;
+
+  const rowsById: Record<string, SetupEnrichmentSource> = {
+    linkedin_csv: {
       id: "linkedin_csv",
       label: "LinkedIn",
       status: String(linkedInStep.status || setupRefreshLedger.status || "unknown"),
@@ -1422,19 +1548,25 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
         refreshArtifacts.linkedin_enrich_people_skipped_enrichment_csv,
       ),
       matched: linkedinCacheHits,
+      unresolved: 0,
+      estimatedCostUsd: null,
+      blocked: false,
       updatedAt: isSkipped("linkedin_csv") ? null : linkedInStep.finished_at || setupRefreshLedger.updated_at || null,
     },
-    {
+    gmail: {
       id: "gmail",
       label: "Gmail",
-      status: String(setupRefreshLedger.status || "unknown"),
+      status: gmailBlocked ? "blocked" : String(setupRefreshLedger.status || "unknown"),
       candidates: gmailQueueCount || sumArtifacts([refreshArtifacts], "gmail_people_csvs") || sumArtifacts([refreshArtifacts], "gmail_people_csv"),
       enriched: gmailFound,
       skipped: gmailNotFound,
-      matched: gmailDirectoryMatches,
-      updatedAt: isSkipped("gmail") ? null : setupRefreshLedger.updated_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
+      matched: gmailExistingMatches,
+      unresolved: gmailRemainingUnresolved,
+      estimatedCostUsd: gmailEstimatedCostUsd,
+      blocked: gmailBlocked,
+      updatedAt: isSkipped("gmail") ? null : gmailApplyStep.finished_at || gmailResolutionStep.finished_at || gmailDirectoryStep.finished_at || setupRefreshLedger.steps?.gmail_msgvault?.finished_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
     },
-    {
+    messages: {
       id: "messages",
       label: "Messages",
       status: String(messagesReview.status || messagesLedger.status || "unknown"),
@@ -1442,9 +1574,12 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       enriched: messagesStats.profilesFound,
       skipped: messagesStats.skipped,
       matched: messagesStats.matched,
+      unresolved: 0,
+      estimatedCostUsd: null,
+      blocked: false,
       updatedAt: isSkipped("messages") ? null : messagesLedger.updated_at || messagesReview.started_at || null,
     },
-    {
+    twitter: {
       id: "twitter",
       label: "Twitter/X",
       status: isSkipped("twitter") ? "skipped" : String(setupRefreshLedger.steps?.twitter?.status || "unknown"),
@@ -1452,9 +1587,16 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       enriched: firstCsvCount(refreshArtifacts.twitter_people_csv, refreshArtifacts.people_csv),
       skipped: 0,
       matched: 0,
+      unresolved: 0,
+      estimatedCostUsd: null,
+      blocked: false,
       updatedAt: isSkipped("twitter") ? null : setupRefreshLedger.steps?.twitter?.finished_at || setupRefreshLedger.updated_at || null,
     },
-  ];
+  };
+
+  return SETUP_SOURCE_ORDER
+    .filter((id) => rowsById[id])
+    .map((id) => rowsById[id]);
 }
 
 function publicImportSources(sources: SetupImportSource[]) {
@@ -1637,7 +1779,10 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
       .filter((source) => source.linked && !source.skipped && source.runnable !== false && source.id !== "twitter");
     if (!enrichableSources.length) throw new Error("no linked sources can be enriched");
     const imports = enrichableSources
-      .map((source) => ({ label: `enriching ${source.label}`, command: enrichmentNetworkCommand(operator.id, source.id) }))
+      .map((source) => ({
+        label: `enriching ${source.label}`,
+        command: source.id === "messages" ? messageEnrichmentCommand(accounts) : enrichmentNetworkCommand(operator.id, source.id),
+      }))
       .filter((stage) => stage.command.length > 0);
     const fanIn = enrichmentFanInCommand(operator.id);
     return startSetupJob(action, importsAndFanInCommand(imports, fanIn), 6 * 60 * 60 * 1000);
@@ -1657,6 +1802,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
 
   if (action === "enrich-source") {
     const sourceId = requireString(body.source, "source");
+    const approveSpend = body.approveSpend === true;
     const source = buildImportSources(accounts, operator.id).find((candidate) => candidate.id === sourceId);
     if (!source) throw new Error(`unsupported import source: ${sourceId}`);
     if (!source.linked) throw new Error(`source is not linked: ${sourceId}`);
@@ -1664,12 +1810,15 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (source.runnable === false || source.command.length === 0) {
       throw new Error(source.disabledReason || `source is not importable yet: ${sourceId}`);
     }
+    if (sourceId === "messages") {
+      return startSetupJob(action, messageEnrichmentCommand(accounts), 2 * 60 * 60 * 1000);
+    }
     const command = enrichmentNetworkCommand(operator.id, sourceId);
     if (command.length === 0) {
-      const fanIn = enrichmentFanInCommand(operator.id, [sourceId]);
+      const fanIn = enrichmentFanInCommand(operator.id, [sourceId], { approveSpend });
       return startSetupJob(action, importsAndFanInCommand([], fanIn), 6 * 60 * 60 * 1000);
     }
-    const fanIn = enrichmentFanInCommand(operator.id, [sourceId]);
+    const fanIn = enrichmentFanInCommand(operator.id, [sourceId], { approveSpend });
     return startSetupJob(action, importAndFanInCommand(command, fanIn, `enriching ${source.label}`), 6 * 60 * 60 * 1000);
   }
 
@@ -1741,6 +1890,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
       "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
       "auth",
       "--store", ".powerpacks/messages/wacli",
+      "--no-open-qr-page",
     ], 10 * 60 * 1000);
   }
 
@@ -1866,6 +2016,16 @@ function powerpacksLocalApiPlugin(): Plugin {
 
           if (url.pathname === "/local-api/setup/status") {
             return sendJson(res, await setupStatus());
+          }
+
+          if (url.pathname === "/local-api/setup/whatsapp-qr") {
+            const relativePath = String(url.searchParams.get("path") || whatsAppQrPngRelativePath);
+            const resolved = safeJoinPowerpacks(relativePath);
+            const messagesDir = `${path.join(powerpacksStateRoot, "messages")}${path.sep}`;
+            if (!resolved || !resolved.startsWith(messagesDir) || path.extname(resolved).toLowerCase() !== ".png" || !fs.existsSync(resolved)) {
+              return sendJson(res, { error: "WhatsApp QR not found" }, 404);
+            }
+            return sendBinary(res, fs.readFileSync(resolved), "image/png");
           }
 
           if (url.pathname === "/local-api/setup/jobs") {
