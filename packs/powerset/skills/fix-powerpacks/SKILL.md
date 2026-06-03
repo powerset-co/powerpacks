@@ -108,10 +108,21 @@ Summarize:
 - whether a WhatsApp/wacli store exists and its local row counts;
 - whether stale duplicate ledgers or state roots exist.
 
-If the plan is safe, apply missing/newer file adoption:
+If the plan is safe, apply missing/newer file adoption plus safe local repairs
+(accounts.json from msgvault and authenticated wacli store adoption):
 
 ```bash
 uv run --project . python scripts/fix-powerpacks-state.py --apply --json
+```
+
+If no authenticated wacli store exists and the canonical store is a bad
+placeholder, ask before scrubbing it. With approval:
+
+```bash
+uv run --project . python scripts/fix-powerpacks-state.py \
+  --apply \
+  --scrub-bad-wacli \
+  --json
 ```
 
 If the user explicitly asks to clean up stale `.codex` state after adoption,
@@ -141,6 +152,11 @@ Allowed without extra approval after showing the dry-run plan:
 - copy newer/missing managed files from legacy `.powerpacks` into canonical
   `.powerpacks`;
 - update only Powerpacks-owned local state under canonical `.powerpacks`;
+- read `~/.msgvault/msgvault.db` and repair `accounts.json` Gmail linkage when
+  the local DB clearly contains the selected Gmail accounts;
+- read-only test WhatsApp/wacli auth using the canonical store;
+- compare legacy wacli stores and copy a better authenticated store into the
+  canonical repo when the canonical store is missing or unauthenticated;
 - run read-only sqlite checks against msgvault and wacli stores;
 - run `setup.py status` from the canonical repo;
 - start the console from the canonical repo.
@@ -149,6 +165,8 @@ Requires explicit approval:
 
 - overwrite canonical files with older/equal legacy files;
 - quarantine/rename legacy `.powerpacks` directories;
+- scrub/move aside an unauthenticated canonical wacli store when no better
+  authenticated store exists (`--scrub-bad-wacli`);
 - move aside dirty ledgers;
 - delete anything;
 - run browser auth, WhatsApp QR linking, msgvault sync, imports, enrichment,

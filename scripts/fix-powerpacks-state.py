@@ -17,8 +17,8 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -236,18 +236,200 @@ def msgvault_accounts(db_path: Path) -> dict[str, Any]:
 def wacli_store_summary(store: Path) -> dict[str, Any]:
     db = store / "wacli.db"
     if not db.exists():
-        return {"status": "missing", "store": str(store)}
-    summary: dict[str, Any] = {"status": "present", "store": str(store), "db": str(db)}
+        return {"status": "missing", "store": str(store), "score": 0}
+    summary: dict[str, Any] = {"status": "present", "store": str(store), "db": str(db), "score": 0}
     try:
         with sqlite3.connect(f"file:{db.resolve()}?mode=ro", uri=True) as conn:
             tables = {row[0] for row in conn.execute("select name from sqlite_master where type='table'").fetchall()}
             for table in ["chats", "contacts", "groups", "messages"]:
                 if table in tables:
                     summary[table] = int(conn.execute(f"select count(*) from {table}").fetchone()[0] or 0)
+            summary["score"] = int(summary.get("messages") or 0) + int(summary.get("contacts") or 0) + int(summary.get("chats") or 0) + int(summary.get("groups") or 0)
     except Exception as exc:
         summary["status"] = "failed"
         summary["error"] = f"{type(exc).__name__}: {exc}"
     return summary
+
+
+def run_json_command(cmd: list[str], *, cwd: Path, timeout: int = 90) -> dict[str, Any]:
+    try:
+        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except Exception as exc:
+        return {"returncode": 1, "stdout": "", "stderr": f"{type(exc).__name__}: {exc}", "json": {}}
+    payload: dict[str, Any] = {}
+    decoder = json.JSONDecoder()
+    text = proc.stdout or ""
+    for idx, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            parsed, _end = decoder.raw_decode(text[idx:])
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            continue
+    return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "json": payload}
+
+
+def wacli_auth_status(canonical: Path, store: Path) -> dict[str, Any]:
+    if not store.exists():
+        return {"status": "missing", "authenticated": False, "store": str(store)}
+    cmd = [
+        sys.executable,
+        "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
+        "status",
+        "--store",
+        str(store),
+    ]
+    result = run_json_command(cmd, cwd=canonical, timeout=90)
+    payload = result.get("json") if isinstance(result.get("json"), dict) else {}
+    auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
+    return {
+        "status": payload.get("status") or ("ok" if result.get("returncode") == 0 else "failed"),
+        "authenticated": bool(auth.get("authenticated")),
+        "returncode": result.get("returncode"),
+        "store": str(store),
+        "auth": auth,
+        "doctor_connected": ((payload.get("doctor") or {}).get("data") or {}).get("connected") if isinstance(payload.get("doctor"), dict) else None,
+        "error": payload.get("error") or auth.get("error") or (result.get("stderr") or "")[-1000:],
+    }
+
+
+def wacli_candidate(canonical: Path, store: Path) -> dict[str, Any]:
+    summary = wacli_store_summary(store)
+    auth = wacli_auth_status(canonical, store)
+    score = int(summary.get("score") or 0) + (1_000_000_000 if auth.get("authenticated") else 0)
+    return {"store": str(store), "summary": summary, "auth_status": auth, "score": score, "newest_mtime": newest_mtime(store)}
+
+
+def copy_directory_replace(src: Path, dst: Path, *, apply: bool, backup: bool) -> dict[str, Any]:
+    backup_path = ""
+    if apply:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            backup_path = str(dst.with_name(f"{dst.name}.backup-{stamp()}"))
+            if backup:
+                shutil.move(str(dst), backup_path)
+            else:
+                shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+    return {"action": "copied" if apply else "would_copy", "source": str(src), "target": str(dst), "backup": backup_path}
+
+
+def repair_wacli_store(canonical: Path, legacy: list[Path], *, apply: bool, backup: bool, scrub_bad: bool) -> dict[str, Any]:
+    canonical_store = canonical / ".powerpacks/messages/wacli"
+    stores = [canonical_store, *[repo / ".powerpacks/messages/wacli" for repo in legacy]]
+    candidates = [wacli_candidate(canonical, store) for store in stores if store.exists()]
+    canonical_candidate = next((item for item in candidates if Path(item["store"]).resolve() == canonical_store.resolve()), wacli_candidate(canonical, canonical_store))
+    best = max(candidates, key=lambda item: (int(item.get("score") or 0), float(item.get("newest_mtime") or 0)), default=canonical_candidate)
+    result: dict[str, Any] = {
+        "canonical_store": str(canonical_store),
+        "canonical": canonical_candidate,
+        "candidates": candidates,
+        "best_store": best.get("store"),
+        "action": "none",
+        "root_cause": "",
+    }
+    canonical_auth = bool((canonical_candidate.get("auth_status") or {}).get("authenticated"))
+    best_auth = bool((best.get("auth_status") or {}).get("authenticated"))
+    best_store = Path(str(best.get("store") or ""))
+    if best_auth and best_store.exists() and best_store.resolve() != canonical_store.resolve() and not canonical_auth:
+        result["root_cause"] = "canonical wacli store is missing or not authenticated, but an authenticated legacy store exists"
+        result.update(copy_directory_replace(best_store, canonical_store, apply=apply, backup=True))
+        if apply:
+            result["post_copy_auth_status"] = wacli_auth_status(canonical, canonical_store)
+        return result
+    if not canonical_auth and canonical_store.exists() and scrub_bad:
+        dest = canonical_store.with_name(f"wacli.stale-{stamp()}")
+        result["root_cause"] = "canonical wacli store exists but is not authenticated; no better authenticated legacy store was found"
+        result["action"] = "moved_stale" if apply else "would_move_stale"
+        result["stale_dest"] = str(dest)
+        if apply:
+            shutil.move(str(canonical_store), str(dest))
+        return result
+    if canonical_auth:
+        result["root_cause"] = "canonical wacli store is authenticated"
+    elif not canonical_store.exists():
+        result["root_cause"] = "no canonical wacli store found; user may need WhatsApp reauth if WhatsApp is linked"
+    else:
+        result["root_cause"] = "canonical wacli store is present but not authenticated; user may need reauth or --scrub-bad-wacli"
+    return result
+
+
+def accounts_container(accounts: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    if isinstance(accounts.get("accounts"), dict):
+        return accounts["accounts"], "accounts"
+    if isinstance(accounts.get("channels"), dict):
+        return accounts["channels"], "channels"
+    accounts.setdefault("accounts", {})
+    return accounts["accounts"], "accounts"
+
+
+def repair_gmail_accounts(canonical: Path, config: dict[str, Any], *, apply: bool) -> dict[str, Any]:
+    accounts_path = canonical / ".powerpacks/ingestion/accounts.json"
+    accounts = load_json(accounts_path)
+    records, records_key = accounts_container(accounts)
+    gmail = records.get("gmail") if isinstance(records.get("gmail"), dict) else {}
+    cfg = config_obj(gmail)
+    db_text = str(cfg.get("msgvault_db") or config.get("external_paths", {}).get("msgvault_default_db") or "~/.msgvault/msgvault.db")
+    db = expand_path(db_text)
+    discovered = msgvault_accounts(db)
+    discovered_emails = sorted({str(row.get("account_email") or "").strip().lower() for row in discovered.get("accounts", []) if row.get("account_email")})
+    existing_selected = string_list(cfg.get("selected_accounts")) or string_list(cfg.get("account_emails")) or string_list(gmail.get("usernames"))
+    missing_existing = [email for email in existing_selected if email.lower() not in set(discovered_emails)]
+    needs_update = bool(discovered_emails) and (
+        not gmail.get("linked")
+        or bool(gmail.get("skipped"))
+        or sorted(email.lower() for email in existing_selected) != discovered_emails
+        or str(cfg.get("msgvault_db") or "") != str(db)
+    )
+    result = {
+        "accounts_path": str(accounts_path),
+        "records_key": records_key,
+        "msgvault": discovered,
+        "existing_selected_accounts": existing_selected,
+        "desired_accounts": discovered_emails,
+        "missing_existing_accounts": missing_existing,
+        "action": "none",
+        "root_cause": "",
+    }
+    if discovered.get("status") != "ok":
+        result["root_cause"] = "msgvault database is missing or unreadable"
+        return result
+    if not discovered_emails:
+        result["root_cause"] = "msgvault database has no Gmail source accounts"
+        return result
+    if not needs_update:
+        result["root_cause"] = "accounts.json Gmail config already matches msgvault accounts"
+        return result
+    result["root_cause"] = "accounts.json Gmail config is stale or missing compared with local msgvault accounts"
+    result["action"] = "updated" if apply else "would_update"
+    if apply:
+        now = now_iso()
+        next_cfg = dict(cfg)
+        next_cfg.update({
+            "msgvault_db": str(db),
+            "account_emails": discovered_emails,
+            "available_accounts": discovered_emails,
+            "selected_accounts": discovered_emails,
+            "pending_accounts": [email for email in string_list(cfg.get("pending_accounts")) if email.lower() not in set(discovered_emails)],
+        })
+        records["gmail"] = {
+            **gmail,
+            "linked": True,
+            "skipped": False,
+            "usernames": discovered_emails,
+            "artifacts": gmail.get("artifacts") if isinstance(gmail.get("artifacts"), list) else [],
+            "config": next_cfg,
+            "last_checked_at": now,
+            "last_success_at": now,
+            "notes": "Repaired by fix-powerpacks from local msgvault accounts; no Gmail sync or import was run.",
+        }
+        accounts[records_key] = records
+        accounts.setdefault("version", 2)
+        accounts["updated_at"] = now
+        write_json(accounts_path, accounts)
+    return result
 
 
 def linked_source_checks(canonical: Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -278,11 +460,15 @@ def linked_source_checks(canonical: Path, config: dict[str, Any]) -> dict[str, A
             msg_cfg = config_obj(record)
             whatsapp = msg_cfg.get("whatsapp") if isinstance(msg_cfg.get("whatsapp"), dict) else {}
             imessage = msg_cfg.get("imessage") if isinstance(msg_cfg.get("imessage"), dict) else {}
+            wacli_store = canonical / ".powerpacks/messages/wacli"
+            wacli_auth = wacli_auth_status(canonical, wacli_store)
+            whatsapp_expected = bool(whatsapp.get("authenticated") or whatsapp.get("status") in {"authenticated", "linked"})
             item.update({
                 "imessage_config": imessage,
                 "whatsapp_config": whatsapp,
-                "wacli_store": wacli_store_summary(canonical / ".powerpacks/messages/wacli"),
-                "ok": True,
+                "wacli_store": wacli_store_summary(wacli_store),
+                "wacli_auth_status": wacli_auth,
+                "ok": (not whatsapp_expected) or bool(wacli_auth.get("authenticated")),
             })
         elif source == "twitter":
             item.update({"handle": (string_list(record.get("usernames")) or [cfg.get("handle") or ""])[0], "ok": True})
@@ -359,6 +545,9 @@ def main() -> int:
     parser.add_argument("--legacy-source", action="append", default=[], help="Additional legacy repo root containing .powerpacks")
     parser.add_argument("--apply", action="store_true", help="Apply newer-state adoption. Default is dry-run/report only.")
     parser.add_argument("--backup", action="store_true", help="Backup target files/dirs before overwrite/copy where applicable.")
+    parser.add_argument("--no-repair-accounts", action="store_true", help="Do not repair accounts.json from local msgvault evidence")
+    parser.add_argument("--no-repair-wacli", action="store_true", help="Do not copy a better authenticated legacy wacli store into the canonical repo")
+    parser.add_argument("--scrub-bad-wacli", action="store_true", help="When no authenticated wacli store exists, move an unauthenticated canonical store aside so the user can reauth cleanly. Requires --apply.")
     parser.add_argument("--quarantine-legacy-state", action="store_true", help="Rename legacy .powerpacks dirs after adoption. Requires --apply.")
     parser.add_argument("--json", action="store_true", help="Emit JSON only")
     args = parser.parse_args()
@@ -377,8 +566,21 @@ def main() -> int:
         status = "needs_attention"
 
     actions = adopt_state(canonical, legacy, config, apply=args.apply, backup=args.backup)
+    gmail_repair = {"action": "skipped", "reason": "--no-repair-accounts"} if args.no_repair_accounts else repair_gmail_accounts(canonical, config, apply=args.apply)
+    if gmail_repair.get("action") in {"would_update", "updated"}:
+        status = "needs_attention" if not args.apply else status
+        if not args.apply:
+            issues.append("accounts.json Gmail config can be repaired from local msgvault accounts")
+    wacli_repair = {"action": "skipped", "reason": "--no-repair-wacli"} if args.no_repair_wacli else repair_wacli_store(canonical, legacy, apply=args.apply, backup=args.backup, scrub_bad=bool(args.scrub_bad_wacli))
+    if wacli_repair.get("action") in {"would_copy", "would_move_stale"}:
+        status = "needs_attention"
+        issues.append(str(wacli_repair.get("root_cause") or "wacli store can be repaired"))
+    if args.scrub_bad_wacli and not args.apply:
+        status = "needs_attention"
+        issues.append("--scrub-bad-wacli requires --apply; no wacli store was moved")
     checks = linked_source_checks(canonical, config)
     for source, item in (checks.get("sources") or {}).items():
+
         if isinstance(item, dict) and item.get("ok") is False:
             status = "needs_attention"
             issues.append(f"linked source check failed: {source}")
@@ -400,6 +602,8 @@ def main() -> int:
         "legacy_repos": [str(path) for path in legacy],
         "issues": issues,
         "adoption_actions": actions,
+        "gmail_accounts_repair": gmail_repair,
+        "wacli_store_repair": wacli_repair,
         "linked_source_checks": checks,
         "quarantine": quarantine,
         "next": "cd " + str(canonical),
