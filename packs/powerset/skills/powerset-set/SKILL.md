@@ -16,6 +16,32 @@ It only manages local set scope:
 - writes `POWERPACKS_DEFAULT_SET_ID` into the local ignored `.env`
 - does not upload contacts, run searches, or mutate server-side set membership
 
+## Canonical repo setup
+
+For `$powerset sets use <id|name>`, resolve and enter the canonical non-`.codex`
+Powerpacks repo before writing `.env`:
+
+```bash
+resolve_powerpacks_root() {
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+    [[ -n "$candidate" ]] || continue
+    [[ "$candidate" != *"/.codex/"* ]] || continue
+    if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+repo="$(resolve_powerpacks_root)" || {
+  echo "No canonical non-.codex Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  exit 1
+}
+cd "$repo"
+```
+
+For read-only set listing, still prefer the canonical repo when available.
+
 ## Workflow
 
 1. Ensure Powerset setup exists. If credentials or MCP registration are missing,
@@ -23,7 +49,7 @@ It only manages local set scope:
 2. Confirm the Powerset Search MCP is installed when needed:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py status --host all
+uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py status --host all
 ```
 
 3. List sets by calling the Powerset Search MCP `list_sets` tool directly.

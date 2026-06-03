@@ -17,6 +17,13 @@
   },
   "managed_paths": [
     {
+      "id": "local_env",
+      "path": ".env",
+      "kind": "file",
+      "policy": "adopt_if_missing",
+      "why": "Local runtime credentials/config belong in the canonical Powerpacks checkout. Copy only when canonical .env is missing; never overwrite or print contents."
+    },
+    {
       "id": "accounts",
       "path": ".powerpacks/ingestion/accounts.json",
       "kind": "file",

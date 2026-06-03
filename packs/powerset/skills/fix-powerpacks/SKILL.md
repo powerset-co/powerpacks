@@ -16,7 +16,7 @@ Use this skill for `$fix-powerpacks` and for requests like:
   them.”
 
 This is a repair workflow. Its default command applies safe local repairs:
-copy/adopt newer canonical state, repair `accounts.json` from local msgvault,
+copy/adopt newer canonical state and copy `.env` only if canonical `.env` is missing, repair `accounts.json` from local msgvault,
 adopt an authenticated wacli store, and move aside a bad unauthenticated wacli
 placeholder so the user can reauth cleanly. It must not run imports, msgvault
 sync, WhatsApp sync, enrichment, processing, uploads, or provider-spend
@@ -46,6 +46,7 @@ config/powerpacks-state-paths.json
 The fixer script reads that contract and knows the managed paths needed for
 setup/import/enrichment to work, including:
 
+- `.env` local runtime config/credentials, copied only if canonical `.env` is missing and never printed
 - `.powerpacks/ingestion/accounts.json`
 - `.powerpacks/messages/research_review.csv`
 - `.powerpacks/messages/contacts.csv`
@@ -105,7 +106,7 @@ Summarize:
 - canonical repo path;
 - current working directory;
 - legacy `.powerpacks` roots found;
-- managed paths copied/adopted;
+- managed paths copied/adopted, including whether `.env` was copied or kept without showing contents;
 - linked source checks that failed;
 - whether Gmail accounts were repaired from msgvault;
 - whether WhatsApp/wacli was authenticated, copied from a better store, or
@@ -131,8 +132,10 @@ uv run --project . python scripts/fix-powerpacks-state.py \
 
 Allowed by default:
 
-- copy newer/missing managed files from legacy `.powerpacks` into canonical
-  `.powerpacks`;
+- copy newer/missing managed files from legacy installs into the canonical repo,
+  including managed `.powerpacks` state;
+- copy legacy `.env` only when canonical `.env` is missing; never overwrite an
+  existing canonical `.env`;
 - update only Powerpacks-owned local state under canonical `.powerpacks`;
 - read `~/.msgvault/msgvault.db` and repair `accounts.json` Gmail linkage when
   the local DB clearly contains the selected Gmail accounts;

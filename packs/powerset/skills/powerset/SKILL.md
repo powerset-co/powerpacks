@@ -50,17 +50,47 @@ $powerset create oauth app      guide Gmail OAuth app setup for msgvault
 $powerset help                  show this help
 ```
 
-## Path setup
+## Canonical repo setup
 
-Resolve primitive paths from the current environment:
+For mutating commands (`$powerset setup`, `$powerset login`, `$powerset env
+pull`, `$powerset sets use`, `$powerset mcp install`, and `$powerset create
+oauth app`), first resolve and enter the canonical non-`.codex` Powerpacks repo.
+This ensures `.env`, operator bootstrap bundles, and any local Powerpacks state
+are written under the installed checkout such as `~/powerpacks`, not under an
+agent skill bundle like `~/.codex/powerpacks`.
 
-- From the Powerpacks repo root, use `packs/powerset/primitives/...`.
-- From an installed skill bundle, use `powerpacks/packs/powerset/primitives/...`.
-- If a path does not exist, locate it with `rg --files -g 'doctor.py' -g
-  'auth.py' -g 'provision_runtime_env.py' -g 'operator_bootstrap.py' -g
-  'mcp_install.py'`.
+Prefer, in order:
 
-Prefer `python3` if `python` is not on PATH.
+1. `$POWERPACKS_REPO_ROOT` if it points to a Powerpacks repo;
+2. current working directory if it is a Powerpacks repo and not under `.codex`;
+3. `~/powerpacks`;
+4. `~/workspace/powerpacks`.
+
+```bash
+resolve_powerpacks_root() {
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+    [[ -n "$candidate" ]] || continue
+    [[ "$candidate" != *"/.codex/"* ]] || continue
+    if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+repo="$(resolve_powerpacks_root)" || {
+  echo "No canonical non-.codex Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  exit 1
+}
+cd "$repo"
+```
+
+For read-only commands (`$powerset status`, `$powerset whoami`, `$powerset sets
+list`), still prefer the canonical repo when available. If no canonical repo is
+available, stop instead of writing or syncing from `~/.codex/powerpacks`.
+
+Run primitives from the canonical repo with `uv run --project . python
+packs/...`. Prefer `python3` only when invoking a local helper outside `uv`.
 
 ## `$powerset setup`
 
@@ -91,7 +121,7 @@ User-facing output must be terse:
 Run one internal setup check first:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
+uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env \
   --gcp-project powerset-search
@@ -104,7 +134,7 @@ doctor fix commands so browser/code prompts stay visible.
 If `auth0_login` is missing or expired, run the Auth0 login directly:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/auth/auth.py login
+uv run --project . python packs/powerset/primitives/auth/auth.py login
 ```
 
 After Auth0 credentials and gcloud access are usable, always run the env pull
@@ -113,7 +143,7 @@ healthy. This makes `$powerset setup` the single refresh command for rotated or
 newly added per-user runtime keys:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
+uv run --project . python packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
   --profile search-core \
   --env-file .env \
   --confirm \
@@ -131,7 +161,7 @@ Relay the URL/code prompt tersely, then rerun the env pull command.
 Then sync the operator bootstrap:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py sync \
+uv run --project . python packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py sync \
   --env-file .env
 ```
 
@@ -149,7 +179,7 @@ installation; `$setup` can still proceed from local account linking/import.
 Then install/refresh MCP:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 Re-run the setup check at the end and use the success/blocker message above. If
@@ -175,7 +205,7 @@ User-facing output must be terse:
 Run one internal setup check:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
+uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env \
   --gcp-project powerset-search
@@ -196,10 +226,10 @@ Otherwise handle `fix_kind` values internally:
 Common direct fixes:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/auth/auth.py login
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
+uv run --project . python packs/powerset/primitives/auth/auth.py login
+uv run --project . python packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
   --profile search-core --env-file .env --confirm --best-effort
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 Do not run nested fix commands in the normal login flow; they can hide
@@ -229,7 +259,7 @@ a human-action blocker, tell the user to ping `#powerpacks` with their
 Run the setup check read-only with the requested or default profile:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
+uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env \
   --gcp-project powerset-search
@@ -242,7 +272,7 @@ debugging detail.
 ## `$powerset whoami`
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/auth/auth.py whoami
+uv run --project . python packs/powerset/primitives/auth/auth.py whoami
 ```
 
 Report the email and authorization/role. Do not print raw tokens.
@@ -250,13 +280,13 @@ Report the email and authorization/role. Do not print raw tokens.
 ## `$powerset mcp install`
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 If the user asks only to inspect MCP state, run:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py status --host all
+uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py status --host all
 ```
 
 ## `$powerset env pull`
@@ -267,7 +297,7 @@ basis. The explicit `$powerset env pull` request is consent to write `.env`;
 do not ask for separate confirmation. Run:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
+uv run --project . python packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
   --profile search-core \
   --env-file .env \
   --confirm \
@@ -298,13 +328,13 @@ Useful minimal profiles:
 This alias is for msgvault/Gmail OAuth setup. Prefer browser automation:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup
+uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup
 ```
 
 If the user only wants instructions, run:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/ingestion/primitives/msgvault_setup/msgvault_setup.py create-oauth-app
+uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py create-oauth-app
 ```
 
 If the user provided an email, add `--email <gmail>`. If they provided a Google

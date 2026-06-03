@@ -104,7 +104,6 @@ canonical repo. For a direct one-off adoption, use:
 ```bash
 cd <canonical-powerpacks-repo>
 uv run --project . python scripts/fix-powerpacks-state.py --json
-uv run --project . python scripts/fix-powerpacks-state.py --apply --json
 ```
 
 Use `--backup` or `--quarantine-legacy-state` only when the user explicitly wants

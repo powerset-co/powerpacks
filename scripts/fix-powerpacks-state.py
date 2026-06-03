@@ -183,7 +183,7 @@ def legacy_repos(config: dict[str, Any], canonical: Path, extras: list[str]) -> 
         path = expand_path(str(item), cwd=Path.cwd())
         if path == canonical:
             continue
-        if (path / ".powerpacks").exists() and path not in out:
+        if ((path / ".powerpacks").exists() or (path / ".env").exists()) and path not in out:
             out.append(path)
     return out
 
@@ -260,15 +260,25 @@ def run_json_command(cmd: list[str], *, cwd: Path, timeout: int = 90) -> dict[st
     except Exception as exc:
         return {"returncode": 1, "stdout": "", "stderr": f"{type(exc).__name__}: {exc}", "json": {}}
     payload: dict[str, Any] = {}
-    decoder = json.JSONDecoder()
     text = proc.stdout or ""
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "json": parsed}
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
     for idx, char in enumerate(text):
         if char != "{":
             continue
         try:
             parsed, _end = decoder.raw_decode(text[idx:])
             if isinstance(parsed, dict):
+                # Fallback for noisy commands: keep the first complete object so
+                # nested pretty-printed objects do not overwrite the envelope.
                 payload = parsed
+                break
         except json.JSONDecodeError:
             continue
     return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "json": payload}
@@ -508,6 +518,16 @@ def adopt_state(canonical: Path, legacy: list[Path], config: dict[str, Any], *, 
             actions.append(action)
             continue
         newest_source = max(sources, key=newest_mtime)
+        if policy == "adopt_if_missing":
+            action["newest_source"] = str(newest_source)
+            if target.exists():
+                action["action"] = "kept_existing_target"
+                actions.append(action)
+                continue
+            result = copy_file_if_newer(newest_source, target, apply=apply, backup=False)
+            action.update(result)
+            actions.append(action)
+            continue
         if policy != "adopt_newer":
             action["action"] = "report_only"
             action["newest_source"] = str(newest_source)

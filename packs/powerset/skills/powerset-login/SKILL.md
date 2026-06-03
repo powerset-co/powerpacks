@@ -42,23 +42,40 @@ Only use install commands when something is actually missing. Do not reinstall
 Powerpacks adapters, MCP config, `gcloud`, or credentials when the setup check says
 the check is already `ok`.
 
-## Path setup
+## Canonical repo setup
 
-Resolve primitive paths from the current environment:
+Resolve and enter the canonical non-`.codex` Powerpacks repo before running any
+Powerset login/setup command. This ensures `.env` and bootstrap state are written
+under the installed checkout such as `~/powerpacks`, not under an agent skill
+bundle like `~/.codex/powerpacks`.
 
-- From the Powerpacks repo root, use `packs/powerset/primitives/...`.
-- From an installed skill bundle, use `powerpacks/packs/powerset/primitives/...`.
-- If the example command path does not exist, locate it with `rg --files -g
-  'doctor.py' -g 'auth.py' -g 'provision_runtime_env.py' -g 'mcp_install.py'`.
+```bash
+resolve_powerpacks_root() {
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+    [[ -n "$candidate" ]] || continue
+    [[ "$candidate" != *"/.codex/"* ]] || continue
+    if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+repo="$(resolve_powerpacks_root)" || {
+  echo "No canonical non-.codex Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  exit 1
+}
+cd "$repo"
+```
 
-Prefer `python3` if `python` is not on PATH.
+Run primitives from the canonical repo with `uv run --project . python packs/...`.
 
 ## Happy path
 
 Run one internal read-only setup check:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/doctor/doctor.py run \
+uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env \
   --gcp-project powerset-search
@@ -105,7 +122,7 @@ requires it.
 If `auth0_login` is missing or expired, run:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/auth/auth.py login
+uv run --project . python packs/powerset/primitives/auth/auth.py login
 ```
 
 If `gcloud_account` is missing, run:
@@ -133,7 +150,7 @@ normal login flow. Only run `gcloud auth application-default login
 If `env_file` is missing keys and `user_secrets` is accessible, run:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
+uv run --project . python packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
   --profile search-core \
   --env-file .env \
   --confirm \
@@ -143,7 +160,7 @@ uv run --project powerpacks python powerpacks/packs/powerset/primitives/provisio
 If `mcp_powerset_search` is missing but a host CLI exists, run:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 If `mcp_powerset_search` says no MCP host CLI is on PATH, that is an install
@@ -210,11 +227,11 @@ If a user shows up in `#powerpacks` with `user_secrets: not_provisioned`, a
 maintainer (anyone with `roles/owner` on `powerset-search`) runs:
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py plan \
+uv run --project . python packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py plan \
   --users newperson@powerset.co \
   --project powerset-search --with-diff
 
-uv run --project powerpacks python powerpacks/packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py apply \
+uv run --project . python packs/powerset/primitives/provision_user_secrets/provision_user_secrets.py apply \
   --users newperson@powerset.co \
   --project powerset-search --confirm
 ```
