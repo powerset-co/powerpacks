@@ -2,8 +2,29 @@
 
 Local Vite app for browsing Powerpacks artifacts from `.powerpacks/`.
 
+Install or repair the local app from the repo root:
+
 ```bash
-cd .. # powerpacks repo root
+./install.sh app
+```
+
+For a clean reinstall:
+
+```bash
+./install.sh app --clean
+```
+
+Direct npm usage is supported:
+
+```bash
+cd app
+npm install
+npm run dev -- --host 0.0.0.0 --port 5177
+```
+
+Start the console in the background from the repo root:
+
+```bash
 scripts/run-powerpacks-console.sh start
 ```
 

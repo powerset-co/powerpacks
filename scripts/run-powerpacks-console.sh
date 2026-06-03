@@ -128,10 +128,7 @@ case "$ACTION" in
       exit 0
     fi
 
-    if [[ ! -d "$APP_DIR/node_modules" ]]; then
-      echo "Installing Powerpacks Console dependencies..."
-      (cd "$APP_DIR" && npm install)
-    fi
+    "$ROOT_DIR/bin/setup-app" --repair-only --no-build
 
     echo "Starting Powerpacks Console on http://$HOST:$PORT"
     echo "Repo: $POWERPACKS_REPO_ROOT"
