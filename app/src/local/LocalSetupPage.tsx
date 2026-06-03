@@ -66,7 +66,7 @@ function phaseTone(status?: string): "default" | "secondary" | "outline" | "dest
   return "outline";
 }
 
-function StatusBadge({ status }: { status?: string }) {
+function statusDisplayLabel(status?: string): string {
   const normalized = String(status || "unknown").toLowerCase();
   const labels: Record<string, string> = {
     blocked_user_action: "action needed",
@@ -85,9 +85,13 @@ function StatusBadge({ status }: { status?: string }) {
     source_import_completed: "completed",
     unlinked: "available",
   };
+  return (labels[normalized] || normalized).replace(/_/g, " ");
+}
+
+function StatusBadge({ status }: { status?: string }) {
   return (
     <Badge variant={phaseTone(status)} className="capitalize">
-      {(labels[normalized] || normalized).replace(/_/g, " ")}
+      {statusDisplayLabel(status)}
     </Badge>
   );
 }
@@ -894,7 +898,7 @@ function ImportSourceRow({
           <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
             <div className="space-y-3">
               <div className="flex flex-wrap gap-2">
-                <MetricChip label="Status" value={displayStatus(source.status)} />
+                <MetricChip label="Status" value={statusDisplayLabel(source.status)} />
                 <MetricChip label="Accounts" value={accountLabel} />
                 <MetricChip label="Runnable" value={canRun ? "Yes" : "No"} />
               </div>
