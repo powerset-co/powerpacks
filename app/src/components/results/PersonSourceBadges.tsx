@@ -103,7 +103,7 @@ export const SOURCE_CONFIG: Record<string, {
   linkedin_connections: {
     icon: Users,
     label: "Connections",
-    color: "bg-indigo-500/20 text-indigo-400 border-indigo-500/30",
+    color: "bg-blue-500/20 text-blue-400 border-blue-500/30",
     showMessageCount: false,
   },
 };
