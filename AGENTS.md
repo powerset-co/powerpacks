@@ -195,6 +195,8 @@ Routes:
   `packs/powerset/skills/powerset/SKILL.md`
 - `$update-powerpacks`, reinstall/update Powerpacks skills, canonical install/state cleanup, adopt `.codex` state →
   `packs/powerset/skills/update-powerpacks/SKILL.md`
+- `$fix-powerpacks`, diagnose/fix local Powerpacks state paths, copy newer `.powerpacks` state into canonical repo, validate linked source wiring →
+  `packs/powerset/skills/fix-powerpacks/SKILL.md`
 - `$import-contacts`, iMessage, WhatsApp, contact import/review/upload/retarget →
   `packs/messages/skills/import-contacts/SKILL.md`
 - `$msgvault`, `$local-msg-vault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →

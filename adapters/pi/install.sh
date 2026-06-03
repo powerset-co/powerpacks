@@ -27,11 +27,12 @@ copy_powerpacks_bundle() {
   # schemas anymore — every domain lives in packs/).
   cp -R "$REPO_ROOT/docs" "$dest/powerpacks/docs"
   cp -R "$REPO_ROOT/templates" "$dest/powerpacks/templates"
+  cp -R "$REPO_ROOT/config" "$dest/powerpacks/config"
   # Domain packs (powerset, search, messages, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
   mkdir -p "$dest/powerpacks/scripts"
-  for script in run-powerpacks-console.sh build-local-duckdb-shim.py adopt-powerpacks-state.py; do
+  for script in run-powerpacks-console.sh build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
     cp "$REPO_ROOT/scripts/$script" "$dest/powerpacks/scripts/$script"
     chmod +x "$dest/powerpacks/scripts/$script"
   done
@@ -75,6 +76,7 @@ install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
+install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
 install_skill import-contacts "$REPO_ROOT/packs/messages/skills/import-contacts/SKILL.md"
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
@@ -88,6 +90,6 @@ install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/S
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
-printf '  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks sales-nav-search\n'
+printf '  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search\n'
 printf '  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

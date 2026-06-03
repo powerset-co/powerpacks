@@ -97,20 +97,21 @@ The canonical repo is the first valid non-`.codex` path among:
 4. `~/workspace/powerpacks`.
 
 If useful state was created under a `.codex` checkout, do **not** keep running
-there. First copy/adopt that local `.powerpacks/` state into the canonical repo,
-then run all commands from the canonical repo. Use:
+there. Prefer `$fix-powerpacks`, which reads `config/powerpacks-state-paths.json`,
+checks linked source wiring, and copies missing/newer managed state into the
+canonical repo. For a direct one-off adoption, use:
 
 ```bash
 cd <canonical-powerpacks-repo>
-uv run --project . python scripts/adopt-powerpacks-state.py \
-  --source ~/.codex/powerpacks \
-  --target "$PWD"
+uv run --project . python scripts/fix-powerpacks-state.py --json
+uv run --project . python scripts/fix-powerpacks-state.py --apply --json
 ```
 
-Use `--overwrite --backup-existing` only when the user explicitly wants the
-legacy state to replace existing canonical files, for example when an
-authenticated WhatsApp store was accidentally created under `.codex` and the
-canonical store is just an unauthenticated placeholder.
+Use `--backup` or `--quarantine-legacy-state` only when the user explicitly wants
+legacy state to replace existing canonical files or wants stale `.codex` state
+renamed after adoption, for example when an authenticated WhatsApp store was
+accidentally created under `.codex` and the canonical store is just an
+unauthenticated placeholder.
 
 This keeps msgvault DB paths, WhatsApp/wacli stores, setup ledgers, import
 artifacts, and DuckDB/index state repeatable under one `.powerpacks/` root.

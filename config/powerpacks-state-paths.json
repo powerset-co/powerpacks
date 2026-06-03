@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "description": "Powerpacks local state path contract. Product setup/import/enrichment/index state belongs under the canonical non-.codex Powerpacks repo unless explicitly marked external.",
+  "canonical_repo_candidates": [
+    "$POWERPACKS_REPO_ROOT",
+    "$PWD",
+    "~/powerpacks",
+    "~/workspace/powerpacks"
+  ],
+  "legacy_state_sources": [
+    "~/.codex/powerpacks",
+    "~/.codex/powerpacks-main",
+    "~/.codex/powerpacks-arthur"
+  ],
+  "external_paths": {
+    "msgvault_default_db": "~/.msgvault/msgvault.db"
+  },
+  "managed_paths": [
+    {
+      "id": "accounts",
+      "path": ".powerpacks/ingestion/accounts.json",
+      "kind": "file",
+      "policy": "adopt_newer",
+      "why": "Source link registry used by setup/import/enrichment."
+    },
+    {
+      "id": "setup_ledger",
+      "path": ".powerpacks/setup/setup-run.json",
+      "kind": "file",
+      "policy": "report_only",
+      "why": "Setup ledger is a checkpoint/log. Report duplicates, but do not copy automatically unless explicitly requested."
+    },
+    {
+      "id": "import_refresh_ledger",
+      "path": ".powerpacks/network-import/import-network-run.setup-refresh.json",
+      "kind": "file",
+      "policy": "report_only",
+      "why": "Import ledger is a checkpoint/log. Current artifacts are more authoritative than stale status."
+    },
+    {
+      "id": "messages_ledger",
+      "path": ".powerpacks/messages/import-run.setup-messages.json",
+      "kind": "file",
+      "policy": "report_only",
+      "why": "Messages ledger is useful diagnostics but can be stale/dirty."
+    },
+    {
+      "id": "messages_review_csv",
+      "path": ".powerpacks/messages/research_review.csv",
+      "kind": "file",
+      "policy": "adopt_newer",
+      "why": "Reviewed messages contacts are user-approved local state."
+    },
+    {
+      "id": "messages_contacts_csv",
+      "path": ".powerpacks/messages/contacts.csv",
+      "kind": "file",
+      "policy": "adopt_newer",
+      "why": "Canonical messages contact metadata artifact."
+    },
+    {
+      "id": "messages_wacli_store",
+      "path": ".powerpacks/messages/wacli",
+      "kind": "directory",
+      "policy": "adopt_newer",
+      "why": "WhatsApp/wacli authenticated local store belongs under canonical Powerpacks state."
+    },
+    {
+      "id": "messages_wacli_contacts_csv",
+      "path": ".powerpacks/messages/wacli.contacts.csv",
+      "kind": "file",
+      "policy": "adopt_newer",
+      "why": "Latest exported WhatsApp contact metadata."
+    },
+    {
+      "id": "network_directory",
+      "path": ".powerpacks/network-import/directory.csv",
+      "kind": "file",
+      "policy": "adopt_newer",
+      "why": "Local email/linkedin resolution cache."
+    },
+    {
+      "id": "network_profile_cache",
+      "path": ".powerpacks/network-import/profile_cache_v2",
+      "kind": "directory",
+      "policy": "adopt_newer",
+      "why": "Local profile/enrichment cache; also restorable from bootstrap when available."
+    },
+    {
+      "id": "network_merged_people",
+      "path": ".powerpacks/network-import/merged/people.csv",
+      "kind": "file",
+      "policy": "adopt_newer",
+      "why": "Merged people CSV used by processing/indexing."
+    },
+    {
+      "id": "operator_bootstrap_bundles",
+      "path": ".powerpacks/operator-bootstrap/bundles",
+      "kind": "directory",
+      "policy": "adopt_newer",
+      "why": "Local operator bootstrap bundles."
+    },
+    {
+      "id": "search_index_duckdb",
+      "path": ".powerpacks/search-index/local-search.duckdb",
+      "kind": "file",
+      "policy": "report_only",
+      "why": "DuckDB can be rebuilt; report duplicates but avoid copying while a process may have it open."
+    }
+  ],
+  "linked_source_checks": {
+    "gmail": ["accounts.config.msgvault_db exists", "msgvault contains selected account emails"],
+    "linkedin_csv": ["accounts.config.csv_path exists"],
+    "messages": ["iMessage readable if configured", "WhatsApp wacli store authenticated if configured"],
+    "twitter": ["handle recorded"]
+  }
+}

@@ -45,8 +45,8 @@ type SetupStepState = "complete" | "current" | "blocked" | "upcoming";
 
 const TABS: Array<{ id: SetupTabId; label: string; shortLabel: string; icon: typeof Link2; description: string; action: string }> = [
   { id: "link", label: "Link accounts", shortLabel: "Link", icon: Link2, description: "Connect the sources you want to use. Skip anything you do not need.", action: "Link or skip each source" },
-  { id: "import", label: "Import data", shortLabel: "Import", icon: Database, description: "Pull fresh local metadata from linked sources.", action: "Run Full Import" },
-  { id: "enrichment", label: "Enrich people", shortLabel: "Enrich", icon: Sparkles, description: "Resolve profiles and review researched people before adding them.", action: "Run enrichment" },
+  { id: "import", label: "Discovery Contacts", shortLabel: "Discover", icon: Database, description: "Discover local contacts and source metadata from linked accounts.", action: "Run discovery" },
+  { id: "enrichment", label: "Import and Enrichment", shortLabel: "Import + Enrich", icon: Sparkles, description: "Resolve profiles, enrich linked sources, and review researched people before adding them.", action: "Run import and enrichment" },
   { id: "index", label: "Process index", shortLabel: "Process", icon: HardDrive, description: "Merge source-specific people and build the searchable local index.", action: "Build index" },
 ];
 const TAB_IDS = new Set(TABS.map((tab) => tab.id));
@@ -1021,7 +1021,7 @@ function ImportSourceRow({
                 onClick={() => onRun({ action: "import-source", source: source.id })}
                 disabled={!canRun}
               >
-                <Play className="h-4 w-4" /> Import {source.label}
+                <Play className="h-4 w-4" /> Discover {source.label}
               </ActionButton>
             </div>
           </div>
@@ -1059,7 +1059,7 @@ function ImportTab({
           </div>
           <div className="flex flex-wrap gap-2">
             <ActionButton action="import" actionState={actionState} onClick={() => onRun({ action: "import" })}>
-              <Play className="h-4 w-4" /> Run Full Import
+              <Play className="h-4 w-4" /> Run Discovery
             </ActionButton>
           </div>
         </div>
@@ -1222,7 +1222,7 @@ function EnrichmentTab({
       <section className="rounded-md border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-base font-semibold">Enrichment</h3>
+            <h3 className="text-base font-semibold">Import and Enrichment</h3>
             <StatusBadge status={status.enrichment.status} />
             <MetricChip label="Candidates" value={status.enrichment.totalCandidates} />
             <MetricChip label="Profiles found" value={status.enrichment.totalEnriched} />
@@ -1248,7 +1248,7 @@ function EnrichmentTab({
               />
             ))
           ) : (
-            <div className="p-6 text-sm text-muted-foreground">No enrichment sources found.</div>
+            <div className="p-6 text-sm text-muted-foreground">No import/enrichment sources found.</div>
           )}
         </div>
       </section>

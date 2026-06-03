@@ -14,6 +14,9 @@ Use this skill for `$update-powerpacks` and for repair requests like:
   Powerpacks install;
 - rerun lightweight setup checks after an update.
 
+For deeper state repair and duplicate-root cleanup, route to `$fix-powerpacks`
+after updating/reinstalling skills.
+
 `$update-powerpacks` is an installation/state-normalization workflow. It should
 not run network imports, message syncs, provider enrichment, processing, uploads,
 or any spend-bearing work.
@@ -86,35 +89,25 @@ new session may be required. For Codex, restart Codex.
 
 ## Adopt state from accidental `.codex` installs
 
-If useful state exists under `~/.codex/powerpacks/.powerpacks`, copy it into the
-canonical repo before running setup/import/index:
+If useful state exists under `~/.codex/powerpacks/.powerpacks`, use the state
+contract fixer before running setup/import/index:
 
 ```bash
 cd "$repo"
-uv run --project . python scripts/adopt-powerpacks-state.py \
-  --source ~/.codex/powerpacks \
-  --target "$PWD" \
-  --dry-run
+uv run --project . python scripts/fix-powerpacks-state.py --json
+uv run --project . python scripts/fix-powerpacks-state.py --apply --json
 ```
 
-If the dry run shows the expected files, copy without overwriting canonical files:
-
-```bash
-uv run --project . python scripts/adopt-powerpacks-state.py \
-  --source ~/.codex/powerpacks \
-  --target "$PWD"
-```
-
-Only use overwrite with a backup when the user explicitly says the `.codex` state
+Only use backup/quarantine flags when the user explicitly says the `.codex` state
 is the correct one, for example an authenticated WhatsApp/wacli store was made
 under `.codex` and the canonical store is an unauthenticated placeholder:
 
 ```bash
-uv run --project . python scripts/adopt-powerpacks-state.py \
-  --source ~/.codex/powerpacks \
-  --target "$PWD" \
-  --overwrite \
-  --backup-existing
+uv run --project . python scripts/fix-powerpacks-state.py \
+  --apply \
+  --backup \
+  --quarantine-legacy-state \
+  --json
 ```
 
 Do not delete `.codex/powerpacks` during normal update. It may still be used as a
