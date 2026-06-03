@@ -17,7 +17,6 @@ import {
   Mail,
   MessageSquare,
   Play,
-  RefreshCcw,
   Sparkles,
   Terminal,
 } from "lucide-react";
@@ -1498,19 +1497,12 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-2xl font-semibold">Setup</h2>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            {refreshLabel(status) && (
-              <span>{refreshLabel(status)}</span>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={refresh} disabled={running}>
-            <RefreshCcw className={cn("h-4 w-4", running && "animate-spin")} /> Refresh
-          </Button>
+      <div>
+        <h2 className="text-2xl font-semibold">Setup</h2>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          {refreshLabel(status) && (
+            <span>{refreshLabel(status)}</span>
+          )}
         </div>
       </div>
 
