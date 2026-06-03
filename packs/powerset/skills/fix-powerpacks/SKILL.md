@@ -15,10 +15,12 @@ Use this skill for `$fix-powerpacks` and for requests like:
 - “clean up stale duplicate state directories so future sessions stop using
   them.”
 
-This is a repair workflow. It may move/copy local state only after showing a
-plan. It must not run imports, msgvault sync, WhatsApp sync, enrichment,
-processing, uploads, or provider-spend operations unless the user separately and
-explicitly requests that.
+This is a repair workflow. Its default command applies safe local repairs:
+copy/adopt newer canonical state, repair `accounts.json` from local msgvault,
+adopt an authenticated wacli store, and move aside a bad unauthenticated wacli
+placeholder so the user can reauth cleanly. It must not run imports, msgvault
+sync, WhatsApp sync, enrichment, processing, uploads, or provider-spend
+operations unless the user separately and explicitly requests that.
 
 ## Principles
 
@@ -91,7 +93,8 @@ test -f scripts/fix-powerpacks-state.py || {
 }
 ```
 
-Run a dry-run diagnosis first:
+Run the default fixer. This applies safe repairs and scrubs a bad canonical
+wacli placeholder if no authenticated store is available:
 
 ```bash
 uv run --project . python scripts/fix-powerpacks-state.py --json
@@ -102,27 +105,17 @@ Summarize:
 - canonical repo path;
 - current working directory;
 - legacy `.powerpacks` roots found;
-- which managed paths would be copied;
+- managed paths copied/adopted;
 - linked source checks that failed;
-- whether Gmail selected accounts exist in msgvault;
-- whether a WhatsApp/wacli store exists and its local row counts;
-- whether stale duplicate ledgers or state roots exist.
+- whether Gmail accounts were repaired from msgvault;
+- whether WhatsApp/wacli was authenticated, copied from a better store, or
+  scrubbed for reauth;
+- root cause for anything still failing.
 
-If the plan is safe, apply missing/newer file adoption plus safe local repairs
-(accounts.json from msgvault and authenticated wacli store adoption):
-
-```bash
-uv run --project . python scripts/fix-powerpacks-state.py --apply --json
-```
-
-If no authenticated wacli store exists and the canonical store is a bad
-placeholder, ask before scrubbing it. With approval:
+For debugging only, inspect without changing files:
 
 ```bash
-uv run --project . python scripts/fix-powerpacks-state.py \
-  --apply \
-  --scrub-bad-wacli \
-  --json
+uv run --project . python scripts/fix-powerpacks-state.py --dry-run --json
 ```
 
 If the user explicitly asks to clean up stale `.codex` state after adoption,
@@ -130,24 +123,13 @@ quarantine it instead of deleting:
 
 ```bash
 uv run --project . python scripts/fix-powerpacks-state.py \
-  --apply \
   --quarantine-legacy-state \
-  --json
-```
-
-If the canonical target has older placeholder files and the user confirms the
-legacy state is correct, use backups:
-
-```bash
-uv run --project . python scripts/fix-powerpacks-state.py \
-  --apply \
-  --backup \
   --json
 ```
 
 ## What “fix” is allowed to do
 
-Allowed without extra approval after showing the dry-run plan:
+Allowed by default:
 
 - copy newer/missing managed files from legacy `.powerpacks` into canonical
   `.powerpacks`;
@@ -157,16 +139,14 @@ Allowed without extra approval after showing the dry-run plan:
 - read-only test WhatsApp/wacli auth using the canonical store;
 - compare legacy wacli stores and copy a better authenticated store into the
   canonical repo when the canonical store is missing or unauthenticated;
-- run read-only sqlite checks against msgvault and wacli stores;
-- run `setup.py status` from the canonical repo;
-- start the console from the canonical repo.
+- move aside a bad unauthenticated canonical wacli placeholder when no better
+  authenticated store exists, so the user can reauth cleanly;
+- run read-only sqlite/status checks against msgvault and wacli stores.
 
 Requires explicit approval:
 
 - overwrite canonical files with older/equal legacy files;
 - quarantine/rename legacy `.powerpacks` directories;
-- scrub/move aside an unauthenticated canonical wacli store when no better
-  authenticated store exists (`--scrub-bad-wacli`);
 - move aside dirty ledgers;
 - delete anything;
 - run browser auth, WhatsApp QR linking, msgvault sync, imports, enrichment,
@@ -178,26 +158,6 @@ Never do:
 - keep `.codex/powerpacks/.powerpacks` as the long-term runtime state root;
 - move `~/.msgvault/msgvault.db` into `.powerpacks`;
 - delete ledgers or stores without a backup and explicit user approval.
-
-## Post-fix checks
-
-After applying fixes, run read-only status from canonical repo:
-
-```bash
-uv run --project . python packs/ingestion/primitives/setup/setup.py status \
-  --operator-id <operator-id> \
-  --accounts .powerpacks/ingestion/accounts.json \
-  --setup-ledger .powerpacks/setup/setup-run.json
-```
-
-Then start the app from canonical repo:
-
-```bash
-scripts/run-powerpacks-console.sh start --path /setup --open
-```
-
-Confirm the launcher prints a non-`.codex` `Repo:` path. If it prints `.codex`,
-stop and fix `POWERPACKS_REPO_ROOT` / installation paths before continuing.
 
 ## Response format
 

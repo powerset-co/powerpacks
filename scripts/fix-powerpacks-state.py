@@ -6,9 +6,12 @@ Powerpacks product state should live under the canonical non-.codex repo's
 .powerpacks/ directory. Legacy .codex checkouts may be scanned as sources, but
 should not remain the runtime root.
 
-Default mode is a dry-run. Use --apply to copy missing/newer managed state into
-the canonical repo. Use --quarantine-legacy-state only with --apply after review;
-it renames legacy .powerpacks directories instead of deleting them.
+Default mode applies safe repairs: copy missing/newer managed state into the
+canonical repo, repair accounts.json from local msgvault evidence, adopt an
+authenticated wacli store, and scrub an unauthenticated canonical wacli store so
+the user can reauth cleanly. Use --dry-run to inspect the plan without changes.
+Use --quarantine-legacy-state only after review; it renames legacy .powerpacks
+directories instead of deleting them.
 """
 from __future__ import annotations
 
@@ -543,11 +546,14 @@ def main() -> int:
     parser.add_argument("--config", default=str(CONFIG))
     parser.add_argument("--target", default="", help="Canonical Powerpacks repo root")
     parser.add_argument("--legacy-source", action="append", default=[], help="Additional legacy repo root containing .powerpacks")
-    parser.add_argument("--apply", action="store_true", help="Apply newer-state adoption. Default is dry-run/report only.")
-    parser.add_argument("--backup", action="store_true", help="Backup target files/dirs before overwrite/copy where applicable.")
+    parser.add_argument("--apply", dest="apply", action="store_true", default=True, help="Apply repairs. This is the default.")
+    parser.add_argument("--dry-run", dest="apply", action="store_false", help="Inspect the repair plan without changing files.")
+    parser.add_argument("--backup", action="store_true", default=True, help="Backup target files/dirs before overwrite/copy where applicable. This is the default for replacements.")
+    parser.add_argument("--no-backup", dest="backup", action="store_false", help="Do not create backups before replacement operations.")
     parser.add_argument("--no-repair-accounts", action="store_true", help="Do not repair accounts.json from local msgvault evidence")
     parser.add_argument("--no-repair-wacli", action="store_true", help="Do not copy a better authenticated legacy wacli store into the canonical repo")
-    parser.add_argument("--scrub-bad-wacli", action="store_true", help="When no authenticated wacli store exists, move an unauthenticated canonical store aside so the user can reauth cleanly. Requires --apply.")
+    parser.add_argument("--scrub-bad-wacli", dest="scrub_bad_wacli", action="store_true", default=True, help="Move an unauthenticated canonical wacli store aside when no authenticated store exists. This is the default.")
+    parser.add_argument("--no-scrub-bad-wacli", dest="scrub_bad_wacli", action="store_false", help="Leave an unauthenticated canonical wacli store in place.")
     parser.add_argument("--quarantine-legacy-state", action="store_true", help="Rename legacy .powerpacks dirs after adoption. Requires --apply.")
     parser.add_argument("--json", action="store_true", help="Emit JSON only")
     args = parser.parse_args()
@@ -575,9 +581,6 @@ def main() -> int:
     if wacli_repair.get("action") in {"would_copy", "would_move_stale"}:
         status = "needs_attention"
         issues.append(str(wacli_repair.get("root_cause") or "wacli store can be repaired"))
-    if args.scrub_bad_wacli and not args.apply:
-        status = "needs_attention"
-        issues.append("--scrub-bad-wacli requires --apply; no wacli store was moved")
     checks = linked_source_checks(canonical, config)
     for source, item in (checks.get("sources") or {}).items():
 
@@ -613,7 +616,7 @@ def main() -> int:
     else:
         print(json.dumps(payload, indent=2, sort_keys=True))
         if not args.apply:
-            print("\nDry run only. Re-run with --apply to copy missing/newer managed state.", file=sys.stderr)
+            print("\nDry run only. Re-run without --dry-run to apply repairs.", file=sys.stderr)
     return 0 if status == "ok" else 1
 
 
