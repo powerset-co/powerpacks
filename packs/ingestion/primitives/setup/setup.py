@@ -2132,9 +2132,15 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
         progress(f"Messages step finished with code={code}, status={payload.get('status') or 'unknown'}")
         results['messages'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
         if code in (20, 21) or str(payload.get('status', '')).startswith('blocked'):
+            results['status'] = 'blocked_user_action'
+            results['completed_at'] = now()
+            results['failed_step'] = 'messages'
             return {'status': 'blocked_user_action', 'step': 'messages', 'refresh': results, 'payload': payload}, code or 20
         if code != 0:
-            return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': tail(stderr) or payload}, 1
+            results['status'] = 'failed'
+            results['completed_at'] = now()
+            results['failed_step'] = 'messages'
+            return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': payload or tail(stderr)}, 1
 
     force_network = refresh_reason in force_reasons
     # Leave Gmail mailbox cursoring to import_network_pipeline. That layer can
@@ -2149,9 +2155,15 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
     progress(f"Network import step finished with code={code}, status={payload.get('status') or 'unknown'}")
     results['network'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
     if code == 20 or payload.get('status') == 'blocked_approval':
+        results['status'] = 'blocked_approval'
+        results['completed_at'] = now()
+        results['failed_step'] = 'network_import'
         return {'status': 'blocked_approval', 'step': 'network_import', 'refresh': results, 'payload': payload}, 20
     if code != 0:
-        return {'status': 'failed', 'step': 'network_import', 'refresh': results, 'error': tail(stderr) or payload}, 1
+        results['status'] = 'failed'
+        results['completed_at'] = now()
+        results['failed_step'] = 'network_import'
+        return {'status': 'failed', 'step': 'network_import', 'refresh': results, 'error': payload or tail(stderr)}, 1
 
     promoted = promote_network_artifacts(payload.get('artifacts') or {})
     after_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''

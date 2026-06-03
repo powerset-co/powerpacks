@@ -512,7 +512,16 @@ def require_ok(result: dict[str, Any], step_id: str) -> dict[str, Any]:
     if result["returncode"] != 0:
         stderr = (result.get("stderr") or "").strip()
         stdout = (result.get("stdout") or "").strip()
-        raise PipelineFailed(f"{step_id} failed rc={result['returncode']}: {(stderr or stdout)[-1000:]}")
+        payload = result.get("json") if isinstance(result.get("json"), dict) else {}
+        payload_error = ""
+        if payload:
+            payload_error = str(payload.get("error") or payload.get("message") or payload.get("status") or "")
+            if payload.get("auth_after_failure"):
+                payload_error += f" auth_after_failure={payload.get('auth_after_failure')}"
+            if payload.get("artifacts"):
+                payload_error += f" artifacts={payload.get('artifacts')}"
+        detail = payload_error or stderr or stdout or "no child output captured"
+        raise PipelineFailed(f"{step_id} failed rc={result['returncode']}: {detail[-3000:]}")
     return result.get("json") or {}
 
 
@@ -2475,11 +2484,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     except PipelineBlocked as exc:
         emit(exc.payload)
         return exc.code
-    except (PipelineFailed, subprocess.TimeoutExpired) as exc:
+    except PipelineFailed as exc:
         ledger = load_ledger(Path(args.ledger))
         ledger["last_error"] = str(exc)
+        ledger["status"] = "failed"
         save_ledger(Path(args.ledger), ledger)
         emit({"primitive": "import_contacts_pipeline", "status": "failed", "error": str(exc), "ledger": str(args.ledger)})
+        return 1
+    except subprocess.TimeoutExpired as exc:
+        ledger = load_ledger(Path(args.ledger))
+        stdout = (exc.output or "").decode() if isinstance(exc.output, bytes) else (exc.output or "")
+        stderr = (exc.stderr or "").decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        detail = f"timed out after {exc.timeout}s; stdout={stdout[-1000:]}; stderr={stderr[-1000:]}"
+        ledger["last_error"] = detail
+        ledger["status"] = "failed"
+        save_ledger(Path(args.ledger), ledger)
+        emit({"primitive": "import_contacts_pipeline", "status": "failed", "error": detail, "ledger": str(args.ledger)})
         return 1
 
 
