@@ -1258,10 +1258,12 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
   const bootstrapRecordCount = Number(status.index.bootstrapRecords?.nonemptyRecordFiles || 0);
   const localRecordsMode = String(estimate.status || "") === "local_records_restore" || (bootstrapRecordCount > 0 && !status.index.duckdbTables?.length);
   const duckdbRepaired = status.index.duckdbRepair?.status === "ok";
-  const requiresProviderSpend = !localRecordsMode && (paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0);
+  const hasProviderEstimate = paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0;
+  const requiresProviderSpend = !localRecordsMode && hasProviderEstimate;
   const updateAvailable = ["needs_processing", "people_csv_ready_for_processing"].includes(String(readiness || "").toLowerCase())
-    || status.index.reason === "search_index_stale_for_people_csv";
-  const showProviderEstimate = updateAvailable && !localRecordsMode;
+    || status.index.reason === "search_index_stale_for_people_csv"
+    || hasProviderEstimate;
+  const showProviderEstimate = hasProviderEstimate && !localRecordsMode;
 
   return (
     <div className="space-y-4">
@@ -1272,7 +1274,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               <h3 className="text-base font-semibold">Local search index</h3>
               <Badge variant={updateAvailable ? "secondary" : phaseTone(readiness)}>{indexLabel(readiness)}</Badge>
               <MetricChip label="Total people" value={status.index.peopleRecords || 0} />
-              <MetricChip label="Bootstrap records" value={bootstrapRecordCount || null} />
+              <MetricChip label="Bootstrap record files" value={bootstrapRecordCount || null} />
               {showProviderEstimate && <MetricChip label="Cost" value={cost || "$0.00"} />}
               {showProviderEstimate && <MetricChip label="Paid calls" value={paidCalls} />}
               <MetricChip label="DuckDB" value={formatBytes(status.index.duckdbSizeBytes)} />
@@ -1283,7 +1285,11 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               </div>
             ) : duckdbRepaired ? (
               <div className="text-sm text-muted-foreground">
-                Built local DuckDB tables from bootstrap records. No provider calls were needed.
+                Built local DuckDB tables from bootstrap records. A full rebuild from the current people.csv would use the estimate below.
+              </div>
+            ) : showProviderEstimate ? (
+              <div className="text-sm text-muted-foreground">
+                Full processing dry-run found provider work for the current people.csv. Review the estimate before rebuilding.
               </div>
             ) : updateAvailable ? (
               <div className="text-sm text-muted-foreground">
@@ -1327,7 +1333,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                 )}
               </div>
               <div className="overflow-hidden rounded-md border">
-                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Next update</div>
+                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Full processing dry-run</div>
                 {localRecordsMode ? (
                   <div className="grid gap-3 p-3 sm:grid-cols-2">
                     <KeyValue label="Action" value="Build DuckDB from bootstrap records" />
@@ -1345,7 +1351,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                     <KeyValue label="Company chunks" value={Number(counts.company_chunks || 0).toLocaleString()} />
                   </div>
                 ) : (
-                  <div className="px-3 py-4 text-sm text-muted-foreground">No provider processing queued.</div>
+                  <div className="px-3 py-4 text-sm text-muted-foreground">No provider processing work detected by dry-run.</div>
                 )}
               </div>
             </div>
