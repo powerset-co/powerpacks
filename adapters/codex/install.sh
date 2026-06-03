@@ -29,10 +29,15 @@ install_powerpacks_bundle() {
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$tmp/packs"
   # The setup product path launches the local Powerpacks Console from the
-  # installed bundle, so users can run $setup from any Codex cwd.
+  # installed bundle, so users can run $setup from any Codex cwd. Keep setup
+  # sidecars here too: setup/index runs from this installed bundle and expects
+  # scripts/build-local-duckdb-shim.py to materialize restored bootstrap records
+  # into .powerpacks/search-index/local-search.duckdb.
   mkdir -p "$tmp/scripts"
-  cp "$REPO_ROOT/scripts/run-powerpacks-console.sh" "$tmp/scripts/run-powerpacks-console.sh"
-  chmod +x "$tmp/scripts/run-powerpacks-console.sh"
+  for script in run-powerpacks-console.sh build-local-duckdb-shim.py; do
+    cp "$REPO_ROOT/scripts/$script" "$tmp/scripts/$script"
+    chmod +x "$tmp/scripts/$script"
+  done
   mkdir -p "$tmp/app"
   for file in README.md components.json index.html package-lock.json package.json postcss.config.js tailwind.config.ts tsconfig.app.json tsconfig.json tsconfig.node.json vite.config.ts; do
     if [[ -f "$REPO_ROOT/app/$file" ]]; then
