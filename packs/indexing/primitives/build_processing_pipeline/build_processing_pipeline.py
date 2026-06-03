@@ -445,6 +445,9 @@ def default_ledger(
     default_operator_id: str | None = None,
     limit: int | None = None,
     *,
+    limit_mode: str = "all",
+    existing_people_csv: str | None = None,
+    existing_duckdb: str | None = None,
     checkpoint_every: int = 1000,
     role_provider: str = "openai",
     allow_paid_role_provider: bool = False,
@@ -479,6 +482,9 @@ def default_ledger(
         "input_sha256": sha256_file(input_path) if input_path.exists() else "",
         "default_operator_id": default_operator_id,
         "limit": limit,
+        "limit_mode": limit_mode,
+        "existing_people_csv": existing_people_csv,
+        "existing_duckdb": existing_duckdb,
         "checkpoint_every": checkpoint_every,
         "role_provider": role_provider,
         "allow_paid_role_provider": allow_paid_role_provider,
@@ -508,12 +514,106 @@ def default_ledger(
     }
 
 
+def normalize_linkedin_url(value: Any) -> str:
+    text = str(value or "").strip().lower().split("?")[0].rstrip("/")
+    if text.startswith("http://"):
+        text = "https://" + text[len("http://"):]
+    return text
+
+
+def public_identifier_from_url(value: Any) -> str:
+    text = normalize_linkedin_url(value)
+    marker = "linkedin.com/in/"
+    if marker in text:
+        return text.split(marker, 1)[1].split("/", 1)[0].strip().lower()
+    return ""
+
+
+def person_keys(row: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for field in ["id", "person_id", "base_id"]:
+        value = str(row.get(field) or "").strip().lower()
+        if value:
+            keys.add(f"id:{value}")
+    url = normalize_linkedin_url(row.get("linkedin_url"))
+    if url:
+        keys.add(f"linkedin_url:{url}")
+    public_id = str(row.get("public_identifier") or "").strip().lower() or public_identifier_from_url(url)
+    if public_id:
+        keys.add(f"public_identifier:{public_id}")
+    return keys
+
+
+def existing_keys_from_csv(path_text: str | None) -> set[str]:
+    if not path_text:
+        return set()
+    path = Path(path_text)
+    if not path.exists():
+        return set()
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        return {key for row in csv.DictReader(handle) for key in person_keys(row)}
+
+
+def existing_keys_from_duckdb(path_text: str | None) -> set[str]:
+    if not path_text:
+        return set()
+    path = Path(path_text)
+    if not path.exists():
+        return set()
+    try:
+        import duckdb  # type: ignore
+    except ModuleNotFoundError:
+        return set()
+    keys: set[str] = set()
+    with duckdb.connect(str(path), read_only=True) as con:
+        tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
+        table = "local_person_profiles" if "local_person_profiles" in tables else "local_people_profiles" if "local_people_profiles" in tables else ""
+        if table:
+            columns = {str(row[1]) for row in con.execute(f"pragma table_info({table})").fetchall()}
+            wanted = [field for field in ["id", "person_id", "base_id", "linkedin_url", "public_identifier"] if field in columns]
+            if wanted:
+                selected = ", ".join(wanted)
+                for values in con.execute(f"select {selected} from {table}").fetchall():
+                    keys.update(person_keys(dict(zip(wanted, values))))
+    return keys
+
+
+def select_people_for_run(people: list[dict[str, Any]], ledger_or_args: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    original_count = len(people)
+    mode = str(getattr(ledger_or_args, "limit_mode", None) or (ledger_or_args.get("limit_mode") if isinstance(ledger_or_args, dict) else None) or "all")
+    existing_csv = getattr(ledger_or_args, "existing_people_csv", None) if not isinstance(ledger_or_args, dict) else ledger_or_args.get("existing_people_csv")
+    existing_duckdb = getattr(ledger_or_args, "existing_duckdb", None) if not isinstance(ledger_or_args, dict) else ledger_or_args.get("existing_duckdb")
+    limit = getattr(ledger_or_args, "limit", None) if not isinstance(ledger_or_args, dict) else ledger_or_args.get("limit")
+    missing_basis: dict[str, Any] = {"mode": mode, "input_people": original_count}
+    if mode == "missing":
+        existing_keys = set()
+        csv_keys = existing_keys_from_csv(str(existing_csv)) if existing_csv else set()
+        duckdb_keys = existing_keys_from_duckdb(str(existing_duckdb)) if existing_duckdb else set()
+        existing_keys.update(csv_keys)
+        existing_keys.update(duckdb_keys)
+        filtered = [person for person in people if person_keys(person).isdisjoint(existing_keys)]
+        missing_basis.update({
+            "existing_people_csv": str(existing_csv or ""),
+            "existing_duckdb": str(existing_duckdb or ""),
+            "existing_keys": len(existing_keys),
+            "existing_csv_keys": len(csv_keys),
+            "existing_duckdb_keys": len(duckdb_keys),
+            "missing_people": len(filtered),
+            "reused_or_existing_people": original_count - len(filtered),
+        })
+        people = filtered
+    if limit is not None:
+        people = people[: int(limit)]
+    missing_basis["selected_people"] = len(people)
+    missing_basis["limit"] = limit
+    return people, missing_basis
+
+
 def step_flatten(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     people = flatten_people(ledger["input"])
-    if ledger.get("limit") is not None:
-        people = people[: int(ledger["limit"])]
+    people, selection = select_people_for_run(people, ledger)
     write_jsonl(ps["flattened"], people)
-    stats = {"people": len(people)}
+    stats = {"people": len(people), "selection": selection}
     write_stats(ledger, "flatten_people", stats)
     return {"flattened_people": str(ps["flattened"])}, stats
 
@@ -1403,8 +1503,7 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
     if not input_path.exists():
         raise SystemExit(f"missing input: {input_path}")
     people = flatten_people(input_path)
-    if getattr(args, "limit", None) is not None:
-        people = people[: int(args.limit)]
+    people, selection = select_people_for_run(people, args)
     role_hashes: set[str] = set()
     missing_title_hashes = 0
     for person in people:
@@ -1442,6 +1541,7 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
             "company_chunks": (len(companies) + checkpoint_every - 1) // checkpoint_every,
             "summary_embedding_chunks": (len(people) + checkpoint_every - 1) // checkpoint_every,
         },
+        "selection": selection,
         "providers": {
             "roles": stages.get("role_enrichment", {}).get("provider") or ("precomputed_artifact" if role_input else getattr(args, "role_provider", "openai")),
             "embeddings": getattr(args, "embedding_provider", "openai"),
@@ -1473,6 +1573,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output-dir", required=True)
     run.add_argument("--default-operator-id", default=None)
     run.add_argument("--limit", type=int)
+    run.add_argument("--limit-mode", choices=["all", "missing"], default="all", help="Apply --limit to all input people or only people missing from an existing index/baseline.")
+    run.add_argument("--existing-people-csv", help="Baseline people.csv used by --limit-mode missing to identify already-processed people.")
+    run.add_argument("--existing-duckdb", help="Local DuckDB with local_person_profiles/local_people_profiles used by --limit-mode missing.")
     run.add_argument("--checkpoint-every", type=int, default=1000)
     run.add_argument("--role-provider", choices=["openai", "tlm"], default="openai")
     run.add_argument("--allow-paid-role-provider", action="store_true")
@@ -1552,6 +1655,9 @@ def main() -> None:
             rd,
             args.default_operator_id,
             args.limit,
+            limit_mode=args.limit_mode,
+            existing_people_csv=args.existing_people_csv,
+            existing_duckdb=args.existing_duckdb,
             checkpoint_every=args.checkpoint_every,
             role_provider=args.role_provider,
             allow_paid_role_provider=args.allow_paid_role_provider,
