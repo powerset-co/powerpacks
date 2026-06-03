@@ -26,6 +26,43 @@ from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 DEFAULT_ENV_FILE = Path(os.getenv("POWERPACKS_ENV_FILE", ".env"))
 DEFAULT_LOCAL_BATCH_SIZE = 1000
 DEFAULT_LOCAL_WORKERS = min(8, max(1, os.cpu_count() or 1))
+LOCAL_PROFILE_HYDRATE_COLUMNS = [
+    "id",
+    "person_id",
+    "base_id",
+    "public_identifier",
+    "linkedin_url",
+    "public_profile_url",
+    "first_name",
+    "last_name",
+    "full_name",
+    "headline",
+    "summary",
+    "city",
+    "state",
+    "country",
+    "location_raw",
+    "profile_picture_url",
+    "current_title",
+    "current_company",
+    "current_company_urn",
+    "primary_email",
+    "all_emails",
+    "primary_phone",
+    "all_phones",
+    "source_channels",
+    "source_artifacts",
+    "twitter_handle",
+    "x_twitter_handle",
+    "x_twitter_followers",
+    "linkedin_followers",
+    "linkedin_connections",
+    "ig_followers",
+    "inferred_birth_year",
+    "work_experiences",
+    "education",
+    "hydrated_context",
+]
 LOCAL_POSITION_HYDRATE_COLUMNS = [
     "id",
     "position_id",
@@ -381,12 +418,44 @@ def first_present(rows: list[dict[str, Any]], field: str) -> Any:
     return None
 
 
+def _list_value(value: Any) -> list[Any]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 def build_local_person_rows(
     person_ids: list[str],
+    profile_rows: list[dict[str, Any]],
     position_rows: list[dict[str, Any]],
     summary_rows: list[dict[str, Any]],
     education_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    profiles_by_person = {
+        str(row.get("person_id") or row.get("base_id") or row.get("id")): row
+        for row in profile_rows
+        if row.get("person_id") or row.get("base_id") or row.get("id")
+    }
     positions_by_person: dict[str, list[dict[str, Any]]] = {}
     for row in position_rows:
         pid = str(row.get("person_id") or row.get("base_id") or "")
@@ -408,46 +477,58 @@ def build_local_person_rows(
 
     rows: list[dict[str, Any]] = []
     for pid in person_ids:
+        profile = profiles_by_person.get(pid, {})
         position_source = positions_by_person.get(pid, [])
         summary = summaries_by_person.get(pid, {})
         education_source = education_by_person.get(pid, [])
-        if not position_source and not summary and not education_source:
+        profile_context = _dict_value(profile.get("hydrated_context"))
+        if not position_source and not summary and not education_source and not profile:
             continue
 
         positions = [local_position(row) for row in position_source]
+        if not positions:
+            positions = _list_value(profile.get("work_experiences")) or _list_value(profile_context.get("positions"))
         education = [local_education(row) for row in education_source]
+        if not education:
+            education = _list_value(profile.get("education")) or _list_value(profile_context.get("education"))
         current = next((row for row in position_source if row.get("is_current")), position_source[0] if position_source else {})
-        title = current.get("position_title") or current.get("raw_title")
-        company = current.get("company_name")
-        headline = " at ".join(str(part) for part in [title, company] if part) or title
-        location = compact_location(current) if current else None
-        years = first_present(position_source, "total_years_experience")
+        title = profile.get("current_title") or current.get("position_title") or current.get("raw_title")
+        company = profile.get("current_company") or current.get("company_name")
+        headline = profile.get("headline") or " at ".join(str(part) for part in [title, company] if part) or title
+        location = profile.get("location_raw") or profile_context.get("location") or (compact_location(current) if current else None)
+        years = first_present(position_source, "total_years_experience") or profile_context.get("years_of_experience")
 
         context = {
             "person_id": pid,
-            "name": "",
+            "name": profile.get("full_name") or profile_context.get("name") or "",
             "headline": headline,
+            "summary": profile.get("summary") or summary.get("summary") or profile_context.get("summary"),
             "location": location,
+            "linkedin_url": profile.get("linkedin_url") or profile.get("public_profile_url") or profile_context.get("linkedin_url"),
+            "profile_picture_url": profile.get("profile_picture_url") or profile_context.get("profile_picture_url"),
             "positions": positions,
             "education": education,
-            "tech_skills": summary.get("tech_skills") or [],
+            "tech_skills": summary.get("tech_skills") or profile_context.get("tech_skills") or [],
             "years_of_experience": years,
         }
         rows.append({
             "id": pid,
-            "full_name": "",
+            "full_name": profile.get("full_name") or profile_context.get("name") or "",
             "headline": headline,
-            "summary": summary.get("summary"),
+            "summary": profile.get("summary") or summary.get("summary") or profile_context.get("summary"),
             "location_raw": location,
-            "city": current.get("city") if current else None,
-            "state": current.get("state") if current else None,
-            "country": current.get("country") if current else None,
+            "city": profile.get("city") or current.get("city") if current else profile.get("city"),
+            "state": profile.get("state") or current.get("state") if current else profile.get("state"),
+            "country": profile.get("country") or current.get("country") if current else profile.get("country"),
+            "public_profile_url": profile.get("public_profile_url") or profile.get("linkedin_url") or profile_context.get("linkedin_url"),
+            "profile_picture_url": profile.get("profile_picture_url") or profile_context.get("profile_picture_url"),
             "hydrated_context": context,
-            "x_twitter_followers": first_present(position_source, "x_twitter_followers"),
-            "linkedin_followers": first_present(position_source, "linkedin_followers"),
-            "linkedin_connections": first_present(position_source, "linkedin_connections"),
-            "ig_followers": first_present(position_source, "ig_followers"),
-            "inferred_birth_year": first_present(position_source, "inferred_birth_year"),
+            "x_twitter_handle": profile.get("x_twitter_handle") or profile.get("twitter_handle"),
+            "x_twitter_followers": profile.get("x_twitter_followers") or first_present(position_source, "x_twitter_followers"),
+            "linkedin_followers": profile.get("linkedin_followers") or first_present(position_source, "linkedin_followers"),
+            "linkedin_connections": profile.get("linkedin_connections") or first_present(position_source, "linkedin_connections"),
+            "ig_followers": profile.get("ig_followers") or first_present(position_source, "ig_followers"),
+            "inferred_birth_year": profile.get("inferred_birth_year") or first_present(position_source, "inferred_birth_year"),
         })
     return rows
 
@@ -457,10 +538,12 @@ def fetch_local_person_batch(db_path: str, person_ids: list[str]) -> list[dict[s
 
     with duckdb.connect(str(db_path), read_only=True) as conn:
         prepare_requested_ids(conn, person_ids)
+        profile_table = "local_person_profiles" if table_exists(conn, "local_person_profiles") else "local_people_profiles" if table_exists(conn, "local_people_profiles") else ""
+        profile_rows = local_rows(conn, profile_table, select_columns=LOCAL_PROFILE_HYDRATE_COLUMNS) if profile_table else []
         position_rows = local_rows(conn, "local_people_positions", select_columns=LOCAL_POSITION_HYDRATE_COLUMNS)
         summary_rows = local_rows(conn, "local_summaries", select_columns=LOCAL_SUMMARY_HYDRATE_COLUMNS)
         education_rows = local_rows(conn, "local_people_education", select_columns=LOCAL_EDUCATION_HYDRATE_COLUMNS)
-    return build_local_person_rows(person_ids, position_rows, summary_rows, education_rows)
+    return build_local_person_rows(person_ids, profile_rows, position_rows, summary_rows, education_rows)
 
 
 def chunked(values: list[str], size: int) -> list[list[str]]:

@@ -1186,3 +1186,58 @@ class LocalFilterEvalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LocalPersonProfilesShimTest(unittest.TestCase):
+    def test_shim_creates_person_profiles_and_hydrates_profile_only_person(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            records = tmp / "records"
+            write_jsonl(records / "people.records.jsonl", [
+                {
+                    "id": "role-1",
+                    "position_id": "role-1",
+                    "person_id": "person-with-role",
+                    "base_id": "person-with-role",
+                    "vector": [0.0, 1.0],
+                    "position_title": "Engineer",
+                    "company_name": "RoleCo",
+                    "allowed_operator_ids": ["op-test"],
+                }
+            ])
+            write_jsonl(records / "summaries.records.jsonl", [])
+            write_jsonl(records / "education.records.jsonl", [])
+            write_jsonl(records / "schools.records.jsonl", [])
+            write_jsonl(records / "companies.records.jsonl", [])
+            people_csv = tmp / "people.csv"
+            people_csv.write_text(
+                "id,linkedin_url,full_name,headline,summary,city,state,country,work_experiences,education,source_channels\n"
+                "person-with-role,https://www.linkedin.com/in/with-role,With Role,Engineer,Builds things,San Francisco,CA,US,[],[],linkedin_csv\n"
+                "person-profile-only,https://www.linkedin.com/in/profile-only,Profile Only,Founder,Builds startups,New York,NY,US,\"[{\"\"title\"\": \"\"Founder\"\", \"\"company\"\": \"\"OnlyCo\"\"}]\",[],gmail_msgvault\n",
+                encoding="utf-8",
+            )
+
+            payload = run_shim_json(
+                "--records-dir", str(records),
+                "--person-profiles-csv", str(people_csv),
+                "--output-dir", str(tmp / "search-index"),
+                "--operator-id", "op-test",
+                "--force",
+            )
+            self.assertEqual(payload["tables"]["local_person_profiles"], 2)
+            self.assertEqual(payload["tables"]["local_people_positions"], 1)
+
+            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
+            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
+            try:
+                rows = hydrate_people.fetch_local_person_rows(["person-profile-only"], workers=1, batch_size=1)
+            finally:
+                if old_db is None:
+                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
+                else:
+                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["full_name"], "Profile Only")
+            self.assertEqual(rows[0]["location_raw"], "New York, NY, US")
+            self.assertEqual(rows[0]["public_profile_url"], "https://www.linkedin.com/in/profile-only")
+            self.assertEqual(rows[0]["hydrated_context"]["positions"][0]["title"], "Founder")

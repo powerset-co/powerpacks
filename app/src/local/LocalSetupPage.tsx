@@ -433,6 +433,7 @@ function money(value?: number | null): string {
 
 function duckdbTableLabel(name: string): string {
   const labels: Record<string, string> = {
+    local_person_profiles: "Person profiles",
     local_people_positions: "Role / position vectors",
     local_summaries: "Person summary vectors",
     local_people_education: "Person education rows",

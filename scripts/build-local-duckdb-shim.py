@@ -53,12 +53,51 @@ LOCAL_TABLES = {
     "local_education": "records/schools.records.jsonl",
     "local_companies": "records/companies.records.jsonl",
 }
+PERSON_PROFILE_RECORD = "records/person_profiles.records.jsonl"
 
 # Local DuckDB contract for the five search namespaces.  These columns mirror
 # the Aleph TurboPuffer upload contracts copied under .powerpacks/aleph-seed:
 # people/summaries/companies carry embeddings; education/schools are lookup and
 # prefilter tables and intentionally do not require vectors in Aleph.
 LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
+    "local_person_profiles": {
+        "id": "VARCHAR",
+        "person_id": "VARCHAR",
+        "base_id": "VARCHAR",
+        "public_identifier": "VARCHAR",
+        "linkedin_url": "VARCHAR",
+        "public_profile_url": "VARCHAR",
+        "first_name": "VARCHAR",
+        "last_name": "VARCHAR",
+        "full_name": "VARCHAR",
+        "headline": "VARCHAR",
+        "summary": "VARCHAR",
+        "city": "VARCHAR",
+        "state": "VARCHAR",
+        "country": "VARCHAR",
+        "location_raw": "VARCHAR",
+        "profile_picture_url": "VARCHAR",
+        "current_title": "VARCHAR",
+        "current_company": "VARCHAR",
+        "current_company_urn": "VARCHAR",
+        "primary_email": "VARCHAR",
+        "all_emails": "VARCHAR[]",
+        "primary_phone": "VARCHAR",
+        "all_phones": "VARCHAR[]",
+        "source_channels": "VARCHAR[]",
+        "source_artifacts": "VARCHAR[]",
+        "twitter_handle": "VARCHAR",
+        "x_twitter_handle": "VARCHAR",
+        "x_twitter_followers": "BIGINT",
+        "linkedin_followers": "BIGINT",
+        "linkedin_connections": "BIGINT",
+        "ig_followers": "BIGINT",
+        "inferred_birth_year": "BIGINT",
+        "work_experiences": "JSON",
+        "education": "JSON",
+        "hydrated_context": "JSON",
+        "allowed_operator_ids": "VARCHAR[]",
+    },
     "local_people_positions": {
         "id": "VARCHAR",
         "position_id": "VARCHAR",
@@ -531,6 +570,123 @@ def add_missing_columns(con: Any, table: str, columns: dict[str, str]) -> None:
             con.execute(f"ALTER TABLE {qident(table)} ADD COLUMN {qident(name)} {type_name}")
 
 
+def _json_value(value: Any, default: Any) -> Any:
+    if value in (None, ""):
+        return default
+    if isinstance(value, (list, dict)):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if parsed is not None else default
+        except json.JSONDecodeError:
+            return default
+    return default
+
+
+def _string_list(value: Any) -> list[str]:
+    parsed = _json_value(value, None)
+    if isinstance(parsed, list):
+        return [str(item) for item in parsed if str(item or "").strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.replace(";", ",").split(",") if part.strip()]
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        parsed = _int_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def materialize_person_profiles_from_csv(source: Path, run_dir: Path, operator_id: str) -> Path | None:
+    if not source.exists():
+        return None
+    out = run_dir / PERSON_PROFILE_RECORD
+    out.parent.mkdir(parents=True, exist_ok=True)
+    def rows():
+        with source.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+            for row in csv.DictReader(handle):
+                pid = str(row.get("id") or row.get("person_id") or row.get("base_id") or "").strip()
+                if not pid:
+                    continue
+                work = _json_value(row.get("work_experiences"), [])
+                edu = _json_value(row.get("education"), [])
+                rapid = _json_value(row.get("rapidapi_response"), {})
+                twitter = _json_value(row.get("twitter_response"), {})
+                if not isinstance(rapid, dict):
+                    rapid = {}
+                if not isinstance(twitter, dict):
+                    twitter = {}
+                linkedin_url = row.get("linkedin_url") or rapid.get("url") or rapid.get("linkedinUrl") or ""
+                location = row.get("location_raw") or ", ".join(str(row.get(k) or "") for k in ["city", "state", "country"] if row.get(k))
+                full_name = row.get("full_name") or " ".join(part for part in [row.get("first_name"), row.get("last_name")] if part)
+                context = {
+                    "person_id": pid,
+                    "name": full_name,
+                    "headline": row.get("headline") or rapid.get("headline") or "",
+                    "summary": row.get("summary") or rapid.get("summary") or "",
+                    "location": location or None,
+                    "linkedin_url": linkedin_url,
+                    "profile_picture_url": row.get("profile_picture_url") or rapid.get("profilePicture") or "",
+                    "positions": work if isinstance(work, list) else [],
+                    "education": edu if isinstance(edu, list) else [],
+                    "tech_skills": _string_list(rapid.get("skills")),
+                }
+                yield {
+                    "id": pid,
+                    "person_id": pid,
+                    "base_id": str(row.get("base_id") or pid),
+                    "public_identifier": row.get("public_identifier") or rapid.get("username") or "",
+                    "linkedin_url": linkedin_url,
+                    "public_profile_url": linkedin_url,
+                    "first_name": row.get("first_name") or rapid.get("firstName") or "",
+                    "last_name": row.get("last_name") or rapid.get("lastName") or "",
+                    "full_name": full_name,
+                    "headline": row.get("headline") or rapid.get("headline") or "",
+                    "summary": row.get("summary") or rapid.get("summary") or "",
+                    "city": row.get("city") or "",
+                    "state": row.get("state") or "",
+                    "country": row.get("country") or "",
+                    "location_raw": row.get("location_raw") or location or "",
+                    "profile_picture_url": row.get("profile_picture_url") or rapid.get("profilePicture") or "",
+                    "current_title": row.get("current_title") or "",
+                    "current_company": row.get("current_company") or "",
+                    "current_company_urn": row.get("current_company_urn") or "",
+                    "primary_email": row.get("primary_email") or "",
+                    "all_emails": _string_list(row.get("all_emails")),
+                    "primary_phone": row.get("primary_phone") or "",
+                    "all_phones": _string_list(row.get("all_phones")),
+                    "source_channels": _string_list(row.get("source_channels")),
+                    "source_artifacts": _string_list(row.get("source_artifacts")),
+                    "twitter_handle": row.get("twitter_handle") or twitter.get("username") or "",
+                    "x_twitter_handle": row.get("twitter_handle") or twitter.get("username") or "",
+                    "x_twitter_followers": _first_int(row.get("x_twitter_followers"), twitter.get("followers"), twitter.get("followers_count")),
+                    "linkedin_followers": _first_int(row.get("linkedin_followers"), rapid.get("followers"), rapid.get("followerCount")),
+                    "linkedin_connections": _first_int(row.get("linkedin_connections"), rapid.get("connections"), rapid.get("connectionCount")),
+                    "ig_followers": _int_or_none(row.get("ig_followers")),
+                    "inferred_birth_year": _int_or_none(row.get("inferred_birth_year")),
+                    "work_experiences": work if isinstance(work, list) else [],
+                    "education": edu if isinstance(edu, list) else [],
+                    "hydrated_context": context,
+                    "allowed_operator_ids": [operator_id],
+                }
+    write_jsonl(out, rows())
+    return out
+
+
 def load_jsonl_table(con: Any, table: str, path: Path) -> int:
     con.execute(f"DROP TABLE IF EXISTS {qident(table)}")
     if has_records(path):
@@ -617,7 +773,7 @@ def resolve_artifact_path(run_dir: Path, rel: str) -> Path:
     return run_dir / rel
 
 
-def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False) -> tuple[Path, dict[str, int]]:
+def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_profiles_csv: Path | None = None) -> tuple[Path, dict[str, int]]:
     try:
         import duckdb  # type: ignore
     except ModuleNotFoundError as exc:
@@ -633,6 +789,11 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False) -> tupl
     con = duckdb.connect(str(db_path))
     counts: dict[str, int] = {}
     try:
+        if person_profiles_csv:
+            profile_record = materialize_person_profiles_from_csv(person_profiles_csv, run_dir, operator_id)
+            if profile_record:
+                counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", profile_record)
+                postprocess_table(con, "local_person_profiles", operator_id)
         for table, rel in LOCAL_TABLES.items():
             path = resolve_artifact_path(run_dir, rel)
             counts[table] = load_jsonl_table(con, table, path)
@@ -695,6 +856,7 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table
         "source": source_value,
         "records_dir": str(Path(args.records_dir)) if args.records_dir else None,
         "aleph_output_dir": str(Path(args.aleph_output_dir)) if args.aleph_output_dir else None,
+        "person_profiles_csv": getattr(args, "_resolved_person_profiles_csv", None),
         "run_dir": str(run_dir),
         "duckdb": str(db_path),
         "powerpacks_local_search_db": str(db_path),
@@ -710,6 +872,7 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=str(DEFAULT_SOURCE), help="Input people CSV; defaults to people_harmonic_all.csv")
+    parser.add_argument("--person-profiles-csv", help="One-row-per-person CSV used to populate local_person_profiles; defaults to --source, then .powerpacks/network-import/merged/people.csv when present")
     parser.add_argument("--records-dir", help="Existing normal pipeline run root or records/ directory containing *.records.jsonl; skips people.csv pipeline build")
     parser.add_argument("--aleph-output-dir", help="Copied Aleph pipeline_output directory; converts Aleph upload artifacts to local records without API calls")
     parser.add_argument("--operator-id", default=DEFAULT_OPERATOR_ID)
@@ -750,7 +913,17 @@ def main() -> None:
         build_pipeline(args, run_dir)
     if not run_dir.exists():
         raise SystemExit(f"missing run dir after pipeline/artifact materialization: {run_dir}")
-    db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force)
+    person_profiles_csv = Path(args.person_profiles_csv) if args.person_profiles_csv else None
+    if person_profiles_csv and not person_profiles_csv.is_absolute():
+        person_profiles_csv = ROOT / person_profiles_csv
+    if not person_profiles_csv:
+        source_candidate = Path(args.source)
+        if not source_candidate.is_absolute():
+            source_candidate = ROOT / source_candidate
+        merged_candidate = ROOT / ".powerpacks/network-import/merged/people.csv"
+        person_profiles_csv = source_candidate if source_candidate.exists() else merged_candidate if merged_candidate.exists() else None
+    args._resolved_person_profiles_csv = str(person_profiles_csv) if person_profiles_csv else None
+    db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force, person_profiles_csv=person_profiles_csv)
     manifest_path = write_manifest(run_dir, args, db_path, table_counts)
     emit({
         "status": "ok",
