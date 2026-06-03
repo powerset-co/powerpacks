@@ -1366,9 +1366,14 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               </div>
             </div>
           </div>
-          <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
-            <Play className="h-4 w-4" /> {localRecordsMode ? "Build DuckDB" : requiresProviderSpend ? "Approve & Update" : "Process"}
-          </ActionButton>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <ActionButton action="index-canary" actionState={actionState} variant="outline" onClick={() => onRun({ action: "index-canary" })}>
+              <Play className="h-4 w-4" /> Process 1-person canary
+            </ActionButton>
+            <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
+              <Play className="h-4 w-4" /> {localRecordsMode ? "Build DuckDB" : requiresProviderSpend ? "Approve & Update" : "Process"}
+            </ActionButton>
+          </div>
         </div>
       </section>
     </div>

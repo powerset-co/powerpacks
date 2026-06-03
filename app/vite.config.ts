@@ -1513,6 +1513,24 @@ function maybeBuildLocalDuckdbFromBootstrapRecords(operatorId: string, duckdbPat
   };
 }
 
+function indexCanaryCommand(operatorId: string): string[] {
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py",
+    "run",
+    "--input", ".powerpacks/network-import/merged/people.csv",
+    "--output-dir", ".powerpacks/search-index-canary-1",
+    "--default-operator-id", operatorId,
+    "--limit", "1",
+    "--limit-mode", "missing",
+    "--existing-duckdb", ".powerpacks/search-index/local-search.duckdb",
+    "--allow-paid-role-provider",
+    "--allow-paid-embeddings",
+    "--allow-paid-company-provider",
+    "--force",
+  ];
+}
+
 function indexDryRunEstimate(operatorId: string, peopleSha256: string): Record<string, any> {
   const peopleCsv = path.join(powerpacksStateRoot, "network-import", "merged", "people.csv");
   if (!fs.existsSync(peopleCsv)) return {};
@@ -1842,6 +1860,10 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   if (action === "index") {
     const extra = body.approveProviderSpend === true ? ["--approve-provider-spend"] : [];
     return startSetupJob(action, setupCommandArgs(operator.id, "index", extra));
+  }
+
+  if (action === "index-canary") {
+    return startSetupJob(action, indexCanaryCommand(operator.id), 2 * 60 * 60 * 1000);
   }
 
   if (["bootstrap", "link", "run"].includes(action)) {
