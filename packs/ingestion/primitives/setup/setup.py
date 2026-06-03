@@ -1725,6 +1725,36 @@ def run_fan_in_phase(args: argparse.Namespace) -> int:
 def run_index_phase(args: argparse.Namespace) -> int:
     ledger_path = Path(args.setup_ledger)
     ledger = load_setup_ledger(ledger_path)
+    process_started_at = now()
+    process_run_id = f"setup-process-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    process_code, process_payload, process_stderr = run_json_command(network_fan_in_command(args, process_run_id, force=True, merge_only=True))
+    if process_code == 20 or process_payload.get('status') == 'blocked_approval':
+        emit({'status': 'blocked_approval', 'phase': 'process', 'payload': process_payload, 'stderr': tail(process_stderr)})
+        return 20
+    if process_code != 0:
+        emit({'status': 'failed', 'phase': 'process', 'payload': process_payload, 'stderr': tail(process_stderr)})
+        return 1
+    promoted = promote_network_artifacts(process_payload.get('artifacts') or {})
+    ledger = load_setup_ledger(ledger_path)
+    ledger.setdefault('phases', {})['process'] = {
+        'status': 'completed',
+        'source': 'index_phase',
+        'started_at': process_started_at,
+        'completed_at': now(),
+        'run_id': process_payload.get('run_id') or process_run_id,
+        'ledger': str(SETUP_REFRESH_LEDGER),
+        'people_csv': '.powerpacks/network-import/merged/people.csv',
+        'promoted': promoted,
+        'artifact_hashes': artifact_hashes(promoted),
+    }
+    ledger.setdefault('phases', {})['import'] = {
+        **(ledger.get('phases', {}).get('import') or {}),
+        'status': 'ready',
+        'source': 'process',
+        'people_csv': '.powerpacks/network-import/merged/people.csv',
+    }
+    ledger['status'] = 'ready'
+    save_setup_ledger(ledger, ledger_path)
     index_payload, index_code = run_processing_index(args, ledger, ledger_path)
     status_args = argparse.Namespace(
         operator_id=args.operator_id,
@@ -1903,7 +1933,7 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
     return cmd
 
 
-def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool) -> list[str]:
+def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool, merge_only: bool = False) -> list[str]:
     cmd = [
         sys.executable,
         'packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py',
@@ -1921,6 +1951,8 @@ def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool
     ]
     if force:
         cmd.append('--force')
+    if merge_only or bool(getattr(args, 'merge_only', False)):
+        cmd.append('--merge-only')
     for source in getattr(args, 'only_source', []) or []:
         cmd.extend(['--only-source', source])
     if bool(getattr(args, 'resolve_gmail_linkedin', False)):
@@ -1981,16 +2013,39 @@ def matching_bootstrap_bundle(operator_id: str) -> Path | None:
     return None
 
 
+def sync_latest_bootstrap_bundle(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    if getattr(args, 'bootstrap_bundle', ''):
+        return {'status': 'skipped', 'reason': 'explicit_bootstrap_bundle'}, 0
+    if getattr(args, 'skip_bootstrap_sync', False):
+        return {'status': 'skipped', 'reason': 'skip_bootstrap_sync'}, 0
+    cmd = [
+        sys.executable,
+        'packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py',
+        'sync',
+        '--operator-id', args.operator_id,
+    ]
+    code, payload, stderr = run_json_command(cmd, timeout=15 * 60)
+    if stderr and isinstance(payload, dict):
+        payload.setdefault('stderr', tail(stderr))
+    payload.setdefault('command', ' '.join(shlex.quote(part) for part in cmd))
+    return payload, code
+
+
 def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> tuple[dict[str, Any] | None, int]:
-    if ledger.get('phases', {}).get('bootstrap', {}).get('status') != 'pending':
+    force = bool(getattr(args, 'force_bootstrap', False))
+    if ledger.get('phases', {}).get('bootstrap', {}).get('status') != 'pending' and not force:
         return None, 0
+    sync_payload, sync_code = sync_latest_bootstrap_bundle(args)
     bundle = Path(args.bootstrap_bundle) if getattr(args, 'bootstrap_bundle', '') else matching_bootstrap_bundle(args.operator_id)
     if not bundle:
-        return {'status': 'skipped', 'reason': 'no_matching_bootstrap_bundle'}, 0
+        if sync_code == 20:
+            return {'status': 'blocked_user_action', 'step': 'bootstrap_sync', 'bootstrap_sync': sync_payload}, 20
+        if sync_code != 0:
+            return {'status': 'failed', 'step': 'bootstrap_sync', 'bootstrap_sync': sync_payload}, 1
+        return {'status': 'skipped', 'reason': 'no_matching_bootstrap_bundle', 'bootstrap_sync': sync_payload}, 0
     inspected = inspect_bundle(bundle)
     if inspected.get('status') != 'ok':
-        return {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected}, 20
-    force = bool(getattr(args, 'force_bootstrap', False))
+        return {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected, 'bootstrap_sync': sync_payload}, 20
     if inspected.get('would_overwrite') and not force:
         return {
             'status': 'blocked_user_action',
@@ -2008,6 +2063,7 @@ def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> t
         allow_legacy_bootstrap_manifest=False,
     )
     payload = apply_bundle(apply_args)
+    payload['bootstrap_sync'] = sync_payload
     if payload.get('status') != 'ok':
         return payload, 20 if payload.get('requires_approval') else 1
     return payload, 0
@@ -2205,6 +2261,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--bootstrap-bundle', default='')
     s.add_argument('--force-bootstrap', action='store_true')
+    s.add_argument('--skip-bootstrap-sync', action='store_true', help=argparse.SUPPRESS)
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.set_defaults(func=run_bootstrap_phase)
 
@@ -2246,6 +2303,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--resolve-gmail-linkedin', action='store_true', help='Run Gmail email-to-LinkedIn resolution with Parallel during enrichment fan-in.')
     s.add_argument('--approve-parallel-spend', action='store_true', help='Auto-approve Parallel.ai spend without blocking.')
     s.add_argument('--gmail-linkedin-limit', type=int, default=None, help='Max Gmail contacts to resolve via Parallel')
+    s.add_argument('--merge-only', action='store_true', help=argparse.SUPPRESS)
     s.set_defaults(func=run_fan_in_phase)
 
     s = sub.add_parser('index')
@@ -2269,6 +2327,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--bootstrap-bundle', default='')
     s.add_argument('--force-bootstrap', action='store_true')
+    s.add_argument('--skip-bootstrap-sync', action='store_true', help=argparse.SUPPRESS)
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
     s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)

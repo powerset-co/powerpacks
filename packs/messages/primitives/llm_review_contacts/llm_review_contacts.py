@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import csv
+import hashlib
 import json
 import os
 import re
@@ -157,6 +158,10 @@ def emit(value: Any) -> None:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
 
 
 def format_recency(last_message: str) -> str:
@@ -455,12 +460,14 @@ def cmd_review(args: argparse.Namespace) -> int:
     batch_size = max(1, int(args.batch_size))
     max_workers = max(1, int(args.max_workers))
     estimate = estimate_cost(contacts, args.model, batch_size=batch_size)
+    input_path = Path(args.input)
     base_manifest = {
         "primitive": "llm_review_contacts",
         "command": "review",
         "started_at": now_iso(),
         "model": args.model,
         "input": str(args.input),
+        "input_sha256": file_sha256(input_path),
         "candidate_count": len(contacts),
         "batch_size": batch_size,
         "max_workers": max_workers,

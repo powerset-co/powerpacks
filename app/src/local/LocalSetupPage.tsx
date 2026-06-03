@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
 import {
   AtSign,
@@ -59,7 +60,7 @@ const SOURCE_ICONS: Record<SetupSourceId, typeof Mail> = {
 
 function phaseTone(status?: string): "default" | "secondary" | "outline" | "destructive" {
   const normalized = String(status || "").toLowerCase();
-  if (["authenticated", "ready", "completed", "restored", "linked"].includes(normalized)) return "default";
+  if (["authenticated", "ready", "completed", "restored", "linked", "source_import_completed", "source_enrichment_completed", "selected_steps_completed"].includes(normalized)) return "default";
   if (["not_authenticated", "skipped", "pending", "unknown", "not_ready"].includes(normalized)) return "secondary";
   if (["permission_required"].includes(normalized) || normalized.startsWith("blocked") || normalized === "failed") return "destructive";
   return "outline";
@@ -79,6 +80,9 @@ function StatusBadge({ status }: { status?: string }) {
     permission_required: "permission required",
     pending: "not started",
     refresh_due: "ready to import",
+    selected_steps_completed: "completed",
+    source_enrichment_completed: "completed",
+    source_import_completed: "completed",
     unlinked: "available",
   };
   return (
@@ -287,6 +291,27 @@ function KeyValue({ label, value }: { label: string; value?: string | number | n
       <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="truncate text-sm">{value}</div>
     </div>
+  );
+}
+
+interface ActionState {
+  running: boolean;
+  activeAction?: string | null;
+}
+
+function ActionButton({
+  action,
+  actionState,
+  disabled,
+  children,
+  ...props
+}: ComponentProps<typeof Button> & { action: string; actionState: ActionState; children: ReactNode }) {
+  const isRunning = actionState.running && actionState.activeAction === action;
+  return (
+    <Button {...props} disabled={disabled || actionState.running}>
+      {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+      {children}
+    </Button>
   );
 }
 
@@ -819,7 +844,7 @@ function AccountLinkingTab({
   );
 }
 
-function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: (body: Record<string, unknown>) => void }) {
+function ImportSourceRow({ source, onRun, actionState }: { source: SetupImportSource; onRun: (body: Record<string, unknown>) => void; actionState: ActionState }) {
   const Icon = SOURCE_ICONS[source.sourceId as SetupSourceId] || Database;
   const canRun = source.linked && !source.skipped && source.runnable !== false;
   const updated = source.linked && !source.skipped ? updatedLabel(source.updatedAt) : "";
@@ -841,13 +866,15 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
       </div>
       <KeyValue label="Updated" value={updated} />
       <div className="flex justify-end gap-2">
-        <Button
+        <ActionButton
+          action="import-source"
+          actionState={actionState}
           size="sm"
           onClick={() => onRun({ action: "import-source", source: source.id })}
           disabled={!canRun}
         >
           <Play className="h-4 w-4" /> Import
-        </Button>
+        </ActionButton>
       </div>
     </div>
   );
@@ -856,9 +883,11 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
 function ImportTab({
   status,
   onRun,
+  actionState,
 }: {
   status: SetupStatusResponse;
   onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
 }) {
   const importSources = status.import.sources || [];
   return (
@@ -869,14 +898,14 @@ function ImportTab({
             <h3 className="text-base font-semibold">Linked account imports</h3>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => onRun({ action: "import" })}>
+            <ActionButton action="import" actionState={actionState} onClick={() => onRun({ action: "import" })}>
               <Play className="h-4 w-4" /> Run Full Import
-            </Button>
+            </ActionButton>
           </div>
         </div>
         <div>
           {importSources.length ? (
-            importSources.map((source) => <ImportSourceRow key={source.id} source={source} onRun={onRun} />)
+            importSources.map((source) => <ImportSourceRow key={source.id} source={source} onRun={onRun} actionState={actionState} />)
           ) : (
             <div className="p-6 text-sm text-muted-foreground">No linked accounts found.</div>
           )}
@@ -890,12 +919,18 @@ function EnrichmentSourceRow({
   source,
   importSource,
   messagesReviewReady = false,
+  messagesParallelBlocked = false,
+  messagesReviewBlocked = false,
   onRun,
+  actionState,
 }: {
   source: SetupEnrichmentSource;
   importSource?: SetupImportSource;
   messagesReviewReady?: boolean;
+  messagesParallelBlocked?: boolean;
+  messagesReviewBlocked?: boolean;
   onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
 }) {
   const Icon = SOURCE_ICONS[source.id as SetupSourceId] || Sparkles;
   const canRun = Boolean(importSource?.linked && !importSource.skipped && importSource.runnable !== false);
@@ -906,6 +941,7 @@ function EnrichmentSourceRow({
   const canReviewMessages = source.id === "messages" && canRun && messagesReviewReady;
   const costLabel = source.estimatedCostUsd != null && source.estimatedCostUsd > 0
     ? `~$${source.estimatedCostUsd.toFixed(2)}` : null;
+  const completingMessages = source.id === "messages" && actionState.running && actionState.activeAction === "messages-complete-review";
   return (
     <div className="border-b px-4 py-3 last:border-b-0">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_120px_120px_120px_auto] lg:items-center">
@@ -932,15 +968,43 @@ function EnrichmentSourceRow({
               <MessageSquare className="h-4 w-4" /> Review
             </Button>
           )}
-          <Button
+          {messagesParallelBlocked && (
+            <ActionButton
+              action="messages-approve-continue"
+              actionState={actionState}
+              size="sm"
+              onClick={() => onRun({ action: "messages-approve-continue" })}
+            >
+              <Play className="h-4 w-4" /> Approve
+            </ActionButton>
+          )}
+          <ActionButton
+            action="enrich-source"
+            actionState={actionState}
             size="sm"
             onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id })}
             disabled={!canRun}
           >
             <Sparkles className="h-4 w-4" /> Enrich
-          </Button>
+          </ActionButton>
         </div>
       </div>
+      {messagesReviewBlocked && canRun && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950">
+          <div className="flex-1 text-sm">
+            <span className="font-medium">Review required.</span>{" "}
+            <span>Please review and approve people to add into your local network, then click Complete.</span>
+          </div>
+          <Button size="sm" onClick={() => { window.location.href = "/setup/imessage/review"; }}>
+            <MessageSquare className="h-4 w-4" /> Review
+          </Button>
+        </div>
+      )}
+      {completingMessages && (
+        <div className="mt-3 flex items-center gap-2 rounded-md border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Materializing Messages people and profile enrichment…
+        </div>
+      )}
       {hasUnresolved && canRun && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-4 py-3">
           <div className="flex-1 text-sm">
@@ -948,12 +1012,14 @@ function EnrichmentSourceRow({
             <span className="text-muted-foreground">contacts need email→LinkedIn resolution via Parallel</span>
             {costLabel && <span className="ml-2 text-muted-foreground">({costLabel} est.)</span>}
           </div>
-          <Button
+          <ActionButton
+            action="enrich-source"
+            actionState={actionState}
             size="sm"
             onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id, approveSpend: true })}
           >
             <Play className="h-4 w-4" /> Approve
-          </Button>
+          </ActionButton>
         </div>
       )}
     </div>
@@ -963,9 +1029,11 @@ function EnrichmentSourceRow({
 function EnrichmentTab({
   status,
   onRun,
+  actionState,
 }: {
   status: SetupStatusResponse;
   onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
 }) {
   const sources = status.enrichment.sources || [];
   const importSourceFor = (source: SetupEnrichmentSource) => {
@@ -976,6 +1044,9 @@ function EnrichmentTab({
     return status.import.sources.find((candidate) => candidate.id === source.id || candidate.sourceId === source.id);
   };
   const messagesReviewReady = Boolean(status.review.exists && (status.review.counts?.total || 0) > 0);
+  const messagesParallelBlocked = String(status.messages.currentBlock?.status || "") === "blocked_approval"
+    && String(status.messages.currentBlock?.approval_type || "") === "parallel";
+  const messagesReviewBlocked = String(status.messages.currentBlock?.status || "") === "blocked_user_action";
 
   return (
     <div className="space-y-4">
@@ -988,9 +1059,9 @@ function EnrichmentTab({
             <MetricChip label="Profiles found" value={status.enrichment.totalEnriched} />
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => onRun({ action: "enrich-all" })}>
+            <ActionButton action="enrich-all" actionState={actionState} onClick={() => onRun({ action: "enrich-all" })}>
               <Play className="h-4 w-4" /> Run All
-            </Button>
+            </ActionButton>
           </div>
         </div>
         <div>
@@ -1001,7 +1072,10 @@ function EnrichmentTab({
                 source={source}
                 importSource={importSourceFor(source)}
                 messagesReviewReady={source.id === "messages" && messagesReviewReady}
+                messagesParallelBlocked={source.id === "messages" && messagesParallelBlocked}
+                messagesReviewBlocked={source.id === "messages" && messagesReviewBlocked}
                 onRun={onRun}
+                actionState={actionState}
               />
             ))
           ) : (
@@ -1013,7 +1087,7 @@ function EnrichmentTab({
   );
 }
 
-function IndexTab({ status, onRun }: { status: SetupStatusResponse; onRun: (body: Record<string, unknown>) => void }) {
+function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse; onRun: (body: Record<string, unknown>) => void; actionState: ActionState }) {
   const readiness = status.index.readiness || status.setup.phases.index;
   const estimate = status.index.processingEstimate || {};
   const paidCalls = paidCallTotal(estimate.estimatedPaidCalls);
@@ -1090,9 +1164,9 @@ function IndexTab({ status, onRun }: { status: SetupStatusResponse; onRun: (body
               </div>
             </div>
           </div>
-          <Button onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
+          <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
             <Play className="h-4 w-4" /> {requiresProviderSpend ? "Approve & Update" : "Update Index"}
-          </Button>
+          </ActionButton>
         </div>
       </section>
     </div>
@@ -1188,6 +1262,10 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
     if (!status?.jobs.length) return null;
     return status.jobs.find((job) => job.id === activeJobId) || status.jobs[0];
   }, [activeJobId, status?.jobs]);
+  const actionState: ActionState = {
+    running,
+    activeAction: activeJob?.status === "running" ? activeJob.action : null,
+  };
 
   const runAction = async (body: Record<string, unknown>) => {
     setError(null);
@@ -1253,11 +1331,11 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
 
       {activeTab === "link" && <AccountLinkingTab status={status} onRun={runAction} />}
 
-      {activeTab === "import" && <ImportTab status={status} onRun={runAction} />}
+      {activeTab === "import" && <ImportTab status={status} onRun={runAction} actionState={actionState} />}
 
-      {activeTab === "enrichment" && <EnrichmentTab status={status} onRun={runAction} />}
+      {activeTab === "enrichment" && <EnrichmentTab status={status} onRun={runAction} actionState={actionState} />}
 
-      {activeTab === "index" && <IndexTab status={status} onRun={runAction} />}
+      {activeTab === "index" && <IndexTab status={status} onRun={runAction} actionState={actionState} />}
 
       <JobPanel job={activeJob} onRunCommand={runCommand} />
     </div>

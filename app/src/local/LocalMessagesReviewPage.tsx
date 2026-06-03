@@ -5,7 +5,6 @@ import {
   Check,
   CheckCircle2,
   CircleSlash,
-  ExternalLink,
   Loader2,
   MessageSquare,
   RefreshCcw,
@@ -38,9 +37,9 @@ const REVIEW_PAGE_SIZE = 100;
 
 const REVIEW_FILTERS: Array<{ id: MessageReviewFilter; label: string; countKey?: keyof MessageReviewResponse["counts"] }> = [
   { id: "all", label: "All", countKey: "total" },
-  { id: "included", label: "Included", countKey: "included" },
-  { id: "in_network", label: "In Network", countKey: "inNetwork" },
-  { id: "yes", label: "Yes", countKey: "yes" },
+  { id: "included", label: "Approved", countKey: "included" },
+  { id: "in_network", label: "Matched", countKey: "inNetwork" },
+  { id: "yes", label: "Research Yes", countKey: "yes" },
   { id: "maybe", label: "Maybe", countKey: "maybe" },
   { id: "no", label: "No", countKey: "no" },
   { id: "feedback", label: "Feedback", countKey: "retargetFeedback" },
@@ -208,7 +207,7 @@ function ReviewCard({
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <Badge variant={row.selected ? "default" : "secondary"}>
-              {row.selected ? "Included" : "Excluded"}
+              {row.selected ? "Approved" : "Excluded"}
             </Badge>
             <Badge variant="outline" className="capitalize">{row.tab.replace("_", " ")}</Badge>
             {row.reviewSource && <Badge variant="secondary">{row.reviewSource.replace(/_/g, " ")}</Badge>}
@@ -345,6 +344,9 @@ export function LocalMessagesReviewPage({ onBackToSetup }: { onBackToSetup: () =
       const next = await runSetupAction(body);
       setActiveJobId(next.job.id);
       await loadStatus();
+      if (body.action === "messages-complete-review") {
+        window.location.href = "/setup?tab=enrichment";
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start messages action");
     }
@@ -371,7 +373,6 @@ export function LocalMessagesReviewPage({ onBackToSetup }: { onBackToSetup: () =
   const blockStatus = stringValue(currentBlock?.status);
   const approvalType = stringValue(currentBlock?.approval_type);
   const blockMessage = stringValue(currentBlock?.message);
-  const reviewUrl = stringValue(currentBlock?.review_url);
   const updated = updatedLabel(response?.updatedAt);
 
   return (
@@ -394,13 +395,7 @@ export function LocalMessagesReviewPage({ onBackToSetup }: { onBackToSetup: () =
           <Button variant="outline" size="sm" onClick={refreshAll} disabled={isLoading || running}>
             <RefreshCcw className={cn("h-4 w-4", (isLoading || running) && "animate-spin")} /> Refresh
           </Button>
-          {reviewUrl && (
-            <Button variant="outline" size="sm" asChild>
-              <a href={reviewUrl} target="_blank" rel="noreferrer">
-                <ExternalLink className="h-4 w-4" /> Legacy Review
-              </a>
-            </Button>
-          )}
+
           <Button size="sm" onClick={() => runAction({ action: "messages-complete-review" })} disabled={running}>
             <CheckCircle2 className="h-4 w-4" /> Complete
           </Button>

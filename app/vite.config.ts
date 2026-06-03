@@ -382,6 +382,14 @@ function shellStage(label: string, command: string[]): string {
   return `printf '%s\\n' ${shellQuote(`setup: ${label}`)} && ${shellJoin(command)}`;
 }
 
+function stagedCommand(stages: Array<{ label: string; command: string[] }>): string[] {
+  return [
+    "/bin/zsh",
+    "-lc",
+    stages.map((stage) => shellStage(stage.label, stage.command)).join(" && "),
+  ];
+}
+
 function importAndFanInCommand(importCommand: string[], fanInCommand: string[], label: string): string[] {
   return importsAndFanInCommand([{ label, command: importCommand }], fanInCommand);
 }
@@ -713,7 +721,16 @@ function messagesCurrentBlockForUi(messagesLedger: Record<string, any>, reviewCo
   if (!block) return null;
   const approvalType = String(block.approval_type || "").trim().toLowerCase();
   if (approvalType === "upload") return null;
-  if (approvalType !== "parallel") return block;
+  if (approvalType !== "parallel") {
+    if (block.review_url) {
+      return {
+        ...block,
+        review_url: "/setup/imessage/review",
+        message: "Review Messages contacts in the inline setup app. Click Complete when done.",
+      };
+    }
+    return block;
+  }
 
   const prepareInput = String(messagesLedger.steps?.prepare_research_queue?.summary?.input || "");
   const selectedForResearch = Number(reviewCounts.researchSelected || 0);
@@ -1056,27 +1073,22 @@ function importNetworkCommand(operatorId: string, extra: string[] = []) {
   return command;
 }
 
-function enrichmentNetworkCommand(operatorId: string, sourceId: string): string[] {
+function enrichmentNetworkCommand(operatorId: string, sourceId: string, options: { approveSpend?: boolean } = {}): string[] {
+  if (sourceId === "gmail") {
+    const extra = ["--fan-in-only", "--only-source", "gmail", "--force", "--enrichment-only", "--resolve-gmail-linkedin"];
+    if (options.approveSpend) {
+      extra.push("--approve-parallel-spend");
+    }
+    return importNetworkCommand(operatorId, extra);
+  }
   if (sourceId === "linkedin_csv") {
     return importNetworkCommand(operatorId, ["--only-source", sourceId, "--force"]);
   }
   return [];
 }
 
-function enrichmentFanInCommand(operatorId: string, sourceIds: string[] = [], options: { approveSpend?: boolean } = {}): string[] {
-  const extra = ["--force"];
-  for (const sourceId of sourceIds) {
-    extra.push("--only-source", sourceId);
-  }
-  if (!sourceIds.length || sourceIds.includes("gmail")) {
-    extra.push("--resolve-gmail-linkedin");
-  }
-  if (options.approveSpend) {
-    extra.push("--approve-parallel-spend");
-  }
-  // TODO: remove limit after testing
-  extra.push("--gmail-linkedin-limit", "3");
-  return setupCommandArgs(operatorId, "fan-in", extra);
+function processLocalNetworkCommand(operatorId: string): string[] {
+  return setupCommandArgs(operatorId, "fan-in", ["--force", "--merge-only"]);
 }
 
 function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[number]) {
@@ -1109,18 +1121,17 @@ function messageEnrichmentCommand(accounts: RunState | null): string[] {
     "continue",
     "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
     "--parallel-timeout", String(process.env.POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS || "900"),
+    "--parallel-limit", "1",
+    "--parallel-auto-approve-usd", "25",
     "--reuse-existing-artifacts",
     ...messageChannelFlags(accounts, ledger),
     "--include-contact-merge",
     "--include-powerset-candidates",
     "--include-local-match",
     "--include-llm-review",
+    "--include-research",
     "--include-review",
-    "--no-open-review",
-    "--force-sync-candidates",
-    "--force-match",
-    "--rerun-llm",
-    "--force-build-review",
+    "--no-open-browser",
   ];
 }
 
@@ -1224,12 +1235,32 @@ function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
       "p.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
     ].join("; "),
   ];
-  const continueAfterReview = [
+  const materializeMessagesPeople = importNetworkCommand("local", [
+    "--fan-in-only",
+    "--only-source", "messages",
+    "--force",
+    "--enrichment-only",
+  ]);
+  return ["/bin/zsh", "-lc", `${shellJoin(markAppReviewComplete)} && ${shellStage("materializing Messages people", materializeMessagesPeople)}`];
+}
+
+function messagesApproveAndContinueCommand(accounts: RunState | null): string[] {
+  const ledger = readJsonSync(messagesLedgerPath) || {};
+  const approve = [
+    "uv", "run", "--project", ".", "python",
+    "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
+    "approve",
+    "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
+    "--confirm",
+  ];
+  const continueAfterApproval = [
     "uv", "run", "--project", ".", "python",
     "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
     "continue",
     "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
     "--parallel-timeout", String(process.env.POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS || "900"),
+    "--parallel-limit", "1",
+    "--parallel-auto-approve-usd", "25",
     "--reuse-existing-artifacts",
     ...messageChannelFlags(accounts, ledger),
     "--include-contact-merge",
@@ -1238,20 +1269,10 @@ function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
     "--include-llm-review",
     "--include-research",
     "--include-review",
+    "--no-open-browser",
     "--force-prepare-queue",
   ];
-  return ["/bin/zsh", "-lc", `${shellJoin(markAppReviewComplete)} && ${shellJoin(continueAfterReview)}`];
-}
-
-function messagesApproveAndContinueCommand(accounts: RunState | null): string[] {
-  const approve = [
-    "uv", "run", "--project", ".", "python",
-    "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
-    "approve",
-    "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
-    "--confirm",
-  ];
-  return ["/bin/zsh", "-lc", `${shellJoin(approve)} && ${shellJoin(messagesCompleteReviewCommand(accounts))}`];
+  return ["/bin/zsh", "-lc", `${shellJoin(approve)} && ${shellJoin(continueAfterApproval)}`];
 }
 
 function csvPathCount(value: unknown): number {
@@ -1778,14 +1799,13 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     const enrichableSources = buildImportSources(accounts, operator.id)
       .filter((source) => source.linked && !source.skipped && source.runnable !== false && source.id !== "twitter");
     if (!enrichableSources.length) throw new Error("no linked sources can be enriched");
-    const imports = enrichableSources
+    const stages = enrichableSources
       .map((source) => ({
         label: `enriching ${source.label}`,
         command: source.id === "messages" ? messageEnrichmentCommand(accounts) : enrichmentNetworkCommand(operator.id, source.id),
       }))
       .filter((stage) => stage.command.length > 0);
-    const fanIn = enrichmentFanInCommand(operator.id);
-    return startSetupJob(action, importsAndFanInCommand(imports, fanIn), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, stagedCommand(stages), 6 * 60 * 60 * 1000);
   }
 
   if (action === "import-source") {
@@ -1813,13 +1833,11 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (sourceId === "messages") {
       return startSetupJob(action, messageEnrichmentCommand(accounts), 2 * 60 * 60 * 1000);
     }
-    const command = enrichmentNetworkCommand(operator.id, sourceId);
+    const command = enrichmentNetworkCommand(operator.id, sourceId, { approveSpend });
     if (command.length === 0) {
-      const fanIn = enrichmentFanInCommand(operator.id, [sourceId], { approveSpend });
-      return startSetupJob(action, importsAndFanInCommand([], fanIn), 6 * 60 * 60 * 1000);
+      throw new Error(`source enrichment is not wired yet: ${sourceId}`);
     }
-    const fanIn = enrichmentFanInCommand(operator.id, [sourceId], { approveSpend });
-    return startSetupJob(action, importAndFanInCommand(command, fanIn, `enriching ${source.label}`), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, stagedCommand([{ label: `enriching ${source.label}`, command }]), 6 * 60 * 60 * 1000);
   }
 
   if (action === "skip-source") {

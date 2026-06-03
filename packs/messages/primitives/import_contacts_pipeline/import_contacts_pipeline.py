@@ -1258,8 +1258,8 @@ def ensure_contacts(args: argparse.Namespace, ledger_path: Path, ledger: dict[st
 
 
 def sync_candidates(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    if completed(ledger, "sync_powerset_candidates") and not args.force_sync_candidates:
-        return
+    # Treat the ledger as a log, not as the source of truth. Re-read the
+    # canonical Powerset candidates file on every app-driven enrichment run.
     cmd = [
         sys.executable,
         primitive_path("packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py"),
@@ -1274,8 +1274,8 @@ def sync_candidates(args: argparse.Namespace, ledger_path: Path, ledger: dict[st
 
 
 def match_contacts(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    if completed(ledger, "match_local_contacts") and not args.force_match:
-        return
+    # Always re-apply local matching to the canonical contacts.csv. Contact
+    # import can rewrite contacts.csv after an earlier match step completed.
     cmd = [
         sys.executable,
         primitive_path("packs/messages/primitives/match_local_candidates/match_local_candidates.py"),
@@ -1297,7 +1297,12 @@ def llm_manifest_path(contacts: Path) -> Path:
 def llm_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
     manifest_path = llm_manifest_path(Path(args.contacts))
     manifest = read_manifest(manifest_path)
-    if manifest and manifest.get("status") in {"completed", "completed_with_errors"} and not args.rerun_llm:
+    current_input_sha = file_sha256(Path(args.contacts)) if Path(args.contacts).exists() else ""
+    if (
+        manifest
+        and manifest.get("status") in {"completed", "completed_with_errors"}
+        and manifest.get("input_sha256") == current_input_sha
+    ):
         mark_step(ledger_path, ledger, "llm_review", "completed", summary={"reused_manifest": str(manifest_path), **manifest})
         return
 
@@ -1388,9 +1393,9 @@ def estimate_network_review_scoring(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def prepare_queue(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    if completed(ledger, "prepare_research_queue") and not args.force_prepare_queue:
-        return
-    queue_input = Path(args.review_csv) if completed(ledger, "review_research_web") and Path(args.review_csv).exists() else Path(args.contacts)
+    # Pre-research queue is derived from the canonical matched/LLM-triaged
+    # contacts.csv. The review CSV is for post-research human decisions.
+    queue_input = Path(args.contacts)
     cmd = [
         sys.executable,
         primitive_path("packs/messages/primitives/prepare_research_queue/prepare_research_queue.py"),
@@ -1406,8 +1411,8 @@ def prepare_queue(args: argparse.Namespace, ledger_path: Path, ledger: dict[str,
 
 
 def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    if completed(ledger, "deep_research") and not args.rerun_parallel:
-        return
+    # Always ask the research primitive for current status/work. It skips
+    # already-researched handles from artifacts, so reruns are natural no-ops.
     estimate_cmd = [
         sys.executable,
         primitive_path("packs/messages/primitives/deep_research_contacts/deep_research_contacts.py"),
@@ -1416,6 +1421,8 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
         "--processor", args.processor,
         "--output-dir", str(args.research_dir),
     ]
+    if getattr(args, "parallel_limit", None) is not None:
+        estimate_cmd.extend(["--limit", str(args.parallel_limit)])
     mark_step(ledger_path, ledger, "parallel_estimate", "running", command=estimate_cmd)
     estimate_result = run_command(estimate_cmd, timeout=args.timeout, env=pipeline_env(args))
     estimate_payload = require_ok(estimate_result, "parallel_estimate")
@@ -1435,6 +1442,17 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
         "would_submit": would_submit,
     }
     aid = approval_id("parallel", payload)
+    auto_parallel_ok = estimated_usd <= float(getattr(args, "parallel_auto_approve_usd", 0.0) or 0.0)
+    if auto_parallel_ok:
+        ledger.setdefault("approvals", {})[aid] = {
+            "approval_id": aid,
+            "type": "parallel",
+            "confirmed": True,
+            "approved_at": now_iso(),
+            "approved_by": "auto_threshold",
+            "payload": payload,
+        }
+        mark_step(ledger_path, ledger, "deep_research", "running", summary={"auto_approved_reason": f"parallel_under_{args.parallel_auto_approve_usd}_usd", **payload})
     if not is_approved(ledger, aid):
         block_for_approval(
             ledger_path,
@@ -1454,6 +1472,8 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
         "--processor", args.processor,
         "--output-dir", str(args.research_dir),
     ]
+    if getattr(args, "parallel_limit", None) is not None:
+        run_cmd.extend(["--limit", str(args.parallel_limit)])
     mark_step(ledger_path, ledger, "deep_research", "running", command=run_cmd)
     run_result = run_command(
         run_cmd,
@@ -1470,17 +1490,6 @@ def parallel_research(args: argparse.Namespace, ledger_path: Path, ledger: dict[
 
 
 def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    if completed(ledger, "build_research_review_csv") and not args.force_build_review:
-        return
-    if completed(ledger, "build_raw_review_csv") and Path(args.review_csv).exists() and not args.force_build_review:
-        mark_step(
-            ledger_path,
-            ledger,
-            "build_research_review_csv",
-            "skipped",
-            summary={"reason": "raw_review_csv_active", "review_csv": str(args.review_csv)},
-        )
-        return
     research_dir = Path(args.research_dir)
     research_dir.mkdir(parents=True, exist_ok=True)
     research_packets = list(research_dir.glob("*/01_research_parallel.json"))
@@ -1548,10 +1557,6 @@ def migrate_review_schema(args: argparse.Namespace, ledger_path: Path, ledger: d
     step_id = "migrate_review_schema"
     review_csv = Path(args.review_csv)
     contacts_csv = Path(args.contacts)
-    if completed(ledger, step_id) and review_csv.exists() and not args.force_build_review:
-        fields = set(read_csv_fieldnames(review_csv) or [])
-        if {"in_network", "network_person_id", "review_source"}.issubset(fields):
-            return
     if not review_csv.exists() or csv_data_rows(review_csv) == 0:
         mark_step(ledger_path, ledger, step_id, "skipped", summary={"reason": "no_review_csv", "review_csv": str(review_csv)})
         return
@@ -1740,16 +1745,12 @@ def open_raw_contacts_review_server(args: argparse.Namespace, ledger_path: Path,
 
 
 def raw_contacts_review(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    if not completed(ledger, "build_raw_review_csv") or not Path(args.review_csv).exists() or args.force_build_review:
-        build_raw_review_csv(args, ledger_path, ledger)
-        migrate_review_schema(args, ledger_path, ledger)
-        if has_research_review(args):
-            reapply_previous_review_state(args, ledger_path, ledger)
+    build_raw_review_csv(args, ledger_path, ledger)
+    migrate_review_schema(args, ledger_path, ledger)
+    if has_research_review(args):
+        reapply_previous_review_state(args, ledger_path, ledger)
 
     if args.no_open_review:
-        return
-
-    if completed(ledger, "review_research_web") and not args.stop_before_upload:
         return
 
     open_review_server(args, ledger_path, ledger)
@@ -1808,16 +1809,17 @@ def load_queue_rows_by_phone(path: Path) -> dict[str, dict[str, str]]:
 def raw_decision(row: dict[str, str]) -> tuple[str, str, str]:
     explicit = (row.get("enrich_decision") or "").strip().lower()
     skip = (row.get("skip") or "").strip().lower()
+    name = (row.get("matched_name") or row.get("name") or "").strip().lower()
     if explicit == "yes" or skip in {"false", "0", "no"}:
         return "yes", "false", "yes"
     if explicit == "no" or skip in {"true", "1", "yes"}:
+        return "no", "true", "no"
+    if not name or name in {"unknown", "unknown sender", "no name"}:
         return "no", "true", "no"
     return "maybe", "", ""
 
 
 def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    if completed(ledger, "build_raw_review_csv") and Path(args.review_csv).exists() and not args.force_build_review:
-        return
     contacts_path = Path(args.contacts)
     queue_by_phone = load_queue_rows_by_phone(Path(args.research_queue))
     previous_sources = previous_review_state_sources(args, ledger, include_active_for_rebuild=True)
@@ -2424,18 +2426,17 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         return selected_steps_completed(args, ledger_path, ledger)
 
     if has_research_review(args):
-        if not completed(ledger, "review_research_web") or args.stop_before_upload:
-            open_review_server(args, ledger_path, ledger)
-            payload = {
-                "primitive": "import_contacts_pipeline",
-                "status": "blocked_user_action",
-                "message": f"Review opened: {review_url(args)}. When done, say: done with review, upload",
-                "review_url": review_url(args),
-                "ledger": str(ledger_path),
-            }
-            ledger["current_block"] = payload
-            save_ledger(ledger_path, ledger)
-            raise PipelineBlocked(payload, code=21)
+        open_review_server(args, ledger_path, ledger)
+        payload = {
+            "primitive": "import_contacts_pipeline",
+            "status": "blocked_user_action",
+            "message": f"Review opened: {review_url(args)}. When done, say: done with review, upload",
+            "review_url": review_url(args),
+            "ledger": str(ledger_path),
+        }
+        ledger["current_block"] = payload
+        save_ledger(ledger_path, ledger)
+        raise PipelineBlocked(payload, code=21)
     else:
         raw_contacts_review(args, ledger_path, ledger)
     if has_research_review(args):
@@ -2579,6 +2580,8 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--env-file", default=".env")
     add_hidden_arg(parser, "--timeout", type=int, default=300)
     add_hidden_arg(parser, "--parallel-timeout", type=int, default=7600)
+    add_hidden_arg(parser, "--parallel-limit", type=int)
+    add_hidden_arg(parser, "--parallel-auto-approve-usd", type=float, default=0.0)
     add_hidden_arg(parser, "--retarget-harness", default="auto", choices=("auto", "codex", "claude", "manual", "off"))
     add_hidden_arg(parser, "--retarget-harness-threshold", type=int, default=DEFAULT_RETARGET_HARNESS_THRESHOLD)
     add_hidden_arg(parser, "--retarget-harness-timeout", type=int, default=900)
