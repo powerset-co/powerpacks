@@ -1225,7 +1225,7 @@ function validLinkedInUrl(value: unknown): boolean {
   return /^https?:\/\/(?:[\w-]+\.)?linkedin\.com\/in\//i.test(text);
 }
 
-function messagesReviewStats(messagesLedger: RunState): { enrich: number; skipped: number; matched: number; profilesFound: number } {
+function messagesReviewStats(messagesLedger: RunState): { total: number; enrich: number; skipped: number; matched: number; profilesFound: number } {
   const reviewRows = csvRowsForArtifact(".powerpacks/messages/research_review.csv");
   const llmSummary = messagesLedger.steps?.llm_review?.summary || {};
   const llmCounts = llmSummary.counts || {};
@@ -1236,9 +1236,12 @@ function messagesReviewStats(messagesLedger: RunState): { enrich: number; skippe
     && (validLinkedInUrl(row.linkedin_url) || validLinkedInUrl(row.network_linkedin_url))
   ).length;
   const matched = Math.max(Number(matchStats.matched || 0), reviewMatched);
+  const enrich = Number(llmCounts.enrich || 0);
+  const skipped = Number(llmCounts.skip || 0);
   return {
-    enrich: Number(llmCounts.enrich || 0),
-    skipped: Number(llmCounts.skip || 0),
+    total: Number(llmSummary.candidate_count || llmCounts.verdicts || enrich + skipped || 0),
+    enrich,
+    skipped,
     matched,
     profilesFound: Math.max(matched, reviewProfiles),
   };
@@ -1350,7 +1353,6 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
   const gmailQueueCount = csvRowsForArtifact(gmailQueueArtifact, ["queue_csv", "linkedin_resolution_queue_csv"]).length;
   const gmailDirectoryEntries = Object.values((refreshArtifacts.gmail_directory_by_slug || {}) as Record<string, any>);
   const gmailDirectoryResolved = gmailDirectoryEntries.reduce((total, item) => total + Number(item?.resolved || 0), 0);
-  const gmailDirectoryUnresolved = gmailDirectoryEntries.reduce((total, item) => total + Number(item?.unresolved || 0), 0);
   const gmailDirectoryMatches = gmailDirectoryResolved || artifactRowsDirectoryMatchCount(
     gmailQueueArtifact,
     directoryRows,
@@ -1358,7 +1360,7 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
   );
   const gmailEnriched = sumArtifacts([refreshArtifacts], "gmail_final_people_csvs");
   const gmailFound = Math.max(gmailEnriched, gmailDirectoryMatches);
-  const gmailToEnrich = gmailDirectoryUnresolved || Math.max(0, gmailQueueCount - gmailFound);
+  const gmailNotFound = Math.max(0, gmailQueueCount - gmailFound);
   const linkedinCacheHits = firstCsvCount(
     refreshArtifacts.linkedin_rapidapi_cache_hits_csv,
     refreshArtifacts.linkedin_enrich_people_rapidapi_cache_hits_csv,
@@ -1385,9 +1387,9 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       id: "gmail",
       label: "Gmail",
       status: String(setupRefreshLedger.status || "unknown"),
-      candidates: gmailQueueCount > 0 ? gmailToEnrich : sumArtifacts([refreshArtifacts], "gmail_people_csvs") || sumArtifacts([refreshArtifacts], "gmail_people_csv"),
+      candidates: gmailQueueCount || sumArtifacts([refreshArtifacts], "gmail_people_csvs") || sumArtifacts([refreshArtifacts], "gmail_people_csv"),
       enriched: gmailFound,
-      skipped: 0,
+      skipped: gmailNotFound,
       matched: gmailDirectoryMatches,
       updatedAt: isSkipped("gmail") ? null : setupRefreshLedger.updated_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
     },
@@ -1395,7 +1397,7 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       id: "messages",
       label: "Messages",
       status: String(messagesReview.status || messagesLedger.status || "unknown"),
-      candidates: Math.max(0, messagesStats.enrich - messagesStats.matched),
+      candidates: messagesStats.total,
       enriched: messagesStats.profilesFound,
       skipped: messagesStats.skipped,
       matched: messagesStats.matched,
