@@ -555,6 +555,14 @@ def existing_keys_from_csv(path_text: str | None) -> set[str]:
 
 
 def existing_keys_from_duckdb(path_text: str | None) -> set[str]:
+    """Return people already covered by processed local-search vectors.
+
+    ``local_person_profiles`` is intentionally not enough: setup/bootstrap can
+    now materialize one profile row for every person without running paid role or
+    embedding providers. For ``--limit-mode missing`` we want missing/new people
+    relative to the processed/vectorized index, so only vector-bearing summary or
+    position rows count as existing.
+    """
     if not path_text:
         return set()
     path = Path(path_text)
@@ -567,14 +575,22 @@ def existing_keys_from_duckdb(path_text: str | None) -> set[str]:
     keys: set[str] = set()
     with duckdb.connect(str(path), read_only=True) as con:
         tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
-        table = "local_person_profiles" if "local_person_profiles" in tables else "local_people_profiles" if "local_people_profiles" in tables else ""
-        if table:
+        for table in ["local_summaries", "local_people_positions"]:
+            if table not in tables:
+                continue
             columns = {str(row[1]) for row in con.execute(f"pragma table_info({table})").fetchall()}
-            wanted = [field for field in ["id", "person_id", "base_id", "linkedin_url", "public_identifier"] if field in columns]
-            if wanted:
-                selected = ", ".join(wanted)
-                for values in con.execute(f"select {selected} from {table}").fetchall():
-                    keys.update(person_keys(dict(zip(wanted, values))))
+            if "vector" not in columns:
+                continue
+            wanted = [field for field in ["id", "person_id", "base_id"] if field in columns]
+            if not wanted:
+                continue
+            selected = ", ".join(wanted)
+            try:
+                rows = con.execute(f"select distinct {selected} from {table} where vector is not null and len(vector) > 0").fetchall()
+            except Exception:
+                rows = []
+            for values in rows:
+                keys.update(person_keys(dict(zip(wanted, values))))
     return keys
 
 
