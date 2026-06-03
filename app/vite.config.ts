@@ -1193,6 +1193,13 @@ function firstCsvCount(...values: unknown[]): number {
   return 0;
 }
 
+function csvCountForArtifactKeys(artifacts: Record<string, any>, pattern: RegExp): number {
+  return Object.entries(artifacts).reduce((total, [key, value]) => {
+    if (!pattern.test(key)) return total;
+    return total + csvPathCount(value);
+  }, 0);
+}
+
 function normalizedDigits(value: unknown): string {
   return String(value || "").replace(/\D+/g, "").slice(-10);
 }
@@ -1358,9 +1365,19 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
     directoryRows,
     ["queue_csv", "linkedin_resolution_queue_csv"],
   );
-  const gmailEnriched = sumArtifacts([refreshArtifacts], "gmail_final_people_csvs");
-  const gmailFound = Math.max(gmailEnriched, gmailDirectoryMatches);
-  const gmailNotFound = Math.max(0, gmailQueueCount - gmailFound);
+  const gmailProviderMatches = csvRowsForArtifact(
+    refreshArtifacts.gmail_linkedin_resolutions_csvs || refreshArtifacts.gmail_linkedin_resolutions_csv,
+    ["resolutions_csv"],
+  ).length;
+  const gmailResolvedByLookup = gmailProviderMatches > 0;
+  const gmailProviderEnriched = csvCountForArtifactKeys(refreshArtifacts, /^gmail_.+_enriched_provider_enriched_csv$/);
+  const gmailRapidFailures = csvCountForArtifactKeys(refreshArtifacts, /^gmail_.+_enriched_rapidapi_recent_failures_csv$/);
+  const gmailUnresolvedRows = csvRowsForArtifact(refreshArtifacts.gmail_unresolved_linkedin_resolution_queue_csvs, ["queue_csv"]).length;
+  const gmailRemainingUnresolved = gmailResolvedByLookup
+    ? Math.max(0, gmailUnresolvedRows - gmailProviderMatches)
+    : gmailUnresolvedRows;
+  const gmailFound = gmailProviderEnriched || gmailDirectoryMatches;
+  const gmailNotFound = gmailRemainingUnresolved + gmailRapidFailures;
   const linkedinCacheHits = firstCsvCount(
     refreshArtifacts.linkedin_rapidapi_cache_hits_csv,
     refreshArtifacts.linkedin_enrich_people_rapidapi_cache_hits_csv,
@@ -1617,8 +1634,11 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (source.runnable === false || source.command.length === 0) {
       throw new Error(source.disabledReason || `source is not importable yet: ${sourceId}`);
     }
+    const command = sourceId === "gmail"
+      ? importNetworkCommand(operator.id, ["--only-source", "gmail", "--force", "--skip-msgvault-sync", "--gmail-linkedin-provider", "parallel"])
+      : source.command;
     const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
-    return startSetupJob(action, importAndFanInCommand(source.command, fanIn, `enriching ${source.label}`), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, importAndFanInCommand(command, fanIn, `enriching ${source.label}`), 6 * 60 * 60 * 1000);
   }
 
   if (action === "skip-source") {
