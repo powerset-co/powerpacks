@@ -42,12 +42,13 @@ import type {
 
 type SetupTabId = "link" | "import" | "enrichment" | "index";
 type LinkRowId = "gmail" | "linkedin_csv" | "imessage" | "whatsapp" | "twitter";
+type SetupStepState = "complete" | "current" | "blocked" | "upcoming";
 
-const TABS: Array<{ id: SetupTabId; label: string; icon: typeof Link2 }> = [
-  { id: "link", label: "Account Linking", icon: Link2 },
-  { id: "import", label: "Import", icon: Database },
-  { id: "enrichment", label: "Enrichment", icon: Sparkles },
-  { id: "index", label: "Indexing", icon: HardDrive },
+const TABS: Array<{ id: SetupTabId; label: string; shortLabel: string; icon: typeof Link2; description: string; action: string }> = [
+  { id: "link", label: "Link accounts", shortLabel: "Link", icon: Link2, description: "Connect the sources you want to use. Skip anything you do not need.", action: "Link or skip each source" },
+  { id: "import", label: "Import data", shortLabel: "Import", icon: Database, description: "Pull fresh local metadata from linked sources.", action: "Run Full Import" },
+  { id: "enrichment", label: "Enrich people", shortLabel: "Enrich", icon: Sparkles, description: "Resolve profiles and review researched people before adding them.", action: "Run enrichment" },
+  { id: "index", label: "Process index", shortLabel: "Process", icon: HardDrive, description: "Merge source-specific people and build the searchable local index.", action: "Build index" },
 ];
 const TAB_IDS = new Set(TABS.map((tab) => tab.id));
 
@@ -145,6 +146,10 @@ function refreshLabel(status: SetupStatusResponse): string {
 function tailText(value?: string, limit = 3500): string {
   const text = String(value || "");
   return text.length > limit ? text.slice(text.length - limit) : text;
+}
+
+function hasSetupTabParam(): boolean {
+  return new URLSearchParams(window.location.search).has("tab");
 }
 
 function setupTabFromLocation(): SetupTabId {
@@ -255,36 +260,129 @@ function extractCommands(job?: SetupJob | null): ExtractedCommand[] {
     .filter((command) => !hideLinkOnlyFollowups || !/rerun[_ ]onboarding|repeat command|next command/i.test(command.label)));
 }
 
-function SetupTabs({
+function isCompleteStatus(status?: string): boolean {
+  const normalized = String(status || "").toLowerCase();
+  return ["ready", "completed", "restored", "source_import_completed", "source_enrichment_completed", "selected_steps_completed"].includes(normalized);
+}
+
+function isBlockedStatus(status?: string): boolean {
+  const normalized = String(status || "").toLowerCase();
+  return normalized.startsWith("blocked") || normalized === "failed" || normalized === "permission_required";
+}
+
+function setupStepProgress(status: SetupStatusResponse, active: SetupTabId) {
+  const phases = status.setup.phases || {};
+  const sourceRows = status.enrichment.sources || [];
+  const enrichmentComplete = isCompleteStatus(status.enrichment.status)
+    || sourceRows.some((source) => isCompleteStatus(source.status))
+    || Number(status.enrichment.totalEnriched || 0) > 0;
+  const indexComplete = isCompleteStatus(phases.index)
+    || String(status.index.readiness || "").toLowerCase() === "ready"
+    || Boolean(status.index.duckdbExists && status.index.peopleSha256 && status.index.indexInputSha256 === status.index.peopleSha256);
+  const completeByStep: Record<SetupTabId, boolean> = {
+    link: isCompleteStatus(phases.link) || status.accounts.unresolvedSources.length === 0,
+    import: isCompleteStatus(phases.import) || isCompleteStatus(status.import.status),
+    enrichment: enrichmentComplete,
+    index: indexComplete,
+  };
+  const blockedByStep: Record<SetupTabId, boolean> = {
+    link: isBlockedStatus(phases.link),
+    import: isBlockedStatus(phases.import) || isBlockedStatus(status.import.status),
+    enrichment: isBlockedStatus(status.enrichment.status) || sourceRows.some((source) => Boolean(source.blocked)),
+    index: isBlockedStatus(phases.index),
+  };
+  const recommended = TABS.find((tab) => !completeByStep[tab.id])?.id || "index";
+  return TABS.map((tab, index) => ({
+    ...tab,
+    index,
+    complete: completeByStep[tab.id],
+    blocked: blockedByStep[tab.id],
+    recommended: tab.id === recommended,
+    state: blockedByStep[tab.id] ? "blocked" : completeByStep[tab.id] ? "complete" : tab.id === active ? "current" : "upcoming" as SetupStepState,
+  }));
+}
+
+function SetupStepper({
   active,
+  status,
   onChange,
 }: {
   active: SetupTabId;
+  status: SetupStatusResponse;
   onChange: (tab: SetupTabId) => void;
 }) {
+  const steps = setupStepProgress(status, active);
+  const current = steps.find((step) => step.id === active) || steps[0];
+  const recommended = steps.find((step) => step.recommended) || current;
+  const completedCount = steps.filter((step) => step.complete).length;
   return (
-    <div role="tablist" aria-label="Setup steps" className="flex flex-wrap gap-2 rounded-md border bg-muted/40 p-1">
-      {TABS.map((tab) => {
-        const Icon = tab.icon;
-        const selected = active === tab.id;
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            onClick={() => onChange(tab.id)}
-            className={cn(
-              "inline-flex min-h-9 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              selected ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            <span>{tab.label}</span>
-          </button>
-        );
-      })}
-    </div>
+    <section className="rounded-xl border bg-card p-4 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-muted-foreground">Guided setup</div>
+          <h3 className="mt-1 text-lg font-semibold">Step {current.index + 1} of {steps.length}: {current.label}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{current.description}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary">{completedCount}/{steps.length} complete</Badge>
+          {recommended.id !== active && (
+            <Button size="sm" variant="outline" onClick={() => onChange(recommended.id)}>
+              Go to next step
+            </Button>
+          )}
+        </div>
+      </div>
+      <div role="tablist" aria-label="Setup steps" className="grid gap-3 md:grid-cols-4">
+        {steps.map((step, index) => {
+          const Icon = step.icon;
+          const selected = active === step.id;
+          const lineDone = index > 0 && steps[index - 1].complete;
+          return (
+            <button
+              key={step.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => onChange(step.id)}
+              className={cn(
+                "group relative flex min-w-0 items-center gap-3 rounded-lg border p-3 text-left transition-colors",
+                selected ? "border-primary/40 bg-primary/5" : "bg-background hover:bg-muted/40",
+                step.blocked && "border-destructive/30 bg-destructive/5"
+              )}
+            >
+              {index > 0 && (
+                <span
+                  className={cn(
+                    "absolute -left-3 top-1/2 hidden h-px w-3 md:block",
+                    lineDone ? "bg-primary" : "bg-border"
+                  )}
+                  aria-hidden="true"
+                />
+              )}
+              <span
+                className={cn(
+                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-background",
+                  step.complete && "border-primary bg-primary text-primary-foreground",
+                  selected && !step.complete && !step.blocked && "border-primary text-primary",
+                  step.blocked && "border-destructive text-destructive"
+                )}
+              >
+                {step.complete ? <CheckCircle2 className="h-5 w-5" /> : <Icon className="h-4 w-4" />}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium">{step.shortLabel}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {step.blocked ? "Action needed" : step.complete ? "Complete" : step.recommended ? "Next" : "Upcoming"}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-4 rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+        <span className="font-medium text-foreground">Your next action:</span> {current.action}
+      </div>
+    </section>
   );
 }
 
@@ -1316,6 +1414,12 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  useEffect(() => {
+    if (!status || hasSetupTabParam()) return;
+    const recommended = setupStepProgress(status, activeTab).find((step) => step.recommended)?.id;
+    if (recommended && recommended !== activeTab) setActiveTab(recommended);
+  }, [activeTab, status]);
+
   const running = status?.jobs.some((job) => job.status === "running") || false;
   useEffect(() => {
     if (!running) return undefined;
@@ -1392,7 +1496,7 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
         </div>
       )}
 
-      <SetupTabs active={activeTab} onChange={changeTab} />
+      <SetupStepper active={activeTab} status={status} onChange={changeTab} />
 
       {activeTab === "link" && <AccountLinkingTab status={status} onRun={runAction} />}
 
