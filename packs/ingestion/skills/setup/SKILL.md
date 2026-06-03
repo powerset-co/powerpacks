@@ -84,20 +84,61 @@ I’ll run the independent imports in parallel so setup finishes sooner, then me
 Use jargon only in hidden/internal notes, command logs, or when asking another
 agent to execute a precise command.
 
+## Canonical install/root rule
+
+Always run setup from the canonical Powerpacks installation directory, not from
+an agent harness checkout such as `~/.codex/powerpacks` or `~/.codex/powerpacks-*`.
+The canonical repo is the first valid non-`.codex` path among:
+
+1. `$POWERPACKS_REPO_ROOT` when it points to a Powerpacks repo;
+2. the current working directory when it is a Powerpacks repo and is not under
+   `.codex`;
+3. `~/powerpacks`;
+4. `~/workspace/powerpacks`.
+
+If useful state was created under a `.codex` checkout, do **not** keep running
+there. First copy/adopt that local `.powerpacks/` state into the canonical repo,
+then run all commands from the canonical repo. Use:
+
+```bash
+cd <canonical-powerpacks-repo>
+uv run --project . python scripts/adopt-powerpacks-state.py \
+  --source ~/.codex/powerpacks \
+  --target "$PWD"
+```
+
+Use `--overwrite --backup-existing` only when the user explicitly wants the
+legacy state to replace existing canonical files, for example when an
+authenticated WhatsApp store was accidentally created under `.codex` and the
+canonical store is just an unauthenticated placeholder.
+
+This keeps msgvault DB paths, WhatsApp/wacli stores, setup ledgers, import
+artifacts, and DuckDB/index state repeatable under one `.powerpacks/` root.
+
 ## Commands
 
 `$setup` is the product command. By default, launch the local Powerpacks Console
-on the guided onboarding page and let the user click through linking, import,
-enrichment, and indexing from the app:
+from the canonical repo on the guided setup page and let the user click through
+linking, import, enrichment, and indexing from the app:
 
 ```bash
-if [[ -n "${POWERPACKS_REPO_ROOT:-}" ]]; then
-  "$POWERPACKS_REPO_ROOT/scripts/run-powerpacks-console.sh" start --path /onboarding --open
-elif [[ -x "scripts/run-powerpacks-console.sh" && -d "packs" ]]; then
-  scripts/run-powerpacks-console.sh start --path /onboarding --open
-else
-  "$HOME/.codex/powerpacks/scripts/run-powerpacks-console.sh" start --path /onboarding --open
-fi
+resolve_powerpacks_root() {
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+    [[ -n "$candidate" ]] || continue
+    [[ "$candidate" != *"/.codex/"* ]] || continue
+    if [[ -x "$candidate/scripts/run-powerpacks-console.sh" && -d "$candidate/packs" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+repo="$(resolve_powerpacks_root)" || {
+  echo "Powerpacks is not installed in a canonical location. Install or copy it to ~/powerpacks, then rerun $setup." >&2
+  exit 1
+}
+cd "$repo"
+scripts/run-powerpacks-console.sh start --path /setup --open
 ```
 
 If the script reports that the app is already running, use the printed `Open:`
@@ -105,9 +146,10 @@ URL. If macOS cannot open the browser from the current shell, tell the user the
 printed URL instead of falling back to `setup.py run`.
 
 Do not run `scripts/run-powerpacks-console.sh` relative to an arbitrary Codex
-cwd. If the user starts `$setup` from `~/` or another non-repo directory, invoke
-the installed launcher at `$HOME/.codex/powerpacks/scripts/run-powerpacks-console.sh`.
-That launcher resolves the actual repo/state root and prints it as `Repo: ...`.
+cwd. If the only available checkout is under `.codex`, stop and ask to install
+or copy Powerpacks to `~/powerpacks` or set `POWERPACKS_REPO_ROOT` to a
+canonical non-`.codex` path. Then adopt any `.codex` state with
+`scripts/adopt-powerpacks-state.py` as shown above.
 
 The app uses the same setup primitives through `/local-api/setup/*`, so this
 still runs the real setup flow. It just avoids one giant Codex-driven chain and
@@ -132,7 +174,7 @@ blindly.
 `$setup cli`:
 
 ```bash
-cd "${POWERPACKS_REPO_ROOT:-$HOME/.codex/powerpacks}"
+cd "${POWERPACKS_REPO_ROOT:-$HOME/powerpacks}"
 uv run --project . python packs/ingestion/primitives/setup/setup.py run \
   --operator-id <operator-id> \
   --accounts .powerpacks/ingestion/accounts.json \
@@ -143,7 +185,7 @@ The read-only next-action command tells agents exactly which phase should run
 next and returns the concrete command to run:
 
 ```bash
-cd "${POWERPACKS_REPO_ROOT:-$HOME/.codex/powerpacks}"
+cd "${POWERPACKS_REPO_ROOT:-$HOME/powerpacks}"
 uv run --project . python packs/ingestion/primitives/setup/setup.py next \
   --operator-id <operator-id> \
   --accounts .powerpacks/ingestion/accounts.json \
@@ -154,7 +196,7 @@ Phase entrypoints use the same underlying logic as `run`; they only narrow the
 scope so agents can test or resume one layer at a time:
 
 ```bash
-cd "${POWERPACKS_REPO_ROOT:-$HOME/.codex/powerpacks}"
+cd "${POWERPACKS_REPO_ROOT:-$HOME/powerpacks}"
 uv run --project . python packs/ingestion/primitives/setup/setup.py bootstrap \
   --operator-id <operator-id> \
   --setup-ledger .powerpacks/setup/setup-run.json
@@ -184,7 +226,7 @@ unrelated phases during debugging.
 For inspection without running refresh work, use local status:
 
 ```bash
-cd "${POWERPACKS_REPO_ROOT:-$HOME/.codex/powerpacks}"
+cd "${POWERPACKS_REPO_ROOT:-$HOME/powerpacks}"
 uv run --project . python packs/ingestion/primitives/setup/setup.py status \
   --operator-id <operator-id> \
   --accounts .powerpacks/ingestion/accounts.json \
@@ -333,6 +375,7 @@ DuckDB, run only local materialization:
 ```bash
 uv run --project . python scripts/build-local-duckdb-shim.py \
   --records-dir .powerpacks/search-index \
+  --derive-positions-from-person-profiles \
   --operator-id <operator-id> \
   --force
 ```

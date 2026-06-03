@@ -14,6 +14,11 @@ is_powerpacks_root() {
   [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]
 }
 
+is_codex_root() {
+  local candidate="$1"
+  [[ "$candidate" == *"/.codex/"* || "$candidate" == "$HOME/.codex" || "$candidate" == "$HOME/.codex/"* ]]
+}
+
 has_powerpacks_state() {
   local candidate="$1"
   [[ -f "$candidate/.powerpacks/setup/setup-run.json" ]] \
@@ -29,15 +34,28 @@ resolve_repo_root() {
     printf "%s\n" "$POWERPACKS_REPO_ROOT"
     return
   fi
-  if is_powerpacks_root "$PWD"; then
+  if is_powerpacks_root "$PWD" && ! is_codex_root "$PWD"; then
     printf "%s\n" "$PWD"
     return
   fi
 
-  local candidates=("$ROOT_DIR" "$HOME/.codex/powerpacks" "$HOME/workspace/powerpacks" "$HOME/powerpacks")
+  local preferred=("$HOME/powerpacks" "$HOME/workspace/powerpacks" "$ROOT_DIR")
+  local legacy=("$HOME/.codex/powerpacks")
   local candidate
-  for candidate in "${candidates[@]}"; do
-    if is_powerpacks_root "$candidate" && has_powerpacks_state "$candidate"; then
+  for candidate in "${preferred[@]}"; do
+    if is_powerpacks_root "$candidate" && ! is_codex_root "$candidate" && has_powerpacks_state "$candidate"; then
+      printf "%s\n" "$candidate"
+      return
+    fi
+  done
+  for candidate in "${preferred[@]}"; do
+    if is_powerpacks_root "$candidate" && ! is_codex_root "$candidate"; then
+      printf "%s\n" "$candidate"
+      return
+    fi
+  done
+  for candidate in "${legacy[@]}"; do
+    if is_powerpacks_root "$candidate"; then
       printf "%s\n" "$candidate"
       return
     fi
