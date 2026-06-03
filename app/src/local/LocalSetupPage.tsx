@@ -844,38 +844,81 @@ function AccountLinkingTab({
   );
 }
 
-function ImportSourceRow({ source, onRun, actionState }: { source: SetupImportSource; onRun: (body: Record<string, unknown>) => void; actionState: ActionState }) {
+function ImportSourceRow({
+  source,
+  expanded,
+  onToggle,
+  onRun,
+  actionState,
+}: {
+  source: SetupImportSource;
+  expanded: boolean;
+  onToggle: () => void;
+  onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
+}) {
   const Icon = SOURCE_ICONS[source.sourceId as SetupSourceId] || Database;
   const canRun = source.linked && !source.skipped && source.runnable !== false;
   const updated = source.linked && !source.skipped ? updatedLabel(source.updatedAt) : "";
+  const accountLabel = source.accountEmail || (source.accountCount ? `${source.accountCount.toLocaleString()} accounts` : "");
   return (
-    <div className="grid gap-3 border-b px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_140px_auto] md:items-center">
-      <div className="flex min-w-0 items-start gap-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-background">
-          <Icon className="h-4 w-4 text-muted-foreground" />
-        </div>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="truncate text-sm font-medium">{source.label}</div>
-            <StatusBadge status={source.status} />
+    <div className="border-b last:border-b-0">
+      <button
+        type="button"
+        className="grid w-full gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30 md:grid-cols-[minmax(0,1fr)_140px_auto] md:items-center"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-background">
+            <Icon className="h-4 w-4 text-muted-foreground" />
           </div>
-          <div className="mt-1 truncate text-xs text-muted-foreground">
-            {source.disabledReason || (updated ? `Last refreshed ${updated}` : source.skipped ? "" : "No refresh yet")}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="truncate text-sm font-medium">{source.label}</div>
+              <StatusBadge status={source.status} />
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              {source.disabledReason || (updated ? `Last refreshed ${updated}` : source.skipped ? "" : "No refresh yet")}
+            </div>
           </div>
         </div>
-      </div>
-      <KeyValue label="Updated" value={updated} />
-      <div className="flex justify-end gap-2">
-        <ActionButton
-          action="import-source"
-          actionState={actionState}
-          size="sm"
-          onClick={() => onRun({ action: "import-source", source: source.id })}
-          disabled={!canRun}
-        >
-          <Play className="h-4 w-4" /> Import
-        </ActionButton>
-      </div>
+        <KeyValue label="Updated" value={updated} />
+        <div className="flex items-center justify-end gap-2 text-xs font-medium text-muted-foreground">
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          <span>{expanded ? "Hide stats" : "Stats"}</span>
+        </div>
+      </button>
+      {expanded && (
+        <div className="border-t bg-muted/20 px-4 py-4">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <MetricChip label="Status" value={displayStatus(source.status)} />
+                <MetricChip label="Accounts" value={accountLabel} />
+                <MetricChip label="Runnable" value={canRun ? "Yes" : "No"} />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <KeyValue label="Source" value={source.label} />
+                <KeyValue label="Last refreshed" value={updated} />
+                <KeyValue label="Run ID" value={source.runId} />
+                <KeyValue label="Blocked reason" value={source.disabledReason} />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <ActionButton
+                action="import-source"
+                actionState={actionState}
+                size="sm"
+                onClick={() => onRun({ action: "import-source", source: source.id })}
+                disabled={!canRun}
+              >
+                <Play className="h-4 w-4" /> Import {source.label}
+              </ActionButton>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -890,6 +933,15 @@ function ImportTab({
   actionState: ActionState;
 }) {
   const importSources = status.import.sources || [];
+  const [expandedSources, setExpandedSources] = useState<Set<string>>(() => new Set());
+  const toggleExpanded = (id: string) => {
+    setExpandedSources((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   return (
     <div className="space-y-4">
       <section className="rounded-md border bg-card">
@@ -905,7 +957,16 @@ function ImportTab({
         </div>
         <div>
           {importSources.length ? (
-            importSources.map((source) => <ImportSourceRow key={source.id} source={source} onRun={onRun} actionState={actionState} />)
+            importSources.map((source) => (
+              <ImportSourceRow
+                key={source.id}
+                source={source}
+                expanded={expandedSources.has(source.id)}
+                onToggle={() => toggleExpanded(source.id)}
+                onRun={onRun}
+                actionState={actionState}
+              />
+            ))
           ) : (
             <div className="p-6 text-sm text-muted-foreground">No linked accounts found.</div>
           )}
