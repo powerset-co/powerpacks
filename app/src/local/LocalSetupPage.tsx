@@ -431,6 +431,17 @@ function money(value?: number | null): string {
   return `$${value.toFixed(2)}`;
 }
 
+function duckdbTableLabel(name: string): string {
+  const labels: Record<string, string> = {
+    local_people_positions: "Role / position vectors",
+    local_summaries: "Person summary vectors",
+    local_people_education: "Person education rows",
+    local_education: "School lookup rows",
+    local_companies: "Company vectors",
+  };
+  return labels[name] || name;
+}
+
 function formatBytes(value?: number | null): string {
   const bytes = Number(value || 0);
   if (!bytes) return "";
@@ -1322,7 +1333,10 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                     <tbody>
                       {status.index.duckdbTables.map((table) => (
                         <tr key={table.name} className="border-t">
-                          <td className="px-3 py-2">{table.name}</td>
+                          <td className="px-3 py-2">
+                            <div>{duckdbTableLabel(table.name)}</div>
+                            <div className="text-xs text-muted-foreground">{table.name}</div>
+                          </td>
                           <td className="px-3 py-2 text-right tabular-nums">{table.rows.toLocaleString()}</td>
                         </tr>
                       ))}

@@ -1448,7 +1448,7 @@ function localDuckdbTableCounts(duckdbPath: string): Array<{ name: string; rows:
   }
   const script = `
 import duckdb, json
-tables = ["local_people", "local_people_positions", "local_summaries", "local_people_education", "local_education", "local_companies"]
+tables = ["local_people_positions", "local_summaries", "local_people_education", "local_education", "local_companies"]
 out = []
 con = duckdb.connect(${JSON.stringify(duckdbPath)}, read_only=True)
 for table in tables:
