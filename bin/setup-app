@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_DIR="${POWERPACKS_APP_DIR:-$ROOT/app}"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-5177}"
+CLEAN="0"
+START_DEV="0"
+RUN_BUILD="1"
+REPAIR_ONLY="0"
+
+usage() {
+  cat >&2 <<'EOF'
+usage: bin/setup-app [--clean] [--repair-only] [--no-build] [--dev] [--host HOST] [--port PORT]
+
+Installs and verifies the local Powerpacks Vite app with npm.
+
+  --clean        remove app/node_modules before installing
+  --repair-only  skip npm install when node_modules passes the local health check
+  --no-build     skip npm run build verification
+  --dev          after setup, run npm run dev in the foreground
+  --host HOST    host passed to vite when --dev is used (default: 0.0.0.0)
+  --port PORT    port passed to vite when --dev is used (default: 5177)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --clean)
+      CLEAN="1"
+      shift
+      ;;
+    --repair-only)
+      REPAIR_ONLY="1"
+      shift
+      ;;
+    --no-build)
+      RUN_BUILD="0"
+      shift
+      ;;
+    --dev|--start)
+      START_DEV="1"
+      shift
+      ;;
+    --host)
+      HOST="${2:-}"
+      if [[ -z "$HOST" ]]; then
+        usage
+        exit 2
+      fi
+      shift 2
+      ;;
+    --port)
+      PORT="${2:-}"
+      if [[ -z "$PORT" ]]; then
+        usage
+        exit 2
+      fi
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "error: npm is required for the Powerpacks local app." >&2
+  echo "Install Node.js LTS, then rerun: ./install.sh app" >&2
+  exit 1
+fi
+
+if [[ ! -f "$APP_DIR/package.json" ]]; then
+  echo "error: app/package.json not found at $APP_DIR" >&2
+  exit 1
+fi
+
+tailwind_preflight="$APP_DIR/node_modules/tailwindcss/lib/css/preflight.css"
+
+if [[ "$CLEAN" == "1" ]]; then
+  echo "setup-app: removing app/node_modules"
+  rm -rf "$APP_DIR/node_modules"
+fi
+
+needs_install="0"
+if [[ ! -d "$APP_DIR/node_modules" ]]; then
+  needs_install="1"
+elif [[ "$REPAIR_ONLY" != "1" ]]; then
+  needs_install="1"
+fi
+
+if [[ "$needs_install" == "1" ]]; then
+  echo "setup-app: npm install"
+  (cd "$APP_DIR" && npm install)
+fi
+
+if [[ ! -f "$tailwind_preflight" ]]; then
+  echo "setup-app: repairing incomplete tailwindcss install"
+  rm -rf "$APP_DIR/node_modules/tailwindcss"
+  (cd "$APP_DIR" && npm install)
+fi
+
+if [[ ! -f "$tailwind_preflight" ]]; then
+  echo "error: tailwindcss is still missing lib/css/preflight.css after npm install." >&2
+  echo "Try: rm -rf app/node_modules && ./install.sh app" >&2
+  exit 1
+fi
+
+if [[ "$RUN_BUILD" == "1" ]]; then
+  echo "setup-app: npm run build"
+  (cd "$APP_DIR" && npm run build)
+fi
+
+echo "setup-app: local app dependencies ready ($APP_DIR)"
+
+if [[ "$START_DEV" == "1" ]]; then
+  echo "setup-app: npm run dev -- --host $HOST --port $PORT"
+  cd "$APP_DIR"
+  exec npm run dev -- --host "$HOST" --port "$PORT"
+fi
