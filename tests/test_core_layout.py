@@ -121,6 +121,8 @@ class CoreLayoutTests(unittest.TestCase):
             bundle = codex_home / "powerpacks"
             self.assertTrue((bundle / "packs").is_dir())
             self.assertTrue((bundle / "pyproject.toml").exists())
+            self.assertTrue((bundle / "scripts" / "run-powerpacks-console.sh").exists())
+            self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
