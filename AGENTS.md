@@ -193,6 +193,8 @@ Routes:
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
 - `$powerset`, `$powerset setup`, Powerset login/status/whoami/sets/MCP/env credentials →
   `packs/powerset/skills/powerset/SKILL.md`
+- `$update-powerpacks`, reinstall/update Powerpacks skills, canonical install/state cleanup, adopt `.codex` state →
+  `packs/powerset/skills/update-powerpacks/SKILL.md`
 - `$import-contacts`, iMessage, WhatsApp, contact import/review/upload/retarget →
   `packs/messages/skills/import-contacts/SKILL.md`
 - `$msgvault`, `$local-msg-vault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →

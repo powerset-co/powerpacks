@@ -34,7 +34,7 @@ install_powerpacks_bundle() {
   # scripts/build-local-duckdb-shim.py to materialize restored bootstrap records
   # into .powerpacks/search-index/local-search.duckdb.
   mkdir -p "$tmp/scripts"
-  for script in run-powerpacks-console.sh build-local-duckdb-shim.py; do
+  for script in run-powerpacks-console.sh build-local-duckdb-shim.py adopt-powerpacks-state.py; do
     cp "$REPO_ROOT/scripts/$script" "$tmp/scripts/$script"
     chmod +x "$tmp/scripts/$script"
   done
@@ -95,6 +95,7 @@ install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-l
 install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
+install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
 install_skill import-contacts "$REPO_ROOT/packs/messages/skills/import-contacts/SKILL.md"
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
@@ -115,5 +116,5 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks sales-nav-search setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter"
 echo "restart Codex to pick up the skill list"
