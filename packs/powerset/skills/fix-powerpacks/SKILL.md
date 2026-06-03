@@ -79,6 +79,18 @@ repo="$(resolve_powerpacks_root)" || {
 cd "$repo"
 ```
 
+Before running repair, verify the canonical checkout actually contains the fixer.
+If this file is missing, the installed skill is newer than the repo that Codex is
+using; stop and run `$update-powerpacks` from a checkout/branch that contains the
+fixer, or update/merge the canonical repo first.
+
+```bash
+test -f scripts/fix-powerpacks-state.py || {
+  echo "Missing scripts/fix-powerpacks-state.py in $repo; update the canonical checkout first." >&2
+  exit 1
+}
+```
+
 Run a dry-run diagnosis first:
 
 ```bash

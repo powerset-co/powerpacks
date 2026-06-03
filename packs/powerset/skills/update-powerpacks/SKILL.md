@@ -75,7 +75,23 @@ git pull --ff-only || true
 If local changes block the pull, stop and report the changed files. Do not stash
 or overwrite user changes without explicit approval.
 
-3. Install/update Python deps and skills from the canonical repo:
+3. Verify the canonical checkout contains the expected update/fix helpers. If
+these files are missing, the checkout is stale/incomplete; do **not** continue
+with state repair from installed skill docs that may be newer than the repo.
+Update the repo/branch first.
+
+```bash
+test -f scripts/fix-powerpacks-state.py || {
+  echo "Missing scripts/fix-powerpacks-state.py; this checkout is stale or incomplete." >&2
+  exit 1
+}
+test -f packs/powerset/skills/fix-powerpacks/SKILL.md || {
+  echo "Missing fix-powerpacks skill; this checkout is stale or incomplete." >&2
+  exit 1
+}
+```
+
+4. Install/update Python deps and skills from the canonical repo:
 
 ```bash
 bin/setup-python
@@ -84,16 +100,22 @@ bin/update-codex
 # adapters/pi/install.sh
 ```
 
-4. Restart the agent/session if the skill list changed. For Pi, `/reload` or a
+5. Restart the agent/session if the skill list changed. For Pi, `/reload` or a
 new session may be required. For Codex, restart Codex.
 
 ## Adopt state from accidental `.codex` installs
 
 If useful state exists under `~/.codex/powerpacks/.powerpacks`, use the state
-contract fixer before running setup/import/index:
+contract fixer before running setup/import/index. First verify the helper exists;
+if it does not, the installed skill is newer than the checkout and the correct
+fix is to update/merge the canonical repo, not to keep using stale commands.
 
 ```bash
 cd "$repo"
+test -f scripts/fix-powerpacks-state.py || {
+  echo "Missing scripts/fix-powerpacks-state.py in $repo; update the canonical checkout first." >&2
+  exit 1
+}
 uv run --project . python scripts/fix-powerpacks-state.py --json
 uv run --project . python scripts/fix-powerpacks-state.py --apply --json
 ```

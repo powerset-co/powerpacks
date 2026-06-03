@@ -10,11 +10,18 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PI_HOME="${PI_HOME:-$HOME/.pi/agent}"
 SKILLS_DIR="${1:-$PI_HOME/skills}"
 
+MANAGED_SKILLS=(
+  search-network search-company search-contacts build-local-search-index
+  powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search
+  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
+  import-email import-network import-twitter
+  import-messages import-imessage import-contacts-review
+)
+
 mkdir -p "$SKILLS_DIR"
-rm -rf "$SKILLS_DIR/import-messages" \
-  "$SKILLS_DIR/import-imessage" \
-  "$SKILLS_DIR/import-whatsapp" \
-  "$SKILLS_DIR/import-contacts-review"
+for skill in "${MANAGED_SKILLS[@]}"; do
+  rm -rf "$SKILLS_DIR/$skill"
+done
 "$REPO_ROOT/bin/setup-python"
 
 copy_powerpacks_bundle() {
