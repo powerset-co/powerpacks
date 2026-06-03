@@ -121,6 +121,7 @@ export interface SetupJob {
   code?: number | null;
   stdout?: string;
   stderr?: string;
+  log?: string;
   output?: Record<string, unknown> | null;
 }
 

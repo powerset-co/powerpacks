@@ -142,11 +142,6 @@ function refreshLabel(status: SetupStatusResponse): string {
   return `Last refreshed ${label}`;
 }
 
-function tailText(value?: string, limit = 3500): string {
-  const text = String(value || "");
-  return text.length > limit ? text.slice(text.length - limit) : text;
-}
-
 function hasSetupTabParam(): boolean {
   return new URLSearchParams(window.location.search).has("tab");
 }
@@ -171,7 +166,7 @@ function cleanJobText(value?: string): string {
 }
 
 function latestJobLine(job: SetupJob): string {
-  return cleanJobText([job.stdout, job.stderr].filter(Boolean).join("\n"))
+  return cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n"))
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -1418,11 +1413,19 @@ function JobPanel({
       )}
       <details open={job.status === "running"}>
         <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-muted-foreground">Command and logs</summary>
-        <div className="border-t px-4 py-3 text-xs text-muted-foreground">
-          <div className="mb-2 font-mono">{cleanJobText(job.command.join(" "))}</div>
-          <pre className="max-h-80 overflow-auto whitespace-pre-wrap">
-            {tailText(cleanJobText([job.stdout, job.stderr].filter(Boolean).join("\n"))) || "No output yet."}
-          </pre>
+        <div className="space-y-3 border-t px-4 py-3 text-xs text-muted-foreground">
+          <div>
+            <div className="mb-1 font-medium">Command</div>
+            <pre className="max-h-32 overflow-auto rounded-md bg-muted/40 p-3 font-mono whitespace-pre-wrap break-words">
+              {cleanJobText(job.command.join(" "))}
+            </pre>
+          </div>
+          <div>
+            <div className="mb-1 font-medium">Logs</div>
+            <pre className="max-h-[28rem] overflow-auto rounded-md bg-muted/40 p-3 font-mono whitespace-pre-wrap break-words">
+              {cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n")) || "No output yet."}
+            </pre>
+          </div>
         </div>
       </details>
     </section>

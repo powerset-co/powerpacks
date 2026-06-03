@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -106,15 +107,58 @@ def tail(text: str, limit: int = 4000) -> str:
     return text[-limit:]
 
 
-def run_json_command(cmd: list[str], timeout: int = 6 * 60 * 60) -> tuple[int, dict[str, Any], str]:
-    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+def progress(message: str) -> None:
+    print(f"[setup {now()}] {message}", file=sys.stderr, flush=True)
+
+
+def run_json_command(cmd: list[str], timeout: int = 6 * 60 * 60, *, stream_stderr: bool = False) -> tuple[int, dict[str, Any], str]:
+    if not stream_stderr:
+        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+        payload: dict[str, Any]
+        try:
+            parsed = parse_json_fragment(proc.stdout)
+            payload = parsed if isinstance(parsed, dict) else {'payload': parsed}
+        except json.JSONDecodeError:
+            payload = {}
+        return proc.returncode, payload, proc.stderr
+
+    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def read_stream(stream: Any, chunks: list[str], *, mirror_stderr: bool = False) -> None:
+        try:
+            for line in iter(stream.readline, ''):
+                chunks.append(line)
+                if mirror_stderr:
+                    print(line, end='', file=sys.stderr, flush=True)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    stdout_thread = threading.Thread(target=read_stream, args=(proc.stdout, stdout_chunks), daemon=True)
+    stderr_thread = threading.Thread(target=read_stream, args=(proc.stderr, stderr_chunks), kwargs={'mirror_stderr': True}, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    try:
+        code = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        code = proc.wait()
+        stderr_chunks.append(f"\ncommand timed out after {timeout} seconds\n")
+    stdout_thread.join(timeout=5)
+    stderr_thread.join(timeout=5)
+    stdout = ''.join(stdout_chunks)
+    stderr = ''.join(stderr_chunks)
     payload: dict[str, Any]
     try:
-        parsed = parse_json_fragment(proc.stdout)
+        parsed = parse_json_fragment(stdout)
         payload = parsed if isinstance(parsed, dict) else {'payload': parsed}
     except json.JSONDecodeError:
         payload = {}
-    return proc.returncode, payload, proc.stderr
+    return code, payload, stderr
 
 
 def sha256_file(path: Path) -> str:
@@ -2075,13 +2119,17 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
     run_id = f"setup-refresh-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     before_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
     results: dict[str, Any] = {'status': 'running', 'started_at': started_at, 'reason': due.get('reason'), 'run_id': run_id}
+    progress(f"Import refresh started: run_id={run_id}, reason={due.get('reason')}, linked_sources={','.join(due.get('linked_sources') or linked_sources(accounts)) or 'none'}")
 
     refresh_reason = str(due.get('reason') or '')
     force_reasons = {'forced', 'refresh_interval_elapsed', 'linked_sources_changed', 'missing_import_artifact', 'import_artifact_drift'}
     force_messages = refresh_reason in force_reasons
     message_cmd = message_refresh_command(accounts, SETUP_MESSAGES_LEDGER, force=force_messages)
     if message_cmd:
-        code, payload, stderr = run_json_command(message_cmd)
+        progress("Starting Messages import/enrichment prerequisites...")
+        progress("Command: " + ' '.join(shlex.quote(part) for part in message_cmd))
+        code, payload, stderr = run_json_command(message_cmd, stream_stderr=True)
+        progress(f"Messages step finished with code={code}, status={payload.get('status') or 'unknown'}")
         results['messages'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
         if code in (20, 21) or str(payload.get('status', '')).startswith('blocked'):
             return {'status': 'blocked_user_action', 'step': 'messages', 'refresh': results, 'payload': payload}, code or 20
@@ -2094,7 +2142,11 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
     # local source/message timestamp. The setup wrapper should not replace that
     # with a broad run-level lookback.
     gmail_sync_after = ''
-    code, payload, stderr = run_json_command(network_refresh_command(args, run_id, force=force_network, gmail_sync_after=gmail_sync_after))
+    network_cmd = network_refresh_command(args, run_id, force=force_network, gmail_sync_after=gmail_sync_after)
+    progress("Starting network import refresh (Gmail/LinkedIn/Twitter as linked)...")
+    progress("Command: " + ' '.join(shlex.quote(part) for part in network_cmd))
+    code, payload, stderr = run_json_command(network_cmd, stream_stderr=True)
+    progress(f"Network import step finished with code={code}, status={payload.get('status') or 'unknown'}")
     results['network'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
     if code == 20 or payload.get('status') == 'blocked_approval':
         return {'status': 'blocked_approval', 'step': 'network_import', 'refresh': results, 'payload': payload}, 20
@@ -2103,6 +2155,7 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
 
     promoted = promote_network_artifacts(payload.get('artifacts') or {})
     after_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
+    progress(f"Import refresh completed: network_changed={bool(after_hash and before_hash != after_hash)}")
     completed = {
         'status': 'completed',
         'started_at': started_at,

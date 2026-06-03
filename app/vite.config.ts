@@ -40,6 +40,7 @@ type SetupJob = {
   code?: number | null;
   stdout?: string;
   stderr?: string;
+  log?: string;
   output?: Record<string, any> | null;
 };
 type SetupImportSource = {
@@ -458,6 +459,7 @@ function startSetupJob(action: string, command: string[], timeoutMs = 6 * 60 * 6
     code: null,
     stdout: "",
     stderr: "",
+    log: "",
     output: null,
   };
   setupJobs.set(job.id, job);
@@ -473,16 +475,21 @@ function startSetupJob(action: string, command: string[], timeoutMs = 6 * 60 * 6
   }, timeoutMs);
 
   child.stdout.on("data", (chunk) => {
-    job.stdout = `${job.stdout || ""}${chunk.toString()}`;
+    const text = chunk.toString();
+    job.stdout = `${job.stdout || ""}${text}`;
+    job.log = `${job.log || ""}${text}`;
   });
   child.stderr.on("data", (chunk) => {
-    job.stderr = `${job.stderr || ""}${chunk.toString()}`;
+    const text = chunk.toString();
+    job.stderr = `${job.stderr || ""}${text}`;
+    job.log = `${job.log || ""}${text}`;
   });
   child.on("error", (err) => {
     clearTimeout(timer);
     job.status = "failed";
     job.completedAt = new Date().toISOString();
     job.stderr = `${job.stderr || ""}${err.message}`;
+    job.log = `${job.log || ""}${err.message}`;
   });
   child.on("close", (code) => {
     clearTimeout(timer);
