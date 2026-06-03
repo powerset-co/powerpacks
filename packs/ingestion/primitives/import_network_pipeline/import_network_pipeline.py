@@ -76,6 +76,10 @@ GMAIL_LABEL_QUERY_TERMS = {
 DIRECTORY_COLUMNS = [
     "source",
     "source_key",
+    "source_account",
+    "source_id",
+    "source_channels",
+    "status",
     "email",
     "phone",
     "name",
@@ -353,12 +357,17 @@ def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", 
     source_key = str(row.get("source_key") or "").strip()
     if not source_key:
         source_key = directory_identity_key(email, phone, name, public_identifier)
-    if not linkedin_url or not public_identifier or not source_key:
+    if not source_key:
         return {}
     confidence = parse_confidence(row.get("confidence"), 0.0)
+    status = str(row.get("status") or ("found" if public_identifier else "observed")).strip().lower()
     output = {
         "source": str(row.get("source") or source or "directory"),
         "source_key": source_key,
+        "source_account": str(row.get("source_account") or row.get("account_email") or ""),
+        "source_id": str(row.get("source_id") or ""),
+        "source_channels": str(row.get("source_channels") or ""),
+        "status": status,
         "email": email,
         "phone": phone,
         "name": name,
@@ -539,7 +548,18 @@ def load_directory_lookup(directory_csv: Path, min_confidence: float = 0.75) -> 
     name_candidates: dict[str, list[dict[str, str]]] = {}
     for row in read_csv_rows(directory_csv)[1]:
         normalized = normalized_directory_row(row, source="directory")
-        if not normalized or parse_confidence(normalized.get("confidence"), 0.0) < min_confidence:
+        if not normalized:
+            continue
+        # Index confirmed not_found entries by email so they're excluded from resolution queues
+        row_status = str(normalized.get("status") or "").strip().lower()
+        if row_status == "not_found" and normalized.get("email"):
+            lookup["email"].setdefault(normalized["email"].lower(), normalized)
+            continue
+        if (
+            not normalized.get("linkedin_url")
+            or not normalized.get("public_identifier")
+            or parse_confidence(normalized.get("confidence"), 0.0) < min_confidence
+        ):
             continue
         if normalized.get("email"):
             lookup["email"][normalized["email"].lower()] = normalized
@@ -592,16 +612,35 @@ def resolution_from_directory_match(queue_row: dict[str, str], directory_row: di
     }
 
 
+def _is_resolvable_person(row: dict[str, str]) -> bool:
+    """Return True if the queue row looks like a real person worth resolving."""
+    try:
+        from packs.ingestion.primitives.resolve_linkedin_queue.resolve_linkedin_queue import (
+            is_generic_or_non_person,
+            is_likely_person_name,
+        )
+    except ImportError:
+        return True
+    email = (row.get("primary_email") or row.get("email") or row.get("handle") or "").strip()
+    name = (row.get("display_name") or row.get("full_name") or "").strip()
+    if not email or not name:
+        return False
+    return not is_generic_or_non_person(email) and is_likely_person_name(name)
+
+
 def apply_directory_to_gmail_queue(record: dict[str, Any], directory_csv: Path, output_dir: Path) -> dict[str, Any]:
     queue_csv = Path(str(record.get("queue_csv") or ""))
     fields, rows = read_csv_rows(queue_csv)
     lookup = load_directory_lookup(directory_csv)
     resolved: list[dict[str, str]] = []
     unresolved: list[dict[str, str]] = []
+    filtered_non_person = 0
     for row in rows:
         match = directory_match_for_queue_row(row, lookup)
         if match:
             resolved.append(resolution_from_directory_match(row, match))
+        elif not _is_resolvable_person(row):
+            filtered_non_person += 1
         else:
             unresolved.append(row)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -617,7 +656,210 @@ def apply_directory_to_gmail_queue(record: dict[str, Any], directory_csv: Path, 
         "input_rows": len(rows),
         "resolved": len(resolved),
         "unresolved": len(unresolved),
+        "filtered_non_person": filtered_non_person,
     })
+    return result
+
+
+def parse_json_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return unique_strings(value)
+    text = str(value or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = []
+    if isinstance(parsed, list):
+        return unique_strings(parsed)
+    return []
+
+
+def gmail_directory_source_key(account_email: str, email: str, fallback_id: str = "") -> str:
+    account = (account_email or "unknown").strip().lower()
+    if email:
+        return f"gmail:{account}:email:{email.strip().lower()}"
+    return f"gmail:{account}:source:{fallback_id.strip().lower()}"
+
+
+def directory_rows_from_gmail_queue(record: dict[str, Any]) -> list[dict[str, str]]:
+    queue_csv = Path(str(record.get("queue_csv") or ""))
+    if not queue_csv.exists():
+        return []
+    account_email = str(record.get("account_email") or "").strip().lower()
+    _fields, rows = read_csv_rows(queue_csv)
+    output: list[dict[str, str]] = []
+    for row in rows:
+        email = str(row.get("primary_email") or row.get("handle") or "").strip().lower()
+        if not email:
+            continue
+        accounts = parse_json_list(row.get("account_emails")) or unique_strings(account_email)
+        source_ids = parse_json_list(row.get("source_ids"))
+        if not accounts:
+            accounts = [account_email or ""]
+        if not source_ids:
+            source_ids = [""]
+        for account in accounts:
+            output.append(normalized_directory_row({
+                "source": "gmail_msgvault",
+                "source_key": gmail_directory_source_key(account, email, row.get("id") or ""),
+                "source_account": account,
+                "source_id": json.dumps(source_ids, ensure_ascii=False),
+                "source_channels": row.get("source_channels") or "gmail_msgvault",
+                "status": "observed",
+                "email": email,
+                "name": row.get("display_name") or row.get("full_name") or "",
+                "confidence": "0",
+                "evidence": json.dumps({
+                    "source": "gmail_msgvault",
+                    "queue_csv": str(queue_csv),
+                    "account_email": account,
+                    "source_ids": source_ids,
+                    "total_messages": row.get("total_messages", ""),
+                    "thread_count": row.get("thread_count", ""),
+                    "last_interaction": row.get("last_interaction", ""),
+                }, sort_keys=True),
+                "reasoning": "Observed in local Gmail metadata",
+            }, source_artifact=str(queue_csv), updated_at=now_iso()))
+    return [row for row in output if row]
+
+
+def commit_directory_rows(directory_csv: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
+    existing: dict[str, dict[str, str]] = {}
+    if directory_csv.exists():
+        for row in read_csv_rows(directory_csv)[1]:
+            normalized = normalized_directory_row(row, source="directory")
+            if normalized:
+                existing[normalized["source_key"]] = normalized
+    merged = merge_directory_rows(rows, existing)
+    write_csv_rows(directory_csv, DIRECTORY_COLUMNS, merged)
+    return {"directory_csv": str(directory_csv), "existing_rows": len(existing), "imported_rows": len(rows), "rows": len(merged)}
+
+
+def people_directory_source_key(row: dict[str, str], source: str, source_account: str, public_identifier: str) -> str:
+    source_name = (source or row.get("source_channels") or "people").strip().lower()
+    account = (source_account or "").strip().lower()
+    email = str(row.get("primary_email") or "").strip().lower()
+    phone = normalize_phone(row.get("primary_phone") or "")
+    if source_name == "gmail_msgvault" and account and email:
+        return gmail_directory_source_key(account, email)
+    if source_name == "linkedin_csv":
+        return f"linkedin_csv:{account or 'local'}:linkedin:{public_identifier}"
+    if source_name == "messages":
+        if phone:
+            return f"messages:phone:{phone}"
+        return f"messages:linkedin:{public_identifier}"
+    if email:
+        return f"{source_name}:email:{email}"
+    if phone:
+        return f"{source_name}:phone:{phone}"
+    return f"{source_name}:linkedin:{public_identifier}"
+
+
+def directory_rows_from_people_csv(path: Path, *, source: str = "", source_account: str = "") -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, str]] = []
+    for row in read_csv_rows(path)[1]:
+        linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or "")
+        public_identifier = extract_public_identifier(linkedin_url)
+        if not public_identifier:
+            continue
+        source_name = source or (row.get("source_channels") or "").split(",", 1)[0] or directory_source_kind(path)
+        email = str(row.get("primary_email") or "").strip().lower()
+        phone = normalize_phone(row.get("primary_phone") or "")
+        rows.append(normalized_directory_row({
+            "source": source_name,
+            "source_key": people_directory_source_key(row, source_name, source_account, public_identifier),
+            "source_account": source_account,
+            "source_id": row.get("id") or "",
+            "source_channels": row.get("source_channels") or source_name,
+            "status": "found",
+            "email": email,
+            "phone": phone,
+            "name": row.get("full_name") or directory_name(row),
+            "linkedin_url": linkedin_url,
+            "confidence": "1.00",
+            "matched_name": row.get("full_name") or directory_name(row),
+            "matched_headline": row.get("headline") or "",
+            "evidence": json.dumps({
+                "source": source_name,
+                "people_csv": str(path),
+                "public_identifier": public_identifier,
+            }, sort_keys=True),
+            "reasoning": "Confirmed by enriched source people artifact",
+            "_priority": 95 if source_name in {"linkedin_csv", "messages"} else 80,
+        }, source_artifact=str(path), updated_at=now_iso()))
+    return [row for row in rows if row]
+
+
+def commit_people_csv_to_directory(
+    input_cfg: dict[str, Any],
+    artifacts: dict[str, Any],
+    people_csv: str,
+    *,
+    source: str,
+    source_account: str = "",
+) -> dict[str, Any]:
+    path = Path(str(people_csv or ""))
+    directory_csv = Path(input_cfg.get("linkedin_directory_csv") or artifacts.get("directory_csv") or DEFAULT_DIRECTORY_CSV)
+    rows = directory_rows_from_people_csv(path, source=source, source_account=source_account)
+    result = commit_directory_rows(directory_csv, rows)
+    result.update({"source": source, "source_account": source_account, "people_csv": str(path), "confirmed_rows": len(rows)})
+    artifacts["directory_csv"] = str(directory_csv)
+    return result
+
+
+def commit_gmail_observations_to_directory(input_cfg: dict[str, Any], artifacts: dict[str, Any]) -> dict[str, Any]:
+    directory_csv = Path(input_cfg.get("linkedin_directory_csv") or artifacts.get("directory_csv") or DEFAULT_DIRECTORY_CSV)
+    rows: list[dict[str, str]] = []
+    for record in gmail_queue_records(artifacts):
+        if isinstance(record, dict):
+            rows.extend(directory_rows_from_gmail_queue(record))
+    result = commit_directory_rows(directory_csv, rows)
+    result["gmail_observation_rows"] = len(rows)
+    artifacts["directory_csv"] = str(directory_csv)
+    artifacts["gmail_directory_observation_checkpoint"] = result
+    return result
+
+
+def commit_gmail_resolutions_to_directory(input_cfg: dict[str, Any], artifacts: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any]:
+    directory_csv = Path(input_cfg.get("linkedin_directory_csv") or artifacts.get("directory_csv") or DEFAULT_DIRECTORY_CSV)
+    rows: list[dict[str, str]] = []
+    for record in records:
+        if not isinstance(record, dict) or not record.get("resolutions_csv"):
+            continue
+        account_email = str(record.get("account_email") or "").strip().lower()
+        for resolution in merge_resolution_rows([Path(str(record["resolutions_csv"]))]):
+            email = str(resolution.get("handle") or "").strip().lower()
+            if "@" not in email:
+                continue
+            evidence = {
+                "source": "gmail_linkedin_resolution",
+                "account_email": account_email,
+                "resolutions_csv": record.get("resolutions_csv"),
+                "resolution_evidence": resolution.get("evidence", ""),
+            }
+            rows.append(normalized_directory_row({
+                "source": "gmail_msgvault",
+                "source_key": gmail_directory_source_key(account_email, email),
+                "source_account": account_email,
+                "source_channels": "gmail_msgvault",
+                "status": "found",
+                "email": email,
+                "name": resolution.get("matched_name") or "",
+                "linkedin_url": resolution.get("linkedin_url") or "",
+                "confidence": resolution.get("confidence") or "0",
+                "matched_name": resolution.get("matched_name") or "",
+                "matched_headline": resolution.get("matched_headline") or "",
+                "evidence": json.dumps(evidence, sort_keys=True),
+                "reasoning": resolution.get("reasoning") or "",
+            }, source_artifact=str(record.get("resolutions_csv") or ""), updated_at=now_iso()))
+    result = commit_directory_rows(directory_csv, rows)
+    result["gmail_resolution_rows"] = len(rows)
+    artifacts["directory_csv"] = str(directory_csv)
+    artifacts["gmail_directory_resolution_checkpoint"] = result
     return result
 
 
@@ -1729,6 +1971,16 @@ def record_linkedin_worker_result(ledger_path: Path, ledger: dict[str, Any], res
     mark_step(ledger, "linkedin", "completed", payload=payload)
     for key, value in (payload.get("artifacts") or {}).items():
         ledger.setdefault("artifacts", {})[f"linkedin_{key}"] = value
+    people_csv = (payload.get("artifacts") or {}).get("people_csv")
+    if people_csv:
+        checkpoint = commit_people_csv_to_directory(
+            ledger.get("input", {}),
+            ledger.setdefault("artifacts", {}),
+            str(people_csv),
+            source="linkedin_csv",
+            source_account=str(ledger.get("input", {}).get("linkedin_source_user") or "local"),
+        )
+        ledger.setdefault("artifacts", {})["linkedin_directory_checkpoint"] = checkpoint
     emit_progress("LinkedIn import completed.")
     return True
 
@@ -2020,10 +2272,12 @@ def run_gmail_directory(ledger_path: Path, ledger: dict[str, Any]) -> bool:
         mark_step(ledger, "gmail_directory", "skipped", reason="no Gmail LinkedIn queue", checkpoint=checkpoint)
         return True
     begin_step(ledger_path, ledger, "gmail_directory", f"Applying directory LinkedIn mappings to {len(queue_records)} Gmail queue(s).")
+    observation_checkpoint = commit_gmail_observations_to_directory(input_cfg, artifacts)
     checkpoint = build_directory_checkpoint(input_cfg, artifacts)
     directory_csv = Path(checkpoint["directory_csv"])
     artifacts["directory_csv"] = str(directory_csv)
-    by_slug = artifacts.setdefault("gmail_directory_by_slug", {})
+    artifacts["gmail_directory_by_slug"] = {}
+    by_slug = artifacts["gmail_directory_by_slug"]
     artifacts["gmail_directory_resolution_records"] = []
     artifacts["gmail_unresolved_linkedin_resolution_queue_csvs"] = []
     results = []
@@ -2031,10 +2285,7 @@ def run_gmail_directory(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     total_unresolved = 0
     for index, record in enumerate(queue_records):
         slug = source_slug(record.get("account_email") or record.get("slug") or f"queue-{index}")
-        existing = by_slug.get(slug) if isinstance(by_slug.get(slug), dict) else {}
-        if existing.get("unresolved_queue_csv") and existing.get("directory_resolutions_csv"):
-            result = existing
-        else:
+        if True:
             out_dir = Path(ledger["run_dir"]) / f"gmail-directory-{slug}"
             result = apply_directory_to_gmail_queue(record, directory_csv, out_dir)
             result["slug"] = slug
@@ -2060,7 +2311,7 @@ def run_gmail_directory(ledger_path: Path, ledger: dict[str, Any]) -> bool:
                 "unresolved": result.get("unresolved"),
             })
         results.append(result)
-    mark_step(ledger, "gmail_directory", "completed", checkpoint=checkpoint, resolved=total_resolved, unresolved=total_unresolved, payload={"results": results})
+    mark_step(ledger, "gmail_directory", "completed", checkpoint=checkpoint, observation_checkpoint=observation_checkpoint, resolved=total_resolved, unresolved=total_unresolved, payload={"results": results})
     emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_unresolved} unresolved.")
     return True
 
@@ -2068,7 +2319,7 @@ def run_gmail_directory(ledger_path: Path, ledger: dict[str, Any]) -> bool:
 def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     input_cfg = ledger.get("input", {})
     provider = "parallel" if input_cfg.get("resolve_gmail_linkedin") else "off"
-    if input_cfg.get("gmail_linkedin_provider"):
+    if input_cfg.get("gmail_linkedin_provider") and input_cfg.get("gmail_linkedin_provider") != "off":
         provider = input_cfg.get("gmail_linkedin_provider")
     artifacts = ledger.setdefault("artifacts", {})
     queue_records = artifacts.get("gmail_unresolved_linkedin_resolution_queue_csvs") or gmail_queue_records(artifacts)
@@ -2079,66 +2330,76 @@ def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> 
     if not queue_records:
         mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="all Gmail queue rows resolved by directory")
         return True
-    by_slug = artifacts.setdefault("gmail_linkedin_resolutions_by_slug", {})
-    artifacts["gmail_linkedin_resolutions_csvs"] = []
-    artifacts["gmail_linkedin_resolution_ledgers"] = []
-    begin_step(ledger_path, ledger, "gmail_linkedin_resolution", f"Resolving Gmail contacts to LinkedIn for {len(queue_records)} account queue(s).")
-    results = []
-    for index, record in enumerate(queue_records):
+    # Combine all unresolved queues into one file and submit as a single batch
+    combined_csv = Path(ledger["run_dir"]) / "gmail-combined-unresolved-queue.csv"
+    combined_fields: list[str] = []
+    combined_rows: list[dict[str, str]] = []
+    for record in queue_records:
         queue = record.get("queue_csv")
         if not queue:
             continue
-        slug = source_slug(record.get("account_email") or record.get("slug") or f"queue-{index}")
-        existing = by_slug.get(slug) if isinstance(by_slug.get(slug), dict) else {}
-        if existing.get("resolutions_csv"):
-            artifacts["gmail_linkedin_resolutions_csvs"].append(existing)
-            if existing.get("ledger"):
-                artifacts["gmail_linkedin_resolution_ledgers"].append(existing["ledger"])
-            results.append(existing)
-            continue
-        child_ledger = Path(ledger["run_dir"]) / f"gmail-linkedin-resolution.{slug}.ledger.json"
-        out_dir = Path(ledger["run_dir"]) / f"gmail-linkedin-resolution-{slug}"
-        cmd = py_cmd(
-            "packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py",
-            "run",
-            "--provider", provider,
-            "--input", str(queue),
-            "--output-dir", str(out_dir),
-            "--ledger", str(child_ledger),
-        )
-        if input_cfg.get("gmail_linkedin_limit") is not None:
-            cmd.extend(["--limit", str(input_cfg["gmail_linkedin_limit"])])
-        code, payload, stderr = run_cmd(cmd)
-        artifacts.setdefault("gmail_linkedin_resolution_ledgers", []).append(str(child_ledger))
-        if "gmail_linkedin_resolution_ledger" not in artifacts:
-            artifacts["gmail_linkedin_resolution_ledger"] = str(child_ledger)
-        if code == 20 or payload.get("status") == "blocked_approval":
-            ledger["blocked"] = {"step_id": "gmail_linkedin_resolution", "child_ledger": str(child_ledger), "child": payload, "account_email": record.get("account_email") if isinstance(record, dict) else ""}
-            mark_step(ledger, "gmail_linkedin_resolution", "blocked", payload=payload)
-            save_ledger(ledger_path, ledger)
-            emit({"status": "blocked_approval", "step_id": "gmail_linkedin_resolution", "ledger": str(ledger_path), "child": payload})
-            return False
-        if code != 0:
-            mark_step(ledger, "gmail_linkedin_resolution", "failed", error=stderr or payload)
-            ledger["status"] = "failed"
-            save_ledger(ledger_path, ledger)
-            emit({"status": "failed", "step_id": "gmail_linkedin_resolution", "error": stderr or payload})
-            return False
-        result = dict(record)
-        result.update({"payload": payload, "resolutions_csv": payload.get("output"), "ledger": str(child_ledger)})
-        results.append(result)
-        if payload.get("output"):
-            by_slug[slug] = result
-            artifacts.setdefault("gmail_linkedin_resolutions_csvs", []).append(result)
-            if "gmail_linkedin_resolutions_csv" not in artifacts:
-                artifacts["gmail_linkedin_resolutions_csv"] = payload.get("output")
-        if payload.get("prompts_jsonl"):
-            artifacts.setdefault("gmail_linkedin_harness_prompts_jsonls", []).append(payload.get("prompts_jsonl"))
-            artifacts.setdefault("gmail_linkedin_harness_prompts_jsonl", payload.get("prompts_jsonl"))
-        if payload.get("instructions"):
-            artifacts.setdefault("gmail_linkedin_harness_instructions", payload.get("instructions"))
-    mark_step(ledger, "gmail_linkedin_resolution", "completed", payload={"results": results})
-    emit_progress("Gmail LinkedIn resolution completed.")
+        fields, rows = read_csv_rows(Path(str(queue)))
+        if not combined_fields and fields:
+            combined_fields = fields
+        combined_rows.extend(rows)
+    if not combined_rows:
+        mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="combined queue is empty")
+        return True
+    write_csv_rows(combined_csv, combined_fields, combined_rows)
+    artifacts["gmail_linkedin_combined_queue_csv"] = str(combined_csv)
+    total_contacts = len(combined_rows)
+    begin_step(ledger_path, ledger, "gmail_linkedin_resolution", f"Resolving {total_contacts} Gmail contacts to LinkedIn in one batch.")
+    child_ledger = Path(ledger["run_dir"]) / "gmail-linkedin-resolution.combined.ledger.json"
+    out_dir = Path(ledger["run_dir"]) / "gmail-linkedin-resolution-combined"
+    cmd = py_cmd(
+        "packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py",
+        "run",
+        "--provider", provider,
+        "--input", str(combined_csv),
+        "--output-dir", str(out_dir),
+        "--ledger", str(child_ledger),
+    )
+    if input_cfg.get("gmail_linkedin_limit") is not None:
+        cmd.extend(["--limit", str(input_cfg["gmail_linkedin_limit"])])
+    if input_cfg.get("approve_parallel_spend"):
+        cmd.append("--approve-spend")
+    code, payload, stderr = run_cmd(cmd)
+    artifacts["gmail_linkedin_resolution_ledger"] = str(child_ledger)
+    artifacts["gmail_linkedin_resolution_ledgers"] = [str(child_ledger)]
+    if code == 20 or payload.get("status") == "blocked_approval":
+        ledger["blocked"] = {"step_id": "gmail_linkedin_resolution", "child_ledger": str(child_ledger), "child": payload}
+        mark_step(ledger, "gmail_linkedin_resolution", "blocked", payload=payload)
+        save_ledger(ledger_path, ledger)
+        emit({"status": "blocked_approval", "step_id": "gmail_linkedin_resolution", "ledger": str(ledger_path), "child": payload})
+        return False
+    if code != 0:
+        mark_step(ledger, "gmail_linkedin_resolution", "failed", error=stderr or payload)
+        ledger["status"] = "failed"
+        save_ledger(ledger_path, ledger)
+        emit({"status": "failed", "step_id": "gmail_linkedin_resolution", "error": stderr or payload})
+        return False
+    if payload.get("output"):
+        combined_output = payload.get("output")
+        artifacts["gmail_linkedin_resolutions_csv"] = combined_output
+        artifacts["gmail_linkedin_combined_resolutions_csv"] = combined_output
+        artifacts["gmail_linkedin_resolutions_csvs"] = [
+            {
+                "account_email": record.get("account_email", ""),
+                "resolutions_csv": combined_output,
+                "people_csv": record.get("people_csv"),
+                "slug": source_slug(record.get("account_email") or record.get("slug") or f"queue-{index}"),
+                "source": "parallel_combined",
+            }
+            for index, record in enumerate(queue_records)
+            if record.get("people_csv")
+        ] or [{"resolutions_csv": combined_output, "slug": "combined", "source": "parallel_combined"}]
+    if payload.get("prompts_jsonl"):
+        artifacts["gmail_linkedin_harness_prompts_jsonl"] = payload.get("prompts_jsonl")
+        artifacts["gmail_linkedin_harness_prompts_jsonls"] = [payload.get("prompts_jsonl")]
+    if payload.get("instructions"):
+        artifacts["gmail_linkedin_harness_instructions"] = payload.get("instructions")
+    mark_step(ledger, "gmail_linkedin_resolution", "completed", payload=payload)
+    emit_progress(f"Gmail LinkedIn resolution completed: {payload.get('found', 0)} found, {payload.get('not_found', 0)} not found.")
     return True
 
 
@@ -2177,19 +2438,18 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
             "slug": "all",
             "source": "provider",
         })
+    if raw_resolution_records:
+        commit_gmail_resolutions_to_directory(input_cfg, artifacts, raw_resolution_records)
     resolution_records = combine_gmail_resolution_records(raw_resolution_records, Path(ledger["run_dir"]))
     if not resolution_records:
         mark_step(ledger, "gmail_apply_enrich", "skipped", reason="no gmail resolutions")
         return True
     resolution_records = ordered_records(resolution_records, unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
-    checkpoint = build_directory_checkpoint(
-        input_cfg,
-        artifacts,
-        extra_sources=[Path(str(record["resolutions_csv"])) for record in resolution_records if record.get("resolutions_csv")],
-    )
+    checkpoint = build_directory_checkpoint(input_cfg, artifacts)
     artifacts["directory_csv"] = checkpoint["directory_csv"]
     artifacts["directory_checkpoint"] = checkpoint
-    by_slug = artifacts.setdefault("gmail_apply_enrich_by_slug", {})
+    artifacts["gmail_apply_enrich_by_slug"] = {}
+    by_slug = artifacts["gmail_apply_enrich_by_slug"]
     artifacts["gmail_resolved_people_csvs"] = []
     artifacts["gmail_enrich_people_ledgers"] = []
     artifacts["gmail_final_people_csvs"] = []
@@ -2199,16 +2459,6 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     final_people_csvs = []
     for index, record in enumerate(resolution_records):
         slug = source_slug(record.get("account_email") or record.get("slug") or f"account-{index}")
-        existing = by_slug.get(slug) if isinstance(by_slug.get(slug), dict) else {}
-        if existing.get("final_people_csv"):
-            final_people_csvs.append(existing["final_people_csv"])
-            artifacts["gmail_final_people_csvs"].append(existing["final_people_csv"])
-            if existing.get("people_csv"):
-                artifacts["gmail_resolved_people_csvs"].append(existing["people_csv"])
-            if existing.get("enrich_ledger"):
-                artifacts["gmail_enrich_people_ledgers"].append(existing["enrich_ledger"])
-            results.append(existing)
-            continue
         apply_cmd = py_cmd(
             "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
             "apply-resolutions",
@@ -2311,24 +2561,14 @@ def run_messages_enrichment(ledger_path: Path, ledger: dict[str, Any]) -> bool:
 
     child_ledger = Path(ledger["run_dir"]) / "messages-enrich-people.ledger.json"
     artifacts["messages_enrich_people_ledger"] = str(child_ledger)
-    existing_payload = enrich_people_payload_from_ledger(child_ledger)
-    if existing_payload:
-        enrich_payload = existing_payload
-        code = 0
-        stderr = ""
-    else:
-        child_state = read_json(child_ledger, {}) or {}
-        if child_ledger.exists() and child_state.get("status") not in {"completed", "failed"}:
-            enrich_cmd = py_cmd("packs/ingestion/primitives/enrich_people/enrich_people.py", "continue", "--ledger", str(child_ledger))
-        else:
-            enrich_cmd = py_cmd(
-                "packs/ingestion/primitives/enrich_people/enrich_people.py",
-                "run",
-                "--input", str(input_people),
-                "--ledger", str(child_ledger),
-                "--run-id", f"{ledger['run_id']}-messages-enrich",
-            )
-        code, enrich_payload, stderr = run_cmd(enrich_cmd)
+    enrich_cmd = py_cmd(
+        "packs/ingestion/primitives/enrich_people/enrich_people.py",
+        "run",
+        "--input", str(input_people),
+        "--ledger", str(child_ledger),
+        "--run-id", f"{ledger['run_id']}-messages-enrich",
+    )
+    code, enrich_payload, stderr = run_cmd(enrich_cmd)
     if code == 20 or enrich_payload.get("status") == "blocked_approval":
         ledger["blocked"] = {"step_id": "messages_enrich_people", "child_ledger": str(child_ledger), "child": enrich_payload}
         mark_step(ledger, "messages_enrich_people", "blocked", summary=materialized, payload=enrich_payload)
@@ -2348,6 +2588,13 @@ def run_messages_enrichment(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     artifacts.setdefault("messages_people_csvs", [])
     if enriched_people and enriched_people not in artifacts["messages_people_csvs"]:
         artifacts["messages_people_csvs"].append(enriched_people)
+    if enriched_people:
+        artifacts["messages_directory_checkpoint"] = commit_people_csv_to_directory(
+            ledger.get("input", {}),
+            artifacts,
+            str(enriched_people),
+            source="messages",
+        )
     mark_step(ledger, "messages_enrich_people", "completed", summary=materialized, payload=enrich_payload)
     emit_progress(f"Messages profile enrichment completed: {materialized.get('rows_written', 0)} LinkedIn rows prepared.")
     return True
@@ -2492,19 +2739,19 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
     selected_fan_in_sources = set(unique_strings(ledger.get("input", {}).get("only_sources"))) if ledger.get("input", {}).get("fan_in_only") else set()
     run_gmail_enrichment = not selected_fan_in_sources or "gmail" in selected_fan_in_sources
     run_messages_profile_enrichment = not selected_fan_in_sources or "messages" in selected_fan_in_sources
-    if run_gmail_enrichment and ledger.get("steps", {}).get("gmail_directory", {}).get("status") not in {"completed", "skipped"}:
+    if run_gmail_enrichment:
         if not run_gmail_directory(ledger_path, ledger):
             return 1
         save_ledger(ledger_path, ledger)
-    if run_gmail_enrichment and ledger.get("steps", {}).get("gmail_linkedin_resolution", {}).get("status") not in {"completed", "skipped"}:
+    if run_gmail_enrichment:
         if not run_gmail_linkedin_resolution(ledger_path, ledger):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
-    if run_gmail_enrichment and ledger.get("steps", {}).get("gmail_apply_enrich", {}).get("status") not in {"completed", "skipped"}:
+    if run_gmail_enrichment:
         if not run_gmail_apply_and_enrich(ledger_path, ledger):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
-    if run_messages_profile_enrichment and ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
+    if run_messages_profile_enrichment:
         if not run_messages_enrichment(ledger_path, ledger):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
@@ -2654,6 +2901,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "gmail_estimate_max_pages": int(getattr(args, "gmail_estimate_max_pages", DEFAULT_GMAIL_ESTIMATE_MAX_PAGES) or DEFAULT_GMAIL_ESTIMATE_MAX_PAGES),
             "gmail_linkedin_provider": args.gmail_linkedin_provider,
             "resolve_gmail_linkedin": args.resolve_gmail_linkedin,
+            "approve_parallel_spend": bool(getattr(args, "approve_parallel_spend", False)),
             "gmail_linkedin_limit": args.gmail_linkedin_limit,
             "gmail_resolutions_csv": args.gmail_resolutions_csv,
             "linkedin_directory_csv": args.linkedin_directory_csv,
@@ -2860,6 +3108,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--skip-gmail-estimate", action="store_true", help="Skip the pre-sync Gmail API label/count estimate")
     run.add_argument("--gmail-estimate-max-pages", type=int, default=DEFAULT_GMAIL_ESTIMATE_MAX_PAGES, help=argparse.SUPPRESS)
     run.add_argument("--resolve-gmail-linkedin", action="store_true", help="Resolve Gmail contacts to LinkedIn with Parallel before applying Gmail enrichment.")
+    run.add_argument("--approve-parallel-spend", action="store_true", help="Auto-approve Parallel.ai spend without blocking for confirmation.")
     run.add_argument("--gmail-linkedin-provider", choices=["off", "harness", "parallel"], default="off", help=argparse.SUPPRESS)
     run.add_argument("--gmail-linkedin-limit", type=int, help=argparse.SUPPRESS)
     run.add_argument("--gmail-resolutions-csv", default="", help="Existing linkedin_resolutions.csv to apply to Gmail people before shared enrich_people")

@@ -57,6 +57,13 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
             writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
+def csv_row_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        return sum(1 for _ in csv.DictReader(handle))
+
+
 def load_dotenv(path: Path = ROOT / ".env") -> None:
     if not path.exists():
         return
@@ -567,24 +574,12 @@ def copy_import_restore_payload(operator_dir: Path, restore_powerpacks_root: Pat
 
 
 def materialize_operator_directory(operator_dir: Path) -> dict[str, Any]:
-    candidates_dir = operator_dir / "import/inputs/linkedin_candidates"
-    candidate_paths = sorted(candidates_dir.glob("linkedin_candidates*.csv")) if candidates_dir.exists() else []
-    if not candidate_paths:
-        return {"status": "skipped", "reason": "no linkedin candidate inputs"}
-    try:
-        from packs.ingestion.primitives.import_network_pipeline import import_network_pipeline
-    except ModuleNotFoundError:
-        sys.path.insert(0, str(ROOT))
-        from packs.ingestion.primitives.import_network_pipeline import import_network_pipeline
-    checkpoint = import_network_pipeline.build_directory_checkpoint(
-        {
-            "linkedin_directory_csv": str(operator_dir / "import/directory.csv"),
-            "linkedin_directory_source_csvs": [str(path) for path in candidate_paths],
-            "linkedin_directory_use_defaults": False,
-        },
-        {},
-    )
-    return {"status": "ok", **checkpoint}
+    generated = operator_dir / "enrich/resolution/directory.csv"
+    if generated.exists():
+        target = operator_dir / "import/directory.csv"
+        copy_file(generated, target)
+        return {"status": "ok", "directory_csv": str(target), "rows": csv_row_count(target), "source": "network_bootstrap_directory"}
+    return {"status": "missing", "reason": "network bootstrap did not generate enrich/resolution/directory.csv"}
 
 
 def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_root: Path, output_root: Path) -> dict[str, Any]:

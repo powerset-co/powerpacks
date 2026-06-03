@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Resolve queued LinkedIn URLs via shared harness prompt or Parallel.ai.
+"""Resolve queued email→LinkedIn via Parallel.ai.
 
-Input is typically Twitter's linkedin_resolution_queue.csv. Harness mode writes
-prompts for Codex/Claude/manual execution. Parallel mode is spend-bearing and
-uses approve/continue before submission.
+Ported from aleph-mvp data_pipeline_v2/step_parallel_enrich. Sends
+(full_name, company, email) to Parallel and writes results to a CSV.
+
+Dedup: reads any existing output CSV to skip already-resolved emails.
+On repeated runs the set of new lookups shrinks to zero.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -27,8 +30,153 @@ DEFAULT_BASE_URL = os.environ.get("POWERPACKS_PARALLEL_BASE_URL", "https://api.p
 DEFAULT_BETA = os.environ.get("POWERPACKS_PARALLEL_BETA", "search-extract-2025-10-10")
 DEFAULT_PROCESSOR = os.environ.get("POWERPACKS_PARALLEL_PROCESSOR", "core2x")
 ALLOWED_PROCESSORS = {"core", "core2x", "pro"}
-PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "linkedin_resolution.md"
-OUTPUT_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
+
+PERSONAL_DOMAINS = {
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "hotmail.com",
+    "outlook.com", "live.com", "msn.com", "icloud.com", "me.com", "mac.com",
+    "aol.com", "protonmail.com", "proton.me", "fastmail.com", "zoho.com",
+    "ymail.com", "att.net", "verizon.net", "sbcglobal.net", "cox.net",
+    "earthlink.net", "comcast.net", "mail.com",
+}
+
+GENERIC_PREFIXES = {
+    "noreply", "no-reply", "no_reply",
+    "donotreply", "do-not-reply", "do_not_reply",
+    "info", "contact", "support", "help", "hello",
+    "sales", "marketing", "hr", "careers", "jobs",
+    "admin", "administrator", "webmaster", "postmaster",
+    "office", "team", "staff", "general",
+    "billing", "invoices", "payments", "accounts", "accounting",
+    "newsletter", "news", "updates", "notifications",
+    "feedback", "enquiries", "inquiries",
+    "service", "customerservice", "care", "dispatch",
+    "concierge", "reservation", "reservations", "booking", "bookings",
+    "rsvp", "registration", "club", "membership", "memberservices",
+    "optical", "photos", "equity", "futures",
+    "launch", "eat", "pbx", "alumni", "masters", "csi",
+    "studentinfo", "fintechsupport", "casasupport",
+}
+
+GENERIC_KEYWORDS = {
+    "support", "service", "noreply", "reply", "taskforce",
+    "insurance", "verification", "recognition",
+}
+
+
+BUSINESS_NAME_KEYWORDS = {
+    "llc", "inc", "corp", "ltd", "team", "services", "service",
+    "spa", "optometry", "electronics", "insurance", "association",
+    "department", "office", "institute", "run", "discount", "massages",
+    "management", "concierge", "dispatch", "accounting", "task force",
+    "hawaii", "waikiki", "aruba", "support", "delivery",
+    "wines", "coffee", "mason", "security", "motors",
+}
+
+
+def is_likely_person_name(name: str) -> bool:
+    """Return True if the name looks like a real person (first + last)."""
+    if not name:
+        return False
+    clean = re.sub(r'\s*\([^)]*\)', '', name).strip()  # strip parentheticals like (LinkedIn Supplier)
+    clean = re.sub(r'^["\']|["\']$', '', clean).strip()
+    words = clean.split()
+    if len(words) < 2:
+        return False
+    if any(kw in clean.lower() for kw in BUSINESS_NAME_KEYWORDS):
+        return False
+    if '&' in clean:
+        return False
+    # All-caps or all-lower single tokens that aren't name-like
+    if clean == clean.upper() and len(words) <= 2:
+        return False
+    return True
+
+
+def is_generic_or_non_person(email: str) -> bool:
+    """Return True if the email looks like a role/service address, not a person."""
+    if not email or "@" not in email:
+        return True
+    local = email.split("@")[0].lower().strip()
+    # Strip plus-addressing
+    local = local.split("+")[0]
+    # Exact prefix match
+    if local in GENERIC_PREFIXES:
+        return True
+    # First segment match (e.g. customer.service@, no-reply@, info-mhi@)
+    base = re.split(r'[.\-_]', local)[0]
+    if base in GENERIC_PREFIXES:
+        return True
+    # Contains generic keyword anywhere
+    for kw in GENERIC_KEYWORDS:
+        if kw in local:
+            return True
+    # Phone-number-like local parts
+    if re.match(r'^\d{7,}$', local):
+        return True
+    # Single character local parts
+    if len(local) <= 1:
+        return True
+    # Local part is just digits (e.g. 2relaxinparadise is fine but pure digits aren't)
+    if re.match(r'^\d+$', local):
+        return True
+    return False
+
+PARALLEL_ENRICH_INSTRUCTIONS = """You are matching a real-world person identity using:
+- full name
+- current company/employer
+- work email
+
+Primary goal:
+- Find the correct LinkedIn profile for the person.
+
+Secondary goal:
+- Find the correct X/Twitter handle ONLY if there is strong evidence it is the same person.
+
+LinkedIn matching rules:
+- Prefer exact identity matches supported by company, work history, location, or direct profile evidence.
+- If multiple people share the same name, choose the one whose company/work history best matches the input.
+- If no reliable LinkedIn match exists, return linkedin_url = "" and status = "not_found".
+
+X/Twitter matching rules:
+- Be conservative. Same name alone is NOT enough.
+- Only return x_handle if the X profile clearly matches the LinkedIn person by at least one strong identity signal:
+  - same employer/company/org referenced in the X bio or linked website
+  - same personal website/domain
+  - highly specific role/location alignment with no contradictions
+- If the X bio/content/location contradicts the LinkedIn identity, return x_handle = "".
+- If evidence is weak, ambiguous, or mostly based on same-name matching, return x_handle = "".
+- It is better to miss a true handle than to attach the wrong handle.
+
+Output rules:
+- Return valid JSON matching the schema.
+- Use status = "completed" when you found the LinkedIn person, even if x_handle is empty.
+- Use status = "not_found" only if no reliable LinkedIn profile is found.
+"""
+
+INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "full_name": {"type": "string", "description": "Full name of the person"},
+        "company": {"type": "string", "description": "Company name where the person works"},
+        "email": {"type": "string", "description": "Work email address (for context)"},
+    },
+    "required": ["full_name", "company", "email"],
+}
+
+OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "linkedin_url": {"type": "string", "description": "LinkedIn profile URL (empty string if not found)"},
+        "x_handle": {"type": "string", "description": "X/Twitter handle (e.g. @username). Empty string unless strong evidence."},
+        "status": {"type": "string", "description": "Status: completed, not_found, or error"},
+    },
+    "required": ["linkedin_url", "status"],
+}
+
+OUTPUT_COLUMNS = [
+    "email", "full_name", "company", "linkedin_url", "x_handle", "status",
+    "confidence", "reasoning",
+]
 
 
 def now_iso() -> str:
@@ -53,7 +201,9 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def read_csv(path: Path) -> list[dict[str, str]]:
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
         return list(csv.DictReader(handle))
 
@@ -67,53 +217,120 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
             writer.writerow({col: row.get(col, "") for col in fieldnames})
 
 
-def prompt_text() -> str:
-    return PROMPT_PATH.read_text(encoding="utf-8")
+def clean_name(name: str) -> str:
+    if not name:
+        return ""
+    name = name.strip("'\"")
+    name = re.sub(r'\s*\(via [^)]+\)', '', name)
+    name = re.sub(r'^(Mr\.|Mrs\.|Ms\.|Dr\.)\s*', '', name)
+    if ',' in name and name.count(',') == 1:
+        parts = name.split(',')
+        if len(parts[0].split()) == 1 and len(parts[1].strip().split()) >= 1:
+            name = f"{parts[1].strip()} {parts[0].strip()}"
+    if name == name.lower():
+        name = name.title()
+    return name.strip()
 
 
-def candidate_id(row: dict[str, str], idx: int) -> str:
-    return (row.get("handle") or row.get("twitter_handle") or row.get("id") or f"row-{idx}").strip()
+def extract_domain(email: str) -> str:
+    if not email or "@" not in email:
+        return ""
+    return email.split("@")[1].lower()
 
 
-def candidate_payload(row: dict[str, str], idx: int) -> dict[str, Any]:
-    return {
-        "handle": candidate_id(row, idx),
-        "display_name": row.get("display_name") or row.get("full_name") or "",
-        "bio": row.get("bio") or row.get("headline") or "",
-        "location": row.get("location") or row.get("location_raw") or "",
-        "website_url": row.get("website_url") or "",
-        "twitter_handle": row.get("handle") or row.get("twitter_handle") or "",
-        "source": row.get("source") or row.get("source_channels") or "",
-        "known_info": {
-            "follower_count": row.get("follower_count") or "",
-            "moe_verdict": row.get("moe_verdict") or "",
-            "moe_reasoning": row.get("moe_top_reasoning") or "",
-            "primary_email": row.get("primary_email") or "",
-            "primary_phone": row.get("primary_phone") or "",
-        },
-    }
+def load_contacts(input_csv: Path) -> list[dict[str, str]]:
+    """Load contacts from a resolution queue CSV, derive company from email domain."""
+    contacts: list[dict[str, str]] = []
+    skipped: list[str] = []
+    for row in read_csv_rows(input_csv):
+        name = row.get("display_name") or row.get("full_name") or ""
+        email = row.get("primary_email") or row.get("email") or row.get("handle") or ""
+        email_type = row.get("primary_email_type", "")
+        if not name or not email:
+            continue
+        if is_generic_or_non_person(email) or not is_likely_person_name(name):
+            skipped.append(email)
+            continue
+        domain = extract_domain(email)
+        is_personal = domain in PERSONAL_DOMAINS or email_type == "personal"
+        if not is_personal:
+            company = domain.replace('.com', '').replace('.co', '').replace('.io', '').replace('.org', '').title()
+        else:
+            company = ""
+        contacts.append({
+            "full_name": clean_name(name),
+            "company": company,
+            "email": email.lower().strip(),
+            "is_personal": str(is_personal).lower(),
+        })
+    if skipped:
+        print(f"[resolve] Filtered {len(skipped)} generic/non-person emails", file=sys.stderr)
+    return contacts
 
 
-def task_spec() -> dict[str, Any]:
-    return {
-        "instructions": prompt_text(),
-        "input_schema": {"json_schema": {"type": "object", "additionalProperties": True}},
-        "output_schema": {"json_schema": {
-            "type": "object",
-            "properties": {
-                "handle": {"type": "string"},
-                "status": {"type": "string", "enum": ["found", "not_found", "ambiguous"]},
-                "linkedin_url": {"type": ["string", "null"]},
-                "confidence": {"type": "number"},
-                "matched_name": {"type": ["string", "null"]},
-                "matched_headline": {"type": ["string", "null"]},
-                "evidence": {"type": "array", "items": {"type": "string"}},
-                "reasoning": {"type": "string"},
-            },
-            "required": ["handle", "status", "confidence", "reasoning"],
-        }},
-    }
+def load_existing_results(output_csv: Path) -> set[str]:
+    """Load emails already resolved from a prior output CSV."""
+    seen: set[str] = set()
+    for row in read_csv_rows(output_csv):
+        email = (row.get("email") or "").strip().lower()
+        if email:
+            seen.add(email)
+    return seen
 
+
+def check_supabase_cache(emails: list[str]) -> tuple[list[dict[str, Any]], set[str]]:
+    """Check email_lookup_cache_v2 in Supabase. Returns (cached_rows, cached_emails)."""
+    try:
+        import psycopg2
+    except ImportError:
+        return [], set()
+    pg_host = os.environ.get("POSTGRES_HOST", "").strip()
+    pg_password = os.environ.get("POSTGRES_PASSWORD", "").strip()
+    if not pg_host or not pg_password:
+        return [], set()
+    try:
+        conn = psycopg2.connect(
+            host=pg_host,
+            port=os.environ.get("POSTGRES_PORT", "6543"),
+            database=os.environ.get("POSTGRES_DB", "postgres"),
+            user=os.environ.get("POSTGRES_USER", "postgres"),
+            password=pg_password,
+        )
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT email, linkedin_url, public_identifier, status, source FROM email_lookup_cache_v2 WHERE email = ANY(%s)",
+            ([e.lower().strip() for e in emails],),
+        )
+        rows = cur.fetchall()
+        conn.close()
+        cached_rows: list[dict[str, Any]] = []
+        cached_emails: set[str] = set()
+        for email, linkedin_url, public_id, status, source in rows:
+            cached_emails.add(email.lower())
+            if status == "found" and linkedin_url:
+                cached_rows.append({
+                    "email": email,
+                    "linkedin_url": linkedin_url,
+                    "status": "completed",
+                    "confidence": "high",
+                    "reasoning": f"From Supabase cache ({source})",
+                })
+            else:
+                cached_rows.append({
+                    "email": email,
+                    "linkedin_url": "",
+                    "status": "not_found",
+                    "confidence": "",
+                    "reasoning": f"Previously not_found ({source})",
+                })
+        print(f"[resolve] Supabase cache: {len(cached_rows)} hits ({sum(1 for r in cached_rows if r['status']=='completed')} found, {sum(1 for r in cached_rows if r['status']=='not_found')} not_found)", file=sys.stderr)
+        return cached_rows, cached_emails
+    except Exception as exc:
+        print(f"[resolve] Supabase cache check failed: {exc}", file=sys.stderr)
+        return [], set()
+
+
+# ── Parallel.ai client (sync, no SDK) ────────────────────────
 
 class ParallelClient:
     def __init__(self, api_key: str, base_url: str, beta: str):
@@ -139,7 +356,7 @@ class ParallelClient:
                 return exc.code, None, raw
 
     def create_group(self) -> dict[str, Any]:
-        status, body, raw = self.request("POST", "/v1beta/tasks/groups", {"metadata": {"source": "powerpacks-linkedin-resolution", "submitted_at": now_iso()}})
+        status, body, raw = self.request("POST", "/v1beta/tasks/groups", {"metadata": {"source": "powerpacks-email-resolution", "submitted_at": now_iso()}})
         if status not in (200, 201) or not isinstance(body, dict):
             raise RuntimeError(f"create_group failed HTTP {status}: {raw[:200]}")
         return body
@@ -166,120 +383,214 @@ class ParallelClient:
         return body
 
 
+# ── Main enrichment logic ─────────────────────────────────────
+
+def task_spec() -> dict[str, Any]:
+    return {
+        "instructions": PARALLEL_ENRICH_INSTRUCTIONS,
+        "input_schema": {"json_schema": INPUT_SCHEMA},
+        "output_schema": {"json_schema": OUTPUT_SCHEMA},
+    }
+
+
+def submit_and_poll(client: ParallelClient, contacts: list[dict[str, str]], processor: str, batch_size: int = 500, max_wait: int = 900) -> list[dict[str, Any]]:
+    """Submit contacts to Parallel, poll until done, return results."""
+    group = client.create_group()
+    group_id = group.get("taskgroup_id") or group.get("id")
+    print(f"[resolve] Created task group {group_id} for {len(contacts)} contacts", file=sys.stderr)
+    sys.stdout.write(json.dumps({"progress": "submitted", "taskgroup_id": group_id, "contacts": len(contacts)}) + "\n")
+    sys.stdout.flush()
+
+    spec = task_spec()
+    run_ids: list[str] = []
+    run_id_to_contact: dict[str, dict[str, str]] = {}
+    for i in range(0, len(contacts), batch_size):
+        batch = contacts[i:i + batch_size]
+        inputs = [{
+            "task_spec": spec,
+            "input": {"full_name": c["full_name"], "company": c["company"], "email": c["email"]},
+            "metadata": {"email": c["email"]},
+            "processor": processor,
+        } for c in batch]
+        resp = client.add_runs(group_id, inputs)
+        new_ids = resp.get("run_ids") or []
+        for rid, contact in zip(new_ids, batch):
+            run_id_to_contact[rid] = contact
+        run_ids.extend(new_ids)
+        print(f"[resolve] Submitted batch {i // batch_size + 1}: {len(new_ids)} runs (total {len(run_ids)})", file=sys.stderr)
+        sys.stdout.flush()
+
+    # Poll
+    start = time.time()
+    while True:
+        group_status = client.get_group(group_id)
+        status = group_status.get("status", {})
+        counts = status.get("task_run_status_counts", {})
+        completed = counts.get("completed", 0)
+        failed = counts.get("failed", 0)
+        elapsed = time.time() - start
+        print(f"[resolve] {elapsed:.0f}s: completed={completed} failed={failed} active={status.get('is_active')}", file=sys.stderr)
+        sys.stdout.write(json.dumps({"progress": "polling", "elapsed_s": int(elapsed), "completed": completed, "failed": failed, "total": len(run_ids)}) + "\n")
+        sys.stdout.flush()
+        if not status.get("is_active", True):
+            break
+        if elapsed > max_wait:
+            print(f"[resolve] Timeout after {elapsed:.0f}s", file=sys.stderr)
+            break
+        time.sleep(10)
+
+    # Fetch results
+    results: list[dict[str, Any]] = []
+    for run_id in run_ids:
+        try:
+            result = client.get_result(run_id) or {}
+            output = result.get("output", {})
+            content = output.get("content") if isinstance(output, dict) else {}
+            if not isinstance(content, dict):
+                continue
+            contact = run_id_to_contact.get(run_id, {})
+            basis_arr = output.get("basis", []) or []
+            basis_by_field: dict[str, dict] = {}
+            for b in basis_arr:
+                if isinstance(b, dict) and b.get("field"):
+                    basis_by_field[b["field"]] = b
+            li_basis = basis_by_field.get("linkedin_url", {})
+            results.append({
+                "email": contact.get("email", ""),
+                "full_name": contact.get("full_name", ""),
+                "company": contact.get("company", ""),
+                "linkedin_url": content.get("linkedin_url", ""),
+                "x_handle": content.get("x_handle", ""),
+                "status": content.get("status", ""),
+                "confidence": li_basis.get("confidence", ""),
+                "reasoning": li_basis.get("reasoning", ""),
+            })
+        except Exception as exc:
+            print(f"[resolve] Failed to fetch result for {run_id}: {exc}", file=sys.stderr)
+
+    print(f"[resolve] Fetched {len(results)} results", file=sys.stderr)
+    sys.stdout.write(json.dumps({"progress": "fetched", "results": len(results)}) + "\n")
+    sys.stdout.flush()
+    return results
+
+
 def save_ledger(path: Path, ledger: dict[str, Any]) -> None:
     ledger["updated_at"] = now_iso()
     write_json(path, ledger)
 
 
-def block(path: Path, ledger: dict[str, Any]) -> None:
-    ledger["blocked"] = {"step": "parallel_submit", "approval_type": "external_api_spend"}
-    save_ledger(path, ledger)
-    emit({"status": "blocked_approval", "approval_type": "external_api_spend", "message": "Approve Parallel.ai LinkedIn resolution spend?", "ledger": str(path), "continue_command": f"uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py approve --ledger {path} && uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py continue --ledger {path}"})
+def run_enrichment(input_csv: Path, output_dir: Path, ledger_path: Path, *, provider: str, processor: str, limit: int | None, approve_spend: bool, base_url: str, beta: str) -> dict[str, Any]:
+    """Main entry point: load contacts, dedup, submit, write results."""
+    output_csv = output_dir / "linkedin_resolutions.csv"
+    all_contacts = load_contacts(input_csv)
+    if not all_contacts:
+        return {"status": "completed", "contacts_loaded": 0, "processed": 0, "output": str(output_csv)}
 
+    # Dedup against existing output
+    existing = load_existing_results(output_csv)
+    to_process = [c for c in all_contacts if c["email"] not in existing]
 
-def write_harness(output_dir: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
-    payloads = [candidate_payload(row, i) for i, row in enumerate(rows)]
-    prompts = output_dir / "harness_prompts.jsonl"
-    instructions = output_dir / "instructions.md"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    instructions.write_text(prompt_text() + "\n\nWrite results as JSON Lines to `linkedin_resolutions.csv` using the documented schema.\n", encoding="utf-8")
-    with prompts.open("w", encoding="utf-8") as handle:
-        for payload in payloads:
-            handle.write(json.dumps({"instructions": prompt_text(), "input": payload}, ensure_ascii=False) + "\n")
-    return {"mode": "harness", "rows": len(rows), "instructions": str(instructions), "prompts_jsonl": str(prompts)}
+    if limit is not None:
+        to_process = to_process[:limit]
 
-
-def submit_parallel(ledger_path: Path, ledger: dict[str, Any]) -> dict[str, Any]:
-    api_key = os.getenv("PARALLEL_API_KEY", "").strip()
-    if not api_key:
-        raise SystemExit("PARALLEL_API_KEY is not set")
-    processor = ledger["input"].get("processor") or DEFAULT_PROCESSOR
-    if processor not in ALLOWED_PROCESSORS:
-        raise SystemExit(f"processor must be one of {sorted(ALLOWED_PROCESSORS)}")
-    rows = read_csv(Path(ledger["input"]["input_csv"]))
-    if ledger["input"].get("limit"):
-        rows = rows[: int(ledger["input"]["limit"])]
-    client = ParallelClient(api_key, ledger["input"].get("base_url") or DEFAULT_BASE_URL, ledger["input"].get("beta") or DEFAULT_BETA)
-    group = client.create_group()
-    group_id = group.get("taskgroup_id") or group.get("id")
-    inputs = [{"task_spec": task_spec(), "input": candidate_payload(row, i), "metadata": {"handle": candidate_id(row, i)}, "processor": processor} for i, row in enumerate(rows)]
-    run_ids: list[str] = []
-    for i in range(0, len(inputs), 50):
-        resp = client.add_runs(group_id, inputs[i:i + 50])
-        run_ids.extend(resp.get("run_ids") or [])
-    ledger["parallel"] = {"taskgroup_id": group_id, "run_ids": run_ids, "submitted_at": now_iso(), "rows": rows}
-    ledger.pop("blocked", None)
+    ledger: dict[str, Any] = {
+        "primitive": "resolve_linkedin_queue",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "output_dir": str(output_dir),
+        "input": {
+            "input_csv": str(input_csv),
+            "provider": provider,
+            "processor": processor,
+            "limit": limit,
+        },
+        "contacts_loaded": len(all_contacts),
+        "already_resolved": len(existing),
+        "to_process": len(to_process),
+    }
     save_ledger(ledger_path, ledger)
-    return {"status": "submitted", "taskgroup_id": group_id, "submitted": len(run_ids)}
 
+    if not to_process:
+        ledger["status"] = "completed"
+        ledger["message"] = "All contacts already resolved"
+        save_ledger(ledger_path, ledger)
+        return {"status": "completed", "output": str(output_csv), "contacts_loaded": len(all_contacts), "already_resolved": len(existing), "processed": 0}
 
-def poll_parallel(ledger_path: Path, ledger: dict[str, Any], wait: bool) -> dict[str, Any]:
+    if provider == "harness":
+        output_dir.mkdir(parents=True, exist_ok=True)
+        prompts = output_dir / "harness_prompts.jsonl"
+        with prompts.open("w", encoding="utf-8") as f:
+            for c in to_process:
+                f.write(json.dumps({"instructions": PARALLEL_ENRICH_INSTRUCTIONS, "input": {"full_name": c["full_name"], "company": c["company"], "email": c["email"]}}) + "\n")
+        ledger["status"] = "prepared_harness"
+        ledger["artifacts"] = {"prompts_jsonl": str(prompts)}
+        save_ledger(ledger_path, ledger)
+        return {"status": "prepared_harness", "rows": len(to_process), "prompts_jsonl": str(prompts), "output": str(output_csv)}
+
+    # Parallel provider
+    if not approve_spend:
+        ledger["status"] = "blocked_approval"
+        ledger["blocked"] = {"step": "parallel_submit", "approval_type": "external_api_spend", "contacts": len(to_process)}
+        save_ledger(ledger_path, ledger)
+        emit({
+            "status": "blocked_approval",
+            "approval_type": "external_api_spend",
+            "message": f"Approve Parallel.ai spend for {len(to_process)} email→LinkedIn lookups?",
+            "contacts": len(to_process),
+            "ledger": str(ledger_path),
+            "output": str(output_csv),
+        })
+        return {"status": "blocked_approval", "contacts": len(to_process), "output": str(output_csv)}
+
     api_key = os.getenv("PARALLEL_API_KEY", "").strip()
     if not api_key:
         raise SystemExit("PARALLEL_API_KEY is not set")
-    client = ParallelClient(api_key, ledger["input"].get("base_url") or DEFAULT_BASE_URL, ledger["input"].get("beta") or DEFAULT_BETA)
-    group_id = ledger.get("parallel", {}).get("taskgroup_id")
-    if not group_id:
-        return {"status": "missing_taskgroup"}
-    while True:
-        group = client.get_group(group_id)
-        if not wait or group.get("status", {}).get("is_active") is False:
-            break
-        time.sleep(10)
-    results: list[dict[str, Any]] = []
-    if group.get("status", {}).get("is_active") is False:
-        for run_id in ledger.get("parallel", {}).get("run_ids", []):
-            result = client.get_result(run_id) or {}
-            content = result.get("output", {}).get("content") if isinstance(result.get("output"), dict) else result.get("content")
-            if isinstance(content, dict):
-                results.append(content)
-    output = Path(ledger["output_dir"]) / "linkedin_resolutions.csv"
-    if results:
-        for row in results:
-            if isinstance(row.get("evidence"), list):
-                row["evidence"] = json.dumps(row["evidence"], ensure_ascii=False)
-        write_csv(output, OUTPUT_COLUMNS, results)
-    return {"status": "completed" if results else "pending", "taskgroup_id": group_id, "results": len(results), "output": str(output), "group": group}
 
+    results = submit_and_poll(
+        ParallelClient(api_key, base_url, beta),
+        to_process, processor,
+    )
+
+    # Merge with existing results + new results
+    existing_rows = read_csv_rows(output_csv)
+    all_rows = existing_rows + results
+    write_csv(output_csv, OUTPUT_COLUMNS, all_rows)
+
+    found = sum(1 for r in results if r.get("linkedin_url") and r.get("status") == "completed")
+    not_found = sum(1 for r in results if r.get("status") == "not_found")
+
+    ledger["status"] = "completed"
+    ledger["results"] = {"processed": len(results), "found": found, "not_found": not_found}
+    save_ledger(ledger_path, ledger)
+
+    return {
+        "status": "completed",
+        "output": str(output_csv),
+        "contacts_loaded": len(all_contacts),
+        "already_resolved": len(existing),
+        "processed": len(results),
+        "found": found,
+        "not_found": not_found,
+    }
+
+
+# ── CLI ───────────────────────────────────────────────────────
 
 def cmd_run(args: argparse.Namespace) -> int:
-    rows = read_csv(Path(args.input))
-    if args.limit is not None:
-        rows = rows[: args.limit]
-    output_dir = Path(args.output_dir)
-    ledger = {"primitive": "resolve_linkedin_queue", "created_at": now_iso(), "updated_at": now_iso(), "output_dir": str(output_dir), "input": {"input_csv": str(args.input), "provider": args.provider, "processor": args.processor, "limit": args.limit, "base_url": args.base_url, "beta": args.beta}}
-    if args.provider == "harness":
-        result = write_harness(output_dir, rows)
-        ledger["status"] = "prepared_harness"
-        ledger["artifacts"] = result
-        save_ledger(Path(args.ledger), ledger)
-        emit({"status": "prepared_harness", "ledger": args.ledger, **result})
-        return 0
-    ledger["status"] = "blocked_approval"
-    save_ledger(Path(args.ledger), ledger)
-    block(Path(args.ledger), ledger)
-    return 20
-
-
-def cmd_approve(args: argparse.Namespace) -> int:
-    ledger = read_json(Path(args.ledger), {})
-    ledger["approved_at"] = now_iso()
-    ledger.pop("blocked", None)
-    save_ledger(Path(args.ledger), ledger)
-    emit({"status": "approved", "ledger": args.ledger})
-    return 0
-
-
-def cmd_continue(args: argparse.Namespace) -> int:
-    ledger_path = Path(args.ledger)
-    ledger = read_json(ledger_path, {})
-    if ledger.get("blocked"):
-        block(ledger_path, ledger)
+    result = run_enrichment(
+        input_csv=Path(args.input),
+        output_dir=Path(args.output_dir),
+        ledger_path=Path(args.ledger),
+        provider=args.provider,
+        processor=args.processor,
+        limit=args.limit,
+        approve_spend=getattr(args, "approve_spend", False),
+        base_url=args.base_url,
+        beta=args.beta,
+    )
+    emit(result)
+    if result.get("status") == "blocked_approval":
         return 20
-    if not ledger.get("parallel"):
-        emit(submit_parallel(ledger_path, ledger))
-        return 0
-    emit(poll_parallel(ledger_path, ledger, args.wait))
     return 0
 
 
@@ -289,25 +600,19 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Resolve LinkedIn URLs for queued candidates via harness prompt or Parallel.ai")
+    parser = argparse.ArgumentParser(description="Resolve email→LinkedIn via Parallel.ai")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
     run.add_argument("--input", required=True)
-    run.add_argument("--provider", choices=["harness", "parallel"], default="harness")
+    run.add_argument("--provider", choices=["harness", "parallel"], default="parallel")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     run.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=sorted(ALLOWED_PROCESSORS))
     run.add_argument("--base-url", default=DEFAULT_BASE_URL)
     run.add_argument("--beta", default=DEFAULT_BETA)
-    run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
+    run.add_argument("--limit", type=int, default=None)
+    run.add_argument("--approve-spend", action="store_true", help="Auto-approve Parallel spend")
     run.set_defaults(func=cmd_run)
-    approve = sub.add_parser("approve")
-    approve.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    approve.set_defaults(func=cmd_approve)
-    cont = sub.add_parser("continue")
-    cont.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    cont.add_argument("--wait", action="store_true")
-    cont.set_defaults(func=cmd_continue)
     status = sub.add_parser("status")
     status.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     status.set_defaults(func=cmd_status)

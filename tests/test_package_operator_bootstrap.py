@@ -111,12 +111,18 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                         "handle,status,linkedin_url,confidence,matched_name,matched_headline,evidence,reasoning\n",
                         encoding="utf-8",
                     )
+                    (operator_dir / "resolution/directory.csv").write_text(
+                        "source,source_key,source_account,source_id,source_channels,status,email,phone,name,linkedin_url,public_identifier,confidence,matched_name,matched_headline,evidence,reasoning,source_artifact,updated_at\n"
+                        "linkedin_candidates,email:pat@example.com,patrick,17d602f7-f073-40b4-97a1-dba00c574442,linkedin_resolution,found,pat@example.com,,Pat,https://www.linkedin.com/in/pat,pat,1.00,Pat,,,,/source/linkedin_candidates_merged_17d602f7.csv,2026-06-02T00:00:00Z\n",
+                        encoding="utf-8",
+                    )
                     (operator_dir / "enrichment/profile_cache_v2/patrick.json").write_text("{}", encoding="utf-8")
                     manifest = {
                         "operator": "patrick",
                         "operator_id": "17d602f7-f073-40b4-97a1-dba00c574442",
                         "counts": {
                             "contact_min_rows": 1,
+                            "directory_rows": 1,
                             "linkedin_resolution_rows": 1,
                             "linkedin_resolution_cached_rows": 1,
                             "linkedin_resolution_uncached_rows": 0,
@@ -224,11 +230,15 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
             self.assertIn(".powerpacks/search-index", manifest["restore"]["normal_pipeline_outputs"])
             self.assertEqual(manifest["stages"]["import"]["directory"]["status"], "ok")
             self.assertEqual(manifest["stages"]["import"]["directory"]["rows"], 1)
+            self.assertEqual(manifest["stages"]["import"]["directory"]["source"], "network_bootstrap_directory")
             bundle = Path(manifest["artifacts"]["bundle"])
             with tarfile.open(bundle, "r:gz") as archive:
                 names = set(archive.getnames())
+                directory_payload = archive.extractfile(".powerpacks/network-import/directory.csv").read().decode("utf-8")
             self.assertIn("patrick/import/inputs/contact_rows_min.csv", names)
             self.assertIn("patrick/import/directory.csv", names)
+            self.assertIn("source_account", directory_payload)
+            self.assertIn("linkedin_resolution", directory_payload)
             self.assertNotIn("patrick/import/inputs/linkedin_candidates/linkedin_candidates_merged_17d602f7.csv", names)
             self.assertNotIn("patrick/import/inputs/linkedin_candidates_manifest.csv", names)
             self.assertNotIn("patrick/enrich/resolution/linkedin_resolutions_cached.csv", names)

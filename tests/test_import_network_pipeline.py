@@ -784,12 +784,17 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
                 self.assertTrue(import_network_pipeline.run_gmail_linkedin_resolution(ledger_path, ledger))
                 self.assertTrue(import_network_pipeline.run_gmail_apply_and_enrich(ledger_path, ledger))
-                self.assertTrue(import_network_pipeline.run_gmail_linkedin_resolution(ledger_path, ledger))
-                self.assertTrue(import_network_pipeline.run_gmail_apply_and_enrich(ledger_path, ledger))
             self.assertEqual(len(ledger["artifacts"]["gmail_linkedin_resolutions_csvs"]), 2)
+            self.assertEqual(
+                len({record["resolutions_csv"] for record in ledger["artifacts"]["gmail_linkedin_resolutions_csvs"]}),
+                1,
+            )
+            self.assertTrue(Path(ledger["artifacts"]["gmail_linkedin_combined_queue_csv"]).exists())
             self.assertEqual(len(ledger["artifacts"]["gmail_enrich_people_ledgers"]), 2)
             self.assertEqual(len(ledger["artifacts"]["gmail_final_people_csvs"]), 2)
-            self.assertEqual(sum(1 for cmd in calls if any("resolve_linkedin_queue.py" in part for part in cmd)), 2)
+            resolve_cmds = [cmd for cmd in calls if any("resolve_linkedin_queue.py" in part for part in cmd)]
+            self.assertEqual(len(resolve_cmds), 1)
+            self.assertTrue(resolve_cmds[0][resolve_cmds[0].index("--input") + 1].endswith("gmail-combined-unresolved-queue.csv"))
             self.assertEqual(sum(1 for cmd in calls if any("gmail_network_import.py" in part for part in cmd)), 2)
             self.assertEqual(sum(1 for cmd in calls if any("enrich_people.py" in part for part in cmd)), 2)
 
@@ -862,6 +867,14 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 unresolved = list(csv.DictReader(handle))
             self.assertEqual(directory_record["resolved"], 1)
             self.assertEqual([row["handle"] for row in unresolved], ["alex@example.com"])
+            with directory.open(newline="", encoding="utf-8") as handle:
+                directory_rows = list(csv.DictReader(handle))
+            observed = {row["source_key"]: row for row in directory_rows if row["status"] == "observed"}
+            self.assertEqual(
+                sorted(observed),
+                ["gmail:me@example.com:email:alex@example.com", "gmail:me@example.com:email:jane@example.com"],
+            )
+            self.assertEqual({row["source_account"] for row in observed.values()}, {"me@example.com"})
 
             calls = []
             def fake_run_cmd(cmd, timeout=None):
@@ -870,7 +883,11 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
                 self.assertTrue(import_network_pipeline.run_gmail_linkedin_resolution(tmp / "ledger.json", ledger))
             self.assertEqual(len(calls), 1)
-            self.assertEqual(calls[0][calls[0].index("--input") + 1], unresolved_record["queue_csv"])
+            combined_queue = Path(calls[0][calls[0].index("--input") + 1])
+            self.assertEqual(combined_queue.name, "gmail-combined-unresolved-queue.csv")
+            with combined_queue.open(newline="", encoding="utf-8") as handle:
+                combined_rows = list(csv.DictReader(handle))
+            self.assertEqual([row["handle"] for row in combined_rows], ["alex@example.com"])
 
     def test_gmail_apply_combines_directory_and_provider_resolutions_once(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -925,7 +942,9 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(ledger["artifacts"]["gmail_final_people_csvs"], [str(tmp / "enriched.csv")])
             with (tmp / "directory.csv").open(newline="", encoding="utf-8") as handle:
                 directory_rows = list(csv.DictReader(handle))
-            self.assertEqual([row["source_key"] for row in directory_rows], ["email:alex@example.com", "email:jane@example.com"])
+            self.assertEqual([row["source_key"] for row in directory_rows], ["gmail:me@example.com:email:alex@example.com", "gmail:me@example.com:email:jane@example.com"])
+            self.assertEqual({row["source_account"] for row in directory_rows}, {"me@example.com"})
+            self.assertEqual({row["status"] for row in directory_rows}, {"found"})
         self.assertEqual(
             import_network_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="", gmail_account_email="")),
             "",
@@ -934,6 +953,58 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             import_network_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="/tmp/msgvault.db", gmail_account_email="")),
             "/tmp/msgvault.db",
         )
+
+    def test_confirmed_people_artifacts_commit_to_directory_by_source(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            directory = tmp / "directory.csv"
+            linkedin_people = tmp / "linkedin_people.csv"
+            messages_people = tmp / "messages_people.csv"
+            for path, row in [
+                (linkedin_people, {
+                    "id": "linkedin:one",
+                    "full_name": "Linked In",
+                    "linkedin_url": "https://www.linkedin.com/in/linked-in",
+                    "public_identifier": "linked-in",
+                    "source_channels": "linkedin_csv",
+                }),
+                (messages_people, {
+                    "id": "message:one",
+                    "full_name": "Message Person",
+                    "linkedin_url": "https://www.linkedin.com/in/message-person",
+                    "public_identifier": "message-person",
+                    "primary_phone": "+15555550100",
+                    "source_channels": "imessage,whatsapp",
+                }),
+            ]:
+                import_network_pipeline.write_csv_rows(
+                    path,
+                    import_network_pipeline.PEOPLE_SCHEMA_COLUMNS,
+                    [{col: row.get(col, "") for col in import_network_pipeline.PEOPLE_SCHEMA_COLUMNS}],
+                )
+            artifacts: dict[str, object] = {}
+            input_cfg = {"linkedin_directory_csv": str(directory)}
+            import_network_pipeline.commit_people_csv_to_directory(
+                input_cfg,
+                artifacts,
+                str(linkedin_people),
+                source="linkedin_csv",
+                source_account="arthur",
+            )
+            import_network_pipeline.commit_people_csv_to_directory(
+                input_cfg,
+                artifacts,
+                str(messages_people),
+                source="messages",
+            )
+            with directory.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(
+                [row["source_key"] for row in rows],
+                ["linkedin_csv:arthur:linkedin:linked-in", "messages:phone:+15555550100"],
+            )
+            self.assertEqual({row["status"] for row in rows}, {"found"})
+            self.assertEqual([row["public_identifier"] for row in rows], ["linked-in", "message-person"])
 
     def test_completed_ledger_dry_run_reports_no_work(self) -> None:
         with tempfile.TemporaryDirectory() as td:

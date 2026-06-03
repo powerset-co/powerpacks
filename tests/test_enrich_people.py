@@ -114,7 +114,7 @@ class EnrichPeopleTests(unittest.TestCase):
     def test_skips_complete_rows_without_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
-            self.write_people(people, complete=True)
+            self.write_people(people, complete=True, rapidapi_response=self.profile())
             ledger = Path(tmp) / "ledger.json"
             code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(ledger)])
             self.assertEqual(code, 0)
@@ -403,6 +403,8 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(state["recent_failure_count"], 1)
             self.assertTrue(Path(state["artifacts"]["rapidapi_recent_failures_csv"]).exists())
             self.assertEqual(payload["status"], "completed")
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                self.assertEqual(list(csv.DictReader(handle)), [])
 
     def test_old_failed_cache_retries_after_ttl(self):
         with tempfile.TemporaryDirectory() as tmp:

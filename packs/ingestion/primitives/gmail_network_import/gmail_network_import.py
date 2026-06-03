@@ -149,6 +149,8 @@ TARGETED_COLUMNS = [
 LINKEDIN_RESOLUTION_QUEUE_COLUMNS = [
     "handle",
     "id",
+    "account_emails",
+    "source_ids",
     "display_name",
     "full_name",
     "primary_email",
@@ -672,6 +674,8 @@ def linkedin_resolution_queue_rows(rows: list[dict[str, Any]]) -> list[dict[str,
         queue.append({
             "handle": email,
             "id": f"gmail:{short_hash(email, 16)}",
+            "account_emails": json.dumps(row.get("account_emails") or [], ensure_ascii=False),
+            "source_ids": json.dumps(row.get("source_ids") or [], ensure_ascii=False),
             "display_name": row.get("display_name") or "",
             "full_name": row.get("display_name") or "",
             "primary_email": email,

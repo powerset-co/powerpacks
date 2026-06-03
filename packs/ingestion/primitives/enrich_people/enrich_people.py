@@ -469,6 +469,15 @@ def cached_profile_from_row(row: dict[str, Any], public_identifier: str, linkedi
     return None
 
 
+def confirmed_people_row(row: dict[str, Any]) -> bool:
+    linkedin_url = normalize_linkedin_url(str(row.get("linkedin_url") or ""))
+    public_identifier = str(row.get("public_identifier") or extract_public_identifier(linkedin_url) or "").strip()
+    if not linkedin_url or not public_identifier:
+        return False
+    raw = parse_jsonish(row.get("rapidapi_response"), None)
+    return isinstance(raw, dict) and normalize_linkedin_profile(raw).get("success") is True
+
+
 def classify_rapidapi_cache_status(row: dict[str, str], profile_cache_dir: Path, refresh_cache: bool, retry_hours: float) -> tuple[str, str, Path | None, dict[str, Any] | None]:
     public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
     cache_path = profile_cache_path(profile_cache_dir, public_identifier)
@@ -769,11 +778,13 @@ def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
         key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or sha(json.dumps(row, sort_keys=True))
         by_key[key] = merged
     output = Path(ledger["run_dir"]) / "people.csv"
-    rows = list(by_key.values())
+    unfiltered_rows = list(by_key.values())
+    rows = [row for row in unfiltered_rows if confirmed_people_row(row)]
     write_csv(output, PEOPLE_SCHEMA_COLUMNS, rows)
     ledger["artifacts"]["people_csv"] = str(output)
-    emit_progress(f"Wrote people.csv with {len(rows)} rows.")
-    return {"rows": len(rows), "output_file": str(output)}
+    filtered_rows = len(unfiltered_rows) - len(rows)
+    emit_progress(f"Wrote people.csv with {len(rows)} confirmed rows.")
+    return {"rows": len(rows), "unfiltered_rows": len(unfiltered_rows), "filtered_rows": filtered_rows, "output_file": str(output)}
 
 
 def execute_step(ledger: dict[str, Any], step_id: str) -> dict[str, Any]:
