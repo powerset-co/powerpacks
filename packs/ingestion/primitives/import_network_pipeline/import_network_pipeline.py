@@ -2727,8 +2727,34 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
         save_ledger(ledger_path, ledger)
         emit({"status": "source_import_completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
+    selected_sources = set(unique_strings(ledger.get("input", {}).get("only_sources")))
+    enrichment_only = bool(ledger.get("input", {}).get("enrichment_only"))
+    merge_only = bool(ledger.get("input", {}).get("merge_only"))
+    selected_fan_in_sources = selected_sources if ledger.get("input", {}).get("fan_in_only") or enrichment_only else set()
+    run_gmail_enrichment = (not selected_fan_in_sources or "gmail" in selected_fan_in_sources) and not merge_only
+    run_messages_profile_enrichment = (not selected_fan_in_sources or "messages" in selected_fan_in_sources) and not merge_only
+    if enrichment_only:
+        if run_gmail_enrichment:
+            if not run_gmail_directory(ledger_path, ledger):
+                return 1
+            save_ledger(ledger_path, ledger)
+            if not run_gmail_linkedin_resolution(ledger_path, ledger):
+                return 20 if ledger.get("blocked") else 1
+            save_ledger(ledger_path, ledger)
+            if not run_gmail_apply_and_enrich(ledger_path, ledger):
+                return 20 if ledger.get("blocked") else 1
+            save_ledger(ledger_path, ledger)
+        if run_messages_profile_enrichment:
+            if not run_messages_enrichment(ledger_path, ledger):
+                return 20 if ledger.get("blocked") else 1
+            save_ledger(ledger_path, ledger)
+        ledger["status"] = "source_enrichment_completed"
+        ledger.pop("blocked", None)
+        save_ledger(ledger_path, ledger)
+        emit({"status": "source_enrichment_completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
+        return 0
     if ledger.get("input", {}).get("only_sources") and not ledger.get("input", {}).get("fan_in_only"):
-        if "messages" in set(unique_strings(ledger.get("input", {}).get("only_sources"))) and ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
+        if "messages" in selected_sources and ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
             if not run_messages_enrichment(ledger_path, ledger):
                 return 20 if ledger.get("blocked") else 1
             save_ledger(ledger_path, ledger)
@@ -2736,9 +2762,6 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
         save_ledger(ledger_path, ledger)
         emit({"status": "source_import_completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
-    selected_fan_in_sources = set(unique_strings(ledger.get("input", {}).get("only_sources"))) if ledger.get("input", {}).get("fan_in_only") else set()
-    run_gmail_enrichment = not selected_fan_in_sources or "gmail" in selected_fan_in_sources
-    run_messages_profile_enrichment = not selected_fan_in_sources or "messages" in selected_fan_in_sources
     if run_gmail_enrichment:
         if not run_gmail_directory(ledger_path, ledger):
             return 1
@@ -2914,6 +2937,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             "only_sources": unique_strings(getattr(args, "only_source", [])),
             "fan_in_only": args.fan_in_only,
             "source_import_only": args.source_import_only,
+            "enrichment_only": bool(getattr(args, "enrichment_only", False)),
+            "merge_only": bool(getattr(args, "merge_only", False)),
             "twitter_handle": getattr(args, "twitter_handle", ""),
             "messages_review_csv": getattr(args, "messages_review_csv", ""),
             "messages_contacts_csv": getattr(args, "messages_contacts_csv", ""),
@@ -3124,6 +3149,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--only-source", action="append", default=[], choices=SOURCE_NAMES, help="Run only a source import worker; skips fan-in merge unless --fan-in-only is set separately")
     run.add_argument("--fan-in-only", action="store_true", help="Skip source import workers and run merge/DuckDB fan-in from existing artifacts")
     run.add_argument("--source-import-only", action="store_true", help="Run raw source imports only; skip resolution, enrichment, merge, and DuckDB fan-in")
+    run.add_argument("--enrichment-only", action="store_true", help="Run source-specific enrichment and stop before merge/DuckDB")
+    run.add_argument("--merge-only", action="store_true", help="Run only merge/DuckDB materialization; skip source-specific enrichment")
     run.add_argument("--dry-run", action="store_true", help="Inspect existing ledger/stage outputs and report work that would run")
     run.add_argument("--estimate", action="store_true", help="Alias for --dry-run")
     run.add_argument("--force", action="store_true")

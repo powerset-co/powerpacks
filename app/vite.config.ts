@@ -40,6 +40,7 @@ type SetupJob = {
   code?: number | null;
   stdout?: string;
   stderr?: string;
+  log?: string;
   output?: Record<string, any> | null;
 };
 type SetupImportSource = {
@@ -382,6 +383,14 @@ function shellStage(label: string, command: string[]): string {
   return `printf '%s\\n' ${shellQuote(`setup: ${label}`)} && ${shellJoin(command)}`;
 }
 
+function stagedCommand(stages: Array<{ label: string; command: string[] }>): string[] {
+  return [
+    "/bin/zsh",
+    "-lc",
+    stages.map((stage) => shellStage(stage.label, stage.command)).join(" && "),
+  ];
+}
+
 function importAndFanInCommand(importCommand: string[], fanInCommand: string[], label: string): string[] {
   return importsAndFanInCommand([{ label, command: importCommand }], fanInCommand);
 }
@@ -450,6 +459,7 @@ function startSetupJob(action: string, command: string[], timeoutMs = 6 * 60 * 6
     code: null,
     stdout: "",
     stderr: "",
+    log: "",
     output: null,
   };
   setupJobs.set(job.id, job);
@@ -465,16 +475,21 @@ function startSetupJob(action: string, command: string[], timeoutMs = 6 * 60 * 6
   }, timeoutMs);
 
   child.stdout.on("data", (chunk) => {
-    job.stdout = `${job.stdout || ""}${chunk.toString()}`;
+    const text = chunk.toString();
+    job.stdout = `${job.stdout || ""}${text}`;
+    job.log = `${job.log || ""}${text}`;
   });
   child.stderr.on("data", (chunk) => {
-    job.stderr = `${job.stderr || ""}${chunk.toString()}`;
+    const text = chunk.toString();
+    job.stderr = `${job.stderr || ""}${text}`;
+    job.log = `${job.log || ""}${text}`;
   });
   child.on("error", (err) => {
     clearTimeout(timer);
     job.status = "failed";
     job.completedAt = new Date().toISOString();
     job.stderr = `${job.stderr || ""}${err.message}`;
+    job.log = `${job.log || ""}${err.message}`;
   });
   child.on("close", (code) => {
     clearTimeout(timer);
@@ -713,7 +728,16 @@ function messagesCurrentBlockForUi(messagesLedger: Record<string, any>, reviewCo
   if (!block) return null;
   const approvalType = String(block.approval_type || "").trim().toLowerCase();
   if (approvalType === "upload") return null;
-  if (approvalType !== "parallel") return block;
+  if (approvalType !== "parallel") {
+    if (block.review_url) {
+      return {
+        ...block,
+        review_url: "/setup/imessage/review",
+        message: "Review Messages contacts in the inline setup app. Click Complete when done.",
+      };
+    }
+    return block;
+  }
 
   const prepareInput = String(messagesLedger.steps?.prepare_research_queue?.summary?.input || "");
   const selectedForResearch = Number(reviewCounts.researchSelected || 0);
@@ -1056,27 +1080,22 @@ function importNetworkCommand(operatorId: string, extra: string[] = []) {
   return command;
 }
 
-function enrichmentNetworkCommand(operatorId: string, sourceId: string): string[] {
+function enrichmentNetworkCommand(operatorId: string, sourceId: string, options: { approveSpend?: boolean } = {}): string[] {
+  if (sourceId === "gmail") {
+    const extra = ["--fan-in-only", "--only-source", "gmail", "--force", "--enrichment-only", "--resolve-gmail-linkedin"];
+    if (options.approveSpend) {
+      extra.push("--approve-parallel-spend");
+    }
+    return importNetworkCommand(operatorId, extra);
+  }
   if (sourceId === "linkedin_csv") {
     return importNetworkCommand(operatorId, ["--only-source", sourceId, "--force"]);
   }
   return [];
 }
 
-function enrichmentFanInCommand(operatorId: string, sourceIds: string[] = [], options: { approveSpend?: boolean } = {}): string[] {
-  const extra = ["--force"];
-  for (const sourceId of sourceIds) {
-    extra.push("--only-source", sourceId);
-  }
-  if (!sourceIds.length || sourceIds.includes("gmail")) {
-    extra.push("--resolve-gmail-linkedin");
-  }
-  if (options.approveSpend) {
-    extra.push("--approve-parallel-spend");
-  }
-  // TODO: remove limit after testing
-  extra.push("--gmail-linkedin-limit", "3");
-  return setupCommandArgs(operatorId, "fan-in", extra);
+function processLocalNetworkCommand(operatorId: string): string[] {
+  return setupCommandArgs(operatorId, "fan-in", ["--force", "--merge-only"]);
 }
 
 function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[number]) {
@@ -1109,18 +1128,16 @@ function messageEnrichmentCommand(accounts: RunState | null): string[] {
     "continue",
     "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
     "--parallel-timeout", String(process.env.POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS || "900"),
+    "--parallel-auto-approve-usd", "25",
     "--reuse-existing-artifacts",
     ...messageChannelFlags(accounts, ledger),
     "--include-contact-merge",
     "--include-powerset-candidates",
     "--include-local-match",
     "--include-llm-review",
+    "--include-research",
     "--include-review",
-    "--no-open-review",
-    "--force-sync-candidates",
-    "--force-match",
-    "--rerun-llm",
-    "--force-build-review",
+    "--no-open-browser",
   ];
 }
 
@@ -1224,12 +1241,31 @@ function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
       "p.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
     ].join("; "),
   ];
-  const continueAfterReview = [
+  const materializeMessagesPeople = importNetworkCommand("local", [
+    "--fan-in-only",
+    "--only-source", "messages",
+    "--force",
+    "--enrichment-only",
+  ]);
+  return ["/bin/zsh", "-lc", `${shellJoin(markAppReviewComplete)} && ${shellStage("materializing Messages people", materializeMessagesPeople)}`];
+}
+
+function messagesApproveAndContinueCommand(accounts: RunState | null): string[] {
+  const ledger = readJsonSync(messagesLedgerPath) || {};
+  const approve = [
+    "uv", "run", "--project", ".", "python",
+    "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
+    "approve",
+    "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
+    "--confirm",
+  ];
+  const continueAfterApproval = [
     "uv", "run", "--project", ".", "python",
     "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
     "continue",
     "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
     "--parallel-timeout", String(process.env.POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS || "900"),
+    "--parallel-auto-approve-usd", "25",
     "--reuse-existing-artifacts",
     ...messageChannelFlags(accounts, ledger),
     "--include-contact-merge",
@@ -1238,20 +1274,10 @@ function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
     "--include-llm-review",
     "--include-research",
     "--include-review",
+    "--no-open-browser",
     "--force-prepare-queue",
   ];
-  return ["/bin/zsh", "-lc", `${shellJoin(markAppReviewComplete)} && ${shellJoin(continueAfterReview)}`];
-}
-
-function messagesApproveAndContinueCommand(accounts: RunState | null): string[] {
-  const approve = [
-    "uv", "run", "--project", ".", "python",
-    "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
-    "approve",
-    "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
-    "--confirm",
-  ];
-  return ["/bin/zsh", "-lc", `${shellJoin(approve)} && ${shellJoin(messagesCompleteReviewCommand(accounts))}`];
+  return ["/bin/zsh", "-lc", `${shellJoin(approve)} && ${shellJoin(continueAfterApproval)}`];
 }
 
 function csvPathCount(value: unknown): number {
@@ -1405,6 +1431,20 @@ function sha256File(filePath: string): string {
   }
 }
 
+function localSearchRecordSummary(): { recordFiles: number; nonemptyRecordFiles: number } {
+  const recordsDir = path.join(powerpacksStateRoot, "search-index", "records");
+  if (!fs.existsSync(recordsDir)) return { recordFiles: 0, nonemptyRecordFiles: 0 };
+  const files = fs.readdirSync(recordsDir).filter((file) => file.endsWith(".records.jsonl"));
+  const nonempty = files.filter((file) => {
+    try {
+      return fs.statSync(path.join(recordsDir, file)).size > 0;
+    } catch {
+      return false;
+    }
+  });
+  return { recordFiles: files.length, nonemptyRecordFiles: nonempty.length };
+}
+
 function localDuckdbTableCounts(duckdbPath: string): Array<{ name: string; rows: number }> {
   if (!duckdbPath || !fs.existsSync(duckdbPath)) return [];
   const stat = fs.statSync(duckdbPath);
@@ -1415,7 +1455,7 @@ function localDuckdbTableCounts(duckdbPath: string): Array<{ name: string; rows:
   }
   const script = `
 import duckdb, json
-tables = ["local_people", "local_people_positions", "local_summaries", "local_people_education", "local_education", "local_companies"]
+tables = ["local_person_profiles", "local_people_positions", "local_summaries", "local_people_education", "local_education", "local_companies"]
 out = []
 con = duckdb.connect(${JSON.stringify(duckdbPath)}, read_only=True)
 for table in tables:
@@ -1444,6 +1484,51 @@ print(json.dumps(out))
   }
   cachedDuckdbTables = { key, expiresAt: nowMs + 10000, value };
   return value;
+}
+
+function maybeBuildLocalDuckdbFromBootstrapRecords(operatorId: string, duckdbPath: string, existingTables: Array<{ name: string; rows: number }>): Record<string, any> | null {
+  const records = localSearchRecordSummary();
+  const duckdbExists = fs.existsSync(duckdbPath);
+  const duckdbHasRows = existingTables.some((table) => Number(table.rows || 0) > 0);
+  if (!records.nonemptyRecordFiles || (duckdbExists && duckdbHasRows)) return null;
+  const result = spawnSync("uv", [
+    "run", "--project", ".", "python",
+    "scripts/build-local-duckdb-shim.py",
+    "--records-dir", ".powerpacks/search-index",
+    "--operator-id", operatorId,
+    "--force",
+  ], {
+    cwd: powerpacksRepoRoot,
+    env: setupProcessEnv(),
+    encoding: "utf8",
+    timeout: 60 * 60 * 1000,
+  });
+  cachedDuckdbTables = null;
+  const payload = parseJsonFragment(result.stdout || "") || {};
+  return {
+    status: result.status === 0 ? "ok" : "failed",
+    records,
+    ...payload,
+    error: result.status === 0 ? "" : String(payload.error || result.stderr || result.error?.message || "").slice(0, 1000),
+  };
+}
+
+function indexCanaryCommand(operatorId: string): string[] {
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py",
+    "run",
+    "--input", ".powerpacks/network-import/merged/people.csv",
+    "--output-dir", ".powerpacks/search-index-canary-1",
+    "--default-operator-id", operatorId,
+    "--limit", "1",
+    "--limit-mode", "missing",
+    "--existing-duckdb", ".powerpacks/search-index/local-search.duckdb",
+    "--allow-paid-role-provider",
+    "--allow-paid-embeddings",
+    "--allow-paid-company-provider",
+    "--force",
+  ];
 }
 
 function indexDryRunEstimate(operatorId: string, peopleSha256: string): Record<string, any> {
@@ -1638,10 +1723,15 @@ async function setupStatus() {
   const peopleCsvPath = path.join(powerpacksStateRoot, "network-import", "merged", "people.csv");
   const duckdbPath = path.join(powerpacksStateRoot, "search-index", "local-search.duckdb");
   const peopleSha256 = String(indexPhase.people_sha256 || sha256File(peopleCsvPath) || "");
-  const duckdbFile = fileSummary(duckdbPath);
-  const duckdbTables = localDuckdbTableCounts(duckdbPath);
+  let duckdbFile = fileSummary(duckdbPath);
+  let duckdbTables = localDuckdbTableCounts(duckdbPath);
+  const duckdbRepair = maybeBuildLocalDuckdbFromBootstrapRecords(operator.id, duckdbPath, duckdbTables);
+  duckdbFile = fileSummary(duckdbPath);
+  duckdbTables = localDuckdbTableCounts(duckdbPath);
   const duckdbHasRows = duckdbTables.some((table) => Number(table.rows || 0) > 0);
+  const bootstrapRecords = localSearchRecordSummary();
   const bootstrapRestorePreferred = Number(bootstrap.peopleRecords || 0) > 0
+    && Boolean(bootstrapRecords.nonemptyRecordFiles)
     && (!duckdbFile.exists || !duckdbHasRows);
   const processingEstimate = bootstrapRestorePreferred ? {
     status: "local_records_restore",
@@ -1713,6 +1803,8 @@ async function setupStatus() {
       readiness: indexPhase.status || "unknown",
       reason: indexPhase.reason || "",
       indexInputSha256: indexPhase.index_input_sha256 || "",
+      bootstrapRecords,
+      duckdbRepair,
       processingEstimate,
     },
     next: deriveNextAction(setupLedger, sources),
@@ -1770,6 +1862,10 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     return startSetupJob(action, setupCommandArgs(operator.id, "index", extra));
   }
 
+  if (action === "index-canary") {
+    return startSetupJob(action, indexCanaryCommand(operator.id), 2 * 60 * 60 * 1000);
+  }
+
   if (["bootstrap", "link", "run"].includes(action)) {
     return startSetupJob(action, setupCommandArgs(operator.id, action as any));
   }
@@ -1778,14 +1874,13 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     const enrichableSources = buildImportSources(accounts, operator.id)
       .filter((source) => source.linked && !source.skipped && source.runnable !== false && source.id !== "twitter");
     if (!enrichableSources.length) throw new Error("no linked sources can be enriched");
-    const imports = enrichableSources
+    const stages = enrichableSources
       .map((source) => ({
         label: `enriching ${source.label}`,
         command: source.id === "messages" ? messageEnrichmentCommand(accounts) : enrichmentNetworkCommand(operator.id, source.id),
       }))
       .filter((stage) => stage.command.length > 0);
-    const fanIn = enrichmentFanInCommand(operator.id);
-    return startSetupJob(action, importsAndFanInCommand(imports, fanIn), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, stagedCommand(stages), 6 * 60 * 60 * 1000);
   }
 
   if (action === "import-source") {
@@ -1813,13 +1908,11 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (sourceId === "messages") {
       return startSetupJob(action, messageEnrichmentCommand(accounts), 2 * 60 * 60 * 1000);
     }
-    const command = enrichmentNetworkCommand(operator.id, sourceId);
+    const command = enrichmentNetworkCommand(operator.id, sourceId, { approveSpend });
     if (command.length === 0) {
-      const fanIn = enrichmentFanInCommand(operator.id, [sourceId], { approveSpend });
-      return startSetupJob(action, importsAndFanInCommand([], fanIn), 6 * 60 * 60 * 1000);
+      throw new Error(`source enrichment is not wired yet: ${sourceId}`);
     }
-    const fanIn = enrichmentFanInCommand(operator.id, [sourceId], { approveSpend });
-    return startSetupJob(action, importAndFanInCommand(command, fanIn, `enriching ${source.label}`), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, stagedCommand([{ label: `enriching ${source.label}`, command }]), 6 * 60 * 60 * 1000);
   }
 
   if (action === "skip-source") {

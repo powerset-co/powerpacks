@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -106,15 +107,58 @@ def tail(text: str, limit: int = 4000) -> str:
     return text[-limit:]
 
 
-def run_json_command(cmd: list[str], timeout: int = 6 * 60 * 60) -> tuple[int, dict[str, Any], str]:
-    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+def progress(message: str) -> None:
+    print(f"[setup {now()}] {message}", file=sys.stderr, flush=True)
+
+
+def run_json_command(cmd: list[str], timeout: int = 6 * 60 * 60, *, stream_stderr: bool = False) -> tuple[int, dict[str, Any], str]:
+    if not stream_stderr:
+        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+        payload: dict[str, Any]
+        try:
+            parsed = parse_json_fragment(proc.stdout)
+            payload = parsed if isinstance(parsed, dict) else {'payload': parsed}
+        except json.JSONDecodeError:
+            payload = {}
+        return proc.returncode, payload, proc.stderr
+
+    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def read_stream(stream: Any, chunks: list[str], *, mirror_stderr: bool = False) -> None:
+        try:
+            for line in iter(stream.readline, ''):
+                chunks.append(line)
+                if mirror_stderr:
+                    print(line, end='', file=sys.stderr, flush=True)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    stdout_thread = threading.Thread(target=read_stream, args=(proc.stdout, stdout_chunks), daemon=True)
+    stderr_thread = threading.Thread(target=read_stream, args=(proc.stderr, stderr_chunks), kwargs={'mirror_stderr': True}, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    try:
+        code = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        code = proc.wait()
+        stderr_chunks.append(f"\ncommand timed out after {timeout} seconds\n")
+    stdout_thread.join(timeout=5)
+    stderr_thread.join(timeout=5)
+    stdout = ''.join(stdout_chunks)
+    stderr = ''.join(stderr_chunks)
     payload: dict[str, Any]
     try:
-        parsed = parse_json_fragment(proc.stdout)
+        parsed = parse_json_fragment(stdout)
         payload = parsed if isinstance(parsed, dict) else {'payload': parsed}
     except json.JSONDecodeError:
         payload = {}
-    return proc.returncode, payload, proc.stderr
+    return code, payload, stderr
 
 
 def sha256_file(path: Path) -> str:
@@ -814,7 +858,7 @@ def processing_run_command_args(operator_id: str, *, allow_paid: bool = False) -
 
 
 def build_local_duckdb_shim_command_text(operator_id: str) -> str:
-    return f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'
+    return f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --derive-positions-from-person-profiles --operator-id {operator_id} --force'
 
 
 def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
@@ -823,6 +867,7 @@ def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
         'scripts/build-local-duckdb-shim.py',
         '--records-dir',
         '.powerpacks/search-index',
+        '--derive-positions-from-person-profiles',
         '--operator-id',
         operator_id,
         '--force',
@@ -1225,7 +1270,7 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
                 'index_input_sha256': people_hash,
             }
     if search_records_have_data() and not duck.exists():
-        return {'status': 'records_only_duckdb_missing', 'repair_command': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'}
+        return {'status': 'records_only_duckdb_missing', 'repair_command': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --derive-positions-from-person-profiles --operator-id {operator_id} --force'}
     if people.exists():
         return processing_needed
     return {'status': 'not_ready', 'missing': ['.powerpacks/network-import/merged/people.csv']}
@@ -1725,6 +1770,36 @@ def run_fan_in_phase(args: argparse.Namespace) -> int:
 def run_index_phase(args: argparse.Namespace) -> int:
     ledger_path = Path(args.setup_ledger)
     ledger = load_setup_ledger(ledger_path)
+    process_started_at = now()
+    process_run_id = f"setup-process-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    process_code, process_payload, process_stderr = run_json_command(network_fan_in_command(args, process_run_id, force=True, merge_only=True))
+    if process_code == 20 or process_payload.get('status') == 'blocked_approval':
+        emit({'status': 'blocked_approval', 'phase': 'process', 'payload': process_payload, 'stderr': tail(process_stderr)})
+        return 20
+    if process_code != 0:
+        emit({'status': 'failed', 'phase': 'process', 'payload': process_payload, 'stderr': tail(process_stderr)})
+        return 1
+    promoted = promote_network_artifacts(process_payload.get('artifacts') or {})
+    ledger = load_setup_ledger(ledger_path)
+    ledger.setdefault('phases', {})['process'] = {
+        'status': 'completed',
+        'source': 'index_phase',
+        'started_at': process_started_at,
+        'completed_at': now(),
+        'run_id': process_payload.get('run_id') or process_run_id,
+        'ledger': str(SETUP_REFRESH_LEDGER),
+        'people_csv': '.powerpacks/network-import/merged/people.csv',
+        'promoted': promoted,
+        'artifact_hashes': artifact_hashes(promoted),
+    }
+    ledger.setdefault('phases', {})['import'] = {
+        **(ledger.get('phases', {}).get('import') or {}),
+        'status': 'ready',
+        'source': 'process',
+        'people_csv': '.powerpacks/network-import/merged/people.csv',
+    }
+    ledger['status'] = 'ready'
+    save_setup_ledger(ledger, ledger_path)
     index_payload, index_code = run_processing_index(args, ledger, ledger_path)
     status_args = argparse.Namespace(
         operator_id=args.operator_id,
@@ -1903,7 +1978,7 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
     return cmd
 
 
-def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool) -> list[str]:
+def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool, merge_only: bool = False) -> list[str]:
     cmd = [
         sys.executable,
         'packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py',
@@ -1921,6 +1996,8 @@ def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool
     ]
     if force:
         cmd.append('--force')
+    if merge_only or bool(getattr(args, 'merge_only', False)):
+        cmd.append('--merge-only')
     for source in getattr(args, 'only_source', []) or []:
         cmd.extend(['--only-source', source])
     if bool(getattr(args, 'resolve_gmail_linkedin', False)):
@@ -1981,16 +2058,39 @@ def matching_bootstrap_bundle(operator_id: str) -> Path | None:
     return None
 
 
+def sync_latest_bootstrap_bundle(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    if getattr(args, 'bootstrap_bundle', ''):
+        return {'status': 'skipped', 'reason': 'explicit_bootstrap_bundle'}, 0
+    if getattr(args, 'skip_bootstrap_sync', False):
+        return {'status': 'skipped', 'reason': 'skip_bootstrap_sync'}, 0
+    cmd = [
+        sys.executable,
+        'packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py',
+        'sync',
+        '--operator-id', args.operator_id,
+    ]
+    code, payload, stderr = run_json_command(cmd, timeout=15 * 60)
+    if stderr and isinstance(payload, dict):
+        payload.setdefault('stderr', tail(stderr))
+    payload.setdefault('command', ' '.join(shlex.quote(part) for part in cmd))
+    return payload, code
+
+
 def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> tuple[dict[str, Any] | None, int]:
-    if ledger.get('phases', {}).get('bootstrap', {}).get('status') != 'pending':
+    force = bool(getattr(args, 'force_bootstrap', False))
+    if ledger.get('phases', {}).get('bootstrap', {}).get('status') != 'pending' and not force:
         return None, 0
+    sync_payload, sync_code = sync_latest_bootstrap_bundle(args)
     bundle = Path(args.bootstrap_bundle) if getattr(args, 'bootstrap_bundle', '') else matching_bootstrap_bundle(args.operator_id)
     if not bundle:
-        return {'status': 'skipped', 'reason': 'no_matching_bootstrap_bundle'}, 0
+        if sync_code == 20:
+            return {'status': 'blocked_user_action', 'step': 'bootstrap_sync', 'bootstrap_sync': sync_payload}, 20
+        if sync_code != 0:
+            return {'status': 'failed', 'step': 'bootstrap_sync', 'bootstrap_sync': sync_payload}, 1
+        return {'status': 'skipped', 'reason': 'no_matching_bootstrap_bundle', 'bootstrap_sync': sync_payload}, 0
     inspected = inspect_bundle(bundle)
     if inspected.get('status') != 'ok':
-        return {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected}, 20
-    force = bool(getattr(args, 'force_bootstrap', False))
+        return {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected, 'bootstrap_sync': sync_payload}, 20
     if inspected.get('would_overwrite') and not force:
         return {
             'status': 'blocked_user_action',
@@ -2008,6 +2108,7 @@ def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> t
         allow_legacy_bootstrap_manifest=False,
     )
     payload = apply_bundle(apply_args)
+    payload['bootstrap_sync'] = sync_payload
     if payload.get('status') != 'ok':
         return payload, 20 if payload.get('requires_approval') else 1
     return payload, 0
@@ -2018,18 +2119,28 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
     run_id = f"setup-refresh-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     before_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
     results: dict[str, Any] = {'status': 'running', 'started_at': started_at, 'reason': due.get('reason'), 'run_id': run_id}
+    progress(f"Import refresh started: run_id={run_id}, reason={due.get('reason')}, linked_sources={','.join(due.get('linked_sources') or linked_sources(accounts)) or 'none'}")
 
     refresh_reason = str(due.get('reason') or '')
     force_reasons = {'forced', 'refresh_interval_elapsed', 'linked_sources_changed', 'missing_import_artifact', 'import_artifact_drift'}
     force_messages = refresh_reason in force_reasons
     message_cmd = message_refresh_command(accounts, SETUP_MESSAGES_LEDGER, force=force_messages)
     if message_cmd:
-        code, payload, stderr = run_json_command(message_cmd)
+        progress("Starting Messages import/enrichment prerequisites...")
+        progress("Command: " + ' '.join(shlex.quote(part) for part in message_cmd))
+        code, payload, stderr = run_json_command(message_cmd, stream_stderr=True)
+        progress(f"Messages step finished with code={code}, status={payload.get('status') or 'unknown'}")
         results['messages'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
         if code in (20, 21) or str(payload.get('status', '')).startswith('blocked'):
+            results['status'] = 'blocked_user_action'
+            results['completed_at'] = now()
+            results['failed_step'] = 'messages'
             return {'status': 'blocked_user_action', 'step': 'messages', 'refresh': results, 'payload': payload}, code or 20
         if code != 0:
-            return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': tail(stderr) or payload}, 1
+            results['status'] = 'failed'
+            results['completed_at'] = now()
+            results['failed_step'] = 'messages'
+            return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': payload or tail(stderr)}, 1
 
     force_network = refresh_reason in force_reasons
     # Leave Gmail mailbox cursoring to import_network_pipeline. That layer can
@@ -2037,15 +2148,26 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
     # local source/message timestamp. The setup wrapper should not replace that
     # with a broad run-level lookback.
     gmail_sync_after = ''
-    code, payload, stderr = run_json_command(network_refresh_command(args, run_id, force=force_network, gmail_sync_after=gmail_sync_after))
+    network_cmd = network_refresh_command(args, run_id, force=force_network, gmail_sync_after=gmail_sync_after)
+    progress("Starting network import refresh (Gmail/LinkedIn/Twitter as linked)...")
+    progress("Command: " + ' '.join(shlex.quote(part) for part in network_cmd))
+    code, payload, stderr = run_json_command(network_cmd, stream_stderr=True)
+    progress(f"Network import step finished with code={code}, status={payload.get('status') or 'unknown'}")
     results['network'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
     if code == 20 or payload.get('status') == 'blocked_approval':
+        results['status'] = 'blocked_approval'
+        results['completed_at'] = now()
+        results['failed_step'] = 'network_import'
         return {'status': 'blocked_approval', 'step': 'network_import', 'refresh': results, 'payload': payload}, 20
     if code != 0:
-        return {'status': 'failed', 'step': 'network_import', 'refresh': results, 'error': tail(stderr) or payload}, 1
+        results['status'] = 'failed'
+        results['completed_at'] = now()
+        results['failed_step'] = 'network_import'
+        return {'status': 'failed', 'step': 'network_import', 'refresh': results, 'error': payload or tail(stderr)}, 1
 
     promoted = promote_network_artifacts(payload.get('artifacts') or {})
     after_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
+    progress(f"Import refresh completed: network_changed={bool(after_hash and before_hash != after_hash)}")
     completed = {
         'status': 'completed',
         'started_at': started_at,
@@ -2205,6 +2327,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--bootstrap-bundle', default='')
     s.add_argument('--force-bootstrap', action='store_true')
+    s.add_argument('--skip-bootstrap-sync', action='store_true', help=argparse.SUPPRESS)
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.set_defaults(func=run_bootstrap_phase)
 
@@ -2246,6 +2369,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--resolve-gmail-linkedin', action='store_true', help='Run Gmail email-to-LinkedIn resolution with Parallel during enrichment fan-in.')
     s.add_argument('--approve-parallel-spend', action='store_true', help='Auto-approve Parallel.ai spend without blocking.')
     s.add_argument('--gmail-linkedin-limit', type=int, default=None, help='Max Gmail contacts to resolve via Parallel')
+    s.add_argument('--merge-only', action='store_true', help=argparse.SUPPRESS)
     s.set_defaults(func=run_fan_in_phase)
 
     s = sub.add_parser('index')
@@ -2269,6 +2393,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--bootstrap-bundle', default='')
     s.add_argument('--force-bootstrap', action='store_true')
+    s.add_argument('--skip-bootstrap-sync', action='store_true', help=argparse.SUPPRESS)
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
     s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)

@@ -33,6 +33,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+from packs.indexing.lib.people import build_people_records, flatten_people  # noqa: E402
 _limit = sys.maxsize
 while True:
     try:
@@ -53,12 +55,51 @@ LOCAL_TABLES = {
     "local_education": "records/schools.records.jsonl",
     "local_companies": "records/companies.records.jsonl",
 }
+PERSON_PROFILE_RECORD = "records/person_profiles.records.jsonl"
 
 # Local DuckDB contract for the five search namespaces.  These columns mirror
 # the Aleph TurboPuffer upload contracts copied under .powerpacks/aleph-seed:
 # people/summaries/companies carry embeddings; education/schools are lookup and
 # prefilter tables and intentionally do not require vectors in Aleph.
 LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
+    "local_person_profiles": {
+        "id": "VARCHAR",
+        "person_id": "VARCHAR",
+        "base_id": "VARCHAR",
+        "public_identifier": "VARCHAR",
+        "linkedin_url": "VARCHAR",
+        "public_profile_url": "VARCHAR",
+        "first_name": "VARCHAR",
+        "last_name": "VARCHAR",
+        "full_name": "VARCHAR",
+        "headline": "VARCHAR",
+        "summary": "VARCHAR",
+        "city": "VARCHAR",
+        "state": "VARCHAR",
+        "country": "VARCHAR",
+        "location_raw": "VARCHAR",
+        "profile_picture_url": "VARCHAR",
+        "current_title": "VARCHAR",
+        "current_company": "VARCHAR",
+        "current_company_urn": "VARCHAR",
+        "primary_email": "VARCHAR",
+        "all_emails": "VARCHAR[]",
+        "primary_phone": "VARCHAR",
+        "all_phones": "VARCHAR[]",
+        "source_channels": "VARCHAR[]",
+        "source_artifacts": "VARCHAR[]",
+        "twitter_handle": "VARCHAR",
+        "x_twitter_handle": "VARCHAR",
+        "x_twitter_followers": "BIGINT",
+        "linkedin_followers": "BIGINT",
+        "linkedin_connections": "BIGINT",
+        "ig_followers": "BIGINT",
+        "inferred_birth_year": "BIGINT",
+        "work_experiences": "JSON",
+        "education": "JSON",
+        "hydrated_context": "JSON",
+        "allowed_operator_ids": "VARCHAR[]",
+    },
     "local_people_positions": {
         "id": "VARCHAR",
         "position_id": "VARCHAR",
@@ -179,6 +220,17 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
 }
 
 VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies"]
+POSITION_PERSON_DUPLICATE_COLUMNS = [
+    "city",
+    "state",
+    "country",
+    "x_twitter_followers",
+    "linkedin_followers",
+    "linkedin_connections",
+    "ig_followers",
+    "inferred_birth_year",
+    "allowed_operator_ids",
+]
 EXTRA_COLUMNS = LOCAL_TABLE_CONTRACT
 
 
@@ -531,6 +583,133 @@ def add_missing_columns(con: Any, table: str, columns: dict[str, str]) -> None:
             con.execute(f"ALTER TABLE {qident(table)} ADD COLUMN {qident(name)} {type_name}")
 
 
+def _json_value(value: Any, default: Any) -> Any:
+    if value in (None, ""):
+        return default
+    if isinstance(value, (list, dict)):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if parsed is not None else default
+        except json.JSONDecodeError:
+            return default
+    return default
+
+
+def _string_list(value: Any) -> list[str]:
+    parsed = _json_value(value, None)
+    if isinstance(parsed, list):
+        return [str(item) for item in parsed if str(item or "").strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.replace(";", ",").split(",") if part.strip()]
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        parsed = _int_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def materialize_positions_from_csv(source: Path, run_dir: Path, operator_id: str, *, force: bool = False) -> Path | None:
+    if not source.exists():
+        return None
+    out = run_dir / "records/people.records.jsonl"
+    if out.exists() and not force:
+        return out
+    people = flatten_people(source)
+    records = build_people_records(people, default_operator_id=operator_id)
+    write_jsonl(out, records)
+    return out
+
+
+def materialize_person_profiles_from_csv(source: Path, run_dir: Path, operator_id: str) -> Path | None:
+    if not source.exists():
+        return None
+    out = run_dir / PERSON_PROFILE_RECORD
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    def rows():
+        for person in flatten_people(source):
+            row = person.get("raw") or {}
+            pid = str(person.get("id") or person.get("person_id") or "").strip()
+            if not pid:
+                continue
+            work = person.get("work_experiences") if isinstance(person.get("work_experiences"), list) else []
+            edu = person.get("education") if isinstance(person.get("education"), list) else []
+            rapid = person.get("rapidapi_response") if isinstance(person.get("rapidapi_response"), dict) else {}
+            twitter = person.get("twitter_response") if isinstance(person.get("twitter_response"), dict) else {}
+            linkedin_url = person.get("linkedin_url") or rapid.get("url") or rapid.get("linkedinUrl") or ""
+            location = person.get("location_raw") or ", ".join(str(person.get(k) or "") for k in ["city", "state", "country"] if person.get(k))
+            full_name = person.get("full_name") or " ".join(part for part in [person.get("first_name"), person.get("last_name")] if part)
+            context = {
+                "person_id": pid,
+                "name": full_name,
+                "headline": person.get("headline") or rapid.get("headline") or "",
+                "summary": person.get("summary") or rapid.get("summary") or "",
+                "location": location or None,
+                "linkedin_url": linkedin_url,
+                "profile_picture_url": person.get("profile_picture_url") or rapid.get("profilePicture") or "",
+                "positions": work,
+                "education": edu,
+                "tech_skills": _string_list(rapid.get("skills")),
+            }
+            yield {
+                "id": pid,
+                "person_id": pid,
+                "base_id": pid,
+                "public_identifier": person.get("public_identifier") or rapid.get("username") or "",
+                "linkedin_url": linkedin_url,
+                "public_profile_url": linkedin_url,
+                "first_name": person.get("first_name") or rapid.get("firstName") or "",
+                "last_name": person.get("last_name") or rapid.get("lastName") or "",
+                "full_name": full_name,
+                "headline": person.get("headline") or rapid.get("headline") or "",
+                "summary": person.get("summary") or rapid.get("summary") or "",
+                "city": person.get("city") or "",
+                "state": person.get("state") or "",
+                "country": person.get("country") or "",
+                "location_raw": location or "",
+                "profile_picture_url": person.get("profile_picture_url") or rapid.get("profilePicture") or "",
+                "current_title": person.get("current_title") or "",
+                "current_company": person.get("current_company") or "",
+                "current_company_urn": row.get("current_company_urn") or "",
+                "primary_email": row.get("primary_email") or "",
+                "all_emails": _string_list(row.get("all_emails")),
+                "primary_phone": row.get("primary_phone") or "",
+                "all_phones": _string_list(row.get("all_phones")),
+                "source_channels": _string_list(row.get("source_channels") or person.get("source_channels")),
+                "source_artifacts": _string_list(row.get("source_artifacts") or person.get("source_artifacts")),
+                "twitter_handle": person.get("twitter_handle") or twitter.get("username") or "",
+                "x_twitter_handle": person.get("x_twitter_handle") or person.get("twitter_handle") or twitter.get("username") or "",
+                "x_twitter_followers": _first_int(row.get("x_twitter_followers"), twitter.get("followers"), twitter.get("followers_count")),
+                "linkedin_followers": _first_int(row.get("linkedin_followers"), rapid.get("followers"), rapid.get("followerCount")),
+                "linkedin_connections": _first_int(row.get("linkedin_connections"), rapid.get("connections"), rapid.get("connectionCount")),
+                "ig_followers": _int_or_none(row.get("ig_followers")),
+                "inferred_birth_year": _int_or_none(row.get("inferred_birth_year")),
+                "work_experiences": work,
+                "education": edu,
+                "hydrated_context": context,
+                "allowed_operator_ids": [operator_id],
+            }
+
+    write_jsonl(out, rows())
+    return out
+
+
 def load_jsonl_table(con: Any, table: str, path: Path) -> int:
     con.execute(f"DROP TABLE IF EXISTS {qident(table)}")
     if has_records(path):
@@ -617,7 +796,7 @@ def resolve_artifact_path(run_dir: Path, rel: str) -> Path:
     return run_dir / rel
 
 
-def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False) -> tuple[Path, dict[str, int]]:
+def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_profiles_csv: Path | None = None, derive_positions_csv: Path | None = None) -> tuple[Path, dict[str, int]]:
     try:
         import duckdb  # type: ignore
     except ModuleNotFoundError as exc:
@@ -633,16 +812,55 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False) -> tupl
     con = duckdb.connect(str(db_path))
     counts: dict[str, int] = {}
     try:
+        if person_profiles_csv:
+            profile_record = materialize_person_profiles_from_csv(person_profiles_csv, run_dir, operator_id)
+            if profile_record:
+                counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", profile_record)
+                postprocess_table(con, "local_person_profiles", operator_id)
+        if derive_positions_csv:
+            materialize_positions_from_csv(derive_positions_csv, run_dir, operator_id, force=True)
         for table, rel in LOCAL_TABLES.items():
             path = resolve_artifact_path(run_dir, rel)
             counts[table] = load_jsonl_table(con, table, path)
             postprocess_table(con, table, operator_id)
         postprocess_cross_tables(con)
+        counts["local_person_profile_position_overlap"] = profile_position_id_overlap(con)
+        counts["local_people_positions_person_columns_dropped"] = int(drop_position_person_duplicates(con))
         con.execute("CREATE OR REPLACE VIEW local_people AS SELECT * FROM local_people_positions")
         con.execute("CHECKPOINT")
     finally:
         con.close()
     return db_path, counts
+
+
+def profile_position_id_overlap(con: Any) -> int:
+    tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
+    if "local_person_profiles" not in tables or "local_people_positions" not in tables:
+        return 0
+    return int(con.execute(
+        """
+        select count(distinct p.person_id)
+        from local_person_profiles p
+        join local_people_positions r
+          on cast(p.person_id as varchar) = cast(r.person_id as varchar)
+          or cast(p.person_id as varchar) = cast(r.base_id as varchar)
+        """
+    ).fetchone()[0] or 0)
+
+
+def drop_position_person_duplicates(con: Any) -> bool:
+    if profile_position_id_overlap(con) <= 0:
+        return False
+    cols = table_columns(con, "local_people_positions")
+    dropped = False
+    for column in POSITION_PERSON_DUPLICATE_COLUMNS:
+        if column in cols:
+            try:
+                con.execute(f"ALTER TABLE local_people_positions DROP COLUMN {qident(column)}")
+                dropped = True
+            except Exception:
+                pass
+    return dropped
 
 
 def postprocess_cross_tables(con: Any) -> None:
@@ -695,6 +913,7 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table
         "source": source_value,
         "records_dir": str(Path(args.records_dir)) if args.records_dir else None,
         "aleph_output_dir": str(Path(args.aleph_output_dir)) if args.aleph_output_dir else None,
+        "person_profiles_csv": getattr(args, "_resolved_person_profiles_csv", None),
         "run_dir": str(run_dir),
         "duckdb": str(db_path),
         "powerpacks_local_search_db": str(db_path),
@@ -710,6 +929,8 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=str(DEFAULT_SOURCE), help="Input people CSV; defaults to people_harmonic_all.csv")
+    parser.add_argument("--person-profiles-csv", help="One-row-per-person CSV used to populate local_person_profiles; defaults to --source, then .powerpacks/network-import/merged/people.csv when present")
+    parser.add_argument("--derive-positions-from-person-profiles", action="store_true", help="Rebuild records/people.records.jsonl deterministically from the same CSV used for local_person_profiles; no vectors or provider calls")
     parser.add_argument("--records-dir", help="Existing normal pipeline run root or records/ directory containing *.records.jsonl; skips people.csv pipeline build")
     parser.add_argument("--aleph-output-dir", help="Copied Aleph pipeline_output directory; converts Aleph upload artifacts to local records without API calls")
     parser.add_argument("--operator-id", default=DEFAULT_OPERATOR_ID)
@@ -750,7 +971,18 @@ def main() -> None:
         build_pipeline(args, run_dir)
     if not run_dir.exists():
         raise SystemExit(f"missing run dir after pipeline/artifact materialization: {run_dir}")
-    db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force)
+    person_profiles_csv = Path(args.person_profiles_csv) if args.person_profiles_csv else None
+    if person_profiles_csv and not person_profiles_csv.is_absolute():
+        person_profiles_csv = ROOT / person_profiles_csv
+    if not person_profiles_csv:
+        source_candidate = Path(args.source)
+        if not source_candidate.is_absolute():
+            source_candidate = ROOT / source_candidate
+        merged_candidate = ROOT / ".powerpacks/network-import/merged/people.csv"
+        person_profiles_csv = source_candidate if source_candidate.exists() else merged_candidate if merged_candidate.exists() else None
+    args._resolved_person_profiles_csv = str(person_profiles_csv) if person_profiles_csv else None
+    derive_positions_csv = person_profiles_csv if args.derive_positions_from_person_profiles else None
+    db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force, person_profiles_csv=person_profiles_csv, derive_positions_csv=derive_positions_csv)
     manifest_path = write_manifest(run_dir, args, db_path, table_counts)
     emit({
         "status": "ok",

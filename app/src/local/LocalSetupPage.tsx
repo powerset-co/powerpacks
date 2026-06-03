@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
 import {
   AtSign,
@@ -16,7 +17,6 @@ import {
   Mail,
   MessageSquare,
   Play,
-  RefreshCcw,
   Sparkles,
   Terminal,
 } from "lucide-react";
@@ -41,12 +41,13 @@ import type {
 
 type SetupTabId = "link" | "import" | "enrichment" | "index";
 type LinkRowId = "gmail" | "linkedin_csv" | "imessage" | "whatsapp" | "twitter";
+type SetupStepState = "complete" | "current" | "blocked" | "upcoming";
 
-const TABS: Array<{ id: SetupTabId; label: string; icon: typeof Link2 }> = [
-  { id: "link", label: "Account Linking", icon: Link2 },
-  { id: "import", label: "Import", icon: Database },
-  { id: "enrichment", label: "Enrichment", icon: Sparkles },
-  { id: "index", label: "Indexing", icon: HardDrive },
+const TABS: Array<{ id: SetupTabId; label: string; shortLabel: string; icon: typeof Link2; description: string; action: string }> = [
+  { id: "link", label: "Link accounts", shortLabel: "Link", icon: Link2, description: "Connect the sources you want to use. Skip anything you do not need.", action: "Link or skip each source" },
+  { id: "import", label: "Discovery Contacts", shortLabel: "Discover", icon: Database, description: "Discover local contacts and source metadata from linked accounts.", action: "Run discovery" },
+  { id: "enrichment", label: "Import and Enrichment", shortLabel: "Import + Enrich", icon: Sparkles, description: "Resolve profiles, enrich linked sources, and review researched people before adding them.", action: "Run import and enrichment" },
+  { id: "index", label: "Process index", shortLabel: "Process", icon: HardDrive, description: "Merge source-specific people and build the searchable local index.", action: "Build index" },
 ];
 const TAB_IDS = new Set(TABS.map((tab) => tab.id));
 
@@ -59,13 +60,13 @@ const SOURCE_ICONS: Record<SetupSourceId, typeof Mail> = {
 
 function phaseTone(status?: string): "default" | "secondary" | "outline" | "destructive" {
   const normalized = String(status || "").toLowerCase();
-  if (["authenticated", "ready", "completed", "restored", "linked"].includes(normalized)) return "default";
+  if (["authenticated", "ready", "completed", "restored", "linked", "source_import_completed", "source_enrichment_completed", "selected_steps_completed"].includes(normalized)) return "default";
   if (["not_authenticated", "skipped", "pending", "unknown", "not_ready"].includes(normalized)) return "secondary";
   if (["permission_required"].includes(normalized) || normalized.startsWith("blocked") || normalized === "failed") return "destructive";
   return "outline";
 }
 
-function StatusBadge({ status }: { status?: string }) {
+function statusDisplayLabel(status?: string): string {
   const normalized = String(status || "unknown").toLowerCase();
   const labels: Record<string, string> = {
     blocked_user_action: "action needed",
@@ -79,11 +80,18 @@ function StatusBadge({ status }: { status?: string }) {
     permission_required: "permission required",
     pending: "not started",
     refresh_due: "ready to import",
+    selected_steps_completed: "completed",
+    source_enrichment_completed: "completed",
+    source_import_completed: "completed",
     unlinked: "available",
   };
+  return (labels[normalized] || normalized).replace(/_/g, " ");
+}
+
+function StatusBadge({ status }: { status?: string }) {
   return (
     <Badge variant={phaseTone(status)} className="capitalize">
-      {(labels[normalized] || normalized).replace(/_/g, " ")}
+      {statusDisplayLabel(status)}
     </Badge>
   );
 }
@@ -134,9 +142,8 @@ function refreshLabel(status: SetupStatusResponse): string {
   return `Last refreshed ${label}`;
 }
 
-function tailText(value?: string, limit = 3500): string {
-  const text = String(value || "");
-  return text.length > limit ? text.slice(text.length - limit) : text;
+function hasSetupTabParam(): boolean {
+  return new URLSearchParams(window.location.search).has("tab");
 }
 
 function setupTabFromLocation(): SetupTabId {
@@ -159,7 +166,7 @@ function cleanJobText(value?: string): string {
 }
 
 function latestJobLine(job: SetupJob): string {
-  return cleanJobText([job.stdout, job.stderr].filter(Boolean).join("\n"))
+  return cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n"))
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -247,36 +254,129 @@ function extractCommands(job?: SetupJob | null): ExtractedCommand[] {
     .filter((command) => !hideLinkOnlyFollowups || !/rerun[_ ]onboarding|repeat command|next command/i.test(command.label)));
 }
 
-function SetupTabs({
+function isCompleteStatus(status?: string): boolean {
+  const normalized = String(status || "").toLowerCase();
+  return ["ready", "completed", "restored", "source_import_completed", "source_enrichment_completed", "selected_steps_completed"].includes(normalized);
+}
+
+function isBlockedStatus(status?: string): boolean {
+  const normalized = String(status || "").toLowerCase();
+  return normalized.startsWith("blocked") || normalized === "failed" || normalized === "permission_required";
+}
+
+function setupStepProgress(status: SetupStatusResponse, active: SetupTabId) {
+  const phases = status.setup.phases || {};
+  const sourceRows = status.enrichment.sources || [];
+  const enrichmentComplete = isCompleteStatus(status.enrichment.status)
+    || sourceRows.some((source) => isCompleteStatus(source.status))
+    || Number(status.enrichment.totalEnriched || 0) > 0;
+  const indexComplete = isCompleteStatus(phases.index)
+    || String(status.index.readiness || "").toLowerCase() === "ready"
+    || Boolean(status.index.duckdbExists && status.index.peopleSha256 && status.index.indexInputSha256 === status.index.peopleSha256);
+  const completeByStep: Record<SetupTabId, boolean> = {
+    link: isCompleteStatus(phases.link) || status.accounts.unresolvedSources.length === 0,
+    import: isCompleteStatus(phases.import) || isCompleteStatus(status.import.status),
+    enrichment: enrichmentComplete,
+    index: indexComplete,
+  };
+  const blockedByStep: Record<SetupTabId, boolean> = {
+    link: isBlockedStatus(phases.link),
+    import: isBlockedStatus(phases.import) || isBlockedStatus(status.import.status),
+    enrichment: isBlockedStatus(status.enrichment.status) || sourceRows.some((source) => Boolean(source.blocked)),
+    index: isBlockedStatus(phases.index),
+  };
+  const recommended = TABS.find((tab) => !completeByStep[tab.id])?.id || "index";
+  return TABS.map((tab, index) => ({
+    ...tab,
+    index,
+    complete: completeByStep[tab.id],
+    blocked: blockedByStep[tab.id],
+    recommended: tab.id === recommended,
+    state: blockedByStep[tab.id] ? "blocked" : completeByStep[tab.id] ? "complete" : tab.id === active ? "current" : "upcoming" as SetupStepState,
+  }));
+}
+
+function SetupStepper({
   active,
+  status,
   onChange,
 }: {
   active: SetupTabId;
+  status: SetupStatusResponse;
   onChange: (tab: SetupTabId) => void;
 }) {
+  const steps = setupStepProgress(status, active);
+  const current = steps.find((step) => step.id === active) || steps[0];
+  const recommended = steps.find((step) => step.recommended) || current;
+  const completedCount = steps.filter((step) => step.complete).length;
   return (
-    <div role="tablist" aria-label="Setup steps" className="flex flex-wrap gap-2 rounded-md border bg-muted/40 p-1">
-      {TABS.map((tab) => {
-        const Icon = tab.icon;
-        const selected = active === tab.id;
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            onClick={() => onChange(tab.id)}
-            className={cn(
-              "inline-flex min-h-9 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              selected ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            <span>{tab.label}</span>
-          </button>
-        );
-      })}
-    </div>
+    <section className="rounded-xl border bg-card p-4 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-muted-foreground">Guided setup</div>
+          <h3 className="mt-1 text-lg font-semibold">Step {current.index + 1} of {steps.length}: {current.label}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{current.description}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary">{completedCount}/{steps.length} complete</Badge>
+          {recommended.id !== active && (
+            <Button size="sm" variant="outline" onClick={() => onChange(recommended.id)}>
+              Go to next step
+            </Button>
+          )}
+        </div>
+      </div>
+      <div role="tablist" aria-label="Setup steps" className="grid gap-3 md:grid-cols-4">
+        {steps.map((step, index) => {
+          const Icon = step.icon;
+          const selected = active === step.id;
+          const lineDone = index > 0 && steps[index - 1].complete;
+          return (
+            <button
+              key={step.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => onChange(step.id)}
+              className={cn(
+                "group relative flex min-w-0 items-center gap-3 rounded-lg border p-3 text-left transition-colors",
+                selected ? "border-primary/40 bg-primary/5" : "bg-background hover:bg-muted/40",
+                step.blocked && "border-destructive/30 bg-destructive/5"
+              )}
+            >
+              {index > 0 && (
+                <span
+                  className={cn(
+                    "absolute -left-3 top-1/2 hidden h-px w-3 md:block",
+                    lineDone ? "bg-primary" : "bg-border"
+                  )}
+                  aria-hidden="true"
+                />
+              )}
+              <span
+                className={cn(
+                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-background",
+                  step.complete && "border-primary bg-primary text-primary-foreground",
+                  selected && !step.complete && !step.blocked && "border-primary text-primary",
+                  step.blocked && "border-destructive text-destructive"
+                )}
+              >
+                {step.complete ? <CheckCircle2 className="h-5 w-5" /> : <Icon className="h-4 w-4" />}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium">{step.shortLabel}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {step.blocked ? "Action needed" : step.complete ? "Complete" : step.recommended ? "Next" : "Upcoming"}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-4 rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+        <span className="font-medium text-foreground">Your next action:</span> {current.action}
+      </div>
+    </section>
   );
 }
 
@@ -287,6 +387,27 @@ function KeyValue({ label, value }: { label: string; value?: string | number | n
       <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="truncate text-sm">{value}</div>
     </div>
+  );
+}
+
+interface ActionState {
+  running: boolean;
+  activeAction?: string | null;
+}
+
+function ActionButton({
+  action,
+  actionState,
+  disabled,
+  children,
+  ...props
+}: ComponentProps<typeof Button> & { action: string; actionState: ActionState; children: ReactNode }) {
+  const isRunning = actionState.running && actionState.activeAction === action;
+  return (
+    <Button {...props} disabled={disabled || actionState.running}>
+      {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+      {children}
+    </Button>
   );
 }
 
@@ -303,6 +424,18 @@ function MetricChip({ label, value }: { label: string; value?: string | number |
 function money(value?: number | null): string {
   if (typeof value !== "number" || Number.isNaN(value)) return "";
   return `$${value.toFixed(2)}`;
+}
+
+function duckdbTableLabel(name: string): string {
+  const labels: Record<string, string> = {
+    local_person_profiles: "Person profiles",
+    local_people_positions: "Role / position vectors",
+    local_summaries: "Person summary vectors",
+    local_people_education: "Person education rows",
+    local_education: "School lookup rows",
+    local_companies: "Company vectors",
+  };
+  return labels[name] || name;
 }
 
 function formatBytes(value?: number | null): string {
@@ -819,36 +952,81 @@ function AccountLinkingTab({
   );
 }
 
-function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: (body: Record<string, unknown>) => void }) {
+function ImportSourceRow({
+  source,
+  expanded,
+  onToggle,
+  onRun,
+  actionState,
+}: {
+  source: SetupImportSource;
+  expanded: boolean;
+  onToggle: () => void;
+  onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
+}) {
   const Icon = SOURCE_ICONS[source.sourceId as SetupSourceId] || Database;
   const canRun = source.linked && !source.skipped && source.runnable !== false;
   const updated = source.linked && !source.skipped ? updatedLabel(source.updatedAt) : "";
+  const accountLabel = source.accountEmail || (source.accountCount ? `${source.accountCount.toLocaleString()} accounts` : "");
   return (
-    <div className="grid gap-3 border-b px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_140px_auto] md:items-center">
-      <div className="flex min-w-0 items-start gap-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-background">
-          <Icon className="h-4 w-4 text-muted-foreground" />
-        </div>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="truncate text-sm font-medium">{source.label}</div>
-            <StatusBadge status={source.status} />
+    <div className="border-b last:border-b-0">
+      <button
+        type="button"
+        className="grid w-full gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30 md:grid-cols-[minmax(0,1fr)_140px_auto] md:items-center"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-background">
+            <Icon className="h-4 w-4 text-muted-foreground" />
           </div>
-          <div className="mt-1 truncate text-xs text-muted-foreground">
-            {source.disabledReason || (updated ? `Last refreshed ${updated}` : source.skipped ? "" : "No refresh yet")}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="truncate text-sm font-medium">{source.label}</div>
+              <StatusBadge status={source.status} />
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              {source.disabledReason || (updated ? `Last refreshed ${updated}` : source.skipped ? "" : "No refresh yet")}
+            </div>
           </div>
         </div>
-      </div>
-      <KeyValue label="Updated" value={updated} />
-      <div className="flex justify-end gap-2">
-        <Button
-          size="sm"
-          onClick={() => onRun({ action: "import-source", source: source.id })}
-          disabled={!canRun}
-        >
-          <Play className="h-4 w-4" /> Import
-        </Button>
-      </div>
+        <KeyValue label="Updated" value={updated} />
+        <div className="flex items-center justify-end gap-2 text-xs font-medium text-muted-foreground">
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          <span>{expanded ? "Hide stats" : "Stats"}</span>
+        </div>
+      </button>
+      {expanded && (
+        <div className="border-t bg-muted/20 px-4 py-4">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <MetricChip label="Status" value={statusDisplayLabel(source.status)} />
+                <MetricChip label="Accounts" value={accountLabel} />
+                <MetricChip label="Runnable" value={canRun ? "Yes" : "No"} />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <KeyValue label="Source" value={source.label} />
+                <KeyValue label="Last refreshed" value={updated} />
+                <KeyValue label="Run ID" value={source.runId} />
+                <KeyValue label="Blocked reason" value={source.disabledReason} />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <ActionButton
+                action="import-source"
+                actionState={actionState}
+                size="sm"
+                onClick={() => onRun({ action: "import-source", source: source.id })}
+                disabled={!canRun}
+              >
+                <Play className="h-4 w-4" /> Discover {source.label}
+              </ActionButton>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -856,11 +1034,22 @@ function ImportSourceRow({ source, onRun }: { source: SetupImportSource; onRun: 
 function ImportTab({
   status,
   onRun,
+  actionState,
 }: {
   status: SetupStatusResponse;
   onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
 }) {
   const importSources = status.import.sources || [];
+  const [expandedSources, setExpandedSources] = useState<Set<string>>(() => new Set());
+  const toggleExpanded = (id: string) => {
+    setExpandedSources((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   return (
     <div className="space-y-4">
       <section className="rounded-md border bg-card">
@@ -869,14 +1058,23 @@ function ImportTab({
             <h3 className="text-base font-semibold">Linked account imports</h3>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => onRun({ action: "import" })}>
-              <Play className="h-4 w-4" /> Run Full Import
-            </Button>
+            <ActionButton action="import" actionState={actionState} onClick={() => onRun({ action: "import" })}>
+              <Play className="h-4 w-4" /> Run Discovery
+            </ActionButton>
           </div>
         </div>
         <div>
           {importSources.length ? (
-            importSources.map((source) => <ImportSourceRow key={source.id} source={source} onRun={onRun} />)
+            importSources.map((source) => (
+              <ImportSourceRow
+                key={source.id}
+                source={source}
+                expanded={expandedSources.has(source.id)}
+                onToggle={() => toggleExpanded(source.id)}
+                onRun={onRun}
+                actionState={actionState}
+              />
+            ))
           ) : (
             <div className="p-6 text-sm text-muted-foreground">No linked accounts found.</div>
           )}
@@ -890,12 +1088,18 @@ function EnrichmentSourceRow({
   source,
   importSource,
   messagesReviewReady = false,
+  messagesParallelBlocked = false,
+  messagesReviewBlocked = false,
   onRun,
+  actionState,
 }: {
   source: SetupEnrichmentSource;
   importSource?: SetupImportSource;
   messagesReviewReady?: boolean;
+  messagesParallelBlocked?: boolean;
+  messagesReviewBlocked?: boolean;
   onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
 }) {
   const Icon = SOURCE_ICONS[source.id as SetupSourceId] || Sparkles;
   const canRun = Boolean(importSource?.linked && !importSource.skipped && importSource.runnable !== false);
@@ -906,6 +1110,7 @@ function EnrichmentSourceRow({
   const canReviewMessages = source.id === "messages" && canRun && messagesReviewReady;
   const costLabel = source.estimatedCostUsd != null && source.estimatedCostUsd > 0
     ? `~$${source.estimatedCostUsd.toFixed(2)}` : null;
+  const completingMessages = source.id === "messages" && actionState.running && actionState.activeAction === "messages-complete-review";
   return (
     <div className="border-b px-4 py-3 last:border-b-0">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_120px_120px_120px_auto] lg:items-center">
@@ -932,15 +1137,43 @@ function EnrichmentSourceRow({
               <MessageSquare className="h-4 w-4" /> Review
             </Button>
           )}
-          <Button
+          {messagesParallelBlocked && (
+            <ActionButton
+              action="messages-approve-continue"
+              actionState={actionState}
+              size="sm"
+              onClick={() => onRun({ action: "messages-approve-continue" })}
+            >
+              <Play className="h-4 w-4" /> Approve
+            </ActionButton>
+          )}
+          <ActionButton
+            action="enrich-source"
+            actionState={actionState}
             size="sm"
             onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id })}
             disabled={!canRun}
           >
             <Sparkles className="h-4 w-4" /> Enrich
-          </Button>
+          </ActionButton>
         </div>
       </div>
+      {messagesReviewBlocked && canRun && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950">
+          <div className="flex-1 text-sm">
+            <span className="font-medium">Review required.</span>{" "}
+            <span>Please review and approve people to add into your local network, then click Complete.</span>
+          </div>
+          <Button size="sm" onClick={() => { window.location.href = "/setup/imessage/review"; }}>
+            <MessageSquare className="h-4 w-4" /> Review
+          </Button>
+        </div>
+      )}
+      {completingMessages && (
+        <div className="mt-3 flex items-center gap-2 rounded-md border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Materializing Messages people and profile enrichment…
+        </div>
+      )}
       {hasUnresolved && canRun && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-4 py-3">
           <div className="flex-1 text-sm">
@@ -948,12 +1181,14 @@ function EnrichmentSourceRow({
             <span className="text-muted-foreground">contacts need email→LinkedIn resolution via Parallel</span>
             {costLabel && <span className="ml-2 text-muted-foreground">({costLabel} est.)</span>}
           </div>
-          <Button
+          <ActionButton
+            action="enrich-source"
+            actionState={actionState}
             size="sm"
             onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id, approveSpend: true })}
           >
             <Play className="h-4 w-4" /> Approve
-          </Button>
+          </ActionButton>
         </div>
       )}
     </div>
@@ -963,9 +1198,11 @@ function EnrichmentSourceRow({
 function EnrichmentTab({
   status,
   onRun,
+  actionState,
 }: {
   status: SetupStatusResponse;
   onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
 }) {
   const sources = status.enrichment.sources || [];
   const importSourceFor = (source: SetupEnrichmentSource) => {
@@ -976,21 +1213,24 @@ function EnrichmentTab({
     return status.import.sources.find((candidate) => candidate.id === source.id || candidate.sourceId === source.id);
   };
   const messagesReviewReady = Boolean(status.review.exists && (status.review.counts?.total || 0) > 0);
+  const messagesParallelBlocked = String(status.messages.currentBlock?.status || "") === "blocked_approval"
+    && String(status.messages.currentBlock?.approval_type || "") === "parallel";
+  const messagesReviewBlocked = String(status.messages.currentBlock?.status || "") === "blocked_user_action";
 
   return (
     <div className="space-y-4">
       <section className="rounded-md border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-base font-semibold">Enrichment</h3>
+            <h3 className="text-base font-semibold">Import and Enrichment</h3>
             <StatusBadge status={status.enrichment.status} />
             <MetricChip label="Candidates" value={status.enrichment.totalCandidates} />
             <MetricChip label="Profiles found" value={status.enrichment.totalEnriched} />
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => onRun({ action: "enrich-all" })}>
+            <ActionButton action="enrich-all" actionState={actionState} onClick={() => onRun({ action: "enrich-all" })}>
               <Play className="h-4 w-4" /> Run All
-            </Button>
+            </ActionButton>
           </div>
         </div>
         <div>
@@ -1001,11 +1241,14 @@ function EnrichmentTab({
                 source={source}
                 importSource={importSourceFor(source)}
                 messagesReviewReady={source.id === "messages" && messagesReviewReady}
+                messagesParallelBlocked={source.id === "messages" && messagesParallelBlocked}
+                messagesReviewBlocked={source.id === "messages" && messagesReviewBlocked}
                 onRun={onRun}
+                actionState={actionState}
               />
             ))
           ) : (
-            <div className="p-6 text-sm text-muted-foreground">No enrichment sources found.</div>
+            <div className="p-6 text-sm text-muted-foreground">No import/enrichment sources found.</div>
           )}
         </div>
       </section>
@@ -1013,15 +1256,21 @@ function EnrichmentTab({
   );
 }
 
-function IndexTab({ status, onRun }: { status: SetupStatusResponse; onRun: (body: Record<string, unknown>) => void }) {
+function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse; onRun: (body: Record<string, unknown>) => void; actionState: ActionState }) {
   const readiness = status.index.readiness || status.setup.phases.index;
   const estimate = status.index.processingEstimate || {};
   const paidCalls = paidCallTotal(estimate.estimatedPaidCalls);
   const cost = money(estimate.totalEstimatedUsd);
   const counts = estimate.counts || {};
-  const requiresProviderSpend = paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0;
+  const bootstrapRecordCount = Number(status.index.bootstrapRecords?.nonemptyRecordFiles || 0);
+  const localRecordsMode = String(estimate.status || "") === "local_records_restore" || (bootstrapRecordCount > 0 && !status.index.duckdbTables?.length);
+  const duckdbRepaired = status.index.duckdbRepair?.status === "ok";
+  const hasProviderEstimate = paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0;
+  const requiresProviderSpend = !localRecordsMode && hasProviderEstimate;
   const updateAvailable = ["needs_processing", "people_csv_ready_for_processing"].includes(String(readiness || "").toLowerCase())
-    || status.index.reason === "search_index_stale_for_people_csv";
+    || status.index.reason === "search_index_stale_for_people_csv"
+    || hasProviderEstimate;
+  const showProviderEstimate = hasProviderEstimate && !localRecordsMode;
 
   return (
     <div className="space-y-4">
@@ -1031,16 +1280,29 @@ function IndexTab({ status, onRun }: { status: SetupStatusResponse; onRun: (body
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-base font-semibold">Local search index</h3>
               <Badge variant={updateAvailable ? "secondary" : phaseTone(readiness)}>{indexLabel(readiness)}</Badge>
-              <MetricChip label="People" value={status.index.peopleRecords || 0} />
-              <MetricChip label="Cost" value={cost || "$0.00"} />
-              <MetricChip label="Paid calls" value={paidCalls} />
+              <MetricChip label="Total people" value={status.index.peopleRecords || 0} />
+              <MetricChip label="Bootstrap record files" value={bootstrapRecordCount || null} />
+              {showProviderEstimate && <MetricChip label="Cost" value={cost || "$0.00"} />}
+              {showProviderEstimate && <MetricChip label="Paid calls" value={paidCalls} />}
               <MetricChip label="DuckDB" value={formatBytes(status.index.duckdbSizeBytes)} />
             </div>
-            {updateAvailable && (
+            {localRecordsMode ? (
+              <div className="text-sm text-muted-foreground">
+                Bootstrap search records are available locally. Processing will build the DuckDB tables from those records without provider calls.
+              </div>
+            ) : duckdbRepaired ? (
+              <div className="text-sm text-muted-foreground">
+                Built local DuckDB tables from bootstrap records. A full rebuild from the current people.csv would use the estimate below.
+              </div>
+            ) : showProviderEstimate ? (
+              <div className="text-sm text-muted-foreground">
+                Full processing dry-run found provider work for the current people.csv. Review the estimate before rebuilding.
+              </div>
+            ) : updateAvailable ? (
               <div className="text-sm text-muted-foreground">
                 Update available. The current index was built from an older people.csv.
               </div>
-            )}
+            ) : null}
             {estimate.error && (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 {estimate.error}
@@ -1067,7 +1329,10 @@ function IndexTab({ status, onRun }: { status: SetupStatusResponse; onRun: (body
                     <tbody>
                       {status.index.duckdbTables.map((table) => (
                         <tr key={table.name} className="border-t">
-                          <td className="px-3 py-2">{table.name}</td>
+                          <td className="px-3 py-2">
+                            <div>{duckdbTableLabel(table.name)}</div>
+                            <div className="text-xs text-muted-foreground">{table.name}</div>
+                          </td>
                           <td className="px-3 py-2 text-right tabular-nums">{table.rows.toLocaleString()}</td>
                         </tr>
                       ))}
@@ -1078,21 +1343,37 @@ function IndexTab({ status, onRun }: { status: SetupStatusResponse; onRun: (body
                 )}
               </div>
               <div className="overflow-hidden rounded-md border">
-                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Next update</div>
-                <div className="grid gap-3 p-3 sm:grid-cols-2">
-                  <KeyValue label="People" value={Number(counts.people || 0).toLocaleString()} />
-                  <KeyValue label="Summaries" value={Number(counts.summaries || 0).toLocaleString()} />
-                  <KeyValue label="Unique roles" value={Number(counts.unique_roles || 0).toLocaleString()} />
-                  <KeyValue label="Companies" value={Number(counts.companies || 0).toLocaleString()} />
-                  <KeyValue label="Role chunks" value={Number(counts.role_chunks || 0).toLocaleString()} />
-                  <KeyValue label="Company chunks" value={Number(counts.company_chunks || 0).toLocaleString()} />
-                </div>
+                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Full processing dry-run</div>
+                {localRecordsMode ? (
+                  <div className="grid gap-3 p-3 sm:grid-cols-2">
+                    <KeyValue label="Action" value="Build DuckDB from bootstrap records" />
+                    <KeyValue label="Provider calls" value="None" />
+                    <KeyValue label="Record files" value={bootstrapRecordCount.toLocaleString()} />
+                    <KeyValue label="Source" value="operator bootstrap" />
+                  </div>
+                ) : showProviderEstimate ? (
+                  <div className="grid gap-3 p-3 sm:grid-cols-2">
+                    <KeyValue label="People" value={Number(counts.people || 0).toLocaleString()} />
+                    <KeyValue label="Summaries" value={Number(counts.summaries || 0).toLocaleString()} />
+                    <KeyValue label="Unique roles" value={Number(counts.unique_roles || 0).toLocaleString()} />
+                    <KeyValue label="Companies" value={Number(counts.companies || 0).toLocaleString()} />
+                    <KeyValue label="Role chunks" value={Number(counts.role_chunks || 0).toLocaleString()} />
+                    <KeyValue label="Company chunks" value={Number(counts.company_chunks || 0).toLocaleString()} />
+                  </div>
+                ) : (
+                  <div className="px-3 py-4 text-sm text-muted-foreground">No provider processing work detected by dry-run.</div>
+                )}
               </div>
             </div>
           </div>
-          <Button onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
-            <Play className="h-4 w-4" /> {requiresProviderSpend ? "Approve & Update" : "Update Index"}
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <ActionButton action="index-canary" actionState={actionState} variant="outline" onClick={() => onRun({ action: "index-canary" })}>
+              <Play className="h-4 w-4" /> Process 1-person canary
+            </ActionButton>
+            <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
+              <Play className="h-4 w-4" /> {localRecordsMode ? "Build DuckDB" : requiresProviderSpend ? "Approve & Update" : "Process"}
+            </ActionButton>
+          </div>
         </div>
       </section>
     </div>
@@ -1137,11 +1418,19 @@ function JobPanel({
       )}
       <details open={job.status === "running"}>
         <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-muted-foreground">Command and logs</summary>
-        <div className="border-t px-4 py-3 text-xs text-muted-foreground">
-          <div className="mb-2 font-mono">{cleanJobText(job.command.join(" "))}</div>
-          <pre className="max-h-80 overflow-auto whitespace-pre-wrap">
-            {tailText(cleanJobText([job.stdout, job.stderr].filter(Boolean).join("\n"))) || "No output yet."}
-          </pre>
+        <div className="space-y-3 border-t px-4 py-3 text-xs text-muted-foreground">
+          <div>
+            <div className="mb-1 font-medium">Command</div>
+            <pre className="max-h-32 overflow-auto rounded-md bg-muted/40 p-3 font-mono whitespace-pre-wrap break-words">
+              {cleanJobText(job.command.join(" "))}
+            </pre>
+          </div>
+          <div>
+            <div className="mb-1 font-medium">Logs</div>
+            <pre className="max-h-[28rem] overflow-auto rounded-md bg-muted/40 p-3 font-mono whitespace-pre-wrap break-words">
+              {cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n")) || "No output yet."}
+            </pre>
+          </div>
         </div>
       </details>
     </section>
@@ -1177,6 +1466,12 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  useEffect(() => {
+    if (!status || hasSetupTabParam()) return;
+    const recommended = setupStepProgress(status, activeTab).find((step) => step.recommended)?.id;
+    if (recommended && recommended !== activeTab) setActiveTab(recommended);
+  }, [activeTab, status]);
+
   const running = status?.jobs.some((job) => job.status === "running") || false;
   useEffect(() => {
     if (!running) return undefined;
@@ -1188,6 +1483,10 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
     if (!status?.jobs.length) return null;
     return status.jobs.find((job) => job.id === activeJobId) || status.jobs[0];
   }, [activeJobId, status?.jobs]);
+  const actionState: ActionState = {
+    running,
+    activeAction: activeJob?.status === "running" ? activeJob.action : null,
+  };
 
   const runAction = async (body: Record<string, unknown>) => {
     setError(null);
@@ -1227,19 +1526,12 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-2xl font-semibold">Setup</h2>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            {refreshLabel(status) && (
-              <span>{refreshLabel(status)}</span>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={refresh} disabled={running}>
-            <RefreshCcw className={cn("h-4 w-4", running && "animate-spin")} /> Refresh
-          </Button>
+      <div>
+        <h2 className="text-2xl font-semibold">Setup</h2>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          {refreshLabel(status) && (
+            <span>{refreshLabel(status)}</span>
+          )}
         </div>
       </div>
 
@@ -1249,15 +1541,15 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
         </div>
       )}
 
-      <SetupTabs active={activeTab} onChange={changeTab} />
+      <SetupStepper active={activeTab} status={status} onChange={changeTab} />
 
       {activeTab === "link" && <AccountLinkingTab status={status} onRun={runAction} />}
 
-      {activeTab === "import" && <ImportTab status={status} onRun={runAction} />}
+      {activeTab === "import" && <ImportTab status={status} onRun={runAction} actionState={actionState} />}
 
-      {activeTab === "enrichment" && <EnrichmentTab status={status} onRun={runAction} />}
+      {activeTab === "enrichment" && <EnrichmentTab status={status} onRun={runAction} actionState={actionState} />}
 
-      {activeTab === "index" && <IndexTab status={status} onRun={runAction} />}
+      {activeTab === "index" && <IndexTab status={status} onRun={runAction} actionState={actionState} />}
 
       <JobPanel job={activeJob} onRunCommand={runCommand} />
     </div>

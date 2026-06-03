@@ -533,8 +533,12 @@ def run_sync(store: Path, *, timeout: int, idle_exit: str, max_messages: int) ->
             "command": command_text(cmd),
         })
     if result["returncode"] != 0:
-        raise PrimitiveFailed(f"sync failed rc={result['returncode']}: {text.strip()[-2000:]}")
-    return {"command": command_text(cmd), "returncode": result["returncode"], "max_messages": max_messages}
+        detail = text.strip()[-2000:] or "no wacli output captured"
+        raise PrimitiveFailed(
+            f"sync failed rc={result['returncode']} timeout={timeout}s max_messages={max_messages}; "
+            f"command={command_text(cmd)}; output={detail}"
+        )
+    return {"command": command_text(cmd), "returncode": result["returncode"], "max_messages": max_messages, "timeout": timeout}
 
 
 def refresh_contacts(store: Path) -> dict[str, Any]:
@@ -1393,12 +1397,18 @@ def cmd_run(args: argparse.Namespace) -> int:
         emit(payload)
         return exc.code
     except Exception as exc:
+        status_after_failure: dict[str, Any] = {}
+        try:
+            status_after_failure = auth_status(store)
+        except Exception as status_exc:
+            status_after_failure = {"error": f"{type(status_exc).__name__}: {status_exc}"}
         payload = {
             "primitive": "import_whatsapp_wacli",
             "command": "run",
             "status": "failed",
             "error": f"{type(exc).__name__}: {exc}",
             "store": str(store),
+            "auth_after_failure": status_after_failure,
             "artifacts": {"manifest": str(manifest), "progress_jsonl": str(progress_jsonl) if progress_jsonl else None},
         }
         write_json(manifest, payload)
