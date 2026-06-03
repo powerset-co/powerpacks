@@ -1256,9 +1256,13 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
   const paidCalls = paidCallTotal(estimate.estimatedPaidCalls);
   const cost = money(estimate.totalEstimatedUsd);
   const counts = estimate.counts || {};
-  const requiresProviderSpend = paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0;
+  const bootstrapRecordCount = Number(status.index.bootstrapRecords?.nonemptyRecordFiles || 0);
+  const localRecordsMode = String(estimate.status || "") === "local_records_restore" || (bootstrapRecordCount > 0 && !status.index.duckdbTables?.length);
+  const duckdbRepaired = status.index.duckdbRepair?.status === "ok";
+  const requiresProviderSpend = !localRecordsMode && (paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0);
   const updateAvailable = ["needs_processing", "people_csv_ready_for_processing"].includes(String(readiness || "").toLowerCase())
     || status.index.reason === "search_index_stale_for_people_csv";
+  const showProviderEstimate = updateAvailable && !localRecordsMode;
 
   return (
     <div className="space-y-4">
@@ -1268,16 +1272,25 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-base font-semibold">Local search index</h3>
               <Badge variant={updateAvailable ? "secondary" : phaseTone(readiness)}>{indexLabel(readiness)}</Badge>
-              <MetricChip label="People" value={status.index.peopleRecords || 0} />
-              <MetricChip label="Cost" value={cost || "$0.00"} />
-              <MetricChip label="Paid calls" value={paidCalls} />
+              <MetricChip label="Total people" value={status.index.peopleRecords || 0} />
+              <MetricChip label="Bootstrap records" value={bootstrapRecordCount || null} />
+              {showProviderEstimate && <MetricChip label="Cost" value={cost || "$0.00"} />}
+              {showProviderEstimate && <MetricChip label="Paid calls" value={paidCalls} />}
               <MetricChip label="DuckDB" value={formatBytes(status.index.duckdbSizeBytes)} />
             </div>
-            {updateAvailable && (
+            {localRecordsMode ? (
+              <div className="text-sm text-muted-foreground">
+                Bootstrap search records are available locally. Processing will build the DuckDB tables from those records without provider calls.
+              </div>
+            ) : duckdbRepaired ? (
+              <div className="text-sm text-muted-foreground">
+                Built local DuckDB tables from bootstrap records. No provider calls were needed.
+              </div>
+            ) : updateAvailable ? (
               <div className="text-sm text-muted-foreground">
                 Update available. The current index was built from an older people.csv.
               </div>
-            )}
+            ) : null}
             {estimate.error && (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 {estimate.error}
@@ -1316,19 +1329,30 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               </div>
               <div className="overflow-hidden rounded-md border">
                 <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Next update</div>
-                <div className="grid gap-3 p-3 sm:grid-cols-2">
-                  <KeyValue label="People" value={Number(counts.people || 0).toLocaleString()} />
-                  <KeyValue label="Summaries" value={Number(counts.summaries || 0).toLocaleString()} />
-                  <KeyValue label="Unique roles" value={Number(counts.unique_roles || 0).toLocaleString()} />
-                  <KeyValue label="Companies" value={Number(counts.companies || 0).toLocaleString()} />
-                  <KeyValue label="Role chunks" value={Number(counts.role_chunks || 0).toLocaleString()} />
-                  <KeyValue label="Company chunks" value={Number(counts.company_chunks || 0).toLocaleString()} />
-                </div>
+                {localRecordsMode ? (
+                  <div className="grid gap-3 p-3 sm:grid-cols-2">
+                    <KeyValue label="Action" value="Build DuckDB from bootstrap records" />
+                    <KeyValue label="Provider calls" value="None" />
+                    <KeyValue label="Record files" value={bootstrapRecordCount.toLocaleString()} />
+                    <KeyValue label="Source" value="operator bootstrap" />
+                  </div>
+                ) : showProviderEstimate ? (
+                  <div className="grid gap-3 p-3 sm:grid-cols-2">
+                    <KeyValue label="People" value={Number(counts.people || 0).toLocaleString()} />
+                    <KeyValue label="Summaries" value={Number(counts.summaries || 0).toLocaleString()} />
+                    <KeyValue label="Unique roles" value={Number(counts.unique_roles || 0).toLocaleString()} />
+                    <KeyValue label="Companies" value={Number(counts.companies || 0).toLocaleString()} />
+                    <KeyValue label="Role chunks" value={Number(counts.role_chunks || 0).toLocaleString()} />
+                    <KeyValue label="Company chunks" value={Number(counts.company_chunks || 0).toLocaleString()} />
+                  </div>
+                ) : (
+                  <div className="px-3 py-4 text-sm text-muted-foreground">No provider processing queued.</div>
+                )}
               </div>
             </div>
           </div>
           <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
-            <Play className="h-4 w-4" /> {requiresProviderSpend ? "Approve & Update" : "Update Index"}
+            <Play className="h-4 w-4" /> {localRecordsMode ? "Build DuckDB" : requiresProviderSpend ? "Approve & Update" : "Process"}
           </ActionButton>
         </div>
       </section>

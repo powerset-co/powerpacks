@@ -1424,6 +1424,20 @@ function sha256File(filePath: string): string {
   }
 }
 
+function localSearchRecordSummary(): { recordFiles: number; nonemptyRecordFiles: number } {
+  const recordsDir = path.join(powerpacksStateRoot, "search-index", "records");
+  if (!fs.existsSync(recordsDir)) return { recordFiles: 0, nonemptyRecordFiles: 0 };
+  const files = fs.readdirSync(recordsDir).filter((file) => file.endsWith(".records.jsonl"));
+  const nonempty = files.filter((file) => {
+    try {
+      return fs.statSync(path.join(recordsDir, file)).size > 0;
+    } catch {
+      return false;
+    }
+  });
+  return { recordFiles: files.length, nonemptyRecordFiles: nonempty.length };
+}
+
 function localDuckdbTableCounts(duckdbPath: string): Array<{ name: string; rows: number }> {
   if (!duckdbPath || !fs.existsSync(duckdbPath)) return [];
   const stat = fs.statSync(duckdbPath);
@@ -1463,6 +1477,33 @@ print(json.dumps(out))
   }
   cachedDuckdbTables = { key, expiresAt: nowMs + 10000, value };
   return value;
+}
+
+function maybeBuildLocalDuckdbFromBootstrapRecords(operatorId: string, duckdbPath: string, existingTables: Array<{ name: string; rows: number }>): Record<string, any> | null {
+  const records = localSearchRecordSummary();
+  const duckdbExists = fs.existsSync(duckdbPath);
+  const duckdbHasRows = existingTables.some((table) => Number(table.rows || 0) > 0);
+  if (!records.nonemptyRecordFiles || (duckdbExists && duckdbHasRows)) return null;
+  const result = spawnSync("uv", [
+    "run", "--project", ".", "python",
+    "scripts/build-local-duckdb-shim.py",
+    "--records-dir", ".powerpacks/search-index",
+    "--operator-id", operatorId,
+    "--force",
+  ], {
+    cwd: powerpacksRepoRoot,
+    env: setupProcessEnv(),
+    encoding: "utf8",
+    timeout: 60 * 60 * 1000,
+  });
+  cachedDuckdbTables = null;
+  const payload = parseJsonFragment(result.stdout || "") || {};
+  return {
+    status: result.status === 0 ? "ok" : "failed",
+    records,
+    ...payload,
+    error: result.status === 0 ? "" : String(payload.error || result.stderr || result.error?.message || "").slice(0, 1000),
+  };
 }
 
 function indexDryRunEstimate(operatorId: string, peopleSha256: string): Record<string, any> {
@@ -1657,10 +1698,15 @@ async function setupStatus() {
   const peopleCsvPath = path.join(powerpacksStateRoot, "network-import", "merged", "people.csv");
   const duckdbPath = path.join(powerpacksStateRoot, "search-index", "local-search.duckdb");
   const peopleSha256 = String(indexPhase.people_sha256 || sha256File(peopleCsvPath) || "");
-  const duckdbFile = fileSummary(duckdbPath);
-  const duckdbTables = localDuckdbTableCounts(duckdbPath);
+  let duckdbFile = fileSummary(duckdbPath);
+  let duckdbTables = localDuckdbTableCounts(duckdbPath);
+  const duckdbRepair = maybeBuildLocalDuckdbFromBootstrapRecords(operator.id, duckdbPath, duckdbTables);
+  duckdbFile = fileSummary(duckdbPath);
+  duckdbTables = localDuckdbTableCounts(duckdbPath);
   const duckdbHasRows = duckdbTables.some((table) => Number(table.rows || 0) > 0);
+  const bootstrapRecords = localSearchRecordSummary();
   const bootstrapRestorePreferred = Number(bootstrap.peopleRecords || 0) > 0
+    && Boolean(bootstrapRecords.nonemptyRecordFiles)
     && (!duckdbFile.exists || !duckdbHasRows);
   const processingEstimate = bootstrapRestorePreferred ? {
     status: "local_records_restore",
@@ -1732,6 +1778,8 @@ async function setupStatus() {
       readiness: indexPhase.status || "unknown",
       reason: indexPhase.reason || "",
       indexInputSha256: indexPhase.index_input_sha256 || "",
+      bootstrapRecords,
+      duckdbRepair,
       processingEstimate,
     },
     next: deriveNextAction(setupLedger, sources),

@@ -232,6 +232,15 @@ export interface SetupStatusResponse {
     readiness?: string;
     reason?: string;
     indexInputSha256?: string;
+    bootstrapRecords?: {
+      recordFiles?: number;
+      nonemptyRecordFiles?: number;
+    };
+    duckdbRepair?: {
+      status?: string;
+      error?: string;
+      tables?: Record<string, number>;
+    } | null;
     processingEstimate?: {
       status?: string;
       totalEstimatedUsd?: number;
