@@ -279,7 +279,8 @@ def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     state=Path(out["state"]); l["state"]=str(state); l.setdefault("artifacts",{})["state"]=str(state)
     mark(lp,l,"init_state","completed",summary=compact_summary(out),command=" ".join(cmd))
     payload=read_json(Path(args.payload_json))
-    cmd=[sys.executable,str(ROOT/"packs/search/primitives/task_state/task_state.py"),"record-step","--state",str(state),"--step-id","expand_search_request","--status","completed","--output-json",json.dumps(payload)]
+    expand_output = payload if isinstance(payload, dict) and "role_search_filters" in payload else {"role_search_filters": payload}
+    cmd=[sys.executable,str(ROOT/"packs/search/primitives/task_state/task_state.py"),"record-step","--state",str(state),"--step-id","expand_search_request","--status","completed","--output-json",json.dumps(expand_output)]
     out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),"record expand_search_request")
     mark(lp,l,"record_expand_search_request","completed",summary=compact_summary(out),command=" ".join(cmd))
     save(lp,l); return state

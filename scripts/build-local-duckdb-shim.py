@@ -33,6 +33,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+from packs.indexing.lib.people import build_people_records, flatten_people  # noqa: E402
 _limit = sys.maxsize
 while True:
     try:
@@ -622,78 +624,88 @@ def _first_int(*values: Any) -> int | None:
     return None
 
 
+def materialize_positions_from_csv(source: Path, run_dir: Path, operator_id: str, *, force: bool = False) -> Path | None:
+    if not source.exists():
+        return None
+    out = run_dir / "records/people.records.jsonl"
+    if out.exists() and not force:
+        return out
+    people = flatten_people(source)
+    records = build_people_records(people, default_operator_id=operator_id)
+    write_jsonl(out, records)
+    return out
+
+
 def materialize_person_profiles_from_csv(source: Path, run_dir: Path, operator_id: str) -> Path | None:
     if not source.exists():
         return None
     out = run_dir / PERSON_PROFILE_RECORD
     out.parent.mkdir(parents=True, exist_ok=True)
+
     def rows():
-        with source.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-            for row in csv.DictReader(handle):
-                pid = str(row.get("id") or row.get("person_id") or row.get("base_id") or "").strip()
-                if not pid:
-                    continue
-                work = _json_value(row.get("work_experiences"), [])
-                edu = _json_value(row.get("education"), [])
-                rapid = _json_value(row.get("rapidapi_response"), {})
-                twitter = _json_value(row.get("twitter_response"), {})
-                if not isinstance(rapid, dict):
-                    rapid = {}
-                if not isinstance(twitter, dict):
-                    twitter = {}
-                linkedin_url = row.get("linkedin_url") or rapid.get("url") or rapid.get("linkedinUrl") or ""
-                location = row.get("location_raw") or ", ".join(str(row.get(k) or "") for k in ["city", "state", "country"] if row.get(k))
-                full_name = row.get("full_name") or " ".join(part for part in [row.get("first_name"), row.get("last_name")] if part)
-                context = {
-                    "person_id": pid,
-                    "name": full_name,
-                    "headline": row.get("headline") or rapid.get("headline") or "",
-                    "summary": row.get("summary") or rapid.get("summary") or "",
-                    "location": location or None,
-                    "linkedin_url": linkedin_url,
-                    "profile_picture_url": row.get("profile_picture_url") or rapid.get("profilePicture") or "",
-                    "positions": work if isinstance(work, list) else [],
-                    "education": edu if isinstance(edu, list) else [],
-                    "tech_skills": _string_list(rapid.get("skills")),
-                }
-                yield {
-                    "id": pid,
-                    "person_id": pid,
-                    "base_id": str(row.get("base_id") or pid),
-                    "public_identifier": row.get("public_identifier") or rapid.get("username") or "",
-                    "linkedin_url": linkedin_url,
-                    "public_profile_url": linkedin_url,
-                    "first_name": row.get("first_name") or rapid.get("firstName") or "",
-                    "last_name": row.get("last_name") or rapid.get("lastName") or "",
-                    "full_name": full_name,
-                    "headline": row.get("headline") or rapid.get("headline") or "",
-                    "summary": row.get("summary") or rapid.get("summary") or "",
-                    "city": row.get("city") or "",
-                    "state": row.get("state") or "",
-                    "country": row.get("country") or "",
-                    "location_raw": row.get("location_raw") or location or "",
-                    "profile_picture_url": row.get("profile_picture_url") or rapid.get("profilePicture") or "",
-                    "current_title": row.get("current_title") or "",
-                    "current_company": row.get("current_company") or "",
-                    "current_company_urn": row.get("current_company_urn") or "",
-                    "primary_email": row.get("primary_email") or "",
-                    "all_emails": _string_list(row.get("all_emails")),
-                    "primary_phone": row.get("primary_phone") or "",
-                    "all_phones": _string_list(row.get("all_phones")),
-                    "source_channels": _string_list(row.get("source_channels")),
-                    "source_artifacts": _string_list(row.get("source_artifacts")),
-                    "twitter_handle": row.get("twitter_handle") or twitter.get("username") or "",
-                    "x_twitter_handle": row.get("twitter_handle") or twitter.get("username") or "",
-                    "x_twitter_followers": _first_int(row.get("x_twitter_followers"), twitter.get("followers"), twitter.get("followers_count")),
-                    "linkedin_followers": _first_int(row.get("linkedin_followers"), rapid.get("followers"), rapid.get("followerCount")),
-                    "linkedin_connections": _first_int(row.get("linkedin_connections"), rapid.get("connections"), rapid.get("connectionCount")),
-                    "ig_followers": _int_or_none(row.get("ig_followers")),
-                    "inferred_birth_year": _int_or_none(row.get("inferred_birth_year")),
-                    "work_experiences": work if isinstance(work, list) else [],
-                    "education": edu if isinstance(edu, list) else [],
-                    "hydrated_context": context,
-                    "allowed_operator_ids": [operator_id],
-                }
+        for person in flatten_people(source):
+            row = person.get("raw") or {}
+            pid = str(person.get("id") or person.get("person_id") or "").strip()
+            if not pid:
+                continue
+            work = person.get("work_experiences") if isinstance(person.get("work_experiences"), list) else []
+            edu = person.get("education") if isinstance(person.get("education"), list) else []
+            rapid = person.get("rapidapi_response") if isinstance(person.get("rapidapi_response"), dict) else {}
+            twitter = person.get("twitter_response") if isinstance(person.get("twitter_response"), dict) else {}
+            linkedin_url = person.get("linkedin_url") or rapid.get("url") or rapid.get("linkedinUrl") or ""
+            location = person.get("location_raw") or ", ".join(str(person.get(k) or "") for k in ["city", "state", "country"] if person.get(k))
+            full_name = person.get("full_name") or " ".join(part for part in [person.get("first_name"), person.get("last_name")] if part)
+            context = {
+                "person_id": pid,
+                "name": full_name,
+                "headline": person.get("headline") or rapid.get("headline") or "",
+                "summary": person.get("summary") or rapid.get("summary") or "",
+                "location": location or None,
+                "linkedin_url": linkedin_url,
+                "profile_picture_url": person.get("profile_picture_url") or rapid.get("profilePicture") or "",
+                "positions": work,
+                "education": edu,
+                "tech_skills": _string_list(rapid.get("skills")),
+            }
+            yield {
+                "id": pid,
+                "person_id": pid,
+                "base_id": pid,
+                "public_identifier": person.get("public_identifier") or rapid.get("username") or "",
+                "linkedin_url": linkedin_url,
+                "public_profile_url": linkedin_url,
+                "first_name": person.get("first_name") or rapid.get("firstName") or "",
+                "last_name": person.get("last_name") or rapid.get("lastName") or "",
+                "full_name": full_name,
+                "headline": person.get("headline") or rapid.get("headline") or "",
+                "summary": person.get("summary") or rapid.get("summary") or "",
+                "city": person.get("city") or "",
+                "state": person.get("state") or "",
+                "country": person.get("country") or "",
+                "location_raw": location or "",
+                "profile_picture_url": person.get("profile_picture_url") or rapid.get("profilePicture") or "",
+                "current_title": person.get("current_title") or "",
+                "current_company": person.get("current_company") or "",
+                "current_company_urn": row.get("current_company_urn") or "",
+                "primary_email": row.get("primary_email") or "",
+                "all_emails": _string_list(row.get("all_emails")),
+                "primary_phone": row.get("primary_phone") or "",
+                "all_phones": _string_list(row.get("all_phones")),
+                "source_channels": _string_list(row.get("source_channels") or person.get("source_channels")),
+                "source_artifacts": _string_list(row.get("source_artifacts") or person.get("source_artifacts")),
+                "twitter_handle": person.get("twitter_handle") or twitter.get("username") or "",
+                "x_twitter_handle": person.get("x_twitter_handle") or person.get("twitter_handle") or twitter.get("username") or "",
+                "x_twitter_followers": _first_int(row.get("x_twitter_followers"), twitter.get("followers"), twitter.get("followers_count")),
+                "linkedin_followers": _first_int(row.get("linkedin_followers"), rapid.get("followers"), rapid.get("followerCount")),
+                "linkedin_connections": _first_int(row.get("linkedin_connections"), rapid.get("connections"), rapid.get("connectionCount")),
+                "ig_followers": _int_or_none(row.get("ig_followers")),
+                "inferred_birth_year": _int_or_none(row.get("inferred_birth_year")),
+                "work_experiences": work,
+                "education": edu,
+                "hydrated_context": context,
+                "allowed_operator_ids": [operator_id],
+            }
+
     write_jsonl(out, rows())
     return out
 
@@ -784,7 +796,7 @@ def resolve_artifact_path(run_dir: Path, rel: str) -> Path:
     return run_dir / rel
 
 
-def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_profiles_csv: Path | None = None) -> tuple[Path, dict[str, int]]:
+def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_profiles_csv: Path | None = None, derive_positions_csv: Path | None = None) -> tuple[Path, dict[str, int]]:
     try:
         import duckdb  # type: ignore
     except ModuleNotFoundError as exc:
@@ -805,6 +817,8 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_
             if profile_record:
                 counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", profile_record)
                 postprocess_table(con, "local_person_profiles", operator_id)
+        if derive_positions_csv:
+            materialize_positions_from_csv(derive_positions_csv, run_dir, operator_id, force=True)
         for table, rel in LOCAL_TABLES.items():
             path = resolve_artifact_path(run_dir, rel)
             counts[table] = load_jsonl_table(con, table, path)
@@ -916,6 +930,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=str(DEFAULT_SOURCE), help="Input people CSV; defaults to people_harmonic_all.csv")
     parser.add_argument("--person-profiles-csv", help="One-row-per-person CSV used to populate local_person_profiles; defaults to --source, then .powerpacks/network-import/merged/people.csv when present")
+    parser.add_argument("--derive-positions-from-person-profiles", action="store_true", help="Rebuild records/people.records.jsonl deterministically from the same CSV used for local_person_profiles; no vectors or provider calls")
     parser.add_argument("--records-dir", help="Existing normal pipeline run root or records/ directory containing *.records.jsonl; skips people.csv pipeline build")
     parser.add_argument("--aleph-output-dir", help="Copied Aleph pipeline_output directory; converts Aleph upload artifacts to local records without API calls")
     parser.add_argument("--operator-id", default=DEFAULT_OPERATOR_ID)
@@ -966,7 +981,8 @@ def main() -> None:
         merged_candidate = ROOT / ".powerpacks/network-import/merged/people.csv"
         person_profiles_csv = source_candidate if source_candidate.exists() else merged_candidate if merged_candidate.exists() else None
     args._resolved_person_profiles_csv = str(person_profiles_csv) if person_profiles_csv else None
-    db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force, person_profiles_csv=person_profiles_csv)
+    derive_positions_csv = person_profiles_csv if args.derive_positions_from_person_profiles else None
+    db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force, person_profiles_csv=person_profiles_csv, derive_positions_csv=derive_positions_csv)
     manifest_path = write_manifest(run_dir, args, db_path, table_counts)
     emit({
         "status": "ok",

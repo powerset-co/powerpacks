@@ -1227,10 +1227,14 @@ class LocalPersonProfilesShimTest(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_person_profiles"], 2)
             self.assertEqual(payload["tables"]["local_people_positions"], 1)
 
+            import duckdb
+            with duckdb.connect(payload["duckdb"], read_only=True) as conn:
+                profile_only_id = conn.execute("select person_id from local_person_profiles where full_name = 'Profile Only'").fetchone()[0]
+
             old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
             os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
             try:
-                rows = hydrate_people.fetch_local_person_rows(["person-profile-only"], workers=1, batch_size=1)
+                rows = hydrate_people.fetch_local_person_rows([str(profile_only_id)], workers=1, batch_size=1)
             finally:
                 if old_db is None:
                     os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
@@ -1238,7 +1242,7 @@ class LocalPersonProfilesShimTest(unittest.TestCase):
                     os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["full_name"], "Profile Only")
-            self.assertEqual(rows[0]["location_raw"], "New York, NY, US")
+            self.assertEqual(rows[0]["location_raw"], "New York, New York, United States")
             self.assertEqual(rows[0]["public_profile_url"], "https://www.linkedin.com/in/profile-only")
             self.assertEqual(rows[0]["hydrated_context"]["positions"][0]["title"], "Founder")
 
@@ -1279,8 +1283,8 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
             people_csv = tmp / "people.csv"
             people_csv.write_text(
                 "id,linkedin_url,full_name,headline,city,state,country,work_experiences,education,source_channels\n"
-                "person-sf,https://www.linkedin.com/in/person-sf,SF Person,Engineer,San Francisco,CA,US,[],[],gmail_msgvault\n"
-                "person-ny,https://www.linkedin.com/in/person-ny,NY Person,Engineer,New York,NY,US,[],[],gmail_msgvault\n",
+                "person-sf,https://www.linkedin.com/in/person-sf,SF Person,Engineer,San Francisco,CA,US,\"[{\"\"title\"\": \"\"Engineer\"\", \"\"company\"\": \"\"SFCo\"\"}]\",[],gmail_msgvault\n"
+                "person-ny,https://www.linkedin.com/in/person-ny,NY Person,Engineer,New York,NY,US,\"[{\"\"title\"\": \"\"Engineer\"\", \"\"company\"\": \"\"NYCo\"\"}]\",[],gmail_msgvault\n",
                 encoding="utf-8",
             )
             payload = run_shim_json(
@@ -1288,9 +1292,11 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
                 "--person-profiles-csv", str(people_csv),
                 "--output-dir", str(tmp / "search-index"),
                 "--operator-id", "op-test",
+                "--derive-positions-from-person-profiles",
                 "--force",
             )
             self.assertEqual(payload["tables"]["local_person_profile_position_overlap"], 2)
+            self.assertEqual(payload["tables"]["local_people_positions"], 2)
             self.assertEqual(payload["tables"]["local_people_positions_person_columns_dropped"], 1)
 
             old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
@@ -1306,4 +1312,5 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
                 else:
                     os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0].model_extra["person_id"], "person-sf")
+            self.assertNotEqual(rows[0].model_extra["person_id"], "person-sf")
+            self.assertRegex(rows[0].model_extra["person_id"], r"^[0-9a-f-]{36}$")

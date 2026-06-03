@@ -445,43 +445,42 @@ class LocalDuckDBSearchStore:
                 return self._quote_ident(field)
         return "1"
 
-    def _eligible_person_ids_sql(self, filters: Any) -> tuple[set[str] | None, bool]:
+    def _compile_people_where_sql(self, filters: Any, columns: dict[str, str], outer_alias: str = "_pp_role") -> tuple[str, list[Any]]:
+        effective_filters = filters
+        person_filters = None
         profile_table = self._person_profile_table()
-        if not profile_table or not self._person_profile_can_constrain_positions():
-            return None, False
-        person_filters, _role_filters = self._split_person_role_filters(filters)
-        if person_filters is None:
-            return None, False
-        columns = self._table_columns(profile_table)
-        where_sql, params = self._compile_filter_sql(person_filters, columns)
-        selected = [field for field in ["person_id", "base_id", "id"] if field in columns]
-        if not selected:
-            return set(), True
-        exprs = ", ".join(self._quote_ident(field) for field in selected)
-        rows = self.conn.execute(f"select {exprs} from {self._quote_ident(profile_table)} where {where_sql}", params).fetchall()
-        eligible = {str(value) for row in rows for value in row if value not in (None, "")}
-        return eligible, True
+        if profile_table and self._person_profile_can_constrain_positions():
+            person_filters, effective_filters = self._split_person_role_filters(filters)
+        where_sql, params = self._compile_filter_sql(effective_filters, columns)
+        if person_filters is None or not profile_table:
+            return where_sql, params
+
+        role_id_fields = [field for field in ["person_id", "base_id"] if field in columns]
+        profile_columns = self._table_columns(profile_table)
+        profile_id_fields = [field for field in ["person_id", "base_id", "id"] if field in profile_columns]
+        if not role_id_fields or not profile_id_fields:
+            return "false", []
+        profile_where_sql, profile_params = self._compile_filter_sql(person_filters, profile_columns)
+        link_clauses = [
+            f"cast(p.{self._quote_ident(profile_field)} as varchar) = cast({outer_alias}.{self._quote_ident(role_field)} as varchar)"
+            for profile_field in profile_id_fields
+            for role_field in role_id_fields
+        ]
+        semijoin = (
+            f"exists (select 1 from {self._quote_ident(profile_table)} p "
+            f"where ({profile_where_sql}) and ({' or '.join(link_clauses)}))"
+        )
+        return f"({where_sql}) and ({semijoin})", [*params, *profile_params]
 
     def _filtered_rows_sql(self, logical_name: str, filters: Any, *, limit: int = 0, order_by_id: bool = False) -> list[dict[str, Any]]:
         table = self._table_for_namespace(logical_name)
         columns = self._table_columns(table)
-        effective_filters = filters
-        eligible_ids: set[str] | None = None
-        used_profile_filter = False
         if logical_name == "people":
-            eligible_ids, used_profile_filter = self._eligible_person_ids_sql(filters)
-            if used_profile_filter:
-                _person_filters, effective_filters = self._split_person_role_filters(filters)
-        where_sql, params = self._compile_filter_sql(effective_filters, columns)
-        if eligible_ids is not None:
-            id_fields = [field for field in ["person_id", "base_id"] if field in columns]
-            if not eligible_ids or not id_fields:
-                return []
-            id_params = sorted(eligible_ids)
-            id_clause = " or ".join(f"cast({self._quote_ident(field)} as varchar) in {self._sql_in_list(id_params)}" for field in id_fields)
-            where_sql = f"({where_sql}) and ({id_clause})"
-            params.extend(id_params * len(id_fields))
-        sql = f"select * from {self._quote_ident(table)} where {where_sql}"
+            where_sql, params = self._compile_people_where_sql(filters, columns)
+            sql = f"select _pp_role.* from {self._quote_ident(table)} as _pp_role where {where_sql}"
+        else:
+            where_sql, params = self._compile_filter_sql(filters, columns)
+            sql = f"select * from {self._quote_ident(table)} where {where_sql}"
         if order_by_id:
             sql += f" order by {self._row_id_order_sql(columns)}"
         if limit and limit > 0:
@@ -695,28 +694,17 @@ class LocalDuckDBSearchStore:
         if sql_field is None:
             return []
 
-        effective_filters = filters
-        eligible_ids: set[str] | None = None
-        used_profile_filter = False
-        if logical_name == "people":
-            eligible_ids, used_profile_filter = self._eligible_person_ids_sql(filters)
-            if used_profile_filter:
-                _person_filters, effective_filters = self._split_person_role_filters(filters)
-        where_sql, params = self._compile_filter_sql(effective_filters, columns)
-        if eligible_ids is not None:
-            id_fields = [field for field in ["person_id", "base_id"] if field in columns]
-            if not eligible_ids or not id_fields:
-                return []
-            id_params = sorted(eligible_ids)
-            id_clause = " or ".join(f"cast({self._quote_ident(id_field)} as varchar) in {self._sql_in_list(id_params)}" for id_field in id_fields)
-            where_sql = f"({where_sql}) and ({id_clause})"
-            params.extend(id_params * len(id_fields))
+        where_sql, params = (
+            self._compile_people_where_sql(filters, columns)
+            if logical_name == "people"
+            else self._compile_filter_sql(filters, columns)
+        )
         vector_column = self._quote_ident(sql_field)
         order_column = self._row_id_order_sql(columns)
         sql = f"""
             with filtered as (
-                select *
-                from {self._quote_ident(table)}
+                select _pp_role.*
+                from {self._quote_ident(table)} as _pp_role
                 where {where_sql}
             ), scored as (
                 select

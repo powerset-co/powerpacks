@@ -814,7 +814,7 @@ def processing_run_command_args(operator_id: str, *, allow_paid: bool = False) -
 
 
 def build_local_duckdb_shim_command_text(operator_id: str) -> str:
-    return f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'
+    return f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --derive-positions-from-person-profiles --operator-id {operator_id} --force'
 
 
 def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
@@ -823,6 +823,7 @@ def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
         'scripts/build-local-duckdb-shim.py',
         '--records-dir',
         '.powerpacks/search-index',
+        '--derive-positions-from-person-profiles',
         '--operator-id',
         operator_id,
         '--force',
@@ -1225,7 +1226,7 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
                 'index_input_sha256': people_hash,
             }
     if search_records_have_data() and not duck.exists():
-        return {'status': 'records_only_duckdb_missing', 'repair_command': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'}
+        return {'status': 'records_only_duckdb_missing', 'repair_command': f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --derive-positions-from-person-profiles --operator-id {operator_id} --force'}
     if people.exists():
         return processing_needed
     return {'status': 'not_ready', 'missing': ['.powerpacks/network-import/merged/people.csv']}
