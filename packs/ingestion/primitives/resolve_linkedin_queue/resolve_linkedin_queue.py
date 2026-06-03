@@ -393,11 +393,23 @@ def task_spec() -> dict[str, Any]:
     }
 
 
-def submit_and_poll(client: ParallelClient, contacts: list[dict[str, str]], processor: str, batch_size: int = 500, max_wait: int = 900) -> list[dict[str, Any]]:
-    """Submit contacts to Parallel, poll until done, return results."""
+def submit_and_poll(
+    client: ParallelClient,
+    contacts: list[dict[str, str]],
+    processor: str,
+    *,
+    ledger_path: Path,
+    ledger: dict[str, Any],
+    batch_size: int = 500,
+    max_wait: int = 900,
+) -> list[dict[str, Any]]:
+    """Submit contacts to Parallel, poll until done, persist progress, return results."""
     group = client.create_group()
     group_id = group.get("taskgroup_id") or group.get("id")
-    print(f"[resolve] Created task group {group_id} for {len(contacts)} contacts", file=sys.stderr)
+    ledger["parallel"] = {"taskgroup_id": group_id, "run_ids": [], "submitted_at": now_iso(), "contacts": len(contacts)}
+    ledger["status"] = "submitted"
+    save_ledger(ledger_path, ledger)
+    print(f"[resolve] Created task group {group_id} for {len(contacts)} contacts", file=sys.stderr, flush=True)
     sys.stdout.write(json.dumps({"progress": "submitted", "taskgroup_id": group_id, "contacts": len(contacts)}) + "\n")
     sys.stdout.flush()
 
@@ -417,7 +429,10 @@ def submit_and_poll(client: ParallelClient, contacts: list[dict[str, str]], proc
         for rid, contact in zip(new_ids, batch):
             run_id_to_contact[rid] = contact
         run_ids.extend(new_ids)
-        print(f"[resolve] Submitted batch {i // batch_size + 1}: {len(new_ids)} runs (total {len(run_ids)})", file=sys.stderr)
+        ledger["parallel"]["run_ids"] = run_ids
+        ledger["parallel"]["submitted_runs"] = len(run_ids)
+        save_ledger(ledger_path, ledger)
+        print(f"[resolve] Submitted batch {i // batch_size + 1}: {len(new_ids)} runs (total {len(run_ids)})", file=sys.stderr, flush=True)
         sys.stdout.flush()
 
     # Poll
@@ -429,7 +444,12 @@ def submit_and_poll(client: ParallelClient, contacts: list[dict[str, str]], proc
         completed = counts.get("completed", 0)
         failed = counts.get("failed", 0)
         elapsed = time.time() - start
-        print(f"[resolve] {elapsed:.0f}s: completed={completed} failed={failed} active={status.get('is_active')}", file=sys.stderr)
+        ledger["status"] = "polling"
+        ledger["parallel"]["last_poll_at"] = now_iso()
+        ledger["parallel"]["status_counts"] = counts
+        ledger["parallel"]["is_active"] = status.get("is_active")
+        save_ledger(ledger_path, ledger)
+        print(f"[resolve] {elapsed:.0f}s: completed={completed} failed={failed} active={status.get('is_active')}", file=sys.stderr, flush=True)
         sys.stdout.write(json.dumps({"progress": "polling", "elapsed_s": int(elapsed), "completed": completed, "failed": failed, "total": len(run_ids)}) + "\n")
         sys.stdout.flush()
         if not status.get("is_active", True):
@@ -468,7 +488,10 @@ def submit_and_poll(client: ParallelClient, contacts: list[dict[str, str]], proc
         except Exception as exc:
             print(f"[resolve] Failed to fetch result for {run_id}: {exc}", file=sys.stderr)
 
-    print(f"[resolve] Fetched {len(results)} results", file=sys.stderr)
+    ledger["status"] = "fetched"
+    ledger["parallel"]["results_fetched"] = len(results)
+    save_ledger(ledger_path, ledger)
+    print(f"[resolve] Fetched {len(results)} results", file=sys.stderr, flush=True)
     sys.stdout.write(json.dumps({"progress": "fetched", "results": len(results)}) + "\n")
     sys.stdout.flush()
     return results
@@ -549,6 +572,8 @@ def run_enrichment(input_csv: Path, output_dir: Path, ledger_path: Path, *, prov
     results = submit_and_poll(
         ParallelClient(api_key, base_url, beta),
         to_process, processor,
+        ledger_path=ledger_path,
+        ledger=ledger,
     )
 
     # Merge with existing results + new results
