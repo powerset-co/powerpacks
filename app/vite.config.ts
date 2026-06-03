@@ -1003,18 +1003,21 @@ function importNetworkCommand(operatorId: string, extra: string[] = []) {
 }
 
 function enrichmentNetworkCommand(operatorId: string, sourceId: string): string[] {
-  if (sourceId === "gmail") {
-    return importNetworkCommand(operatorId, [
-      "--only-source", "gmail",
-      "--force",
-      "--skip-msgvault-sync",
-      "--gmail-linkedin-provider", "parallel",
-    ]);
-  }
-  if (sourceId === "linkedin_csv" || sourceId === "messages") {
+  if (sourceId === "linkedin_csv") {
     return importNetworkCommand(operatorId, ["--only-source", sourceId, "--force"]);
   }
   return [];
+}
+
+function enrichmentFanInCommand(operatorId: string, sourceIds: string[] = []): string[] {
+  const extra = ["--force"];
+  for (const sourceId of sourceIds) {
+    extra.push("--only-source", sourceId);
+  }
+  if (!sourceIds.length || sourceIds.includes("gmail")) {
+    extra.push("--resolve-gmail-linkedin");
+  }
+  return setupCommandArgs(operatorId, "fan-in", extra);
 }
 
 function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[number]) {
@@ -1630,12 +1633,13 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   }
 
   if (action === "enrich-all") {
-    const imports = buildImportSources(accounts, operator.id)
-      .filter((source) => source.linked && !source.skipped && source.runnable !== false)
+    const enrichableSources = buildImportSources(accounts, operator.id)
+      .filter((source) => source.linked && !source.skipped && source.runnable !== false && source.id !== "twitter");
+    if (!enrichableSources.length) throw new Error("no linked sources can be enriched");
+    const imports = enrichableSources
       .map((source) => ({ label: `enriching ${source.label}`, command: enrichmentNetworkCommand(operator.id, source.id) }))
       .filter((stage) => stage.command.length > 0);
-    if (!imports.length) throw new Error("no linked sources can be enriched");
-    const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
+    const fanIn = enrichmentFanInCommand(operator.id);
     return startSetupJob(action, importsAndFanInCommand(imports, fanIn), 6 * 60 * 60 * 1000);
   }
 
@@ -1648,8 +1652,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (source.runnable === false || source.command.length === 0) {
       throw new Error(source.disabledReason || `source is not importable yet: ${sourceId}`);
     }
-    const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
-    return startSetupJob(action, importAndFanInCommand(source.command, fanIn, `importing ${source.label}`), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, source.command, 6 * 60 * 60 * 1000);
   }
 
   if (action === "enrich-source") {
@@ -1663,9 +1666,10 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     }
     const command = enrichmentNetworkCommand(operator.id, sourceId);
     if (command.length === 0) {
-      throw new Error(source.disabledReason || `source is not enrichable yet: ${sourceId}`);
+      const fanIn = enrichmentFanInCommand(operator.id, [sourceId]);
+      return startSetupJob(action, importsAndFanInCommand([], fanIn), 6 * 60 * 60 * 1000);
     }
-    const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
+    const fanIn = enrichmentFanInCommand(operator.id, [sourceId]);
     return startSetupJob(action, importAndFanInCommand(command, fanIn, `enriching ${source.label}`), 6 * 60 * 60 * 1000);
   }
 

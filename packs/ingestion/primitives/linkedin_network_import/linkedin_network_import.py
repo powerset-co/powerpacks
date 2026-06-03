@@ -242,8 +242,14 @@ def mark_step(ledger: dict[str, Any], step_id: str, status: str, **extra: Any) -
     rec.update({k: v for k, v in extra.items() if v is not None})
 
 
+def pipeline_steps(ledger: dict[str, Any]) -> list[str]:
+    if ledger.get("input", {}).get("convert_only"):
+        return ["convert"]
+    return PIPELINE_STEPS
+
+
 def next_pending_step(ledger: dict[str, Any]) -> str | None:
-    for step_id in PIPELINE_STEPS:
+    for step_id in pipeline_steps(ledger):
         if ledger.setdefault("steps", {}).get(step_id, {}).get("status") != "completed":
             return step_id
     return None
@@ -437,6 +443,7 @@ def command_run(args: argparse.Namespace) -> int:
             "company_corpus_jsonl": [str(Path(p)) for p in (args.company_corpus_jsonl or [])],
             "sleep_seconds": args.sleep_seconds,
             "force_enrich": args.force_enrich,
+            "convert_only": args.convert_only,
             "max_workers": args.max_workers,
             "max_rpm": args.max_rpm,
             "failure_retry_hours": args.failure_retry_hours,
@@ -512,6 +519,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     run.add_argument("--run-id")
     run.add_argument("--force", action="store_true", help="Overwrite an active linkedin_network_import ledger")
+    run.add_argument("--convert-only", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--force-enrich", action="store_true", help="Re-enrich rows even when source rows look complete")
     run.add_argument("--profile-cache-dir", default=str(DEFAULT_PROFILE_CACHE_DIR))
     run.add_argument("--refresh-cache", action="store_true", help="Force RapidAPI calls even when cache entries exist")

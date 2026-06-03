@@ -1699,6 +1699,8 @@ def run_linkedin_child(ledger: dict[str, Any], mode: str) -> dict[str, Any]:
         )
         if input_cfg.get("linkedin_limit") is not None:
             cmd.extend(["--limit", str(input_cfg["linkedin_limit"])])
+        if input_cfg.get("source_import_only"):
+            cmd.append("--convert-only")
     else:
         cmd = py_cmd("packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py", "continue", "--ledger", str(child_ledger))
     code, payload, stderr = run_cmd(cmd)
@@ -2065,7 +2067,9 @@ def run_gmail_directory(ledger_path: Path, ledger: dict[str, Any]) -> bool:
 
 def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     input_cfg = ledger.get("input", {})
-    provider = input_cfg.get("gmail_linkedin_provider") or "off"
+    provider = "parallel" if input_cfg.get("resolve_gmail_linkedin") else "off"
+    if input_cfg.get("gmail_linkedin_provider"):
+        provider = input_cfg.get("gmail_linkedin_provider")
     artifacts = ledger.setdefault("artifacts", {})
     queue_records = artifacts.get("gmail_unresolved_linkedin_resolution_queue_csvs") or gmail_queue_records(artifacts)
     if provider == "off" or not queue_records:
@@ -2471,6 +2475,11 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
         if not run_source_import_workers(ledger_path, ledger, resume=resume):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
+    if ledger.get("input", {}).get("source_import_only"):
+        ledger["status"] = "source_import_completed"
+        save_ledger(ledger_path, ledger)
+        emit({"status": "source_import_completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
+        return 0
     if ledger.get("input", {}).get("only_sources") and not ledger.get("input", {}).get("fan_in_only"):
         if "messages" in set(unique_strings(ledger.get("input", {}).get("only_sources"))) and ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
             if not run_messages_enrichment(ledger_path, ledger):
@@ -2480,19 +2489,22 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
         save_ledger(ledger_path, ledger)
         emit({"status": "source_import_completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
-    if ledger.get("steps", {}).get("gmail_directory", {}).get("status") not in {"completed", "skipped"}:
+    selected_fan_in_sources = set(unique_strings(ledger.get("input", {}).get("only_sources"))) if ledger.get("input", {}).get("fan_in_only") else set()
+    run_gmail_enrichment = not selected_fan_in_sources or "gmail" in selected_fan_in_sources
+    run_messages_profile_enrichment = not selected_fan_in_sources or "messages" in selected_fan_in_sources
+    if run_gmail_enrichment and ledger.get("steps", {}).get("gmail_directory", {}).get("status") not in {"completed", "skipped"}:
         if not run_gmail_directory(ledger_path, ledger):
             return 1
         save_ledger(ledger_path, ledger)
-    if ledger.get("steps", {}).get("gmail_linkedin_resolution", {}).get("status") not in {"completed", "skipped"}:
+    if run_gmail_enrichment and ledger.get("steps", {}).get("gmail_linkedin_resolution", {}).get("status") not in {"completed", "skipped"}:
         if not run_gmail_linkedin_resolution(ledger_path, ledger):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
-    if ledger.get("steps", {}).get("gmail_apply_enrich", {}).get("status") not in {"completed", "skipped"}:
+    if run_gmail_enrichment and ledger.get("steps", {}).get("gmail_apply_enrich", {}).get("status") not in {"completed", "skipped"}:
         if not run_gmail_apply_and_enrich(ledger_path, ledger):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
-    if ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
+    if run_messages_profile_enrichment and ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
         if not run_messages_enrichment(ledger_path, ledger):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
@@ -2546,6 +2558,46 @@ def preserved_state_for_source_refresh(existing: dict[str, Any], selected_source
     return {"artifacts": artifacts, "steps": steps, "source_imports": source_imports}
 
 
+GMAIL_ENRICHMENT_ARTIFACT_KEYS = {
+    "gmail_directory_resolution_records",
+    "gmail_unresolved_linkedin_resolution_queue_csvs",
+    "gmail_linkedin_resolutions_csvs",
+    "gmail_linkedin_resolution_ledgers",
+    "gmail_linkedin_resolution_ledger",
+    "gmail_linkedin_resolutions_csv",
+    "gmail_linkedin_resolutions_by_slug",
+    "gmail_linkedin_harness_prompts_jsonls",
+    "gmail_linkedin_harness_prompts_jsonl",
+    "gmail_linkedin_harness_instructions",
+    "gmail_resolved_people_csvs",
+    "gmail_resolved_people_csv",
+    "gmail_enrich_people_ledgers",
+    "gmail_enrich_people_ledger",
+    "gmail_final_people_csvs",
+    "gmail_combined_resolutions_csvs",
+    "gmail_apply_enrich_by_slug",
+}
+
+
+def reset_selected_fan_in_state(preserved: dict[str, Any], selected_sources: set[str]) -> dict[str, Any]:
+    if not preserved or not selected_sources:
+        return preserved
+    steps = preserved.setdefault("steps", {})
+    artifacts = preserved.setdefault("artifacts", {})
+    if "gmail" in selected_sources:
+        for step in ["gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich"]:
+            steps.pop(step, None)
+        for key in list(artifacts):
+            if key in GMAIL_ENRICHMENT_ARTIFACT_KEYS or key.startswith("gmail_directory_by_slug") or key.startswith("gmail_") and "_enriched_" in key:
+                artifacts.pop(key, None)
+    if "messages" in selected_sources:
+        steps.pop("messages_enrich_people", None)
+        for key in list(artifacts):
+            if key.startswith("messages_enriched_") or key in {"messages_people_csv", "messages_people_csvs", "messages_people_input_csv", "messages_people_input_manifest", "messages_enrich_people_ledger"}:
+                artifacts.pop(key, None)
+    return preserved
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     args = apply_account_sources(args)
     run_id = args.run_id or f"network-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
@@ -2573,6 +2625,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     selected_sources = set(unique_strings(getattr(args, "only_source", [])))
     preserve_sources = set() if args.fan_in_only else selected_sources
     preserved = preserved_state_for_source_refresh(existing, preserve_sources) if args.force and (selected_sources or args.fan_in_only) else {}
+    if args.force and args.fan_in_only and selected_sources:
+        preserved = reset_selected_fan_in_state(preserved, selected_sources)
     ledger = {
         "primitive": "import_network_pipeline",
         "version": 1,
@@ -2599,6 +2653,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "skip_gmail_estimate": bool(getattr(args, "skip_gmail_estimate", False)),
             "gmail_estimate_max_pages": int(getattr(args, "gmail_estimate_max_pages", DEFAULT_GMAIL_ESTIMATE_MAX_PAGES) or DEFAULT_GMAIL_ESTIMATE_MAX_PAGES),
             "gmail_linkedin_provider": args.gmail_linkedin_provider,
+            "resolve_gmail_linkedin": args.resolve_gmail_linkedin,
             "gmail_linkedin_limit": args.gmail_linkedin_limit,
             "gmail_resolutions_csv": args.gmail_resolutions_csv,
             "linkedin_directory_csv": args.linkedin_directory_csv,
@@ -2610,6 +2665,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "from_setup": args.from_setup,
             "only_sources": unique_strings(getattr(args, "only_source", [])),
             "fan_in_only": args.fan_in_only,
+            "source_import_only": args.source_import_only,
             "twitter_handle": getattr(args, "twitter_handle", ""),
             "messages_review_csv": getattr(args, "messages_review_csv", ""),
             "messages_contacts_csv": getattr(args, "messages_contacts_csv", ""),
@@ -2687,16 +2743,20 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
     }
     gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
     gmail_estimates = estimate_gmail_accounts_via_api(input_cfg, gmail_emails) if gmail_emails else []
-    if args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args):
+    fan_in_only = bool(getattr(args, "fan_in_only", False))
+    source_import_only = bool(getattr(args, "source_import_only", False))
+    if not fan_in_only and (args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args)):
         would_run.append("gmail_msgvault")
+    if not source_import_only and (args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args)):
         would_run.append("gmail_directory")
-    if getattr(args, "gmail_linkedin_provider", "off") != "off":
+    if not source_import_only and (getattr(args, "resolve_gmail_linkedin", False) or getattr(args, "gmail_linkedin_provider", "off") != "off"):
         would_run.append("gmail_linkedin_resolution")
-    if getattr(args, "gmail_resolutions_csv", ""):
+    if not source_import_only and getattr(args, "gmail_resolutions_csv", ""):
         would_run.append("gmail_apply_enrich")
-    if messages_review_csv:
+    if not source_import_only and messages_review_csv:
         would_run.append("messages_enrich_people")
-    would_run.extend(["merge", "duckdb"])
+    if not source_import_only:
+        would_run.extend(["merge", "duckdb"])
     return {
         "status": "dry_run",
         "ledger": str(ledger_path),
@@ -2704,7 +2764,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
         "run_dir": str(run_dir),
         "existing_status": "missing",
         "would_run_steps": would_run,
-        "worker_groups": {"import": source_worker_group(input_cfg, run_id)},
+        "worker_groups": {} if fan_in_only else {"import": source_worker_group(input_cfg, run_id)},
         "gmail_api_estimates": gmail_estimates,
         "gmail_estimate_summary": summarize_gmail_estimates(gmail_estimates) if gmail_estimates else "",
         "estimated_paid_calls": "unknown_without_existing_stage_outputs",
@@ -2799,7 +2859,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--gmail-sync-after", default="", help="Pass --after YYYY-MM-DD to msgvault sync-full for bounded Gmail refreshes")
     run.add_argument("--skip-gmail-estimate", action="store_true", help="Skip the pre-sync Gmail API label/count estimate")
     run.add_argument("--gmail-estimate-max-pages", type=int, default=DEFAULT_GMAIL_ESTIMATE_MAX_PAGES, help=argparse.SUPPRESS)
-    run.add_argument("--gmail-linkedin-provider", choices=["off", "harness", "parallel"], default="off", help="Prepare/run Gmail email-to-LinkedIn resolution before merge. harness is local prompt prep; parallel is spend-bearing and requires approval.")
+    run.add_argument("--resolve-gmail-linkedin", action="store_true", help="Resolve Gmail contacts to LinkedIn with Parallel before applying Gmail enrichment.")
+    run.add_argument("--gmail-linkedin-provider", choices=["off", "harness", "parallel"], default="off", help=argparse.SUPPRESS)
     run.add_argument("--gmail-linkedin-limit", type=int, help=argparse.SUPPRESS)
     run.add_argument("--gmail-resolutions-csv", default="", help="Existing linkedin_resolutions.csv to apply to Gmail people before shared enrich_people")
     run.add_argument("--linkedin-directory-csv", default=str(DEFAULT_DIRECTORY_CSV), help=argparse.SUPPRESS)
@@ -2813,6 +2874,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--allow-unreviewed-messages", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--only-source", action="append", default=[], choices=SOURCE_NAMES, help="Run only a source import worker; skips fan-in merge unless --fan-in-only is set separately")
     run.add_argument("--fan-in-only", action="store_true", help="Skip source import workers and run merge/DuckDB fan-in from existing artifacts")
+    run.add_argument("--source-import-only", action="store_true", help="Run raw source imports only; skip resolution, enrichment, merge, and DuckDB fan-in")
     run.add_argument("--dry-run", action="store_true", help="Inspect existing ledger/stage outputs and report work that would run")
     run.add_argument("--estimate", action="store_true", help="Alias for --dry-run")
     run.add_argument("--force", action="store_true")

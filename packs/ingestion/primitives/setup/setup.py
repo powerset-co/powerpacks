@@ -1908,6 +1908,7 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
         str(SETUP_REFRESH_LEDGER),
         '--run-id',
         run_id,
+        '--source-import-only',
     ]
     if force:
         cmd.append('--force')
@@ -1934,6 +1935,10 @@ def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool
     ]
     if force:
         cmd.append('--force')
+    for source in getattr(args, 'only_source', []) or []:
+        cmd.extend(['--only-source', source])
+    if bool(getattr(args, 'resolve_gmail_linkedin', False)):
+        cmd.append('--resolve-gmail-linkedin')
     return cmd
 
 
@@ -2247,6 +2252,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--force', action='store_true')
+    s.add_argument('--only-source', action='append', choices=['gmail', 'linkedin_csv', 'messages', 'twitter'], default=[])
+    s.add_argument('--resolve-gmail-linkedin', action='store_true', help='Run Gmail email-to-LinkedIn resolution with Parallel during enrichment fan-in.')
     s.set_defaults(func=run_fan_in_phase)
 
     s = sub.add_parser('index')
