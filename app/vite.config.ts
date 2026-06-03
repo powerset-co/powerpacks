@@ -371,6 +371,10 @@ function shellStage(label: string, command: string[]): string {
 }
 
 function importAndFanInCommand(importCommand: string[], fanInCommand: string[], label: string): string[] {
+  return importsAndFanInCommand([{ label, command: importCommand }], fanInCommand);
+}
+
+function importsAndFanInCommand(imports: Array<{ label: string; command: string[] }>, fanInCommand: string[]): string[] {
   const importNetworkApprove = [
     "uv", "run", "--project", ".", "python",
     "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py",
@@ -387,16 +391,18 @@ function importAndFanInCommand(importCommand: string[], fanInCommand: string[], 
     "/bin/zsh",
     "-lc",
     [
-      `printf '%s\\n' ${shellQuote(`setup: ${label}`)}`,
-      `${shellJoin(importCommand)}; code=$?`,
-      [
-        "if [[ $code -eq 20 ]]; then",
-        `  printf '%s\\n' ${shellQuote("setup: approving network import spend")}`,
-        `  ${shellJoin(importNetworkApprove)} && ${shellJoin(importNetworkContinue)}`,
-        "elif [[ $code -ne 0 ]]; then",
-        "  exit $code",
-        "fi",
-      ].join("\n"),
+      ...imports.flatMap((stage) => [
+        `printf '%s\\n' ${shellQuote(`setup: ${stage.label}`)}`,
+        `${shellJoin(stage.command)}; code=$?`,
+        [
+          "if [[ $code -eq 20 ]]; then",
+          `  printf '%s\\n' ${shellQuote("setup: approving network import spend")}`,
+          `  ${shellJoin(importNetworkApprove)} && ${shellJoin(importNetworkContinue)}`,
+          "elif [[ $code -ne 0 ]]; then",
+          "  exit $code",
+          "fi",
+        ].join("\n"),
+      ]),
       shellStage("merging local network", fanInCommand),
     ].join(" && "),
   ];
@@ -994,6 +1000,21 @@ function importNetworkCommand(operatorId: string, extra: string[] = []) {
   ];
   command.push(...extra);
   return command;
+}
+
+function enrichmentNetworkCommand(operatorId: string, sourceId: string): string[] {
+  if (sourceId === "gmail") {
+    return importNetworkCommand(operatorId, [
+      "--only-source", "gmail",
+      "--force",
+      "--skip-msgvault-sync",
+      "--gmail-linkedin-provider", "parallel",
+    ]);
+  }
+  if (sourceId === "linkedin_csv" || sourceId === "messages") {
+    return importNetworkCommand(operatorId, ["--only-source", sourceId, "--force"]);
+  }
+  return [];
 }
 
 function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[number]) {
@@ -1609,7 +1630,13 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   }
 
   if (action === "enrich-all") {
-    return startSetupJob(action, setupCommandArgs(operator.id, "import"), 6 * 60 * 60 * 1000);
+    const imports = buildImportSources(accounts, operator.id)
+      .filter((source) => source.linked && !source.skipped && source.runnable !== false)
+      .map((source) => ({ label: `enriching ${source.label}`, command: enrichmentNetworkCommand(operator.id, source.id) }))
+      .filter((stage) => stage.command.length > 0);
+    if (!imports.length) throw new Error("no linked sources can be enriched");
+    const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
+    return startSetupJob(action, importsAndFanInCommand(imports, fanIn), 6 * 60 * 60 * 1000);
   }
 
   if (action === "import-source") {
@@ -1634,9 +1661,10 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (source.runnable === false || source.command.length === 0) {
       throw new Error(source.disabledReason || `source is not importable yet: ${sourceId}`);
     }
-    const command = sourceId === "gmail"
-      ? importNetworkCommand(operator.id, ["--only-source", "gmail", "--force", "--skip-msgvault-sync", "--gmail-linkedin-provider", "parallel"])
-      : source.command;
+    const command = enrichmentNetworkCommand(operator.id, sourceId);
+    if (command.length === 0) {
+      throw new Error(source.disabledReason || `source is not enrichable yet: ${sourceId}`);
+    }
     const fanIn = setupCommandArgs(operator.id, "fan-in", ["--force"]);
     return startSetupJob(action, importAndFanInCommand(command, fanIn, `enriching ${source.label}`), 6 * 60 * 60 * 1000);
   }
