@@ -873,6 +873,7 @@ function EnrichmentSourceRow({
   const canRun = Boolean(importSource?.linked && !importSource.skipped && importSource.runnable !== false);
   const sourceSkipped = String(source.status || "").toLowerCase() === "skipped";
   const updated = sourceSkipped ? "" : updatedLabel(source.updatedAt || importSource?.updatedAt);
+  const skippedLabel = source.id === "messages" ? "Skipped" : "Not found";
   return (
     <div className="grid gap-3 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(0,1.4fr)_120px_120px_120px_120px_auto] lg:items-center">
       <div className="flex min-w-0 items-start gap-3">
@@ -892,7 +893,7 @@ function EnrichmentSourceRow({
       <KeyValue label="Candidates" value={source.candidates.toLocaleString()} />
       <KeyValue label="Profiles found" value={source.enriched.toLocaleString()} />
       <KeyValue label="Existing matches" value={source.matched.toLocaleString()} />
-      <KeyValue label="Skipped" value={source.skipped.toLocaleString()} />
+      <KeyValue label={skippedLabel} value={source.skipped.toLocaleString()} />
       <div className="flex justify-end">
         <Button
           size="sm"

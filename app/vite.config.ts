@@ -1348,13 +1348,17 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
     artifactsList.reduce((total, artifacts) => total + csvPathCount(artifacts[key]), 0);
   const gmailQueueArtifact = refreshArtifacts.gmail_linkedin_resolution_queue_csvs || refreshArtifacts.gmail_linkedin_resolution_queue_csv;
   const gmailQueueCount = csvRowsForArtifact(gmailQueueArtifact, ["queue_csv", "linkedin_resolution_queue_csv"]).length;
-  const gmailDirectoryMatches = artifactRowsDirectoryMatchCount(
+  const gmailDirectoryEntries = Object.values((refreshArtifacts.gmail_directory_by_slug || {}) as Record<string, any>);
+  const gmailDirectoryResolved = gmailDirectoryEntries.reduce((total, item) => total + Number(item?.resolved || 0), 0);
+  const gmailDirectoryUnresolved = gmailDirectoryEntries.reduce((total, item) => total + Number(item?.unresolved || 0), 0);
+  const gmailDirectoryMatches = gmailDirectoryResolved || artifactRowsDirectoryMatchCount(
     gmailQueueArtifact,
     directoryRows,
     ["queue_csv", "linkedin_resolution_queue_csv"],
   );
   const gmailEnriched = sumArtifacts([refreshArtifacts], "gmail_final_people_csvs");
-  const gmailToEnrich = Math.max(0, gmailQueueCount - gmailDirectoryMatches - gmailEnriched);
+  const gmailFound = Math.max(gmailEnriched, gmailDirectoryMatches);
+  const gmailToEnrich = gmailDirectoryUnresolved || Math.max(0, gmailQueueCount - gmailFound);
   const linkedinCacheHits = firstCsvCount(
     refreshArtifacts.linkedin_rapidapi_cache_hits_csv,
     refreshArtifacts.linkedin_enrich_people_rapidapi_cache_hits_csv,
@@ -1382,9 +1386,9 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       label: "Gmail",
       status: String(setupRefreshLedger.status || "unknown"),
       candidates: gmailQueueCount > 0 ? gmailToEnrich : sumArtifacts([refreshArtifacts], "gmail_people_csvs") || sumArtifacts([refreshArtifacts], "gmail_people_csv"),
-      enriched: gmailEnriched + gmailDirectoryMatches,
+      enriched: gmailFound,
       skipped: 0,
-      matched: sumArtifacts([refreshArtifacts], "gmail_resolved_people_csvs") || gmailDirectoryMatches,
+      matched: gmailDirectoryMatches,
       updatedAt: isSkipped("gmail") ? null : setupRefreshLedger.updated_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
     },
     {

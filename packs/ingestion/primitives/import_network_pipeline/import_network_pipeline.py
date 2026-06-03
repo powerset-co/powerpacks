@@ -1862,7 +1862,7 @@ def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     ledger.setdefault("artifacts", {})["gmail_api_estimates"] = estimates
     begin_step(ledger_path, ledger, "gmail_msgvault", f"Importing Gmail metadata for {len(emails)} msgvault account(s). {summarize_gmail_estimates(estimates)}")
     ok = True
-    max_workers = min(len(emails), int(os.environ.get("POWERPACKS_IMPORT_NETWORK_GMAIL_MAX_WORKERS", "4"))) or 1
+    max_workers = min(len(emails), int(os.environ.get("POWERPACKS_IMPORT_NETWORK_GMAIL_MAX_WORKERS", "1"))) or 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(run_gmail_msgvault_account, ledger, email, index) for index, email in enumerate(emails)]
         results = [future.result() for future in futures]
@@ -1945,7 +1945,9 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
     gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
     if not gmail_emails and input_cfg.get("msgvault_db"):
         gmail_emails = [""]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(8, len(gmail_emails) + (1 if input_cfg.get("linkedin_csv") else 0) or 1))) as executor:
+    gmail_max_workers = min(len(gmail_emails), int(os.environ.get("POWERPACKS_IMPORT_NETWORK_GMAIL_MAX_WORKERS", "1"))) if gmail_emails else 0
+    total_workers = gmail_max_workers + (1 if input_cfg.get("linkedin_csv") else 0)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(8, total_workers or 1))) as executor:
         if "linkedin_csv" in runnable_sources and input_cfg.get("linkedin_csv") and ledger.get("steps", {}).get("linkedin", {}).get("status") not in {"completed", "skipped"}:
             futures[executor.submit(run_linkedin_child, ledger, "continue" if resume else "run")] = "linkedin_csv"
         if "gmail" in runnable_sources and ledger.get("steps", {}).get("gmail_msgvault", {}).get("status") not in {"completed", "skipped"} and gmail_emails:
