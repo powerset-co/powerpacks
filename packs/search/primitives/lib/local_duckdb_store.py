@@ -40,6 +40,29 @@ ARRAY_FILTER_FIELDS = {
     "yc_batches",
 }
 COMPARISON_OPS = {"Eq", "NotEq", "In", "NotIn", "Gt", "Gte", "Lt", "Lte", "ContainsAny", "ContainsAllTokens", "IGlob"}
+PERSON_PROFILE_TABLES = ("local_person_profiles", "local_people_profiles")
+PERSON_PROFILE_FILTER_FIELDS = {
+    "allowed_operator_ids",
+    "city",
+    "state",
+    "country",
+    "location_raw",
+    "full_name",
+    "first_name",
+    "last_name",
+    "headline",
+    "linkedin_url",
+    "public_identifier",
+    "source_channels",
+    "source_artifacts",
+    "twitter_handle",
+    "x_twitter_handle",
+    "x_twitter_followers",
+    "linkedin_followers",
+    "linkedin_connections",
+    "ig_followers",
+    "inferred_birth_year",
+}
 
 
 class LocalDuckDBError(RuntimeError):
@@ -136,6 +159,31 @@ class LocalDuckDBSearchStore:
             [table],
         ).fetchone()
         return bool(row and row[0])
+
+    def _person_profile_table(self) -> str | None:
+        for table in PERSON_PROFILE_TABLES:
+            if self._table_exists(table):
+                return table
+        return None
+
+    def _person_profile_can_constrain_positions(self) -> bool:
+        profile_table = self._person_profile_table()
+        if not profile_table or not self._table_exists("local_people_positions"):
+            return False
+        try:
+            row = self.conn.execute(
+                f"""
+                select count(*)
+                from {self._quote_ident(profile_table)} p
+                join local_people_positions r
+                  on cast(p.person_id as varchar) = cast(r.person_id as varchar)
+                  or cast(p.person_id as varchar) = cast(r.base_id as varchar)
+                limit 1
+                """
+            ).fetchone()
+            return bool(row and row[0])
+        except Exception:
+            return False
 
     def _rows_for_namespace(self, logical_name: str) -> list[dict[str, Any]]:
         table = self._table_for_namespace(logical_name)
@@ -283,6 +331,50 @@ class LocalDuckDBSearchStore:
         text = str(pattern or "").lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         return text.replace("*", "%").replace("?", "_")
 
+    def _filter_fields(self, filters: Any) -> set[str]:
+        if filters is None or not isinstance(filters, (list, tuple)) or not filters:
+            return set()
+        op_or_field = filters[0]
+        if op_or_field in {"And", "Or"} and len(filters) == 2 and isinstance(filters[1], (list, tuple)):
+            out: set[str] = set()
+            for clause in filters[1]:
+                out.update(self._filter_fields(clause))
+            return out
+        if len(filters) in {3, 4} and isinstance(filters[0], str):
+            return {filters[0]}
+        return set()
+
+    def _is_person_profile_filter(self, filters: Any) -> bool:
+        fields = self._filter_fields(filters)
+        return bool(fields) and fields.issubset(PERSON_PROFILE_FILTER_FIELDS)
+
+    def _split_person_role_filters(self, filters: Any) -> tuple[Any | None, Any | None]:
+        if filters is None:
+            return None, None
+        if not isinstance(filters, (list, tuple)) or not filters:
+            return None, filters
+        op_or_field = filters[0]
+        if op_or_field == "And" and len(filters) == 2 and isinstance(filters[1], (list, tuple)):
+            person_clauses: list[Any] = []
+            role_clauses: list[Any] = []
+            for clause in filters[1]:
+                person_filter, role_filter = self._split_person_role_filters(clause)
+                if person_filter is not None:
+                    person_clauses.append(person_filter)
+                if role_filter is not None:
+                    role_clauses.append(role_filter)
+            return (
+                ["And", person_clauses] if person_clauses else None,
+                ["And", role_clauses] if role_clauses else None,
+            )
+        if op_or_field == "Or" and len(filters) == 2 and isinstance(filters[1], (list, tuple)):
+            if all(self._is_person_profile_filter(clause) for clause in filters[1]):
+                return filters, None
+            return None, filters
+        if self._is_person_profile_filter(filters):
+            return filters, None
+        return None, filters
+
     def _compile_filter_sql(self, filters: Any, columns: dict[str, str]) -> tuple[str, list[Any]]:
         if filters is None:
             return "true", []
@@ -343,7 +435,7 @@ class LocalDuckDBSearchStore:
             return self._sql_contains_all_tokens(sql_field, expected, options, array_field=array_field)
         if operator == "IGlob":
             pattern = self._sql_like_pattern(expected)
-            return f"lower(cast({column} as varchar)) like ? escape '\\\\'", [pattern]
+            return f"lower(cast({column} as varchar)) like ? escape '\\'", [pattern]
 
         raise ValueError(f"unsupported filter operator: {operator!r}")
 
@@ -353,10 +445,42 @@ class LocalDuckDBSearchStore:
                 return self._quote_ident(field)
         return "1"
 
+    def _eligible_person_ids_sql(self, filters: Any) -> tuple[set[str] | None, bool]:
+        profile_table = self._person_profile_table()
+        if not profile_table or not self._person_profile_can_constrain_positions():
+            return None, False
+        person_filters, _role_filters = self._split_person_role_filters(filters)
+        if person_filters is None:
+            return None, False
+        columns = self._table_columns(profile_table)
+        where_sql, params = self._compile_filter_sql(person_filters, columns)
+        selected = [field for field in ["person_id", "base_id", "id"] if field in columns]
+        if not selected:
+            return set(), True
+        exprs = ", ".join(self._quote_ident(field) for field in selected)
+        rows = self.conn.execute(f"select {exprs} from {self._quote_ident(profile_table)} where {where_sql}", params).fetchall()
+        eligible = {str(value) for row in rows for value in row if value not in (None, "")}
+        return eligible, True
+
     def _filtered_rows_sql(self, logical_name: str, filters: Any, *, limit: int = 0, order_by_id: bool = False) -> list[dict[str, Any]]:
         table = self._table_for_namespace(logical_name)
         columns = self._table_columns(table)
-        where_sql, params = self._compile_filter_sql(filters, columns)
+        effective_filters = filters
+        eligible_ids: set[str] | None = None
+        used_profile_filter = False
+        if logical_name == "people":
+            eligible_ids, used_profile_filter = self._eligible_person_ids_sql(filters)
+            if used_profile_filter:
+                _person_filters, effective_filters = self._split_person_role_filters(filters)
+        where_sql, params = self._compile_filter_sql(effective_filters, columns)
+        if eligible_ids is not None:
+            id_fields = [field for field in ["person_id", "base_id"] if field in columns]
+            if not eligible_ids or not id_fields:
+                return []
+            id_params = sorted(eligible_ids)
+            id_clause = " or ".join(f"cast({self._quote_ident(field)} as varchar) in {self._sql_in_list(id_params)}" for field in id_fields)
+            where_sql = f"({where_sql}) and ({id_clause})"
+            params.extend(id_params * len(id_fields))
         sql = f"select * from {self._quote_ident(table)} where {where_sql}"
         if order_by_id:
             sql += f" order by {self._row_id_order_sql(columns)}"
@@ -571,7 +695,22 @@ class LocalDuckDBSearchStore:
         if sql_field is None:
             return []
 
-        where_sql, params = self._compile_filter_sql(filters, columns)
+        effective_filters = filters
+        eligible_ids: set[str] | None = None
+        used_profile_filter = False
+        if logical_name == "people":
+            eligible_ids, used_profile_filter = self._eligible_person_ids_sql(filters)
+            if used_profile_filter:
+                _person_filters, effective_filters = self._split_person_role_filters(filters)
+        where_sql, params = self._compile_filter_sql(effective_filters, columns)
+        if eligible_ids is not None:
+            id_fields = [field for field in ["person_id", "base_id"] if field in columns]
+            if not eligible_ids or not id_fields:
+                return []
+            id_params = sorted(eligible_ids)
+            id_clause = " or ".join(f"cast({self._quote_ident(id_field)} as varchar) in {self._sql_in_list(id_params)}" for id_field in id_fields)
+            where_sql = f"({where_sql}) and ({id_clause})"
+            params.extend(id_params * len(id_fields))
         vector_column = self._quote_ident(sql_field)
         order_column = self._row_id_order_sql(columns)
         sql = f"""

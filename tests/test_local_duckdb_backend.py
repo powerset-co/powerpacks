@@ -1241,3 +1241,69 @@ class LocalPersonProfilesShimTest(unittest.TestCase):
             self.assertEqual(rows[0]["location_raw"], "New York, NY, US")
             self.assertEqual(rows[0]["public_profile_url"], "https://www.linkedin.com/in/profile-only")
             self.assertEqual(rows[0]["hydrated_context"]["positions"][0]["title"], "Founder")
+
+class LocalPersonProfilePrefilterTest(unittest.TestCase):
+    def test_profile_filter_constrains_position_search_without_duplicate_position_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            records = tmp / "records"
+            write_jsonl(records / "people.records.jsonl", [
+                {
+                    "id": "role-sf",
+                    "position_id": "role-sf",
+                    "person_id": "person-sf",
+                    "base_id": "person-sf",
+                    "vector": [0.0, 1.0],
+                    "position_title": "Engineer",
+                    "company_name": "SFCo",
+                    "allowed_operator_ids": ["op-test"],
+                    "city": "SHOULD_DROP",
+                    "state": "SHOULD_DROP",
+                    "country": "SHOULD_DROP",
+                },
+                {
+                    "id": "role-ny",
+                    "position_id": "role-ny",
+                    "person_id": "person-ny",
+                    "base_id": "person-ny",
+                    "vector": [0.0, 1.0],
+                    "position_title": "Engineer",
+                    "company_name": "NYCo",
+                    "allowed_operator_ids": ["op-test"],
+                },
+            ])
+            write_jsonl(records / "summaries.records.jsonl", [])
+            write_jsonl(records / "education.records.jsonl", [])
+            write_jsonl(records / "schools.records.jsonl", [])
+            write_jsonl(records / "companies.records.jsonl", [])
+            people_csv = tmp / "people.csv"
+            people_csv.write_text(
+                "id,linkedin_url,full_name,headline,city,state,country,work_experiences,education,source_channels\n"
+                "person-sf,https://www.linkedin.com/in/person-sf,SF Person,Engineer,San Francisco,CA,US,[],[],gmail_msgvault\n"
+                "person-ny,https://www.linkedin.com/in/person-ny,NY Person,Engineer,New York,NY,US,[],[],gmail_msgvault\n",
+                encoding="utf-8",
+            )
+            payload = run_shim_json(
+                "--records-dir", str(records),
+                "--person-profiles-csv", str(people_csv),
+                "--output-dir", str(tmp / "search-index"),
+                "--operator-id", "op-test",
+                "--force",
+            )
+            self.assertEqual(payload["tables"]["local_person_profile_position_overlap"], 2)
+            self.assertEqual(payload["tables"]["local_people_positions_person_columns_dropped"], 1)
+
+            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
+            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
+            turbopuffer_client._local_store_for_path.cache_clear()
+            try:
+                store = turbopuffer_client.namespace("people")
+                rows = store.query(filters=["city", "IGlob", "*san francisco*"], top_k=10, include_attributes=["person_id", "position_title"]).rows
+            finally:
+                turbopuffer_client._local_store_for_path.cache_clear()
+                if old_db is None:
+                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
+                else:
+                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].model_extra["person_id"], "person-sf")

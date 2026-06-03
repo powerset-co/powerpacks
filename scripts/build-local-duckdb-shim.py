@@ -218,6 +218,17 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
 }
 
 VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies"]
+POSITION_PERSON_DUPLICATE_COLUMNS = [
+    "city",
+    "state",
+    "country",
+    "x_twitter_followers",
+    "linkedin_followers",
+    "linkedin_connections",
+    "ig_followers",
+    "inferred_birth_year",
+    "allowed_operator_ids",
+]
 EXTRA_COLUMNS = LOCAL_TABLE_CONTRACT
 
 
@@ -799,11 +810,43 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_
             counts[table] = load_jsonl_table(con, table, path)
             postprocess_table(con, table, operator_id)
         postprocess_cross_tables(con)
+        counts["local_person_profile_position_overlap"] = profile_position_id_overlap(con)
+        counts["local_people_positions_person_columns_dropped"] = int(drop_position_person_duplicates(con))
         con.execute("CREATE OR REPLACE VIEW local_people AS SELECT * FROM local_people_positions")
         con.execute("CHECKPOINT")
     finally:
         con.close()
     return db_path, counts
+
+
+def profile_position_id_overlap(con: Any) -> int:
+    tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
+    if "local_person_profiles" not in tables or "local_people_positions" not in tables:
+        return 0
+    return int(con.execute(
+        """
+        select count(distinct p.person_id)
+        from local_person_profiles p
+        join local_people_positions r
+          on cast(p.person_id as varchar) = cast(r.person_id as varchar)
+          or cast(p.person_id as varchar) = cast(r.base_id as varchar)
+        """
+    ).fetchone()[0] or 0)
+
+
+def drop_position_person_duplicates(con: Any) -> bool:
+    if profile_position_id_overlap(con) <= 0:
+        return False
+    cols = table_columns(con, "local_people_positions")
+    dropped = False
+    for column in POSITION_PERSON_DUPLICATE_COLUMNS:
+        if column in cols:
+            try:
+                con.execute(f"ALTER TABLE local_people_positions DROP COLUMN {qident(column)}")
+                dropped = True
+            except Exception:
+                pass
+    return dropped
 
 
 def postprocess_cross_tables(con: Any) -> None:
