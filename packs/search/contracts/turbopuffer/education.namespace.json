@@ -17,6 +17,7 @@
     {"name": "start_year", "type": "integer"},
     {"name": "end_year", "type": "integer"},
     {"name": "graduation_year", "type": "integer"},
+    {"name": "school_canonical_key", "type": "string", "notes": "Normalized school identity key for dedup."},
     {"name": "allowed_operator_ids", "type": "string[]"}
   ],
   "filters": [
