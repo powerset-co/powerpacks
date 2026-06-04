@@ -1701,6 +1701,8 @@ function indexDryRunEstimate(operatorId: string, peopleSha256: string): Record<s
     "--input", ".powerpacks/network-import/merged/people.csv",
     "--output-dir", ".powerpacks/search-index",
     "--default-operator-id", operatorId,
+    "--limit-mode", "missing",
+    "--existing-duckdb", ".powerpacks/search-index/local-search.duckdb",
   ], {
     cwd: powerpacksRepoRoot,
     env: setupProcessEnv(),

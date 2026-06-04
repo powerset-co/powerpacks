@@ -1305,7 +1305,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               </div>
             ) : showProviderEstimate ? (
               <div className="text-sm text-muted-foreground">
-                Full processing dry-run found provider work for the current people.csv. Review the estimate before rebuilding.
+                Pending processing dry-run found provider work for people missing from the vector index. Review the estimate before updating.
               </div>
             ) : updateAvailable ? (
               <div className="text-sm text-muted-foreground">
@@ -1354,7 +1354,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                 )}
               </div>
               <div className="overflow-hidden rounded-md border">
-                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Full processing dry-run</div>
+                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Pending processing dry-run</div>
                 {localRecordsMode ? (
                   <div className="grid gap-3 p-3 sm:grid-cols-2">
                     <KeyValue label="Action" value="Build DuckDB from bootstrap records" />
