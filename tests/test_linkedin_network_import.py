@@ -25,25 +25,33 @@ class LinkedInNetworkImportTests(unittest.TestCase):
         payload = json.loads(buf.getvalue()) if buf.getvalue().strip() else {}
         return code, payload
 
-    def write_connections(self, path: Path):
+    def write_connections(self, path: Path, rows=None):
+        if rows is None:
+            rows = [
+                ("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024"),
+                ("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024"),
+            ]
+        body = "\n".join(
+            f"{first},{last},https://www.linkedin.com/in/{public_id},{email},{company},{position},{connected_on}"
+            for first, last, public_id, email, company, position, connected_on in rows
+        )
         path.write_text(
             "Notes:\nExported from LinkedIn\n\n"
             "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
-            "Jane,Example,https://www.linkedin.com/in/jane-example,jane@example.com,Acme,CEO,01 Jan 2024\n"
-            "Jane,Example,https://www.linkedin.com/in/jane-example,jane@example.com,Acme,CEO,01 Jan 2024\n",
+            f"{body}\n",
             encoding="utf-8",
         )
 
-    def cache_entry(self):
+    def cache_entry(self, public_identifier="jane-example", full_name="Jane Example", company="Acme", title="CEO"):
         raw = {
-            "full_name": "Jane Example",
-            "headline": "CEO at Acme",
+            "full_name": full_name,
+            "headline": f"{title} at {company}",
             "geo": {"city": "San Francisco, California", "country": "United States", "full": "San Francisco, California, United States"},
             "experiences": [{
-                "title": "CEO",
-                "companyName": "Acme",
+                "title": title,
+                "companyName": company,
                 "company_id": "123",
-                "company_linkedin_url": "https://linkedin.com/company/acme",
+                "company_linkedin_url": f"https://linkedin.com/company/{company.lower()}",
                 "starts_at": {"year": 2020},
                 "ends_at": None,
             }],
@@ -51,8 +59,8 @@ class LinkedInNetworkImportTests(unittest.TestCase):
         }
         return {
             "fetched_at": "2026-01-01T00:00:00Z",
-            "public_identifier": "jane-example",
-            "linkedin_url": "https://www.linkedin.com/in/jane-example",
+            "public_identifier": public_identifier,
+            "linkedin_url": f"https://www.linkedin.com/in/{public_identifier}",
             "raw_response": raw,
             "normalized_profile": {"success": True},
         }
@@ -72,7 +80,6 @@ class LinkedInNetworkImportTests(unittest.TestCase):
                         "--operator-id", "operator-12345678",
                         "--output-dir", str(Path(tmp) / "out"),
                         "--ledger", str(ledger),
-                        "--run-id", "run-test",
                         "--profile-cache-dir", str(cache_dir),
                         "--force",
                     ])
@@ -88,6 +95,10 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             self.assertEqual(rows[0]["source_channels"], "linkedin_csv")
             self.assertNotIn("blocked", state)
             self.assertEqual(state["steps"]["enrich_people"]["summary"]["paid_call_count"], 1)
+            discover_dir = Path(tmp) / "out" / "discover" / "linkedin"
+            self.assertEqual(Path(state["artifact_dir"]), discover_dir)
+            self.assertEqual(Path(state["artifacts"]["people_csv"]), discover_dir / "people.csv")
+            self.assertFalse((Path(tmp) / "out" / "linkedin" / "run-test").exists())
             self.assertTrue(Path(state["artifacts"]["people_csv"]).exists())
 
     def test_seeded_cache_end_to_end_writes_people_csv_without_network_or_key(self):
@@ -105,7 +116,6 @@ class LinkedInNetworkImportTests(unittest.TestCase):
                     "--source-user", "arthur",
                     "--output-dir", str(Path(tmp) / "out"),
                     "--ledger", str(ledger),
-                    "--run-id", "run-cache",
                     "--profile-cache-dir", str(cache_dir),
                 ])
             self.assertEqual(code, 0)
@@ -129,6 +139,79 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             experiences = json.loads(rows[0]["work_experiences"])
             self.assertEqual(experiences[0]["company_key"], "linkedin_company:acme")
             self.assertTrue(Path(state["artifacts"]["people_csv"]).exists())
+
+    def test_rerun_updates_same_stable_discover_artifacts_without_run_id_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            csv_path = tmp_path / "Connections.csv"
+            cache_dir = tmp_path / "profile_cache"
+            cache_dir.mkdir()
+            (cache_dir / "jane-example.json").write_text(json.dumps(self.cache_entry()), encoding="utf-8")
+            (cache_dir / "sam-example.json").write_text(
+                json.dumps(self.cache_entry("sam-example", "Sam Example", "BetaCo", "Founder")),
+                encoding="utf-8",
+            )
+            ledger = tmp_path / "ledger.json"
+            out_dir = tmp_path / "out"
+            discover_dir = out_dir / "discover" / "linkedin"
+
+            self.write_connections(csv_path, [("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024")])
+            with patch.object(linkedin_network_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
+                code, payload = self.invoke([
+                    "run",
+                    "--csv", str(csv_path),
+                    "--source-user", "arthur",
+                    "--output-dir", str(out_dir),
+                    "--ledger", str(ledger),
+                    "--profile-cache-dir", str(cache_dir),
+                ])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            first_state = json.loads(ledger.read_text(encoding="utf-8"))
+            artifact_keys = [
+                "connections_csv",
+                "source_people_csv",
+                "people_csv",
+                "provider_enriched_csv",
+                "linkedin_enrichment_queue_csv",
+                "rapidapi_cache_hits_csv",
+                "rapidapi_cache_misses_csv",
+                "rapidapi_recent_failures_csv",
+                "needs_resolution_queue_csv",
+                "skipped_enrichment_csv",
+                "raw_provider_responses_dir",
+                "enrich_people_ledger",
+            ]
+            first_paths = {key: first_state["artifacts"][key] for key in artifact_keys}
+            self.assertEqual(Path(first_state["artifact_dir"]), discover_dir)
+
+            self.write_connections(csv_path, [
+                ("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024"),
+                ("Sam", "Example", "sam-example", "sam@example.com", "BetaCo", "Founder", "02 Jan 2024"),
+            ])
+            with patch.object(linkedin_network_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
+                code, payload = self.invoke([
+                    "run",
+                    "--csv", str(csv_path),
+                    "--source-user", "arthur",
+                    "--output-dir", str(out_dir),
+                    "--ledger", str(ledger),
+                    "--profile-cache-dir", str(cache_dir),
+                ])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            second_state = json.loads(ledger.read_text(encoding="utf-8"))
+            second_paths = {key: second_state["artifacts"][key] for key in artifact_keys}
+            self.assertEqual(second_paths, first_paths)
+            self.assertEqual(Path(second_state["artifacts"]["people_csv"]), discover_dir / "people.csv")
+            self.assertEqual(Path(second_state["artifacts"]["enrich_people_ledger"]), discover_dir / "enrich_people.ledger.json")
+            self.assertFalse((out_dir / "linkedin" / "first-run").exists())
+            self.assertFalse((out_dir / "linkedin" / "second-run").exists())
+
+            with (discover_dir / "people.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual([row["public_identifier"] for row in rows], ["jane-example", "sam-example"])
+            self.assertEqual(second_state["steps"]["enrich_people"]["summary"]["cache_hit_count"], 2)
 
     def test_check_keys_delegates_to_rapidapi_only_enrichment(self):
         code, payload = self.invoke(["check-keys"])

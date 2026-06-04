@@ -212,6 +212,30 @@ def fetch_qr_value(base_url: str, api_key: str, session: str, dest: Path) -> dic
     return {"saved": True, "path": str(dest), "length": len(value), "value": value}
 
 
+def clear_qr_artifacts(*paths: Path) -> list[str]:
+    removed: list[str] = []
+    for path in paths:
+        try:
+            path.unlink()
+            removed.append(str(path))
+        except FileNotFoundError:
+            continue
+    return removed
+
+
+def fetch_qr_artifacts(base_url: str, api_key: str, session: str, qr_dir: Path) -> dict[str, Any]:
+    qr_image_path = qr_dir / "qr.png"
+    qr_value_path = qr_dir / "qr.txt"
+    removed = clear_qr_artifacts(qr_image_path, qr_value_path)
+    image_meta = fetch_qr_image(base_url, api_key, session, qr_image_path)
+    value_meta = fetch_qr_value(base_url, api_key, session, qr_value_path)
+    return {
+        "image": image_meta,
+        "value": value_meta,
+        "removed_stale": removed,
+    }
+
+
 def open_file(path: Path) -> bool:
     if sys.platform == "darwin":
         cmd = ["open", str(path)]
@@ -287,17 +311,14 @@ def cmd_start(args: argparse.Namespace) -> int:
             return 1
 
     qr_image_path = args.qr_dir / "qr.png"
-    qr_value_path = args.qr_dir / "qr.txt"
-    image_meta = {"saved": False, "skipped": True}
-    value_meta = {"saved": False, "skipped": True}
 
     # Pull QR best-effort. If the session is already WORKING the QR endpoints
-    # may be unavailable; that's fine.
-    image_meta = fetch_qr_image(args.base_url, args.api_key, args.session, qr_image_path)
-    value_meta = fetch_qr_value(args.base_url, args.api_key, args.session, qr_value_path)
+    # may be unavailable; that's fine. Clear old QR files first so a stale QR is
+    # never reopened when the current session cannot provide a fresh one.
+    qr_meta = fetch_qr_artifacts(args.base_url, args.api_key, args.session, args.qr_dir)
 
     opened = False
-    if args.open and image_meta.get("saved"):
+    if args.open and qr_meta["image"].get("saved"):
         opened = open_file(qr_image_path)
 
     final_state = session_state(args.base_url, args.api_key, args.session)
@@ -312,8 +333,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         "pre_state": pre_state,
         "start_response": started_payload,
         "qr": {
-            "image": image_meta,
-            "value": value_meta,
+            **qr_meta,
             "opened": opened,
             "instructions": "WhatsApp > Settings > Linked Devices > Link a Device, then scan the PNG.",
         },
@@ -333,12 +353,14 @@ def _wait_until_working(args: argparse.Namespace, prelude: dict[str, Any] | None
         last_state = session_state(args.base_url, args.api_key, args.session)
         status = last_state.get("status")
         if status == "WORKING":
+            removed = clear_qr_artifacts(args.qr_dir / "qr.png", args.qr_dir / "qr.txt") if args.qr_dir else []
             emit({
                 "primitive": "waha_session",
                 "command": "wait",
                 "status": "working",
                 "checked_at": now_iso(),
                 "session": args.session,
+                "qr_removed": removed,
                 "state": last_state,
             })
             return 0
@@ -354,8 +376,7 @@ def _wait_until_working(args: argparse.Namespace, prelude: dict[str, Any] | None
             return 1
         # Refresh QR every 15s in case the user is mid-scan.
         if args.qr_dir and time.time() - last_qr_refresh > 15:
-            fetch_qr_image(args.base_url, args.api_key, args.session, args.qr_dir / "qr.png")
-            fetch_qr_value(args.base_url, args.api_key, args.session, args.qr_dir / "qr.txt")
+            fetch_qr_artifacts(args.base_url, args.api_key, args.session, args.qr_dir)
             last_qr_refresh = time.time()
         time.sleep(args.poll_interval)
     emit({

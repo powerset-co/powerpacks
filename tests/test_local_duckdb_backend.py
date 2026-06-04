@@ -164,6 +164,9 @@ class LocalDuckDBFixtureMixin:
                 "alter table local_people_positions add column company_funding_total double",
                 "alter table local_people_positions add column company_stage varchar",
                 "alter table local_people_positions add column investor_names varchar[]",
+                "alter table local_people_positions add column title_hash varchar",
+                "alter table local_people_positions add column raw_title varchar",
+                "alter table local_people_positions add column role_type_category varchar",
             ]:
                 con.execute(ddl)
             con.execute(
@@ -187,8 +190,85 @@ class LocalDuckDBFixtureMixin:
                     company_headcount = case when company_id = 'company-infra' then 120 else 40 end,
                     company_funding_total = case when company_id = 'company-infra' then 25000000 else 5000000 end,
                     company_stage = case when company_id = 'company-infra' then 'growth' else 'seed' end,
-                    investor_names = case when company_id = 'company-infra' then ['OpenAI Startup Fund'] else [] end
+                    investor_names = case when company_id = 'company-infra' then ['OpenAI Startup Fund'] else [] end,
+                    title_hash = id || '-title',
+                    raw_title = position_title,
+                    role_type_category = role_track
                 """
+            )
+
+            con.execute(
+                """
+                create table local_person_profiles (
+                    id varchar,
+                    person_id varchar,
+                    base_id varchar,
+                    public_identifier varchar,
+                    linkedin_url varchar,
+                    public_profile_url varchar,
+                    first_name varchar,
+                    last_name varchar,
+                    full_name varchar,
+                    headline varchar,
+                    summary varchar,
+                    city varchar,
+                    state varchar,
+                    country varchar,
+                    location_raw varchar,
+                    profile_picture_url varchar,
+                    current_title varchar,
+                    current_company varchar,
+                    current_company_urn varchar,
+                    primary_email varchar,
+                    all_emails varchar[],
+                    primary_phone varchar,
+                    all_phones varchar[],
+                    source_channels varchar[],
+                    source_artifacts varchar[],
+                    twitter_handle varchar,
+                    x_twitter_handle varchar,
+                    x_twitter_followers bigint,
+                    linkedin_followers bigint,
+                    linkedin_connections bigint,
+                    ig_followers bigint,
+                    inferred_birth_year bigint,
+                    work_experiences json,
+                    education json,
+                    hydrated_context json,
+                    allowed_operator_ids varchar[]
+                )
+                """
+            )
+            con.executemany(
+                "insert into local_person_profiles values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        "person-founder", "person-founder", "person-founder", "founder-example",
+                        "https://www.linkedin.com/in/founder-example", "https://www.linkedin.com/in/founder-example",
+                        "Founder", "Example", "Founder Example", "Founder and CEO at Acme AI",
+                        "Founder with product leadership background", "San Francisco", "California", "United States",
+                        "San Francisco, California, United States", "", "Founder and CEO", "Acme AI", "company-startup",
+                        "founder@example.com", ["founder@example.com"], "", [], ["linkedin"], ["fixture"],
+                        "founder_x", "founder_x", 1000, 5000, 3000, 100, 1988,
+                        json.dumps([{"title": "Founder and CEO", "company": "Acme AI"}]),
+                        json.dumps([{"school": "Stanford University"}]),
+                        json.dumps({"positions": [{"title": "Founder and CEO", "company": "Acme AI"}]}),
+                        ["op1", "op-founder"],
+                    ),
+                    (
+                        "person-engineer", "person-engineer", "person-engineer", "engineer-example",
+                        "https://www.linkedin.com/in/engineer-example", "https://www.linkedin.com/in/engineer-example",
+                        "Engineer", "Example", "Engineer Example", "Backend Engineer at InfraDB",
+                        "Backend engineer building Python services", "New York", "New York", "United States",
+                        "New York, New York, United States", "", "Backend Engineer", "InfraDB", "company-infra",
+                        "engineer@example.com", ["engineer@example.com"], "", [], ["linkedin"], ["fixture"],
+                        "engineer_x", "engineer_x", 120, 1500, 1200, 40, 1992,
+                        json.dumps([{"title": "Backend Engineer", "company": "InfraDB"}]),
+                        json.dumps([{"school": "Massachusetts Institute of Technology"}]),
+                        json.dumps({"positions": [{"title": "Backend Engineer", "company": "InfraDB"}]}),
+                        ["op1", "op-eng"],
+                    ),
+                ],
             )
 
             con.execute(

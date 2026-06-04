@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "accounts_json": ".powerpacks/ingestion/accounts.json",
+  "sources": {
+    "gmail": {
+      "inputs": {
+        "accounts_json": ".powerpacks/ingestion/accounts.json",
+        "msgvault_db_default": "~/.msgvault/msgvault.db",
+        "msgvault_db_state_key": "accounts.gmail.config.msgvault_db",
+        "selected_accounts_state_key": "accounts.gmail.config.selected_accounts",
+        "sync_query": "-category:social -category:promotions -category:forums -category:updates"
+      },
+      "outputs": {
+        "contacts_csv": ".powerpacks/network-import/discover/gmail/contacts.csv",
+        "linkedin_resolution_queue_csv": ".powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv",
+        "manifest_json": ".powerpacks/network-import/discover/gmail/manifest.json"
+      }
+    },
+    "linkedin_csv": {
+      "inputs": {
+        "accounts_json": ".powerpacks/ingestion/accounts.json",
+        "connections_csv_state_key": "accounts.linkedin_csv.config.csv_path"
+      },
+      "outputs": {
+        "source_csv": ".powerpacks/network-import/discover/linkedin/Connections.csv",
+        "contacts_csv": ".powerpacks/network-import/discover/linkedin/contacts.csv",
+        "manifest_json": ".powerpacks/network-import/discover/linkedin/manifest.json"
+      }
+    },
+    "imessage": {
+      "inputs": {
+        "chat_db_state_key": "accounts.messages.config.imessage.chat_db"
+      },
+      "outputs": {
+        "contacts_csv": ".powerpacks/network-import/discover/imessage/contacts.csv",
+        "manifest_json": ".powerpacks/network-import/discover/imessage/manifest.json"
+      }
+    },
+    "whatsapp": {
+      "inputs": {
+        "store_state_key": "accounts.messages.config.whatsapp.store",
+        "max_messages": 500
+      },
+      "outputs": {
+        "contacts_csv": ".powerpacks/network-import/discover/whatsapp/contacts.csv",
+        "manifest_json": ".powerpacks/network-import/discover/whatsapp/manifest.json"
+      }
+    },
+    "messages": {
+      "inputs": {
+        "imessage_contacts_csv": ".powerpacks/network-import/discover/imessage/contacts.csv",
+        "whatsapp_contacts_csv": ".powerpacks/network-import/discover/whatsapp/contacts.csv"
+      },
+      "outputs": {
+        "contacts_csv": ".powerpacks/network-import/discover/messages/contacts.csv",
+        "manifest_json": ".powerpacks/network-import/discover/messages/manifest.json"
+      }
+    }
+  }
+}

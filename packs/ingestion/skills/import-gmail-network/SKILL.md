@@ -46,7 +46,7 @@ uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_
 ```
 
 This writes legacy Gmail CSV artifacts plus canonical
-`.powerpacks/network-import/gmail/<run-id>/people.csv`.
+`.powerpacks/network-import/discover/gmail/<account>/people.csv`.
 
 ## Legacy one-person seed
 

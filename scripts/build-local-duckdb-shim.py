@@ -328,6 +328,12 @@ def materialize_records_dir(records_dir: Path, run_dir: Path, *, force: bool = F
         raise SystemExit(f"missing records directory: {records_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
     copied: dict[str, str] = {}
+    src = record_source_path(records_dir, PERSON_PROFILE_RECORD)
+    if src:
+        dst = run_dir / PERSON_PROFILE_RECORD
+        link_or_copy(src, dst, force=force)
+        if dst.exists():
+            copied[PERSON_PROFILE_RECORD] = str(dst)
     for _table, rel in LOCAL_TABLES.items():
         src = record_source_path(records_dir, rel)
         if not src:
@@ -820,6 +826,9 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_
             if profile_record:
                 counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", profile_record)
                 postprocess_table(con, "local_person_profiles", operator_id)
+        elif has_records(run_dir / PERSON_PROFILE_RECORD):
+            counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", run_dir / PERSON_PROFILE_RECORD)
+            postprocess_table(con, "local_person_profiles", operator_id)
         if derive_positions_csv:
             materialize_positions_from_csv(derive_positions_csv, run_dir, operator_id, force=True)
         for table, rel in LOCAL_TABLES.items():

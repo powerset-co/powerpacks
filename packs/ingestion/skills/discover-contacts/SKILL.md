@@ -1,11 +1,11 @@
 ---
-name: import-network
-description: Orchestrate local LinkedIn CSV, msgvault email, existing messages, and Twitter artifacts into merged network contacts plus DuckDB. Use for $import-network.
+name: discover-contacts
+description: Orchestrate local LinkedIn CSV, msgvault email, existing messages, and Twitter artifacts into merged network contacts plus DuckDB. Use for $discover-contacts.
 ---
 
-# import-network
+# discover-contacts
 
-Use this skill for `$import-network` or end-to-end local network ingestion testing.
+Use this skill for `$discover-contacts` or end-to-end local network ingestion testing.
 
 ## User-facing tone
 
@@ -78,7 +78,7 @@ approval confirmation. Do not ask again for routine local metadata import work.
 ## Command
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run \
   --from-accounts .powerpacks/ingestion/accounts.json
 ```
 
@@ -96,11 +96,11 @@ These sources can be imported at the same time, so I’ll run them in parallel a
 then combine the results when they finish.
 ```
 
-For manual worker fan-out, run source workers with `--only-source` and isolated
-ledgers/run ids, then run the normal command (or `--fan-in-only`) for merge and
-DuckDB after all source workers finish. Do not approve RapidAPI/Parallel/OpenAI
-spend confirmations inside workers; return those confirmations to the main
-thread.
+For manual worker fan-out, run source workers with `--only-source`; each source
+writes to its fixed `.powerpacks/network-import/discover/<source>/` folder. Then
+run the normal command (or `--fan-in-only`) for merge and DuckDB after all source
+workers finish. Do not approve RapidAPI/Parallel/OpenAI spend confirmations
+inside workers; return those confirmations to the main thread.
 
 ## Bootstrap Prior Checkpoints
 
@@ -124,19 +124,19 @@ Then run the command printed in
 Resume after a child approval confirmation:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve
-uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py approve
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py continue
 ```
 
 ## Long Runs
 
-Run the command in a visible shell and keep `[import-network]` /
+Run the command in a visible shell and keep `[discover-contacts]` /
 `[enrich-people]` progress lines visible. For large mailboxes or profile sets,
 use the status command every few minutes instead of treating silence as failure:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py status \
-  --ledger .powerpacks/network-import/import-network-run.json
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py status \
+  --ledger .powerpacks/network-import/discover/ledger.json
 ```
 
 RapidAPI LinkedIn hydration now runs directly when a RapidAPI key is configured.
@@ -148,7 +148,7 @@ approval before running `approve`.
 The orchestrator writes merged CSVs and DuckDB under:
 
 ```text
-.powerpacks/network-import/network-runs/<run-id>/
+.powerpacks/network-import/final/
 ```
 
 Key artifacts:
@@ -157,6 +157,6 @@ Key artifacts:
 - `merged/network_contacts.csv`
 - `merged/network_contact_sources.csv`
 - `merged/network_companies.csv`
-- `duckdb/network.<run-id>.duckdb`
+- `duckdb/network.local.duckdb`
 
 Do not upload automatically. Report artifact paths and counts only.

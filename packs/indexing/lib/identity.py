@@ -14,16 +14,28 @@ import uuid
 from typing import Any
 
 try:
-    from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
+    from packs.ingestion.schemas.people_schema import (
+        PERSON_ID_NAMESPACE,
+        extract_public_identifier,
+        generate_person_id as generate_linkedin_person_id,
+        normalize_linkedin_url,
+        stable_person_id_from_key as schema_stable_person_id_from_key,
+    )
 except ModuleNotFoundError:  # pragma: no cover - direct script fallback
     import sys
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
+    from packs.ingestion.schemas.people_schema import (
+        PERSON_ID_NAMESPACE,
+        extract_public_identifier,
+        generate_person_id as generate_linkedin_person_id,
+        normalize_linkedin_url,
+        stable_person_id_from_key as schema_stable_person_id_from_key,
+    )
 
-# Fixed namespace for Powerpacks local indexing artifacts. Do not change: doing
-# so would invalidate generated person/company/position/school/summary IDs.
+# Fixed namespace for non-person Powerpacks local indexing artifacts. Person IDs
+# intentionally use Aleph's PERSON_ID_NAMESPACE from people_schema.
 POWERPACKS_INDEXING_NAMESPACE = uuid.UUID("7b6f8a9e-2d68-4a7b-8cf7-6d7f0f3f8a42")
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -84,7 +96,7 @@ def _school_key(school: Any) -> str:
 
 def person_uuid(row_or_key: Any) -> str:
     key = canonical_person_key(row_or_key) if isinstance(row_or_key, dict) else str(row_or_key or "")
-    return stable_uuid5(f"person:{key}")
+    return schema_stable_person_id_from_key(key)
 
 
 def company_uuid(company: Any) -> str:
@@ -148,7 +160,7 @@ def stable_summary_id_from_person_id(person_id: str) -> str:
 def stable_person_id(*, public_identifier: str = "", linkedin_url: str = "", email: str = "", phone: str = "", name: str = "") -> str:
     public_identifier = _canonical(public_identifier) or extract_public_identifier(linkedin_url or "")
     if public_identifier:
-        return person_uuid(f"linkedin:{public_identifier}")
+        return generate_linkedin_person_id(public_identifier)
     email = normalize_email(email)
     if email:
         return person_uuid(f"email:{email}")

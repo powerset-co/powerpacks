@@ -36,9 +36,11 @@ try:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
+        generate_person_id as generate_linkedin_person_id,
         normalize_linkedin_url,
         normalize_people_row,
         parse_jsonish,
+        stable_person_id_from_key,
     )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
@@ -47,9 +49,11 @@ except ModuleNotFoundError:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
+        generate_person_id as generate_linkedin_person_id,
         normalize_linkedin_url,
         normalize_people_row,
         parse_jsonish,
+        stable_person_id_from_key,
     )
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/enrichment/import-run.json")
@@ -168,10 +172,9 @@ def split_name(full_name: str) -> tuple[str, str]:
 
 
 def generate_person_id(public_identifier: str, fallback: str = "") -> str:
-    import uuid
     if public_identifier:
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"linkedin:{public_identifier.lower().strip()}"))
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"person:{fallback.lower().strip()}"))
+        return generate_linkedin_person_id(public_identifier)
+    return stable_person_id_from_key(f"person:{fallback}")
 
 
 def count_items(value: Any) -> int:
@@ -536,7 +539,11 @@ def next_pending_step(ledger: dict[str, Any]) -> str | None:
 
 
 def approval_id(ledger: dict[str, Any], step_id: str) -> str:
-    return f"{ledger.get('run_id', 'run')}:{step_id}"
+    return f"enrich_people:{step_id}"
+
+
+def artifact_dir_from_ledger(ledger: dict[str, Any]) -> Path:
+    return Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_BASE_DIR / "enrichment"))
 
 
 def is_approved(ledger: dict[str, Any], step_id: str) -> bool:
@@ -601,7 +608,7 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
             unresolved.append(row)
         else:
             skipped.append(row)
-    run_dir = Path(ledger["run_dir"])
+    run_dir = artifact_dir_from_ledger(ledger)
     queue_path = run_dir / "linkedin_enrichment_queue.csv"
     cache_hits_path = run_dir / "rapidapi_cache_hits.csv"
     cache_misses_path = run_dir / "rapidapi_cache_misses.csv"
@@ -652,7 +659,7 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
     if miss_path.exists():
         rows.extend(read_csv(miss_path))
     if not rows:
-        out_path = Path(ledger["run_dir"]) / "provider_enriched.csv"
+        out_path = artifact_dir_from_ledger(ledger) / "provider_enriched.csv"
         write_csv(out_path, PROVIDER_COLUMNS, [])
         ledger["artifacts"]["provider_enriched_csv"] = str(out_path)
         emit_progress("No LinkedIn enrichment work needed.")
@@ -669,7 +676,7 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
     max_rpm = float(ledger["input"].get("max_rpm") if ledger["input"].get("max_rpm") is not None else DEFAULT_RAPIDAPI_MAX_RPM)
     sleep_seconds = float(ledger["input"].get("sleep_seconds") or 0.0)
     rate_limiter = StartRateLimiter(max_rpm, sleep_seconds)
-    raw_dir = Path(ledger["run_dir"]) / "raw_provider_responses"
+    raw_dir = artifact_dir_from_ledger(ledger) / "raw_provider_responses"
     raw_dir.mkdir(parents=True, exist_ok=True)
     cache_rows = sum(1 for row in rows if row.get("cache_status") == "hit")
     emit_progress(
@@ -746,7 +753,7 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
         public_identifier = out.get("public_identifier") or extract_public_identifier(out.get("linkedin_url") or "")
         write_json(raw_dir / f"{public_identifier or sha(out.get('linkedin_url') or out.get('id',''))}.json", raw_payload)
         enriched.append(out)
-    out_path = Path(ledger["run_dir"]) / "provider_enriched.csv"
+    out_path = artifact_dir_from_ledger(ledger) / "provider_enriched.csv"
     write_csv(out_path, PROVIDER_COLUMNS, enriched)
     ledger["artifacts"].update({"provider_enriched_csv": str(out_path), "raw_provider_responses_dir": str(raw_dir)})
     emit_progress(f"LinkedIn profile enrichment finished: {len(enriched)} profiles processed.")
@@ -777,7 +784,7 @@ def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
         merged = merge_provider_profile(row, rapid, rapid_raw)
         key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or sha(json.dumps(row, sort_keys=True))
         by_key[key] = merged
-    output = Path(ledger["run_dir"]) / "people.csv"
+    output = artifact_dir_from_ledger(ledger) / "people.csv"
     unfiltered_rows = list(by_key.values())
     rows = [row for row in unfiltered_rows if confirmed_people_row(row)]
     write_csv(output, PEOPLE_SCHEMA_COLUMNS, rows)
@@ -810,7 +817,7 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
             ledger["status"] = "completed"
             ledger.pop("blocked", None)
             save_ledger(ledger_path, ledger)
-            emit({"status": "completed", "ledger": str(ledger_path), "run_dir": ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})})
+            emit({"status": "completed", "ledger": str(ledger_path), "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})})
             return 0
         try:
             paid_call_count = int(ledger.get("paid_call_count") or 0)
@@ -835,8 +842,7 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
 
 
 def command_run(args: argparse.Namespace) -> int:
-    run_id = args.run_id or f"enrich-{sha(str(args.input) + ':' + now_iso())}"
-    run_dir = Path(args.output_dir) / "enrichment" / run_id
+    artifact_dir = Path(args.artifact_dir) if args.artifact_dir else Path(args.output_dir) / "enrichment"
     ledger_path = Path(args.ledger)
     if ledger_path.exists() and not args.force_ledger:
         existing = load_ledger(ledger_path)
@@ -849,8 +855,7 @@ def command_run(args: argparse.Namespace) -> int:
         "status": "running",
         "created_at": now_iso(),
         "updated_at": now_iso(),
-        "run_id": run_id,
-        "run_dir": str(run_dir),
+        "artifact_dir": str(artifact_dir),
         "ledger": str(ledger_path),
         "input": {
             "input_csv": str(Path(args.input)),
@@ -928,8 +933,8 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run")
     run.add_argument("--input", required=True, help="Input shared people schema CSV, e.g. merged people CSV")
     run.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
+    run.add_argument("--artifact-dir", default="", help=argparse.SUPPRESS)
     run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    run.add_argument("--run-id")
     run.add_argument("--force", action="store_true", help="Re-enrich rows even if they appear complete")
     run.add_argument("--force-ledger", action="store_true", help="Overwrite an active ledger")
     run.add_argument("--profile-cache-dir", default=str(DEFAULT_BASE_DIR / "profile_cache_v2"))

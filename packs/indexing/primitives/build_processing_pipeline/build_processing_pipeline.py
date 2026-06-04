@@ -1774,6 +1774,25 @@ def merge_existing_outputs_after_limited_run(rd: Path, snapshot: Path | None, le
     }
 
 
+def promote_incremental_work_dir(work_dir: Path, canonical_dir: Path, ledger: dict[str, Any]) -> dict[str, Any]:
+    """Publish a completed limited run after its outputs have been merged.
+
+    Limited/missing runs write only the selected people. Publishing them directly
+    into the canonical output dir can wipe restored bootstrap coverage if the
+    run is interrupted before merge. Keep canonical intact until merge succeeds,
+    then replace it with the merged work dir.
+    """
+
+    if not work_dir.exists():
+        return {"status": "failed", "reason": "missing_work_dir", "work_dir": str(work_dir)}
+    if canonical_dir.exists():
+        shutil.rmtree(canonical_dir)
+    canonical_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(work_dir), str(canonical_dir))
+    ledger["run_dir"] = str(canonical_dir)
+    return {"status": "promoted", "run_dir": str(canonical_dir)}
+
+
 def _arg_artifact(args: argparse.Namespace, attr: str, relative: str) -> str | None:
     value = getattr(args, attr, None)
     if value:
@@ -1924,13 +1943,24 @@ def main() -> None:
         return
     if args.cmd == "run":
         rd = run_dir(Path(args.output_dir))
+        canonical_rd = rd
         ledger_path = paths(rd)["ledger"]
         if args.dry_run or args.estimate:
             emit_json(estimate_run(args))
             return
         previous_ledger: dict[str, Any] | None = None
         merge_snapshot: Path | None = None
+        incremental_work_dir: Path | None = None
         limited_incremental = args.limit is not None or args.limit_mode == "missing"
+        if limited_incremental and canonical_rd.exists() and not args.force:
+            canonical_ledger = paths(canonical_rd)["ledger"]
+            if canonical_ledger.exists():
+                previous_ledger = load_ledger(canonical_ledger)
+            merge_snapshot = snapshot_existing_merge_artifacts(canonical_rd)
+            if merge_snapshot:
+                incremental_work_dir = Path(tempfile.mkdtemp(prefix="powerpacks-index-incremental-", dir=str(canonical_rd.parent)))
+                rd = incremental_work_dir
+                ledger_path = paths(rd)["ledger"]
         if rd.exists():
             if args.force:
                 shutil.rmtree(rd)
@@ -1941,11 +1971,11 @@ def main() -> None:
                     emit_json({"status": ledger["status"], "run_dir": ledger["run_dir"], "counts": {step["id"]: step.get("stats", {}) for step in ledger.get("steps", [])}})
                     return
                 previous_ledger = ledger
-                if limited_incremental:
+                if limited_incremental and not incremental_work_dir:
                     merge_snapshot = snapshot_existing_merge_artifacts(rd)
                 reset_incremental_progress(rd)
             else:
-                if limited_incremental:
+                if limited_incremental and not incremental_work_dir:
                     merge_snapshot = snapshot_existing_merge_artifacts(rd)
                 reset_incremental_progress(rd)
         rd.mkdir(parents=True, exist_ok=True)
@@ -2013,6 +2043,10 @@ def main() -> None:
         if ledger.get("status") == "completed" and limited_incremental:
             incremental_merge = merge_existing_outputs_after_limited_run(rd, merge_snapshot, ledger)
             ledger["incremental_merge"] = incremental_merge
+            if incremental_work_dir and incremental_merge.get("status") == "merged":
+                incremental_merge["promotion"] = promote_incremental_work_dir(incremental_work_dir, canonical_rd, ledger)
+                rd = canonical_rd
+                ledger_path = paths(rd)["ledger"]
             save_ledger(ledger_path, ledger)
             if merge_snapshot:
                 shutil.rmtree(merge_snapshot, ignore_errors=True)

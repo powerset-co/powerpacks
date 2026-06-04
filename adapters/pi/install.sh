@@ -14,7 +14,7 @@ MANAGED_SKILLS=(
   search-network search-company search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
-  import-email import-network import-twitter
+  import-email discover-contacts import-twitter
   import-messages import-imessage import-contacts-review
 )
 
@@ -92,11 +92,11 @@ install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
 install_skill import-email "$REPO_ROOT/packs/ingestion/skills/import-email/SKILL.md"
-install_skill import-network "$REPO_ROOT/packs/ingestion/skills/import-network/SKILL.md"
+install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
 printf '  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search\n'
-printf '  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter\n'
+printf '  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email discover-contacts import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

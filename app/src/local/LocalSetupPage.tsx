@@ -174,7 +174,97 @@ function latestJobLine(job: SetupJob): string {
     .slice(-1)[0] || "";
 }
 
+type JobStage = { label: string; index: number; total: number };
+
+function normalizeStageLabel(label: string): string {
+  const cleaned = label.replace(/\s+\(\d+\/\d+\)\s*$/, "").trim();
+  return cleaned.replace(/[A-Za-z][A-Za-z0-9]*/g, (word) => {
+    if (/[A-Z]/.test(word.slice(1))) return word;
+    if (word === word.toUpperCase()) return word;
+    return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+  });
+}
+
+function jobStages(job: SetupJob): JobStage[] {
+  const explicitStages = Array.isArray(job.stages) ? job.stages : [];
+  if (explicitStages.length > 0) {
+    return explicitStages
+      .map((stage, index) => ({
+        label: normalizeStageLabel(String(stage.label || "")),
+        index: Number(stage.index || index + 1),
+        total: Number(stage.total || explicitStages.length),
+      }))
+      .filter((stage) => stage.label);
+  }
+
+  const outputStages = Array.isArray((job.output as Record<string, unknown> | null | undefined)?.stages)
+    ? ((job.output as Record<string, unknown>).stages as Array<Record<string, unknown>>)
+    : [];
+  if (outputStages.length > 0) {
+    return outputStages
+      .map((stage, index) => ({
+        label: normalizeStageLabel(String(stage.label || "")),
+        index: Number(stage.index || index + 1),
+        total: Number(stage.total || outputStages.length),
+      }))
+      .filter((stage) => stage.label);
+  }
+
+  const stages: JobStage[] = [];
+  const seen = new Set<string>();
+  const text = cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n"));
+  for (const match of text.matchAll(/^setup:\s+(.+?)(?:\s+\((\d+)\/(\d+)\))?\s*$/gm)) {
+    const label = normalizeStageLabel(match[1] || "");
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    stages.push({
+      label,
+      index: Number(match[2] || stages.length + 1),
+      total: Number(match[3] || 0),
+    });
+  }
+  const total = Math.max(...stages.map((stage) => stage.total || 0), stages.length);
+  return stages.map((stage, index) => ({ ...stage, index: stage.index || index + 1, total }));
+}
+
+function loggedJobStages(job: SetupJob): JobStage[] {
+  const stages: JobStage[] = [];
+  const seen = new Set<string>();
+  const text = cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n"));
+  for (const match of text.matchAll(/^setup:\s+(.+?)(?:\s+\((\d+)\/(\d+)\))?\s*$/gm)) {
+    const label = normalizeStageLabel(match[1] || "");
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    stages.push({
+      label,
+      index: Number(match[2] || stages.length + 1),
+      total: Number(match[3] || 0),
+    });
+  }
+  const total = Math.max(...stages.map((stage) => stage.total || 0), job.stages?.length || 0, stages.length);
+  return stages.map((stage, index) => ({ ...stage, index: stage.index || index + 1, total }));
+}
+
+function stageJobSummary(job: SetupJob): string {
+  const stages = jobStages(job);
+  if (stages.length <= 1) return "";
+  const labels = stages.map((stage) => stage.label);
+  const output = (job.output || {}) as Record<string, unknown>;
+  const failedStage = normalizeStageLabel(String(output.failed_stage || ""));
+  if (job.status === "running") {
+    const reachedStages = loggedJobStages(job);
+    const latestReached = reachedStages[reachedStages.length - 1];
+    const latestStage = stages.find((stage) => stage.label === latestReached?.label) || stages[0];
+    return `Running ${latestStage.label} (${latestStage.index}/${latestStage.total || stages.length})`;
+  }
+  if (job.status === "failed" && failedStage) return `Failed during ${failedStage}`;
+  if (job.status === "completed") return `Completed ${labels.join(", ")}`;
+  return labels.join(", ");
+}
+
 function jobSummary(job: SetupJob): string {
+  const stages = stageJobSummary(job);
+  if (stages) return stages;
   const output = job.output || {};
   const payload = (output.payload || output) as Record<string, unknown>;
   const message = cleanJobText(
@@ -394,18 +484,29 @@ function KeyValue({ label, value }: { label: string; value?: string | number | n
 interface ActionState {
   running: boolean;
   activeAction?: string | null;
+  activeActionKey?: string | null;
+  runningActions: Set<string>;
+  runningActionKeys: Set<string>;
 }
 
 function ActionButton({
   action,
+  actionKey,
   actionState,
   disabled,
+  disableWhileAnyRunning = true,
   children,
   ...props
-}: ComponentProps<typeof Button> & { action: string; actionState: ActionState; children: ReactNode }) {
-  const isRunning = actionState.running && actionState.activeAction === action;
+}: ComponentProps<typeof Button> & { action: string; actionKey?: string; actionState: ActionState; disableWhileAnyRunning?: boolean; children: ReactNode }) {
+  const buttonKey = actionKey || action;
+  const isRunning = actionState.running && (
+    actionState.runningActionKeys.has(buttonKey)
+    || (!actionKey && actionState.runningActions.has(action))
+    || actionState.activeActionKey === buttonKey
+  );
+  const runningDisabled = isRunning || disableWhileAnyRunning;
   return (
-    <Button {...props} disabled={disabled || actionState.running}>
+    <Button {...props} disabled={disabled || (actionState.running && runningDisabled)}>
       {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
       {children}
     </Button>
@@ -430,8 +531,8 @@ function money(value?: number | null): string {
 function duckdbTableLabel(name: string): string {
   const labels: Record<string, string> = {
     local_person_profiles: "Person profiles",
-    local_people_positions: "Role / position vectors",
-    local_summaries: "Person summary vectors",
+    local_people_positions: "Role / position rows",
+    local_summaries: "Person summary rows",
     local_people_education: "Person education rows",
     local_education: "School lookup rows",
     local_companies: "Company vectors",
@@ -1013,14 +1114,16 @@ function ImportSourceRow({
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <KeyValue label="Source" value={source.label} />
                 <KeyValue label="Last refreshed" value={updated} />
-                <KeyValue label="Run ID" value={source.runId} />
+                <KeyValue label="Artifacts" value={source.artifactDir} />
                 <KeyValue label="Blocked reason" value={source.disabledReason} />
               </div>
             </div>
             <div className="flex justify-end">
               <ActionButton
                 action="import-source"
+                actionKey={`import-source:${source.id}`}
                 actionState={actionState}
+                disableWhileAnyRunning={false}
                 size="sm"
                 onClick={() => onRun({ action: "import-source", source: source.id })}
                 disabled={!canRun}
@@ -1111,6 +1214,7 @@ function EnrichmentSourceRow({
   const updated = sourceSkipped ? "" : updatedLabel(source.updatedAt || importSource?.updatedAt);
   const skippedLabel = source.id === "messages" ? "Skipped" : "Not found";
   const hasUnresolved = (source.unresolved || 0) > 0;
+  const messagesImportConfirmationBlocked = source.id === "messages" && String(source.status || "").toLowerCase() === "blocked_approval";
   const canReviewMessages = source.id === "messages" && canRun && messagesReviewReady;
   const costLabel = source.estimatedCostUsd != null && source.estimatedCostUsd > 0
     ? `~$${source.estimatedCostUsd.toFixed(2)}` : null;
@@ -1153,7 +1257,9 @@ function EnrichmentSourceRow({
           )}
           <ActionButton
             action="enrich-source"
+            actionKey={`enrich-source:${importSource?.id || source.id}`}
             actionState={actionState}
+            disableWhileAnyRunning={false}
             size="sm"
             onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id })}
             disabled={!canRun}
@@ -1178,6 +1284,23 @@ function EnrichmentSourceRow({
           <Loader2 className="h-4 w-4 animate-spin" /> Materializing Messages people and profile enrichment…
         </div>
       )}
+      {messagesImportConfirmationBlocked && canRun && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-4 py-3">
+          <div className="flex-1 text-sm text-muted-foreground">
+            Confirm adding reviewed Messages LinkedIn profiles into your local network.
+          </div>
+          <ActionButton
+            action="enrich-source"
+            actionKey={`enrich-source:${importSource?.id || source.id}:approve`}
+            actionState={actionState}
+            disableWhileAnyRunning={false}
+            size="sm"
+            onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id, approveSpend: true })}
+          >
+            <Play className="h-4 w-4" /> Confirm
+          </ActionButton>
+        </div>
+      )}
       {hasUnresolved && canRun && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-4 py-3">
           <div className="flex-1 text-sm">
@@ -1187,7 +1310,9 @@ function EnrichmentSourceRow({
           </div>
           <ActionButton
             action="enrich-source"
+            actionKey={`enrich-source:${importSource?.id || source.id}:approve`}
             actionState={actionState}
+            disableWhileAnyRunning={false}
             size="sm"
             onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id, approveSpend: true })}
           >
@@ -1335,6 +1460,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                       <tr>
                         <th className="px-3 py-2 font-medium">Table</th>
                         <th className="px-3 py-2 text-right font-medium">Rows</th>
+                        <th className="px-3 py-2 text-right font-medium">Vector rows</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1345,6 +1471,10 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                             <div className="text-xs text-muted-foreground">{table.name}</div>
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums">{table.rows.toLocaleString()}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            {table.vectorRows === undefined ? "—" : table.vectorRows.toLocaleString()}
+                            {table.vectorPeople !== undefined ? <div className="text-xs text-muted-foreground">{table.vectorPeople.toLocaleString()} people</div> : null}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1391,6 +1521,43 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
   );
 }
 
+function JobStageStrip({ job }: { job: SetupJob }) {
+  const stages = jobStages(job);
+  if (stages.length <= 1) return null;
+  const reachedStages = loggedJobStages(job);
+  const reachedLabels = new Set(reachedStages.map((stage) => stage.label));
+  const latestReached = reachedStages[reachedStages.length - 1];
+  const activeStage = stages.find((stage) => stage.label === latestReached?.label) || stages[0];
+  const failedStage = normalizeStageLabel(String((job.output as Record<string, unknown> | null | undefined)?.failed_stage || ""));
+
+  return (
+    <div className="flex flex-wrap gap-2 border-b px-4 py-3">
+      {stages.map((stage) => {
+        const isFailed = job.status === "failed" && failedStage === stage.label;
+        const isRunning = job.status === "running" && stage.label === activeStage.label;
+        const isDone = job.status === "completed" || (reachedLabels.has(stage.label) && !isRunning && !isFailed);
+        const Icon = isFailed ? CircleAlert : isRunning ? Loader2 : isDone ? CheckCircle2 : CircleDot;
+        return (
+          <div
+            key={`${stage.index}:${stage.label}`}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs",
+              isFailed && "border-destructive/40 bg-destructive/5 text-destructive",
+              isRunning && "border-primary/30 bg-primary/5 text-primary",
+              isDone && "border-emerald-500/30 bg-emerald-500/5 text-emerald-700",
+              !isFailed && !isRunning && !isDone && "bg-muted/30 text-muted-foreground",
+            )}
+          >
+            <Icon className={cn("h-3.5 w-3.5", isRunning && "animate-spin")} />
+            <span>{stage.label}</span>
+            <span className="text-muted-foreground">{stage.index}/{stage.total || stages.length}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function JobPanel({
   job,
   onRunCommand,
@@ -1412,6 +1579,7 @@ function JobPanel({
           </div>
           <StatusBadge status={job.status} />
       </div>
+      <JobStageStrip job={job} />
       {commands.length > 0 && (
         <div className="space-y-2 border-b p-4">
           {commands.map((command) => (
@@ -1465,6 +1633,8 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
   const [activeTab, setActiveTab] = useState<SetupTabId>(() => setupTabFromLocation());
   const [status, setStatus] = useState<SetupStatusResponse | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [pendingRequest, setPendingRequest] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1496,7 +1666,8 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
     if (recommended && recommended !== activeTab) setActiveTab(recommended);
   }, [activeTab, status]);
 
-  const running = status?.jobs.some((job) => job.status === "running") || false;
+  const actualRunning = status?.jobs.some((job) => job.status === "running") || false;
+  const running = actualRunning || pendingRequest || Boolean(pendingActionKey);
   useEffect(() => {
     if (!running) return undefined;
     const timer = window.setInterval(refresh, 2000);
@@ -1507,18 +1678,46 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
     if (!status?.jobs.length) return null;
     return status.jobs.find((job) => job.id === activeJobId) || status.jobs[0];
   }, [activeJobId, status?.jobs]);
+  const runningJobs = useMemo(() => (status?.jobs || []).filter((job) => job.status === "running"), [status?.jobs]);
+  const pendingAction = pendingActionKey?.split(":")[0] || null;
   const actionState: ActionState = {
     running,
-    activeAction: activeJob?.status === "running" ? activeJob.action : null,
+    activeAction: activeJob?.status === "running" ? activeJob.action : pendingAction,
+    activeActionKey: activeJob?.status === "running" ? activeJob.actionKey || pendingActionKey : pendingActionKey,
+    runningActions: new Set([
+      ...runningJobs.map((job) => job.action),
+      ...(pendingAction ? [pendingAction] : []),
+    ]),
+    runningActionKeys: new Set([
+      ...runningJobs.map((job) => job.actionKey || "").filter(Boolean),
+      ...(pendingActionKey ? [pendingActionKey] : []),
+    ]),
   };
+
+  useEffect(() => {
+    if (!pendingRequest && !actualRunning) setPendingActionKey(null);
+  }, [actualRunning, pendingRequest]);
 
   const runAction = async (body: Record<string, unknown>) => {
     setError(null);
+    const requestedAction = String(body.action || "");
+    const requestedSource = typeof body.source === "string" ? body.source : "";
+    const requestedActionKey = requestedAction && requestedSource
+      ? `${requestedAction}:${requestedSource}${body.approveSpend === true ? ":approve" : ""}`
+      : requestedAction || null;
+    if (requestedActionKey) {
+      setPendingActionKey(requestedActionKey);
+      setPendingRequest(true);
+    }
     try {
       const response = await runSetupAction(body);
       setActiveJobId(response.job.id);
+      setPendingActionKey(response.job.actionKey || requestedActionKey);
       await refresh();
+      setPendingRequest(false);
     } catch (err) {
+      if (requestedActionKey) setPendingActionKey(null);
+      setPendingRequest(false);
       setError(err instanceof Error ? err.message : "Failed to start setup action");
     }
   };

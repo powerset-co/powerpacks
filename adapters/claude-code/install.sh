@@ -18,7 +18,8 @@ mkdir -p "$SKILLS_DIR"
 rm -rf "$SKILLS_DIR/import-messages" \
   "$SKILLS_DIR/import-imessage" \
   "$SKILLS_DIR/import-whatsapp" \
-  "$SKILLS_DIR/import-contacts-review"
+  "$SKILLS_DIR/import-contacts-review" \
+  "$SKILLS_DIR/import-network"
 "$REPO_ROOT/bin/setup-python"
 
 copy_powerpacks_bundle() {
@@ -78,12 +79,12 @@ install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
 install_skill import-email "$REPO_ROOT/packs/ingestion/skills/import-email/SKILL.md"
-install_skill import-network "$REPO_ROOT/packs/ingestion/skills/import-network/SKILL.md"
+install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search"
-echo "  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter"
+echo "  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email discover-contacts import-twitter"
 echo
 echo "restart Claude Code to pick up the skill list"

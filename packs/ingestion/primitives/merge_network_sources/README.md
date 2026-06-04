@@ -3,15 +3,15 @@
 Local cross-source merge/dedupe for network imports.
 
 - Accepts only explicit `--input` paths; it never scans `.powerpacks` for run artifacts.
-- Setup/import fan-in should pass stable per-source artifacts such as `gmail/people.gmail.csv` and `messages/people.messages.csv`.
+- Setup/discover fan-in should pass stable per-source artifacts such as `discover/gmail/<account>/people.csv` and `discover/messages/people.csv`.
 - Explicit `messages/contacts.csv` inputs are mapped into the shared people schema.
 - Dedupe rule: merge exact LinkedIn public identifiers first.
 - Similar names without shared LinkedIn are **not merged**; they are flagged in `possible_duplicates_review.csv`.
 
 ```bash
 uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run \
-  --input .powerpacks/network-import/gmail/people.gmail.csv \
-  --input .powerpacks/network-import/messages/people.messages.csv
+  --input .powerpacks/network-import/discover/gmail/me-example-com/people.csv \
+  --input .powerpacks/network-import/discover/messages/people.csv
 ```
 
 Outputs:

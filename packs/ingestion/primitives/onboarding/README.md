@@ -37,7 +37,7 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
   --linkedin-source-user <label>
 ```
 
-This records the export as linked input only. The later `import-network`
+This records the export as linked input only. The later `discover-contacts`
 handoff owns LinkedIn parsing, enrichment, and any spend approval gates.
 
 Status/planning helpers:

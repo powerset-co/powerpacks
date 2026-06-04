@@ -662,7 +662,7 @@ def cmd_step(args: argparse.Namespace) -> int:
 
     The command is safe to run repeatedly. It refreshes accounts.json from local
     artifacts first, then returns the next missing action. LinkedIn CSV is
-    recorded as linked input here; import-network owns the later parse/enrich
+    recorded as linked input here; discover-contacts owns the later parse/enrich
     work and any paid provider approvals.
     """
     path = Path(args.accounts)

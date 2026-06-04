@@ -122,7 +122,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.chdir(tmp)
             try:
-                self.write_gmail_artifact_run(Path(".powerpacks/network-import/gmail/network-test-gmail"))
+                self.write_gmail_artifact_run(Path(".powerpacks/network-import/discover/gmail/network-test-gmail"))
                 path = Path(tmp) / "accounts.json"
                 code, payload = self.invoke(onboarding, ["check", "--accounts", str(path)])
             finally:
@@ -138,7 +138,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.chdir(tmp)
             try:
-                self.write_gmail_artifact_run(Path(".powerpacks/network-import/gmail/msgvault-realrun"), email="me@gmail.com")
+                self.write_gmail_artifact_run(Path(".powerpacks/network-import/discover/gmail/msgvault-realrun"), email="me@gmail.com")
                 path = Path(tmp) / "accounts.json"
                 code, _payload = self.invoke(onboarding, ["check", "--accounts", str(path)])
             finally:
@@ -473,8 +473,8 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(registry["accounts"]["gmail"]["artifacts"], [])
             self.assertEqual(registry["accounts"]["gmail"]["config"]["selected_accounts"], ["me@gmail.com", "work@example.com"])
             self.assertFalse(Path(tmp, "out").exists())
-            self.assertFalse(Path(tmp, ".powerpacks/network-import/import-network-run.json").exists())
-            self.assertFalse(Path(tmp, ".powerpacks/network-import/linkedin/import-run.json").exists())
+            self.assertFalse(Path(tmp, ".powerpacks/network-import/discover/ledger.json").exists())
+            self.assertFalse(Path(tmp, ".powerpacks/network-import/discover/gmail").exists())
 
     def test_onboarding_step_auto_links_empty_bootstrap_skipped_gmail_from_msgvault(self):
         old_cwd = Path.cwd()

@@ -55,8 +55,10 @@ except ModuleNotFoundError:
         normalize_people_row,
     )
 
-DEFAULT_LEDGER = Path(".powerpacks/network-import/import-network-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
+DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover"
+DEFAULT_FINAL_DIR = DEFAULT_BASE_DIR / "final"
+DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "ledger.json"
 DEFAULT_DIRECTORY_CSV = DEFAULT_BASE_DIR / "directory.csv"
 DEFAULT_MSGVAULT_DB = Path.home() / ".msgvault" / "msgvault.db"
 DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS", str(6 * 60 * 60)))
@@ -150,8 +152,28 @@ def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def discover_source_dir(source: str) -> Path:
+    if source == "linkedin_csv":
+        return DEFAULT_DISCOVER_DIR / "linkedin"
+    return DEFAULT_DISCOVER_DIR / source
+
+
+def default_artifact_dir(args: argparse.Namespace, selected_sources: set[str]) -> Path:
+    if getattr(args, "enrichment_only", False) and selected_sources and len(selected_sources) == 1:
+        source = next(iter(selected_sources))
+        return discover_source_dir(source)
+    if getattr(args, "only_source", "") and selected_sources and len(selected_sources) == 1:
+        source = next(iter(selected_sources))
+        return discover_source_dir(source)
+    return DEFAULT_FINAL_DIR
+
+
+def artifact_dir_from_ledger(ledger: dict[str, Any]) -> Path:
+    return Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_DISCOVER_DIR))
+
+
 def emit_progress(message: str) -> None:
-    print(f"[import-network] {message}", file=sys.stderr, flush=True)
+    print(f"[discover-contacts] {message}", file=sys.stderr, flush=True)
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -1949,7 +1971,7 @@ def extract_accounts_path_from_setup(path: str) -> str:
         if isinstance(value, str):
             return value
     commands = handoff.get("commands") if isinstance(handoff.get("commands"), dict) else {}
-    cmd = str(commands.get("import_network_run") or "")
+    cmd = str(commands.get("discover_contacts_run") or "")
     if "--from-accounts" in cmd:
         parts = cmd.split()
         try:
@@ -2102,7 +2124,7 @@ def py_cmd(script: str, *args: str) -> list[str]:
 
 def load_ledger(path: Path) -> dict[str, Any]:
     ledger = read_json(path, {}) or {}
-    ledger.setdefault("primitive", "import_network_pipeline")
+    ledger.setdefault("primitive", "discover_contacts_pipeline")
     ledger.setdefault("version", 1)
     ledger.setdefault("created_at", now_iso())
     ledger.setdefault("updated_at", now_iso())
@@ -2134,7 +2156,8 @@ def begin_step(ledger_path: Path, ledger: dict[str, Any], step: str, message: st
 
 def run_linkedin_child(ledger: dict[str, Any], mode: str) -> dict[str, Any]:
     input_cfg = ledger.get("input", {})
-    child_ledger = Path(ledger["run_dir"]) / "linkedin.ledger.json"
+    artifact_dir = discover_source_dir("linkedin_csv")
+    child_ledger = artifact_dir / "linkedin.ledger.json"
     if mode == "run":
         cmd = py_cmd(
             "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py",
@@ -2142,9 +2165,8 @@ def run_linkedin_child(ledger: dict[str, Any], mode: str) -> dict[str, Any]:
             "--csv", input_cfg["linkedin_csv"],
             "--source-user", input_cfg.get("linkedin_source_user") or "local",
             "--operator-id", input_cfg.get("operator_id") or "local",
-            "--output-dir", str(DEFAULT_BASE_DIR),
+            "--output-dir", str(DEFAULT_DISCOVER_DIR),
             "--ledger", str(child_ledger),
-            "--run-id", f"{ledger['run_id']}-linkedin",
             "--force",
         )
         if input_cfg.get("linkedin_limit") is not None:
@@ -2161,7 +2183,7 @@ def record_linkedin_worker_result(ledger_path: Path, ledger: dict[str, Any], res
     code = int(result.get("code") or 0)
     payload = result.get("payload") or {}
     stderr = result.get("stderr") or ""
-    child_ledger = result.get("child_ledger") or str(Path(ledger["run_dir"]) / "linkedin.ledger.json")
+    child_ledger = result.get("child_ledger") or str(artifact_dir_from_ledger(ledger) / "linkedin.ledger.json")
     ledger.setdefault("artifacts", {})["linkedin_ledger"] = str(child_ledger)
     if code == 20 or payload.get("status") == "blocked_approval":
         ledger["blocked"] = {"step_id": "linkedin", "child_ledger": str(child_ledger), "child": payload}
@@ -2205,7 +2227,7 @@ def run_linkedin(ledger_path: Path, ledger: dict[str, Any], mode: str) -> bool:
 def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 0) -> dict[str, Any]:
     input_cfg = ledger.get("input", {})
     db = input_cfg.get("msgvault_db") or str(DEFAULT_MSGVAULT_DB)
-    run_id = f"{ledger['run_id']}-gmail-{source_slug(email or 'all') or index}"
+    artifact_dir = DEFAULT_DISCOVER_DIR / "gmail" / source_slug(email or "all")
     excluded_labels = gmail_excluded_labels(input_cfg)
     sync_query = gmail_sync_query(input_cfg)
     sync_after = gmail_sync_after(input_cfg)
@@ -2243,7 +2265,7 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
                 "id": f"gmail:{email}",
                 "source": "gmail",
                 "account_email": email,
-                "run_id": run_id,
+                "artifact_dir": str(artifact_dir),
                 "sync_command": sync_cmd,
                 "excluded_labels": excluded_labels,
                 "sync_query": sync_query,
@@ -2262,7 +2284,7 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
         "msgvault",
         "--db", db,
         "--operator-id", input_cfg.get("operator_id") or "local",
-        "--run-id", run_id,
+        "--output-dir", str(DEFAULT_BASE_DIR),
     )
     if email:
         cmd.extend(["--account-email", email])
@@ -2275,7 +2297,7 @@ def run_gmail_msgvault_account(ledger: dict[str, Any], email: str, index: int = 
     for label in excluded_labels:
         cmd.extend(["--exclude-label", label])
     code, payload, stderr = run_cmd(cmd)
-    return {"id": f"gmail:{email or 'all'}", "source": "gmail", "account_email": email, "run_id": run_id, "sync_command": sync_command, "sync_skipped_reason": sync_skipped_reason, "excluded_labels": excluded_labels, "sync_query": sync_query, "sync_after": sync_after, "sync_after_source": sync_after_source, "gmail_estimate": estimate, "command": cmd, "code": code, "payload": payload, "stderr": stderr, "phase": "gmail_network_import"}
+    return {"id": f"gmail:{email or 'all'}", "source": "gmail", "account_email": email, "artifact_dir": str(artifact_dir), "sync_command": sync_command, "sync_skipped_reason": sync_skipped_reason, "excluded_labels": excluded_labels, "sync_query": sync_query, "sync_after": sync_after, "sync_after_source": sync_after_source, "gmail_estimate": estimate, "command": cmd, "code": code, "payload": payload, "stderr": stderr, "phase": "gmail_network_import"}
 
 
 def record_gmail_worker_result(ledger: dict[str, Any], result: dict[str, Any]) -> bool:
@@ -2288,7 +2310,7 @@ def record_gmail_worker_result(ledger: dict[str, Any], result: dict[str, Any]) -
         ledger["status"] = "failed"
         return False
     mark_step(ledger, step_id, "completed", payload=payload, account_email=email, sync_command=result.get("sync_command"), sync_skipped_reason=result.get("sync_skipped_reason"), excluded_labels=result.get("excluded_labels"), sync_query=result.get("sync_query"), sync_after=result.get("sync_after"), sync_after_source=result.get("sync_after_source"), gmail_estimate=result.get("gmail_estimate"))
-    ledger.setdefault("source_imports", {})[step_id] = {"status": "completed", "source": "gmail", "account_email": email, "run_id": result.get("run_id"), "sync_command": result.get("sync_command"), "sync_skipped_reason": result.get("sync_skipped_reason"), "excluded_labels": result.get("excluded_labels"), "sync_query": result.get("sync_query"), "sync_after": result.get("sync_after"), "sync_after_source": result.get("sync_after_source"), "gmail_estimate": result.get("gmail_estimate")}
+    ledger.setdefault("source_imports", {})[step_id] = {"status": "completed", "source": "gmail", "account_email": email, "artifact_dir": result.get("artifact_dir"), "sync_command": result.get("sync_command"), "sync_skipped_reason": result.get("sync_skipped_reason"), "excluded_labels": result.get("excluded_labels"), "sync_query": result.get("sync_query"), "sync_after": result.get("sync_after"), "sync_after_source": result.get("sync_after_source"), "gmail_estimate": result.get("gmail_estimate")}
     slug = source_slug(email)
     people_csv = ""
     for key, value in (payload.get("artifacts") or {}).items():
@@ -2336,7 +2358,7 @@ def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     return ok
 
 
-def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any]:
+def source_worker_group(input_cfg: dict[str, Any]) -> dict[str, Any]:
     jobs: list[dict[str, Any]] = []
     gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
     if gmail_emails or input_cfg.get("msgvault_db"):
@@ -2347,22 +2369,22 @@ def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any
                 "source": "gmail",
                 "account_email": email,
                 "step_id": f"gmail_msgvault:{source_slug(email or 'all')}",
-                "artifact_root": str(Path(DEFAULT_BASE_DIR) / "gmail" / f"{run_id}-gmail-{source_slug(email or 'all')}"),
+                "artifact_root": str(DEFAULT_DISCOVER_DIR / "gmail" / source_slug(email or "all")),
                 "sync_query": gmail_sync_query(input_cfg),
                 "sync_after": gmail_sync_after(input_cfg),
                 "excluded_labels": gmail_excluded_labels(input_cfg),
                 "parallelizable": True,
-                "reason": "local msgvault metadata read with isolated output run id",
+                "reason": "local msgvault metadata read into a stable discover folder",
             })
     if input_cfg.get("linkedin_csv"):
         jobs.append({
             "id": "linkedin_csv",
             "source": "linkedin_csv",
             "step_id": "linkedin",
-            "ledger": str(Path(DEFAULT_BASE_DIR) / "network-runs" / run_id / "linkedin.ledger.json"),
-            "artifact_root": str(Path(DEFAULT_BASE_DIR) / "linkedin" / f"{run_id}-linkedin"),
+            "ledger": str(DEFAULT_DISCOVER_DIR / "linkedin" / "linkedin.ledger.json"),
+            "artifact_root": str(DEFAULT_DISCOVER_DIR / "linkedin"),
             "parallelizable": True,
-            "reason": "CSV conversion/enrichment uses its own child ledger and cache confirmations",
+            "reason": "CSV conversion/enrichment writes into a stable discover folder",
             "requires_approval": ["rapidapi_linkedin_profile_enrichment"],
         })
     if input_cfg.get("twitter_handle"):
@@ -2394,7 +2416,7 @@ def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any
 
 def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resume: bool = False) -> bool:
     input_cfg = ledger.get("input", {})
-    group = source_worker_group(input_cfg, ledger["run_id"])
+    group = source_worker_group(input_cfg)
     ledger["worker_groups"] = {"import": group}
     selected = set(unique_strings(input_cfg.get("only_sources")))
     runnable_sources = {"gmail", "linkedin_csv"}
@@ -2495,7 +2517,7 @@ def run_gmail_directory(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     for index, record in enumerate(queue_records):
         slug = source_slug(record.get("account_email") or record.get("slug") or f"queue-{index}")
         if True:
-            out_dir = Path(ledger["run_dir"]) / f"gmail-directory-{slug}"
+            out_dir = artifact_dir_from_ledger(ledger) / f"gmail-directory-{slug}"
             result = apply_directory_to_gmail_queue(record, directory_csv, out_dir)
             result["slug"] = slug
             by_slug[slug] = result
@@ -2556,7 +2578,7 @@ def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> 
         mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="all Gmail queue rows resolved by directory")
         return True
     # Combine all unresolved queues into one file and submit as a single batch
-    combined_csv = Path(ledger["run_dir"]) / "gmail-combined-unresolved-queue.csv"
+    combined_csv = artifact_dir_from_ledger(ledger) / "gmail-combined-unresolved-queue.csv"
     combined_fields: list[str] = []
     combined_rows: list[dict[str, str]] = []
     for record in queue_records:
@@ -2574,8 +2596,8 @@ def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> 
     artifacts["gmail_linkedin_combined_queue_csv"] = str(combined_csv)
     total_contacts = len(combined_rows)
     begin_step(ledger_path, ledger, "gmail_linkedin_resolution", f"Resolving {total_contacts} Gmail contacts to LinkedIn in one batch.")
-    child_ledger = Path(ledger["run_dir"]) / "gmail-linkedin-resolution.combined.ledger.json"
-    out_dir = Path(ledger["run_dir"]) / "gmail-linkedin-resolution-combined"
+    child_ledger = artifact_dir_from_ledger(ledger) / "gmail-linkedin-resolution.combined.ledger.json"
+    out_dir = artifact_dir_from_ledger(ledger) / "gmail-linkedin-resolution-combined"
     cmd = py_cmd(
         "packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py",
         "run",
@@ -2607,7 +2629,7 @@ def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> 
         combined_output = payload.get("output")
         artifacts["gmail_linkedin_raw_resolutions_csv"] = combined_output
         artifacts["gmail_linkedin_combined_resolutions_csv"] = combined_output
-        provider_records = materialize_gmail_provider_resolution_records(combined_output, queue_records, Path(ledger["run_dir"]))
+        provider_records = materialize_gmail_provider_resolution_records(combined_output, queue_records, artifact_dir_from_ledger(ledger))
         if provider_records:
             artifacts["gmail_linkedin_resolutions_csvs"] = provider_records
             artifacts["gmail_linkedin_resolutions_by_slug"] = {record.get("slug", ""): record for record in provider_records if record.get("slug")}
@@ -2653,7 +2675,7 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     raw_resolution_records.extend(record for record in artifacts.get("gmail_linkedin_resolutions_csvs") or [] if isinstance(record, dict))
     if raw_resolution_records:
         commit_gmail_resolutions_to_directory(input_cfg, artifacts, raw_resolution_records)
-    resolution_records = combine_gmail_resolution_records(raw_resolution_records, Path(ledger["run_dir"]))
+    resolution_records = combine_gmail_resolution_records(raw_resolution_records, artifact_dir_from_ledger(ledger))
     if not resolution_records:
         mark_step(ledger, "gmail_apply_enrich", "skipped", reason="no gmail resolutions")
         return True
@@ -2672,13 +2694,14 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
     final_people_csvs = []
     for index, record in enumerate(resolution_records):
         slug = source_slug(record.get("account_email") or record.get("slug") or f"account-{index}")
+        account_dir = Path(str(record.get("people_csv") or "")).parent
+        resolved_dir = account_dir / "resolved"
         apply_cmd = py_cmd(
             "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
             "apply-resolutions",
             "--people-csv", str(record["people_csv"]),
             "--resolutions-csv", str(record["resolutions_csv"]),
-            "--output-dir", str(DEFAULT_BASE_DIR),
-            "--run-id", f"{ledger['run_id']}-gmail-resolved-{slug}",
+            "--output-dir", str(resolved_dir),
         )
         code, payload, stderr = run_cmd(apply_cmd)
         if code != 0:
@@ -2693,13 +2716,14 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
         result = {"account_email": record.get("account_email", ""), "slug": slug, "apply": payload, "people_csv": resolved_people}
         if int(payload.get("resolved") or 0) > 0:
             emit_progress(f"Enriching {payload.get('resolved')} resolved Gmail LinkedIn profiles for {record.get('account_email') or slug}.")
-            child_ledger = Path(ledger["run_dir"]) / f"gmail-enrich-people.{slug}.ledger.json"
+            enrich_dir = account_dir / "enrichment"
+            child_ledger = account_dir / "enrich_people.ledger.json"
             enrich_cmd = py_cmd(
                 "packs/ingestion/primitives/enrich_people/enrich_people.py",
                 "run",
                 "--input", str(resolved_people),
                 "--ledger", str(child_ledger),
-                "--run-id", f"{ledger['run_id']}-gmail-enrich-{slug}",
+                "--artifact-dir", str(enrich_dir),
             )
             code, enrich_payload, stderr = run_cmd(enrich_cmd)
             artifacts.setdefault("gmail_enrich_people_ledgers", []).append(str(child_ledger))
@@ -2751,7 +2775,7 @@ def enrich_people_payload_from_ledger(child_ledger: Path) -> dict[str, Any]:
     child = read_json(child_ledger, {}) or {}
     if child.get("status") != "completed":
         return {}
-    return {"status": "completed", "ledger": str(child_ledger), "run_dir": child.get("run_dir"), "artifacts": child.get("artifacts", {})}
+    return {"status": "completed", "ledger": str(child_ledger), "artifact_dir": child.get("artifact_dir") or child.get("run_dir"), "artifacts": child.get("artifacts", {})}
 
 
 def run_messages_enrichment(ledger_path: Path, ledger: dict[str, Any]) -> bool:
@@ -2762,7 +2786,7 @@ def run_messages_enrichment(ledger_path: Path, ledger: dict[str, Any]) -> bool:
         return True
     review_csv = Path(review_csv_text)
     artifacts["messages_review_csv"] = str(review_csv)
-    run_dir = Path(ledger["run_dir"]) / "messages"
+    run_dir = artifact_dir_from_ledger(ledger) / "messages"
     input_people = run_dir / "people.input.csv"
     manifest_path = run_dir / "people_manifest.json"
     begin_step(ledger_path, ledger, "messages_enrich_people", "Preparing reviewed Messages LinkedIn rows for local profile enrichment.")
@@ -2776,14 +2800,14 @@ def run_messages_enrichment(ledger_path: Path, ledger: dict[str, Any]) -> bool:
         emit_progress("No reviewed Messages LinkedIn rows need local enrichment.")
         return True
 
-    child_ledger = Path(ledger["run_dir"]) / "messages-enrich-people.ledger.json"
+    child_ledger = artifact_dir_from_ledger(ledger) / "messages-enrich-people.ledger.json"
     artifacts["messages_enrich_people_ledger"] = str(child_ledger)
     enrich_cmd = py_cmd(
         "packs/ingestion/primitives/enrich_people/enrich_people.py",
         "run",
         "--input", str(input_people),
         "--ledger", str(child_ledger),
-        "--run-id", f"{ledger['run_id']}-messages-enrich",
+        "--artifact-dir", str(run_dir / "enrichment"),
     )
     code, enrich_payload, stderr = run_cmd(enrich_cmd)
     if code == 20 or enrich_payload.get("status") == "blocked_approval":
@@ -2877,7 +2901,7 @@ def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
 
 def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     begin_step(ledger_path, ledger, "merge", "Merging network sources.")
-    merge_dir = Path(ledger["run_dir"]) / "merged"
+    merge_dir = artifact_dir_from_ledger(ledger) / "merged"
     cmd = py_cmd(
         "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py",
         "run",
@@ -2907,13 +2931,13 @@ def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
 
 def run_duckdb(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     begin_step(ledger_path, ledger, "duckdb", "Building local network DuckDB.")
-    merge_dir = Path(ledger["run_dir"]) / "merged"
-    duckdb_dir = Path(ledger["run_dir"]) / "duckdb"
+    merge_dir = artifact_dir_from_ledger(ledger) / "merged"
+    duckdb_dir = artifact_dir_from_ledger(ledger) / "duckdb"
     cmd = py_cmd(
         "packs/ingestion/primitives/build_network_duckdb/build_network_duckdb.py",
         "--network-dir", str(merge_dir),
         "--output-dir", str(duckdb_dir),
-        "--flavor", ledger["run_id"],
+        "--flavor", "local",
         "--force",
     )
     code, payload, stderr = run_cmd(cmd)
@@ -2938,7 +2962,7 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
     if ledger.get("input", {}).get("source_import_only"):
         ledger["status"] = "source_import_completed"
         save_ledger(ledger_path, ledger)
-        emit({"status": "source_import_completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
+        emit({"status": "source_import_completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
     selected_sources = set(unique_strings(ledger.get("input", {}).get("only_sources")))
     enrichment_only = bool(ledger.get("input", {}).get("enrichment_only"))
@@ -2964,7 +2988,7 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
         ledger["status"] = "source_enrichment_completed"
         ledger.pop("blocked", None)
         save_ledger(ledger_path, ledger)
-        emit({"status": "source_enrichment_completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
+        emit({"status": "source_enrichment_completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
     if ledger.get("input", {}).get("only_sources") and not ledger.get("input", {}).get("fan_in_only"):
         if "messages" in selected_sources and ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
@@ -2973,7 +2997,7 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
             save_ledger(ledger_path, ledger)
         ledger["status"] = "source_import_completed"
         save_ledger(ledger_path, ledger)
-        emit({"status": "source_import_completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
+        emit({"status": "source_import_completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
     if run_gmail_enrichment:
         if not run_gmail_directory(ledger_path, ledger):
@@ -2999,7 +3023,7 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
     ledger["status"] = "completed"
     ledger.pop("blocked", None)
     save_ledger(ledger_path, ledger)
-    emit({"status": "completed", "ledger": str(ledger_path), "run_dir": ledger["run_dir"], "artifacts": ledger.get("artifacts", {})})
+    emit({"status": "completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "artifacts": ledger.get("artifacts", {})})
     return 0
 
 
@@ -3088,11 +3112,11 @@ def reset_selected_fan_in_state(preserved: dict[str, Any], selected_sources: set
 
 def cmd_run(args: argparse.Namespace) -> int:
     args = apply_account_sources(args)
-    run_id = args.run_id or f"network-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    run_dir = DEFAULT_BASE_DIR / "network-runs" / run_id
+    selected_sources = set(unique_strings(getattr(args, "only_source", [])))
+    artifact_dir = default_artifact_dir(args, selected_sources)
     ledger_path = Path(args.ledger)
     if args.dry_run or args.estimate:
-        emit(dry_run_plan(args, ledger_path, run_id, run_dir))
+        emit(dry_run_plan(args, ledger_path, artifact_dir))
         return 0
     existing = load_ledger(ledger_path) if ledger_path.exists() else {}
     if ledger_path.exists() and not args.force:
@@ -3101,8 +3125,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "status": "completed",
                 "cached": True,
                 "ledger": str(ledger_path),
-                "run_dir": existing.get("run_dir"),
-                "message": "Existing completed import-network run found; no work was run.",
+                "artifact_dir": existing.get("artifact_dir") or existing.get("run_dir"),
+                "message": "Existing completed discover-contacts ledger found; no work was run.",
                 "artifact_check": check_artifact_paths(existing),
                 "artifacts": existing.get("artifacts", {}),
             })
@@ -3110,19 +3134,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         if existing.get("status") not in {"failed"}:
             emit({"status": "active_run_exists", "ledger": str(ledger_path), "message": "Use continue/approve or --force."})
             return 0
-    selected_sources = set(unique_strings(getattr(args, "only_source", [])))
     preserve_sources = set() if args.fan_in_only else selected_sources
     preserved = preserved_state_for_source_refresh(existing, preserve_sources) if args.force and (selected_sources or args.fan_in_only) else {}
     if args.force and args.fan_in_only and selected_sources:
         preserved = reset_selected_fan_in_state(preserved, selected_sources)
     ledger = {
-        "primitive": "import_network_pipeline",
+        "primitive": "discover_contacts_pipeline",
         "version": 1,
         "status": "running",
         "created_at": now_iso(),
         "updated_at": now_iso(),
-        "run_id": run_id,
-        "run_dir": str(run_dir),
+        "artifact_dir": str(artifact_dir),
         "ledger": str(ledger_path),
         "input": {
             "operator_id": args.operator_id,
@@ -3174,7 +3196,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     return run_pipeline(ledger_path, resume=False)
 
 
-def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_dir: Path) -> dict[str, Any]:
+def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path) -> dict[str, Any]:
     args = apply_account_sources(args)
     if ledger_path.exists():
         ledger = load_ledger(ledger_path)
@@ -3196,8 +3218,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
         return {
             "status": "dry_run",
             "ledger": str(ledger_path),
-            "run_id": ledger.get("run_id") or run_id,
-            "run_dir": ledger.get("run_dir") or str(run_dir),
+            "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir") or str(artifact_dir),
             "existing_status": ledger.get("status", "unknown"),
             "would_run_steps": would_run,
             "estimated_paid_calls": 0 if not would_run else "unknown_without_running_child_stage_plans",
@@ -3249,15 +3270,14 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
     return {
         "status": "dry_run",
         "ledger": str(ledger_path),
-        "run_id": run_id,
-        "run_dir": str(run_dir),
+        "artifact_dir": str(artifact_dir),
         "existing_status": "missing",
         "would_run_steps": would_run,
-        "worker_groups": {} if fan_in_only else {"import": source_worker_group(input_cfg, run_id)},
+        "worker_groups": {} if fan_in_only else {"import": source_worker_group(input_cfg)},
         "gmail_api_estimates": gmail_estimates,
         "gmail_estimate_summary": summarize_gmail_estimates(gmail_estimates) if gmail_estimates else "",
         "estimated_paid_calls": "unknown_without_existing_stage_outputs",
-        "message": "No existing import-network ledger was found; running would execute the listed stages until any child approval confirmation.",
+        "message": "No existing discover-contacts ledger was found; running would execute the listed stages until any child approval confirmation.",
     }
 
 
@@ -3317,7 +3337,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     emit({
         "status": ledger.get("status", "unknown"),
         "ledger": args.ledger,
-        "run_dir": ledger.get("run_dir"),
+        "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir"),
         "blocked": ledger.get("blocked"),
         "steps": ledger.get("steps", {}),
         "artifacts": ledger.get("artifacts", {}),
@@ -3332,7 +3352,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     run.add_argument("--from-accounts", default="", help="Account registry path produced by onboarding; fills source-specific args unless explicit flags override it")
     run.add_argument("--from-setup", default="", help="Setup ledger/handoff path containing an accounts path")
-    run.add_argument("--run-id")
     run.add_argument("--operator-id", default="local")
     run.add_argument("--linkedin-csv", default="")
     run.add_argument("--linkedin-source-user", default="")

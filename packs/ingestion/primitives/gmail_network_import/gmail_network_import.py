@@ -20,13 +20,18 @@ import os
 import re
 import sqlite3
 import sys
-import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-DEFAULT_LEDGER = Path(".powerpacks/network-import/gmail/import-run.json")
+try:
+    from packs.ingestion.schemas.people_schema import generate_person_id as generate_linkedin_person_id
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.ingestion.schemas.people_schema import generate_person_id as generate_linkedin_person_id
+
+DEFAULT_LEDGER = Path(".powerpacks/network-import/discover/gmail-one/ledger.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 DEFAULT_EXCLUDED_MSGVAULT_LABELS = ("CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES")
@@ -238,10 +243,6 @@ def normalize_linkedin_url(value: str) -> str:
     return f"https://www.linkedin.com/in/{public_id}" if public_id else url
 
 
-def generate_linkedin_person_id(public_identifier: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"linkedin:{public_identifier.lower().strip()}"))
-
-
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -416,9 +417,10 @@ def build_one_person(args: argparse.Namespace) -> OnePersonInput:
     )
 
 
-def run_dir(base_dir: Path, contact: OnePersonInput, run_id: str | None) -> Path:
-    rid = run_id or f"gmail-one-{short_hash(contact.email + ':' + now_iso(), 12)}"
-    return base_dir / "gmail" / rid
+def one_person_dir(base_dir: Path, contact: OnePersonInput) -> Path:
+    account = source_slug(contact.account_email or "local")
+    contact_slug = source_slug(contact.email)
+    return base_dir / "discover" / "gmail-one" / account / contact_slug
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -432,6 +434,70 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def source_slug(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", (value or "").strip().lower()).strip("-._")
+    return slug or "source"
+
+
+def gmail_discover_dir(base_dir: Path, account_email: str = "") -> Path:
+    return base_dir / "discover" / "gmail" / source_slug(account_email or "all")
+
+
+def csv_key(row: dict[str, Any], fields: list[str]) -> tuple[str, ...] | None:
+    key = tuple(str(row.get(field) or "").strip().lower() for field in fields)
+    return key if any(key) else None
+
+
+def normalize_csv_row(fieldnames: list[str], row: dict[str, Any]) -> dict[str, Any]:
+    return {field: row.get(field, "") for field in fieldnames}
+
+
+def merge_csv_row(fieldnames: list[str], existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = normalize_csv_row(fieldnames, existing)
+    for field in fieldnames:
+        value = incoming.get(field, "")
+        if value in ("", None):
+            continue
+        if field == "added_at" and merged.get(field):
+            continue
+        merged[field] = value
+    return merged
+
+
+def upsert_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]], key_fields: list[str]) -> dict[str, int]:
+    existing_rows = read_csv(path) if path.exists() else []
+    keyed: dict[tuple[str, ...], dict[str, Any]] = {}
+    keyless_existing: list[dict[str, Any]] = []
+    for row in existing_rows:
+        normalized = normalize_csv_row(fieldnames, row)
+        key = csv_key(normalized, key_fields)
+        if key is None:
+            keyless_existing.append(normalized)
+            continue
+        keyed[key] = merge_csv_row(fieldnames, keyed[key], normalized) if key in keyed else normalized
+
+    incoming_keys: set[tuple[str, ...]] = set()
+    for row in rows:
+        normalized = normalize_csv_row(fieldnames, row)
+        key = csv_key(normalized, key_fields)
+        if key is None:
+            keyless_existing.append(normalized)
+            continue
+        incoming_keys.add(key)
+        keyed[key] = merge_csv_row(fieldnames, keyed[key], normalized) if key in keyed else normalized
+
+    output_rows = [keyed[key] for key in sorted(keyed)]
+    output_rows.extend(keyless_existing)
+    write_csv(path, fieldnames, output_rows)
+    return {
+        "incoming": len(rows),
+        "existing": len(existing_rows),
+        "written": len(output_rows),
+        "preserved_existing": len([key for key in keyed if key not in incoming_keys]),
+        "upserted": len(incoming_keys),
+    }
 
 
 def append_account(contact: OnePersonInput, out_dir: Path) -> Path:
@@ -774,16 +840,15 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     filtered = [row for row in non_automated if has_round_trip_interaction(row)]
     if limit is not None:
         filtered = filtered[: max(0, int(limit))]
-    account_short = short_hash(account_email or "all", 8)
-    op_short = (operator_id or "local")[:8]
     out_dir.mkdir(parents=True, exist_ok=True)
-    threads_path = out_dir / f"gmail_threads_{account_short}_{op_short}.csv"
-    aggregated_path = out_dir / f"gmail_contacts_aggregated_{account_short}_{op_short}.csv"
-    targeted_path = out_dir / f"targeted_emails_{account_short}_{op_short}.csv"
+    threads_path = out_dir / "gmail_threads.csv"
+    aggregated_path = out_dir / "gmail_contacts_aggregated.csv"
+    targeted_path = out_dir / "targeted_emails.csv"
     resolution_queue_path = out_dir / "linkedin_resolution_queue.csv"
     people_path = out_dir / "people.csv"
     accounts_path = out_dir / "accounts.csv"
     manifest_path = out_dir / "manifest.json"
+    discovered_at = now_iso()
 
     account_rows = []
     seen_accounts: set[str] = set()
@@ -792,12 +857,13 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
             if account in seen_accounts:
                 continue
             seen_accounts.add(account)
-            account_rows.append({"account_id": f"msgvault:{short_hash(account, 12)}", "account_email": account, "provider": "gmail", "source": "msgvault", "added_at": now_iso()})
+            account_rows.append({"account_id": f"msgvault:{short_hash(account, 12)}", "account_email": account, "provider": "gmail", "source": "msgvault", "added_at": discovered_at})
     if account_email and account_email not in seen_accounts:
-        account_rows.append({"account_id": f"msgvault:{short_hash(account_email, 12)}", "account_email": account_email, "provider": "gmail", "source": "msgvault", "added_at": now_iso()})
-    write_csv(accounts_path, ACCOUNT_COLUMNS, account_rows)
+        account_rows.append({"account_id": f"msgvault:{short_hash(account_email, 12)}", "account_email": account_email, "provider": "gmail", "source": "msgvault", "added_at": discovered_at})
+    upserts: dict[str, dict[str, int]] = {}
+    upserts["accounts_csv"] = upsert_csv(accounts_path, ACCOUNT_COLUMNS, account_rows, ["account_email"])
 
-    write_csv(threads_path, THREAD_COLUMNS, [{
+    threads_rows = [{
         "email": row["email"],
         "display_name": row["display_name"],
         "thread_id": "",
@@ -807,9 +873,9 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "first_message_at": row["first_interaction"],
         "last_message_at": row["last_interaction"],
         "subject": "",
-        "discovered_at": now_iso(),
-    } for row in filtered])
-    write_csv(aggregated_path, AGGREGATED_COLUMNS, [{
+        "discovered_at": discovered_at,
+    } for row in filtered]
+    aggregated_rows = [{
         "email": row["email"],
         "display_name": row["display_name"],
         "total_sent": row["total_sent"],
@@ -819,8 +885,8 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "first_interaction": row["first_interaction"],
         "last_interaction": row["last_interaction"],
         "sample_subjects": "[]",
-    } for row in filtered])
-    write_csv(targeted_path, TARGETED_COLUMNS, [{
+    } for row in filtered]
+    targeted_rows = [{
         "display_name": row["display_name"],
         "primary_email": row["email"],
         "primary_email_type": row["primary_email_type"],
@@ -836,16 +902,27 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "potential_same_person_emails": "[]",
         "sample_subjects": "[]",
         "sample_calendar_titles": "[]",
-    } for row in filtered])
-    write_csv(resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, linkedin_resolution_queue_rows(filtered))
-    write_csv(people_path, PEOPLE_COLUMNS, people_rows_from_msgvault(filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)]))
+    } for row in filtered]
+    resolution_queue_rows = linkedin_resolution_queue_rows(filtered)
+    people_rows = people_rows_from_msgvault(filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)])
+
+    upserts["gmail_threads_csv"] = upsert_csv(threads_path, THREAD_COLUMNS, threads_rows, ["email"])
+    upserts["gmail_contacts_aggregated_csv"] = upsert_csv(aggregated_path, AGGREGATED_COLUMNS, aggregated_rows, ["email"])
+    upserts["targeted_emails_csv"] = upsert_csv(targeted_path, TARGETED_COLUMNS, targeted_rows, ["primary_email"])
+    upserts["linkedin_resolution_queue_csv"] = upsert_csv(resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, resolution_queue_rows, ["handle"])
+    upserts["people_csv"] = upsert_csv(people_path, PEOPLE_COLUMNS, people_rows, ["primary_email"])
+
+    existing_manifest = read_json(manifest_path, {}) or {}
 
     manifest = {
         "task": "import_gmail_network_msgvault",
-        "version": 1,
-        "created_at": now_iso(),
+        "version": 2,
+        "created_at": existing_manifest.get("created_at") or discovered_at,
+        "updated_at": discovered_at,
         "status": "completed",
         "source": "msgvault",
+        "artifact_dir": str(out_dir),
+        "account_slug": out_dir.name,
         "privacy": {
             "message_bodies_read": False,
             "message_subjects_included": False,
@@ -856,12 +933,15 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "counts": {
             "contacts_seen": len(rows),
             "contacts_written": len(filtered),
+            "contacts_final": upserts["people_csv"]["written"],
+            "contacts_preserved_existing": upserts["people_csv"]["preserved_existing"],
             "automated_filtered": len(automated_filtered),
             "one_way_filtered": len(one_way_filtered),
             "round_trip_required": True,
-            "accounts": len(account_rows),
+            "accounts": upserts["accounts_csv"]["written"],
             "excluded_labels": normalize_label_names(excluded_labels),
         },
+        "upserts": upserts,
         "artifacts": {
             "accounts_csv": str(accounts_path),
             "gmail_threads_csv": str(threads_path),
@@ -1030,9 +1110,13 @@ def next_pending_step(ledger: dict[str, Any]) -> str | None:
     return None
 
 
+def artifact_dir_from_ledger(ledger: dict[str, Any]) -> Path:
+    return Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_BASE_DIR / "discover" / "gmail-one"))
+
+
 def step_seed_one(ledger: dict[str, Any]) -> dict[str, Any]:
     contact = OnePersonInput(**ledger["input"])
-    manifest = make_artifacts(contact, Path(ledger["run_dir"]))
+    manifest = make_artifacts(contact, artifact_dir_from_ledger(ledger))
     ledger["account"] = manifest["account"]
     ledger["ids"] = manifest["ids"]
     ledger["artifacts"].update(manifest["artifacts"])
@@ -1040,13 +1124,14 @@ def step_seed_one(ledger: dict[str, Any]) -> dict[str, Any]:
 
 
 def step_prepare_local_workspace(ledger: dict[str, Any]) -> dict[str, Any]:
+    artifact_dir = artifact_dir_from_ledger(ledger)
     workspace = {
-        "workspace_root": ledger["run_dir"],
+        "workspace_root": str(artifact_dir),
         "contract": "powerpacks.gmail_network_import.v1.local_one_person",
         "multiple_accounts_supported_by": "one run per account_email/account_id, then merge later by email/linkedin/person_id",
         "sync_model": "msgvault local SQLite metadata import is the supported Gmail sync path; this legacy seed does not use OAuth",
     }
-    path = Path(ledger["run_dir"]) / "workspace.json"
+    path = artifact_dir / "workspace.json"
     write_json(path, workspace)
     ledger["artifacts"]["workspace_json"] = str(path)
     return workspace
@@ -1071,7 +1156,7 @@ def step_write_next_steps(ledger: dict[str, Any]) -> dict[str, Any]:
         ],
         "future_orchestrator_shape": "run/continue/approve, with sub-agents allowed for long approved steps; all artifacts remain under .powerpacks/.",
     }
-    path = Path(ledger["run_dir"]) / "next-steps.json"
+    path = artifact_dir_from_ledger(ledger) / "next-steps.json"
     write_json(path, next_steps)
     ledger["artifacts"]["next_steps_json"] = str(path)
     return next_steps
@@ -1098,7 +1183,7 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
             emit({
                 "status": "completed",
                 "ledger": str(ledger_path),
-                "run_dir": ledger.get("run_dir"),
+                "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir"),
                 "artifacts": ledger.get("artifacts", {}),
                 "summary": "Local one-person Gmail seed completed. No external APIs, DVC, uploads, or prod writes were run.",
             })
@@ -1119,7 +1204,7 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
 
 def command_run(args: argparse.Namespace) -> int:
     contact = build_one_person(args)
-    out_dir = run_dir(Path(args.output_dir), contact, args.run_id)
+    out_dir = one_person_dir(Path(args.output_dir), contact)
     ledger_path = Path(args.ledger)
     if ledger_path.exists() and not args.force:
         existing = load_ledger(ledger_path)
@@ -1136,8 +1221,7 @@ def command_run(args: argparse.Namespace) -> int:
         "status": "running",
         "created_at": now_iso(),
         "updated_at": now_iso(),
-        "run_id": out_dir.name,
-        "run_dir": str(out_dir),
+        "artifact_dir": str(out_dir),
         "ledger": str(ledger_path),
         "input": asdict(contact),
         "steps": {},
@@ -1257,8 +1341,7 @@ def command_msgvault(args: argparse.Namespace) -> int:
         rows = aggregate_msgvault_contacts(con, args.account_email, excluded_labels)
     finally:
         con.close()
-    run_id = args.run_id or f"msgvault-{short_hash((args.account_email or 'all') + ':' + now_iso(), 12)}"
-    out_dir = Path(args.output_dir) / "gmail" / run_id
+    out_dir = gmail_discover_dir(Path(args.output_dir), args.account_email)
     manifest = write_msgvault_artifacts(
         rows,
         out_dir,
@@ -1270,7 +1353,7 @@ def command_msgvault(args: argparse.Namespace) -> int:
     )
     emit({
         "status": "completed",
-        "run_dir": str(out_dir),
+        "artifact_dir": str(out_dir),
         "artifacts": manifest["artifacts"],
         "counts": manifest["counts"],
         "privacy": manifest["privacy"],
@@ -1280,12 +1363,10 @@ def command_msgvault(args: argparse.Namespace) -> int:
 
 
 def command_apply_resolutions(args: argparse.Namespace) -> int:
-    run_id = args.run_id or f"gmail-resolved-{short_hash(str(args.people_csv) + ':' + str(args.resolutions_csv) + ':' + now_iso(), 12)}"
-    output_dir = Path(args.output_dir) / "gmail-resolved" / run_id
     payload = apply_linkedin_resolutions_to_people(
         Path(args.people_csv),
         Path(args.resolutions_csv),
-        output_dir,
+        Path(args.output_dir),
         min_confidence=args.min_confidence,
     )
     emit(payload)
@@ -1305,7 +1386,6 @@ def add_contact_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--first-interaction", default="")
     parser.add_argument("--last-interaction", default="")
     parser.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
-    parser.add_argument("--run-id")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1340,7 +1420,6 @@ def build_parser() -> argparse.ArgumentParser:
     msgvault.add_argument("--account-email", default="", help="Optional Gmail source account filter")
     msgvault.add_argument("--operator-id", default="local")
     msgvault.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
-    msgvault.add_argument("--run-id")
     msgvault.add_argument("--limit", type=int)
     msgvault.add_argument("--include-automated", action="store_true", help="Include noreply/automated service addresses")
     msgvault.add_argument("--exclude-label", action="append", default=[], help="Exclude messages with this msgvault/Gmail label name; may be repeated")
@@ -1351,7 +1430,6 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--people-csv", required=True)
     apply.add_argument("--resolutions-csv", required=True)
     apply.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
-    apply.add_argument("--run-id")
     apply.add_argument("--min-confidence", type=float, default=0.75)
     apply.set_defaults(func=command_apply_resolutions)
 

@@ -205,6 +205,13 @@ def is_in_network(row: dict[str, str]) -> bool:
     return bool((row.get("network_person_id") or "").strip())
 
 
+def has_review_name(row: dict[str, str]) -> bool:
+    return any(
+        str(row.get(key) or "").strip()
+        for key in ("network_name", "full_name", "retarget_name", "matched_name")
+    )
+
+
 def row_tab(row: dict[str, str]) -> str:
     if is_in_network(row):
         return "in_network"
@@ -213,6 +220,8 @@ def row_tab(row: dict[str, str]) -> str:
         return "no"
     if falsy(exclude):
         return "yes"
+    if not has_review_name(row):
+        return "no"
     return bucket_label(row.get("bucket", ""))
 
 
@@ -224,6 +233,8 @@ def is_selected(row: dict[str, str]) -> bool:
         return True
     if is_in_network(row):
         return True
+    if not has_review_name(row):
+        return False
     return bucket_label(row.get("bucket", "")) == "yes"
 
 
@@ -361,6 +372,24 @@ def row_view(row: dict[str, str], research_dir: Path | None) -> dict[str, str]:
     }
 
 
+def review_display_name(row: dict[str, str], view: dict[str, str]) -> str:
+    for value in (
+        view.get("name", ""),
+        row.get("network_name", ""),
+        row.get("full_name", ""),
+    ):
+        text = str(value or "").strip()
+        if text and text.lower() != "unknown":
+            return text
+    phone = str(row.get("phone_e164") or "").strip()
+    if phone:
+        return f"Contact {phone}"
+    handle = str(row.get("handle") or "").strip()
+    if handle:
+        return handle
+    return "Unnamed contact"
+
+
 def matches_filter(row: dict[str, str], params: dict[str, list[str]], research_dir: Path | None) -> bool:
     tab = (params.get("tab") or ["yes"])[0].strip().lower()
     q = (params.get("q") or [""])[0].strip().lower()
@@ -451,7 +480,7 @@ def app_row(row: dict[str, str], index: int, research_dir: Path | None) -> dict[
         "decision": explicit_decision(row),
         "selected": is_selected(row),
         "handle": row.get("handle", ""),
-        "fullName": view["name"] or row.get("full_name", "") or "Unknown",
+        "fullName": review_display_name(row, view),
         "phone": row.get("phone_e164", ""),
         "messageSource": row.get("message_source", ""),
         "totalMessages": parse_int(row.get("total_messages", "")),

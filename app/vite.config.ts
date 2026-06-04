@@ -13,10 +13,11 @@ const powerpacksRepoRoot = path.resolve(
   process.env.POWERPACKS_REPO_ROOT || ".."
 );
 const powerpacksStateRoot = path.join(powerpacksRepoRoot, ".powerpacks");
+const discoverContactsSetupLedger = ".powerpacks/network-import/discover/ledger.setup.json";
 const runsDir = path.join(powerpacksStateRoot, "runs");
 const setupLedgerPath = path.join(powerpacksStateRoot, "setup", "setup-run.json");
 const accountsPath = path.join(powerpacksStateRoot, "ingestion", "accounts.json");
-const importRefreshLedgerPath = path.join(powerpacksStateRoot, "network-import", "import-network-run.setup-refresh.json");
+const importRefreshLedgerPath = path.join(powerpacksRepoRoot, discoverContactsSetupLedger);
 const messagesLedgerPath = path.join(powerpacksStateRoot, "messages", "import-run.setup-messages.json");
 const messagesReviewCsvPath = path.join(powerpacksStateRoot, "messages", "research_review.csv");
 const whatsAppWacliQrPngRelativePath = ".powerpacks/messages/wacli-login-qr.png";
@@ -36,9 +37,13 @@ const whatsAppStorePath = ".powerpacks/messages/wacli";
 
 type RunState = Record<string, any>;
 type CsvDocument = { headers: string[]; rows: Record<string, string>[] };
+type SetupJobStage = { label: string; index: number; total: number };
 type SetupJob = {
   id: string;
   action: string;
+  actionKey?: string;
+  source?: string;
+  stages?: SetupJobStage[];
   status: "running" | "completed" | "failed" | "blocked";
   startedAt: string;
   completedAt?: string | null;
@@ -61,7 +66,7 @@ type SetupImportSource = {
   runnable?: boolean;
   disabledReason?: string;
   updatedAt?: string | null;
-  runId?: string;
+  artifactDir?: string;
   command: string[];
 };
 type SetupEnrichmentSource = {
@@ -89,7 +94,7 @@ function summarizeEnrichmentStatus(sources: SetupEnrichmentSource[]): string {
 
 const setupJobs = new Map<string, SetupJob>();
 let cachedWhatsAppLinkStatus: { expiresAt: number; value: Record<string, any> } | null = null;
-let cachedDuckdbTables: { key: string; expiresAt: number; value: Array<{ name: string; rows: number }> } | null = null;
+let cachedDuckdbTables: { key: string; expiresAt: number; value: Array<{ name: string; rows: number; vectorRows?: number; vectorPeople?: number }> } | null = null;
 let cachedIndexEstimate: { key: string; expiresAt: number; value: Record<string, any> } | null = null;
 let cachedIndexCoverage: { key: string; expiresAt: number; value: Record<string, any> } | null = null;
 const SETUP_SOURCE_ORDER = ["gmail", "linkedin_csv", "messages", "twitter"] as const;
@@ -152,12 +157,20 @@ function readEnvSummary(): Record<string, string> {
 }
 
 function setupProcessEnv(): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...readEnvSummary(),
     ...process.env,
     POWERPACKS_REPO_ROOT: powerpacksRepoRoot,
     PYTHONUNBUFFERED: "1",
   };
+  const localBin = env.HOME ? path.join(env.HOME, ".local", "bin") : "";
+  env.PATH = Array.from(new Set([
+    localBin,
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    ...(env.PATH || "").split(":"),
+  ].filter(Boolean))).join(":");
+  return env;
 }
 
 function whatsAppProvider(): "wacli" | "waha" {
@@ -442,11 +455,43 @@ function shellStage(label: string, command: string[]): string {
   return `printf '%s\\n' ${shellQuote(`setup: ${label}`)} && ${shellJoin(command)}`;
 }
 
+function setupStageSummaries(stages: Array<{ label: string; command: string[] }>): SetupJobStage[] {
+  const total = stages.length;
+  return stages.map((stage, index) => ({
+    label: stage.label,
+    index: index + 1,
+    total,
+  }));
+}
+
 function stagedCommand(stages: Array<{ label: string; command: string[] }>): string[] {
+  if (stages.length === 0) return [];
+  if (stages.length === 1) return stages[0].command;
+  const totalStages = stages.length;
+  const stageSummaries = setupStageSummaries(stages);
+  const script = [
+    "set -o pipefail",
+    ...stages.map((stage, index) => {
+      const stageNumber = index + 1;
+      const failurePayload = {
+        status: "failed",
+        failed_stage: stage.label,
+        stage_index: stageNumber,
+        total_stages: totalStages,
+      };
+      return [
+        `printf '%s\\n' ${shellQuote(`setup: ${stage.label} (${stageNumber}/${totalStages})`)}`,
+        shellJoin(stage.command),
+        "code=$?",
+        `if [ "$code" -ne 0 ]; then printf '%s\\n' ${shellQuote(JSON.stringify(failurePayload))}; exit "$code"; fi`,
+      ].join("; ");
+    }),
+    `printf '%s\\n' ${shellQuote(JSON.stringify({ status: "completed", stages: stageSummaries }))}`,
+  ].join("; ");
   return [
     "/bin/zsh",
     "-lc",
-    stages.map((stage) => shellStage(stage.label, stage.command)).join(" && "),
+    script,
   ];
 }
 
@@ -457,13 +502,13 @@ function importAndFanInCommand(importCommand: string[], fanInCommand: string[], 
 function importsAndFanInCommand(imports: Array<{ label: string; command: string[] }>, fanInCommand: string[]): string[] {
   const importNetworkApprove = [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py",
+    "packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py",
     "approve",
     "--ledger", importRefreshLedgerPath,
   ];
   const importNetworkContinue = [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py",
+    "packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py",
     "continue",
     "--ledger", importRefreshLedgerPath,
   ];
@@ -506,11 +551,12 @@ function pruneSetupJobs() {
   for (const job of jobs.slice(40)) setupJobs.delete(job.id);
 }
 
-function startSetupJob(action: string, command: string[], timeoutMs = 6 * 60 * 60 * 1000): SetupJob {
+function startSetupJob(action: string, command: string[], timeoutMs = 6 * 60 * 60 * 1000, metadata: Pick<SetupJob, "actionKey" | "source" | "stages"> = {}): SetupJob {
   pruneSetupJobs();
   const job: SetupJob = {
     id: randomUUID(),
     action,
+    ...metadata,
     status: "running",
     startedAt: new Date().toISOString(),
     completedAt: null,
@@ -572,6 +618,7 @@ function whitelistedShellCommand(command: string): boolean {
     "uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py ",
     "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step",
     "uv run --project . python packs/ingestion/primitives/setup/setup.py ",
+    "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/import_contacts_pipeline.py ",
     "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py ",
     "uv run --project . python packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py auth",
     "uv run --project . python packs/messages/primitives/waha_runtime/waha_runtime.py ",
@@ -1120,7 +1167,7 @@ function ledgerStatus(filePath: string, fallback: string) {
   return {
     status: String(block?.status || ledger.status || fallback),
     updatedAt: ledger.updated_at || ledger.completed_at || summary.updatedAt || null,
-    runId: ledger.run_id || "",
+    artifactDir: ledger.artifact_dir || ledger.run_dir || "",
   };
 }
 
@@ -1138,7 +1185,7 @@ function messagesLedgerStatus(fallback: string) {
   return {
     status: rawStatus === "selected_steps_completed" ? "completed" : rawStatus,
     updatedAt: ledger.updated_at || ledger.completed_at || summary.updatedAt || null,
-    runId: ledger.run_id || "",
+    artifactDir: ledger.artifact_dir || ledger.run_dir || "",
   };
 }
 
@@ -1172,36 +1219,90 @@ function messagesImportLedgerStatus(fallback: string) {
   return {
     status,
     updatedAt: ledger.updated_at || ledger.completed_at || summary.updatedAt || null,
-    runId: ledger.run_id || "",
+    artifactDir: ledger.artifact_dir || ledger.run_dir || "",
   };
 }
 
-function importNetworkCommand(operatorId: string, extra: string[] = []) {
+function discoverContactsCommand(operatorId: string, extra: string[] = []) {
   const command = [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py",
+    "packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py",
     "run",
     "--from-accounts", ".powerpacks/ingestion/accounts.json",
     "--operator-id", operatorId,
     "--include-existing-artifacts",
-    "--ledger", ".powerpacks/network-import/import-network-run.setup-refresh.json",
+    "--ledger", discoverContactsSetupLedger,
   ];
   command.push(...extra);
   return command;
 }
 
+function gmailDiscoveryCommand(): string[] {
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/discover_contacts_pipeline/gmail.py",
+    "discover",
+    "--accounts", ".powerpacks/ingestion/accounts.json",
+  ];
+}
+
+function linkedinDiscoveryCommand(): string[] {
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/discover_contacts_pipeline/linkedin.py",
+    "discover",
+    "--accounts", ".powerpacks/ingestion/accounts.json",
+  ];
+}
+
+function messagesDiscoveryCommand(): string[] {
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/discover_contacts_pipeline/messages.py",
+    "discover",
+    "--accounts", ".powerpacks/ingestion/accounts.json",
+  ];
+}
+
+function discoveryManifestState(sourceId: string, fallback: string) {
+  const relPathBySource: Record<string, string> = {
+    gmail: ".powerpacks/network-import/discover/gmail/manifest.json",
+    linkedin_csv: ".powerpacks/network-import/discover/linkedin/manifest.json",
+    messages: ".powerpacks/network-import/discover/messages/manifest.json",
+  };
+  const fallbackRelPathBySource: Record<string, string> = {
+    messages: ".powerpacks/network-import/messages/manifest.json",
+  };
+  const relPath = relPathBySource[sourceId];
+  if (!relPath) return { status: fallback, updatedAt: null as string | null, artifactDir: "" };
+  const primaryPath = path.join(powerpacksRepoRoot, relPath);
+  const fallbackRelPath = fallbackRelPathBySource[sourceId];
+  const fallbackPath = fallbackRelPath ? path.join(powerpacksRepoRoot, fallbackRelPath) : "";
+  const manifestPath = fs.existsSync(primaryPath) || !fallbackPath ? primaryPath : fallbackPath;
+  const activeRelPath = manifestPath === primaryPath ? relPath : String(fallbackRelPath);
+  const manifest = readJsonSync(manifestPath) || {};
+  const summary = fileSummary(manifestPath);
+  const rawStatus = String(manifest.status || fallback);
+  return {
+    status: rawStatus === "selected_steps_completed" ? "completed" : rawStatus,
+    updatedAt: manifest.updated_at || manifest.completed_at || summary.updatedAt || null,
+    artifactDir: path.dirname(activeRelPath),
+  };
+}
+
 function enrichmentNetworkCommand(operatorId: string, sourceId: string, options: { approveSpend?: boolean } = {}): string[] {
-  if (sourceId === "gmail") {
-    const extra = ["--fan-in-only", "--only-source", "gmail", "--force", "--enrichment-only", "--resolve-gmail-linkedin"];
-    if (options.approveSpend) {
-      extra.push("--approve-parallel-spend");
-    }
-    return importNetworkCommand(operatorId, extra);
-  }
-  if (sourceId === "linkedin_csv") {
-    return importNetworkCommand(operatorId, ["--only-source", sourceId, "--force"]);
-  }
-  return [];
+  const source = sourceId === "linkedin_csv" ? "linkedin" : sourceId;
+  if (!["gmail", "linkedin", "messages"].includes(source)) return [];
+  const command = [
+    "uv", "run", "--project", ".", "python",
+    `packs/ingestion/primitives/import_contacts_pipeline/${source}.py`,
+    "run",
+    "--accounts", ".powerpacks/ingestion/accounts.json",
+    "--operator-id", operatorId,
+  ];
+  if (options.approveSpend && source === "messages") command.push("--confirm-import");
+  else if (options.approveSpend) command.push("--approve-parallel-spend");
+  return command;
 }
 
 function processLocalNetworkCommand(operatorId: string): string[] {
@@ -1231,31 +1332,14 @@ function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[n
 }
 
 function messageEnrichmentCommand(accounts: RunState | null): string[] {
-  const ledger = readJsonSync(messagesLedgerPath) || {};
-  return [
-    "uv", "run", "--project", ".", "python",
-    "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
-    "continue",
-    "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
-    "--parallel-timeout", String(process.env.POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS || "900"),
-    "--parallel-auto-approve-usd", "25",
-    "--reuse-existing-artifacts",
-    ...messageChannelFlags(accounts, ledger),
-    "--include-contact-merge",
-    "--include-powerset-candidates",
-    "--include-local-match",
-    "--include-llm-review",
-    "--include-research",
-    "--include-review",
-    "--no-open-browser",
-  ];
+  return enrichmentNetworkCommand(resolveOperator(readJsonSync(setupLedgerPath) || {}, accounts).id, "messages");
 }
 
 function buildImportSources(accounts: RunState | null, operatorId: string): SetupImportSource[] {
   const sources = normalizeSetupSources(accounts);
   const byId = Object.fromEntries(sources.map((source) => [source.id, source]));
   const rows: SetupImportSource[] = [];
-  const setupRefreshLedger = ".powerpacks/network-import/import-network-run.setup-refresh.json";
+  const setupRefreshLedger = discoverContactsSetupLedger;
   const refreshState = ledgerStatus(path.join(powerpacksRepoRoot, setupRefreshLedger), "ready");
   const refreshLedgerData = readJsonSync(path.join(powerpacksRepoRoot, setupRefreshLedger)) || {};
   const refreshSteps = refreshLedgerData.steps || {};
@@ -1265,6 +1349,7 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
   };
 
   const gmail = byId.gmail;
+  const gmailState = discoveryManifestState("gmail", "ready");
   const gmailAccounts = [
     ...new Set([
       ...((Array.isArray(gmail?.config?.selected_accounts) ? gmail.config.selected_accounts : []) as unknown[]).map(String),
@@ -1276,21 +1361,23 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
     id: "gmail",
     sourceId: "gmail",
     label: "Gmail",
-    status: gmail?.skipped ? "skipped" : gmail?.linked ? refreshState.status : "not_linked",
+    status: gmail?.skipped ? "skipped" : gmail?.linked ? gmailState.status : "not_linked",
     linked: Boolean(gmail?.linked),
     skipped: Boolean(gmail?.skipped),
     accountEmail: gmailAccounts.length === 1 ? gmailAccounts[0] : undefined,
     accountCount: gmailAccounts.length,
-    updatedAt: gmail?.linked && !gmail?.skipped ? (sourceUpdatedAt("gmail_msgvault") || refreshState.updatedAt) : null,
-    runId: gmail?.linked && !gmail?.skipped ? refreshState.runId : "",
-    command: importNetworkCommand(operatorId, ["--only-source", "gmail", "--force"]),
+    updatedAt: gmail?.linked && !gmail?.skipped ? (gmailState.updatedAt || sourceUpdatedAt("gmail_msgvault") || refreshState.updatedAt) : null,
+    artifactDir: gmail?.linked && !gmail?.skipped ? gmailState.artifactDir : "",
+    command: gmailDiscoveryCommand(),
   });
 
   for (const id of ["linkedin_csv", "messages", "twitter"] as const) {
     const source = byId[id];
-    const ledger = id === "messages" ? ".powerpacks/messages/import-run.setup-messages.json" : setupRefreshLedger;
+    const discoveryState = discoveryManifestState(id, source?.linked ? "ready" : source?.skipped ? "skipped" : "not_linked");
     const state = id === "messages"
-      ? messagesImportLedgerStatus(source?.linked ? "ready" : source?.skipped ? "skipped" : "not_linked")
+      ? discoveryState
+      : id === "linkedin_csv"
+        ? discoveryState
       : refreshState;
     rows.push({
       id,
@@ -1300,16 +1387,16 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
       linked: Boolean(source?.linked),
       skipped: Boolean(source?.skipped),
       updatedAt: source?.linked && !source?.skipped
-        ? (id === "linkedin_csv" ? (sourceUpdatedAt("linkedin") || state.updatedAt) : state.updatedAt)
+        ? (id === "linkedin_csv" ? (state.updatedAt || sourceUpdatedAt("linkedin")) : state.updatedAt)
         : null,
-      runId: source?.linked && !source?.skipped ? state.runId : "",
+      artifactDir: source?.linked && !source?.skipped ? state.artifactDir : "",
       runnable: id === "twitter" ? false : undefined,
       disabledReason: id === "twitter" ? "Twitter/X handle is recorded; follower import is not wired into setup yet." : undefined,
       command: id === "messages"
-        ? messageImportCommand(source)
+        ? messagesDiscoveryCommand()
         : id === "twitter"
           ? []
-          : importNetworkCommand(operatorId, ["--only-source", id, "--force"]),
+          : linkedinDiscoveryCommand(),
     });
   }
 
@@ -1351,12 +1438,7 @@ function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
       "p.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
     ].join("; "),
   ];
-  const materializeMessagesPeople = importNetworkCommand("local", [
-    "--fan-in-only",
-    "--only-source", "messages",
-    "--force",
-    "--enrichment-only",
-  ]);
+  const materializeMessagesPeople = enrichmentNetworkCommand("local", "messages");
   return ["/bin/zsh", "-lc", `${shellJoin(markAppReviewComplete)} && ${shellStage("materializing Messages people", materializeMessagesPeople)}`];
 }
 
@@ -1555,7 +1637,7 @@ function localSearchRecordSummary(): { recordFiles: number; nonemptyRecordFiles:
   return { recordFiles: files.length, nonemptyRecordFiles: nonempty.length };
 }
 
-function localDuckdbTableCounts(duckdbPath: string): Array<{ name: string; rows: number }> {
+function localDuckdbTableCounts(duckdbPath: string): Array<{ name: string; rows: number; vectorRows?: number; vectorPeople?: number }> {
   if (!duckdbPath || !fs.existsSync(duckdbPath)) return [];
   const stat = fs.statSync(duckdbPath);
   const key = `${duckdbPath}:${stat.mtimeMs}:${stat.size}`;
@@ -1570,7 +1652,13 @@ out = []
 con = duckdb.connect(${JSON.stringify(duckdbPath)}, read_only=True)
 for table in tables:
     try:
-        out.append({"name": table, "rows": int(con.execute(f"select count(*) from {table}").fetchone()[0])})
+        row = {"name": table, "rows": int(con.execute(f"select count(*) from {table}").fetchone()[0])}
+        columns = {str(col[1]) for col in con.execute(f"pragma table_info({table})").fetchall()}
+        if "vector" in columns:
+            row["vectorRows"] = int(con.execute(f"select count(*) from {table} where vector is not null and len(vector) > 0").fetchone()[0])
+            if "person_id" in columns:
+                row["vectorPeople"] = int(con.execute(f"select count(distinct person_id) from {table} where vector is not null and len(vector) > 0").fetchone()[0])
+        out.append(row)
     except Exception:
         pass
 print(json.dumps(out))
@@ -1586,7 +1674,12 @@ print(json.dumps(out))
     const parsed = JSON.parse(result.stdout || "[]");
     if (Array.isArray(parsed)) {
       value = parsed
-        .map((row) => ({ name: String(row.name || ""), rows: Number(row.rows || 0) }))
+        .map((row) => ({
+          name: String(row.name || ""),
+          rows: Number(row.rows || 0),
+          vectorRows: row.vectorRows === undefined ? undefined : Number(row.vectorRows || 0),
+          vectorPeople: row.vectorPeople === undefined ? undefined : Number(row.vectorPeople || 0),
+        }))
         .filter((row) => row.name);
     }
   } catch {
@@ -1726,26 +1819,32 @@ function readRelativeLedger(relativePath: string): RunState {
   return readJsonSync(path.join(powerpacksRepoRoot, relativePath)) || {};
 }
 
+function importManifest(sourceId: string): RunState {
+  const source = sourceId === "linkedin_csv" ? "linkedin" : sourceId;
+  return readJsonSync(path.join(powerpacksStateRoot, "network-import", "import", source, "manifest.json")) || {};
+}
+
 function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSources> = []): SetupEnrichmentSource[] {
-  const setupRefreshLedger = readRelativeLedger(".powerpacks/network-import/import-network-run.setup-refresh.json");
-  const refreshArtifacts = setupRefreshLedger.artifacts || {};
-  const linkedInStep = setupRefreshLedger.steps?.linkedin || {};
-  const gmailDirectoryStep = setupRefreshLedger.steps?.gmail_directory || {};
-  const gmailResolutionStep = setupRefreshLedger.steps?.gmail_linkedin_resolution || {};
-  const gmailApplyStep = setupRefreshLedger.steps?.gmail_apply_enrich || {};
+  const gmailImport = importManifest("gmail");
+  const linkedinImport = importManifest("linkedin");
+  const messagesImport = importManifest("messages");
+  const gmailImportArtifacts = gmailImport.artifacts || {};
+  const linkedinImportArtifacts = linkedinImport.artifacts || {};
+  const linkedInStep = linkedinImport.steps?.enrich_people || {};
+  const gmailDirectoryStep = gmailImport.steps?.gmail_directory || {};
+  const gmailResolutionStep = gmailImport.steps?.gmail_linkedin_resolution || {};
+  const gmailApplyStep = gmailImport.steps?.gmail_apply_enrich || {};
   const sourceById = Object.fromEntries(setupSources.map((source) => [source.id, source]));
   const isSkipped = (id: string) => Boolean(sourceById[id]?.skipped);
   const directoryRows = csvRowsForArtifact(".powerpacks/network-import/directory.csv");
 
-  const messagesLedger = readJsonSync(messagesLedgerPath) || {};
-  const messagesReview = messagesLedger.steps?.llm_review?.summary || {};
-  const messagesStats = messagesReviewStats(messagesLedger);
-
   const sumArtifacts = (artifactsList: Record<string, any>[], key: string) =>
     artifactsList.reduce((total, artifacts) => total + csvPathCount(artifacts[key]), 0);
-  const gmailQueueArtifact = refreshArtifacts.gmail_linkedin_resolution_queue_csvs || refreshArtifacts.gmail_linkedin_resolution_queue_csv;
+  const gmailArtifacts = gmailImportArtifacts;
+  const linkedinArtifacts = linkedinImportArtifacts;
+  const gmailQueueArtifact = gmailArtifacts.gmail_linkedin_resolution_queue_csvs || gmailArtifacts.gmail_linkedin_resolution_queue_csv;
   const gmailQueueCount = csvRowsForArtifact(gmailQueueArtifact, ["queue_csv", "linkedin_resolution_queue_csv"]).length;
-  const gmailDirectoryEntries = Object.values((refreshArtifacts.gmail_directory_by_slug || {}) as Record<string, any>);
+  const gmailDirectoryEntries = Object.values((gmailArtifacts.gmail_directory_by_slug || {}) as Record<string, any>);
   const gmailDirectoryResolved = gmailDirectoryEntries.reduce((total, item) => total + Number(item?.resolved || 0), 0);
   const gmailExistingMatches = gmailDirectoryEntries.length > 0 ? gmailDirectoryResolved : directoryLookupMatchCount(
     gmailQueueArtifact,
@@ -1753,7 +1852,7 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
     ["queue_csv", "linkedin_resolution_queue_csv"],
   );
   const gmailProviderRows = csvRowsForArtifact(
-    refreshArtifacts.gmail_linkedin_resolutions_csvs || refreshArtifacts.gmail_linkedin_resolutions_csv,
+    gmailArtifacts.gmail_linkedin_resolutions_csvs || gmailArtifacts.gmail_linkedin_resolutions_csv,
     ["resolutions_csv"],
   );
   const gmailProviderAttemptedEmails = new Set(
@@ -1771,20 +1870,20 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
       || (["completed", "found", "success"].includes(status) && !validLinkedInUrl(row.linkedin_url));
   }).length;
   const gmailResolvedByLookup = gmailProviderAttemptedEmails.size > 0 || Boolean(gmailResolutionStep.status || gmailApplyStep.status);
-  const gmailProviderEnriched = csvCountForArtifactKeys(refreshArtifacts, /^gmail_.+_enriched_provider_enriched_csv$/);
-  const gmailRapidFailures = csvCountForArtifactKeys(refreshArtifacts, /^gmail_.+_enriched_rapidapi_recent_failures_csv$/);
-  const gmailUnresolvedRows = csvRowsForArtifact(refreshArtifacts.gmail_unresolved_linkedin_resolution_queue_csvs, ["queue_csv"]).length;
-  const gmailCachedNegativeRows = csvRowsForArtifact(refreshArtifacts.gmail_cached_negative_linkedin_resolution_queue_csvs, ["queue_csv"]).length;
+  const gmailProviderEnriched = csvCountForArtifactKeys(gmailArtifacts, /^gmail_.+_enriched_provider_enriched_csv$/);
+  const gmailRapidFailures = csvCountForArtifactKeys(gmailArtifacts, /^gmail_.+_enriched_rapidapi_recent_failures_csv$/);
+  const gmailUnresolvedRows = csvRowsForArtifact(gmailArtifacts.gmail_unresolved_linkedin_resolution_queue_csvs, ["queue_csv"]).length;
+  const gmailCachedNegativeRows = csvRowsForArtifact(gmailArtifacts.gmail_cached_negative_linkedin_resolution_queue_csvs, ["queue_csv"]).length;
   const gmailRemainingUnresolved = gmailResolvedByLookup
     ? Math.max(0, gmailUnresolvedRows - gmailProviderAttemptedEmails.size)
     : gmailUnresolvedRows;
-  const gmailFound = Math.min(gmailQueueCount || Number.MAX_SAFE_INTEGER, gmailExistingMatches + Math.max(gmailProviderEnriched, gmailProviderFound));
   const gmailNotFound = gmailResolvedByLookup ? gmailProviderNegative + gmailCachedNegativeRows + gmailRapidFailures : gmailCachedNegativeRows;
   const linkedinCacheHits = firstCsvCount(
-    refreshArtifacts.linkedin_rapidapi_cache_hits_csv,
-    refreshArtifacts.linkedin_enrich_people_rapidapi_cache_hits_csv,
+    linkedinArtifacts.rapidapi_cache_hits_csv,
+    linkedinArtifacts.linkedin_rapidapi_cache_hits_csv,
+    linkedinArtifacts.linkedin_enrich_people_rapidapi_cache_hits_csv,
   );
-  const linkedinEnriched = firstCsvCount(refreshArtifacts.linkedin_provider_enriched_csv, refreshArtifacts.linkedin_enrich_people_provider_enriched_csv);
+  const linkedinEnriched = firstCsvCount(linkedinImport.outputs?.people_csv, linkedinArtifacts.people_csv, linkedinArtifacts.provider_enriched_csv, linkedinArtifacts.linkedin_provider_enriched_csv, linkedinArtifacts.linkedin_enrich_people_provider_enriched_csv);
 
   const gmailBlocked = gmailResolutionStep.status === "blocked" || gmailApplyStep.status === "blocked";
   const COST_PER_1000_CORE2X = 50;
@@ -1794,59 +1893,61 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
     linkedin_csv: {
       id: "linkedin_csv",
       label: "LinkedIn",
-      status: String(linkedInStep.status || setupRefreshLedger.status || "unknown"),
-      candidates: firstCsvCount(refreshArtifacts.linkedin_linkedin_enrichment_queue_csv, refreshArtifacts.linkedin_source_people_csv),
+      status: String(linkedinImport.status || linkedInStep.status || "unknown"),
+      candidates: Number(linkedinImport.stats?.candidates || 0) || firstCsvCount(linkedinArtifacts.linkedin_enrichment_queue_csv, linkedinArtifacts.linkedin_linkedin_enrichment_queue_csv, linkedinArtifacts.source_people_csv, linkedinArtifacts.linkedin_source_people_csv),
       enriched: linkedinEnriched,
       skipped: firstCsvCount(
-        refreshArtifacts.linkedin_rapidapi_recent_failures_csv,
-        refreshArtifacts.linkedin_enrich_people_rapidapi_recent_failures_csv,
-        refreshArtifacts.linkedin_skipped_enrichment_csv,
-        refreshArtifacts.linkedin_enrich_people_skipped_enrichment_csv,
+        linkedinArtifacts.rapidapi_recent_failures_csv,
+        linkedinArtifacts.linkedin_rapidapi_recent_failures_csv,
+        linkedinArtifacts.linkedin_enrich_people_rapidapi_recent_failures_csv,
+        linkedinArtifacts.skipped_enrichment_csv,
+        linkedinArtifacts.linkedin_skipped_enrichment_csv,
+        linkedinArtifacts.linkedin_enrich_people_skipped_enrichment_csv,
       ),
       matched: linkedinCacheHits,
       unresolved: 0,
       estimatedCostUsd: null,
-      blocked: false,
-      updatedAt: isSkipped("linkedin_csv") ? null : linkedInStep.finished_at || setupRefreshLedger.updated_at || null,
+      blocked: String(linkedinImport.status || "").startsWith("blocked"),
+      updatedAt: isSkipped("linkedin_csv") ? null : linkedinImport.updated_at || linkedInStep.finished_at || null,
     },
     gmail: {
       id: "gmail",
       label: "Gmail",
-      status: gmailBlocked ? "blocked" : String(setupRefreshLedger.status || "unknown"),
-      candidates: gmailQueueCount || sumArtifacts([refreshArtifacts], "gmail_people_csvs") || sumArtifacts([refreshArtifacts], "gmail_people_csv"),
-      enriched: gmailFound,
+      status: gmailBlocked ? "blocked" : String(gmailImport.status || "unknown"),
+      candidates: Number(gmailImport.stats?.candidates || 0) || gmailQueueCount || sumArtifacts([gmailArtifacts], "gmail_people_csvs") || sumArtifacts([gmailArtifacts], "gmail_people_csv"),
+      enriched: gmailProviderEnriched,
       skipped: gmailNotFound,
       matched: gmailExistingMatches,
       unresolved: gmailRemainingUnresolved,
       estimatedCostUsd: gmailEstimatedCostUsd,
       blocked: gmailBlocked,
-      updatedAt: isSkipped("gmail") ? null : gmailApplyStep.finished_at || gmailResolutionStep.finished_at || gmailDirectoryStep.finished_at || setupRefreshLedger.steps?.gmail_msgvault?.finished_at || setupRefreshLedger.steps?.source_imports?.finished_at || null,
+      updatedAt: isSkipped("gmail") ? null : gmailImport.updated_at || gmailApplyStep.finished_at || gmailResolutionStep.finished_at || gmailDirectoryStep.finished_at || null,
     },
     messages: {
       id: "messages",
       label: "Messages",
-      status: String(messagesReview.status || messagesLedger.status || "unknown"),
-      candidates: messagesStats.total,
-      enriched: messagesStats.profilesFound,
-      skipped: messagesStats.skipped,
-      matched: messagesStats.matched,
+      status: String(messagesImport.status || "unknown"),
+      candidates: Number(messagesImport.stats?.candidates || 0),
+      enriched: Number(messagesImport.stats?.people || 0),
+      skipped: 0,
+      matched: 0,
       unresolved: 0,
       estimatedCostUsd: null,
-      blocked: false,
-      updatedAt: isSkipped("messages") ? null : messagesLedger.updated_at || messagesReview.started_at || null,
+      blocked: String(messagesImport.status || "").startsWith("blocked"),
+      updatedAt: isSkipped("messages") ? null : messagesImport.updated_at || null,
     },
     twitter: {
       id: "twitter",
       label: "Twitter/X",
-      status: isSkipped("twitter") ? "skipped" : String(setupRefreshLedger.steps?.twitter?.status || "unknown"),
-      candidates: firstCsvCount(refreshArtifacts.twitter_people_csv, refreshArtifacts.people_csv),
-      enriched: firstCsvCount(refreshArtifacts.twitter_people_csv, refreshArtifacts.people_csv),
+      status: isSkipped("twitter") ? "skipped" : "unknown",
+      candidates: 0,
+      enriched: 0,
       skipped: 0,
       matched: 0,
       unresolved: 0,
       estimatedCostUsd: null,
       blocked: false,
-      updatedAt: isSkipped("twitter") ? null : setupRefreshLedger.steps?.twitter?.finished_at || setupRefreshLedger.updated_at || null,
+      updatedAt: null,
     },
   };
 
@@ -1952,7 +2053,7 @@ async function setupStatus() {
       ...importFile,
       status: importLiveRefresh?.status || phases.import?.status || "unknown",
       updatedAt: importLiveRefresh?.completed_at || importLiveRefresh?.updated_at || importFile.updatedAt || null,
-      runId: importLiveRefresh?.run_id || importRefreshLedger.run_id || "",
+      artifactDir: importLiveRefresh?.artifact_dir || importRefreshLedger.artifact_dir || "",
       linkedSources: Array.isArray(importLiveRefresh?.linked_sources) ? importLiveRefresh.linked_sources : [],
       gmailSyncAfter: importLiveRefresh?.gmail_sync_after || "",
       sources: publicImportSources(importSources),
@@ -2027,7 +2128,16 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   }
 
   if (action === "import") {
-    return startSetupJob(action, setupCommandArgs(operator.id, "import"), 6 * 60 * 60 * 1000);
+    const importableSources = buildImportSources(accounts, operator.id)
+      .filter((source) => source.linked && !source.skipped && source.runnable !== false && source.command.length > 0);
+    if (!importableSources.length) throw new Error("no linked sources can be discovered");
+    const stages = importableSources.map((source) => ({
+      label: `Discovering ${source.label}`,
+      command: source.command,
+    }));
+    return startSetupJob(action, stagedCommand(stages), 6 * 60 * 60 * 1000, {
+      stages: setupStageSummaries(stages),
+    });
   }
 
   if (action === "index") {
@@ -2049,11 +2159,13 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (!enrichableSources.length) throw new Error("no linked sources can be enriched");
     const stages = enrichableSources
       .map((source) => ({
-        label: `enriching ${source.label}`,
-        command: source.id === "messages" ? messageEnrichmentCommand(accounts) : enrichmentNetworkCommand(operator.id, source.id),
+        label: `Enriching ${source.label}`,
+        command: enrichmentNetworkCommand(operator.id, source.id),
       }))
       .filter((stage) => stage.command.length > 0);
-    return startSetupJob(action, stagedCommand(stages), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, stagedCommand(stages), 6 * 60 * 60 * 1000, {
+      stages: setupStageSummaries(stages),
+    });
   }
 
   if (action === "import-source") {
@@ -2065,7 +2177,10 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (source.runnable === false || source.command.length === 0) {
       throw new Error(source.disabledReason || `source is not importable yet: ${sourceId}`);
     }
-    return startSetupJob(action, source.command, 6 * 60 * 60 * 1000);
+    return startSetupJob(action, source.command, 6 * 60 * 60 * 1000, {
+      actionKey: `${action}:${sourceId}`,
+      source: sourceId,
+    });
   }
 
   if (action === "enrich-source") {
@@ -2078,14 +2193,14 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (source.runnable === false || source.command.length === 0) {
       throw new Error(source.disabledReason || `source is not importable yet: ${sourceId}`);
     }
-    if (sourceId === "messages") {
-      return startSetupJob(action, messageEnrichmentCommand(accounts), 2 * 60 * 60 * 1000);
-    }
     const command = enrichmentNetworkCommand(operator.id, sourceId, { approveSpend });
     if (command.length === 0) {
       throw new Error(`source enrichment is not wired yet: ${sourceId}`);
     }
-    return startSetupJob(action, stagedCommand([{ label: `enriching ${source.label}`, command }]), 6 * 60 * 60 * 1000);
+    return startSetupJob(action, stagedCommand([{ label: `Enriching ${source.label}`, command }]), 6 * 60 * 60 * 1000, {
+      actionKey: `${action}:${sourceId}${approveSpend ? ":approve" : ""}`,
+      source: sourceId,
+    });
   }
 
   if (action === "skip-source") {

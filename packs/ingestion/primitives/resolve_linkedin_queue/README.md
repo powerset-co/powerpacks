@@ -10,7 +10,7 @@ Modes:
 ```bash
 uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
   --provider harness \
-  --input .powerpacks/network-import/twitter/<run-id>/linkedin_resolution_queue.csv
+  --input .powerpacks/network-import/discover/twitter/<handle>/linkedin_resolution_queue.csv
 ```
 
 Parallel:
@@ -18,7 +18,7 @@ Parallel:
 ```bash
 uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
   --provider parallel \
-  --input .powerpacks/network-import/twitter/<run-id>/linkedin_resolution_queue.csv
+  --input .powerpacks/network-import/discover/twitter/<handle>/linkedin_resolution_queue.csv
 uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py approve
 uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py continue --wait
 ```

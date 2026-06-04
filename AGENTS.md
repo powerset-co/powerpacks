@@ -208,9 +208,9 @@ Routes:
   `packs/ingestion/skills/import-email/SKILL.md`
 - `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
   `packs/ingestion/skills/import-twitter/SKILL.md`
-- `$import-network`, local network ingestion orchestration, LinkedIn CSV plus
+- `$discover-contacts`, local network ingestion orchestration, LinkedIn CSV plus
   msgvault/messages/Twitter merge, DuckDB materialization →
-  `packs/ingestion/skills/import-network/SKILL.md`
+  `packs/ingestion/skills/discover-contacts/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Ask a brief
 clarifying question only when the same wording could mean multiple surfaces,

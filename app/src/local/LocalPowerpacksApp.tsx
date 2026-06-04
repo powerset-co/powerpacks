@@ -195,7 +195,7 @@ export function LocalPowerpacksApp() {
             {activeView === "setup" ? (
               <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
             ) : activeView === "messagesReview" ? (
-              <LocalMessagesReviewPage onBackToSetup={() => navigate("/setup?tab=import")} />
+              <LocalMessagesReviewPage onBackToSetup={() => navigate("/setup?tab=enrichment")} />
             ) : (
               <>
                 <div className="flex flex-wrap items-start justify-between gap-4">

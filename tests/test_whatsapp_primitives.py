@@ -33,6 +33,11 @@ assert _WAHA_RUNTIME_SPEC and _WAHA_RUNTIME_SPEC.loader
 waha_runtime = importlib.util.module_from_spec(_WAHA_RUNTIME_SPEC)
 _WAHA_RUNTIME_SPEC.loader.exec_module(waha_runtime)
 
+_WAHA_SESSION_SPEC = importlib.util.spec_from_file_location("waha_session", WAHA_SESSION)
+assert _WAHA_SESSION_SPEC and _WAHA_SESSION_SPEC.loader
+waha_session = importlib.util.module_from_spec(_WAHA_SESSION_SPEC)
+_WAHA_SESSION_SPEC.loader.exec_module(waha_session)
+
 
 # ---------------------------------------------------------------------------
 # Fake WAHA HTTP server
@@ -204,6 +209,20 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["primitive"], "waha_session")
         self.assertFalse(payload["state"].get("reachable"))
+
+    def test_waha_session_clears_stale_qr_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            qr_dir = Path(tmp)
+            qr_png = qr_dir / "qr.png"
+            qr_txt = qr_dir / "qr.txt"
+            qr_png.write_bytes(b"old")
+            qr_txt.write_text("old", encoding="utf-8")
+
+            removed = waha_session.clear_qr_artifacts(qr_png, qr_txt)
+
+            self.assertEqual(set(removed), {str(qr_png), str(qr_txt)})
+            self.assertFalse(qr_png.exists())
+            self.assertFalse(qr_txt.exists())
 
     def test_extract_whatsapp_contacts_against_fake_waha(self) -> None:
         FakeWAHAHandler.request_counts = {}

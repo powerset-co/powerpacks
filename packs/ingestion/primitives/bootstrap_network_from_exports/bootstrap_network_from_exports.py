@@ -676,10 +676,9 @@ def write_cached_linkedin_subset(linkedin_csv: str, output_path: Path, cached_pu
 
 def build_commands(operator: dict[str, Any], bundle_dir: Path, linkedin_csv: str, gmail_account_email: str) -> str:
     parts = [
-        "uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run",
+        "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run",
         f"--operator-id {operator['operator_id']}",
-        f"--run-id network-bootstrap-{operator['slug']}",
-        f"--ledger {bundle_dir}/outputs/import-network.ledger.json",
+        f"--ledger {bundle_dir}/outputs/discover-contacts.ledger.json",
         "--force",
     ]
     if linkedin_csv:

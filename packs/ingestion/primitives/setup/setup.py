@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -25,9 +26,10 @@ DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS = int(os.environ.get('POWERPACKS_SETUP_GMAIL_SY
 DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS', '900'))
 DEFAULT_AUTO_SPEND_LIMIT_USD = float(os.environ.get('POWERPACKS_SETUP_AUTO_SPEND_LIMIT_USD', '10'))
 EMPTY_LOCAL_SEARCH_DUCKDB_MAX_BYTES = int(os.environ.get('POWERPACKS_SETUP_EMPTY_DUCKDB_MAX_BYTES', str(1024 * 1024)))
-SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/import-network-run.setup-refresh.json')
+SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/discover/ledger.setup.json')
 SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
 SETUP_SOURCE_CHANNELS = ['gmail', 'linkedin_csv', 'messages', 'twitter']
+BOOTSTRAP_DIRECTORY_RESTORE_PATH = '.powerpacks/network-import/directory.csv'
 REQUIRED_PRIVACY = [
     'raw_msgvault_db_copied', 'raw_mail_copied', 'message_bodies_copied',
     'attachments_copied', 'secrets_copied',
@@ -42,12 +44,21 @@ PRIVACY_ALIASES = {
 ALLOWED_ROOTS = [
     PurePosixPath('.powerpacks/search-index'),
     PurePosixPath('.powerpacks/network-import/directory.csv'),
+    PurePosixPath('.powerpacks/network-import/discover'),
+    PurePosixPath('.powerpacks/network-import/final'),
     PurePosixPath('.powerpacks/network-import/merged'),
     PurePosixPath('.powerpacks/network-import/profile_cache_v2'),
     PurePosixPath('.powerpacks/operator-bootstrap/restore-manifest.json'),
 ]
 SEARCH_BOOTSTRAP_PREFIX_MEMBERS = [
     PurePosixPath('.powerpacks/search-index/records'),
+    PurePosixPath('.powerpacks/search-index/company'),
+    PurePosixPath('.powerpacks/search-index/education'),
+    PurePosixPath('.powerpacks/search-index/location'),
+    PurePosixPath('.powerpacks/search-index/profiles'),
+    PurePosixPath('.powerpacks/search-index/roles'),
+    PurePosixPath('.powerpacks/search-index/summaries'),
+    PurePosixPath('.powerpacks/search-index/unified'),
 ]
 SEARCH_BOOTSTRAP_EXACT_MEMBERS = {
     PurePosixPath('.powerpacks/search-index/ledger.json'),
@@ -275,9 +286,6 @@ def privacy_flags(manifest: dict[str, Any]) -> tuple[dict[str, bool | None], lis
 
 
 def allowed_restore_path(pp: PurePosixPath) -> bool:
-    if str(pp).startswith('.powerpacks/network-import/network-runs/'):
-        parts = pp.parts
-        return len(parts) >= 4 and re.fullmatch(r'[A-Za-z0-9._-]+', parts[3] or '') is not None
     for root in ALLOWED_ROOTS:
         if pp == root or str(pp).startswith(str(root) + '/'):
             return True
@@ -530,6 +538,54 @@ def copy_replace(src: Path, dst: Path, force: bool, backup_root: Path, overwritt
         shutil.copy2(src, dst)
 
 
+def directory_linkedin_stats(path: Path) -> dict[str, int]:
+    if not path.exists() or not path.is_file():
+        return {'rows': 0, 'linkedin_urls': 0}
+    rows = 0
+    linkedin_urls = 0
+    try:
+        with path.open(newline='', encoding='utf-8-sig', errors='replace') as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                rows += 1
+                if str(row.get('linkedin_url') or '').strip():
+                    linkedin_urls += 1
+    except Exception:
+        return {'rows': 0, 'linkedin_urls': 0}
+    return {'rows': rows, 'linkedin_urls': linkedin_urls}
+
+
+def copy_bootstrap_directory_if_better(src: Path, dst: Path, backup_root: Path, overwritten: list[str]) -> dict[str, Any]:
+    src_stats = directory_linkedin_stats(src)
+    dst_stats = directory_linkedin_stats(dst)
+    payload: dict[str, Any] = {
+        'path': BOOTSTRAP_DIRECTORY_RESTORE_PATH,
+        'source_stats': src_stats,
+        'target_stats': dst_stats,
+    }
+    if src_stats['linkedin_urls'] <= 0:
+        return {**payload, 'status': 'skipped', 'reason': 'bootstrap_directory_has_no_linkedin_urls'}
+    if dst.exists() and dst_stats['linkedin_urls'] >= src_stats['linkedin_urls']:
+        return {**payload, 'status': 'kept_target', 'reason': 'target_has_equal_or_more_linkedin_urls'}
+    if dst.exists():
+        rel = dst.relative_to(ROOT)
+        backup = backup_root / rel
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(dst, backup)
+        dst.unlink()
+        if str(rel) not in overwritten:
+            overwritten.append(str(rel))
+        payload['backup'] = str(backup)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return {
+        **payload,
+        'status': 'restored',
+        'reason': 'bootstrap_directory_has_more_linkedin_urls',
+        'target_after_stats': directory_linkedin_stats(dst),
+    }
+
+
 def mark_restored_ledgers(paths: list[Path], operator_id: str) -> list[str]:
     touched = []
     for p in paths:
@@ -575,18 +631,14 @@ def restore_candidates(wanted: set[str]) -> list[str]:
             candidates.append(root_rel)
     if '.powerpacks/operator-bootstrap/restore-manifest.json' in wanted:
         candidates.append('.powerpacks/operator-bootstrap/restore-manifest.json')
-    candidates.extend(
-        rel for rel in sorted(wanted)
-        if rel.startswith('.powerpacks/network-import/network-runs/')
-    )
     return list(dict.fromkeys(candidates))
 
 
 def restored_ledger_paths(restored: list[str]) -> list[Path]:
     paths = [ROOT / rel / 'ledger.json' for rel in restored]
-    network_runs = ROOT / '.powerpacks/network-import/network-runs'
-    if network_runs.exists():
-        paths.extend(network_runs.glob('*/**/*.json'))
+    discover = ROOT / '.powerpacks/network-import/discover'
+    if discover.exists():
+        paths.extend(discover.glob('**/*.json'))
     return paths
 
 
@@ -606,6 +658,7 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
     backup_root = ROOT / '.powerpacks/operator-bootstrap/backups' / ts
     overwritten: list[str] = []
     restored: list[str] = []
+    directory_restore: dict[str, Any] = {'status': 'not_attempted'}
     with tempfile.TemporaryDirectory(prefix='setup-restore-') as td:
         tmp = Path(td)
         with tarfile.open(bundle, 'r:*') as tf:
@@ -622,6 +675,11 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
         for rel in restore_candidates(wanted):
             src = tmp / rel
             if src.exists():
+                if rel == BOOTSTRAP_DIRECTORY_RESTORE_PATH and not bool(args.force):
+                    directory_restore = copy_bootstrap_directory_if_better(src, ROOT / rel, backup_root, overwritten)
+                    if (ROOT / rel).exists():
+                        restored.append(rel)
+                    continue
                 try:
                     copy_replace(src, ROOT / rel, bool(args.force), backup_root, overwritten)
                 except FileExistsError as exc:
@@ -630,8 +688,17 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
                         'reason': str(exc),
                         'requires_approval': [{'id': 'destructive_restore_overwrite'}],
                         'inspect': inspect,
+                        'directory_restore': directory_restore,
                     }
                 restored.append(rel)
+                if rel == BOOTSTRAP_DIRECTORY_RESTORE_PATH:
+                    directory_restore = {
+                        'status': 'restored',
+                        'path': rel,
+                        'source_stats': directory_linkedin_stats(src),
+                        'target_after_stats': directory_linkedin_stats(ROOT / rel),
+                        'reason': 'force_restore',
+                    }
     touched = mark_restored_ledgers(restored_ledger_paths(restored), args.operator_id)
     directory_bootstrap = materialize_bootstrap_directory()
     op_slug = re.sub(r'[^A-Za-z0-9._-]+', '-', str(inspect.get('operator') or args.operator_id)).strip('-') or 'operator'
@@ -645,6 +712,7 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
         'restored': restored,
         'overwritten': overwritten,
         'directory_bootstrap': directory_bootstrap,
+        'directory_restore': directory_restore,
     }
     write_json(ROOT / '.powerpacks/operator-bootstrap/applied' / op_slug / 'manifest.json', provenance)
     ledger = load_setup_ledger(Path(args.setup_ledger))
@@ -1862,9 +1930,8 @@ def run_fan_in_phase(args: argparse.Namespace) -> int:
     accounts = accounts_summary(Path(args.accounts))
 
     started_at = now()
-    run_id = f"setup-fan-in-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     before_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
-    code, payload, stderr = run_json_command(network_fan_in_command(args, run_id, force=bool(getattr(args, 'force', False))))
+    code, payload, stderr = run_json_command(network_fan_in_command(args, force=bool(getattr(args, 'force', False))))
     if code == 20 or payload.get('status') == 'blocked_approval':
         emit({'status': 'blocked_approval', 'phase': 'fan-in', 'payload': payload, 'stderr': tail(stderr)})
         return 20
@@ -1878,7 +1945,7 @@ def run_fan_in_phase(args: argparse.Namespace) -> int:
         'status': 'completed',
         'started_at': started_at,
         'completed_at': now(),
-        'run_id': payload.get('run_id') or run_id,
+        'artifact_dir': payload.get('artifact_dir') or '.powerpacks/network-import/final',
         'ledger': str(SETUP_REFRESH_LEDGER),
         'source_fingerprint': linked_source_fingerprint(accounts),
         'linked_sources': linked_sources(accounts),
@@ -1921,8 +1988,7 @@ def run_index_phase(args: argparse.Namespace) -> int:
     ledger_path = Path(args.setup_ledger)
     ledger = load_setup_ledger(ledger_path)
     process_started_at = now()
-    process_run_id = f"setup-process-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    process_code, process_payload, process_stderr = run_json_command(network_fan_in_command(args, process_run_id, force=True, merge_only=True))
+    process_code, process_payload, process_stderr = run_json_command(network_fan_in_command(args, force=True, merge_only=True))
     if process_code == 20 or process_payload.get('status') == 'blocked_approval':
         emit({'status': 'blocked_approval', 'phase': 'process', 'payload': process_payload, 'stderr': tail(process_stderr)})
         return 20
@@ -1936,7 +2002,7 @@ def run_index_phase(args: argparse.Namespace) -> int:
         'source': 'index_phase',
         'started_at': process_started_at,
         'completed_at': now(),
-        'run_id': process_payload.get('run_id') or process_run_id,
+        'artifact_dir': process_payload.get('artifact_dir') or '.powerpacks/network-import/final',
         'ledger': str(SETUP_REFRESH_LEDGER),
         'people_csv': '.powerpacks/network-import/merged/people.csv',
         'promoted': promoted,
@@ -1961,7 +2027,14 @@ def run_index_phase(args: argparse.Namespace) -> int:
     save_setup_ledger(final_status['setup_ledger'], ledger_path)
     index_summary = {
         'status': index_payload.get('status'),
+        'source': index_payload.get('source', ''),
         'step': index_payload.get('step', ''),
+        'provider_spend_approved': bool(index_payload.get('provider_spend_approved', False)),
+        'auto_spend_limit_usd': index_payload.get('auto_spend_limit_usd', 0),
+        'auto_approved_paid_calls': index_payload.get('auto_approved_paid_calls', 0),
+        'estimated_cost_usd': index_payload.get('estimated_cost_usd', 0),
+        'processing_estimate': index_payload.get('processing_estimate', {}),
+        'bootstrap_records_restore': index_payload.get('bootstrap_records_restore', {}),
         'people_csv': index_payload.get('people_csv', '.powerpacks/network-import/merged/people.csv'),
         'people_sha256': index_payload.get('people_sha256', ''),
         'duckdb': index_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb'),
@@ -1984,12 +2057,12 @@ def run_index_phase(args: argparse.Namespace) -> int:
 
 def setup_commands(args: argparse.Namespace) -> dict[str, str]:
     return {
-        'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
-        'import_network_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
-        'import_network_fan_in': f'uv run --project . python packs/ingestion/primitives/setup/setup.py fan-in --operator-id {args.operator_id} --accounts {args.accounts} --setup-ledger {args.setup_ledger} --force',
-        'import_network_status': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py status',
-        'import_network_continue': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue',
-        'import_network_approve': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve',
+        'discover_contacts_dry_run': f'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
+        'discover_contacts_run': f'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
+        'discover_contacts_fan_in': f'uv run --project . python packs/ingestion/primitives/setup/setup.py fan-in --operator-id {args.operator_id} --accounts {args.accounts} --setup-ledger {args.setup_ledger} --force',
+        'discover_contacts_status': 'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py status',
+        'discover_contacts_continue': 'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py continue',
+        'discover_contacts_approve': 'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py approve',
         'processing_plan': processing_plan_command_text(),
         'processing_dry_run': processing_dry_run_command_text(args.operator_id),
         'processing_run': processing_run_command_text(args.operator_id),
@@ -2017,7 +2090,7 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
                 'account_count': len(emails),
                 'parallelizable': False,
                 'ledger': str(SETUP_REFRESH_LEDGER),
-                'command': commands['import_network_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source gmail --force',
+                'command': commands['discover_contacts_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source gmail --force',
             })
         else:
             if ch == 'messages':
@@ -2036,23 +2109,19 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 requires_approval = ['whatsapp_qr'] if '--include-whatsapp' in include_flags else []
                 ledger = str(SETUP_MESSAGES_LEDGER)
-                run_id = ''
             elif ch == 'twitter':
                 command = ''
                 requires_approval = []
                 ledger = ''
-                run_id = ''
             else:
-                command = commands['import_network_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source {ch} --force'
+                command = commands['discover_contacts_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source {ch} --force'
                 requires_approval = []
                 ledger = str(SETUP_REFRESH_LEDGER)
-                run_id = ''
             worker_jobs.append({
                 'id': ch,
                 'source': ch,
                 'parallelizable': ch == 'messages',
                 'ledger': ledger,
-                'run_id': run_id,
                 'command': command,
                 'requires_approval': requires_approval,
                 **({'status': 'recorded_only', 'reason': 'Twitter/X handle is recorded; follower import is not wired into setup yet.'} if ch == 'twitter' else {}),
@@ -2068,8 +2137,8 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
         'indexing': idx,
         'requires_approval': approvals,
         'local_only_command_ids': [
-            'import_network_dry_run',
-            'import_network_status',
+            'discover_contacts_dry_run',
+            'discover_contacts_status',
             'processing_plan',
             'processing_dry_run',
             'build_local_duckdb_shim',
@@ -2117,10 +2186,10 @@ def message_refresh_command(accounts: dict[str, Any], ledger_path: Path, *, forc
     return cmd
 
 
-def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: bool, gmail_sync_after: str = '') -> list[str]:
+def network_refresh_command(args: argparse.Namespace, *, force: bool, gmail_sync_after: str = '') -> list[str]:
     cmd = [
         sys.executable,
-        'packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py',
+        'packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py',
         'run',
         '--from-accounts',
         args.accounts,
@@ -2129,8 +2198,6 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
         '--include-existing-artifacts',
         '--ledger',
         str(SETUP_REFRESH_LEDGER),
-        '--run-id',
-        run_id,
         '--source-import-only',
     ]
     if force:
@@ -2140,10 +2207,10 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
     return cmd
 
 
-def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool, merge_only: bool = False) -> list[str]:
+def network_fan_in_command(args: argparse.Namespace, *, force: bool, merge_only: bool = False) -> list[str]:
     cmd = [
         sys.executable,
-        'packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py',
+        'packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py',
         'run',
         '--from-accounts',
         args.accounts,
@@ -2153,8 +2220,6 @@ def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool
         '--fan-in-only',
         '--ledger',
         str(SETUP_REFRESH_LEDGER),
-        '--run-id',
-        run_id,
     ]
     if force:
         cmd.append('--force')
@@ -2253,14 +2318,6 @@ def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> t
     inspected = inspect_bundle(bundle)
     if inspected.get('status') != 'ok':
         return {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected, 'bootstrap_sync': sync_payload}, 20
-    if inspected.get('would_overwrite') and not force:
-        return {
-            'status': 'blocked_user_action',
-            'step': 'bootstrap',
-            'reason': 'bootstrap restore would overwrite existing artifacts',
-            'requires_approval': [{'id': 'destructive_restore_overwrite'}],
-            'inspect': inspected,
-        }, 20
     apply_args = argparse.Namespace(
         bundle=str(bundle),
         operator_id=args.operator_id,
@@ -2278,10 +2335,9 @@ def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> t
 
 def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts: dict[str, Any], due: dict[str, Any]) -> tuple[dict[str, Any], int]:
     started_at = now()
-    run_id = f"setup-refresh-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     before_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
-    results: dict[str, Any] = {'status': 'running', 'started_at': started_at, 'reason': due.get('reason'), 'run_id': run_id}
-    progress(f"Import refresh started: run_id={run_id}, reason={due.get('reason')}, linked_sources={','.join(due.get('linked_sources') or linked_sources(accounts)) or 'none'}")
+    results: dict[str, Any] = {'status': 'running', 'started_at': started_at, 'reason': due.get('reason')}
+    progress(f"Import refresh started: reason={due.get('reason')}, linked_sources={','.join(due.get('linked_sources') or linked_sources(accounts)) or 'none'}")
 
     refresh_reason = str(due.get('reason') or '')
     force_reasons = {'forced', 'refresh_interval_elapsed', 'linked_sources_changed', 'missing_import_artifact', 'import_artifact_drift'}
@@ -2305,12 +2361,12 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
             return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': payload or tail(stderr)}, 1
 
     force_network = refresh_reason in force_reasons
-    # Leave Gmail mailbox cursoring to import_network_pipeline. That layer can
+    # Leave Gmail mailbox cursoring to discover_contacts_pipeline. That layer can
     # inspect msgvault per account and pass sync-full --after from the newest
     # local source/message timestamp. The setup wrapper should not replace that
     # with a broad run-level lookback.
     gmail_sync_after = ''
-    network_cmd = network_refresh_command(args, run_id, force=force_network, gmail_sync_after=gmail_sync_after)
+    network_cmd = network_refresh_command(args, force=force_network, gmail_sync_after=gmail_sync_after)
     progress("Starting network import refresh (Gmail/LinkedIn/Twitter as linked)...")
     progress("Command: " + ' '.join(shlex.quote(part) for part in network_cmd))
     code, payload, stderr = run_json_command(network_cmd, stream_stderr=True)
@@ -2334,7 +2390,7 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
         'status': 'completed',
         'started_at': started_at,
         'completed_at': now(),
-        'run_id': payload.get('run_id') or run_id,
+        'artifact_dir': payload.get('artifact_dir') or '.powerpacks/network-import/discover',
         'ledger': str(SETUP_REFRESH_LEDGER),
         'source_fingerprint': due.get('source_fingerprint') or linked_source_fingerprint(accounts),
         'linked_sources': due.get('linked_sources') or linked_sources(accounts),

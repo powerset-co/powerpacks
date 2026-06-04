@@ -9,13 +9,13 @@ Build local indexing artifacts from canonical Powerpacks people data.
 
 ## Canonical input
 
-Prefer the canonical merged people CSV from `$import-network`:
+Prefer the canonical merged people CSV from `$discover-contacts`:
 
 ```text
 .powerpacks/network-import/merged/people.csv
 ```
 
-If the aggregate merge output is missing or stale, refresh it with `$import-network`/setup fan-in. If you run the ingestion merge primitive directly, pass each source explicitly with `--input`; it does not discover run artifacts or use legacy merged filenames.
+If the aggregate merge output is missing or stale, refresh it with `$discover-contacts`/setup fan-in. If you run the ingestion merge primitive directly, pass each source explicitly with `--input`; it does not discover run artifacts or use legacy merged filenames.
 
 ## Run locally
 

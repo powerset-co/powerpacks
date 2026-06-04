@@ -51,9 +51,10 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
 
     def test_restore_path_filter_excludes_referenced_duckdb_outputs(self) -> None:
         mod = load_module()
-        self.assertTrue(mod.should_copy_referenced_restore_path(".powerpacks/network-import/network-runs/run-1/merged/people.csv"))
+        self.assertTrue(mod.should_copy_referenced_restore_path(".powerpacks/network-import/final/merged/people.csv"))
+        self.assertTrue(mod.should_copy_referenced_restore_path(".powerpacks/network-import/discover/ledger.json"))
         self.assertTrue(mod.should_copy_referenced_restore_path(".powerpacks/network-import/profile_cache_v2/person.json"))
-        self.assertFalse(mod.should_copy_referenced_restore_path(".powerpacks/network-import/network-runs/run-1/duckdb/network.run-1.duckdb"))
+        self.assertFalse(mod.should_copy_referenced_restore_path(".powerpacks/network-import/final/duckdb/network.local.duckdb"))
         self.assertFalse(mod.should_copy_referenced_restore_path(".powerpacks/search-index/local-search.duckdb"))
 
     def test_packages_import_enrich_processing_without_raw_sync_data(self) -> None:
@@ -105,7 +106,7 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                         "linkedin_candidates_merged_17d602f7.csv,linkedin_candidates,1,/source/linkedin_candidates_merged_17d602f7.csv\n",
                         encoding="utf-8",
                     )
-                    (operator_dir / "outputs/commands.txt").write_text("import-network\n", encoding="utf-8")
+                    (operator_dir / "outputs/commands.txt").write_text("discover-contacts\n", encoding="utf-8")
                     (operator_dir / "outputs/counts.json").write_text(json.dumps({"contact_min_rows": 1}), encoding="utf-8")
                     (operator_dir / "resolution/linkedin_resolutions_cached.csv").write_text(
                         "handle,status,linkedin_url,confidence,matched_name,matched_headline,evidence,reasoning\n",
@@ -225,6 +226,7 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                 "gs://bucket/bootstrap/users/patrick/operators/17d602f7-f073-40b4-97a1-dba00c574442/operator-bootstrap.tar.gz",
             )
             self.assertIn(".powerpacks/network-import/directory.csv", manifest["restore"]["normal_pipeline_outputs"])
+            self.assertIn(".powerpacks/network-import/profile_cache_v2", manifest["restore"]["normal_pipeline_outputs"])
             self.assertNotIn(".powerpacks/operator-bootstrap/import/resolution", manifest["restore"]["normal_pipeline_outputs"])
             self.assertNotIn(".powerpacks/operator-bootstrap/import/linkedin_candidates", manifest["restore"]["normal_pipeline_outputs"])
             self.assertIn(".powerpacks/search-index", manifest["restore"]["normal_pipeline_outputs"])
@@ -242,7 +244,9 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
             self.assertNotIn("patrick/import/inputs/linkedin_candidates/linkedin_candidates_merged_17d602f7.csv", names)
             self.assertNotIn("patrick/import/inputs/linkedin_candidates_manifest.csv", names)
             self.assertNotIn("patrick/enrich/resolution/linkedin_resolutions_cached.csv", names)
+            self.assertNotIn("patrick/enrich/enrichment/profile_cache_v2/patrick.json", names)
             self.assertIn(".powerpacks/network-import/directory.csv", names)
+            self.assertIn(".powerpacks/network-import/profile_cache_v2/patrick.json", names)
             self.assertNotIn(".powerpacks/operator-bootstrap/import/linkedin_candidates/linkedin_candidates_merged_17d602f7.csv", names)
             self.assertNotIn(".powerpacks/operator-bootstrap/import/resolution/linkedin_resolutions_cached.csv", names)
             self.assertNotIn("patrick/processing/search-index/local-search.duckdb", names)

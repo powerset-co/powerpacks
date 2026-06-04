@@ -15,7 +15,7 @@ class CoreLayoutTests(unittest.TestCase):
         powerset_pack = sorted(
             path.name for path in (ROOT / "packs/powerset/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(powerset_pack, ["powerpacks-console", "powerset", "powerset-login", "powerset-set"])
+        self.assertEqual(powerset_pack, ["fix-powerpacks", "powerpacks-console", "powerset", "powerset-login", "powerset-set", "update-powerpacks"])
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
@@ -32,10 +32,10 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertEqual(
             ingestion_pack,
             [
+                "discover-contacts",
                 "import-email",
                 "import-gmail-network",
                 "import-linkedin-network",
-                "import-network",
                 "import-twitter",
                 "import-twitter-network",
                 "ingestion-onboarding",
@@ -88,7 +88,7 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "search-network" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-email" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-network" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "discover-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())

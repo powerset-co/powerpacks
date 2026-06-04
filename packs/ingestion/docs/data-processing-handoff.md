@@ -18,7 +18,7 @@ account linking / local source setup
 | Account linking / local source setup | source-specific onboarding | msgvault CLI, LinkedIn export UI, `$import-contacts`, Twitter RapidAPI key checks | Establish source access; avoid provider/API work unless explicitly approved. |
 | Ingestion/source import | ingestion skills + primitives | `gmail_network_import.py msgvault`, `linkedin_network_import.py`, `twitter_network_import.py`, messages primitives | Produces source-local normalized `people.csv` or message contacts artifacts. |
 | Enrichment / resolution | data processing + source-specific gates | `enrich_people.py`, Twitter `pre_resolve_linkedin`/`validate_linkedin`, future resolver queues | RapidAPI LinkedIn profile enrichment is centralized in `enrich_people` for LinkedIn-identified rows; Twitter still has source-specific validation. |
-| Merge + materialization | ingestion orchestration | `import_network_pipeline.py`, `merge_network_sources.py`, `build_network_duckdb.py` | Produces merged CSV contracts and local DuckDB. |
+| Merge + materialization | ingestion orchestration | `discover_contacts_pipeline.py`, `merge_network_sources.py`, `build_network_duckdb.py` | Produces merged CSV contracts and local DuckDB. |
 | Processing / indexing / search | data processing / indexing/search packs | indexing primitives consume merged artifacts | Should consume canonical CSVs/views, not source-specific raw dumps. |
 
 ## User-facing skills and runtime handlers
@@ -28,11 +28,11 @@ primitives so runs are deterministic, ledgered, testable, and resumable.
 
 | User command / skill | Skill file | Runtime script(s) | Result |
 | --- | --- | --- | --- |
-| `$import-email` | `packs/ingestion/skills/import-email/SKILL.md` | `import_network_pipeline.py run --gmail-account-email ...` -> `gmail_network_import.py msgvault` -> merge -> DuckDB | msgvault email metadata imported into local network artifacts. |
-| `$import-network` | `packs/ingestion/skills/import-network/SKILL.md` | `import_network_pipeline.py run ...` | End-to-end orchestrator for LinkedIn CSV + Gmail and optional existing messages/Twitter artifacts. |
-| `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter_network_import.py run/approve/continue`; then `$import-network --include-existing-artifacts` | Twitter/X `people.csv`, then merged local network artifacts. |
-| `$import-contacts` | `packs/messages/skills/import-contacts/SKILL.md` | messages pack primitives; then `$import-network --include-existing-artifacts` | iMessage/WhatsApp metadata, then merged local network artifacts. |
-| LinkedIn CSV path | `$import-network` or `import-linkedin-network` | `linkedin_network_import.py` -> `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
+| `$import-email` | `packs/ingestion/skills/import-email/SKILL.md` | `discover_contacts_pipeline.py run --gmail-account-email ...` -> `gmail_network_import.py msgvault` -> merge -> DuckDB | msgvault email metadata imported into local network artifacts. |
+| `$discover-contacts` | `packs/ingestion/skills/discover-contacts/SKILL.md` | `discover_contacts_pipeline.py run ...` | End-to-end orchestrator for LinkedIn CSV + Gmail and optional existing messages/Twitter artifacts. |
+| `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter_network_import.py run/approve/continue`; then `$discover-contacts --include-existing-artifacts` | Twitter/X `people.csv`, then merged local network artifacts. |
+| `$import-contacts` | `packs/messages/skills/import-contacts/SKILL.md` | messages pack primitives; then `$discover-contacts --include-existing-artifacts` | iMessage/WhatsApp metadata, then merged local network artifacts. |
+| LinkedIn CSV path | `$discover-contacts` or `import-linkedin-network` | `linkedin_network_import.py` -> `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
 
 ## Canonical CSV contracts
 
@@ -128,7 +128,7 @@ vertical owning separate enrichment implementations.
 
 ```bash
 uv run --project . python -m unittest \
-  tests/test_import_network_pipeline.py \
+  tests/test_discover_contacts_pipeline.py \
   tests/test_merge_network_sources.py \
   tests/test_network_duckdb.py \
   tests/test_enrich_people.py \

@@ -114,6 +114,9 @@ export interface SetupNextAction {
 export interface SetupJob {
   id: string;
   action: string;
+  actionKey?: string;
+  source?: string;
+  stages?: Array<{ label: string; index: number; total: number }>;
   status: "running" | "completed" | "failed" | "blocked";
   startedAt: string;
   completedAt?: string | null;
@@ -137,7 +140,7 @@ export interface SetupImportSource {
   runnable?: boolean;
   disabledReason?: string;
   updatedAt?: string | null;
-  runId?: string;
+  artifactDir?: string;
 }
 
 export interface SetupEnrichmentSource {
@@ -210,7 +213,7 @@ export interface SetupStatusResponse {
     exists: boolean;
     status: string;
     updatedAt?: string | null;
-    runId?: string;
+    artifactDir?: string;
     linkedSources: string[];
     gmailSyncAfter?: string;
     sources: SetupImportSource[];
@@ -226,7 +229,7 @@ export interface SetupStatusResponse {
     duckdbExists?: boolean;
     duckdbUpdatedAt?: string | null;
     duckdbSizeBytes?: number;
-    duckdbTables?: Array<{ name: string; rows: number }>;
+    duckdbTables?: Array<{ name: string; rows: number; vectorRows?: number; vectorPeople?: number }>;
     peopleCsv?: string;
     peopleRecords?: number;
     peopleSha256?: string;

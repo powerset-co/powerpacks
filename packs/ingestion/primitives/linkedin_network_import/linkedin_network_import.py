@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
-import hashlib
 import io
 import json
 import sys
@@ -29,6 +28,7 @@ try:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
         extract_public_identifier,
+        generate_person_id,
         normalize_linkedin_url,
         normalize_people_row,
     )
@@ -38,12 +38,14 @@ except ModuleNotFoundError:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
         extract_public_identifier,
+        generate_person_id,
         normalize_linkedin_url,
         normalize_people_row,
     )
 
-DEFAULT_LEDGER = Path(".powerpacks/network-import/linkedin/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
+DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "linkedin"
+DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "linkedin_network_import.ledger.json"
 DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
 
 CONNECTION_COLUMNS = [
@@ -59,6 +61,20 @@ CONNECTION_COLUMNS = [
     "connected_on",
 ]
 PIPELINE_STEPS = ["convert", "enrich_people"]
+GENERATED_DISCOVER_FILES = [
+    "connections_for_enrichment.csv",
+    "source_people.csv",
+    "linkedin_enrichment_queue.csv",
+    "rapidapi_cache_hits.csv",
+    "rapidapi_cache_misses.csv",
+    "rapidapi_recent_failures.csv",
+    "needs_resolution_queue.csv",
+    "skipped_enrichment.csv",
+    "provider_enriched.csv",
+    "people.csv",
+    "enrich_people.ledger.json",
+]
+GENERATED_DISCOVER_DIRS = ["raw_provider_responses"]
 
 
 class PipelineBlocked(Exception):
@@ -94,14 +110,25 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def sha(value: str, length: int = 12) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+def discover_output_dir(output_dir: Path) -> Path:
+    if output_dir.name == "linkedin" and output_dir.parent.name in {"discover", "import"}:
+        return output_dir
+    if output_dir.name == "discover":
+        return output_dir / "linkedin"
+    return output_dir / "discover" / "linkedin"
 
 
-def generate_person_id(public_identifier: str) -> str:
-    import uuid
+def reset_delegate_state(discover_dir: Path) -> None:
+    ledger = discover_dir / "enrich_people.ledger.json"
+    if ledger.exists():
+        ledger.unlink()
 
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"linkedin:{public_identifier.lower().strip()}"))
+
+def read_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        return [{str(key): value or "" for key, value in row.items() if key is not None} for row in csv.DictReader(handle)]
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
@@ -111,6 +138,38 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
         writer.writeheader()
         for row in rows:
             writer.writerow({k: row.get(k, "") for k in fieldnames})
+
+
+def row_key(row: dict[str, Any], preferred: list[str]) -> str:
+    for field in preferred:
+        value = str(row.get(field) or "").strip().lower()
+        if value:
+            return f"{field}:{value}"
+    return json.dumps({k: str(row.get(k, "") or "") for k in sorted(row)}, sort_keys=True)
+
+
+def upsert_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]], preferred_keys: list[str]) -> list[dict[str, Any]]:
+    ordered: list[dict[str, Any]] = []
+    by_key: dict[str, dict[str, Any]] = {}
+    for existing in read_csv_rows(path):
+        key = row_key(existing, preferred_keys)
+        by_key[key] = existing
+        ordered.append(existing)
+    for row in rows:
+        key = row_key(row, preferred_keys)
+        normalized = {field: row.get(field, "") for field in fieldnames}
+        if key in by_key:
+            target = by_key[key]
+            for field, value in normalized.items():
+                if value != "":
+                    target[field] = value
+                else:
+                    target.setdefault(field, "")
+        else:
+            by_key[key] = normalized
+            ordered.append(normalized)
+    write_csv(path, fieldnames, ordered)
+    return ordered
 
 
 @dataclass
@@ -256,7 +315,7 @@ def next_pending_step(ledger: dict[str, Any]) -> str | None:
 
 
 def approval_id(ledger: dict[str, Any], step_id: str) -> str:
-    return f"{ledger.get('run_id', 'run')}:{step_id}"
+    return f"linkedin:{step_id}"
 
 
 def block_for_delegate_approval(ledger_path: Path, ledger: dict[str, Any], blocked: dict[str, Any], delegate_ledger: Path) -> None:
@@ -284,24 +343,40 @@ def block_for_delegate_approval(ledger_path: Path, ledger: dict[str, Any], block
 
 
 def step_convert(ledger: dict[str, Any]) -> dict[str, Any]:
-    run_dir = Path(ledger["run_dir"])
+    run_dir = Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_DISCOVER_DIR))
     inp = Path(ledger["input"]["csv"])
     connections, stats = parse_connections_csv(inp, ledger["input"]["source_user"], ledger["input"].get("limit"))
     connection_rows = [conn.row() for conn in connections]
     people_rows = [conn.people_row(inp) for conn in connections]
     connections_out = run_dir / "connections_for_enrichment.csv"
     people_out = run_dir / "source_people.csv"
-    write_csv(connections_out, CONNECTION_COLUMNS, connection_rows)
-    write_csv(people_out, PEOPLE_COLUMNS, people_rows)
+    merged_connections = upsert_csv(
+        connections_out,
+        CONNECTION_COLUMNS,
+        connection_rows,
+        ["public_identifier", "linkedin_url", "linkedin_email", "person_id"],
+    )
+    merged_people = upsert_csv(
+        people_out,
+        PEOPLE_COLUMNS,
+        people_rows,
+        ["person_id", "public_identifier", "linkedin_url", "email"],
+    )
     ledger["artifacts"].update({
         "connections_csv": str(connections_out),
         "source_people_csv": str(people_out),
     })
-    return {**stats, "connections_file": str(connections_out), "source_people_file": str(people_out)}
+    return {
+        **stats,
+        "connections_file": str(connections_out),
+        "source_people_file": str(people_out),
+        "connections_total": len(merged_connections),
+        "source_people_total": len(merged_people),
+    }
 
 
 def ensure_delegate_ledger(ledger: dict[str, Any]) -> Path:
-    run_dir = Path(ledger["run_dir"])
+    run_dir = Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_DISCOVER_DIR))
     delegate_path = run_dir / "enrich_people.ledger.json"
     if delegate_path.exists():
         return delegate_path
@@ -314,8 +389,7 @@ def ensure_delegate_ledger(ledger: dict[str, Any]) -> Path:
         "status": "running",
         "created_at": now_iso(),
         "updated_at": now_iso(),
-        "run_id": f"{ledger.get('run_id', 'linkedin')}-enrichment",
-        "run_dir": str(run_dir),
+        "artifact_dir": str(run_dir),
         "ledger": str(delegate_path),
         "input": {
             "input_csv": source_people,
@@ -361,6 +435,7 @@ def step_enrich_people(ledger: dict[str, Any], ledger_path: Path) -> dict[str, A
         "linkedin_enrichment_queue_csv",
         "rapidapi_cache_hits_csv",
         "rapidapi_cache_misses_csv",
+        "rapidapi_recent_failures_csv",
         "needs_resolution_queue_csv",
         "skipped_enrichment_csv",
         "raw_provider_responses_dir",
@@ -393,7 +468,7 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
             ledger["status"] = "completed"
             ledger.pop("blocked", None)
             save_ledger(ledger_path, ledger)
-            emit({"status": "completed", "ledger": str(ledger_path), "run_dir": ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})})
+            emit({"status": "completed", "ledger": str(ledger_path), "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})})
             return 0
         try:
             mark_step(ledger, step_id, "running")
@@ -413,8 +488,7 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
 
 
 def command_run(args: argparse.Namespace) -> int:
-    run_id = args.run_id or f"linkedin-{sha(str(args.csv) + ':' + now_iso())}"
-    run_dir = Path(args.output_dir) / "linkedin" / run_id
+    run_dir = discover_output_dir(Path(args.output_dir))
     ledger_path = Path(args.ledger)
     if ledger_path.exists() and not args.force:
         existing = load_ledger(ledger_path)
@@ -424,14 +498,16 @@ def command_run(args: argparse.Namespace) -> int:
     if args.no_harmonic:
         # Accepted for old scripts; shared enrichment is RapidAPI-only now.
         pass
+    reset_delegate_state(run_dir)
     ledger = {
         "primitive": "linkedin_network_import",
         "version": 2,
         "status": "running",
         "created_at": now_iso(),
         "updated_at": now_iso(),
-        "run_id": run_id,
-        "run_dir": str(run_dir),
+        "artifact_dir": str(run_dir),
+        "artifact_layout": "stable_discover",
+        "discover_dir": str(run_dir),
         "ledger": str(ledger_path),
         "input": {
             "csv": str(Path(args.csv)),
@@ -517,7 +593,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
     run.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    run.add_argument("--run-id")
     run.add_argument("--force", action="store_true", help="Overwrite an active linkedin_network_import ledger")
     run.add_argument("--convert-only", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--force-enrich", action="store_true", help="Re-enrich rows even when source rows look complete")

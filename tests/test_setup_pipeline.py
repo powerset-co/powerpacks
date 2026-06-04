@@ -46,7 +46,7 @@ def make_bundle(path: Path, *, privacy=True, restore_paths=None, traversal=False
         '.powerpacks/network-import/directory.csv',
         '.powerpacks/network-import/merged',
         '.powerpacks/network-import/profile_cache_v2',
-        '.powerpacks/network-import/network-runs/run-1/import-network.ledger.json',
+        '.powerpacks/network-import/discover/ledger.json',
     ]
     manifest = {
         'schema_version': 1,
@@ -81,7 +81,7 @@ def make_bundle(path: Path, *, privacy=True, restore_paths=None, traversal=False
                 b'email:jane@example.com,jane@example.com,,Jane Example,https://www.linkedin.com/in/jane-example,jane-example,1.0,linkedin_candidates,,,,,,\n',
             )
         add_file(tf, '.powerpacks/network-import/profile_cache_v2/a.json', b'{}')
-        add_file(tf, '.powerpacks/network-import/network-runs/run-1/import-network.ledger.json', json.dumps({'status': 'completed', 'steps': {'merge': {'status': 'completed'}}}).encode())
+        add_file(tf, '.powerpacks/network-import/discover/ledger.json', json.dumps({'status': 'completed', 'steps': {'merge': {'status': 'completed'}}}).encode())
         if traversal:
             add_file(tf, '../evil.txt', b'evil')
 
@@ -113,7 +113,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['status'], 'ok')
         self.assertEqual(payload['operator_id'], OPERATOR_ID)
         self.assertIn('bundle_sha256', payload)
-        self.assertIn('.powerpacks/network-import/network-runs/run-1/import-network.ledger.json', payload['would_restore'])
+        self.assertIn('.powerpacks/network-import/discover/ledger.json', payload['would_restore'])
 
     def test_missing_legacy_privacy_flags_need_user_action(self):
         tmp = self.temp_workspace()
@@ -135,10 +135,10 @@ class SetupPipelineTests(unittest.TestCase):
     def test_restore_allowlist_blocks_unrelated_paths(self):
         tmp = self.temp_workspace()
         bundle = tmp / 'bundle.tar.gz'
-        make_bundle(bundle, restore_paths=['.powerpacks/search-index', '.powerpacks/messages/raw.db', '.powerpacks/network-import/network-runs/ok-run/x.json'])
+        make_bundle(bundle, restore_paths=['.powerpacks/search-index', '.powerpacks/messages/raw.db', '.powerpacks/network-import/discover/ok/x.json'])
         payload = setup.inspect_bundle(bundle)
         self.assertIn('.powerpacks/messages/raw.db', payload['restore_root_classification']['blocked'])
-        self.assertIn('.powerpacks/network-import/network-runs/ok-run/x.json', payload['restore_root_classification']['allowed'])
+        self.assertIn('.powerpacks/network-import/discover/ok/x.json', payload['restore_root_classification']['allowed'])
 
     def test_apply_refuses_overwrite_without_force_and_backs_up_with_force(self):
         tmp = self.temp_workspace()
@@ -162,6 +162,28 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertIn('jane@example.com', directory.read_text(encoding='utf-8'))
         self.assertEqual(payload['directory_bootstrap']['status'], 'ok')
         self.assertEqual(payload['directory_bootstrap']['source'], 'restored_directory_csv')
+
+    def test_apply_nonforce_repairs_directory_when_bootstrap_has_more_linkedin_urls(self):
+        tmp = self.temp_workspace()
+        bundle = tmp / 'bundle.tar.gz'
+        make_bundle(bundle, include_directory=True)
+        (tmp / '.powerpacks/search-index').mkdir(parents=True)
+        (tmp / '.powerpacks/search-index/old.txt').write_text('old', encoding='utf-8')
+        directory = tmp / '.powerpacks/network-import/directory.csv'
+        directory.parent.mkdir(parents=True)
+        directory.write_text(
+            'source_key,email,phone,name,linkedin_url\n'
+            'email:old@example.com,old@example.com,,Old Example,\n',
+            encoding='utf-8',
+        )
+        args = argparse.Namespace(bundle=str(bundle), operator_id=OPERATOR_ID, force=False, inspect_file='', setup_ledger=str(tmp / '.powerpacks/setup/setup-run.json'), allow_legacy_bootstrap_manifest=False)
+        payload = setup.apply_bundle(args)
+        self.assertEqual(payload['status'], 'rejected')
+        self.assertEqual(payload['directory_restore']['status'], 'restored')
+        self.assertEqual(payload['directory_restore']['source_stats']['linkedin_urls'], 1)
+        self.assertEqual(payload['directory_restore']['target_stats']['linkedin_urls'], 0)
+        self.assertIn('jane@example.com', directory.read_text(encoding='utf-8'))
+        self.assertTrue(list((tmp / '.powerpacks/operator-bootstrap/backups').glob('*/.powerpacks/network-import/directory.csv')))
 
     def test_inspect_apply_hash_rebinding(self):
         tmp = self.temp_workspace()
@@ -340,7 +362,7 @@ class SetupPipelineTests(unittest.TestCase):
             'handoff': {
                 'generated_at': '2026-01-01T00:00:00Z',
                 'commands': {
-                    'import_network_run': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts accounts.json --operator-id old',
+                    'discover_contacts_run': 'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run --from-accounts accounts.json --operator-id old',
                 },
                 'requires_approval': [],
             },
@@ -363,8 +385,8 @@ class SetupPipelineTests(unittest.TestCase):
 
         payload = setup.status_payload(argparse.Namespace(operator_id=OPERATOR_ID, accounts=str(accounts), setup_ledger=str(ledger), refresh_interval_hours=168))
         commands = payload['setup_ledger']['handoff']['commands']
-        self.assertIn('--include-existing-artifacts', commands['import_network_run'])
-        self.assertIn('--include-existing-artifacts', commands['import_network_dry_run'])
+        self.assertIn('--include-existing-artifacts', commands['discover_contacts_run'])
+        self.assertIn('--include-existing-artifacts', commands['discover_contacts_dry_run'])
         self.assertIn('destructive_restore_overwrite', {item['id'] for item in payload['setup_ledger']['handoff']['requires_approval']})
 
     def test_run_refreshes_linked_sources_and_marks_index_stale_when_network_changes(self):
@@ -401,15 +423,15 @@ class SetupPipelineTests(unittest.TestCase):
         (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             joined = ' '.join(cmd)
             if 'import_contacts_pipeline.py' in joined:
                 return 0, {'status': 'selected_steps_completed', 'artifacts': {'contacts_csv': '.powerpacks/messages/contacts.csv'}}, ''
             if 'build-local-duckdb-shim.py' in joined:
                 return fake_local_duckdb_payload(tmp)
-            if 'import_network_pipeline.py' in joined:
-                run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            if 'discover_contacts_pipeline.py' in joined:
+                run_dir = tmp / '.powerpacks/network-import/final'
                 merged_dir = run_dir / 'merged'
                 merged_dir.mkdir(parents=True)
                 for name, content in {
@@ -422,13 +444,12 @@ class SetupPipelineTests(unittest.TestCase):
                     (merged_dir / name).write_text(content, encoding='utf-8')
                 duckdb_dir = run_dir / 'duckdb'
                 duckdb_dir.mkdir(parents=True)
-                duckdb = duckdb_dir / 'network.setup-refresh-test.duckdb'
-                manifest = duckdb_dir / 'manifest.setup-refresh-test.json'
+                duckdb = duckdb_dir / 'network.local.duckdb'
+                manifest = duckdb_dir / 'manifest.local.json'
                 duckdb.write_text('duckdb', encoding='utf-8')
                 manifest.write_text('{}\n', encoding='utf-8')
                 return 0, {
                     'status': 'completed',
-                    'run_id': 'setup-refresh-test',
                     'artifacts': {
                         'merged_people_csv': str(merged_dir / 'people.csv'),
                         'network_contacts_csv': str(merged_dir / 'network_contacts.csv'),
@@ -469,7 +490,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertNotIn('--rerun-llm', message_cmd)
         self.assertNotIn('--force-build-review', message_cmd)
         self.assertNotIn('--force-whatsapp', message_cmd)
-        network_cmd = next(cmd for cmd in calls if 'import_network_pipeline.py' in ' '.join(cmd))
+        network_cmd = next(cmd for cmd in calls if 'discover_contacts_pipeline.py' in ' '.join(cmd))
         self.assertIn('--include-existing-artifacts', network_cmd)
         self.assertEqual((tmp / '.powerpacks/network-import/merged/people.csv').read_text(encoding='utf-8'), 'id\nnew\n')
         self.assertTrue((tmp / '.powerpacks/network-import/duckdb/network.duckdb').exists())
@@ -514,7 +535,7 @@ class SetupPipelineTests(unittest.TestCase):
         (records / 'people.records.jsonl').write_text('{}\n', encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             joined = ' '.join(cmd)
             self.assertIn('build-local-duckdb-shim.py', joined)
@@ -565,7 +586,7 @@ class SetupPipelineTests(unittest.TestCase):
         (records / 'people.records.jsonl').write_text('{}\n', encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             self.assertIn('build-local-duckdb-shim.py', ' '.join(cmd))
             return fake_local_duckdb_payload(tmp)
@@ -623,7 +644,7 @@ class SetupPipelineTests(unittest.TestCase):
         (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             joined = ' '.join(cmd)
             if 'build-local-duckdb-shim.py' in joined:
@@ -632,8 +653,8 @@ class SetupPipelineTests(unittest.TestCase):
                 return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.5, 'estimated_paid_calls': {'role_enrichment': 1}}, ''
             if 'build_processing_pipeline.py' in joined:
                 return 0, {'status': 'completed', 'run_dir': '.powerpacks/search-index'}, ''
-            self.assertIn('import_network_pipeline.py', joined)
-            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            self.assertIn('discover_contacts_pipeline.py', joined)
+            run_dir = tmp / '.powerpacks/network-import/final'
             merged_dir = run_dir / 'merged'
             merged_dir.mkdir(parents=True)
             for name, content in {
@@ -646,13 +667,12 @@ class SetupPipelineTests(unittest.TestCase):
                 (merged_dir / name).write_text(content, encoding='utf-8')
             duckdb_dir = run_dir / 'duckdb'
             duckdb_dir.mkdir(parents=True)
-            duckdb = duckdb_dir / 'network.setup-refresh-test.duckdb'
-            manifest = duckdb_dir / 'manifest.setup-refresh-test.json'
+            duckdb = duckdb_dir / 'network.local.duckdb'
+            manifest = duckdb_dir / 'manifest.local.json'
             duckdb.write_text('duckdb', encoding='utf-8')
             manifest.write_text('{}\n', encoding='utf-8')
             return 0, {
                 'status': 'completed',
-                'run_id': 'setup-refresh-test',
                 'artifacts': {
                     'merged_people_csv': str(merged_dir / 'people.csv'),
                     'network_contacts_csv': str(merged_dir / 'network_contacts.csv'),
@@ -719,7 +739,7 @@ class SetupPipelineTests(unittest.TestCase):
         (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             joined = ' '.join(cmd)
             if 'build-local-duckdb-shim.py' in joined:
@@ -728,7 +748,7 @@ class SetupPipelineTests(unittest.TestCase):
                 return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.75, 'estimated_paid_calls': {'role_enrichment': 1}}, ''
             if 'build_processing_pipeline.py' in joined:
                 return 0, {'status': 'completed', 'run_dir': '.powerpacks/search-index'}, ''
-            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            run_dir = tmp / '.powerpacks/network-import/final'
             merged_dir = run_dir / 'merged'
             merged_dir.mkdir(parents=True)
             for name, content in {
@@ -741,13 +761,12 @@ class SetupPipelineTests(unittest.TestCase):
                 (merged_dir / name).write_text(content, encoding='utf-8')
             duckdb_dir = run_dir / 'duckdb'
             duckdb_dir.mkdir(parents=True)
-            duckdb = duckdb_dir / 'network.setup-refresh-test.duckdb'
-            manifest = duckdb_dir / 'manifest.setup-refresh-test.json'
+            duckdb = duckdb_dir / 'network.local.duckdb'
+            manifest = duckdb_dir / 'manifest.local.json'
             duckdb.write_text('duckdb', encoding='utf-8')
             manifest.write_text('{}\n', encoding='utf-8')
             return 0, {
                 'status': 'completed',
-                'run_id': 'setup-refresh-test',
                 'artifacts': {
                     'merged_people_csv': str(merged_dir / 'people.csv'),
                     'network_contacts_csv': str(merged_dir / 'network_contacts.csv'),
@@ -809,7 +828,7 @@ class SetupPipelineTests(unittest.TestCase):
         (tmp / '.powerpacks/search-index/ledger.json').write_text(json.dumps({'status': 'restored', 'restored_operator_id': OPERATOR_ID}), encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             joined = ' '.join(cmd)
             if 'build-local-duckdb-shim.py' in joined:
@@ -818,7 +837,7 @@ class SetupPipelineTests(unittest.TestCase):
                 return 0, {'status': 'dry_run', 'estimated_cost_usd': 0.0, 'estimated_paid_calls': {'role_enrichment': 0}}, ''
             if 'build_processing_pipeline.py' in joined:
                 return 0, {'status': 'completed', 'run_dir': '.powerpacks/search-index'}, ''
-            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            run_dir = tmp / '.powerpacks/network-import/final'
             merged_dir = run_dir / 'merged'
             merged_dir.mkdir(parents=True)
             for name, content in {
@@ -831,13 +850,12 @@ class SetupPipelineTests(unittest.TestCase):
                 (merged_dir / name).write_text(content, encoding='utf-8')
             duckdb_dir = run_dir / 'duckdb'
             duckdb_dir.mkdir(parents=True)
-            duckdb = duckdb_dir / 'network.setup-refresh-test.duckdb'
-            manifest = duckdb_dir / 'manifest.setup-refresh-test.json'
+            duckdb = duckdb_dir / 'network.local.duckdb'
+            manifest = duckdb_dir / 'manifest.local.json'
             duckdb.write_text('duckdb', encoding='utf-8')
             manifest.write_text('{}\n', encoding='utf-8')
             return 0, {
                 'status': 'completed',
-                'run_id': 'setup-refresh-test',
                 'artifacts': {
                     'merged_people_csv': str(merged_dir / 'people.csv'),
                     'network_contacts_csv': str(merged_dir / 'network_contacts.csv'),
@@ -902,7 +920,7 @@ class SetupPipelineTests(unittest.TestCase):
         }), encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             joined = ' '.join(cmd)
             if 'build_processing_pipeline.py' in joined and '--dry-run' in cmd:
@@ -914,7 +932,7 @@ class SetupPipelineTests(unittest.TestCase):
                 }, ''
             self.assertNotIn('build_processing_pipeline.py', joined)
             self.assertNotIn('build-local-duckdb-shim.py', joined)
-            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            run_dir = tmp / '.powerpacks/network-import/final'
             merged_dir = run_dir / 'merged'
             merged_dir.mkdir(parents=True)
             for name, content in {
@@ -927,13 +945,12 @@ class SetupPipelineTests(unittest.TestCase):
                 (merged_dir / name).write_text(content, encoding='utf-8')
             duckdb_dir = run_dir / 'duckdb'
             duckdb_dir.mkdir(parents=True)
-            duckdb = duckdb_dir / 'network.setup-refresh-test.duckdb'
-            manifest = duckdb_dir / 'manifest.setup-refresh-test.json'
+            duckdb = duckdb_dir / 'network.local.duckdb'
+            manifest = duckdb_dir / 'manifest.local.json'
             duckdb.write_text('duckdb', encoding='utf-8')
             manifest.write_text('{}\n', encoding='utf-8')
             return 0, {
                 'status': 'completed',
-                'run_id': 'setup-refresh-test',
                 'artifacts': {
                     'merged_people_csv': str(merged_dir / 'people.csv'),
                     'network_contacts_csv': str(merged_dir / 'network_contacts.csv'),
@@ -977,11 +994,11 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['status'], 'ok')
         self.assertIn('import', payload['worker_groups'])
         self.assertFalse(payload['worker_groups']['import']['parallel'])
-        self.assertIn('import_network_fan_in', payload['commands'])
+        self.assertIn('discover_contacts_fan_in', payload['commands'])
         self.assertIn('processing_plan', payload['commands'])
         self.assertIn('processing_dry_run', payload['commands'])
-        self.assertIn('--include-existing-artifacts', payload['commands']['import_network_run'])
-        self.assertIn('--include-existing-artifacts', payload['commands']['import_network_dry_run'])
+        self.assertIn('--include-existing-artifacts', payload['commands']['discover_contacts_run'])
+        self.assertIn('--include-existing-artifacts', payload['commands']['discover_contacts_dry_run'])
         jobs = payload['worker_groups']['import']['jobs']
         gmail_jobs = [job for job in jobs if job['source'] == 'gmail']
         self.assertEqual([job['id'] for job in gmail_jobs], ['gmail'])
@@ -992,7 +1009,7 @@ class SetupPipelineTests(unittest.TestCase):
         linkedin_jobs = [job for job in jobs if job['source'] == 'linkedin_csv']
         self.assertEqual(len(linkedin_jobs), 1)
         self.assertIn('--only-source linkedin_csv', linkedin_jobs[0]['command'])
-        self.assertTrue(all('--ledger .powerpacks/network-import/import-network-run.setup-refresh.json' in job['command'] for job in jobs if job.get('command')))
+        self.assertTrue(all('--ledger .powerpacks/network-import/discover/ledger.setup.json' in job['command'] for job in jobs if job.get('command')))
         self.assertNotIn('twitter', {job['source'] for job in jobs})
         ids = {x['id'] for x in payload['requires_approval']}
         for required in ['browser_auth', 'gcs_download', 'destructive_restore_overwrite', 'provider_spend']:
@@ -1075,7 +1092,7 @@ class SetupPipelineTests(unittest.TestCase):
             'msgvault sync-full',
             'add-test-users',
             'add-account',
-            'import-network',
+            'discover-contacts',
             'parallel worker sub-agents',
             'fan-in',
             'build_processing_pipeline.py plan',
@@ -1090,7 +1107,7 @@ class SetupPipelineTests(unittest.TestCase):
 
     def test_setup_and_import_skills_include_user_friendly_import_copy(self):
         setup_text = (ROOT / 'packs/ingestion/skills/setup/SKILL.md').read_text(encoding='utf-8')
-        import_text = (ROOT / 'packs/ingestion/skills/import-network/SKILL.md').read_text(encoding='utf-8')
+        import_text = (ROOT / 'packs/ingestion/skills/discover-contacts/SKILL.md').read_text(encoding='utf-8')
         onboard_text = (ROOT / 'packs/ingestion/skills/onboard/SKILL.md').read_text(encoding='utf-8')
         for required in [
             'How to explain setup to the user',
@@ -1283,10 +1300,13 @@ class SetupPipelineTests(unittest.TestCase):
         tmp = self.temp_workspace()
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
+            joined = ' '.join(cmd)
+            if 'onboarding.py' not in joined:
+                return 0, {'status': 'skipped', 'reason': 'skip_bootstrap_sync'}, ''
             accounts = tmp / '.powerpacks/ingestion/accounts.json'
-            accounts.parent.mkdir(parents=True)
+            accounts.parent.mkdir(parents=True, exist_ok=True)
             accounts.write_text(json.dumps({'version': 2, 'accounts': {
                 'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
             }}), encoding='utf-8')
@@ -1321,16 +1341,19 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['setup_ledger']['phases']['link']['status'], 'ready')
         self.assertEqual(payload['setup_ledger']['phases']['link']['optional_unlinked_sources'], ['linkedin_csv', 'messages', 'twitter'])
         self.assertNotIn('unresolved_sources', payload['setup_ledger']['phases']['link'])
-        self.assertFalse(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+        self.assertFalse(any('discover_contacts_pipeline.py' in ' '.join(cmd) for cmd in calls))
 
     def test_run_setup_after_partial_gmail_link_points_to_import(self):
         tmp = self.temp_workspace()
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
+            joined = ' '.join(cmd)
+            if 'onboarding.py' not in joined:
+                return 0, {'status': 'skipped', 'reason': 'skip_bootstrap_sync'}, ''
             accounts = tmp / '.powerpacks/ingestion/accounts.json'
-            accounts.parent.mkdir(parents=True)
+            accounts.parent.mkdir(parents=True, exist_ok=True)
             accounts.write_text(json.dumps({'version': 2, 'accounts': {
                 'gmail': {'linked': True, 'skipped': False, 'usernames': ['me@example.com'], 'artifacts': [], 'config': {'selected_accounts': ['me@example.com']}},
             }}), encoding='utf-8')
@@ -1368,7 +1391,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['setup_ledger']['phases']['link']['status'], 'ready')
         self.assertEqual(payload['setup_ledger']['phases']['link']['optional_unlinked_sources'], ['linkedin_csv', 'messages', 'twitter'])
         self.assertNotIn('unresolved_sources', payload['setup_ledger']['phases']['link'])
-        self.assertFalse(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+        self.assertFalse(any('discover_contacts_pipeline.py' in ' '.join(cmd) for cmd in calls))
         self.assertFalse(any('sync-full' in ' '.join(cmd) for cmd in calls))
 
     def test_import_phase_refreshes_linked_sources_without_indexing(self):
@@ -1397,11 +1420,11 @@ class SetupPipelineTests(unittest.TestCase):
         }), encoding='utf-8')
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             joined = ' '.join(cmd)
-            self.assertIn('import_network_pipeline.py', joined)
-            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-test'
+            self.assertIn('discover_contacts_pipeline.py', joined)
+            run_dir = tmp / '.powerpacks/network-import/final'
             merged_dir = run_dir / 'merged'
             merged_dir.mkdir(parents=True)
             for name, content in {
@@ -1414,7 +1437,6 @@ class SetupPipelineTests(unittest.TestCase):
                 (merged_dir / name).write_text(content, encoding='utf-8')
             return 0, {
                 'status': 'completed',
-                'run_id': 'setup-refresh-test',
                 'artifacts': {'merged_people_csv': str(merged_dir / 'people.csv')},
             }, ''
 
@@ -1435,7 +1457,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload['phase'], 'import')
         self.assertEqual(payload['status'], 'completed')
-        self.assertTrue(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+        self.assertTrue(any('discover_contacts_pipeline.py' in ' '.join(cmd) for cmd in calls))
         self.assertFalse(any('build_processing_pipeline.py' in ' '.join(cmd) for cmd in calls))
 
     def test_import_phase_refreshes_partial_linked_sources(self):
@@ -1468,9 +1490,9 @@ class SetupPipelineTests(unittest.TestCase):
             only_if_due=False,
         )
         buf = io.StringIO()
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
-            run_dir = tmp / '.powerpacks/network-import/network-runs/setup-refresh-partial'
+            run_dir = tmp / '.powerpacks/network-import/final'
             merged_dir = run_dir / 'merged'
             merged_dir.mkdir(parents=True)
             for name, content in {
@@ -1483,7 +1505,6 @@ class SetupPipelineTests(unittest.TestCase):
                 (merged_dir / name).write_text(content, encoding='utf-8')
             return 0, {
                 'status': 'completed',
-                'run_id': 'setup-refresh-partial',
                 'artifacts': {'merged_people_csv': str(merged_dir / 'people.csv')},
             }, ''
 
@@ -1497,7 +1518,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['phase'], 'import')
         self.assertEqual(payload['refresh']['linked_sources'], ['gmail'])
         self.assertEqual(payload['next']['phase'], 'index')
-        self.assertTrue(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+        self.assertTrue(any('discover_contacts_pipeline.py' in ' '.join(cmd) for cmd in calls))
 
     def test_next_indexes_existing_people_csv_without_linked_sources(self):
         tmp = self.temp_workspace()
@@ -1529,8 +1550,10 @@ class SetupPipelineTests(unittest.TestCase):
         ledger = tmp / '.powerpacks/setup/setup-run.json'
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
+            if 'discover_contacts_pipeline.py' in ' '.join(cmd):
+                return 0, {'status': 'completed', 'artifact_dir': '.powerpacks/network-import/final', 'artifacts': {}}, ''
             return fake_local_duckdb_payload(tmp)
 
         args = argparse.Namespace(
@@ -1550,7 +1573,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['phase'], 'index')
         self.assertEqual(payload['status'], 'ready')
         self.assertTrue(any('build-local-duckdb-shim.py' in ' '.join(cmd) for cmd in calls))
-        self.assertFalse(any('import_network_pipeline.py' in ' '.join(cmd) for cmd in calls))
+        self.assertTrue(any('discover_contacts_pipeline.py' in ' '.join(cmd) for cmd in calls))
 
     def test_index_phase_restores_bootstrap_records_when_local_records_are_empty(self):
         tmp = self.temp_workspace()
@@ -1576,9 +1599,11 @@ class SetupPipelineTests(unittest.TestCase):
         ledger = tmp / '.powerpacks/setup/setup-run.json'
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             joined = ' '.join(cmd)
+            if 'discover_contacts_pipeline.py' in joined:
+                return 0, {'status': 'completed', 'artifact_dir': '.powerpacks/network-import/final', 'artifacts': {}}, ''
             self.assertIn('build-local-duckdb-shim.py', joined)
             return fake_local_duckdb_payload(tmp)
 
@@ -1601,7 +1626,7 @@ class SetupPipelineTests(unittest.TestCase):
         self.assertEqual(payload['index']['source'], 'operator_bootstrap')
         self.assertEqual(payload['index']['bootstrap_records_restore']['status'], 'restored')
         self.assertGreater((records / 'people.records.jsonl').stat().st_size, 0)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)
         self.assertFalse(any('build_processing_pipeline.py' in ' '.join(cmd) for cmd in calls))
 
     def test_index_phase_approved_provider_spend_runs_processing(self):
@@ -1615,9 +1640,11 @@ class SetupPipelineTests(unittest.TestCase):
         ledger = tmp / '.powerpacks/setup/setup-run.json'
         calls = []
 
-        def fake_run_json_command(cmd, timeout=6 * 60 * 60):
+        def fake_run_json_command(cmd, timeout=6 * 60 * 60, **kwargs):
             calls.append(cmd)
             joined = ' '.join(cmd)
+            if 'discover_contacts_pipeline.py' in joined:
+                return 0, {'status': 'completed', 'artifact_dir': '.powerpacks/network-import/final', 'artifacts': {}}, ''
             if 'build_processing_pipeline.py' in joined and '--dry-run' in cmd:
                 return 0, {
                     'status': 'dry_run',
@@ -1660,12 +1687,14 @@ class SetupPipelineTests(unittest.TestCase):
             operator_id=OPERATOR_ID,
             bootstrap_bundle='',
             force_bootstrap=False,
+            skip_bootstrap_sync=True,
             setup_ledger=str(ledger),
         )
         payload, code = setup.maybe_apply_bootstrap(args, setup.load_setup_ledger(ledger))
 
         self.assertEqual(code, 0)
-        self.assertEqual(payload, {'status': 'skipped', 'reason': 'no_matching_bootstrap_bundle'})
+        self.assertEqual(payload['status'], 'skipped')
+        self.assertEqual(payload['reason'], 'no_matching_bootstrap_bundle')
 
 
 if __name__ == '__main__':
