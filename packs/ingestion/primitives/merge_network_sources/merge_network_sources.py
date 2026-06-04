@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+csv.field_size_limit(sys.maxsize)
+
 try:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,

@@ -54,6 +54,46 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             writer.writeheader()
             writer.writerow(out)
 
+    def test_large_profile_payload_fields_do_not_break_csv_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                people = Path(".powerpacks/network-import/gmail/run-large/people.csv")
+                people.parent.mkdir(parents=True, exist_ok=True)
+                fields = merge_network_sources.PEOPLE_SCHEMA_COLUMNS
+                row = {col: "" for col in fields}
+                row.update({
+                    "id": "gmail:large-payload",
+                    "public_identifier": "large-payload",
+                    "linkedin_url": "https://www.linkedin.com/in/large-payload",
+                    "full_name": "Large Payload",
+                    "source_channels": "gmail_msgvault",
+                    "rapidapi_response": json.dumps({
+                        "full_name": "Large Payload",
+                        "summary": "x" * 200_000,
+                        "experiences": [{"title": "Founder", "company": "Big Field Co"}],
+                    }),
+                })
+                with people.open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerow(row)
+
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke([
+                    "run",
+                    "--no-discover",
+                    "--output-dir", str(out_dir),
+                    "--input", str(people),
+                ])
+
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["input_rows"], 1)
+                self.assertEqual(payload["merged_rows"], 1)
+            finally:
+                os.chdir(old_cwd)
+
     def test_discovery_prefers_people_csv_and_writes_canonical_merge_alias(self):
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()
