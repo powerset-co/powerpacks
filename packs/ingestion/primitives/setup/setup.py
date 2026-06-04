@@ -818,8 +818,19 @@ def processing_dry_run_command_text(operator_id: str) -> str:
     return f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --dry-run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {operator_id}'
 
 
-def processing_dry_run_command_args(operator_id: str) -> list[str]:
-    return [
+def index_limit_args(args: argparse.Namespace) -> list[str]:
+    cmd = [
+        '--limit-mode', str(getattr(args, 'limit_mode', 'missing') or 'missing'),
+        '--existing-duckdb', '.powerpacks/search-index/local-search.duckdb',
+    ]
+    limit = getattr(args, 'limit', None)
+    if limit is not None:
+        cmd.extend(['--limit', str(int(limit))])
+    return cmd
+
+
+def processing_dry_run_command_args(operator_id: str, args: argparse.Namespace | None = None) -> list[str]:
+    cmd = [
         sys.executable,
         'packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py',
         'run',
@@ -831,16 +842,21 @@ def processing_dry_run_command_args(operator_id: str) -> list[str]:
         '--default-operator-id',
         operator_id,
     ]
+    if args is not None:
+        cmd.extend(index_limit_args(args))
+    return cmd
 
 
-def processing_run_command_text(operator_id: str, *, allow_paid: bool = False) -> str:
+def processing_run_command_text(operator_id: str, *, allow_paid: bool = False, args: argparse.Namespace | None = None) -> str:
     text = f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {operator_id}'
+    if args is not None:
+        text += ' ' + ' '.join(index_limit_args(args))
     if allow_paid:
         text += ' --allow-paid-role-provider --allow-paid-embeddings --allow-paid-company-provider'
     return text
 
 
-def processing_run_command_args(operator_id: str, *, allow_paid: bool = False) -> list[str]:
+def processing_run_command_args(operator_id: str, *, allow_paid: bool = False, args: argparse.Namespace | None = None) -> list[str]:
     cmd = [
         sys.executable,
         'packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py',
@@ -852,6 +868,8 @@ def processing_run_command_args(operator_id: str, *, allow_paid: bool = False) -
         '--default-operator-id',
         operator_id,
     ]
+    if args is not None:
+        cmd.extend(index_limit_args(args))
     if allow_paid:
         cmd.extend(['--allow-paid-role-provider', '--allow-paid-embeddings', '--allow-paid-company-provider'])
     return cmd
@@ -968,8 +986,8 @@ def restore_search_index_from_bootstrap(bundle: Path, operator_id: str) -> dict[
     }
 
 
-def run_processing_dry_run(operator_id: str) -> dict[str, Any]:
-    code, payload, stderr = run_json_command(processing_dry_run_command_args(operator_id), timeout=60 * 60)
+def run_processing_dry_run(operator_id: str, args: argparse.Namespace | None = None) -> dict[str, Any]:
+    code, payload, stderr = run_json_command(processing_dry_run_command_args(operator_id, args), timeout=60 * 60)
     if code != 0:
         return {'status': 'failed', 'command': processing_dry_run_command_text(operator_id), 'error': tail(stderr) or payload}
     return payload
@@ -1101,7 +1119,7 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         return payload, 0
 
     spend_limit = float(getattr(args, 'auto_spend_limit_usd', DEFAULT_AUTO_SPEND_LIMIT_USD))
-    estimate = run_processing_dry_run(args.operator_id)
+    estimate = run_processing_dry_run(args.operator_id, args)
     if estimate.get('status') == 'failed':
         payload = {'status': 'failed', 'step': 'index_dry_run', 'processing_estimate': estimate}
         ledger.setdefault('phases', {})['index'] = payload
@@ -1127,7 +1145,7 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
             'estimated_paid_calls': estimate.get('estimated_paid_calls', {}),
             'processing_estimate': estimate,
             'requires_approval': [{'id': 'provider_spend'}],
-            'approve_command': processing_run_command_text(args.operator_id, allow_paid=True),
+            'approve_command': processing_run_command_text(args.operator_id, allow_paid=True, args=args),
         }
         ledger.setdefault('phases', {})['index'] = payload
         ledger['status'] = 'blocked_approval'
@@ -1136,7 +1154,7 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
 
     allow_paid = approve_provider_spend or paid_calls > 0 or bool(total_cost and total_cost > 0)
     code, processing_payload, processing_stderr = run_json_command(
-        processing_run_command_args(args.operator_id, allow_paid=allow_paid),
+        processing_run_command_args(args.operator_id, allow_paid=allow_paid, args=args),
         timeout=6 * 60 * 60,
     )
     if code != 0:
@@ -2379,6 +2397,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
     s.add_argument('--approve-provider-spend', action='store_true')
+    s.add_argument('--limit', type=int, default=None, help='Process at most N people in this index run')
+    s.add_argument('--limit-mode', choices=['all', 'missing'], default='missing', help='When --limit is set, select from all people or only people missing from the canonical DuckDB')
     s.set_defaults(func=run_index_phase)
 
     s = sub.add_parser('handoff')

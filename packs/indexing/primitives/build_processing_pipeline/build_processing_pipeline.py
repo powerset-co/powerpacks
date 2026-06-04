@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 from argparse import Namespace
 from pathlib import Path
 from typing import Any
@@ -739,11 +740,12 @@ def _cache_path(ledger: dict[str, Any], explicit_key: str, relative: str) -> str
         candidate = Path(str(cache_dir)) / relative
         if candidate.exists():
             return str(candidate)
-    run_root = ledger.get("run_dir")
-    if run_root:
-        candidate = Path(str(run_root)) / relative
-        if candidate.exists():
-            return str(candidate)
+    if not ledger.get("disable_output_dir_cache"):
+        run_root = ledger.get("run_dir")
+        if run_root:
+            candidate = Path(str(run_root)) / relative
+            if candidate.exists():
+                return str(candidate)
     return None
 
 
@@ -1497,6 +1499,146 @@ def reset_incremental_progress(rd: Path) -> None:
             path.unlink()
 
 
+MERGE_JSONL_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "unified/flattened_people.jsonl": ("id", "person_id", "base_id"),
+    "profiles/hydrated_profiles.jsonl": ("id", "person_id"),
+    "records/people.records.jsonl": ("id", "position_id"),
+    "records/companies.records.jsonl": ("id", "company_urn"),
+    "records/summaries.records.jsonl": ("id", "person_id"),
+    "records/education.records.jsonl": ("id",),
+    "records/schools.records.jsonl": ("id", "canonical_education_id"),
+    "roles/raw_titles.jsonl": ("title_hash",),
+    "roles/roles_with_dense_text.jsonl": ("title_hash",),
+    "roles/roles_with_dense_text_remapped.jsonl": ("title_hash",),
+    "roles/roles_with_embeddings.jsonl": ("title_hash",),
+    "unified/roles/roles_with_dense_text_remapped.jsonl": ("title_hash",),
+    "unified/roles/roles_with_embeddings.jsonl": ("title_hash",),
+    "company/companies_corpus_v3.jsonl": ("company_urn", "id"),
+    "company/company_embeddings_v3.jsonl": ("company_urn", "id"),
+    "education/people_education.jsonl": ("person_id", "education_id"),
+    "education/schools_corpus.jsonl": ("entity_urn", "id"),
+    "location/locations_corpus.jsonl": ("id", "location", "display_value"),
+    "summaries/summary_records.jsonl": ("id", "person_id"),
+    "summaries/summary_embeddings.jsonl": ("person_id", "id"),
+    "summaries/person_tech_skills.jsonl": ("person_id",),
+    "unified/summary_embeddings.jsonl": ("person_id", "id"),
+    "unified/person_tech_skills.jsonl": ("person_id",),
+}
+
+
+def _merge_key(row: dict[str, Any], keys: tuple[str, ...]) -> str:
+    values = [str(row.get(key) or "").strip() for key in keys]
+    if any(values):
+        return "|".join(values)
+    return hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def snapshot_existing_merge_artifacts(rd: Path) -> Path | None:
+    if not rd.exists():
+        return None
+    snapshot = Path(tempfile.mkdtemp(prefix="powerpacks-index-prev-"))
+    copied = 0
+    for rel_path in [*MERGE_JSONL_ARTIFACTS.keys(), "unified/unified_person.csv", "roles/role_mapping.csv"]:
+        src = rd / rel_path
+        if not src.exists():
+            continue
+        dst = snapshot / rel_path
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied += 1
+    if copied == 0:
+        shutil.rmtree(snapshot, ignore_errors=True)
+        return None
+    return snapshot
+
+
+def merge_jsonl_file(previous: Path, current: Path, keys: tuple[str, ...]) -> dict[str, Any]:
+    if not previous.exists():
+        return {"action": "no_previous"}
+    rows_by_key: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    previous_rows = 0
+    current_rows = 0
+    for row in read_jsonl(previous):
+        key = _merge_key(row, keys)
+        if key not in rows_by_key:
+            order.append(key)
+        rows_by_key[key] = row
+        previous_rows += 1
+    if current.exists():
+        for row in read_jsonl(current):
+            key = _merge_key(row, keys)
+            if key not in rows_by_key:
+                order.append(key)
+            rows_by_key[key] = row
+            current_rows += 1
+    current.parent.mkdir(parents=True, exist_ok=True)
+    write_jsonl(current, (rows_by_key[key] for key in order))
+    return {"action": "merged", "previous_rows": previous_rows, "new_rows": current_rows, "merged_rows": len(order)}
+
+
+def merge_csv_by_id(previous: Path, current: Path, key_field: str = "id") -> dict[str, Any]:
+    if not previous.exists():
+        return {"action": "no_previous"}
+    rows_by_key: dict[str, dict[str, str]] = {}
+    order: list[str] = []
+    fieldnames: list[str] = []
+    previous_rows = current_rows = 0
+    for source, is_current in [(previous, False), (current, True)]:
+        if not source.exists():
+            continue
+        with source.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for field in reader.fieldnames or []:
+                if field not in fieldnames:
+                    fieldnames.append(field)
+            for row in reader:
+                key = str(row.get(key_field) or "").strip() or hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
+                if key not in rows_by_key:
+                    order.append(key)
+                rows_by_key[key] = row
+                if is_current:
+                    current_rows += 1
+                else:
+                    previous_rows += 1
+    if not fieldnames:
+        return {"action": "empty"}
+    current.parent.mkdir(parents=True, exist_ok=True)
+    with current.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for key in order:
+            writer.writerow({field: rows_by_key[key].get(field, "") for field in fieldnames})
+    return {"action": "merged", "previous_rows": previous_rows, "new_rows": current_rows, "merged_rows": len(order)}
+
+
+def merge_existing_outputs_after_limited_run(rd: Path, snapshot: Path | None, ledger: dict[str, Any]) -> dict[str, Any]:
+    if not snapshot:
+        return {"status": "skipped", "reason": "no_previous_artifacts"}
+    merged: dict[str, Any] = {}
+    for rel_path, keys in MERGE_JSONL_ARTIFACTS.items():
+        previous = snapshot / rel_path
+        if previous.exists():
+            merged[rel_path] = merge_jsonl_file(previous, rd / rel_path, keys)
+    if (snapshot / "unified/unified_person.csv").exists():
+        merged["unified/unified_person.csv"] = merge_csv_by_id(snapshot / "unified/unified_person.csv", rd / "unified/unified_person.csv")
+    if (snapshot / "roles/role_mapping.csv").exists():
+        merged["roles/role_mapping.csv"] = merge_csv_by_id(snapshot / "roles/role_mapping.csv", rd / "roles/role_mapping.csv", key_field="title_hash")
+    ps = paths(rd)
+    vector_artifacts, vector_stats = step_vectors(ledger, ps)
+    validate_artifacts, validate_stats = step_validate(ledger, ps)
+    write_stats(ledger, "build_vectors", vector_stats)
+    write_stats(ledger, "validate_contracts", validate_stats)
+    return {
+        "status": "merged",
+        "artifacts": merged,
+        "build_vectors": vector_stats,
+        "validate_contracts": validate_stats,
+        "vector_artifacts": vector_artifacts,
+        "validate_artifacts": validate_artifacts,
+    }
+
+
 def _arg_artifact(args: argparse.Namespace, attr: str, relative: str) -> str | None:
     value = getattr(args, attr, None)
     if value:
@@ -1652,6 +1794,8 @@ def main() -> None:
             emit_json(estimate_run(args))
             return
         previous_ledger: dict[str, Any] | None = None
+        merge_snapshot: Path | None = None
+        limited_incremental = args.limit is not None or args.limit_mode == "missing"
         if rd.exists():
             if args.force:
                 shutil.rmtree(rd)
@@ -1662,8 +1806,12 @@ def main() -> None:
                     emit_json({"status": ledger["status"], "run_dir": ledger["run_dir"], "counts": {step["id"]: step.get("stats", {}) for step in ledger.get("steps", [])}})
                     return
                 previous_ledger = ledger
+                if limited_incremental:
+                    merge_snapshot = snapshot_existing_merge_artifacts(rd)
                 reset_incremental_progress(rd)
             else:
+                if limited_incremental:
+                    merge_snapshot = snapshot_existing_merge_artifacts(rd)
                 reset_incremental_progress(rd)
         rd.mkdir(parents=True, exist_ok=True)
         ledger = default_ledger(
@@ -1700,6 +1848,8 @@ def main() -> None:
             company_input_embeddings=args.company_input_embeddings,
         )
         ledger["sync_mode"] = "incremental_existing_outputs"
+        if limited_incremental:
+            ledger["disable_output_dir_cache"] = True
         if previous_ledger:
             ledger["previous_ledger"] = {
                 "status": previous_ledger.get("status"),
@@ -1709,7 +1859,14 @@ def main() -> None:
         ledger_path = paths(rd)["ledger"]
         save_ledger(ledger_path, ledger)
         ledger = execute(ledger_path, {"stop_after_role_chunks": args.stop_after_role_chunks, "stop_after_company_chunks": args.stop_after_company_chunks, "stop_after_embedding_chunks": args.stop_after_embedding_chunks})
-        emit_json({"status": ledger["status"], "run_dir": str(rd), "counts": {step["id"]: step.get("stats", {}) for step in ledger["steps"]}})
+        incremental_merge: dict[str, Any] = {"status": "skipped"}
+        if ledger.get("status") == "completed" and limited_incremental:
+            incremental_merge = merge_existing_outputs_after_limited_run(rd, merge_snapshot, ledger)
+            ledger["incremental_merge"] = incremental_merge
+            save_ledger(ledger_path, ledger)
+            if merge_snapshot:
+                shutil.rmtree(merge_snapshot, ignore_errors=True)
+        emit_json({"status": ledger["status"], "run_dir": str(rd), "counts": {step["id"]: step.get("stats", {}) for step in ledger["steps"]}, "incremental_merge": incremental_merge})
         return
     if args.cmd == "continue":
         ledger = execute(Path(args.ledger))
