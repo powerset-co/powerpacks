@@ -72,6 +72,9 @@ type SetupEnrichmentSource = {
   enriched: number;
   skipped: number;
   matched: number;
+  unresolved: number;
+  estimatedCostUsd?: number | null;
+  blocked?: boolean;
   updatedAt?: string | null;
 };
 type SetupOperator = { id: string; email?: string; label: string };
@@ -1684,19 +1687,34 @@ function buildEnrichmentSources(setupSources: ReturnType<typeof normalizeSetupSo
     directoryRows,
     ["queue_csv", "linkedin_resolution_queue_csv"],
   );
-  const gmailProviderMatches = csvRowsForArtifact(
+  const gmailProviderRows = csvRowsForArtifact(
     refreshArtifacts.gmail_linkedin_resolutions_csvs || refreshArtifacts.gmail_linkedin_resolutions_csv,
     ["resolutions_csv"],
-  ).length;
-  const gmailResolvedByLookup = gmailProviderMatches > 0 || Boolean(gmailResolutionStep.status || gmailApplyStep.status);
+  );
+  const gmailProviderAttemptedEmails = new Set(
+    gmailProviderRows
+      .map((row) => String(row.handle || row.email || row.primary_email || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const gmailProviderFound = gmailProviderRows.filter((row) => {
+    const status = String(row.status || "").trim().toLowerCase();
+    return ["found", "completed", "success"].includes(status) && validLinkedInUrl(row.linkedin_url);
+  }).length;
+  const gmailProviderNegative = gmailProviderRows.filter((row) => {
+    const status = String(row.status || "").trim().toLowerCase();
+    return ["not_found", "not-found", "missing", "failed", "error"].includes(status)
+      || (["completed", "found", "success"].includes(status) && !validLinkedInUrl(row.linkedin_url));
+  }).length;
+  const gmailResolvedByLookup = gmailProviderAttemptedEmails.size > 0 || Boolean(gmailResolutionStep.status || gmailApplyStep.status);
   const gmailProviderEnriched = csvCountForArtifactKeys(refreshArtifacts, /^gmail_.+_enriched_provider_enriched_csv$/);
   const gmailRapidFailures = csvCountForArtifactKeys(refreshArtifacts, /^gmail_.+_enriched_rapidapi_recent_failures_csv$/);
   const gmailUnresolvedRows = csvRowsForArtifact(refreshArtifacts.gmail_unresolved_linkedin_resolution_queue_csvs, ["queue_csv"]).length;
+  const gmailCachedNegativeRows = csvRowsForArtifact(refreshArtifacts.gmail_cached_negative_linkedin_resolution_queue_csvs, ["queue_csv"]).length;
   const gmailRemainingUnresolved = gmailResolvedByLookup
-    ? Math.max(0, gmailUnresolvedRows - gmailProviderMatches)
+    ? Math.max(0, gmailUnresolvedRows - gmailProviderAttemptedEmails.size)
     : gmailUnresolvedRows;
-  const gmailFound = Math.min(gmailQueueCount || Number.MAX_SAFE_INTEGER, gmailExistingMatches + gmailProviderEnriched);
-  const gmailNotFound = gmailResolvedByLookup ? gmailRemainingUnresolved + gmailRapidFailures : 0;
+  const gmailFound = Math.min(gmailQueueCount || Number.MAX_SAFE_INTEGER, gmailExistingMatches + Math.max(gmailProviderEnriched, gmailProviderFound));
+  const gmailNotFound = gmailResolvedByLookup ? gmailProviderNegative + gmailCachedNegativeRows + gmailRapidFailures : gmailCachedNegativeRows;
   const linkedinCacheHits = firstCsvCount(
     refreshArtifacts.linkedin_rapidapi_cache_hits_csv,
     refreshArtifacts.linkedin_enrich_people_rapidapi_cache_hits_csv,

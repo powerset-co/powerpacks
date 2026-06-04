@@ -758,21 +758,24 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             def fake_run_cmd(cmd, timeout=None):
                 calls.append(cmd)
                 if any("resolve_linkedin_queue.py" in part for part in cmd):
-                    queue = Path(cmd[cmd.index("--input") + 1]).stem
-                    output = tmp / f"resolutions-{queue}.csv"
+                    queue = Path(cmd[cmd.index("--input") + 1])
+                    output = tmp / f"resolutions-{queue.stem}.csv"
+                    queue_rows = import_network_pipeline.read_csv_rows(queue)[1]
                     with output.open("w", newline="", encoding="utf-8") as handle:
-                        writer = csv.DictWriter(handle, fieldnames=import_network_pipeline.LINKEDIN_RESOLUTION_COLUMNS)
+                        writer = csv.DictWriter(handle, fieldnames=["email", "full_name", "company", "linkedin_url", "x_handle", "status", "confidence", "reasoning"])
                         writer.writeheader()
-                        writer.writerow({
-                            "handle": "person@example.com",
-                            "status": "found",
-                            "linkedin_url": "https://www.linkedin.com/in/person-example",
-                            "confidence": "0.95",
-                            "matched_name": "Person Example",
-                            "matched_headline": "",
-                            "evidence": "[]",
-                            "reasoning": "fixture",
-                        })
+                        for row in queue_rows:
+                            email = row["primary_email"]
+                            writer.writerow({
+                                "email": email,
+                                "full_name": row["full_name"],
+                                "company": "",
+                                "linkedin_url": f"https://www.linkedin.com/in/{email.split('@', 1)[0]}",
+                                "x_handle": "",
+                                "status": "completed",
+                                "confidence": "high",
+                                "reasoning": "fixture",
+                            })
                     return 0, {"output": str(output)}, ""
                 if any("gmail_network_import.py" in part for part in cmd):
                     run_id = cmd[cmd.index("--run-id") + 1]
@@ -787,7 +790,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(len(ledger["artifacts"]["gmail_linkedin_resolutions_csvs"]), 2)
             self.assertEqual(
                 len({record["resolutions_csv"] for record in ledger["artifacts"]["gmail_linkedin_resolutions_csvs"]}),
-                1,
+                2,
             )
             self.assertTrue(Path(ledger["artifacts"]["gmail_linkedin_combined_queue_csv"]).exists())
             self.assertEqual(len(ledger["artifacts"]["gmail_enrich_people_ledgers"]), 2)
@@ -888,6 +891,114 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             with combined_queue.open(newline="", encoding="utf-8") as handle:
                 combined_rows = list(csv.DictReader(handle))
             self.assertEqual([row["handle"] for row in combined_rows], ["alex@example.com"])
+
+    def test_gmail_linkedin_resolution_does_not_fallback_to_full_queue_after_all_directory_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            original_queue = tmp / "queue.csv"
+            import_network_pipeline.write_csv_rows(original_queue, ["handle", "primary_email", "display_name"], [
+                {"handle": "jane@example.com", "primary_email": "jane@example.com", "display_name": "Jane Example"},
+            ])
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {"gmail_linkedin_provider": "parallel", "resolve_gmail_linkedin": True},
+                "steps": {},
+                "artifacts": {
+                    "gmail_linkedin_resolution_queue_csvs": [{"account_email": "me@example.com", "queue_csv": str(original_queue), "people_csv": str(tmp / "people.csv")}],
+                    "gmail_unresolved_linkedin_resolution_queue_csvs": [],
+                },
+            }
+            with mock.patch.object(import_network_pipeline, "run_cmd") as run_cmd:
+                self.assertTrue(import_network_pipeline.run_gmail_linkedin_resolution(tmp / "ledger.json", ledger))
+            run_cmd.assert_not_called()
+            self.assertEqual(ledger["steps"]["gmail_linkedin_resolution"]["status"], "skipped")
+
+    def test_gmail_directory_filters_cached_negative_resolution_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            directory = tmp / "directory.csv"
+            import_network_pipeline.write_csv_rows(directory, import_network_pipeline.DIRECTORY_COLUMNS, [
+                {
+                    "source": "gmail_msgvault",
+                    "source_key": "gmail:me@example.com:email:alex@example.com",
+                    "source_account": "me@example.com",
+                    "source_channels": "gmail_msgvault",
+                    "status": "not_found",
+                    "email": "alex@example.com",
+                    "name": "Alex Example",
+                    "confidence": "0.01",
+                },
+                {
+                    "source": "fixture",
+                    "source_key": "email:jane@example.com",
+                    "status": "found",
+                    "email": "jane@example.com",
+                    "name": "Jane Example",
+                    "linkedin_url": "https://www.linkedin.com/in/jane-example",
+                    "public_identifier": "jane-example",
+                    "confidence": "1.00",
+                    "matched_name": "Jane Example",
+                },
+            ])
+            queue = tmp / "queue.csv"
+            import_network_pipeline.write_csv_rows(queue, [
+                "handle", "id", "display_name", "full_name", "primary_email", "company_guess", "primary_email_type",
+            ], [
+                {"handle": "jane@example.com", "id": "gmail:jane", "display_name": "Jane Example", "full_name": "Jane Example", "primary_email": "jane@example.com"},
+                {"handle": "alex@example.com", "id": "gmail:alex", "display_name": "Alex Example", "full_name": "Alex Example", "primary_email": "alex@example.com"},
+                {"handle": "bob@example.com", "id": "gmail:bob", "display_name": "Bob Example", "full_name": "Bob Example", "primary_email": "bob@example.com"},
+            ])
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {"gmail_linkedin_provider": "harness", "linkedin_directory_csv": str(directory)},
+                "steps": {},
+                "artifacts": {"gmail_linkedin_resolution_queue_csvs": [{"account_email": "me@example.com", "queue_csv": str(queue), "people_csv": str(tmp / "people.csv")}]},
+            }
+            with mock.patch.object(import_network_pipeline, "default_directory_source_paths", return_value=[]):
+                self.assertTrue(import_network_pipeline.run_gmail_directory(tmp / "ledger.json", ledger))
+            self.assertEqual(ledger["steps"]["gmail_directory"]["resolved"], 1)
+            self.assertEqual(ledger["steps"]["gmail_directory"]["cached_negative"], 1)
+            self.assertEqual(ledger["steps"]["gmail_directory"]["unresolved"], 1)
+            unresolved_record = ledger["artifacts"]["gmail_unresolved_linkedin_resolution_queue_csvs"][0]
+            with Path(unresolved_record["queue_csv"]).open(newline="", encoding="utf-8") as handle:
+                unresolved = list(csv.DictReader(handle))
+            self.assertEqual([row["handle"] for row in unresolved], ["bob@example.com"])
+
+    def test_gmail_apply_commits_provider_found_and_not_found_to_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            provider_resolutions = tmp / "provider_resolutions.csv"
+            with provider_resolutions.open("w", newline="", encoding="utf-8") as handle_obj:
+                writer = csv.DictWriter(handle_obj, fieldnames=["email", "full_name", "company", "linkedin_url", "x_handle", "status", "confidence", "reasoning"])
+                writer.writeheader()
+                writer.writerow({"email": "alex@example.com", "full_name": "Alex Example", "linkedin_url": "https://linkedin.com/in/alex-example", "status": "completed", "confidence": "high", "reasoning": "found"})
+                writer.writerow({"email": "bob@example.com", "full_name": "Bob Example", "linkedin_url": "", "status": "not_found", "confidence": "medium", "reasoning": "not found"})
+            people = tmp / "people.csv"
+            people.write_text("id,primary_email\ngmail:alex,alex@example.com\ngmail:bob,bob@example.com\n", encoding="utf-8")
+            ledger = {
+                "run_id": "network-test",
+                "run_dir": str(tmp / "network-test"),
+                "input": {"linkedin_directory_csv": str(tmp / "directory.csv"), "linkedin_directory_use_defaults": False},
+                "steps": {},
+                "artifacts": {
+                    "gmail_linkedin_resolutions_csvs": [{"account_email": "me@example.com", "resolutions_csv": str(provider_resolutions), "people_csv": str(people), "slug": "me"}],
+                },
+            }
+            def fake_run_cmd(cmd, timeout=None):
+                if any("gmail_network_import.py" in part for part in cmd):
+                    return 0, {"people_csv": str(tmp / "resolved.csv"), "resolved": 1}, ""
+                if any("enrich_people.py" in part for part in cmd):
+                    return 0, {"artifacts": {"people_csv": str(tmp / "enriched.csv")}}, ""
+                self.fail(f"unexpected command: {cmd}")
+            with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                self.assertTrue(import_network_pipeline.run_gmail_apply_and_enrich(tmp / "ledger.json", ledger))
+            with (tmp / "directory.csv").open(newline="", encoding="utf-8") as handle:
+                rows = {row["email"]: row for row in csv.DictReader(handle)}
+            self.assertEqual(rows["alex@example.com"]["status"], "found")
+            self.assertEqual(rows["bob@example.com"]["status"], "not_found")
+            self.assertEqual(rows["bob@example.com"]["linkedin_url"], "")
 
     def test_gmail_apply_combines_directory_and_provider_resolutions_once(self) -> None:
         with tempfile.TemporaryDirectory() as td:
