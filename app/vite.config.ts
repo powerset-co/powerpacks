@@ -19,10 +19,16 @@ const accountsPath = path.join(powerpacksStateRoot, "ingestion", "accounts.json"
 const importRefreshLedgerPath = path.join(powerpacksStateRoot, "network-import", "import-network-run.setup-refresh.json");
 const messagesLedgerPath = path.join(powerpacksStateRoot, "messages", "import-run.setup-messages.json");
 const messagesReviewCsvPath = path.join(powerpacksStateRoot, "messages", "research_review.csv");
-const whatsAppQrPngRelativePath = ".powerpacks/messages/wacli-login-qr.png";
-const whatsAppQrHtmlRelativePath = ".powerpacks/messages/wacli-login-qr.html";
-const whatsAppQrPngPath = path.join(powerpacksStateRoot, "messages", "wacli-login-qr.png");
-const whatsAppQrHtmlPath = path.join(powerpacksStateRoot, "messages", "wacli-login-qr.html");
+const whatsAppWacliQrPngRelativePath = ".powerpacks/messages/wacli-login-qr.png";
+const whatsAppWacliQrHtmlRelativePath = ".powerpacks/messages/wacli-login-qr.html";
+const whatsAppWacliQrPngPath = path.join(powerpacksStateRoot, "messages", "wacli-login-qr.png");
+const whatsAppWacliQrHtmlPath = path.join(powerpacksStateRoot, "messages", "wacli-login-qr.html");
+const whatsAppWahaQrPngRelativePath = ".powerpacks/messages/whatsapp/qr.png";
+const whatsAppWahaQrTxtRelativePath = ".powerpacks/messages/whatsapp/qr.txt";
+const whatsAppWahaQrPngPath = path.join(powerpacksStateRoot, "messages", "whatsapp", "qr.png");
+const whatsAppWahaQrTxtPath = path.join(powerpacksStateRoot, "messages", "whatsapp", "qr.txt");
+const whatsAppWahaEngine = "NOWEB";
+const whatsAppWahaImage = "devlikeapro/waha:noweb-2026.3.4";
 const messagesChatDbPath = process.env.POWERPACKS_IMESSAGE_CHAT_DB
   ? path.resolve(process.env.POWERPACKS_IMESSAGE_CHAT_DB)
   : path.join(process.env.HOME || "", "Library", "Messages", "chat.db");
@@ -148,6 +154,55 @@ function setupProcessEnv(): NodeJS.ProcessEnv {
     POWERPACKS_REPO_ROOT: powerpacksRepoRoot,
     PYTHONUNBUFFERED: "1",
   };
+}
+
+function whatsAppProvider(): "wacli" | "waha" {
+  const value = String(setupProcessEnv().POWERPACKS_WHATSAPP_PROVIDER || "wacli").trim().toLowerCase();
+  return value === "waha" ? "waha" : "wacli";
+}
+
+function whatsAppQrPngRelativePath(): string {
+  return whatsAppProvider() === "waha" ? whatsAppWahaQrPngRelativePath : whatsAppWacliQrPngRelativePath;
+}
+
+function removeLocalFiles(paths: string[]): string[] {
+  const removed: string[] = [];
+  for (const filePath of paths) {
+    try {
+      fs.unlinkSync(filePath);
+      removed.push(path.relative(powerpacksRepoRoot, filePath));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+  return removed;
+}
+
+function wahaRuntimeCommand(command: "up" | "status", extra: string[] = []): string[] {
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/messages/primitives/waha_runtime/waha_runtime.py",
+    command,
+    "--engine", whatsAppWahaEngine,
+    "--image", whatsAppWahaImage,
+    ...extra,
+  ];
+}
+
+function wahaSessionCommand(command: "start" | "status", extra: string[] = []): string[] {
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/messages/primitives/waha_session/waha_session.py",
+    command,
+    "--engine", whatsAppWahaEngine,
+    ...extra,
+  ];
+}
+
+function wahaWaitTimeoutSeconds(): string {
+  const raw = String(setupProcessEnv().POWERPACKS_WAHA_WAIT_TIMEOUT || "180").trim();
+  const seconds = Number.parseInt(raw, 10);
+  return Number.isFinite(seconds) && seconds > 0 ? String(seconds) : "180";
 }
 
 function resolveOperator(setupLedger: RunState | null, accounts: RunState | null): SetupOperator {
@@ -515,6 +570,8 @@ function whitelistedShellCommand(command: string): boolean {
     "uv run --project . python packs/ingestion/primitives/setup/setup.py ",
     "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py ",
     "uv run --project . python packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py auth",
+    "uv run --project . python packs/messages/primitives/waha_runtime/waha_runtime.py ",
+    "uv run --project . python packs/messages/primitives/waha_session/waha_session.py ",
     "uv run --project . python packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py open-privacy-settings",
   ].some((prefix) => trimmed.startsWith(prefix));
 }
@@ -904,13 +961,62 @@ function whatsappLinkStatus(): Record<string, any> {
     return cachedWhatsAppLinkStatus.value;
   }
 
+  const provider = whatsAppProvider();
   const base = {
     status: "not_authenticated",
     authenticated: false,
-    store: whatsAppStorePath,
+    provider,
+    engine: provider === "waha" ? whatsAppWahaEngine : undefined,
+    image: provider === "waha" ? whatsAppWahaImage : undefined,
+    store: provider === "wacli" ? whatsAppStorePath : undefined,
   };
   let value: Record<string, any> = base;
   try {
+    if (provider === "waha") {
+      const runtimeStatusCommand = wahaRuntimeCommand("status");
+      const sessionStatusCommand = wahaSessionCommand("status");
+      const runtime = spawnSync(runtimeStatusCommand[0], runtimeStatusCommand.slice(1), {
+        cwd: powerpacksRepoRoot,
+        env: setupProcessEnv(),
+        encoding: "utf8",
+        timeout: 8000,
+      });
+      const session = spawnSync(sessionStatusCommand[0], sessionStatusCommand.slice(1), {
+        cwd: powerpacksRepoRoot,
+        env: setupProcessEnv(),
+        encoding: "utf8",
+        timeout: 8000,
+      });
+      const runtimePayload = parseJsonFragment(runtime.stdout || "");
+      const sessionPayload = parseJsonFragment(session.stdout || "");
+      const state = sessionPayload?.state && typeof sessionPayload.state === "object" ? sessionPayload.state : {};
+      const authenticated = state.status === "WORKING";
+      const qrArtifacts = authenticated ? {} : {
+        qr_png: fs.existsSync(whatsAppWahaQrPngPath) ? whatsAppWahaQrPngRelativePath : "",
+        qr_raw: fs.existsSync(whatsAppWahaQrTxtPath) ? whatsAppWahaQrTxtRelativePath : "",
+        qr_updated_at: fs.existsSync(whatsAppWahaQrPngPath) ? fs.statSync(whatsAppWahaQrPngPath).mtime.toISOString() : "",
+      };
+      value = {
+        ...base,
+        status: authenticated ? "authenticated" : "not_authenticated",
+        authenticated,
+        session: state.name || sessionPayload?.session || "default",
+        session_status: state.status || (state.reachable === false ? "unreachable" : "unknown"),
+        runtime_ready: runtimePayload?.runtime?.ok === true,
+        ...qrArtifacts,
+      };
+      if (!authenticated) {
+        const runtimeError = runtimePayload?.docker?.error
+          || runtimePayload?.container?.error
+          || runtimePayload?.runtime?.mismatches?.[0]?.field;
+        const sessionError = state.error || session.error?.message || session.stderr;
+        const error = sessionError || runtimeError || runtime.stderr;
+        if (error) value.error = String(error).slice(0, 500);
+      }
+      cachedWhatsAppLinkStatus = { expiresAt: nowMs + 5000, value };
+      return value;
+    }
+
     const result = spawnSync("uv", [
       "run", "--project", ".", "python",
       "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
@@ -926,11 +1032,11 @@ function whatsappLinkStatus(): Record<string, any> {
     const auth = payload?.auth && typeof payload.auth === "object" ? payload.auth : {};
     const authenticated = auth.authenticated === true;
     const qrArtifacts = authenticated ? {} : {
-      qr_page: typeof auth.qr_page === "string" && auth.qr_page ? auth.qr_page : (fs.existsSync(whatsAppQrHtmlPath) ? whatsAppQrHtmlRelativePath : ""),
-      qr_png: typeof auth.qr_png === "string" && auth.qr_png ? auth.qr_png : (fs.existsSync(whatsAppQrPngPath) ? whatsAppQrPngRelativePath : ""),
+      qr_page: typeof auth.qr_page === "string" && auth.qr_page ? auth.qr_page : (fs.existsSync(whatsAppWacliQrHtmlPath) ? whatsAppWacliQrHtmlRelativePath : ""),
+      qr_png: typeof auth.qr_png === "string" && auth.qr_png ? auth.qr_png : (fs.existsSync(whatsAppWacliQrPngPath) ? whatsAppWacliQrPngRelativePath : ""),
       qr_updated_at: typeof auth.qr_updated_at === "string" && auth.qr_updated_at
         ? auth.qr_updated_at
-        : (fs.existsSync(whatsAppQrPngPath) ? fs.statSync(whatsAppQrPngPath).mtime.toISOString() : ""),
+        : (fs.existsSync(whatsAppWacliQrPngPath) ? fs.statSync(whatsAppWacliQrPngPath).mtime.toISOString() : ""),
     };
     value = {
       ...base,
@@ -1845,7 +1951,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   }
 
   if (action === "index-one") {
-    return startSetupJob(action, setupCommandArgs(operator.id, "index", ["--approve-provider-spend", "--limit", "1", "--limit-mode", "missing"]), 2 * 60 * 60 * 1000);
+    return startSetupJob(action, setupCommandArgs(operator.id, "index", ["--approve-provider-spend", "--limit", "10", "--limit-mode", "missing"]), 2 * 60 * 60 * 1000);
   }
 
   if (["bootstrap", "link", "run"].includes(action)) {
@@ -1960,6 +2066,21 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
 
   if (action === "whatsapp-auth") {
     cachedWhatsAppLinkStatus = null;
+    if (whatsAppProvider() === "waha") {
+      removeLocalFiles([whatsAppWahaQrPngPath, whatsAppWahaQrTxtPath]);
+      const runtimeUp = wahaRuntimeCommand("up");
+      const sessionStart = wahaSessionCommand("start", [
+        "--force",
+        "--open",
+        "--wait",
+        "--wait-timeout", wahaWaitTimeoutSeconds(),
+      ]);
+      return startSetupJob(action, [
+        "/bin/zsh", "-lc",
+        `${shellJoin(runtimeUp)} && ${shellJoin(sessionStart)}`,
+      ], 10 * 60 * 1000);
+    }
+    removeLocalFiles([whatsAppWacliQrPngPath, whatsAppWacliQrHtmlPath]);
     return startSetupJob(action, [
       "uv", "run", "--project", ".", "python",
       "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
@@ -2094,7 +2215,7 @@ function powerpacksLocalApiPlugin(): Plugin {
           }
 
           if (url.pathname === "/local-api/setup/whatsapp-qr") {
-            const relativePath = String(url.searchParams.get("path") || whatsAppQrPngRelativePath);
+            const relativePath = String(url.searchParams.get("path") || whatsAppQrPngRelativePath());
             const resolved = safeJoinPowerpacks(relativePath);
             const messagesDir = `${path.join(powerpacksStateRoot, "messages")}${path.sep}`;
             if (!resolved || !resolved.startsWith(messagesDir) || path.extname(resolved).toLowerCase() !== ".png" || !fs.existsSync(resolved)) {

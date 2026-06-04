@@ -1985,6 +1985,21 @@ def main() -> None:
         ledger["sync_mode"] = "incremental_existing_outputs"
         if limited_incremental:
             ledger["disable_output_dir_cache"] = True
+            # Feed snapshot artifacts as input caches so enrichment stages
+            # reuse prior LLM results instead of re-calling for already-
+            # enriched roles/companies/embeddings.
+            if merge_snapshot:
+                for cache_key, rel_path in [
+                    ("role_input_classifications", "roles/roles_with_dense_text_remapped.jsonl"),
+                    ("role_input_embeddings", "roles/roles_with_embeddings.jsonl"),
+                    ("company_input_classifications", "company/companies_corpus_v3.jsonl"),
+                    ("company_input_embeddings", "company/company_embeddings_v3.jsonl"),
+                    ("summary_input_embeddings", "summaries/summary_embeddings.jsonl"),
+                    ("person_tech_skills_input", "unified/person_tech_skills.jsonl"),
+                ]:
+                    cached = merge_snapshot / rel_path
+                    if cached.exists() and not ledger.get(cache_key):
+                        ledger[cache_key] = str(cached)
         if previous_ledger:
             ledger["previous_ledger"] = {
                 "status": previous_ledger.get("status"),

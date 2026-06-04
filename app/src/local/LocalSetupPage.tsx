@@ -1372,7 +1372,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <ActionButton action="index-one" actionState={actionState} variant="outline" onClick={() => onRun({ action: "index-one" })}>
-              <Play className="h-4 w-4" /> Process 1 missing person
+              <Play className="h-4 w-4" /> Process 10 missing people
             </ActionButton>
             <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
               <Play className="h-4 w-4" /> {localRecordsMode ? "Build DuckDB" : requiresProviderSpend ? "Approve & Update" : "Process"}
