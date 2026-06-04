@@ -930,9 +930,20 @@ def local_duckdb_processing_dq(processing_payload: dict[str, Any], duckdb_payloa
         import duckdb  # type: ignore
     except ModuleNotFoundError:
         return {'status': 'skipped', 'reason': 'duckdb_python_module_missing', 'duckdb': str(db_path), 'selected_person_ids': selected_ids}
+    # Retry with short delay to handle transient locks from the rebuild process
+    con = None
+    for attempt in range(5):
+        try:
+            con = duckdb.connect(str(db_path), read_only=True)
+            break
+        except Exception as lock_err:
+            if attempt < 4 and 'lock' in str(lock_err).lower():
+                import time
+                time.sleep(1 + attempt)
+                continue
+            return {'status': 'skipped', 'reason': 'duckdb_locked', 'duckdb': str(db_path), 'error': f'{type(lock_err).__name__}: {lock_err}', 'selected_person_ids': selected_ids}
     try:
-        with duckdb.connect(str(db_path), read_only=True) as con:
-            tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
+        tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
             profile_hits: set[str] = set()
             vector_hits: set[str] = set()
             position_vector_hits: set[str] = set()
@@ -988,6 +999,12 @@ def local_duckdb_processing_dq(processing_payload: dict[str, Any], duckdb_payloa
         }
     except Exception as exc:
         return {'status': 'failed', 'reason': 'duckdb_dq_query_failed', 'duckdb': str(db_path), 'error': f'{type(exc).__name__}: {exc}', 'selected_person_ids': selected_ids}
+    finally:
+        if con:
+            try:
+                con.close()
+            except Exception:
+                pass
 
 
 def search_record_summary() -> dict[str, Any]:
@@ -1284,7 +1301,7 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         return payload, 1
 
     duckdb_dq = local_duckdb_processing_dq(processing_payload, duckdb_payload if isinstance(duckdb_payload, dict) else {})
-    if duckdb_dq.get('status') == 'failed':
+    if duckdb_dq.get('status') == 'failed' and duckdb_dq.get('reason') != 'duckdb_locked':
         payload = {
             'status': 'failed',
             'step': 'local_duckdb_dq',

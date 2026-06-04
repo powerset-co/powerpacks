@@ -17,6 +17,7 @@ import {
   Mail,
   MessageSquare,
   Play,
+  ClipboardCopy,
   Sparkles,
   Terminal,
 } from "lucide-react";
@@ -768,6 +769,8 @@ function MessagesChannelPanel({
   const whatsAppQrPath = stringValue(whatsApp.qr_png);
   const whatsAppQrPage = stringValue(whatsApp.qr_page);
   const whatsAppQrUpdatedAt = stringValue(whatsApp.qr_updated_at);
+  const whatsAppProvider = stringValue(whatsApp.provider) || "wacli";
+  const whatsAppEngine = stringValue(whatsApp.engine);
   const whatsAppQrSrc = whatsAppQrPath
     ? `/local-api/setup/whatsapp-qr?path=${encodeURIComponent(whatsAppQrPath)}${whatsAppQrUpdatedAt ? `&t=${encodeURIComponent(whatsAppQrUpdatedAt)}` : ""}`
     : "";
@@ -820,9 +823,10 @@ function MessagesChannelPanel({
               <StatusBadge status="not_authenticated" />
             )}
           </div>
+          <KeyValue label="Provider" value={whatsAppEngine ? `${whatsAppProvider} / ${whatsAppEngine}` : whatsAppProvider} />
           <KeyValue label="Account" value={whatsAppAuthenticated ? "authenticated" : "not authenticated"} />
-          {!whatsAppAuthenticated && whatsAppQrPage && (
-            <KeyValue label="QR file" value={whatsAppQrPage} />
+          {!whatsAppAuthenticated && (whatsAppQrPage || whatsAppQrPath) && (
+            <KeyValue label="QR file" value={whatsAppQrPage || whatsAppQrPath} />
           )}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1426,7 +1430,20 @@ function JobPanel({
             </pre>
           </div>
           <div>
-            <div className="mb-1 font-medium">Logs</div>
+            <div className="mb-1 flex items-center justify-between">
+              <span className="font-medium">Logs</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 gap-1 px-2 text-xs"
+                onClick={() => {
+                  const text = cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n")) || "";
+                  navigator.clipboard.writeText(text).catch(() => {});
+                }}
+              >
+                <ClipboardCopy className="h-3 w-3" /> Copy
+              </Button>
+            </div>
             <pre className="max-h-[28rem] overflow-auto rounded-md bg-muted/40 p-3 font-mono whitespace-pre-wrap break-words">
               {cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n")) || "No output yet."}
             </pre>
