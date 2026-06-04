@@ -630,7 +630,9 @@ def step_flatten(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
     people = flatten_people(ledger["input"])
     people, selection = select_people_for_run(people, ledger)
     write_jsonl(ps["flattened"], people)
-    stats = {"people": len(people), "selection": selection}
+    selected_person_ids = [str(person.get("id") or person.get("person_id") or person.get("base_id") or "").strip() for person in people]
+    selected_person_ids = [person_id for person_id in selected_person_ids if person_id]
+    stats = {"people": len(people), "selection": selection, "selected_person_ids": selected_person_ids}
     write_stats(ledger, "flatten_people", stats)
     return {"flattened_people": str(ps["flattened"])}, stats
 
@@ -1612,6 +1614,22 @@ def merge_csv_by_id(previous: Path, current: Path, key_field: str = "id") -> dic
     return {"action": "merged", "previous_rows": previous_rows, "new_rows": current_rows, "merged_rows": len(order)}
 
 
+def compact_validation_stats(validation_stats: dict[str, Any]) -> dict[str, Any]:
+    validation = validation_stats.get("validation") if isinstance(validation_stats.get("validation"), dict) else {}
+    compact: dict[str, Any] = {"validation": {}}
+    for name, result in validation.items():
+        if not isinstance(result, dict):
+            compact["validation"][name] = result
+            continue
+        errors = result.get("errors") if isinstance(result.get("errors"), list) else []
+        compact["validation"][name] = {
+            key: value for key, value in result.items() if key != "errors"
+        }
+        compact["validation"][name]["error_count"] = len(errors)
+        compact["validation"][name]["error_sample"] = errors[:3]
+    return compact
+
+
 def merge_existing_outputs_after_limited_run(rd: Path, snapshot: Path | None, ledger: dict[str, Any]) -> dict[str, Any]:
     if not snapshot:
         return {"status": "skipped", "reason": "no_previous_artifacts"}
@@ -1633,7 +1651,7 @@ def merge_existing_outputs_after_limited_run(rd: Path, snapshot: Path | None, le
         "status": "merged",
         "artifacts": merged,
         "build_vectors": vector_stats,
-        "validate_contracts": validate_stats,
+        "validate_contracts": compact_validation_stats(validate_stats),
         "vector_artifacts": vector_artifacts,
         "validate_artifacts": validate_artifacts,
     }

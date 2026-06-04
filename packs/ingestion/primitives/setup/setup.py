@@ -876,7 +876,7 @@ def processing_run_command_args(operator_id: str, *, allow_paid: bool = False, a
 
 
 def build_local_duckdb_shim_command_text(operator_id: str) -> str:
-    return f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --derive-positions-from-person-profiles --operator-id {operator_id} --force'
+    return f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'
 
 
 def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
@@ -885,11 +885,109 @@ def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
         'scripts/build-local-duckdb-shim.py',
         '--records-dir',
         '.powerpacks/search-index',
-        '--derive-positions-from-person-profiles',
         '--operator-id',
         operator_id,
         '--force',
     ]
+
+
+def _processing_selected_person_ids(processing_payload: dict[str, Any]) -> list[str]:
+    counts = processing_payload.get('counts') if isinstance(processing_payload.get('counts'), dict) else {}
+    flatten = counts.get('flatten_people') if isinstance(counts.get('flatten_people'), dict) else {}
+    selected = flatten.get('selected_person_ids') if isinstance(flatten.get('selected_person_ids'), list) else []
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in selected:
+        text = str(value or '').strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+    return out
+
+
+def _duckdb_columns(con: Any, table: str) -> set[str]:
+    try:
+        return {str(row[1]) for row in con.execute(f'pragma table_info({table})').fetchall()}
+    except Exception:
+        return set()
+
+
+def local_duckdb_processing_dq(processing_payload: dict[str, Any], duckdb_payload: dict[str, Any]) -> dict[str, Any]:
+    selected_ids = _processing_selected_person_ids(processing_payload)
+    counts = processing_payload.get('counts') if isinstance(processing_payload.get('counts'), dict) else {}
+    flatten = counts.get('flatten_people') if isinstance(counts.get('flatten_people'), dict) else {}
+    selected_count = int(flatten.get('people') or (flatten.get('selection') or {}).get('selected_people') or 0)
+    if selected_count == 0:
+        return {'status': 'ok', 'reason': 'no_people_selected', 'selected_people': 0}
+    if not selected_ids:
+        return {'status': 'skipped', 'reason': 'processing_payload_missing_selected_person_ids', 'selected_people': selected_count}
+    db_path = Path(str(duckdb_payload.get('duckdb') or '.powerpacks/search-index/local-search.duckdb'))
+    if not db_path.is_absolute():
+        db_path = ROOT / db_path
+    if not db_path.exists():
+        return {'status': 'failed', 'reason': 'missing_duckdb', 'duckdb': str(db_path), 'selected_person_ids': selected_ids}
+    try:
+        import duckdb  # type: ignore
+    except ModuleNotFoundError:
+        return {'status': 'skipped', 'reason': 'duckdb_python_module_missing', 'duckdb': str(db_path), 'selected_person_ids': selected_ids}
+    try:
+        with duckdb.connect(str(db_path), read_only=True) as con:
+            tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
+            profile_hits: set[str] = set()
+            vector_hits: set[str] = set()
+            position_vector_hits: set[str] = set()
+            summary_vector_hits: set[str] = set()
+            if 'local_person_profiles' in tables:
+                profile_cols = _duckdb_columns(con, 'local_person_profiles')
+                profile_id_cols = [col for col in ['person_id', 'base_id', 'id'] if col in profile_cols]
+                for person_id in selected_ids:
+                    if not profile_id_cols:
+                        continue
+                    where = ' OR '.join([f"cast({col} as varchar) = ?" for col in profile_id_cols])
+                    params = [person_id] * len(profile_id_cols)
+                    if int(con.execute(f"select count(*) from local_person_profiles where {where}", params).fetchone()[0] or 0) > 0:
+                        profile_hits.add(person_id)
+            for table in ['local_people_positions', 'local_summaries']:
+                if table not in tables:
+                    continue
+                cols = _duckdb_columns(con, table)
+                if 'vector' not in cols:
+                    continue
+                id_cols = [col for col in ['person_id', 'base_id', 'id'] if col in cols]
+                if not id_cols:
+                    continue
+                for person_id in selected_ids:
+                    where_ids = ' OR '.join([f"cast({col} as varchar) = ?" for col in id_cols])
+                    params = [person_id] * len(id_cols)
+                    query = f"select count(*) from {table} where ({where_ids}) and vector is not null and len(vector) > 0"
+                    if int(con.execute(query, params).fetchone()[0] or 0) > 0:
+                        vector_hits.add(person_id)
+                        if table == 'local_people_positions':
+                            position_vector_hits.add(person_id)
+                        elif table == 'local_summaries':
+                            summary_vector_hits.add(person_id)
+        people_counts = counts.get('build_people_records') if isinstance(counts.get('build_people_records'), dict) else {}
+        expected_position_vectors = int(people_counts.get('with_vectors') or 0) > 0
+        missing_vectors = [person_id for person_id in selected_ids if person_id not in vector_hits]
+        missing_position_vectors = [person_id for person_id in selected_ids if expected_position_vectors and person_id not in position_vector_hits]
+        missing_profiles = [person_id for person_id in selected_ids if person_id not in profile_hits]
+        failed = bool(missing_vectors or missing_position_vectors)
+        return {
+            'status': 'ok' if not failed else 'failed',
+            'duckdb': str(db_path),
+            'selected_people': selected_count,
+            'selected_person_ids': selected_ids,
+            'profile_hits': len(profile_hits),
+            'vector_hits': len(vector_hits),
+            'position_vector_hits': len(position_vector_hits),
+            'summary_vector_hits': len(summary_vector_hits),
+            'expected_position_vectors': expected_position_vectors,
+            'missing_profile_person_ids': missing_profiles,
+            'missing_vector_person_ids': missing_vectors,
+            'missing_position_vector_person_ids': missing_position_vectors,
+        }
+    except Exception as exc:
+        return {'status': 'failed', 'reason': 'duckdb_dq_query_failed', 'duckdb': str(db_path), 'error': f'{type(exc).__name__}: {exc}', 'selected_person_ids': selected_ids}
 
 
 def search_record_summary() -> dict[str, Any]:
@@ -1185,6 +1283,22 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         save_setup_ledger(ledger, ledger_path)
         return payload, 1
 
+    duckdb_dq = local_duckdb_processing_dq(processing_payload, duckdb_payload if isinstance(duckdb_payload, dict) else {})
+    if duckdb_dq.get('status') == 'failed':
+        payload = {
+            'status': 'failed',
+            'step': 'local_duckdb_dq',
+            'processing_estimate': estimate,
+            'processing': processing_payload,
+            'local_duckdb': duckdb_payload,
+            'local_duckdb_dq': duckdb_dq,
+            'error': 'processed people were not found with vectors in canonical DuckDB',
+        }
+        ledger.setdefault('phases', {})['index'] = payload
+        ledger['status'] = 'failed'
+        save_setup_ledger(ledger, ledger_path)
+        return payload, 1
+
     payload = {
         'status': 'ready',
         'people_csv': '.powerpacks/network-import/merged/people.csv',
@@ -1196,6 +1310,7 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         'processing_estimate': estimate,
         'processing': processing_payload,
         'local_duckdb': duckdb_payload,
+        'local_duckdb_dq': duckdb_dq,
         'duckdb': duckdb_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb') if isinstance(duckdb_payload, dict) else '.powerpacks/search-index/local-search.duckdb',
         'updated_at': now(),
     }
@@ -1827,12 +1942,24 @@ def run_index_phase(args: argparse.Namespace) -> int:
     )
     final_status = status_payload(status_args)
     save_setup_ledger(final_status['setup_ledger'], ledger_path)
+    index_summary = {
+        'status': index_payload.get('status'),
+        'step': index_payload.get('step', ''),
+        'people_csv': index_payload.get('people_csv', '.powerpacks/network-import/merged/people.csv'),
+        'people_sha256': index_payload.get('people_sha256', ''),
+        'duckdb': index_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb'),
+        'processing_counts': (index_payload.get('processing') or {}).get('counts', {}) if isinstance(index_payload.get('processing'), dict) else {},
+        'incremental_merge': (index_payload.get('processing') or {}).get('incremental_merge', {}) if isinstance(index_payload.get('processing'), dict) else {},
+        'local_duckdb': index_payload.get('local_duckdb', {}),
+        'local_duckdb_dq': index_payload.get('local_duckdb_dq', {}),
+        'error': index_payload.get('error', ''),
+    }
     emit({
         'status': index_payload.get('status'),
         'phase': 'index',
         'operator_id': args.operator_id,
-        'index': index_payload,
-        'setup_ledger': final_status['setup_ledger'],
+        'index': index_summary,
+        'setup_ledger_path': str(ledger_path),
         'next': next_action_payload(status_args)['next'],
     })
     return index_code
