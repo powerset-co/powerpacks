@@ -1,0 +1,63 @@
+name: powerpacks-local
+
+x-powerpacks-image: &powerpacks_image
+  build:
+    context: .
+    dockerfile: adapters/codex/docker/Dockerfile
+
+services:
+  console:
+    <<: *powerpacks_image
+    restart: unless-stopped
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - cd /workspace/powerpacks/app && if [ ! -d node_modules/.vite ]; then npm ci --no-audit --no-fund; fi && exec npm run dev -- --host 0.0.0.0 --port 5177
+    environment:
+      POWERPACKS_REPO_ROOT: /workspace/powerpacks
+      HOST: 0.0.0.0
+      PORT: "5177"
+    ports:
+      - "127.0.0.1:${POWERPACKS_CONSOLE_PORT:-5177}:5177"
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/powerpacks
+        read_only: false
+      - type: bind
+        source: ./.powerpacks
+        target: /workspace/powerpacks/.powerpacks
+      - powerpacks-console-node-modules:/workspace/powerpacks/app/node_modules
+
+  codex-heartbeat:
+    <<: *powerpacks_image
+    profiles: ["loops"]
+    restart: unless-stopped
+    environment:
+      CODEX_HOME: /root/.codex
+      HOST_CODEX_HOME: /host-codex
+      POWERPACKS_REPO_ROOT: /workspace/powerpacks
+      POWERPACKS_HEARTBEAT_STATE: /root/.cache/powerpacks/codex-heartbeat-state.json
+      HEARTBEAT_POLL_SECONDS: "${HEARTBEAT_POLL_SECONDS:-300}"
+      POWERPACKS_SYNC_HOST_CODEX_HOME: "1"
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/powerpacks
+        read_only: true
+      - type: bind
+        source: ./.powerpacks
+        target: /workspace/powerpacks/.powerpacks
+      - type: bind
+        source: ${HOST_CODEX_HOME}
+        target: /host-codex
+        read_only: true
+        bind:
+          create_host_path: false
+      - powerpacks-codex-home:/root/.codex
+      - powerpacks-codex-cache:/root/.cache/powerpacks
+
+volumes:
+  powerpacks-console-node-modules:
+  powerpacks-codex-home:
+  powerpacks-codex-cache:

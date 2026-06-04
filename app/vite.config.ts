@@ -5,11 +5,17 @@ import { powerpacksLocalApiPlugin } from "./local-api/powerpacksLocalApiPlugin";
 
 export default defineConfig(() => ({
   server: {
-    host: "0.0.0.0",
+    host: process.env.HOST || "127.0.0.1",
     port: 5177,
     strictPort: false,
     watch: {
-      ignored: ["**/.powerpacks/**"],
+      ignored: [
+        "**/.powerpacks/**",
+        "**/.codex/**",
+        "**/.venv/**",
+        "**/node_modules/**",
+        "**/dist/**",
+      ],
     },
   },
   plugins: [
