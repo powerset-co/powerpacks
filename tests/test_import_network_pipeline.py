@@ -499,6 +499,27 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             message_inputs = [path for path in paths if path.endswith("source-inputs/messages/contacts.csv")]
             self.assertEqual(message_inputs, [])
 
+    def test_merge_uses_single_messages_canonical_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            canonical_messages = tmp / "people.messages.csv"
+            stale_one = tmp / "old-messages-1.csv"
+            stale_two = tmp / "old-messages-2.csv"
+            ledger = {
+                "input": {},
+                "artifacts": {
+                    "messages_final_people_csvs": [str(canonical_messages)],
+                    "messages_people_csv": str(canonical_messages),
+                    "messages_people_csvs": [str(stale_one), str(stale_two)],
+                },
+            }
+
+            paths = import_network_pipeline.merge_input_paths(ledger, tmp / "run/merged")
+
+            self.assertIn(str(canonical_messages), paths)
+            self.assertNotIn(str(stale_one), paths)
+            self.assertNotIn(str(stale_two), paths)
+
     def test_include_existing_artifacts_uses_canonical_people_as_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -599,6 +620,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
     def test_messages_enrichment_delegates_to_enrich_people_and_records_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
+            base = tmp / ".powerpacks/network-import"
             review = tmp / "research_review.csv"
             review.write_text(
                 "bucket,full_name,phone_e164,total_messages,message_source,in_network,network_person_id,network_linkedin_url\n"
@@ -610,7 +632,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             ledger = {
                 "run_id": "network-test",
                 "run_dir": str(tmp / "network-test"),
-                "input": {"messages_review_csv": str(review)},
+                "input": {"messages_review_csv": str(review), "linkedin_directory_csv": str(tmp / "directory.csv")},
                 "steps": {},
                 "artifacts": {},
             }
@@ -623,19 +645,25 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 with input_csv.open(newline="", encoding="utf-8") as handle:
                     rows = list(csv.DictReader(handle))
                 self.assertEqual(rows[0]["public_identifier"], "network-person")
+                import_network_pipeline.write_csv_rows(enriched, import_network_pipeline.PEOPLE_SCHEMA_COLUMNS, rows)
                 return 0, {"status": "completed", "artifacts": {"people_csv": str(enriched)}}, ""
 
-            with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
-                self.assertTrue(import_network_pipeline.run_messages_enrichment(ledger_path, ledger))
+            with mock.patch.object(import_network_pipeline, "DEFAULT_BASE_DIR", base):
+                with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
+                    self.assertTrue(import_network_pipeline.run_messages_enrichment(ledger_path, ledger))
 
+            canonical_messages = base / "messages" / "people.messages.csv"
             self.assertEqual(len(calls), 1)
             self.assertEqual(ledger["steps"]["messages_enrich_people"]["status"], "completed")
-            self.assertEqual(ledger["artifacts"]["messages_people_csv"], str(enriched))
+            self.assertEqual(ledger["artifacts"]["messages_people_csv"], str(canonical_messages))
+            self.assertEqual(ledger["artifacts"]["messages_people_csvs"], [str(canonical_messages)])
+            self.assertTrue(canonical_messages.exists())
             self.assertTrue(Path(ledger["artifacts"]["messages_people_input_csv"]).exists())
             self.assertTrue(Path(ledger["artifacts"]["messages_people_input_manifest"]).exists())
 
             paths = import_network_pipeline.merge_input_paths(ledger, tmp / "merge")
-            self.assertIn(str(enriched), paths)
+            self.assertIn(str(canonical_messages), paths)
+            self.assertNotIn(str(enriched), paths)
 
     def test_messages_enrichment_blocks_for_child_rapidapi_approval(self) -> None:
         with tempfile.TemporaryDirectory() as td:

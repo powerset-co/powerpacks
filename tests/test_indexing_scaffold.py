@@ -104,6 +104,7 @@ class IndexingScaffoldTests(unittest.TestCase):
                     sys.executable,
                     str(ROOT / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py"),
                     "run",
+                    "--discover",
                     "--base-dir",
                     str(base / ".powerpacks"),
                     "--output-dir",

@@ -144,7 +144,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.write_people(run_dir / "people.csv", "Jane Canonical")
                 self.write_people(run_dir / "people_harmonic_all.csv", "Jane Legacy")
                 out_dir = Path(tmp) / "merged"
-                code, payload = self.invoke(["run", "--base-dir", ".powerpacks", "--output-dir", str(out_dir)])
+                code, payload = self.invoke(["run", "--discover", "--base-dir", ".powerpacks", "--output-dir", str(out_dir)])
                 self.assertEqual(code, 0)
                 self.assertEqual(Path(payload["people_csv"]).name, "people.csv")
                 self.assertTrue(Path(payload["people_csv"]).exists())
@@ -183,6 +183,20 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(payload["merged_rows"], 0)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
                     self.assertEqual(list(csv.DictReader(handle)), [])
+            finally:
+                os.chdir(old_cwd)
+
+    def test_default_run_does_not_discover_filesystem_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                self.write_people(Path(".powerpacks/network-import/linkedin/old-run/people.csv"), "Jane Old")
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke(["run", "--base-dir", ".powerpacks", "--output-dir", str(out_dir)])
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["input_rows"], 0)
+                self.assertEqual(payload["merged_rows"], 0)
             finally:
                 os.chdir(old_cwd)
 

@@ -485,10 +485,10 @@ def similar_pairs(rows: list[dict[str, Any]], threshold: float) -> list[dict[str
 def cmd_run(args: argparse.Namespace) -> int:
     if args.input:
         inputs = [Path(p) for p in args.input]
-    elif args.no_discover:
-        inputs = []
-    else:
+    elif args.discover and not args.no_discover:
         inputs = discover_inputs(Path(args.base_dir))
+    else:
+        inputs = []
     all_rows: list[dict[str, str]] = []
     per_file: dict[str, int] = {}
     for path in inputs:
@@ -570,7 +570,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Merge/dedupe local network import people artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
-    run.add_argument("--input", action="append", help="Input people.csv, legacy people_harmonic_all.csv, or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
+    run.add_argument("--input", action="append", help="Input people.csv, legacy people_harmonic_all.csv, or messages contacts.csv; repeatable. If omitted, no inputs are used unless --discover is set")
+    run.add_argument("--discover", action="store_true", help="Legacy recovery mode: discover run-dir inputs from the filesystem when --input is omitted")
     run.add_argument("--no-discover", action="store_true", help="Do not discover inputs from the filesystem when --input is omitted")
     run.add_argument("--base-dir", default=".powerpacks")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))

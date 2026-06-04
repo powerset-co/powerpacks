@@ -1081,8 +1081,8 @@ def merge_jsonish_lists(current: str, incoming: str) -> str:
     return json.dumps(sorted(set(values)), ensure_ascii=False) if values else ""
 
 
-def materialize_gmail_merged_people_csv(input_csvs: list[str], output_csv: Path) -> dict[str, Any]:
-    """Write one stable Gmail people artifact from all Gmail account outputs."""
+def materialize_source_merged_people_csv(input_csvs: list[str], output_csv: Path, *, default_source_channels: str) -> dict[str, Any]:
+    """Write one stable source people artifact from one or more run outputs."""
     merged: dict[str, dict[str, str]] = {}
     for path_text in unique_strings(input_csvs):
         path = Path(path_text)
@@ -1097,7 +1097,7 @@ def materialize_gmail_merged_people_csv(input_csvs: list[str], output_csv: Path)
                 key = f"email:{email}" if email else str(row.get("id") or "").strip()
             if not key:
                 continue
-            row["source_channels"] = row.get("source_channels") or "gmail_msgvault"
+            row["source_channels"] = row.get("source_channels") or default_source_channels
             row["source_artifacts"] = merge_jsonish_lists(row.get("source_artifacts", ""), str(path))
             if key not in merged:
                 merged[key] = {col: row.get(col, "") for col in PEOPLE_SCHEMA_COLUMNS}
@@ -1115,6 +1115,16 @@ def materialize_gmail_merged_people_csv(input_csvs: list[str], output_csv: Path)
         return {"status": "skipped", "people_csv": str(output_csv), "rows": 0, "input_csvs": input_csvs}
     write_csv_rows(output_csv, PEOPLE_SCHEMA_COLUMNS, rows)
     return {"status": "completed", "people_csv": str(output_csv), "rows": len(rows), "input_csvs": input_csvs}
+
+
+def materialize_gmail_merged_people_csv(input_csvs: list[str], output_csv: Path) -> dict[str, Any]:
+    """Write one stable Gmail people artifact from all Gmail account outputs."""
+    return materialize_source_merged_people_csv(input_csvs, output_csv, default_source_channels="gmail_msgvault")
+
+
+def materialize_messages_merged_people_csv(input_csvs: list[str], output_csv: Path) -> dict[str, Any]:
+    """Write one stable Messages people artifact from reviewed/enriched outputs."""
+    return materialize_source_merged_people_csv(input_csvs, output_csv, default_source_channels="messages")
 
 
 def sha(value: str, length: int = 12) -> str:
@@ -2810,15 +2820,28 @@ def run_messages_enrichment(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     for key, value in (enrich_payload.get("artifacts") or {}).items():
         artifacts[f"messages_enriched_{key}"] = value
     enriched_people = enrich_payload.get("artifacts", {}).get("people_csv") or materialized.get("people_csv")
-    artifacts["messages_people_csv"] = enriched_people
-    artifacts.setdefault("messages_people_csvs", [])
-    if enriched_people and enriched_people not in artifacts["messages_people_csvs"]:
-        artifacts["messages_people_csvs"].append(enriched_people)
+    final_people = str(enriched_people or "")
+    messages_merge: dict[str, Any] = {"status": "skipped", "people_csv": str(DEFAULT_BASE_DIR / "messages" / "people.messages.csv"), "rows": 0, "input_csvs": []}
     if enriched_people:
+        messages_merge = materialize_messages_merged_people_csv(
+            [str(enriched_people)],
+            DEFAULT_BASE_DIR / "messages" / "people.messages.csv",
+        )
+        artifacts["messages_merged_people"] = messages_merge
+        if messages_merge.get("status") == "completed" and messages_merge.get("people_csv"):
+            final_people = str(messages_merge["people_csv"])
+            artifacts["messages_merged_people_csv"] = final_people
+        artifacts["messages_people_csv"] = final_people
+        artifacts["messages_final_people_csvs"] = [final_people] if final_people else []
+        # Keep the legacy plural key as an alias, but never let it accumulate
+        # old run dirs. Fan-in should see one canonical Messages artifact.
+        artifacts["messages_people_csvs"] = [final_people] if final_people else []
+    enrich_payload = {**enrich_payload, "messages_merged_people": messages_merge}
+    if final_people:
         artifacts["messages_directory_checkpoint"] = commit_people_csv_to_directory(
             ledger.get("input", {}),
             artifacts,
-            str(enriched_people),
+            final_people,
             source="messages",
         )
     mark_step(ledger, "messages_enrich_people", "completed", summary=materialized, payload=enrich_payload)
@@ -2851,9 +2874,15 @@ def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
     elif artifacts.get("gmail_people_csv"):
         explicit_inputs.append(str(artifacts["gmail_people_csv"]))
 
-    messages_people_inputs = artifacts.get("messages_people_csvs") or []
+    messages_people_inputs = unique_strings(artifacts.get("messages_final_people_csvs") or [])
+    if not messages_people_inputs and artifacts.get("messages_merged_people_csv"):
+        messages_people_inputs = [str(artifacts["messages_merged_people_csv"])]
     if not messages_people_inputs and artifacts.get("messages_people_csv"):
-        messages_people_inputs = [artifacts.get("messages_people_csv")]
+        messages_people_inputs = [str(artifacts["messages_people_csv"])]
+    if not messages_people_inputs:
+        legacy_messages = unique_strings(artifacts.get("messages_people_csvs") or [])
+        if legacy_messages:
+            messages_people_inputs = [legacy_messages[-1]]
     explicit_inputs.extend(str(path) for path in messages_people_inputs if path)
 
     messages_review = artifacts.get("messages_review_csv") or input_cfg.get("messages_review_csv")
@@ -3094,7 +3123,7 @@ def reset_selected_fan_in_state(preserved: dict[str, Any], selected_sources: set
     if "messages" in selected_sources:
         steps.pop("messages_enrich_people", None)
         for key in list(artifacts):
-            if key.startswith("messages_enriched_") or key in {"messages_people_csv", "messages_people_csvs", "messages_people_input_csv", "messages_people_input_manifest", "messages_enrich_people_ledger"}:
+            if key.startswith("messages_enriched_") or key in {"messages_people_csv", "messages_people_csvs", "messages_final_people_csvs", "messages_merged_people_csv", "messages_merged_people", "messages_people_input_csv", "messages_people_input_manifest", "messages_enrich_people_ledger"}:
                 artifacts.pop(key, None)
     return preserved
 
