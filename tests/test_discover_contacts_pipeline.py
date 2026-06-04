@@ -1,5 +1,6 @@
 import argparse
 import csv
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -897,6 +898,10 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 ["gmail:me@example.com:email:alex@example.com", "gmail:me@example.com:email:jane@example.com"],
             )
             self.assertEqual({row["source_account"] for row in observed.values()}, {"me@example.com"})
+            self.assertEqual(
+                {row["source_id"] for row in observed.values()},
+                {f"msgvault:{hashlib.sha256(b'me@example.com').hexdigest()[:12]}"},
+            )
 
             calls = []
             def fake_run_cmd(cmd, timeout=None):
@@ -1070,6 +1075,10 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 directory_rows = list(csv.DictReader(handle))
             self.assertEqual([row["source_key"] for row in directory_rows], ["gmail:me@example.com:email:alex@example.com", "gmail:me@example.com:email:jane@example.com"])
             self.assertEqual({row["source_account"] for row in directory_rows}, {"me@example.com"})
+            self.assertEqual(
+                {row["source_id"] for row in directory_rows},
+                {f"msgvault:{hashlib.sha256(b'me@example.com').hexdigest()[:12]}"},
+            )
             self.assertEqual({row["status"] for row in directory_rows}, {"found"})
         self.assertEqual(
             discover_contacts_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="", gmail_account_email="")),

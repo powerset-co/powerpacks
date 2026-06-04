@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -231,6 +232,17 @@ def directory_identity_key(email: str, phone: str, name: str, public_identifier:
     return ""
 
 
+def gmail_account_source_id(source_account: str, source_key: str = "") -> str:
+    account = (source_account or "").strip().lower()
+    if not account and source_key.startswith("gmail:"):
+        parts = source_key.split(":", 3)
+        if len(parts) >= 2:
+            account = parts[1].strip().lower()
+    if not account:
+        return ""
+    return f"msgvault:{hashlib.sha256(account.encode('utf-8')).hexdigest()[:12]}"
+
+
 def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", source: str = "", updated_at: str = "") -> dict[str, str]:
     linkedin_url = normalize_linkedin_url(str(row.get("linkedin_url") or ""))
     public_identifier = extract_public_identifier(linkedin_url)
@@ -244,11 +256,16 @@ def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", 
         return {}
     confidence = parse_confidence(row.get("confidence"), 0.0)
     status = str(row.get("status") or ("found" if public_identifier else "observed")).strip().lower()
+    source_name = str(row.get("source") or source or "directory")
+    source_account = str(row.get("source_account") or row.get("account_email") or "")
+    source_id = str(row.get("source_id") or "")
+    if not source_id and (source_name == "gmail_msgvault" or source_key.startswith("gmail:")):
+        source_id = gmail_account_source_id(source_account, source_key)
     output = {
-        "source": str(row.get("source") or source or "directory"),
+        "source": source_name,
         "source_key": source_key,
-        "source_account": str(row.get("source_account") or row.get("account_email") or ""),
-        "source_id": str(row.get("source_id") or ""),
+        "source_account": source_account,
+        "source_id": source_id,
         "source_channels": str(row.get("source_channels") or ""),
         "status": status,
         "email": email,
