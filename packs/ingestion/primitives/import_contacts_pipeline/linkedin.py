@@ -16,6 +16,7 @@ try:
         read_accounts,
         run_cmd,
     )
+    from packs.ingestion.primitives.discover_contacts_pipeline.directory import commit_people_csv_to_directory
     from packs.ingestion.primitives.import_contacts_pipeline.common import (
         DEFAULT_ACCOUNTS,
         DEFAULT_IMPORT_DIR,
@@ -35,6 +36,7 @@ except ModuleNotFoundError:
         read_accounts,
         run_cmd,
     )
+    from packs.ingestion.primitives.discover_contacts_pipeline.directory import commit_people_csv_to_directory
     from packs.ingestion.primitives.import_contacts_pipeline.common import (
         DEFAULT_ACCOUNTS,
         DEFAULT_IMPORT_DIR,
@@ -49,6 +51,7 @@ except ModuleNotFoundError:
 def run(args: argparse.Namespace) -> dict:
     accounts = read_accounts(args.accounts)
     csv_path = linkedin_csv_path(accounts)
+    source_user = linkedin_source_user(accounts)
     import_dir = DEFAULT_IMPORT_DIR / "linkedin"
     ledger_path = import_dir / "ledger.json"
     if not csv_path:
@@ -57,7 +60,7 @@ def run(args: argparse.Namespace) -> dict:
         "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py",
         "run",
         "--csv", csv_path,
-        "--source-user", linkedin_source_user(accounts),
+        "--source-user", source_user,
         "--operator-id", args.operator_id,
         "--output-dir", str(import_dir),
         "--ledger", str(ledger_path),
@@ -67,6 +70,15 @@ def run(args: argparse.Namespace) -> dict:
     status = "completed" if code == 0 and child.get("status") == "completed" else child.get("status") or "failed"
     artifacts = child.get("artifacts") or {}
     people_csv = copy_people_csv("linkedin", str(artifacts.get("people_csv") or ""))
+    directory_checkpoint = {}
+    if status == "completed" and people_csv:
+        directory_checkpoint = commit_people_csv_to_directory(
+            {"linkedin_directory_csv": str(DEFAULT_DIRECTORY_CSV)},
+            artifacts,
+            people_csv,
+            source="linkedin_csv",
+            source_account=source_user,
+        )
     return write_manifest("linkedin", {
         "status": status,
         "ledger": str(ledger_path),
@@ -76,6 +88,7 @@ def run(args: argparse.Namespace) -> dict:
         "error": stderr if code != 0 else "",
         "input": {
             "connections_csv": csv_path,
+            "source_user": source_user,
         },
         "outputs": {
             "people_csv": people_csv,
@@ -85,6 +98,7 @@ def run(args: argparse.Namespace) -> dict:
             "people": csv_count(people_csv),
             "candidates": csv_count(str(DEFAULT_BASE_DIR / "discover" / "linkedin" / "contacts.csv")),
         },
+        "directory_checkpoint": directory_checkpoint,
         "artifacts": artifacts,
     })
 
