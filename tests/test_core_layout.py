@@ -54,10 +54,10 @@ class CoreLayoutTests(unittest.TestCase):
             path.name for path in (ROOT / "packs/indexing/skills").iterdir() if path.is_dir()
         )
         self.assertEqual(indexing_pack, ["build-local-search-index"])
-        apollo_pack = sorted(
+        outbound_pack = sorted(
             path.name for path in (ROOT / "packs/apollo/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(apollo_pack, ["apollo"])
+        self.assertEqual(outbound_pack, ["build-outbound"])
 
     def test_pack_skills_have_codex_frontmatter(self) -> None:
         for path in sorted((ROOT / "packs").glob("*/skills/*/SKILL.md")):
@@ -98,7 +98,7 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "import-network" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "apollo" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())
             self.assertTrue((skills_dir / "search-network" / "powerpacks" / "pyproject.toml").exists())
             self.assertIn(
@@ -134,19 +134,19 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "apollo" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "import-contacts" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "setup" / "powerpacks").is_symlink())
-            self.assertTrue((skills_dir / "apollo" / "powerpacks").is_symlink())
+            self.assertTrue((skills_dir / "build-outbound" / "powerpacks").is_symlink())
             self.assertEqual((skills_dir / "powerset" / "powerpacks").resolve(), bundle.resolve())
             self.assertEqual((skills_dir / "import-contacts" / "powerpacks").resolve(), bundle.resolve())
             self.assertEqual((skills_dir / "setup" / "powerpacks").resolve(), bundle.resolve())
-            self.assertEqual((skills_dir / "apollo" / "powerpacks").resolve(), bundle.resolve())
+            self.assertEqual((skills_dir / "build-outbound" / "powerpacks").resolve(), bundle.resolve())
             nested_skill_files = sorted(path.relative_to(bundle) for path in bundle.glob("packs/*/skills/*/SKILL.md"))
             self.assertEqual(nested_skill_files, [])
 
-    def test_claude_adapter_installs_apollo_skill(self) -> None:
+    def test_claude_adapter_installs_build_outbound_skill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
             proc = subprocess.run(
@@ -157,8 +157,8 @@ class CoreLayoutTests(unittest.TestCase):
                 env={**os.environ, "POWERPACKS_SKIP_UV_SYNC": "1"},
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertTrue((skills_dir / "apollo" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "apollo" / "powerpacks" / "packs" / "apollo").is_dir())
+            self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "build-outbound" / "powerpacks" / "packs" / "apollo").is_dir())
             nested_skill_files = sorted(
                 path.relative_to(skills_dir)
                 for path in skills_dir.glob("*/powerpacks/packs/*/skills/*/SKILL.md")

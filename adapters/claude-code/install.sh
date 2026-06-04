@@ -81,10 +81,10 @@ install_skill import-email "$REPO_ROOT/packs/ingestion/skills/import-email/SKILL
 install_skill import-network "$REPO_ROOT/packs/ingestion/skills/import-network/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
-install_skill apollo "$REPO_ROOT/packs/apollo/skills/apollo/SKILL.md"
+install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search apollo"
+echo "  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search build-outbound"
 echo "  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter"
 echo
 echo "restart Claude Code to pick up the skill list"

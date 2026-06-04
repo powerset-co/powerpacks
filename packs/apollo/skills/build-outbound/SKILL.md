@@ -1,13 +1,11 @@
 ---
-name: apollo
-description: Configure and use the Apollo.io MCP for lead enrichment/contact creation and sequence enrollment. Use for `$apollo setup`, `$apollo status`, `$apollo prepare-leads`, Apollo outbound campaign handoff, or adding Powerpacks/Sales Nav/network-search leads to Apollo sequences.
+name: build-outbound
+description: Build an outbound handoff from network-search or Sales Nav leads through the Apollo.io MCP. Use for `$build-outbound setup`, `$build-outbound status`, `$build-outbound prepare-leads`, outbound campaign handoff, or adding Powerpacks/Sales Nav/network-search leads to Apollo sequences.
 ---
 
-# Apollo
+# Build Outbound
 
-Use this skill when the user asks to configure Apollo.io MCP, prepare leads for
-Apollo outbound, or move `$search-network` / `$sales-nav-search` results into an
-Apollo sequence.
+Use this skill when the user asks to build outbound from leads, configure Apollo.io MCP, prepare leads for Apollo outbound, or move `$search-network` / `$sales-nav-search` results into an Apollo sequence.
 
 Powerpacks uses the public stdio MCP package `apollo-mcp@0.2.0`. There is no
 first-party Apollo.io MCP server in this repo. The MCP exposes Apollo API tools;
@@ -72,11 +70,11 @@ uv run --project . python packs/apollo/primitives/apollo_mcp/apollo_mcp.py prepa
 
 ## Routing
 
-- `$apollo`, `$apollo help`: summarize setup and safe outbound flow.
-- `$apollo status`: run `apollo_mcp.py status` (defaults to Codex) unless the
+- `$build-outbound`, `$build-outbound help`: summarize setup and safe outbound flow.
+- `$build-outbound status`: run `apollo_mcp.py status` (defaults to Codex) unless the
   user asks for Claude or all hosts. Say only whether `APOLLO_API_KEY`, Node/npx,
   and MCP registration are present. Never print the API key.
-- `$apollo setup` / `install apollo mcp`: if `APOLLO_API_KEY` is present, run
+- `$build-outbound setup` / `install outbound mcp` / `install apollo mcp`: if `APOLLO_API_KEY` is present, run
   `apollo_mcp.py install` for Codex, or add `--host claude` / `--host all` when
   requested. If missing, tell the user to create a Master API key in Apollo and
   add `APOLLO_API_KEY` to `.env` or the shell.

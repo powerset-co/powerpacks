@@ -191,8 +191,8 @@ Routes:
   `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
-- `$apollo`, Apollo.io MCP setup/status, Apollo outbound campaign/sequence handoff, prepare LinkedIn leads for Apollo →
-  `packs/apollo/skills/apollo/SKILL.md`
+- `$build-outbound`, outbound handoff setup/status, Apollo campaign/sequence handoff, prepare LinkedIn leads for Apollo →
+  `packs/apollo/skills/build-outbound/SKILL.md`
 - `$powerset`, `$powerset setup`, Powerset login/status/whoami/sets/MCP/env credentials →
   `packs/powerset/skills/powerset/SKILL.md`
 - `$update-powerpacks`, reinstall/update Powerpacks skills, canonical install/state cleanup, adopt `.codex` state →
