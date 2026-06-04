@@ -94,6 +94,47 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_repeated_merge_flattens_and_caps_source_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                people = Path(".powerpacks/network-import/gmail/run-1/people.csv")
+                self.write_people_row(people, {
+                    "id": "gmail:jane",
+                    "public_identifier": "jane-repeat",
+                    "linkedin_url": "https://www.linkedin.com/in/jane-repeat",
+                    "full_name": "Jane Repeat",
+                    "source_channels": "gmail_msgvault",
+                    "source_artifacts": json.dumps(["gmail/source-a.csv", "gmail/source-b.csv"]),
+                })
+                first_out = Path(tmp) / "merged-first"
+                code, first = self.invoke([
+                    "run",
+                    "--no-discover",
+                    "--output-dir", str(first_out),
+                    "--input", str(people),
+                ])
+                self.assertEqual(code, 0)
+                first_people = Path(first["people_csv"])
+                second_out = Path(tmp) / "merged-second"
+                code, second = self.invoke([
+                    "run",
+                    "--no-discover",
+                    "--output-dir", str(second_out),
+                    "--input", str(first_people),
+                    "--input", str(people),
+                ])
+                self.assertEqual(code, 0)
+                with Path(second["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                artifacts = json.loads(rows[0]["source_artifacts"])
+                self.assertIn("gmail/source-a.csv", artifacts)
+                self.assertIn("gmail/source-b.csv", artifacts)
+                self.assertLess(len(rows[0]["source_artifacts"]), 1000)
+            finally:
+                os.chdir(old_cwd)
+
     def test_discovery_prefers_people_csv_and_writes_canonical_merge_alias(self):
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()
