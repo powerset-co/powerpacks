@@ -65,6 +65,21 @@ Pipeline step `infer_ages` runs after CEO/founder detection, before
 birth year from education and work timelines, writes `inferred_ages.jsonl`.
 The `step_people` join applies `inferred_birth_year` to people records.
 
+## Known bugs
+
+### Gmail unresolved count doesn't reflect completed Parallel runs
+
+The UI shows "N contacts need email→LinkedIn resolution via Parallel" even after
+Parallel already ran on those contacts. The status display reads the original
+unresolved queue count without checking whether the resolution step completed.
+This causes users to re-run Parallel on contacts that were already resolved
+(wasting ~$3/run on duplicate work).
+
+**Fix**: The enrichment status computation should check whether
+`gmail_linkedin_resolution` step completed for the current unresolved queue. If
+it did, show the post-resolution counts (found/not-found) instead of the
+pre-resolution unresolved count.
+
 ## Remaining gaps
 
 ### Company base data (priority: low, acceptable gap)
