@@ -39,44 +39,33 @@ Both pipelines follow the same core shape:
 - [x] Checkpointed role/company/embedding stages
 - [x] Strict contract validation (zero extra/missing fields)
 
-## Gaps to implement
+## Implemented (ported from Aleph)
 
-### CEO/Founder detection (priority: high)
+### CEO/Founder detection ✅
 
-**Aleph**: `detect_ceo_founders` step runs LLM-based founder detection for
-CEO/CTO positions. When detected, injects `"founder co-founder startup"` into
-d2q_tokens and adds `"founder"` to `role_ids`. This is important because many
-founders have titles like "CEO" without "founder" in the title.
+Ported from `aleph-mvp/data_pipeline_v2/pipelines/people/processing/detect_ceo_founders.py`.
 
-**Local**: Not implemented. Founders without "founder" in their title won't get
-founder d2q boost or `founder` role_id.
+Local primitive: `packs/indexing/primitives/detect_ceo_founders/detect_ceo_founders.py`
 
-**Source**: `aleph-mvp/data_pipeline_v2/pipelines/people/processing/detect_ceo_founders.py`
+Pipeline step `detect_ceo_founders` runs after company embedding, before
+`build_people_records`. Reads `flattened_people.jsonl`, finds current CEO/CTO
+positions without "founder" in title, calls LLM to classify, writes
+`founder_enrichment.jsonl`. The `step_people` join reads founder IDs and injects
+`"founder co-founder startup"` into d2q_tokens and `"founder"` into role_ids.
 
-**Lift plan**: Port the detection prompt and inject logic into a new step between
-`build_people_records` and `build_vectors`. The detection reads flattened people,
-checks CEO/CTO titles, calls LLM to determine if they are founders, and outputs
-`founder_enrichment.jsonl`. The `step_people` join should then read founder IDs
-and inject d2q + role_ids like Aleph's `upload_people_turbopuffer.py` does.
+### Inferred birth year / age ✅
 
-### Inferred birth year / age (priority: low)
+Ported from `aleph-mvp/data_pipeline_v2/pipelines/people/processing/infer_ages.py`.
+LLM-only (no rule-based fallback).
 
-**Aleph**: Dedicated `infer_ages` step uses LLM (`gpt-5.4-mini`, structured
-output) to estimate birth year from education and work experience timelines.
-The LLM prompt handles non-traditional students, internship vs full-time
-distinctions, high school anchoring, and cross-validation of multiple signals.
-A rule-based heuristic in `birth_year.py` serves as fallback only when the LLM
-stage hasn't run.
+Local primitive: `packs/indexing/primitives/infer_ages/infer_ages.py`
 
-**Local**: Uses `inferred_birth_year` from CSV if available (usually empty for
-RapidAPI-sourced people).
+Pipeline step `infer_ages` runs after CEO/founder detection, before
+`build_people_records`. Reads `flattened_people.jsonl`, calls LLM to estimate
+birth year from education and work timelines, writes `inferred_ages.jsonl`.
+The `step_people` join applies `inferred_birth_year` to people records.
 
-**Source**: `aleph-mvp/data_pipeline_v2/pipelines/people/processing/infer_ages.py`
-
-**Lift plan**: Port the LLM stage only. Uses `gpt-5.4-mini` with Pydantic
-structured output (`AgeInference` model), async batching, and checkpointing.
-Cost is ~$18 for 34K people at flex pricing. Do not port the rule-based
-heuristic fallback in `birth_year.py`.
+## Remaining gaps
 
 ### Company base data (priority: low, acceptable gap)
 
