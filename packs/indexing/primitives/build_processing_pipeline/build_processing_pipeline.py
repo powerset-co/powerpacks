@@ -36,6 +36,8 @@ from packs.indexing.lib.people import build_people_records, build_unified_profil
 from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed  # noqa: E402
 from packs.indexing.primitives.enrich_companies_checkpointed import enrich_companies_checkpointed  # noqa: E402
 from packs.indexing.primitives.embed_records_checkpointed import embed_records_checkpointed  # noqa: E402
+from packs.indexing.primitives.detect_ceo_founders import detect_ceo_founders  # noqa: E402
+from packs.indexing.primitives.infer_ages import infer_ages  # noqa: E402
 
 STEPS = [
     "flatten_people",
@@ -45,6 +47,8 @@ STEPS = [
     "embed_companies",
     "build_education_corpus",
     "build_location_corpus",
+    "detect_ceo_founders",
+    "infer_ages",
     "build_people_records",
     "build_unified_profiles",
     "build_summary_records",
@@ -110,6 +114,8 @@ def paths(rd: Path) -> dict[str, Path]:
         "aleph_roles_dir": rd / "unified/roles",
         "aleph_roles_dense": rd / "unified/roles/roles_with_dense_text_remapped.jsonl",
         "aleph_roles_embeddings": rd / "unified/roles/roles_with_embeddings.jsonl",
+        "founder_enrichment": rd / "unified/roles/founder_enrichment.jsonl",
+        "inferred_ages": rd / "unified/inferred_ages.jsonl",
     }
 
 
@@ -385,6 +391,27 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
 
     profile_rows = build_unified_profiles(people)
     summary_rows = build_summary_records(profile_rows, getattr(args, "default_operator_id", None))["internal_text"]
+    # CEO/founder detection estimate: ~150 input + ~50 output tokens per candidate
+    ceo_candidates = sum(
+        1 for person in people
+        for exp in (person.get("work_experiences") or [])
+        if isinstance(exp, dict)
+        and bool(exp.get("is_current") or str(exp.get("end_date", "")).lower() in ("", "present", "current", "now"))
+        and detect_ceo_founders.CEO_CTO_RE.search(str(exp.get("title") or exp.get("position_title") or ""))
+        and not detect_ceo_founders.FOUNDER_RE.search(str(exp.get("title") or exp.get("position_title") or ""))
+    ) if detect_ceo_founders else 0
+    ceo_stage = _chat_cost_stage(
+        provider=role_provider, model=role_model,
+        calls=ceo_candidates, input_tokens=ceo_candidates * 150, output_tokens=ceo_candidates * 50,
+        precomputed=False,
+    )
+    # Age inference estimate: ~400 input + ~30 output tokens per person
+    age_candidates = len(people)
+    age_stage = _chat_cost_stage(
+        provider=role_provider, model=role_model,
+        calls=age_candidates, input_tokens=age_candidates * 400, output_tokens=age_candidates * 30,
+        precomputed=False,
+    )
     stages = {
         "role_enrichment": role_stage,
         "role_embeddings": _embedding_cost_stage(
@@ -415,6 +442,8 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
             input_embeddings=summary_emb,
             artifact_id_field="person_id",
         ),
+        "ceo_founder_detection": ceo_stage,
+        "age_inference": age_stage,
     }
     known = all(stage.get("known_pricing") for stage in stages.values())
     total = None
@@ -1171,12 +1200,72 @@ def step_location(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str
     return {"locations": str(ps["locations_corpus"])}, stats
 
 
+def step_detect_ceo_founders(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    if not ledger.get("allow_paid_role_provider"):
+        return {}, {"status": "skipped", "reason": "requires_allow_paid_role_provider"}
+    result = detect_ceo_founders.run(Namespace(
+        flattened=str(ps["flattened"]),
+        output=str(ps["founder_enrichment"]),
+        model=ledger.get("role_openai_model") or "gpt-5.1",
+        confidence_threshold=0.7,
+        concurrency=int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", "30")),
+        limit=None,
+        dry_run=False,
+    ))
+    stats = {
+        "status": result.get("status", "completed"),
+        "total_candidates": result.get("total_candidates", 0),
+        "founders_detected": result.get("founders_detected", 0),
+        "founder_rate": result.get("founder_rate", 0),
+        "high_confidence_founder_ids": result.get("high_confidence_founder_ids", 0),
+    }
+    write_stats(ledger, "detect_ceo_founders", stats)
+    return {"founder_enrichment": str(ps["founder_enrichment"])}, stats
+
+
+def step_infer_ages(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    if not ledger.get("allow_paid_role_provider"):
+        return {}, {"status": "skipped", "reason": "requires_allow_paid_role_provider"}
+    result = infer_ages.run(Namespace(
+        flattened=str(ps["flattened"]),
+        output=str(ps["inferred_ages"]),
+        model=ledger.get("role_openai_model") or "gpt-5.1",
+        concurrency=int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", "50")),
+        limit=None,
+        dry_run=False,
+    ))
+    stats = {
+        "status": result.get("status", "completed"),
+        "total_people": result.get("total_people", 0),
+        "inferred": result.get("inferred", 0),
+        "coverage": result.get("coverage", 0),
+    }
+    write_stats(ledger, "infer_ages", stats)
+    return {"inferred_ages": str(ps["inferred_ages"])}, stats
+
+
 def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     people = read_jsonl(ps["flattened"])
     records = build_people_records(people, default_operator_id=ledger.get("default_operator_id"))
     role_data = _load_by_id(ps["roles_dense"], "title_hash")
     role_embeddings = _load_by_id(ps["roles_embeddings"], "title_hash")
     hashes = _role_hashes_for_flattened(people)
+    # Load founder enrichment
+    founder_position_ids: set[str] = set()
+    founder_person_ids: set[str] = set()
+    if ps["founder_enrichment"].exists():
+        for row in read_jsonl(ps["founder_enrichment"]):
+            if row.get("is_founder") and float(row.get("confidence", 0)) >= 0.7:
+                founder_position_ids.add(str(row.get("position_id", "")))
+                founder_person_ids.add(str(row.get("person_id", "")))
+    # Load inferred ages
+    age_lookup: dict[str, int] = {}
+    if ps["inferred_ages"].exists():
+        for row in read_jsonl(ps["inferred_ages"]):
+            pid = str(row.get("person_id", "")).strip()
+            by = row.get("birth_year")
+            if pid and isinstance(by, (int, float)) and int(by) > 0:
+                age_lookup[pid] = int(by)
     enriched = []
     for idx, record in enumerate(records):
         role_hash = hashes[idx] if idx < len(hashes) else ""
@@ -1205,6 +1294,20 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
         vector = embedding_row.get("dense_embedding") or embedding_row.get("embedding")
         if vector:
             record["vector"] = vector
+        # Founder injection
+        record_id = str(record.get("id") or "")
+        person_id = str(record.get("base_id") or record.get("person_id") or "")
+        if record_id in founder_position_ids or person_id in founder_person_ids:
+            d2q = record.get("d2q_tokens") or []
+            if "founder" not in d2q:
+                d2q = list(d2q) + _word_tokenize("founder co-founder startup")
+                record["d2q_tokens"] = d2q
+            role_ids = record.get("role_ids") or []
+            if "founder" not in role_ids:
+                record["role_ids"] = list(role_ids) + ["founder"]
+        # Inferred birth year
+        if person_id in age_lookup and not record.get("inferred_birth_year"):
+            record["inferred_birth_year"] = age_lookup[person_id]
         enriched.append(record)
     contract = load_search_contract("turbopuffer/people.namespace.json")
     normalized = [normalize_record_for_contract(row, contract) for row in enriched]
@@ -1445,6 +1548,8 @@ STEP_FUNCTIONS = {
     "build_roles": step_roles,
     "embed_role_positions": step_role_embeddings,
     "build_company_corpus": step_company,
+    "detect_ceo_founders": step_detect_ceo_founders,
+    "infer_ages": step_infer_ages,
     "embed_companies": step_company_embeddings,
     "build_education_corpus": step_education,
     "build_location_corpus": step_location,
@@ -1529,6 +1634,8 @@ MERGE_JSONL_ARTIFACTS: dict[str, tuple[str, ...]] = {
     "summaries/person_tech_skills.jsonl": ("person_id",),
     "unified/summary_embeddings.jsonl": ("person_id", "id"),
     "unified/person_tech_skills.jsonl": ("person_id",),
+    "unified/roles/founder_enrichment.jsonl": ("position_id", "person_id"),
+    "unified/inferred_ages.jsonl": ("person_id",),
 }
 
 
