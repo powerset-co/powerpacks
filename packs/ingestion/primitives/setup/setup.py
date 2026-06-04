@@ -944,39 +944,39 @@ def local_duckdb_processing_dq(processing_payload: dict[str, Any], duckdb_payloa
             return {'status': 'skipped', 'reason': 'duckdb_locked', 'duckdb': str(db_path), 'error': f'{type(lock_err).__name__}: {lock_err}', 'selected_person_ids': selected_ids}
     try:
         tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
-            profile_hits: set[str] = set()
-            vector_hits: set[str] = set()
-            position_vector_hits: set[str] = set()
-            summary_vector_hits: set[str] = set()
-            if 'local_person_profiles' in tables:
-                profile_cols = _duckdb_columns(con, 'local_person_profiles')
-                profile_id_cols = [col for col in ['person_id', 'base_id', 'id'] if col in profile_cols]
-                for person_id in selected_ids:
-                    if not profile_id_cols:
-                        continue
-                    where = ' OR '.join([f"cast({col} as varchar) = ?" for col in profile_id_cols])
-                    params = [person_id] * len(profile_id_cols)
-                    if int(con.execute(f"select count(*) from local_person_profiles where {where}", params).fetchone()[0] or 0) > 0:
-                        profile_hits.add(person_id)
-            for table in ['local_people_positions', 'local_summaries']:
-                if table not in tables:
+        profile_hits: set[str] = set()
+        vector_hits: set[str] = set()
+        position_vector_hits: set[str] = set()
+        summary_vector_hits: set[str] = set()
+        if 'local_person_profiles' in tables:
+            profile_cols = _duckdb_columns(con, 'local_person_profiles')
+            profile_id_cols = [col for col in ['person_id', 'base_id', 'id'] if col in profile_cols]
+            for person_id in selected_ids:
+                if not profile_id_cols:
                     continue
-                cols = _duckdb_columns(con, table)
-                if 'vector' not in cols:
-                    continue
-                id_cols = [col for col in ['person_id', 'base_id', 'id'] if col in cols]
-                if not id_cols:
-                    continue
-                for person_id in selected_ids:
-                    where_ids = ' OR '.join([f"cast({col} as varchar) = ?" for col in id_cols])
-                    params = [person_id] * len(id_cols)
-                    query = f"select count(*) from {table} where ({where_ids}) and vector is not null and len(vector) > 0"
-                    if int(con.execute(query, params).fetchone()[0] or 0) > 0:
-                        vector_hits.add(person_id)
-                        if table == 'local_people_positions':
-                            position_vector_hits.add(person_id)
-                        elif table == 'local_summaries':
-                            summary_vector_hits.add(person_id)
+                where = ' OR '.join([f"cast({col} as varchar) = ?" for col in profile_id_cols])
+                params = [person_id] * len(profile_id_cols)
+                if int(con.execute(f"select count(*) from local_person_profiles where {where}", params).fetchone()[0] or 0) > 0:
+                    profile_hits.add(person_id)
+        for table in ['local_people_positions', 'local_summaries']:
+            if table not in tables:
+                continue
+            cols = _duckdb_columns(con, table)
+            if 'vector' not in cols:
+                continue
+            id_cols = [col for col in ['person_id', 'base_id', 'id'] if col in cols]
+            if not id_cols:
+                continue
+            for person_id in selected_ids:
+                where_ids = ' OR '.join([f"cast({col} as varchar) = ?" for col in id_cols])
+                params = [person_id] * len(id_cols)
+                query = f"select count(*) from {table} where ({where_ids}) and vector is not null and len(vector) > 0"
+                if int(con.execute(query, params).fetchone()[0] or 0) > 0:
+                    vector_hits.add(person_id)
+                    if table == 'local_people_positions':
+                        position_vector_hits.add(person_id)
+                    elif table == 'local_summaries':
+                        summary_vector_hits.add(person_id)
         people_counts = counts.get('build_people_records') if isinstance(counts.get('build_people_records'), dict) else {}
         expected_position_vectors = int(people_counts.get('with_vectors') or 0) > 0
         missing_vectors = [person_id for person_id in selected_ids if person_id not in vector_hits]
