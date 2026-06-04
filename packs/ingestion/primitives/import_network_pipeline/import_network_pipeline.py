@@ -1131,10 +1131,6 @@ def sha(value: str, length: int = 12) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
 
 
-def default_messages_review_csv() -> Path:
-    return DEFAULT_BASE_DIR.parent / "messages" / "research_review.csv"
-
-
 def collect_artifact_paths(value: Any) -> list[str]:
     paths: list[str] = []
     if isinstance(value, dict):
@@ -2379,11 +2375,10 @@ def source_worker_group(input_cfg: dict[str, Any], run_id: str) -> dict[str, Any
             "requires_approval": ["rapidapi_twitter", "openai_moe", "rapidapi_linkedin_validation"],
             "status": "existing_artifacts_or_explicit_import_required",
         })
-    default_review_csv = default_messages_review_csv()
-    messages_review_csv = input_cfg.get("messages_review_csv") or (str(default_review_csv) if input_cfg.get("include_existing_artifacts") and default_review_csv.exists() else "")
+    messages_review_csv = input_cfg.get("messages_review_csv") or ""
     if messages_review_csv and not Path(str(messages_review_csv)).exists():
         messages_review_csv = ""
-    if input_cfg.get("messages_contacts_csv") or messages_review_csv or input_cfg.get("include_existing_artifacts"):
+    if input_cfg.get("messages_contacts_csv") or messages_review_csv:
         jobs.append({
             "id": "messages",
             "source": "messages",
@@ -2644,9 +2639,6 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
             )
             if isinstance(record, dict) and record.get("people_csv")
         ]
-        if not people_records:
-            people_csvs = unique_strings(artifacts.get("gmail_final_people_csvs") or artifacts.get("gmail_people_csvs") or artifacts.get("gmail_people_csv"))
-            people_records = [{"account_email": "", "people_csv": path, "slug": "all" if len(people_csvs) == 1 else f"account-{index}"} for index, path in enumerate(people_csvs)]
         raw_resolution_records.extend([
             {
                 "account_email": record.get("account_email", ""),
@@ -2659,14 +2651,6 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
         ])
     raw_resolution_records.extend(record for record in artifacts.get("gmail_directory_resolution_records") or [] if isinstance(record, dict))
     raw_resolution_records.extend(record for record in artifacts.get("gmail_linkedin_resolutions_csvs") or [] if isinstance(record, dict))
-    if not raw_resolution_records and artifacts.get("gmail_linkedin_resolutions_csv"):
-        raw_resolution_records.append({
-            "account_email": "",
-            "resolutions_csv": artifacts.get("gmail_linkedin_resolutions_csv"),
-            "people_csv": artifacts.get("gmail_people_csv"),
-            "slug": "all",
-            "source": "provider",
-        })
     if raw_resolution_records:
         commit_gmail_resolutions_to_directory(input_cfg, artifacts, raw_resolution_records)
     resolution_records = combine_gmail_resolution_records(raw_resolution_records, Path(ledger["run_dir"]))
@@ -2760,9 +2744,6 @@ def resolve_messages_review_csv(ledger: dict[str, Any]) -> str:
     input_cfg = ledger.get("input", {}) or {}
     artifacts = ledger.get("artifacts", {}) or {}
     review_csv = artifacts.get("messages_review_csv") or input_cfg.get("messages_review_csv") or ""
-    default_review_csv = default_messages_review_csv()
-    if not review_csv and input_cfg.get("include_existing_artifacts") and default_review_csv.exists():
-        review_csv = str(default_review_csv)
     return str(review_csv or "")
 
 
@@ -2858,12 +2839,9 @@ def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
     if include_existing and canonical_people.exists():
         explicit_inputs.append(str(canonical_people))
 
-    account_order = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
-    gmail_inputs = artifacts.get("gmail_final_people_csvs") or []
-    if not gmail_inputs and artifacts.get("gmail_people_records"):
-        gmail_inputs = [record.get("people_csv") for record in ordered_records(artifacts["gmail_people_records"], account_order)]
-    if not gmail_inputs:
-        gmail_inputs = sorted(str(path) for path in artifacts.get("gmail_people_csvs", []) if path)
+    gmail_inputs = unique_strings(artifacts.get("gmail_final_people_csvs") or [])
+    if not gmail_inputs and artifacts.get("gmail_merged_people_csv"):
+        gmail_inputs = [str(artifacts["gmail_merged_people_csv"])]
 
     explicit_inputs.extend(
         value for key, value in sorted(artifacts.items())
@@ -2871,29 +2849,11 @@ def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
     )
     if gmail_inputs:
         explicit_inputs.extend(str(path) for path in gmail_inputs if path)
-    elif artifacts.get("gmail_people_csv"):
-        explicit_inputs.append(str(artifacts["gmail_people_csv"]))
 
     messages_people_inputs = unique_strings(artifacts.get("messages_final_people_csvs") or [])
     if not messages_people_inputs and artifacts.get("messages_merged_people_csv"):
         messages_people_inputs = [str(artifacts["messages_merged_people_csv"])]
-    if not messages_people_inputs and artifacts.get("messages_people_csv"):
-        messages_people_inputs = [str(artifacts["messages_people_csv"])]
-    if not messages_people_inputs:
-        legacy_messages = unique_strings(artifacts.get("messages_people_csvs") or [])
-        if legacy_messages:
-            messages_people_inputs = [legacy_messages[-1]]
     explicit_inputs.extend(str(path) for path in messages_people_inputs if path)
-
-    messages_review = artifacts.get("messages_review_csv") or input_cfg.get("messages_review_csv")
-    default_review_csv = default_messages_review_csv()
-    if not messages_review and include_existing and default_review_csv.exists():
-        messages_review = str(default_review_csv)
-    if messages_review:
-        scratch = merge_dir / "source-inputs" / "messages" / "contacts.csv"
-        materialized = materialize_approved_messages_review(Path(messages_review), scratch)
-        if materialized and materialized.get("contacts_csv"):
-            explicit_inputs.append(str(scratch))
 
     messages_contacts = ""
     if input_cfg.get("allow_unreviewed_messages"):
@@ -2921,8 +2881,6 @@ def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     cmd = py_cmd(
         "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py",
         "run",
-        "--no-discover",
-        "--base-dir", ".powerpacks",
         "--output-dir", str(merge_dir),
     )
     explicit_inputs = merge_input_paths(ledger, merge_dir)
@@ -3251,8 +3209,6 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, run_id: str, run_d
     if args.linkedin_csv:
         would_run.append("linkedin")
     messages_review_csv = getattr(args, "messages_review_csv", "")
-    if not messages_review_csv and getattr(args, "include_existing_artifacts", False) and default_messages_review_csv().exists():
-        messages_review_csv = str(default_messages_review_csv())
     if messages_review_csv and not Path(str(messages_review_csv)).exists():
         messages_review_csv = ""
     input_cfg = {

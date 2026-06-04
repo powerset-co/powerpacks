@@ -15,16 +15,7 @@ Prefer the canonical merged people CSV from `$import-network`:
 .powerpacks/network-import/merged/people.csv
 ```
 
-If the aggregate merge output is missing or stale, use the latest
-`.powerpacks/network-import/network-runs/*/merged/people.csv` and refresh the
-aggregate before indexing. Do not use legacy merged filenames for indexing.
-
-If the file is missing, create it with `$import-network` or the ingestion merge
-primitive:
-
-```bash
-uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run
-```
+If the aggregate merge output is missing or stale, refresh it with `$import-network`/setup fan-in. If you run the ingestion merge primitive directly, pass each source explicitly with `--input`; it does not discover run artifacts or use legacy merged filenames.
 
 ## Run locally
 

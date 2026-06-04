@@ -445,7 +445,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             self.assertEqual(ledger["steps"]["linkedin"]["error"], "RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
             self.assertEqual(ledger["steps"]["source_imports"]["status"], "failed")
 
-    def test_merge_includes_all_gmail_people_csvs(self) -> None:
+    def test_merge_includes_only_canonical_gmail_people_csv(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             ledger_path = tmp / "ledger.json"
@@ -455,7 +455,8 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 "input": {"include_existing_artifacts": False},
                 "steps": {},
                 "artifacts": {
-                    "gmail_people_csvs": [str(tmp / "gmail-a.csv"), str(tmp / "gmail-b.csv")],
+                    "gmail_final_people_csvs": [str(tmp / "gmail-canonical.csv")],
+                    "gmail_people_csvs": [str(tmp / "gmail-stale-a.csv"), str(tmp / "gmail-stale-b.csv")],
                     "linkedin_people_csv": str(tmp / "linkedin.csv"),
                 },
             }
@@ -466,9 +467,9 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             with mock.patch.object(import_network_pipeline, "run_cmd", side_effect=fake_run_cmd):
                 self.assertTrue(import_network_pipeline.run_merge(ledger_path, ledger))
             cmd = seen_cmds[0]
-            self.assertIn("--no-discover", cmd)
+            self.assertNotIn("--no-discover", cmd)
             input_values = [cmd[i + 1] for i, part in enumerate(cmd) if part == "--input"]
-            self.assertEqual(input_values, [str(tmp / "linkedin.csv"), str(tmp / "gmail-a.csv"), str(tmp / "gmail-b.csv")])
+            self.assertEqual(input_values, [str(tmp / "linkedin.csv"), str(tmp / "gmail-canonical.csv")])
 
     def test_include_existing_artifacts_skips_unreviewed_messages_contacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -485,7 +486,7 @@ class ImportNetworkPipelineTests(unittest.TestCase):
             ledger = {
                 "input": {"include_existing_artifacts": True},
                 "artifacts": {
-                    "gmail_people_csvs": [str(current_gmail)],
+                    "gmail_final_people_csvs": [str(current_gmail)],
                     "linkedin_people_csv": str(current_linkedin),
                 },
             }
@@ -539,10 +540,9 @@ class ImportNetworkPipelineTests(unittest.TestCase):
 
             self.assertEqual(paths[:2], [str(canonical), str(current_linkedin)])
 
-    def test_include_existing_artifacts_uses_only_explicitly_approved_messages_review_rows(self) -> None:
+    def test_materialize_approved_messages_review_uses_only_explicit_rows(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            base = tmp / ".powerpacks/network-import"
             review = tmp / ".powerpacks/messages/research_review.csv"
             review.parent.mkdir(parents=True, exist_ok=True)
             fields = [
@@ -563,14 +563,10 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 writer.writeheader()
                 writer.writerows(rows)
 
-            ledger = {"input": {"include_existing_artifacts": True}, "artifacts": {}}
-            merge_dir = tmp / "run/merged"
-            with mock.patch.object(import_network_pipeline, "DEFAULT_BASE_DIR", base):
-                paths = import_network_pipeline.merge_input_paths(ledger, merge_dir)
-
-            message_inputs = [Path(path) for path in paths if path.endswith("source-inputs/messages/contacts.csv")]
-            self.assertEqual(len(message_inputs), 1)
-            with message_inputs[0].open(newline="", encoding="utf-8") as handle:
+            scratch = tmp / "source-inputs/messages/contacts.csv"
+            summary = import_network_pipeline.materialize_approved_messages_review(review, scratch)
+            self.assertEqual(summary["contacts_csv"], str(scratch))
+            with scratch.open(newline="", encoding="utf-8") as handle:
                 materialized = list(csv.DictReader(handle))
             self.assertEqual([row["name"] for row in materialized], ["Exclude No", "Approved True", "Upload Include"])
             self.assertEqual([row["phone"] for row in materialized], ["+101", "+102", "+103"])
@@ -1304,7 +1300,10 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows, [])
             manifest = json.loads(Path(artifacts["merge_manifest"]).read_text(encoding="utf-8"))
-            self.assertEqual(manifest["filtered_without_linkedin"], 1)
+            # Raw Gmail metadata is not a fan-in input. Gmail only enters merge
+            # through the canonical enriched people.gmail.csv artifact.
+            self.assertEqual(manifest["input_rows"], 0)
+            self.assertEqual(manifest["filtered_without_linkedin"], 0)
             self.assertEqual(manifest["merged_rows"], 0)
 
     def test_msgvault_can_prepare_gmail_linkedin_harness(self) -> None:

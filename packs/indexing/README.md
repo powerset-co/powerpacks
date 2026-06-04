@@ -4,11 +4,7 @@ Local pipeline for turning canonical Powerpacks people CSVs into durable search-
 
 ## Canonical input
 
-Indexing consumes only `.powerpacks/network-import/merged/people.csv`, produced by:
-
-```bash
-uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run
-```
+Indexing consumes only `.powerpacks/network-import/merged/people.csv`, produced by `$import-network`/setup fan-in. If running the merge primitive directly, pass every source explicitly with `--input`; it never discovers run artifacts.
 
 ## Build local search index artifacts
 

@@ -83,7 +83,6 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 out_dir = Path(tmp) / "merged"
                 code, payload = self.invoke([
                     "run",
-                    "--no-discover",
                     "--output-dir", str(out_dir),
                     "--input", str(people),
                 ])
@@ -111,7 +110,6 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 first_out = Path(tmp) / "merged-first"
                 code, first = self.invoke([
                     "run",
-                    "--no-discover",
                     "--output-dir", str(first_out),
                     "--input", str(people),
                 ])
@@ -120,7 +118,6 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 second_out = Path(tmp) / "merged-second"
                 code, second = self.invoke([
                     "run",
-                    "--no-discover",
                     "--output-dir", str(second_out),
                     "--input", str(first_people),
                     "--input", str(people),
@@ -135,7 +132,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
-    def test_discovery_prefers_people_csv_and_writes_canonical_merge_alias(self):
+    def test_explicit_input_writes_canonical_merge_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()
             os.chdir(tmp)
@@ -144,7 +141,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.write_people(run_dir / "people.csv", "Jane Canonical")
                 self.write_people(run_dir / "people_harmonic_all.csv", "Jane Legacy")
                 out_dir = Path(tmp) / "merged"
-                code, payload = self.invoke(["run", "--discover", "--base-dir", ".powerpacks", "--output-dir", str(out_dir)])
+                code, payload = self.invoke(["run", "--output-dir", str(out_dir), "--input", str(run_dir / "people.csv")])
                 self.assertEqual(code, 0)
                 self.assertEqual(Path(payload["people_csv"]).name, "people.csv")
                 self.assertTrue(Path(payload["people_csv"]).exists())
@@ -170,14 +167,14 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
-    def test_no_discover_ignores_filesystem_candidates_without_explicit_inputs(self):
+    def test_default_ignores_filesystem_candidates_without_explicit_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()
             os.chdir(tmp)
             try:
                 self.write_people(Path(".powerpacks/network-import/linkedin/old-run/people.csv"), "Jane Old")
                 out_dir = Path(tmp) / "merged"
-                code, payload = self.invoke(["run", "--no-discover", "--base-dir", ".powerpacks", "--output-dir", str(out_dir)])
+                code, payload = self.invoke(["run", "--output-dir", str(out_dir)])
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["input_rows"], 0)
                 self.assertEqual(payload["merged_rows"], 0)
@@ -193,14 +190,14 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             try:
                 self.write_people(Path(".powerpacks/network-import/linkedin/old-run/people.csv"), "Jane Old")
                 out_dir = Path(tmp) / "merged"
-                code, payload = self.invoke(["run", "--base-dir", ".powerpacks", "--output-dir", str(out_dir)])
+                code, payload = self.invoke(["run", "--output-dir", str(out_dir)])
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["input_rows"], 0)
                 self.assertEqual(payload["merged_rows"], 0)
             finally:
                 os.chdir(old_cwd)
 
-    def test_discovery_skips_unreviewed_messages_contacts(self):
+    def test_default_skips_unreviewed_messages_contacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()
             os.chdir(tmp)
@@ -209,7 +206,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 contacts.parent.mkdir(parents=True, exist_ok=True)
                 contacts.write_text("name,phone,source,message_count,last_message\nJane,+15551234567,imessage,3,2026-01-01\n", encoding="utf-8")
                 out_dir = Path(tmp) / "merged"
-                code, payload = self.invoke(["run", "--base-dir", ".powerpacks", "--output-dir", str(out_dir)])
+                code, payload = self.invoke(["run", "--output-dir", str(out_dir)])
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["input_rows"], 0)
                 self.assertEqual(payload["merged_rows"], 0)
@@ -236,7 +233,6 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 out_dir = Path(tmp) / "merged"
                 code, payload = self.invoke([
                     "run",
-                    "--no-discover",
                     "--output-dir", str(out_dir),
                     "--input", str(old_people),
                     "--input", str(new_people),
@@ -275,7 +271,6 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 out_dir = Path(tmp) / "merged"
                 code, payload = self.invoke([
                     "run",
-                    "--no-discover",
                     "--output-dir", str(out_dir),
                     "--input", str(old_people),
                     "--input", str(new_people),
@@ -335,7 +330,6 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 out_dir = Path(tmp) / "merged"
                 code, payload = self.invoke([
                     "run",
-                    "--no-discover",
                     "--output-dir", str(out_dir),
                     "--input", str(enriched),
                     "--input", str(contact_only),

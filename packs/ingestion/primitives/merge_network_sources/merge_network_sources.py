@@ -235,16 +235,6 @@ def stable_source_key(row: dict[str, str]) -> str:
     return f"row:{sha(json.dumps({col: row.get(col, '') for col in PEOPLE_SCHEMA_COLUMNS if col != 'source_artifacts'}, sort_keys=True), 16)}"
 
 
-def discover_inputs(base: Path) -> list[Path]:
-    paths_by_dir: dict[Path, Path] = {}
-    for p in base.glob("network-import/*/*/people.csv"):
-        paths_by_dir[p.parent] = p
-    for p in base.glob("network-import/*/*/people_harmonic_all.csv"):
-        paths_by_dir.setdefault(p.parent, p)
-    paths = list(paths_by_dir.values())
-    return sorted(set(paths))
-
-
 def source_label(path: Path) -> str:
     text = str(path)
     if "/linkedin/" in text:
@@ -483,12 +473,7 @@ def similar_pairs(rows: list[dict[str, Any]], threshold: float) -> list[dict[str
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    if args.input:
-        inputs = [Path(p) for p in args.input]
-    elif args.discover and not args.no_discover:
-        inputs = discover_inputs(Path(args.base_dir))
-    else:
-        inputs = []
+    inputs = [Path(p) for p in args.input] if args.input else []
     all_rows: list[dict[str, str]] = []
     per_file: dict[str, int] = {}
     for path in inputs:
@@ -570,10 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Merge/dedupe local network import people artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
-    run.add_argument("--input", action="append", help="Input people.csv, legacy people_harmonic_all.csv, or messages contacts.csv; repeatable. If omitted, no inputs are used unless --discover is set")
-    run.add_argument("--discover", action="store_true", help="Legacy recovery mode: discover run-dir inputs from the filesystem when --input is omitted")
-    run.add_argument("--no-discover", action="store_true", help="Do not discover inputs from the filesystem when --input is omitted")
-    run.add_argument("--base-dir", default=".powerpacks")
+    run.add_argument("--input", action="append", help="Input people.csv, people_harmonic_all.csv, or messages contacts.csv; repeatable. No filesystem discovery is performed.")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     run.add_argument("--name-threshold", type=float, default=0.92)
     run.set_defaults(func=cmd_run)
