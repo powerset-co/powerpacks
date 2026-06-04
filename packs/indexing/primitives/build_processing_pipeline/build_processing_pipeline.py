@@ -1201,8 +1201,6 @@ def step_location(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str
 
 
 def step_detect_ceo_founders(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
-    if not ledger.get("allow_paid_role_provider"):
-        return {}, {"status": "skipped", "reason": "requires_allow_paid_role_provider"}
     result = detect_ceo_founders.run(Namespace(
         flattened=str(ps["flattened"]),
         output=str(ps["founder_enrichment"]),
@@ -1224,8 +1222,6 @@ def step_detect_ceo_founders(ledger: dict[str, Any], ps: dict[str, Path]) -> tup
 
 
 def step_infer_ages(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
-    if not ledger.get("allow_paid_role_provider"):
-        return {}, {"status": "skipped", "reason": "requires_allow_paid_role_provider"}
     result = infer_ages.run(Namespace(
         flattened=str(ps["flattened"]),
         output=str(ps["inferred_ages"]),
