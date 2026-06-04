@@ -12,7 +12,7 @@ SKILLS_DIR="${1:-$PI_HOME/skills}"
 
 MANAGED_SKILLS=(
   search-network search-company search-contacts build-local-search-index
-  powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search
+  powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search apollo
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
   import-email import-network import-twitter
   import-messages import-imessage import-contacts-review
@@ -95,8 +95,9 @@ install_skill import-email "$REPO_ROOT/packs/ingestion/skills/import-email/SKILL
 install_skill import-network "$REPO_ROOT/packs/ingestion/skills/import-network/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
+install_skill apollo "$REPO_ROOT/packs/apollo/skills/apollo/SKILL.md"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
-printf '  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search\n'
+printf '  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search apollo\n'
 printf '  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email import-network import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

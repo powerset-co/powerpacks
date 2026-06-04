@@ -88,6 +88,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 | Skill | Trigger | What it does |
 | --- | --- | --- |
 | [`sales-nav-search`](packs/sales-nav/skills/sales-nav-search/SKILL.md) | `$sales-nav-search` | Run a Sales Navigator search through the `powerset-search` MCP. Resolves company / title filters, runs a paginated lead search with server-side artifact persistence on by default, paginates via `get_artifact`. Depends on `$powerset setup` having run first. |
+| [`apollo`](packs/apollo/skills/apollo/SKILL.md) | `$apollo setup`, `$apollo prepare-leads` | Configure the Apollo.io MCP (`apollo-mcp`) and prepare network-search/Sales Nav LinkedIn lead exports for Apollo contact creation and existing-sequence enrollment. Requires `APOLLO_API_KEY`, a connected Apollo email account, and an existing Apollo sequence for outbound. |
 
 ### Messages pack
 
@@ -129,6 +130,9 @@ powerpacks/
 │   │   └── templates/      env.example
 │   ├── sales-nav/          Sales Navigator search via the powerset-search MCP
 │   │   └── skills/         sales-nav-search
+│   ├── apollo/             Apollo.io MCP setup + outbound lead handoff
+│   │   ├── skills/         apollo
+│   │   └── primitives/     apollo_mcp (install/status + CSV handoff)
 │   ├── indexing/           local people.csv → search-index artifact pipeline
 │   │   ├── skills/         build-local-search-index
 │   │   ├── primitives/     build_processing_pipeline + transform CLIs
@@ -211,6 +215,7 @@ $import-whatsapp                  # isolated WhatsApp sync test via wacli
 | `powerset setup` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
 | `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, plus optional review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `sales-nav-search` | `$powerset setup` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
+| `apollo` | Node/npx, `APOLLO_API_KEY` in `.env` or shell, connected Apollo email account, and an existing Apollo sequence/campaign for enrollment |
 
 ### Secrets / env vars
 
@@ -231,6 +236,7 @@ review/research.
 | `OPENROUTER_API_KEY` | Messages contact review |
 | `PARALLEL_API_KEY` | Messages deep research |
 | `POWERPACKS_DEFAULT_SET_ID` | Local default Powerset set selection |
+| `APOLLO_API_KEY` | Apollo.io MCP; use a Master API key for sequences/email accounts |
 
 Additional profiles can pull specialized keys such as RapidAPI LinkedIn/Twitter
 or Supabase admin credentials when a workflow needs them.

@@ -191,6 +191,8 @@ Routes:
   `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
+- `$apollo`, Apollo.io MCP setup/status, Apollo outbound campaign/sequence handoff, prepare LinkedIn leads for Apollo →
+  `packs/apollo/skills/apollo/SKILL.md`
 - `$powerset`, `$powerset setup`, Powerset login/status/whoami/sets/MCP/env credentials →
   `packs/powerset/skills/powerset/SKILL.md`
 - `$update-powerpacks`, reinstall/update Powerpacks skills, canonical install/state cleanup, adopt `.codex` state →
@@ -236,6 +238,7 @@ the primitive blocks/fails or the user asks for implementation details.
   `uv run --project . ...` so agents use the locked environment.
 - **Test additions** go in `tests/` and run via `uv run --project . python -m unittest discover -s tests`.
   Run the full suite after non-trivial edits.
+- **Apollo outbound safety**: Apollo enrichment/contact writes/sequence enrollment are spend-bearing or mutating and may send email through Apollo sequence settings. Require explicit user confirmation before those MCP tool calls; setup/status/lead preparation are safe.
 - **Privacy contract**: no message bodies are ever read or sent. Only
   contact metadata (phone, name, source, group flags, message counts,
   last_message). Carry this through any new primitive.
