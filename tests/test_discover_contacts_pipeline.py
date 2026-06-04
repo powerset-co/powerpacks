@@ -1,6 +1,5 @@
 import argparse
 import csv
-import hashlib
 import json
 import sqlite3
 import subprocess
@@ -898,10 +897,6 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 ["gmail:me@example.com:email:alex@example.com", "gmail:me@example.com:email:jane@example.com"],
             )
             self.assertEqual({row["source_account"] for row in observed.values()}, {"me@example.com"})
-            self.assertEqual(
-                {row["source_id"] for row in observed.values()},
-                {f"msgvault:{hashlib.sha256(b'me@example.com').hexdigest()[:12]}"},
-            )
 
             calls = []
             def fake_run_cmd(cmd, timeout=None):
@@ -1075,10 +1070,6 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 directory_rows = list(csv.DictReader(handle))
             self.assertEqual([row["source_key"] for row in directory_rows], ["gmail:me@example.com:email:alex@example.com", "gmail:me@example.com:email:jane@example.com"])
             self.assertEqual({row["source_account"] for row in directory_rows}, {"me@example.com"})
-            self.assertEqual(
-                {row["source_id"] for row in directory_rows},
-                {f"msgvault:{hashlib.sha256(b'me@example.com').hexdigest()[:12]}"},
-            )
             self.assertEqual({row["status"] for row in directory_rows}, {"found"})
         self.assertEqual(
             discover_contacts_pipeline.resolve_msgvault_db(argparse.Namespace(msgvault_db="", gmail_account_email="")),
@@ -1138,6 +1129,10 @@ class ImportNetworkPipelineTests(unittest.TestCase):
                 [row["source_key"] for row in rows],
                 ["linkedin_csv:arthur:linkedin:linked-in", "messages:phone:+15555550100"],
             )
+            by_source = {row["source"]: row for row in rows}
+            self.assertEqual(by_source["linkedin_csv"]["source_account"], "arthur")
+            self.assertEqual(by_source["messages"]["source_account"], "imessage,whatsapp")
+            self.assertEqual(by_source["messages"]["source_channels"], "imessage,whatsapp")
             self.assertEqual({row["status"] for row in rows}, {"found"})
             self.assertEqual([row["public_identifier"] for row in rows], ["linked-in", "message-person"])
 

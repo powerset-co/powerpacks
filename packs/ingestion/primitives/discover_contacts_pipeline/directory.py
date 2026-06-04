@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -232,15 +231,13 @@ def directory_identity_key(email: str, phone: str, name: str, public_identifier:
     return ""
 
 
-def gmail_account_source_id(source_account: str, source_key: str = "") -> str:
-    account = (source_account or "").strip().lower()
-    if not account and source_key.startswith("gmail:"):
-        parts = source_key.split(":", 3)
-        if len(parts) >= 2:
-            account = parts[1].strip().lower()
-    if not account:
+def gmail_account_from_source_key(source_key: str) -> str:
+    if not source_key.startswith("gmail:"):
         return ""
-    return f"msgvault:{hashlib.sha256(account.encode('utf-8')).hexdigest()[:12]}"
+    parts = source_key.split(":", 3)
+    if len(parts) < 2:
+        return ""
+    return parts[1].strip().lower()
 
 
 def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", source: str = "", updated_at: str = "") -> dict[str, str]:
@@ -258,14 +255,15 @@ def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", 
     status = str(row.get("status") or ("found" if public_identifier else "observed")).strip().lower()
     source_name = str(row.get("source") or source or "directory")
     source_account = str(row.get("source_account") or row.get("account_email") or "")
-    source_id = str(row.get("source_id") or "")
-    if not source_id and (source_name == "gmail_msgvault" or source_key.startswith("gmail:")):
-        source_id = gmail_account_source_id(source_account, source_key)
+    if not source_account and (source_name == "gmail_msgvault" or source_key.startswith("gmail:")):
+        source_account = gmail_account_from_source_key(source_key)
+    if not source_account and source_name == "messages":
+        source_account = str(row.get("source_channels") or "messages")
     output = {
         "source": source_name,
         "source_key": source_key,
         "source_account": source_account,
-        "source_id": source_id,
+        "source_id": str(row.get("source_id") or ""),
         "source_channels": str(row.get("source_channels") or ""),
         "status": status,
         "email": email,
@@ -618,12 +616,15 @@ def directory_rows_from_people_csv(path: Path, *, source: str = "", source_accou
         if not public_identifier:
             continue
         source_name = source or (row.get("source_channels") or "").split(",", 1)[0] or directory_source_kind(path)
+        row_source_account = source_account
+        if not row_source_account and source_name == "messages":
+            row_source_account = row.get("source_channels") or source_name
         email = str(row.get("primary_email") or "").strip().lower()
         phone = normalize_phone(row.get("primary_phone") or "")
         rows.append(normalized_directory_row({
             "source": source_name,
-            "source_key": people_directory_source_key(row, source_name, source_account, public_identifier),
-            "source_account": source_account,
+            "source_key": people_directory_source_key(row, source_name, row_source_account, public_identifier),
+            "source_account": row_source_account,
             "source_id": row.get("id") or "",
             "source_channels": row.get("source_channels") or source_name,
             "status": "found",

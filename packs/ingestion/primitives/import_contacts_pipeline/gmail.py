@@ -25,8 +25,10 @@ try:
         DEFAULT_PROFILE_CACHE_DIR,
         copy_people_csv,
         csv_count,
+        directory_source_account_quality,
         linked_gmail_accounts,
         load_legacy_discover_module,
+        normalize_directory_source_accounts,
         write_manifest,
     )
 except ModuleNotFoundError:
@@ -47,8 +49,10 @@ except ModuleNotFoundError:
         DEFAULT_PROFILE_CACHE_DIR,
         copy_people_csv,
         csv_count,
+        directory_source_account_quality,
         linked_gmail_accounts,
         load_legacy_discover_module,
+        normalize_directory_source_accounts,
         write_manifest,
     )
 
@@ -199,6 +203,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ledger["status"] = "completed"
     legacy.save_ledger(ledger_path, ledger)
     people_csv = copy_people_csv("gmail", str(ledger.get("artifacts", {}).get("gmail_merged_people_csv") or ledger.get("artifacts", {}).get("gmail_people_csv") or ""))
+    directory_normalization = normalize_directory_source_accounts("gmail")
+    directory_quality = directory_source_account_quality("gmail")
+    if directory_quality["status"] != "ok":
+        return write_manifest("gmail", {
+            "status": "failed",
+            "reason": "directory_source_account_quality_failed",
+            "ledger": str(ledger_path),
+            "artifact_dir": str(import_dir),
+            "outputs": {
+                "people_csv": people_csv,
+                "directory_csv": str(DEFAULT_DIRECTORY_CSV),
+            },
+            "directory_normalization": directory_normalization,
+            "directory_quality": directory_quality,
+            "steps": ledger.get("steps", {}),
+            "auto_approvals": ledger.get("auto_approvals", []),
+            "artifacts": ledger.get("artifacts", {}),
+        })
     return write_manifest("gmail", {
         "status": "completed",
         "ledger": str(ledger_path),
@@ -218,6 +240,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "steps": ledger.get("steps", {}),
         "auto_approvals": ledger.get("auto_approvals", []),
+        "directory_normalization": directory_normalization,
+        "directory_quality": directory_quality,
         "artifacts": ledger.get("artifacts", {}),
     })
 
