@@ -85,7 +85,7 @@ CONTRACT_PERSON_COLUMNS = [
 ]
 
 PEOPLE_NAMESPACE_COLUMNS = [
-    "id", "base_id", "position_title", "word_tokens", "char_tokens", "d2q_tokens", "phrase_tokens", "city",
+    "id", "base_id", "person_id", "position_id", "title_hash", "raw_title", "role_type_category", "position_title", "word_tokens", "char_tokens", "d2q_tokens", "phrase_tokens", "city",
     "state", "country", "macro_region", "metro_areas", "seniority_band", "company_id", "is_current",
     "total_years_experience", "start_date_epoch", "end_date_epoch", "tenure_years", "role_track", "allowed_operator_ids",
     "role_ids", "inferred_birth_year", "description", "dense_text", "company_domain", "company_linkedin_url",
@@ -562,9 +562,15 @@ def build_roles(people: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             description = _first(exp, ("description", "summary"))
             dense_text = " ".join(part for part in [title, company_name, description] if part)
             word_tokens = _tokens(title, company_name, description, person.get("headline"))
+            position_id = position_uuid(person["id"], _string(exp.get("id") or exp.get("position_id") or exp.get("urn")) or idx)
             row = {
-                "id": position_uuid(person["id"], _string(exp.get("id") or exp.get("position_id") or exp.get("urn")) or idx),
+                "id": position_id,
                 "base_id": person["id"],
+                "person_id": person["id"],
+                "position_id": position_id,
+                "title_hash": _string(exp.get("title_hash") or person.get("title_hash")),
+                "raw_title": title,
+                "role_type_category": "",
                 "position_title": title,
                 "description": description,
                 "dense_text": dense_text,

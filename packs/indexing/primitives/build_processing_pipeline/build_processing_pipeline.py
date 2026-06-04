@@ -1182,7 +1182,11 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
         role_hash = hashes[idx] if idx < len(hashes) else ""
         role = role_data.get(role_hash, {})
         embedding_row = role_embeddings.get(role_hash, {})
+        if role_hash:
+            record["title_hash"] = role_hash
         if role:
+            record["raw_title"] = role.get("raw_title") or record.get("raw_title") or record.get("position_title", "")
+            record["role_type_category"] = role.get("role_type") or record.get("role_type_category", "")
             record["description"] = role.get("description") or record.get("description", "")
             record["dense_text"] = role.get("dense_text") or record.get("dense_text", "")
             record["seniority_band"] = role.get("seniority_band") or record.get("seniority_band", "")
