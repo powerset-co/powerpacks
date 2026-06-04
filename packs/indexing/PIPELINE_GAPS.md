@@ -61,17 +61,24 @@ and inject d2q + role_ids like Aleph's `upload_people_turbopuffer.py` does.
 
 ### Inferred birth year / age (priority: low)
 
-**Aleph**: Dedicated `infer_ages` step produces `inferred_ages.jsonl` with
-person-level `birth_year` estimates from graduation years and career timelines.
+**Aleph**: Dedicated `infer_ages` step uses LLM (`gpt-5.4-mini`, structured
+output) to estimate birth year from education and work experience timelines.
+The LLM prompt handles non-traditional students, internship vs full-time
+distinctions, high school anchoring, and cross-validation of multiple signals.
+A rule-based heuristic in `birth_year.py` serves as fallback only when the LLM
+stage hasn't run.
 
 **Local**: Uses `inferred_birth_year` from CSV if available (usually empty for
 RapidAPI-sourced people).
 
-**Source**: `aleph-mvp/data_pipeline_v2/pipelines/people/processing/infer_ages.py`
-(if it exists) or inline in `upload_people_turbopuffer.py`.
+**Source**:
+- LLM stage: `aleph-mvp/data_pipeline_v2/pipelines/people/processing/infer_ages.py`
+- Rule-based fallback: `aleph-mvp/data_pipeline_v2/pipelines/people/lib/birth_year.py`
 
-**Lift plan**: Port the age inference heuristic. It uses education end years and
-career start dates to estimate birth year. No LLM needed.
+**Lift plan**: Port both the LLM stage (for batch inference) and the rule-based
+heuristic (for quick local fallback). The LLM stage uses `gpt-5.4-mini` with
+Pydantic structured output (`AgeInference` model), async batching, and
+checkpointing. Cost is ~$18 for 34K people at flex pricing.
 
 ### Company base data (priority: low, acceptable gap)
 
