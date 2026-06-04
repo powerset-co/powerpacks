@@ -71,14 +71,12 @@ stage hasn't run.
 **Local**: Uses `inferred_birth_year` from CSV if available (usually empty for
 RapidAPI-sourced people).
 
-**Source**:
-- LLM stage: `aleph-mvp/data_pipeline_v2/pipelines/people/processing/infer_ages.py`
-- Rule-based fallback: `aleph-mvp/data_pipeline_v2/pipelines/people/lib/birth_year.py`
+**Source**: `aleph-mvp/data_pipeline_v2/pipelines/people/processing/infer_ages.py`
 
-**Lift plan**: Port both the LLM stage (for batch inference) and the rule-based
-heuristic (for quick local fallback). The LLM stage uses `gpt-5.4-mini` with
-Pydantic structured output (`AgeInference` model), async batching, and
-checkpointing. Cost is ~$18 for 34K people at flex pricing.
+**Lift plan**: Port the LLM stage only. Uses `gpt-5.4-mini` with Pydantic
+structured output (`AgeInference` model), async batching, and checkpointing.
+Cost is ~$18 for 34K people at flex pricing. Do not port the rule-based
+heuristic fallback in `birth_year.py`.
 
 ### Company base data (priority: low, acceptable gap)
 
