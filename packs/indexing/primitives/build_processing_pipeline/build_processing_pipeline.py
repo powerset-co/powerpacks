@@ -1615,18 +1615,28 @@ def merge_csv_by_id(previous: Path, current: Path, key_field: str = "id") -> dic
 
 
 def compact_validation_stats(validation_stats: dict[str, Any]) -> dict[str, Any]:
+    """Return validation counts only; never include row-level errors in ledgers.
+
+    Local search records intentionally carry a few helper fields that older
+    TurboPuffer contract JSON files may not list. The full validation stats are
+    written to stats/validate_contracts.json for debugging, but the setup/index
+    JSON payload should stay compact and should not print thousands of noisy
+    row-level "extra field" diagnostics.
+    """
+
     validation = validation_stats.get("validation") if isinstance(validation_stats.get("validation"), dict) else {}
     compact: dict[str, Any] = {"validation": {}}
     for name, result in validation.items():
         if not isinstance(result, dict):
-            compact["validation"][name] = result
+            compact["validation"][name] = {"status": "reported", "value_type": type(result).__name__}
             continue
         errors = result.get("errors") if isinstance(result.get("errors"), list) else []
         compact["validation"][name] = {
-            key: value for key, value in result.items() if key != "errors"
+            "ok": result.get("ok"),
+            "row_count": result.get("row_count"),
+            "path": result.get("path"),
+            "error_count": len(errors),
         }
-        compact["validation"][name]["error_count"] = len(errors)
-        compact["validation"][name]["error_sample"] = errors[:3]
     return compact
 
 
