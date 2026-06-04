@@ -1,6 +1,6 @@
 # discover_contacts_pipeline
 
-One local orchestration command for network ingestion inputs.
+One local orchestration command for network source discovery inputs.
 
 Skills are user-facing handlers; this primitive is the deterministic runtime
 handler they call. In other words: `$import-email` / `$discover-contacts` route the
@@ -10,17 +10,17 @@ agent to a `SKILL.md`, and that skill calls this script.
 
 | User command / skill | This orchestrator role | Source primitive/script |
 | --- | --- | --- |
-| `$import-email` | Calls this script with `--gmail-account-email`; this script imports msgvault, merges, loads DuckDB | `gmail_network_import.py msgvault` |
-| `$discover-contacts` | Calls this script for end-to-end local network ingestion | `linkedin_network_import.py`, `gmail_network_import.py msgvault`, `merge_network_sources.py`, `build_network_duckdb.py` |
-| `$import-twitter` | Runs Twitter primitive first, then use this script with `--include-existing-artifacts` to merge/load DuckDB | `twitter_network_import.py` |
-| `$import-contacts` | Produces message artifacts first, then use this script with `--include-existing-artifacts` | messages pack primitives |
+| `$import-email` | Calls this script with `--gmail-account-email`; this script discovers msgvault contacts | `gmail_network_import.py msgvault` |
+| `$discover-contacts` | Calls this script for source discovery only | `linkedin_network_import.py`, `gmail_network_import.py msgvault` |
+| `$import-twitter` | Runs Twitter primitive directly | `twitter_network_import.py` |
+| `$import-contacts` | Produces message artifacts through messages pack primitives | messages pack primitives |
 
 ## Inputs
 
 - LinkedIn CSV: LinkedIn `Connections.csv`, handled by `linkedin_network_import`.
 - Gmail: local msgvault SQLite (`~/.msgvault/msgvault.db`), handled by `gmail_network_import msgvault`; multiple selected accounts from onboarding are imported into fixed per-account folders under `.powerpacks/network-import/discover/gmail/<account>/`.
 - Setup/account state: `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` fills in LinkedIn CSV/source label, msgvault DB, selected Gmail accounts, Twitter handle, and message contacts artifacts unless explicit CLI flags override them.
-- Messages: existing `.powerpacks/messages/research_review.csv`, produced by `$import-contacts`; include with `--include-existing-artifacts`. Reviewed rows with usable LinkedIn `/in/` URLs are materialized into a local people CSV and hydrated through `enrich_people.py` before merge. Raw `.powerpacks/messages/contacts.csv` remains review-gated.
+- Messages: existing `.powerpacks/messages/research_review.csv`, produced by `$import-contacts`. Reviewed rows with usable LinkedIn `/in/` URLs are materialized into a local people CSV and hydrated through `enrich_people.py` during import/enrichment. Raw `.powerpacks/messages/contacts.csv` remains review-gated.
 - Twitter/X: existing `.powerpacks/network-import/discover/twitter/*/people.csv`, produced by `twitter_network_import`; include with `--include-existing-artifacts`.
 
 ## Run
@@ -30,7 +30,7 @@ uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/
   --from-accounts .powerpacks/ingestion/accounts.json
 ```
 
-## Parallel source fan-out / fan-in
+## Parallel source discovery
 
 `run --dry-run --from-accounts ...` emits `worker_groups.import.jobs`. Jobs for
 Gmail accounts, LinkedIn CSV import/enrichment, Twitter, and messages artifacts
@@ -44,11 +44,13 @@ local research artifacts only, then delegates LinkedIn profile hydration to
 Twitter remains an existing-artifact or dedicated-skill worker unless explicitly
 approved; this orchestrator never runs `$import-contacts` research/upload implicitly.
 
-Fan-in (`merge_network_sources.py` and `build_network_duckdb.py`) runs only after
-selected source workers complete or return a blocked approval. Manual fan-out can
-use `--only-source gmail|linkedin_csv|twitter|messages`; each worker updates its
-fixed source folder. Run the normal command, or `--fan-in-only`, afterward to
-merge/load DuckDB into `.powerpacks/network-import/final/`.
+Fan-in is not owned by this primitive. The indexing pipeline owns merge,
+network DuckDB materialization, and local search indexing:
+
+```bash
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run \
+  --operator-id <operator-id>
+```
 
 Optional email LinkedIn resolution/enrichment bridge:
 
@@ -80,8 +82,6 @@ The pipeline writes:
 
 - per-source artifacts under `.powerpacks/network-import/discover/{linkedin,gmail,...}`
 - `.powerpacks/network-import/directory.csv` for reusable email/phone/name to LinkedIn mappings
-- merged CSVs under `.powerpacks/network-import/final/merged/` (`people.csv`, `network_contacts.csv`, `network_contact_sources.csv`, `network_companies.csv`)
-- DuckDB under `.powerpacks/network-import/final/duckdb/`
 
 ## Approval behavior
 
@@ -97,8 +97,8 @@ uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/
 uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py continue
 ```
 
-Gmail msgvault import, directory application, Messages materialization, merge,
-and DuckDB loading are local-only. Gmail email-to-LinkedIn provider resolution
+Gmail msgvault import, directory application, and Messages materialization are
+local-only. Gmail email-to-LinkedIn provider resolution
 is optional and only receives rows not already matched by `directory.csv`:
 `--gmail-linkedin-provider harness` only prepares prompts;
 `--gmail-linkedin-provider parallel` is spend-bearing and requires approval.

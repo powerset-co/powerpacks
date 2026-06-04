@@ -63,10 +63,12 @@ GMAIL_PARALLEL_AUTO_APPROVE_UNDER = 25
 def gmail_artifacts_from_discovery() -> dict[str, Any]:
     manifest = read_json(DEFAULT_BASE_DIR / "discover" / "gmail" / "manifest.json", {}) or {}
     artifacts: dict[str, Any] = {}
-    if manifest.get("contacts_csv"):
-        artifacts["gmail_contacts_csv"] = manifest["contacts_csv"]
-    if manifest.get("linkedin_resolution_queue_csv"):
-        artifacts["gmail_linkedin_resolution_queue_csv"] = manifest["linkedin_resolution_queue_csv"]
+    contacts_csv = str(manifest.get("contacts_csv") or DEFAULT_BASE_DIR / "discover" / "gmail" / "contacts.csv")
+    stable_queue_csv = str(manifest.get("linkedin_resolution_queue_csv") or DEFAULT_BASE_DIR / "discover" / "gmail" / "linkedin_resolution_queue.csv")
+    if Path(contacts_csv).exists():
+        artifacts["gmail_contacts_csv"] = contacts_csv
+    if Path(stable_queue_csv).exists():
+        artifacts["gmail_linkedin_resolution_queue_csv"] = stable_queue_csv
     queue_records: list[dict[str, Any]] = []
     people_records: list[dict[str, Any]] = []
     for child in manifest.get("children") or []:
@@ -78,15 +80,22 @@ def gmail_artifacts_from_discovery() -> dict[str, Any]:
         queue_csv = child_artifacts.get("linkedin_resolution_queue_csv")
         people_csv = child_artifacts.get("people_csv")
         slug = source_slug(account_email or "gmail")
-        if people_csv:
+        if people_csv and Path(str(people_csv)).exists():
             people_records.append({"account_email": account_email, "people_csv": people_csv, "slug": slug})
-        if queue_csv:
+        if queue_csv and Path(str(queue_csv)).exists():
             queue_records.append({
                 "account_email": account_email,
                 "queue_csv": queue_csv,
-                "people_csv": people_csv or "",
+                "people_csv": people_csv if people_csv and Path(str(people_csv)).exists() else "",
                 "slug": slug,
             })
+    if Path(stable_queue_csv).exists():
+        queue_records = [{
+            "account_email": "",
+            "queue_csv": stable_queue_csv,
+            "people_csv": contacts_csv if Path(contacts_csv).exists() else people_records[0]["people_csv"] if people_records else "",
+            "slug": "all",
+        }]
     if queue_records:
         artifacts["gmail_linkedin_resolution_queue_csvs"] = queue_records
     if people_records:

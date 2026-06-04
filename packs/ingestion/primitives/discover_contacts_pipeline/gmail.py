@@ -24,6 +24,7 @@ try:
         read_csv_rows,
         read_json,
         run_cmd,
+        source_slug,
         write_csv_rows,
         write_json,
     )
@@ -46,6 +47,7 @@ except ModuleNotFoundError:
         read_csv_rows,
         read_json,
         run_cmd,
+        source_slug,
         write_csv_rows,
         write_json,
     )
@@ -248,10 +250,9 @@ def sync_msgvault_account(email: str, db: str, query: str) -> dict[str, Any]:
     return {
         "status": "completed" if code == 0 else "failed",
         "account_email": email,
-        "command": cmd,
         "code": code,
-        "payload": payload,
-        "stderr": stderr,
+        "messages_added": payload.get("messages_added") if isinstance(payload, dict) else "",
+        "error": stderr or payload if code != 0 else "",
         "sync_after": sync_after,
         "sync_after_source": sync_after_source,
         "query": query,
@@ -338,6 +339,7 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
     children: list[dict[str, Any]] = []
     raw_root = contacts_csv.parent / "raw"
     for email in source_inputs["selected_accounts"]:
+        account_raw_dir = raw_root / source_slug(email)
         sync = sync_msgvault_account(email, source_inputs["msgvault_db"], source_inputs["sync_query"])
         if sync["status"] == "failed":
             payload = {"status": "failed", "source": "gmail", "account_email": email, "error": sync}
@@ -351,18 +353,30 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             "--account-email",
             email,
             "--output-dir",
-            str(raw_root),
+            str(account_raw_dir),
         )
         code, child, stderr = run_cmd(cmd)
-        children.append({"account_email": email, "sync": sync, "code": code, "payload": child, "stderr": stderr})
+        child_artifacts = child.get("artifacts") if isinstance(child, dict) else {}
+        child_queue_text = str((child_artifacts or {}).get("linkedin_resolution_queue_csv") or "").strip()
+        child_queue = Path(child_queue_text) if child_queue_text else None
+        rows_written = 0
+        if child_queue and child_queue.is_file():
+            _fields, rows = read_csv_rows(child_queue)
+            incoming.extend(rows)
+            rows_written = len(rows)
+        children.append({
+            "account_email": email,
+            "sync": sync,
+            "code": code,
+            "status": child.get("status") if isinstance(child, dict) else "",
+            "contacts": child.get("contacts") or child.get("counts", {}).get("contacts_written", "") if isinstance(child, dict) else "",
+            "rows_read": rows_written,
+            "raw_dir": str(account_raw_dir),
+        })
         if code != 0:
             payload = {"status": "failed", "source": "gmail", "account_email": email, "error": stderr or child}
             write_json(manifest_json, payload)
             return payload
-        child_queue = Path(str((child.get("artifacts") or {}).get("linkedin_resolution_queue_csv") or ""))
-        if child_queue.exists():
-            _fields, rows = read_csv_rows(child_queue)
-            incoming.extend(rows)
 
     existing: list[dict[str, Any]] = []
     if contacts_csv.exists():

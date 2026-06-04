@@ -8,6 +8,7 @@ from unittest import mock
 
 from packs.ingestion.primitives.discover_contacts_pipeline.directory import DIRECTORY_COLUMNS
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
+from packs.ingestion.primitives.import_contacts_pipeline import gmail as gmail_import
 from packs.ingestion.primitives.import_contacts_pipeline import linkedin as linkedin_import
 from packs.ingestion.primitives.import_contacts_pipeline.common import (
     directory_source_account_quality,
@@ -24,6 +25,41 @@ def write_directory(path: Path, rows: list[dict[str, str]]) -> None:
 
 
 class ImportContactsQualityTests(unittest.TestCase):
+    def test_gmail_import_uses_stable_discovery_queue_when_child_queue_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            base = tmp / ".powerpacks/network-import"
+            discover_gmail = base / "discover/gmail"
+            discover_gmail.mkdir(parents=True)
+            contacts = discover_gmail / "contacts.csv"
+            queue = discover_gmail / "linkedin_resolution_queue.csv"
+            contacts.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
+            queue.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
+            (discover_gmail / "manifest.json").write_text(json.dumps({
+                "contacts_csv": str(contacts),
+                "linkedin_resolution_queue_csv": str(queue),
+                "children": [{
+                    "account_email": "arthur@powerset.co",
+                    "payload": {
+                        "artifacts": {
+                            "linkedin_resolution_queue_csv": str(tmp / "missing-temp-queue.csv"),
+                            "people_csv": str(tmp / "missing-people.csv"),
+                        }
+                    },
+                }],
+            }), encoding="utf-8")
+
+            with mock.patch.object(gmail_import, "DEFAULT_BASE_DIR", base):
+                artifacts = gmail_import.gmail_artifacts_from_discovery()
+
+            self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csv"], str(queue))
+            self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csvs"], [{
+                "account_email": "",
+                "queue_csv": str(queue),
+                "people_csv": str(contacts),
+                "slug": "all",
+            }])
+
     def test_gmail_directory_rows_require_source_account(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td) / "directory.csv"

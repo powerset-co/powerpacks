@@ -2208,32 +2208,17 @@ def network_refresh_command(args: argparse.Namespace, *, force: bool, gmail_sync
 
 
 def network_fan_in_command(args: argparse.Namespace, *, force: bool, merge_only: bool = False) -> list[str]:
-    cmd = [
+    return [
         sys.executable,
-        'packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py',
-        'run',
-        '--from-accounts',
-        args.accounts,
+        'packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py',
+        'fan-in',
         '--operator-id',
         args.operator_id,
-        '--include-existing-artifacts',
-        '--fan-in-only',
-        '--ledger',
-        str(SETUP_REFRESH_LEDGER),
+        '--accounts',
+        args.accounts,
+        '--manifest',
+        '.powerpacks/network-import/index/contacts/manifest.json',
     ]
-    if force:
-        cmd.append('--force')
-    if merge_only or bool(getattr(args, 'merge_only', False)):
-        cmd.append('--merge-only')
-    for source in getattr(args, 'only_source', []) or []:
-        cmd.extend(['--only-source', source])
-    if bool(getattr(args, 'resolve_gmail_linkedin', False)):
-        cmd.append('--resolve-gmail-linkedin')
-    if bool(getattr(args, 'approve_parallel_spend', False)):
-        cmd.append('--approve-parallel-spend')
-    if getattr(args, 'gmail_linkedin_limit', None) is not None:
-        cmd.extend(['--gmail-linkedin-limit', str(args.gmail_linkedin_limit)])
-    return cmd
 
 
 def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:

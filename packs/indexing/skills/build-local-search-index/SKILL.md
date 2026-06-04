@@ -15,43 +15,39 @@ Prefer the canonical merged people CSV from `$discover-contacts`:
 .powerpacks/network-import/merged/people.csv
 ```
 
-If the aggregate merge output is missing or stale, refresh it with `$discover-contacts`/setup fan-in. If you run the ingestion merge primitive directly, pass each source explicitly with `--input`; it does not discover run artifacts or use legacy merged filenames.
+If the aggregate merge output is missing or stale, run the contacts indexing
+pipeline. It performs fan-in first, promotes the canonical
+`.powerpacks/network-import/merged/people.csv`, then indexes that file.
 
 ## Run locally
 
-Plan/status inspection and dry-run cost estimates are local-only and safe to
-run before asking for provider spend approval:
+Plan inspection is local-only and safe:
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py plan --operator-id <operator-id>
 ```
 
-Estimate processing spend without writing artifacts or calling providers:
+Run the full local contacts indexing pipeline:
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --dry-run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run --operator-id <operator-id>
 ```
 
-Run:
+If the pipeline reports provider work above the approval threshold, rerun with
+explicit approval:
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run --operator-id <operator-id> --approve-provider-spend
 ```
 
 The run is single-index and idempotent: a partial index resumes from
 `.powerpacks/search-index/ledger.json`; a completed index refreshes the same
 directory instead of creating a new one.
 
-If the dry run reports that real provider stages are needed, do not run them by
-default. Continue only when precomputed/restored artifacts are already present
-or the user has explicitly approved the relevant provider allow flags/spend and
-the reported cost. Do not treat `plan`, `status`, or `run --dry-run` as
-approval to call providers.
+The stage manifest is written to:
 
-Materialize the local search DuckDB:
-
-```bash
-uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id <operator-id> --force
+```text
+.powerpacks/network-import/index/contacts/manifest.json
 ```
 
 Use the resulting local search DB:
@@ -69,7 +65,7 @@ uv run --project . python packs/indexing/primitives/build_processing_pipeline/bu
 Status:
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py status --ledger .powerpacks/search-index/ledger.json
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py status
 ```
 
 Artifacts are written under `.powerpacks/search-index/`. The local DuckDB is

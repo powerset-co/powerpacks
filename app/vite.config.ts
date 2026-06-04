@@ -1306,7 +1306,24 @@ function enrichmentNetworkCommand(operatorId: string, sourceId: string, options:
 }
 
 function processLocalNetworkCommand(operatorId: string): string[] {
-  return setupCommandArgs(operatorId, "fan-in", ["--force", "--merge-only"]);
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py",
+    "fan-in",
+    "--operator-id", operatorId,
+    "--accounts", ".powerpacks/ingestion/accounts.json",
+  ];
+}
+
+function indexContactsCommand(operatorId: string, extra: string[] = []): string[] {
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py",
+    "run",
+    "--operator-id", operatorId,
+    "--accounts", ".powerpacks/ingestion/accounts.json",
+    ...extra,
+  ];
 }
 
 function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[number]) {
@@ -2142,11 +2159,11 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
 
   if (action === "index") {
     const extra = body.approveProviderSpend === true ? ["--approve-provider-spend"] : [];
-    return startSetupJob(action, setupCommandArgs(operator.id, "index", extra));
+    return startSetupJob(action, indexContactsCommand(operator.id, extra));
   }
 
   if (action === "index-one") {
-    return startSetupJob(action, setupCommandArgs(operator.id, "index", ["--approve-provider-spend", "--limit", "10", "--limit-mode", "missing"]), 2 * 60 * 60 * 1000);
+    return startSetupJob(action, indexContactsCommand(operator.id, ["--approve-provider-spend", "--limit", "10", "--limit-mode", "missing"]), 2 * 60 * 60 * 1000);
   }
 
   if (["bootstrap", "link", "run"].includes(action)) {

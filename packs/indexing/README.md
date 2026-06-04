@@ -4,18 +4,18 @@ Local pipeline for turning canonical Powerpacks people CSVs into durable search-
 
 ## Canonical input
 
-Indexing consumes only `.powerpacks/network-import/merged/people.csv`, produced by `$discover-contacts`/setup fan-in. If running the merge primitive directly, pass every source explicitly with `--input`; it never discovers run artifacts.
+Indexing consumes only `.powerpacks/network-import/merged/people.csv`. The
+contacts indexing pipeline creates that file first by fanning in canonical
+source import outputs, then runs processing/indexing.
 
 ## Build local search index artifacts
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan \
-  --input .powerpacks/network-import/merged/people.csv \
-  --output-dir .powerpacks/search-index
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py plan \
+  --operator-id <operator-id>
 
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run \
-  --input .powerpacks/network-import/merged/people.csv \
-  --output-dir .powerpacks/search-index
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run \
+  --operator-id <operator-id>
 ```
 
 The pipeline has one local index target. A partial `.powerpacks/search-index`
@@ -49,12 +49,9 @@ Artifacts are written under:
 └── stats/*.json
 ```
 
-Materialize the local DuckDB search backend:
+The wrapper also materializes the local DuckDB search backend:
 
 ```bash
-uv run --project . python scripts/build-local-duckdb-shim.py \
-  --records-dir .powerpacks/search-index \
-  --force
 export POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb
 ```
 

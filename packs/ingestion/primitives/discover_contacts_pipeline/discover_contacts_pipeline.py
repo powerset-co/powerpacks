@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Orchestrate local network ingestion sources into merged CSVs + DuckDB.
+"""Orchestrate local network source discovery.
 
 The source-specific discovery work lives in sibling modules:
 - gmail.py for msgvault/Gmail sync, directory matching, and LinkedIn resolution
 - messages.py for reviewed iMessage/WhatsApp contact promotion and enrichment
 - directory.py for directory.csv and people.csv materialization helpers
 
-This file intentionally keeps orchestration, CLI, and fan-in/merge control flow.
+Fan-in/merge/indexing is owned by packs/indexing/primitives/index_contacts_pipeline.
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
-import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,15 +32,6 @@ DEFAULT_CHILD_TIMEOUT_SECONDS = common.DEFAULT_CHILD_TIMEOUT_SECONDS
 DEFAULT_GMAIL_ESTIMATE_MAX_PAGES = gmail.DEFAULT_GMAIL_ESTIMATE_MAX_PAGES
 
 SOURCE_NAMES = ["gmail", "linkedin_csv", "twitter", "messages"]
-MERGED_ARTIFACT_KEYS = {
-    "merged_people_csv",
-    "network_contacts_csv",
-    "network_contact_sources_csv",
-    "network_companies_csv",
-    "merge_manifest",
-    "duckdb",
-    "duckdb_manifest",
-}
 SOURCE_ARTIFACT_PREFIXES = {
     "gmail": ("gmail_",),
     "linkedin_csv": ("linkedin_",),
@@ -330,11 +320,11 @@ def source_worker_group(input_cfg: dict[str, Any]) -> dict[str, Any]:
             "review_csv": messages_review_csv,
             "contacts_csv": input_cfg.get("messages_contacts_csv") or ".powerpacks/messages/contacts.csv",
             "parallelizable": True,
-            "reason": "reviewed Messages LinkedIn rows are materialized locally, then hydrated through enrich_people before fan-in" if messages_review_csv else MESSAGES_REVIEW_GATE_REASON,
+            "reason": "reviewed Messages LinkedIn rows are materialized locally, then hydrated through enrich_people" if messages_review_csv else MESSAGES_REVIEW_GATE_REASON,
             "requires_approval": ["rapidapi_linkedin_profile_enrichment"] if messages_review_csv else ["messages_review_flow"],
             "status": "approved_review_artifact" if messages_review_csv else "review_required",
         })
-    return {"parallel": True, "fan_in": "merge_network_sources_then_duckdb_after_nonblocked_workers", "jobs": jobs}
+    return {"parallel": True, "jobs": jobs}
 
 
 def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resume: bool = False) -> bool:
@@ -425,122 +415,17 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
     mark_step(ledger, "source_imports", "completed", worker_group=group)
     save_ledger(ledger_path, ledger)
     return True
-def merge_input_paths(ledger: dict[str, Any], merge_dir: Path) -> list[str]:
-    input_cfg = ledger.get("input", {}) or {}
-    artifacts = ledger.get("artifacts", {}) or {}
-    include_existing = bool(input_cfg.get("include_existing_artifacts"))
-    explicit_inputs: list[str] = []
-    canonical_people = DEFAULT_BASE_DIR / "merged" / "people.csv"
-    if include_existing and canonical_people.exists():
-        explicit_inputs.append(str(canonical_people))
-
-    gmail_inputs = unique_strings(artifacts.get("gmail_final_people_csvs") or [])
-    if not gmail_inputs and artifacts.get("gmail_merged_people_csv"):
-        gmail_inputs = [str(artifacts["gmail_merged_people_csv"])]
-
-    explicit_inputs.extend(
-        value for key, value in sorted(artifacts.items())
-        if key in {"linkedin_people_csv"} and value
-    )
-    if gmail_inputs:
-        explicit_inputs.extend(str(path) for path in gmail_inputs if path)
-
-    messages_people_inputs = unique_strings(artifacts.get("messages_final_people_csvs") or [])
-    if not messages_people_inputs and artifacts.get("messages_merged_people_csv"):
-        messages_people_inputs = [str(artifacts["messages_merged_people_csv"])]
-    explicit_inputs.extend(str(path) for path in messages_people_inputs if path)
-
-    messages_contacts = ""
-    if input_cfg.get("allow_unreviewed_messages"):
-        messages_contacts = artifacts.get("messages_contacts_csv") or input_cfg.get("messages_contacts_csv")
-    if messages_contacts:
-        message_input = Path(messages_contacts)
-        # `merge_network_sources` recognizes message contact CSVs by a
-        # `/messages/contacts.csv` path segment. A linked source may live
-        # elsewhere, so copy it into this run's fan-in scratch area before
-        # passing it as an explicit input.
-        if message_input.exists():
-            scratch = merge_dir / "source-inputs" / "messages" / "contacts.csv"
-            scratch.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(message_input, scratch)
-            explicit_inputs.append(str(scratch))
-        else:
-            explicit_inputs.append(str(message_input))
-
-    return list(dict.fromkeys(explicit_inputs))
-
-
-def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
-    begin_step(ledger_path, ledger, "merge", "Merging network sources.")
-    merge_dir = artifact_dir_from_ledger(ledger) / "merged"
-    cmd = py_cmd(
-        "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py",
-        "run",
-        "--output-dir", str(merge_dir),
-    )
-    explicit_inputs = merge_input_paths(ledger, merge_dir)
-    for input_path in explicit_inputs:
-        cmd.extend(["--input", str(input_path)])
-    code, payload, stderr = run_cmd(cmd)
-    if code != 0:
-        mark_step(ledger, "merge", "failed", error=stderr or payload)
-        ledger["status"] = "failed"
-        save_ledger(ledger_path, ledger)
-        emit({"status": "failed", "step_id": "merge", "error": stderr or payload})
-        return False
-    mark_step(ledger, "merge", "completed", payload=payload)
-    ledger.setdefault("artifacts", {}).update({
-        "merged_people_csv": payload.get("people_csv"),
-        "network_contacts_csv": payload.get("network_contacts_csv"),
-        "network_contact_sources_csv": payload.get("network_contact_sources_csv"),
-        "network_companies_csv": payload.get("network_companies_csv"),
-        "merge_manifest": payload.get("manifest"),
-    })
-    emit_progress(f"Merged network sources: {payload.get('merged_rows', 0)} people.")
-    return True
-
-
-def run_duckdb(ledger_path: Path, ledger: dict[str, Any]) -> bool:
-    begin_step(ledger_path, ledger, "duckdb", "Building local network DuckDB.")
-    merge_dir = artifact_dir_from_ledger(ledger) / "merged"
-    duckdb_dir = artifact_dir_from_ledger(ledger) / "duckdb"
-    cmd = py_cmd(
-        "packs/ingestion/primitives/build_network_duckdb/build_network_duckdb.py",
-        "--network-dir", str(merge_dir),
-        "--output-dir", str(duckdb_dir),
-        "--flavor", "local",
-        "--force",
-    )
-    code, payload, stderr = run_cmd(cmd)
-    if code != 0:
-        mark_step(ledger, "duckdb", "failed", error=stderr or payload)
-        ledger["status"] = "failed"
-        save_ledger(ledger_path, ledger)
-        emit({"status": "failed", "step_id": "duckdb", "error": stderr or payload})
-        return False
-    mark_step(ledger, "duckdb", "completed", payload=payload)
-    ledger.setdefault("artifacts", {}).update({"duckdb": payload.get("duckdb"), "duckdb_manifest": payload.get("manifest")})
-    emit_progress("Local network DuckDB is ready.")
-    return True
-
-
 def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
     ledger = load_ledger(ledger_path)
-    if not ledger.get("input", {}).get("fan_in_only") and ledger.get("steps", {}).get("source_imports", {}).get("status") not in {"completed", "skipped"}:
+    if ledger.get("steps", {}).get("source_imports", {}).get("status") not in {"completed", "skipped"}:
         if not run_source_import_workers(ledger_path, ledger, resume=resume):
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
-    if ledger.get("input", {}).get("source_import_only"):
-        ledger["status"] = "source_import_completed"
-        save_ledger(ledger_path, ledger)
-        emit({"status": "source_import_completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
-        return 0
     selected_sources = set(unique_strings(ledger.get("input", {}).get("only_sources")))
     enrichment_only = bool(ledger.get("input", {}).get("enrichment_only"))
-    merge_only = bool(ledger.get("input", {}).get("merge_only"))
-    selected_fan_in_sources = selected_sources if ledger.get("input", {}).get("fan_in_only") or enrichment_only else set()
-    run_gmail_enrichment = (not selected_fan_in_sources or "gmail" in selected_fan_in_sources) and not merge_only
-    run_messages_profile_enrichment = (not selected_fan_in_sources or "messages" in selected_fan_in_sources) and not merge_only
+    selected_enrichment_sources = selected_sources if enrichment_only else set()
+    run_gmail_enrichment = not selected_enrichment_sources or "gmail" in selected_enrichment_sources
+    run_messages_profile_enrichment = not selected_enrichment_sources or "messages" in selected_enrichment_sources
     if enrichment_only:
         if run_gmail_enrichment:
             if not run_gmail_directory(ledger_path, ledger):
@@ -561,7 +446,7 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
         save_ledger(ledger_path, ledger)
         emit({"status": "source_enrichment_completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
-    if ledger.get("input", {}).get("only_sources") and not ledger.get("input", {}).get("fan_in_only"):
+    if ledger.get("input", {}).get("only_sources"):
         if "messages" in selected_sources and ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
             if not run_messages_enrichment(ledger_path, ledger):
                 return 20 if ledger.get("blocked") else 1
@@ -570,31 +455,10 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
         save_ledger(ledger_path, ledger)
         emit({"status": "source_import_completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
-    if run_gmail_enrichment:
-        if not run_gmail_directory(ledger_path, ledger):
-            return 1
-        save_ledger(ledger_path, ledger)
-    if run_gmail_enrichment:
-        if not run_gmail_linkedin_resolution(ledger_path, ledger):
-            return 20 if ledger.get("blocked") else 1
-        save_ledger(ledger_path, ledger)
-    if run_gmail_enrichment:
-        if not run_gmail_apply_and_enrich(ledger_path, ledger):
-            return 20 if ledger.get("blocked") else 1
-        save_ledger(ledger_path, ledger)
-    if run_messages_profile_enrichment:
-        if not run_messages_enrichment(ledger_path, ledger):
-            return 20 if ledger.get("blocked") else 1
-        save_ledger(ledger_path, ledger)
-    if not run_merge(ledger_path, ledger):
-        return 1
-    save_ledger(ledger_path, ledger)
-    if not run_duckdb(ledger_path, ledger):
-        return 1
-    ledger["status"] = "completed"
+    ledger["status"] = "source_import_completed"
     ledger.pop("blocked", None)
     save_ledger(ledger_path, ledger)
-    emit({"status": "completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "artifacts": ledger.get("artifacts", {})})
+    emit({"status": "source_import_completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "artifacts": ledger.get("artifacts", {})})
     return 0
 
 
@@ -621,12 +485,12 @@ def preserved_state_for_source_refresh(existing: dict[str, Any], selected_source
     artifacts = {
         key: copy.deepcopy(value)
         for key, value in (existing.get("artifacts") or {}).items()
-        if key not in MERGED_ARTIFACT_KEYS and not artifact_matches_source(key, selected_sources)
+        if not artifact_matches_source(key, selected_sources)
     }
     steps = {
         key: copy.deepcopy(value)
         for key, value in (existing.get("steps") or {}).items()
-        if key not in {"source_imports", "merge", "duckdb"} and not step_matches_source(key, selected_sources)
+        if key != "source_imports" and not step_matches_source(key, selected_sources)
     }
     source_imports = {
         key: copy.deepcopy(value)
@@ -662,7 +526,7 @@ GMAIL_ENRICHMENT_ARTIFACT_KEYS = {
 }
 
 
-def reset_selected_fan_in_state(preserved: dict[str, Any], selected_sources: set[str]) -> dict[str, Any]:
+def reset_selected_enrichment_state(preserved: dict[str, Any], selected_sources: set[str]) -> dict[str, Any]:
     if not preserved or not selected_sources:
         return preserved
     steps = preserved.setdefault("steps", {})
@@ -705,10 +569,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if existing.get("status") not in {"failed"}:
             emit({"status": "active_run_exists", "ledger": str(ledger_path), "message": "Use continue/approve or --force."})
             return 0
-    preserve_sources = set() if args.fan_in_only else selected_sources
-    preserved = preserved_state_for_source_refresh(existing, preserve_sources) if args.force and (selected_sources or args.fan_in_only) else {}
-    if args.force and args.fan_in_only and selected_sources:
-        preserved = reset_selected_fan_in_state(preserved, selected_sources)
+    preserved = preserved_state_for_source_refresh(existing, selected_sources) if args.force and selected_sources else {}
     ledger = {
         "primitive": "discover_contacts_pipeline",
         "version": 1,
@@ -746,10 +607,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "from_accounts": args.from_accounts,
             "from_setup": args.from_setup,
             "only_sources": unique_strings(getattr(args, "only_source", [])),
-            "fan_in_only": args.fan_in_only,
-            "source_import_only": args.source_import_only,
             "enrichment_only": bool(getattr(args, "enrichment_only", False)),
-            "merge_only": bool(getattr(args, "merge_only", False)),
             "twitter_handle": getattr(args, "twitter_handle", ""),
             "messages_review_csv": getattr(args, "messages_review_csv", ""),
             "messages_contacts_csv": getattr(args, "messages_contacts_csv", ""),
@@ -776,7 +634,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
             would_run = []
         else:
             would_run = [
-                step for step in ["linkedin", "gmail_msgvault", "gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich", "messages_enrich_people", "merge", "duckdb"]
+                step for step in ["linkedin", "gmail_msgvault", "gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich", "messages_enrich_people"]
                 if (steps.get(step) or {}).get("status") not in {"completed", "skipped"}
             ]
         child_paid = {}
@@ -824,27 +682,24 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
     }
     gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
     gmail_estimates = estimate_gmail_accounts_via_api(input_cfg, gmail_emails) if gmail_emails else []
-    fan_in_only = bool(getattr(args, "fan_in_only", False))
-    source_import_only = bool(getattr(args, "source_import_only", False))
-    if not fan_in_only and (args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args)):
+    enrichment_only = bool(getattr(args, "enrichment_only", False))
+    if args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args):
         would_run.append("gmail_msgvault")
-    if not source_import_only and (args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args)):
+    if enrichment_only and (args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args)):
         would_run.append("gmail_directory")
-    if not source_import_only and (getattr(args, "resolve_gmail_linkedin", False) or getattr(args, "gmail_linkedin_provider", "off") != "off"):
+    if enrichment_only and (getattr(args, "resolve_gmail_linkedin", False) or getattr(args, "gmail_linkedin_provider", "off") != "off"):
         would_run.append("gmail_linkedin_resolution")
-    if not source_import_only and getattr(args, "gmail_resolutions_csv", ""):
+    if enrichment_only and getattr(args, "gmail_resolutions_csv", ""):
         would_run.append("gmail_apply_enrich")
-    if not source_import_only and messages_review_csv:
+    if enrichment_only and messages_review_csv:
         would_run.append("messages_enrich_people")
-    if not source_import_only:
-        would_run.extend(["merge", "duckdb"])
     return {
         "status": "dry_run",
         "ledger": str(ledger_path),
         "artifact_dir": str(artifact_dir),
         "existing_status": "missing",
         "would_run_steps": would_run,
-        "worker_groups": {} if fan_in_only else {"import": source_worker_group(input_cfg)},
+        "worker_groups": {"import": source_worker_group(input_cfg)},
         "gmail_api_estimates": gmail_estimates,
         "gmail_estimate_summary": summarize_gmail_estimates(gmail_estimates) if gmail_estimates else "",
         "estimated_paid_calls": "unknown_without_existing_stage_outputs",
@@ -952,11 +807,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--messages-review-csv", default="", help=argparse.SUPPRESS)
     run.add_argument("--messages-contacts-csv", default="", help=argparse.SUPPRESS)
     run.add_argument("--allow-unreviewed-messages", action="store_true", help=argparse.SUPPRESS)
-    run.add_argument("--only-source", action="append", default=[], choices=SOURCE_NAMES, help="Run only a source import worker; skips fan-in merge unless --fan-in-only is set separately")
-    run.add_argument("--fan-in-only", action="store_true", help="Skip source import workers and run merge/DuckDB fan-in from existing artifacts")
-    run.add_argument("--source-import-only", action="store_true", help="Run raw source imports only; skip resolution, enrichment, merge, and DuckDB fan-in")
-    run.add_argument("--enrichment-only", action="store_true", help="Run source-specific enrichment and stop before merge/DuckDB")
-    run.add_argument("--merge-only", action="store_true", help="Run only merge/DuckDB materialization; skip source-specific enrichment")
+    run.add_argument("--only-source", action="append", default=[], choices=SOURCE_NAMES, help="Run only a source discovery worker")
+    run.add_argument("--enrichment-only", action="store_true", help="Run source-specific enrichment only")
     run.add_argument("--dry-run", action="store_true", help="Inspect existing ledger/stage outputs and report work that would run")
     run.add_argument("--estimate", action="store_true", help="Alias for --dry-run")
     run.add_argument("--force", action="store_true")
