@@ -1266,6 +1266,9 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
   const paidCalls = paidCallTotal(estimate.estimatedPaidCalls);
   const cost = money(estimate.totalEstimatedUsd);
   const counts = estimate.counts || {};
+  const coverage = status.index.coverage || {};
+  const indexedPeople = Number(coverage.indexedPeople || 0);
+  const pendingPeople = Number(coverage.pendingPeople || 0);
   const bootstrapRecordCount = Number(status.index.bootstrapRecords?.nonemptyRecordFiles || 0);
   const localRecordsMode = String(estimate.status || "") === "local_records_restore" || (bootstrapRecordCount > 0 && !status.index.duckdbTables?.length);
   const duckdbRepaired = status.index.duckdbRepair?.status === "ok";
@@ -1285,6 +1288,8 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               <h3 className="text-base font-semibold">Local search index</h3>
               <Badge variant={updateAvailable ? "secondary" : phaseTone(readiness)}>{indexLabel(readiness)}</Badge>
               <MetricChip label="Total people" value={status.index.peopleRecords || 0} />
+              <MetricChip label="Indexed" value={indexedPeople || null} />
+              <MetricChip label="Pending" value={pendingPeople || null} />
               <MetricChip label="Bootstrap record files" value={bootstrapRecordCount || null} />
               {showProviderEstimate && <MetricChip label="Cost" value={cost || "$0.00"} />}
               {showProviderEstimate && <MetricChip label="Paid calls" value={paidCalls} />}
@@ -1318,6 +1323,8 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               <KeyValue label="People CSV" value={status.index.peopleCsv} />
               <KeyValue label="People SHA" value={status.index.peopleSha256} />
               <KeyValue label="Input SHA" value={status.index.indexInputSha256} />
+              <KeyValue label="Indexed people" value={indexedPeople ? indexedPeople.toLocaleString() : "0"} />
+              <KeyValue label="Pending people" value={pendingPeople ? pendingPeople.toLocaleString() : "0"} />
             </div>
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="overflow-hidden rounded-md border">

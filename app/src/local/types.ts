@@ -242,6 +242,14 @@ export interface SetupStatusResponse {
       error?: string;
       tables?: Record<string, number>;
     } | null;
+    coverage?: {
+      status?: string;
+      totalPeople?: number;
+      indexedPeople?: number;
+      pendingPeople?: number;
+      existingDuckdbKeys?: number;
+      error?: string;
+    };
     processingEstimate?: {
       status?: string;
       totalEstimatedUsd?: number;

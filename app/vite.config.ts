@@ -91,6 +91,7 @@ const setupJobs = new Map<string, SetupJob>();
 let cachedWhatsAppLinkStatus: { expiresAt: number; value: Record<string, any> } | null = null;
 let cachedDuckdbTables: { key: string; expiresAt: number; value: Array<{ name: string; rows: number }> } | null = null;
 let cachedIndexEstimate: { key: string; expiresAt: number; value: Record<string, any> } | null = null;
+let cachedIndexCoverage: { key: string; expiresAt: number; value: Record<string, any> } | null = null;
 const SETUP_SOURCE_ORDER = ["gmail", "linkedin_csv", "messages", "twitter"] as const;
 const SETUP_SOURCE_LABELS: Record<string, string> = {
   gmail: "Gmail",
@@ -1622,6 +1623,68 @@ function maybeBuildLocalDuckdbFromBootstrapRecords(operatorId: string, duckdbPat
   };
 }
 
+function localIndexCoverage(peopleSha256: string, duckdbPath: string): Record<string, any> {
+  const peopleCsv = path.join(powerpacksStateRoot, "network-import", "merged", "people.csv");
+  if (!fs.existsSync(peopleCsv)) {
+    return { status: "missing_people_csv", totalPeople: 0, indexedPeople: 0, pendingPeople: 0, existingDuckdbKeys: 0 };
+  }
+  const duckdbStat = fs.existsSync(duckdbPath) ? fs.statSync(duckdbPath) : null;
+  const key = `${peopleSha256 || sha256File(peopleCsv)}:${duckdbStat?.mtimeMs || 0}:${duckdbStat?.size || 0}`;
+  const nowMs = Date.now();
+  if (cachedIndexCoverage && cachedIndexCoverage.key === key && cachedIndexCoverage.expiresAt > nowMs) {
+    return cachedIndexCoverage.value;
+  }
+  const script = `
+import importlib.util, json
+from pathlib import Path
+module_path = Path("packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py")
+spec = importlib.util.spec_from_file_location("build_processing_pipeline_status", module_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+people = mod.flatten_people(Path(".powerpacks/network-import/merged/people.csv"))
+existing = mod.existing_keys_from_duckdb(".powerpacks/search-index/local-search.duckdb")
+indexed = 0
+pending = 0
+for person in people:
+    keys = mod.person_keys(person)
+    if keys and not keys.isdisjoint(existing):
+        indexed += 1
+    else:
+        pending += 1
+print(json.dumps({
+    "status": "ok",
+    "totalPeople": len(people),
+    "indexedPeople": indexed,
+    "pendingPeople": pending,
+    "existingDuckdbKeys": len(existing),
+}))
+`;
+  const result = spawnSync("uv", ["run", "--project", ".", "python", "-c", script], {
+    cwd: powerpacksRepoRoot,
+    env: setupProcessEnv(),
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  let value: Record<string, any>;
+  try {
+    value = JSON.parse(result.stdout || "{}");
+  } catch {
+    value = {};
+  }
+  if (!value.status) {
+    value = {
+      status: result.status === 0 ? "ok" : "failed",
+      totalPeople: 0,
+      indexedPeople: 0,
+      pendingPeople: 0,
+      existingDuckdbKeys: 0,
+      error: String(result.stderr || result.error?.message || "").slice(0, 1000),
+    };
+  }
+  cachedIndexCoverage = { key, expiresAt: nowMs + 30000, value };
+  return value;
+}
+
 function indexDryRunEstimate(operatorId: string, peopleSha256: string): Record<string, any> {
   const peopleCsv = path.join(powerpacksStateRoot, "network-import", "merged", "people.csv");
   if (!fs.existsSync(peopleCsv)) return {};
@@ -1847,6 +1910,7 @@ async function setupStatus() {
     providers: {},
     error: "",
   } : indexDryRunEstimate(operator.id, peopleSha256);
+  const indexCoverage = localIndexCoverage(peopleSha256, duckdbPath);
   const importLiveRefresh = phases.import?.live_refresh || importRefreshLedger.refresh || importRefreshLedger;
   const messagesCurrentBlock = messagesCurrentBlockForUi(messagesLedger, reviewApi.counts || {});
 
@@ -1911,6 +1975,7 @@ async function setupStatus() {
       indexInputSha256: indexPhase.index_input_sha256 || "",
       bootstrapRecords,
       duckdbRepair,
+      coverage: indexCoverage,
       processingEstimate,
     },
     next: deriveNextAction(setupLedger, sources),
