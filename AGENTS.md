@@ -20,6 +20,17 @@ re-run `bin/sync-agent-files.sh` from the repo root.
 
 ---
 
+## Reference fidelity
+
+Do not be lazy when the user asks to copy, mirror, reference, or base work on an
+existing implementation. For frontend work, copy the referenced style, layout,
+component choices, spacing, colors, and code structure as close to 1:1 as
+possible unless underlying functionality makes that impossible. For backend
+work, copy the same interface, logic, and behavior as closely as possible unless
+the user explicitly asks not to copy it or asks for a different approach.
+
+---
+
 ## Sub-agent delegation
 
 The user explicitly authorizes Codex to use sub-agents for this repo. If skills

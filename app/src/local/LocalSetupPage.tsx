@@ -12,6 +12,7 @@ import {
   Database,
   FileText,
   HardDrive,
+  KeyRound,
   Link2,
   Loader2,
   Mail,
@@ -27,11 +28,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
+  fetchEnvStatus,
   fetchSetupStatus,
   runSetupAction,
   uploadLinkedInCsv,
 } from "./powerpacksApi";
 import type {
+  EnvStatusResponse,
   SetupEnrichmentSource,
   SetupImportSource,
   SetupJob,
@@ -40,13 +43,13 @@ import type {
   SetupStatusResponse,
 } from "./types";
 
-type SetupTabId = "link" | "import" | "enrichment" | "index";
+type SetupTabId = "link" | "discover" | "enrichment" | "index";
 type LinkRowId = "gmail" | "linkedin_csv" | "imessage" | "whatsapp" | "twitter";
 type SetupStepState = "complete" | "current" | "blocked" | "upcoming";
 
 const TABS: Array<{ id: SetupTabId; label: string; shortLabel: string; icon: typeof Link2; description: string; action: string }> = [
   { id: "link", label: "Link accounts", shortLabel: "Link", icon: Link2, description: "Connect the sources you want to use. Skip anything you do not need.", action: "Link or skip each source" },
-  { id: "import", label: "Discovery Contacts", shortLabel: "Discover", icon: Database, description: "Discover local contacts and source metadata from linked accounts.", action: "Run discovery" },
+  { id: "discover", label: "Discovery Contacts", shortLabel: "Discover", icon: Database, description: "Discover local contacts and source metadata from linked accounts.", action: "Run discovery" },
   { id: "enrichment", label: "Import and Enrichment", shortLabel: "Import + Enrich", icon: Sparkles, description: "Resolve profiles, enrich linked sources, and review researched people before adding them.", action: "Run import and enrichment" },
   { id: "index", label: "Process index", shortLabel: "Process", icon: HardDrive, description: "Merge source-specific people and build the searchable local index.", action: "Build index" },
 ];
@@ -147,8 +150,13 @@ function hasSetupTabParam(): boolean {
   return new URLSearchParams(window.location.search).has("tab");
 }
 
+function rawSetupTabParam(): string {
+  return new URLSearchParams(window.location.search).get("tab") || "";
+}
+
 function setupTabFromLocation(): SetupTabId {
-  const tab = new URLSearchParams(window.location.search).get("tab") || "";
+  const tab = rawSetupTabParam();
+  if (tab === "import") return "discover";
   return TAB_IDS.has(tab as SetupTabId) ? tab as SetupTabId : "link";
 }
 
@@ -366,13 +374,13 @@ function setupStepProgress(status: SetupStatusResponse, active: SetupTabId) {
     || Boolean(status.index.duckdbExists && status.index.peopleSha256 && status.index.indexInputSha256 === status.index.peopleSha256);
   const completeByStep: Record<SetupTabId, boolean> = {
     link: isCompleteStatus(phases.link) || status.accounts.unresolvedSources.length === 0,
-    import: isCompleteStatus(phases.import) || isCompleteStatus(status.import.status),
+    discover: isCompleteStatus(phases.import) || isCompleteStatus(status.import.status),
     enrichment: enrichmentComplete,
     index: indexComplete,
   };
   const blockedByStep: Record<SetupTabId, boolean> = {
     link: isBlockedStatus(phases.link),
-    import: isBlockedStatus(phases.import) || isBlockedStatus(status.import.status),
+    discover: isBlockedStatus(phases.import) || isBlockedStatus(status.import.status),
     enrichment: isBlockedStatus(status.enrichment.status) || sourceRows.some((source) => Boolean(source.blocked)),
     index: isBlockedStatus(phases.index),
   };
@@ -1398,7 +1406,6 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
   const localRecordsMode = String(estimate.status || "") === "local_records_restore" || (bootstrapRecordCount > 0 && !status.index.duckdbTables?.length);
   const duckdbRepaired = status.index.duckdbRepair?.status === "ok";
   const hasProviderEstimate = paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0;
-  const requiresProviderSpend = !localRecordsMode && hasProviderEstimate;
   const updateAvailable = ["needs_processing", "people_csv_ready_for_processing"].includes(String(readiness || "").toLowerCase())
     || status.index.reason === "search_index_stale_for_people_csv"
     || hasProviderEstimate;
@@ -1415,10 +1422,6 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               <MetricChip label="Total people" value={status.index.peopleRecords || 0} />
               <MetricChip label="Indexed" value={indexedPeople || null} />
               <MetricChip label="Pending" value={pendingPeople || null} />
-              <MetricChip label="Bootstrap record files" value={bootstrapRecordCount || null} />
-              {showProviderEstimate && <MetricChip label="Cost" value={cost || "$0.00"} />}
-              {showProviderEstimate && <MetricChip label="Paid calls" value={paidCalls} />}
-              <MetricChip label="DuckDB" value={formatBytes(status.index.duckdbSizeBytes)} />
             </div>
             {localRecordsMode ? (
               <div className="text-sm text-muted-foreground">
@@ -1442,15 +1445,6 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                 {estimate.error}
               </div>
             )}
-            <div className="grid gap-3 md:grid-cols-2">
-              <KeyValue label="DuckDB" value={status.index.duckdb} />
-              <KeyValue label="Last updated" value={updatedLabel(status.index.duckdbUpdatedAt)} />
-              <KeyValue label="People CSV" value={status.index.peopleCsv} />
-              <KeyValue label="People SHA" value={status.index.peopleSha256} />
-              <KeyValue label="Input SHA" value={status.index.indexInputSha256} />
-              <KeyValue label="Indexed people" value={indexedPeople ? indexedPeople.toLocaleString() : "0"} />
-              <KeyValue label="Pending people" value={pendingPeople ? pendingPeople.toLocaleString() : "0"} />
-            </div>
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="overflow-hidden rounded-md border">
                 <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">DuckDB tables</div>
@@ -1460,7 +1454,6 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                       <tr>
                         <th className="px-3 py-2 font-medium">Table</th>
                         <th className="px-3 py-2 text-right font-medium">Rows</th>
-                        <th className="px-3 py-2 text-right font-medium">Vector rows</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1471,10 +1464,6 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                             <div className="text-xs text-muted-foreground">{table.name}</div>
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums">{table.rows.toLocaleString()}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">
-                            {table.vectorRows === undefined ? "—" : table.vectorRows.toLocaleString()}
-                            {table.vectorPeople !== undefined ? <div className="text-xs text-muted-foreground">{table.vectorPeople.toLocaleString()} people</div> : null}
-                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1484,7 +1473,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                 )}
               </div>
               <div className="overflow-hidden rounded-md border">
-                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Pending processing dry-run</div>
+                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Pending dry-run estimates</div>
                 {localRecordsMode ? (
                   <div className="grid gap-3 p-3 sm:grid-cols-2">
                     <KeyValue label="Action" value="Build DuckDB from bootstrap records" />
@@ -1494,12 +1483,11 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                   </div>
                 ) : showProviderEstimate ? (
                   <div className="grid gap-3 p-3 sm:grid-cols-2">
-                    <KeyValue label="People" value={Number(counts.people || 0).toLocaleString()} />
-                    <KeyValue label="Summaries" value={Number(counts.summaries || 0).toLocaleString()} />
-                    <KeyValue label="Unique roles" value={Number(counts.unique_roles || 0).toLocaleString()} />
-                    <KeyValue label="Companies" value={Number(counts.companies || 0).toLocaleString()} />
-                    <KeyValue label="Role chunks" value={Number(counts.role_chunks || 0).toLocaleString()} />
-                    <KeyValue label="Company chunks" value={Number(counts.company_chunks || 0).toLocaleString()} />
+                    <KeyValue label="Cost" value={cost || "$0.00"} />
+                    <KeyValue label="Pending people" value={Number(counts.people || counts.pending_people || 0).toLocaleString()} />
+                    <KeyValue label="Pending summaries" value={Number(counts.summaries || 0).toLocaleString()} />
+                    <KeyValue label="Pending unique roles" value={Number(counts.unique_roles || 0).toLocaleString()} />
+                    <KeyValue label="Pending companies" value={Number(counts.companies || 0).toLocaleString()} />
                   </div>
                 ) : (
                   <div className="px-3 py-4 text-sm text-muted-foreground">No provider processing work detected by dry-run.</div>
@@ -1508,11 +1496,8 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
-            <ActionButton action="index-one" actionState={actionState} variant="outline" onClick={() => onRun({ action: "index-one" })}>
-              <Play className="h-4 w-4" /> Process 10 missing people
-            </ActionButton>
-            <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
-              <Play className="h-4 w-4" /> {localRecordsMode ? "Build DuckDB" : requiresProviderSpend ? "Approve & Update" : "Process"}
+            <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index" })}>
+              <Play className="h-4 w-4" /> {localRecordsMode ? "Build DuckDB" : "Process"}
             </ActionButton>
           </div>
         </div>
@@ -1632,6 +1617,7 @@ function JobPanel({
 export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
   const [activeTab, setActiveTab] = useState<SetupTabId>(() => setupTabFromLocation());
   const [status, setStatus] = useState<SetupStatusResponse | null>(null);
+  const [envStatus, setEnvStatus] = useState<EnvStatusResponse | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
   const [pendingRequest, setPendingRequest] = useState(false);
@@ -1641,12 +1627,20 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const nextStatus = await fetchSetupStatus();
+      const nextStatus = await fetchSetupStatus({ tab: activeTab });
       setStatus(nextStatus);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load setup status");
     } finally {
       setIsLoading(false);
+    }
+  }, [activeTab]);
+
+  const refreshEnv = useCallback(async () => {
+    try {
+      setEnvStatus(await fetchEnvStatus());
+    } catch {
+      setEnvStatus(null);
     }
   }, []);
 
@@ -1655,16 +1649,19 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
   }, [refresh]);
 
   useEffect(() => {
+    refreshEnv();
+  }, [refreshEnv]);
+
+  useEffect(() => {
     const handlePopState = () => setActiveTab(setupTabFromLocation());
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   useEffect(() => {
-    if (!status || hasSetupTabParam()) return;
-    const recommended = setupStepProgress(status, activeTab).find((step) => step.recommended)?.id;
-    if (recommended && recommended !== activeTab) setActiveTab(recommended);
-  }, [activeTab, status]);
+    if (hasSetupTabParam() && rawSetupTabParam() !== "import") return;
+    setSetupTabParam(activeTab);
+  }, [activeTab]);
 
   const actualRunning = status?.jobs.some((job) => job.status === "running") || false;
   const running = actualRunning || pendingRequest || Boolean(pendingActionKey);
@@ -1678,7 +1675,8 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
     if (!status?.jobs.length) return null;
     return status.jobs.find((job) => job.id === activeJobId) || status.jobs[0];
   }, [activeJobId, status?.jobs]);
-  const runningJobs = useMemo(() => (status?.jobs || []).filter((job) => job.status === "running"), [status?.jobs]);
+	  const runningJobs = useMemo(() => (status?.jobs || []).filter((job) => job.status === "running"), [status?.jobs]);
+  const missingRequiredEnv = useMemo(() => (envStatus?.keys || []).filter((key) => key.required && !key.satisfied), [envStatus]);
   const pendingAction = pendingActionKey?.split(":")[0] || null;
   const actionState: ActionState = {
     running,
@@ -1764,11 +1762,24 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
         </div>
       )}
 
+      {missingRequiredEnv.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <CircleAlert className="h-4 w-4 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <span className="font-medium">{missingRequiredEnv.length} required environment key{missingRequiredEnv.length === 1 ? "" : "s"} missing or empty.</span>{" "}
+            <span>Add them before running provider-backed imports or indexing.</span>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => { window.location.href = "/env"; }}>
+            <KeyRound className="h-4 w-4" /> Open Env
+          </Button>
+        </div>
+      )}
+
       <SetupStepper active={activeTab} status={status} onChange={changeTab} />
 
       {activeTab === "link" && <AccountLinkingTab status={status} onRun={runAction} />}
 
-      {activeTab === "import" && <ImportTab status={status} onRun={runAction} actionState={actionState} />}
+      {activeTab === "discover" && <ImportTab status={status} onRun={runAction} actionState={actionState} />}
 
       {activeTab === "enrichment" && <EnrichmentTab status={status} onRun={runAction} actionState={actionState} />}
 

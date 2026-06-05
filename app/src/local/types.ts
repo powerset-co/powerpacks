@@ -157,6 +157,66 @@ export interface SetupEnrichmentSource {
   updatedAt?: string | null;
 }
 
+export interface EnvKeyStatus {
+  key: string;
+  label: string;
+  provider: string;
+  description: string;
+  required: boolean;
+  getUrl: string;
+  docsUrl?: string;
+  status: "present" | "present_via_alias" | "empty" | "missing" | string;
+  satisfied: boolean;
+  satisfiedBy?: string;
+  valuePreview?: string;
+  aliases?: Array<{
+    key: string;
+    status: "present" | "empty" | "missing" | string;
+    valuePreview?: string;
+  }>;
+}
+
+export interface EnvStatusResponse {
+  path: string;
+  exists: boolean;
+  updatedAt?: string | null;
+  sizeBytes?: number;
+  keys: EnvKeyStatus[];
+  summary: {
+    total: number;
+    required: number;
+    ready: boolean;
+    missingRequired: number;
+    present: number;
+    empty: number;
+    missing: number;
+  };
+}
+
+export interface LocalProfileResponse {
+  operator: {
+    id: string;
+    email?: string;
+    label: string;
+  };
+  accounts: {
+    path: string;
+    exists: boolean;
+    updatedAt?: string | null;
+    sizeBytes?: number;
+    linkedCount: number;
+    skippedCount: number;
+    sources: Array<{
+      id: SetupSourceId | string;
+      label: string;
+      status: string;
+      linked: boolean;
+      skipped: boolean;
+      usernames: string[];
+    }>;
+  };
+}
+
 export interface SetupStatusResponse {
   operator: {
     id: string;
@@ -229,7 +289,7 @@ export interface SetupStatusResponse {
     duckdbExists?: boolean;
     duckdbUpdatedAt?: string | null;
     duckdbSizeBytes?: number;
-    duckdbTables?: Array<{ name: string; rows: number; vectorRows?: number; vectorPeople?: number }>;
+    duckdbTables?: Array<{ name: string; rows: number }>;
     peopleCsv?: string;
     peopleRecords?: number;
     peopleSha256?: string;
