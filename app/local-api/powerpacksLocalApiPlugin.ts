@@ -110,7 +110,7 @@ const ENV_KEY_SPECS: EnvKeySpec[] = [
     provider: "RapidAPI",
     description: "Used for LinkedIn profile hydration during import and enrichment. RAPIDAPI_KEY is accepted as a legacy fallback.",
     required: true,
-    getUrl: "https://rapidapi.com/hub",
+    getUrl: "https://rapidapi.com/pnd-team-pnd-team/api/professional-network-data",
     aliases: ["RAPIDAPI_KEY"],
   },
   {
@@ -119,7 +119,7 @@ const ENV_KEY_SPECS: EnvKeySpec[] = [
     provider: "Parallel",
     description: "Used for Gmail and Messages LinkedIn resolution / deep research.",
     required: true,
-    getUrl: "https://platform.parallel.ai/settings/api-keys",
+    getUrl: "https://platform.parallel.ai/settings?tab=api-keys",
   },
   {
     key: "APOLLO_API_KEY",
@@ -127,7 +127,7 @@ const ENV_KEY_SPECS: EnvKeySpec[] = [
     provider: "Apollo",
     description: "Used for Apollo-backed contact and enrichment workflows.",
     required: true,
-    getUrl: "https://app.apollo.io/#/settings/integrations/api",
+    getUrl: "https://developer.apollo.io/keys#/keys",
   },
   {
     key: "TURBOPUFFER_API_KEY",
