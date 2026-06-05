@@ -61,8 +61,18 @@ schema/contract blocker, or the user asks for debugging.
 
 Default composition:
 
-- `expand_search_request` primitive: always use this first to produce
-  the extraction JSON. It runs 7 parallel domain-specific extractors
+- URL/JD intake gate: run this before `expand_search_request` whenever the user
+  gives a URL, job posting, or role brief. If the input is a URL, fetch/read the
+  page content with the available browser/web tool or a repo-supported fetcher
+  before deciding the route. Treat a URL string alone as insufficient evidence
+  for search extraction. Write the fetched title, source URL, and extracted text
+  or summary to a durable artifact under the current run/search directory. If
+  the page cannot be fetched, surface that blocker instead of guessing from the
+  URL.
+- `expand_search_request` primitive: use this first only after URL/JD intake has
+  confirmed the request belongs on the normal single-query path, or internally
+  for each bounded probe in the complex-JD recruiter loop. It runs 7 parallel
+  domain-specific extractors
   (role, company, location, education, temporal, seniority, social)
   via OpenAI, matching the app's battle-tested prompts.
 
@@ -73,7 +83,8 @@ Default composition:
 
   Do not use a separate extraction skill or ask the harness to piece together
   decomposition. Use this parallel primitive directly. Do not hide query
-  extraction inside eval or harness-only code paths.
+  extraction inside eval or harness-only code paths. Do not run it against a
+  bare job URL until the URL content has been fetched and classified.
 - `search-company`: use when natural-language company criteria, investors,
   sectors, funding, headcount, or company-domain intent must resolve into
   canonical company IDs before people retrieval
@@ -118,16 +129,31 @@ updated constraints rather than filtering a previous artifact.
 
 ## Fast path runner
 
+Before choosing the fast path, classify the user input:
+
+- company-only directory lookup -> company-directory fast path below
+- ordinary role/company/person search -> normal single-query `prepare`
+- job posting, JD URL, pasted JD, or complex role brief -> complex-JD recruiter
+  loop
+
+For URL-only inputs, fetch/read the URL content first when possible. If the
+fetched page is a job posting or contains JD signals such as a job title,
+requirements, responsibilities, qualifications, compensation, department, or
+location, classify from the fetched content, not from the URL string. If the
+fetched content has several JD signals or multiple hard/soft traits, use the
+complex-JD recruiter loop even when the original user input was only a URL.
+
 Do not use the normal single-query `prepare` path first when the user supplied a
-complex JD / role brief that clearly needs the recruiter loop below. Use the
-normal path for ordinary role/company/person searches; use the complex-JD path
-when one broad query would likely produce a noisy 1k-5k frontier or miss distinct
-candidate patterns.
+complex JD / role brief or a URL that resolves to one. Use the normal path for
+ordinary role/company/person searches; use the complex-JD path when one broad
+query would likely produce a noisy 1k-5k frontier or miss distinct candidate
+patterns.
 
 ### Complex JD Recruiter Loop
 
-When the user runs `$search-network <long JD or complex role brief>`, detect
-complex JD intent and do the work end to end:
+When the user runs `$search-network <job URL>`,
+`$search-network <long JD>`, or `$search-network <complex role brief>`, detect
+complex JD intent from the fetched/pasted content and do the work end to end:
 
 This is agent/harness orchestration over existing per-query search primitives and
 their artifacts, not a claim that one monolithic pipeline command already runs
@@ -137,6 +163,8 @@ company cohorts into one giant TurboPuffer request.
 
 Use this path when the request has several of these signals:
 
+- job posting URL whose fetched content contains title, responsibilities,
+  qualifications, department, location, compensation, or hiring-process text
 - pasted JD / long role brief / requirements list
 - many traits where some are nice-to-have tech skills
 - hard filters plus soft filters plus OR-style experience families
@@ -160,12 +188,45 @@ User-facing budget semantics for this path:
   specified a different threshold. Below-cutoff profiles are debug/audit only,
   not candidates to present or fan out from.
 
+Sub-agent probe execution:
+
+- When the harness has a worker/sub-agent facility and the user approves a
+  complex-JD plan, dispatch the approved initial probes in parallel with one
+  sub-agent per probe. Use a separate worker for each probe because each probe
+  has a disjoint query, ledger, task state, and artifact directory.
+- The main agent remains responsible for the parent task state, review-budget
+  accounting, merge/dedupe, exemplar clustering, fan-out planning, and final
+  presentation. Probe workers should only run their assigned bounded per-query
+  search and return compact durable outputs.
+- Each probe worker gets the parent plan path, parent state path, `probe_id`,
+  exact probe query, `candidate_limit`, `review_limit`, and instructions to run
+  `search_network_pipeline.py prepare` followed by the returned
+  `execute_command` / `run --execute-approved` command. Workers must not ask the
+  user for approval again and must not edit the skill or parent plan.
+- Each probe worker returns only: `probe_id`, status, blocker if any, artifact
+  directory, state path, found count, and a few top candidates/reasons. It must
+  not paste hydrated profiles, full CSVs, JSONL payloads, or terminal logs.
+- Record each worker's artifact/state path in the parent task state through
+  `run_lineage[]`; if a worker blocks or fails, record the blocker and stop the
+  complex loop unless the remaining probes are still useful and the failure is
+  clearly isolated.
+- If the sub-agent pool is full, close stale completed workers, retry the probe
+  fan-out, and only fall back to sequential probe execution when sub-agents are
+  unavailable or still blocked.
+- Use the same pattern for fan-out threads after exemplar clustering: one
+  sub-agent per approved fan-out thread, bounded by remaining review budget and
+  linked back to the parent through `run_lineage[]`.
+
 Execution flow:
 
-1. Create a multi-query search plan as a durable artifact or task-state step.
-2. Show one compact complex-search preview, not five separate approvals. Include:
+1. If the input is a URL, fetch/read the page content first and persist the
+   source URL, title, and extracted JD text/summary as a durable artifact. Use
+   that content as the query source of truth.
+2. Create a multi-query search plan as a durable artifact or task-state step.
+3. Show one compact complex-search preview, not five separate approvals. Include:
    - exact route label: `complex-JD recruiter loop`
    - normalized archetype
+   - source URL/title when the request came from a URL
    - hard filters / set scope
    - `initial probes`: about 5 probes and their candidate limits
    - `llm_review_budget`: default `100` if unspecified
@@ -183,28 +244,31 @@ Execution flow:
      equivalent `search_network_pipeline.py run --execute-approved` command
    Render those literal snake_case labels exactly in the preview; do not rewrite
    them as title-cased headings such as "LLM Review Budget".
-3. Ask exactly:
+4. Ask exactly:
 
    `Execute this search plan or modify it?`
 
-4. If the user chooses `execute`, run the approved initial probes as separate,
-   bounded per-query runs. Use
-   `search_network_pipeline.py prepare` internally for each planned query to
-   validate/decompose it, then run the returned `execute_command` or equivalent
+5. If the user chooses `execute`, dispatch the approved initial probes as
+   separate, bounded per-query runs. Prefer the sub-agent probe execution pattern
+   above: spawn one worker per probe, each running
+   `search_network_pipeline.py prepare` internally to validate/decompose its
+   query, then the returned `execute_command` or equivalent
    `run --execute-approved` command without a second chat-visible approval gate.
-5. Run count-only / retrieval-only gates before LLM review. If a probe is too
+   If sub-agents are unavailable, say so once and run the probes sequentially
+   with the same per-probe commands.
+6. Run count-only / retrieval-only gates before LLM review. If a probe is too
    broad, narrow or cap it before review rather than spending budget on a noisy
    frontier.
-6. Merge and dedupe initial candidates. Hydrate only the deduped review frontier
+7. Merge and dedupe initial candidates. Hydrate only the deduped review frontier
    needed for the current phase.
-7. Review at most `remaining_review_budget` profiles with the configured LLM
+8. Review at most `remaining_review_budget` profiles with the configured LLM
    reviewer/reranker. Track reviewed count and remaining budget in task state.
-8. Drop `score < 0.3` profiles from the usable candidate set. Keep them only for
+9. Drop `score < 0.3` profiles from the usable candidate set. Keep them only for
    debug/audit artifacts.
-9. Select 10-20 above-cutoff exemplars when available, cluster them into K
+10. Select 10-20 above-cutoff exemplars when available, cluster them into K
    differentiated threads, and run K bounded fan-out searches only if there is
    enough remaining review budget to review those fan-out results.
-10. Dedupe, hydrate, review, apply the same cutoff, persist CSV/JSONL artifacts,
+11. Dedupe, hydrate, review, apply the same cutoff, persist CSV/JSONL artifacts,
     and present a compact final result summary.
 
 Feedback and lineage persistence for complex JD loops:
@@ -248,6 +312,8 @@ For the normal semantic/role search path, use the resumable orchestrator's
 quality gate, and emits the exact preview fields plus an `execute_command`.
 Do **not** grep/search/read the repo, schemas, docs, primitive source, or prior
 artifacts before this command unless the user explicitly asked to debug them.
+This normal path does not apply to job URLs or fetched JD content that meets the
+complex-JD signals above.
 
 Do not use `prepare` for the company-directory fast path below. Company-only
 queries such as `people who work at OpenAI` should call `list_company_people`
@@ -296,11 +362,16 @@ After query extraction/currentness is resolved and the user has selected
 runs. Keep invoking `search_network_pipeline.py` until it
 finishes or emits a concrete `blocked_approval` / `blocked_user_action`.
 
-When the harness has a worker/sub-agent facility, dispatch noisy orchestrator
-execution to a worker sub-agent. The only chat-visible handoff line should be
-exactly:
+When the harness has a worker/sub-agent facility, dispatch noisy normal-path
+orchestrator execution to a worker sub-agent. The only chat-visible handoff line
+for a normal-path run should be exactly:
 
 `Starting search through sub-agent.`
+
+For complex-JD recruiter-loop execution with parallel probes, the only
+chat-visible handoff line should be exactly:
+
+`Starting search through sub-agents.`
 
 LLM filtering + reranking can legitimately take about 2-3 minutes. Treat the
 primitive's starting/estimate line as progress, keep the worker alive, and do
@@ -431,8 +502,16 @@ search.
 ## First Response Contract
 
 For an initial `/search-network ...` request, do not reply with a long visible
-plan. Extract the query, run the payload quality gate below, then show one
-compact search preview and ask for exactly one decision:
+plan. First classify company-only, normal role search, or URL/JD/complex role
+brief. For URL/JD/complex role brief inputs, fetch URL content when applicable,
+create the complex-JD recruiter-loop plan, show the compact complex-search
+preview described above, and ask exactly:
+
+`Execute this search plan or modify it?`
+
+For ordinary normal-path searches, extract the query, run the payload quality
+gate below, then show one compact search preview and ask for exactly one
+decision:
 
 `Execute this search or modify it?`
 
