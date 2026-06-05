@@ -25,7 +25,7 @@ def deprecated(args: argparse.Namespace) -> int:
         "primitive": "gmail_metadata_sync",
         "message": "Powerset-hosted Gmail metadata sync is disabled. Use local msgvault sync/import instead.",
         "replacement_command": MSGVAULT_COMMAND,
-        "ledger": str(Path(getattr(args, "ledger", ".powerpacks/network-import/gmail/sync-run.json"))),
+        "ledger": str(Path(getattr(args, "ledger", ".powerpacks/network-import/discover/gmail/sync.ledger.json"))),
     })
     return 2
 
@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     for name in ("run", "approve", "continue", "status"):
         cmd = sub.add_parser(name)
-        cmd.add_argument("--ledger", default=".powerpacks/network-import/gmail/sync-run.json")
+        cmd.add_argument("--ledger", default=".powerpacks/network-import/discover/gmail/sync.ledger.json")
         cmd.add_argument("--account-email", default="")
         cmd.add_argument("--api-url", default="")
         cmd.add_argument("--sync-path", default="")

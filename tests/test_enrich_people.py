@@ -5,11 +5,12 @@ import os
 import sys
 import tempfile
 import unittest
-import uuid
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
+
+from packs.ingestion.schemas.people_schema import generate_person_id
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/enrich_people/enrich_people.py"
 spec = importlib.util.spec_from_file_location("enrich_people", MODULE_PATH)
@@ -207,7 +208,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(code, 0)
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual(rows[0]["id"], str(uuid.uuid5(uuid.NAMESPACE_URL, "linkedin:jane-example")))
+            self.assertEqual(rows[0]["id"], generate_person_id("jane-example"))
             people2 = Path(tmp) / "people2.csv"
             self.write_people(people2, rapidapi_response=self.profile(), row_id="existing")
             code, payload = self.invoke(["run", "--input", str(people2), "--output-dir", str(Path(tmp) / "out2"), "--ledger", str(Path(tmp) / "ledger2.json")])

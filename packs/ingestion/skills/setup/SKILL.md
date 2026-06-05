@@ -298,7 +298,7 @@ Record selected accounts in `gmail.config.selected_accounts` /
 `gmail.config.account_emails`. Newly requested Gmail accounts stay in
 `gmail.config.pending_accounts` until the returned `--gmail-authorized-email
 <email>` rerun records them as linked. Do not create
-`.powerpacks/network-import/gmail` outputs or run `msgvault sync-full` during
+`.powerpacks/network-import/discover/gmail` outputs or run `msgvault sync-full` during
 linking; Gmail sync/import runs later in the import phase for linked accounts.
 
 ## Import phase: automatic refresh, then fan-in
@@ -327,7 +327,7 @@ uv run --project . python packs/ingestion/primitives/setup/setup.py handoff \
   --setup-ledger .powerpacks/setup/setup-run.json
 ```
 
-If using the handoff output directly, the generated `import_network_*` commands
+If using the handoff output directly, the generated `discover-contacts` commands
 must include `--include-existing-artifacts`. Use the
 `worker_groups.import.jobs` output to spin up parallel worker sub-agents where
 possible:
@@ -344,10 +344,11 @@ possible:
   are not fan-in inputs for network DuckDB. If a reviewed messages CSV is
   present, only explicitly approved rows can join the network fan-in.
 
-Workers must use isolated ledgers/run ids for `--only-source` source jobs and
-must return blocked approvals to the main thread. Merge/network DuckDB fan-in
-runs only after all selected network source workers complete or block; message
-contact metadata stays outside that fan-in until it has passed review.
+Workers must write to the fixed `.powerpacks/network-import/discover/<source>/`
+folders for `--only-source` source jobs and must return blocked approvals to the
+main thread. Merge/network DuckDB fan-in runs only after all selected network
+source workers complete or block; message contact metadata stays outside that
+fan-in until it has passed review.
 
 ## Consent boundaries
 
@@ -362,7 +363,7 @@ The main thread owns these approvals. Never let workers approve them silently:
 - RapidAPI, Parallel, OpenAI/TLM, embedding, or other provider spend;
 - `$import-contacts` research/review/upload or any upload/prod write.
 
-Local status, msgvault account listing, import-network dry-run, processing
+Local status, msgvault account listing, discover-contacts dry-run, processing
 `plan`, processing `run --dry-run`, local merge, and local DuckDB
 materialization may run without spend approval.
 

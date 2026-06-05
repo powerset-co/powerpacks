@@ -38,11 +38,11 @@
       "why": "Setup ledger is a checkpoint/log. Report duplicates, but do not copy automatically unless explicitly requested."
     },
     {
-      "id": "import_refresh_ledger",
-      "path": ".powerpacks/network-import/import-network-run.setup-refresh.json",
+      "id": "discover_setup_ledger",
+      "path": ".powerpacks/network-import/discover/ledger.setup.json",
       "kind": "file",
       "policy": "report_only",
-      "why": "Import ledger is a checkpoint/log. Current artifacts are more authoritative than stale status."
+      "why": "Discovery setup ledger is a checkpoint/log. Per-vertical manifests are more authoritative than stale status."
     },
     {
       "id": "messages_ledger",
@@ -85,6 +85,20 @@
       "kind": "file",
       "policy": "adopt_newer",
       "why": "Local email/linkedin resolution cache."
+    },
+    {
+      "id": "network_discovery_artifacts",
+      "path": ".powerpacks/network-import/discover",
+      "kind": "directory",
+      "policy": "adopt_newer",
+      "why": "Stable per-source discovery manifests and contact queues consumed by import/enrichment."
+    },
+    {
+      "id": "network_import_artifacts",
+      "path": ".powerpacks/network-import/import",
+      "kind": "directory",
+      "policy": "adopt_newer",
+      "why": "Stable per-source import/enrichment manifests and outputs consumed by setup UI."
     },
     {
       "id": "network_profile_cache",

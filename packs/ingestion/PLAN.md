@@ -137,7 +137,7 @@ Keep source importers focused on source-specific collection/parsing:
 Update writers/readers in this order:
 
 1. Add `people.csv` output while still writing legacy aliases where needed. ✅
-2. Update `merge_network_sources` discovery to prefer `people.csv`, falling back to `people_harmonic_all.csv`. ✅
+2. Update fan-in to pass explicit canonical `people.csv` source artifacts; `merge_network_sources` does not discover run artifacts. ✅
 3. Update READMEs/skills to refer to `people.csv` as canonical. ✅ for LinkedIn/Twitter/enrich/merge docs touched here.
 4. Update tests to assert canonical names and compatibility fallback. ✅
 5. Remove or de-emphasize legacy names after downstream consumers are updated.
@@ -149,7 +149,7 @@ Add/adjust tests for:
 - `enrich_people` approval gate before live provider calls.
 - provider/cache behavior using seeded RapidAPI cache and mocked network calls.
 - `linkedin_network_import` producing source-normalized rows and delegating to shared enrichment.
-- `merge_network_sources` discovering `people.csv` first and legacy files second.
+- `merge_network_sources` merging only explicit `--input` paths; no filesystem discovery.
 - no external calls in tests; all provider calls mocked.
 
 ### 6. Document operator workflow

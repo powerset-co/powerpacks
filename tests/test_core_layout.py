@@ -22,9 +22,7 @@ class CoreLayoutTests(unittest.TestCase):
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(
-            search_pack, ["search-company", "search-network"]
-        )
+        self.assertEqual(search_pack, ["search-company", "search-network"])
         messages_pack = sorted(
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
         )
@@ -35,10 +33,10 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertEqual(
             ingestion_pack,
             [
+                "discover-contacts",
                 "import-email",
                 "import-gmail-network",
                 "import-linkedin-network",
-                "import-network",
                 "import-twitter",
                 "import-twitter-network",
                 "ingestion-onboarding",
@@ -80,6 +78,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("investor_names", text)
         self.assertIn("company_sector_strategy", text)
 
+
     def test_pi_adapter_installs_skills(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             skills_dir = Path(td) / "skills"
@@ -95,7 +94,7 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "search-network" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-email" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-network" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "discover-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
@@ -358,6 +357,136 @@ class CoreLayoutTests(unittest.TestCase):
                 [step["id"] for step in state["planned_steps"]],
                 ["resolve_education", "count_candidates"],
             )
+
+    def test_task_state_appends_feedback_lineage(self) -> None:
+        task_state = ROOT / "packs/search/primitives/task_state/task_state.py"
+        with tempfile.TemporaryDirectory() as td:
+            state_path = Path(td) / "run.json"
+
+            def append_lineage(kind: str, payload: dict) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        str(task_state),
+                        "append-lineage",
+                        "--state",
+                        str(state_path),
+                        "--kind",
+                        kind,
+                        "--payload-json",
+                        json.dumps(payload),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(task_state),
+                    "init",
+                    "--query",
+                    "cto technical cofounder",
+                    "--out",
+                    str(state_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            initialized = json.loads(state_path.read_text())
+            for field in [
+                "search_plan_revisions",
+                "candidate_feedback",
+                "criteria_mutations",
+                "run_lineage",
+                "exemplar_sets",
+                "fanout_threads",
+            ]:
+                self.assertEqual(initialized[field], [])
+
+            feedback_result = append_lineage(
+                "candidate_feedback",
+                {
+                    "feedback_id": "fb-1",
+                    "person_id": "person-1",
+                    "label": "false_positive",
+                    "reason": "not technical",
+                    "applied_to_next_search": True,
+                },
+            )
+            self.assertIn("candidate_feedback", feedback_result.stdout)
+            append_lineage(
+                "criteria_mutation",
+                {
+                    "source_feedback_ids": ["fb-1"],
+                    "reason": "tighten technical-depth evidence",
+                    "mutation": {"reject_criteria": ["non-technical operator"]},
+                },
+            )
+            append_lineage(
+                "search_plan_revision",
+                {
+                    "reason": "apply candidate feedback",
+                    "criteria_delta": {"reject_criteria": ["non-technical operator"]},
+                    "plan": {"initial_probes": 5},
+                },
+            )
+            append_lineage(
+                "run_lineage",
+                {
+                    "relationship": "follow_up",
+                    "task_id": "search-network-child",
+                    "state": ".powerpacks/runs/child.json",
+                    "artifact_dir": ".powerpacks/search/child",
+                },
+            )
+            append_lineage(
+                "exemplar_set",
+                {
+                    "name": "above-cutoff technical builders",
+                    "person_ids": ["person-1", "person-2"],
+                    "selection_reason": "score >= 0.3 and strong technical evidence",
+                },
+            )
+            append_lineage(
+                "fanout_thread",
+                {
+                    "cluster_label": "cloud cost infrastructure builders",
+                    "criteria": {"companies": ["Databricks", "Snowflake"]},
+                    "state": ".powerpacks/runs/fanout.json",
+                    "artifact_dir": ".powerpacks/search/fanout",
+                },
+            )
+
+            state = json.loads(state_path.read_text())
+            self.assertEqual(state["candidate_feedback"][0]["feedback_id"], "fb-1")
+            self.assertEqual(state["criteria_mutations"][0]["source_feedback_ids"], ["fb-1"])
+            self.assertIn("mutation_id", state["criteria_mutations"][0])
+            self.assertEqual(state["search_plan_revisions"][0]["revision"], 1)
+            self.assertIn("revision_id", state["search_plan_revisions"][0])
+            self.assertEqual(state["run_lineage"][0]["relationship"], "follow_up")
+            self.assertIn("lineage_id", state["run_lineage"][0])
+            self.assertEqual(state["exemplar_sets"][0]["person_ids"], ["person-1", "person-2"])
+            self.assertIn("exemplar_set_id", state["exemplar_sets"][0])
+            self.assertEqual(state["fanout_threads"][0]["cluster_label"], "cloud cost infrastructure builders")
+            self.assertIn("thread_id", state["fanout_threads"][0])
+
+            events = [json.loads(line) for line in state_path.with_suffix(".json.events.jsonl").read_text().splitlines()]
+            lineage_events = [event for event in events if event.get("event") == "append_lineage"]
+            self.assertEqual(
+                [event["kind"] for event in lineage_events],
+                [
+                    "candidate_feedback",
+                    "criteria_mutation",
+                    "search_plan_revision",
+                    "run_lineage",
+                    "exemplar_set",
+                    "fanout_thread",
+                ],
+            )
+            self.assertEqual(lineage_events[0]["feedback_id"], "fb-1")
 
 
 if __name__ == "__main__":

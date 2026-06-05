@@ -119,6 +119,12 @@
       "optional": true
     },
     {
+      "id": "llm_rerank_candidates",
+      "kind": "primitive",
+      "primitive": "llm_rerank_candidates",
+      "optional": true
+    },
+    {
       "id": "persist_search_results",
       "kind": "primitive",
       "primitive": "persist_search_results"

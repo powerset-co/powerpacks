@@ -30,7 +30,8 @@
           },
           "primitive": { "type": "string" },
           "output_schema": { "type": "string" },
-          "optional": { "type": "boolean" }
+          "optional": { "type": "boolean" },
+          "note": { "type": "string" }
         }
       }
     }

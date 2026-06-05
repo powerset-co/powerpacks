@@ -4,7 +4,11 @@ Use the Powerpacks docs as a hard contract when calling search tools.
 
 - Decompose free text first.
 - Treat that decomposition as the `expand` phase.
-- Use `$search-network` as the top-level operational entrypoint.
+- Use `$search-network` as the top-level operational retrieval entrypoint. If a
+  `$search-network` request contains a complex JD, plan a recruiter loop
+  internally, show one search-plan approval, then orchestrate bounded per-query
+  probes, review, clustering, fan-out, and export. Default the LLM review budget
+  to 100 unique reviewed profiles unless the user states another number.
 - Create and update a JSON task run while searching.
 - Choose a strategy before retrieval: direct, count-first, slices, or clarify.
 - Generate multiple bounded retrieval slices only when the query warrants it.
@@ -28,3 +32,4 @@ Use the Powerpacks docs as a hard contract when calling search tools.
 V1 public verticals:
 
 - `people_by_role`
+- `search_plan`

@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+csv.field_size_limit(sys.maxsize)
+
 try:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
@@ -77,6 +79,8 @@ NETWORK_COMPANY_COLUMNS = [
     "contact_ids",
     "contact_names",
 ]
+MAX_SOURCE_ARTIFACTS_PER_ROW = 12
+MAX_SOURCE_ARTIFACT_TEXT = 4096
 
 
 def now_iso() -> str:
@@ -127,6 +131,54 @@ def listish_values(value: str) -> list[str]:
     if isinstance(parsed, list):
         return [str(item) for item in parsed if str(item).strip()]
     return [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
+
+
+def source_artifact_values(value: Any, *, _depth: int = 0) -> list[str]:
+    """Flatten source_artifacts provenance without preserving nested JSON blobs.
+
+    Earlier merges could include an already-merged row whose source_artifacts was
+    itself a JSON array. Treating that whole JSON array as one artifact caused
+    exponential growth on repeated fan-ins. Keep only a bounded, flat list of
+    readable artifact references; source_artifacts is debug provenance, not a
+    searchable/indexing payload.
+    """
+    if value is None or _depth > 6:
+        return []
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            out.extend(source_artifact_values(item, _depth=_depth + 1))
+        return out
+    text = str(value).strip()
+    if not text:
+        return []
+    if len(text) > MAX_SOURCE_ARTIFACT_TEXT and not text.startswith("["):
+        return [text[:MAX_SOURCE_ARTIFACT_TEXT] + "…"]
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            # Malformed huge provenance is not useful enough to retain.
+            return [] if len(text) > MAX_SOURCE_ARTIFACT_TEXT else [text]
+        return source_artifact_values(parsed, _depth=_depth + 1)
+    return [text]
+
+
+def compact_source_artifacts(values: list[Any], *, limit: int = MAX_SOURCE_ARTIFACTS_PER_ROW) -> str:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        for artifact in source_artifact_values(value):
+            artifact = artifact.strip()
+            if not artifact or artifact in seen:
+                continue
+            seen.add(artifact)
+            out.append(artifact)
+    out.sort()
+    if len(out) > limit:
+        remaining = len(out) - limit
+        out = out[:limit] + [f"... {remaining} more source artifact(s) omitted"]
+    return json.dumps(out, ensure_ascii=False)
 
 
 def usable_rapidapi_payload(value: str) -> bool:
@@ -181,16 +233,6 @@ def stable_source_key(row: dict[str, str]) -> str:
     if name:
         return f"name:{sha(channel + ':' + name, 16)}"
     return f"row:{sha(json.dumps({col: row.get(col, '') for col in PEOPLE_SCHEMA_COLUMNS if col != 'source_artifacts'}, sort_keys=True), 16)}"
-
-
-def discover_inputs(base: Path) -> list[Path]:
-    paths_by_dir: dict[Path, Path] = {}
-    for p in base.glob("network-import/*/*/people.csv"):
-        paths_by_dir[p.parent] = p
-    for p in base.glob("network-import/*/*/people_harmonic_all.csv"):
-        paths_by_dir.setdefault(p.parent, p)
-    paths = list(paths_by_dir.values())
-    return sorted(set(paths))
 
 
 def source_label(path: Path) -> str:
@@ -342,25 +384,26 @@ def source_fact_rows(contact: dict[str, Any], source_rows: list[dict[str, str]])
     facts: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for row in source_rows:
+        artifacts = source_artifact_values(row.get("source_artifacts", ""))[:MAX_SOURCE_ARTIFACTS_PER_ROW] or [""]
         for channel in row_source_channels(row):
             identifier = source_identifier(row, channel)
-            artifact = row.get("source_artifacts", "")
-            key = (channel, identifier, artifact)
-            if key in seen:
-                continue
-            seen.add(key)
-            facts.append({
-                "contact_id": contact.get("id", ""),
-                "merge_key": contact.get("merge_key", ""),
-                "source_channel": channel,
-                "source_identifier": identifier,
-                "source_artifact": artifact,
-                "display_name": row_name(row),
-                "linkedin_url": row.get("linkedin_url", ""),
-                "public_identifier": row.get("public_identifier", ""),
-                "primary_email": row.get("primary_email", ""),
-                "primary_phone": row.get("primary_phone", ""),
-            })
+            for artifact in artifacts:
+                key = (channel, identifier, artifact)
+                if key in seen:
+                    continue
+                seen.add(key)
+                facts.append({
+                    "contact_id": contact.get("id", ""),
+                    "merge_key": contact.get("merge_key", ""),
+                    "source_channel": channel,
+                    "source_identifier": identifier,
+                    "source_artifact": artifact,
+                    "display_name": row_name(row),
+                    "linkedin_url": row.get("linkedin_url", ""),
+                    "public_identifier": row.get("public_identifier", ""),
+                    "primary_email": row.get("primary_email", ""),
+                    "primary_phone": row.get("primary_phone", ""),
+                })
     return facts
 
 
@@ -374,10 +417,10 @@ def merge_group(key: str, rows: list[dict[str, str]]) -> dict[str, Any]:
         for src in (row.get("source_channels") or "").split(","):
             if src.strip():
                 sources.add(src.strip())
-        if row.get("source_artifacts"):
-            artifacts.add(row["source_artifacts"])
+        for artifact in source_artifact_values(row.get("source_artifacts")):
+            artifacts.add(artifact)
     merged["source_channels"] = ",".join(sorted(sources))
-    merged["source_artifacts"] = json.dumps(sorted(artifacts))
+    merged["source_artifacts"] = compact_source_artifacts(sorted(artifacts))
     merged["merge_key"] = key
     merged["merge_confidence"] = "1.0" if key.startswith("linkedin:") else "0.0"
     merged["merge_sources"] = merged["source_channels"]
@@ -430,12 +473,7 @@ def similar_pairs(rows: list[dict[str, Any]], threshold: float) -> list[dict[str
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    if args.input:
-        inputs = [Path(p) for p in args.input]
-    elif args.no_discover:
-        inputs = []
-    else:
-        inputs = discover_inputs(Path(args.base_dir))
+    inputs = [Path(p) for p in args.input] if args.input else []
     all_rows: list[dict[str, str]] = []
     per_file: dict[str, int] = {}
     for path in inputs:
@@ -517,9 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Merge/dedupe local network import people artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
-    run.add_argument("--input", action="append", help="Input people.csv, legacy people_harmonic_all.csv, or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
-    run.add_argument("--no-discover", action="store_true", help="Do not discover inputs from the filesystem when --input is omitted")
-    run.add_argument("--base-dir", default=".powerpacks")
+    run.add_argument("--input", action="append", help="Input people.csv, people_harmonic_all.csv, or messages contacts.csv; repeatable. No filesystem discovery is performed.")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     run.add_argument("--name-threshold", type=float, default=0.92)
     run.set_defaults(func=cmd_run)

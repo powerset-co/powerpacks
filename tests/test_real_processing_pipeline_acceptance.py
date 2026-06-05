@@ -18,7 +18,7 @@ SEARCH_LIB = ROOT / "packs/search/primitives/lib"
 FULL_COMPATIBLE_GREEN_CRITERIA = {
     "role_artifacts": "roles_with_dense_text_remapped.jsonl + roles_with_embeddings.jsonl keyed by 16-char title_hash with Aleph classifier fields and 1536-d dense_embedding",
     "company_artifacts": "companies_corpus_v3.jsonl + company_embeddings_v3.jsonl keyed by company_urn with Aleph corpus fields and 1536-d embedding",
-    "summary_artifacts": "unified_person.csv + summary_embeddings.jsonl + person_tech_skills.jsonl keyed by person_id with 1536-d embedding",
+    "summary_artifacts": "summary_embeddings.jsonl + person_tech_skills.jsonl keyed by person_id with 1536-d embedding",
     "education_artifacts": "people_education.jsonl + schools_corpus.jsonl using education_id/entity_urn Aleph fields",
     "provider": "real provider output or copied/cache fixtures; local-fake vectors are scaffold-only and not full-compatible",
     "search": "materialized DuckDB supports vector kNN and role/company local search from those artifacts",
@@ -265,7 +265,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "2",
                 "--input-classifications",
                 str(role_input),
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(full["status"], "completed")
@@ -285,7 +284,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(role_input),
                 "--stop-after-chunks",
                 "1",
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(partial["status"], "partial")
@@ -330,7 +328,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(clean_base),
                 "--checkpoint-every",
                 "2",
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(clean["status"], "completed")
@@ -349,7 +346,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "2",
                 "--stop-after-role-chunks",
                 "1",
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(partial["status"], "partial")
@@ -401,7 +397,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "op-vector",
                 "--checkpoint-every",
                 "2",
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(payload["status"], "completed")
@@ -442,7 +437,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "vector@example.com",
                 "--output-dir",
                 str(tmp / "duckdb"),
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(db_payload["status"], "ok")
@@ -505,7 +499,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "op-shape",
                 "--checkpoint-every",
                 "2",
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(payload["status"], "completed")
@@ -596,7 +589,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "op-full-compatible",
                 "--checkpoint-every",
                 "2",
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(payload["status"], "completed")
@@ -689,7 +681,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "vector@example.com",
                 "--output-dir",
                 str(tmp / ".powerpacks/search-index"),
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(payload["tables"]["local_people_positions"], 1)
@@ -751,7 +742,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(inputs["summary_embeddings"]),
                 "--checkpoint-every",
                 "2",
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(payload["counts"]["build_company_corpus"]["provider"], "artifact")
@@ -791,7 +781,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(tmp / ".powerpacks/search-index"),
                 "--limit",
                 "20",
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             con = duckdb.connect(payload["duckdb"], read_only=True)
@@ -848,7 +837,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 str(tmp / ".powerpacks/search-index"),
                 "--limit",
                 "3",
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(payload["status"], "ok")
@@ -924,7 +912,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "acceptance@example.com",
                 "--output-dir",
                 str(output_dir),
-                "--force",
             ])
             self.assertEqual(code, 0, err)
             self.assertEqual(payload["status"], "ok")

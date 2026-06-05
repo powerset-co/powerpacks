@@ -1092,7 +1092,8 @@ def merge_ranked_rows(row_batches: list[list[dict[str, Any]]]) -> list[dict[str,
 
 def is_filter_only_payload(payload: dict[str, Any]) -> bool:
     semantic_query = str(payload.get("semantic_query") or "").strip()
-    return len(semantic_query) < 80
+    bm25_queries = [str(query).strip() for query in payload.get("bm25_queries") or [] if str(query).strip()]
+    return not semantic_query and not bm25_queries and payload.get("query_embedding") is None
 
 
 async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
@@ -1198,22 +1199,22 @@ async def _hybrid_role_rows_single(
 ) -> list[dict[str, Any]]:
     if is_local_backend():
         local_payload = dict(payload)
+        semantic_query = str(payload.get("semantic_query") or "").strip()
+        if query_embedding is None and semantic_query:
+            query_embedding = await embedding(semantic_query)
         if query_embedding is not None:
             local_payload["query_embedding"] = query_embedding
-            embedding_fn = None
-        else:
-            embedding_fn = embedding
         return await local_store().hybrid_role_rows(
             local_payload,
             filters,
             top_k,
             include_attributes,
-            embedding_fn=embedding_fn,
         )
 
     semantic_query = str(payload.get("semantic_query") or "").strip()
     bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
-    query_embedding = query_embedding or await embedding(semantic_query)
+    if query_embedding is None and semantic_query:
+        query_embedding = await embedding(semantic_query)
     per_field = bm25_queries_per_field(bm25_queries)
 
     queries: list[dict[str, Any]] = []
@@ -1230,13 +1231,14 @@ async def _hybrid_role_rows_single(
                 "filters": filters,
             })
             weights.append(weight)
-    queries.append({
-        "rank_by": ("vector", "kNN", query_embedding),
-        "top_k": top_k,
-        "include_attributes": include_attributes,
-        "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
-    })
-    weights.append(0.6)
+    if query_embedding is not None:
+        queries.append({
+            "rank_by": ("vector", "kNN", query_embedding),
+            "top_k": top_k,
+            "include_attributes": include_attributes,
+            "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
+        })
+        weights.append(0.6)
 
     ns = namespace("people")
 
@@ -1281,7 +1283,8 @@ async def _batched_base_id_rows(
     batch_values = chunks(base_ids, BASE_ID_BATCH_SIZE)
     base_filter = strip_base_candidate_filter(filters)
     filter_only = is_filter_only_payload(payload)
-    query_embedding = None if filter_only else await embedding(str(payload.get("semantic_query") or "").strip())
+    semantic_query = str(payload.get("semantic_query") or "").strip()
+    query_embedding = None if filter_only or not semantic_query else await embedding(semantic_query)
     semaphore = asyncio.Semaphore(max(1, BASE_ID_BATCH_CONCURRENCY))
 
     async def run_batch(batch_index: int, batch: list[str]) -> list[dict[str, Any]]:

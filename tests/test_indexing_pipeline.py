@@ -71,7 +71,7 @@ class IndexingPipelineTests(unittest.TestCase):
     def test_run_blocks_before_paid_stage_without_approval_or_precomputed_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td) / ".powerpacks"
-            proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--input", str(FIXTURE_PEOPLE), "--force"], cwd=ROOT, capture_output=True, text=True, check=False)
+            proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--input", str(FIXTURE_PEOPLE)], cwd=ROOT, capture_output=True, text=True, check=False)
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("requires --allow-paid-role-provider or --role-input-classifications", proc.stderr + proc.stdout)
             self.assertFalse((base / "search-index/roles/chunks").exists())
@@ -79,7 +79,7 @@ class IndexingPipelineTests(unittest.TestCase):
     def test_pipeline_does_not_recompute_missing_title_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td) / ".powerpacks"
-            proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--input", str(FIXTURE_PEOPLE), "--role-input-classifications", str(Path(td) / "missing.jsonl"), "--allow-paid-company-provider", "--allow-paid-embeddings", "--force"], cwd=ROOT, capture_output=True, text=True, check=False)
+            proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--input", str(FIXTURE_PEOPLE), "--role-input-classifications", str(Path(td) / "missing.jsonl"), "--allow-paid-company-provider", "--allow-paid-embeddings"], cwd=ROOT, capture_output=True, text=True, check=False)
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("missing input role classifications", proc.stderr + proc.stdout)
 

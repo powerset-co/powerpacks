@@ -1,6 +1,6 @@
 ---
 name: search-network
-description: Run a role-first people search from a natural-language query, job description, or URL. Use when the user wants the agent to decompose the request, show one compact search preview, then execute retrieval, hydration, LLM filtering/reranking, and result export.
+description: Run a role-first people search from a natural-language query, job description, or URL. Use when the user wants the agent to decompose the request, show one compact search preview, then execute retrieval, hydration, LLM filtering/reranking, and result export. For complex JDs, detect broad multi-trait intent, plan multiple narrow searches, execute the probes, review with a bounded LLM budget, cluster exemplars, and run bounded fan-out searches.
 ---
 
 # Search Network
@@ -23,7 +23,8 @@ The agent should:
 - decompose the request into the Powerpacks role-search schema
 - decide whether adjacent/domain search is off, confirmed, or should be asked
   about
-- decide whether to search directly, count first, or generate slices
+- decide whether to search directly, count first, generate slices, or run the
+  complex-JD recruiter loop
 - show one compact search preview after extraction and ask the user to
   `execute` or `modify`
 - after `execute`, run retrieval, hydration, LLM filtering/reranking, and
@@ -116,6 +117,130 @@ change, narrow, broaden, or refine a search, create a new search run with the
 updated constraints rather than filtering a previous artifact.
 
 ## Fast path runner
+
+Do not use the normal single-query `prepare` path first when the user supplied a
+complex JD / role brief that clearly needs the recruiter loop below. Use the
+normal path for ordinary role/company/person searches; use the complex-JD path
+when one broad query would likely produce a noisy 1k-5k frontier or miss distinct
+candidate patterns.
+
+### Complex JD Recruiter Loop
+
+When the user runs `$search-network <long JD or complex role brief>`, detect
+complex JD intent and do the work end to end:
+
+This is agent/harness orchestration over existing per-query search primitives and
+their artifacts, not a claim that one monolithic pipeline command already runs
+the whole multi-probe + cluster + fan-out loop. Keep each probe and fan-out as a
+bounded per-query run; do not combine all probes, BM25/title channels, or large
+company cohorts into one giant TurboPuffer request.
+
+Use this path when the request has several of these signals:
+
+- pasted JD / long role brief / requirements list
+- many traits where some are nice-to-have tech skills
+- hard filters plus soft filters plus OR-style experience families
+- explicit concern that one search is too broad or returns thousands
+- founder-capable / CTO / technical cofounder / ambiguous archetype language
+- company-cohort examples that should seed separate search threads
+
+User-facing budget semantics for this path:
+
+- Default `llm_review_budget` to 100 unique profiles for a complex JD run unless
+  the user states another number.
+- This budget is the max number of deduped, hydrated profiles sent through LLM
+  recruiter review/rerank across initial probes plus fan-out. It is not the
+  number retrieved, not the count-only pool size, and not the final number shown.
+- `planned_review_count` is the number about to be reviewed in the current
+  phase. It must not exceed `remaining_review_budget`.
+- `remaining_review_budget = llm_review_budget - already_reviewed_count`.
+- Count-only and retrieval-only gates can inspect broader pools cheaply. Only
+  profiles actually sent to LLM review/rerank consume the budget.
+- Apply `score >= 0.3` as the hard usable-candidate cutoff unless the user
+  specified a different threshold. Below-cutoff profiles are debug/audit only,
+  not candidates to present or fan out from.
+
+Execution flow:
+
+1. Create a multi-query search plan as a durable artifact or task-state step.
+2. Show one compact complex-search preview, not five separate approvals. Include:
+   - exact route label: `complex-JD recruiter loop`
+   - normalized archetype
+   - hard filters / set scope
+   - `initial probes`: about 5 probes and their candidate limits
+   - `llm_review_budget`: default `100` if unspecified
+   - `planned_review_count`: number intended for the first review phase after
+     retrieval/count gates
+   - `remaining_review_budget`: starts at the `llm_review_budget` and decrements
+     only when deduped hydrated profiles are sent to LLM review/rerank
+   - default usable cutoff `score >= 0.3`
+   - `cluster_plan`: K differentiated threads if exemplars survive
+   - `fan-out`: bounded per-thread follow-up searches if review budget remains
+   - `lineage_state`: feedback/mutation history is persisted with
+     `candidate_feedback`, `criteria_mutation`, `search_plan_revision`,
+     `run_lineage`, and `task_state.py append-lineage`
+   - execution command guidance: each probe produces an `execute_command` or
+     equivalent `search_network_pipeline.py run --execute-approved` command
+   Render those literal snake_case labels exactly in the preview; do not rewrite
+   them as title-cased headings such as "LLM Review Budget".
+3. Ask exactly:
+
+   `Execute this search plan or modify it?`
+
+4. If the user chooses `execute`, run the approved initial probes as separate,
+   bounded per-query runs. Use
+   `search_network_pipeline.py prepare` internally for each planned query to
+   validate/decompose it, then run the returned `execute_command` or equivalent
+   `run --execute-approved` command without a second chat-visible approval gate.
+5. Run count-only / retrieval-only gates before LLM review. If a probe is too
+   broad, narrow or cap it before review rather than spending budget on a noisy
+   frontier.
+6. Merge and dedupe initial candidates. Hydrate only the deduped review frontier
+   needed for the current phase.
+7. Review at most `remaining_review_budget` profiles with the configured LLM
+   reviewer/reranker. Track reviewed count and remaining budget in task state.
+8. Drop `score < 0.3` profiles from the usable candidate set. Keep them only for
+   debug/audit artifacts.
+9. Select 10-20 above-cutoff exemplars when available, cluster them into K
+   differentiated threads, and run K bounded fan-out searches only if there is
+   enough remaining review budget to review those fan-out results.
+10. Dedupe, hydrate, review, apply the same cutoff, persist CSV/JSONL artifacts,
+    and present a compact final result summary.
+
+Feedback and lineage persistence for complex JD loops:
+
+- Store the initial multi-query plan in task state as `plan` and/or an
+  `approval.plan`; do not keep it only in chat.
+- Store each user-visible plan revision in `search_plan_revisions[]` with the
+  reason, user feedback, criteria delta, and resulting plan.
+- Store candidate-level feedback in `candidate_feedback[]` with `feedback_id`,
+  `person_id`, label, reason, and whether it was applied to the next search.
+- Store derived criteria changes in `criteria_mutations[]` instead of silently
+  changing hard filters, soft filters, reject criteria, company caps, budget, or
+  fan-out shape.
+- Store selected exemplars in `exemplar_sets[]`, clustered follow-up threads in
+  `fanout_threads[]`, and links to parent/child states or artifact dirs in
+  `run_lineage[]`.
+- Use `task_state.py append-lineage --kind <kind> --payload-json ...` whenever a
+  user says a candidate is good/bad, gives feedback such as "too many Roblox" or
+  "some weren't technical", or asks to mutate the search. This creates an
+  append-only `.events.jsonl` audit row as well as updating the JSON state.
+- For feedback-driven follow-up searches, do not mutate criteria invisibly. The
+  required sequence is:
+  1. append `candidate_feedback` entries for the referenced candidates or
+     aggregate feedback;
+  2. append a `criteria_mutation` whose `source_feedback_ids` point at the
+     generated/supplied `feedback_id` values;
+  3. append a `search_plan_revision` with the new plan and criteria delta;
+  4. then run any follow-up probes/fan-outs and link child state/artifact paths
+     through `run_lineage[]`.
+- When continuing from a prior run, read the prior state and artifact manifest,
+  summarize the relevant feedback/criteria mutations, append a new
+  `search_plan_revision`, and link any new run back through `run_lineage[]`.
+
+Do not stop after planning when the user invoked `$search-network`; planning is
+an internal step for complex JD execution. Only stop after the plan when the
+user explicitly asked for planning only.
 
 For the normal semantic/role search path, use the resumable orchestrator's
 `prepare` command as the first action after loading this skill. It runs
@@ -269,6 +394,10 @@ search.
 9. Record every primitive output into task state. `steps[]` is the append-only
    execution log; `planned_steps[]` is the mutable checklist that should move
    from pending to completed/failed/skipped as matching steps run.
+   Feedback-driven refinements should additionally use `candidate_feedback[]`,
+   `criteria_mutations[]`, `search_plan_revisions[]`, `exemplar_sets[]`,
+   `fanout_threads[]`, and `run_lineage[]` so the historical progression is
+   auditable across follow-up searches.
 10. Assess the frontier with `assess_frontier`.
 11. Decide the next action with `plan_candidate_review`.
 12. Hydrate the full candidate frontier with `hydrate_people --write-state`.

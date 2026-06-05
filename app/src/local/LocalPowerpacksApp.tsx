@@ -5,13 +5,15 @@ import { Loader2, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { fetchRunResults, fetchRuns } from "./powerpacksApi";
+import { fetchLocalProfile, fetchRunResults, fetchRuns } from "./powerpacksApi";
+import { LocalContactsPage } from "./LocalContactsPage";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
+import { LocalEnvPage } from "./LocalEnvPage";
 import { LocalResultsTable } from "./LocalResultsTable";
 import { LocalRunSidebar } from "./LocalRunSidebar";
 import { LocalSetupPage } from "./LocalSetupPage";
-import type { LocalRunResultsResponse, LocalRunSummary } from "./types";
+import type { LocalProfileResponse, LocalRunResultsResponse, LocalRunSummary } from "./types";
 import { toDatabaseRecord } from "./types";
 
 const PAGE_SIZE = 50;
@@ -21,10 +23,12 @@ function taskIdFromPath(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-type LocalView = "setup" | "messagesReview" | "runs";
+type LocalView = "contacts" | "setup" | "messagesReview" | "env" | "runs";
 
 function viewFromPath(): LocalView {
   if (window.location.pathname === "/onboarding") return "setup";
+  if (window.location.pathname === "/contacts") return "contacts";
+  if (window.location.pathname === "/env") return "env";
   if (window.location.pathname === "/setup/imessage/review") return "messagesReview";
   if (window.location.pathname === "/setup") return "setup";
   return "runs";
@@ -63,6 +67,7 @@ export function LocalPowerpacksApp() {
   const [search, setSearch] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => taskIdFromPath());
   const [resultResponse, setResultResponse] = useState<LocalRunResultsResponse | null>(null);
+  const [profile, setProfile] = useState<LocalProfileResponse | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,6 +95,14 @@ export function LocalPowerpacksApp() {
     }
   };
 
+  const refreshProfile = async () => {
+    try {
+      setProfile(await fetchLocalProfile());
+    } catch {
+      setProfile(null);
+    }
+  };
+
   const loadResultsPage = useCallback(async (offset: number, append: boolean) => {
     if (!selectedTaskId) return;
     if (append) setIsLoadingMore(true);
@@ -112,6 +125,7 @@ export function LocalPowerpacksApp() {
       setActiveView("setup");
     }
     refreshRuns();
+    refreshProfile();
 
     const handlePopState = () => {
       setActiveView(viewFromPath());
@@ -163,25 +177,33 @@ export function LocalPowerpacksApp() {
     <TooltipProvider>
       <div className="flex min-h-dvh bg-background text-foreground">
         <LocalRunSidebar
-          activeView={activeView === "runs" ? "runs" : "setup"}
+          activeView={
+            activeView === "runs"
+              ? "runs"
+              : activeView === "env"
+                ? "env"
+                : activeView === "contacts"
+                  ? "contacts"
+                  : "setup"
+          }
           runs={filteredRuns}
+          operatorEmail={profile?.operator.email || profile?.operator.label}
+          accountSources={profile?.accounts.sources}
           selectedTaskId={selectedTaskId}
           isLoading={runsLoading}
           search={search}
           onSearchChange={setSearch}
+          onSelectContacts={() => {
+            navigate("/contacts");
+          }}
           onSelectSetup={() => {
             navigate("/setup");
           }}
-          onSelectRuns={() => {
-            setActiveView("runs");
-            if (selectedTaskId) navigate(`/conversation/${encodeURIComponent(selectedTaskId)}`);
-            else if (runs[0]) {
-              const id = runs[0].conversationId || runs[0].taskId;
-              setSelectedTaskId(id);
-              navigate(`/conversation/${encodeURIComponent(id)}`);
-            } else {
-              navigate("/");
-            }
+          onSelectEnv={() => {
+            navigate("/env");
+          }}
+          onSelectLinkSetup={() => {
+            navigate("/setup?tab=link");
           }}
           onSelect={(run) => {
             const id = run.conversationId || run.taskId;
@@ -194,8 +216,12 @@ export function LocalPowerpacksApp() {
           <div className="mx-auto max-w-7xl space-y-4 p-6">
             {activeView === "setup" ? (
               <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
+            ) : activeView === "env" ? (
+              <LocalEnvPage />
+            ) : activeView === "contacts" ? (
+              <LocalContactsPage />
             ) : activeView === "messagesReview" ? (
-              <LocalMessagesReviewPage onBackToSetup={() => navigate("/setup?tab=import")} />
+              <LocalMessagesReviewPage onBackToSetup={() => navigate("/setup?tab=enrichment")} />
             ) : (
               <>
                 <div className="flex flex-wrap items-start justify-between gap-4">

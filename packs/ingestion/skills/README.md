@@ -2,16 +2,17 @@
 
 Skills are user-facing routing/instruction files. They do not ingest data by
 themselves; each skill chooses the primitive/orchestrator script that performs
-the work. The orchestrator keeps end-to-end runs consistent by calling the same
-source primitives, merge step, and DuckDB loader every time.
+the work. Discovery owns source extraction. Merge, network DuckDB
+materialization, and local search indexing are owned by
+`packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py`.
 
 | User command / skill | Skill file | Primary script called | What it handles | Output contract |
 | --- | --- | --- | --- | --- |
-| `$import-email` | `packs/ingestion/skills/import-email/SKILL.md` | `packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --gmail-account-email ...` | Local msgvault Gmail/email metadata import, then merge + DuckDB | Gmail `people.csv`; merged `people.csv`, `network_contacts.csv`, `network_contact_sources.csv`, `network_companies.csv`; DuckDB |
-| `$import-network` | `packs/ingestion/skills/import-network/SKILL.md` | `packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run ...` | End-to-end local network orchestration across LinkedIn CSV, msgvault email, and optionally existing message/Twitter artifacts | Same merged CSVs + DuckDB |
-| `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run ...` | Twitter/X crawl, MOE, and LinkedIn validation smoke/import | Twitter run `people.csv`; merge through `$import-network --include-existing-artifacts` |
-| `$import-contacts` | `packs/messages/skills/import-contacts/SKILL.md` | messages pack primitives | iMessage/WhatsApp contact metadata import/review | Message contacts artifacts; merge through `$import-network --include-existing-artifacts` |
-| LinkedIn CSV inside `$import-network` | `packs/ingestion/skills/import-network/SKILL.md` or `import-linkedin-network` | `packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py` called by orchestrator | LinkedIn `Connections.csv`, enrichment cache/API approval | LinkedIn `people.csv`; merged by orchestrator |
+| `$import-email` | `packs/ingestion/skills/import-email/SKILL.md` | `packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run --gmail-account-email ...` | Local msgvault Gmail/email metadata discovery | Gmail source folder |
+| `$discover-contacts` | `packs/ingestion/skills/discover-contacts/SKILL.md` | `packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run ...` | Source discovery across LinkedIn CSV, msgvault email, and optionally existing message/Twitter artifacts | Fixed source folders |
+| `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run ...` | Twitter/X crawl, MOE, and LinkedIn validation smoke/import | Twitter source `people.csv` |
+| `$import-contacts` | `packs/messages/skills/import-contacts/SKILL.md` | messages pack primitives | iMessage/WhatsApp contact metadata import/review | Message contacts artifacts |
+| LinkedIn CSV inside `$discover-contacts` | `packs/ingestion/skills/discover-contacts/SKILL.md` | `packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py` called by orchestrator | LinkedIn `Connections.csv`, enrichment cache/API approval | LinkedIn source `people.csv` |
 
 ## Why skills are not the runtime handler
 
@@ -26,6 +27,6 @@ So the flow is:
 user command → skill routing/instructions → primitive/orchestrator → artifacts
 ```
 
-For end-to-end tests prefer `$import-network` / `import_network_pipeline.py`; it
-proves the source primitive, merge contracts, `network_companies.csv`, and DuckDB
-loader still work together.
+For end-to-end local search readiness tests use `index_contacts_pipeline.py run`;
+it proves source fan-in, merge contracts, `network_companies.csv`, network
+DuckDB, processing records, and local search DuckDB work together.

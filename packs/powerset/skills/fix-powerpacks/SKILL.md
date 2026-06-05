@@ -12,15 +12,23 @@ Use this skill for `$fix-powerpacks` and for requests like:
 - “move/copy the right local data into the real Powerpacks install”;
 - “check if Gmail/msgvault, WhatsApp/wacli, Messages review CSV, and network
   artifacts are wired correctly”;
+- “check whether operator bootstrap restored `directory.csv`, whether expected
+  bootstrap files are present, and whether discovery/import manifests exist for
+  each vertical”;
+- “report stale run-id / temp artifact directories under `.powerpacks` so they
+  can be triaged or cleaned up deliberately”;
 - “clean up stale duplicate state directories so future sessions stop using
   them.”
 
 This is a repair workflow. Its default command applies safe local repairs:
 copy/adopt newer canonical state and copy `.env` only if canonical `.env` is missing, repair `accounts.json` from local msgvault,
-adopt an authenticated wacli store, and move aside a bad unauthenticated wacli
-placeholder so the user can reauth cleanly. It must not run imports, msgvault
-sync, WhatsApp sync, enrichment, processing, uploads, or provider-spend
-operations unless the user separately and explicitly requests that.
+adopt an authenticated wacli store, move aside a bad unauthenticated wacli
+placeholder so the user can reauth cleanly, and repair canonical
+`.powerpacks/network-import/directory.csv` from the best local operator
+bootstrap bundle when that bundle has strictly more LinkedIn mappings. It must
+not run imports, msgvault sync, WhatsApp sync, enrichment, processing, GCS
+pulls, uploads, provider-spend operations, or destructive cleanup unless the
+user separately and explicitly requests that.
 
 ## Principles
 
@@ -34,6 +42,12 @@ operations unless the user separately and explicitly requests that.
 6. Rename/quarantine stale bad directories instead of deleting them.
 7. Ledgers are logs/checkpoints; current artifacts and live read-only checks are
    more authoritative than stale ledger statuses.
+8. When files are missing or bootstrap contents do not match expectations,
+   report the exact missing path and observed counts. Do not invent substitute
+   files or silently treat an old artifact as equivalent.
+9. Stale run-id/temp directories are cleanup candidates, not source of truth.
+   Report them by path and size/count first; quarantine/remove them only after a
+   separate explicit cleanup request.
 
 ## State path contract
 
@@ -53,11 +67,35 @@ setup/import/enrichment to work, including:
 - `.powerpacks/messages/wacli/`
 - `.powerpacks/messages/wacli.contacts.csv`
 - `.powerpacks/network-import/directory.csv`
+- `.powerpacks/network-import/discover/`
+- `.powerpacks/network-import/import/`
 - `.powerpacks/network-import/profile_cache_v2/`
 - `.powerpacks/network-import/merged/people.csv`
 - `.powerpacks/operator-bootstrap/bundles/`
 
-Report-only paths include dirty ledgers and rebuildable DuckDB files.
+Report-only paths include dirty ledgers, rebuildable DuckDB files, and stale
+run-id/temp artifact directories. The canonical current paths are stable and
+should not include arbitrary run IDs:
+
+```text
+.powerpacks/network-import/discover/<vertical>/manifest.json
+.powerpacks/network-import/import/<vertical>/manifest.json
+.powerpacks/network-import/final/
+.powerpacks/network-import/merged/
+.powerpacks/network-import/directory.csv
+.powerpacks/network-import/profile_cache_v2/
+```
+
+Known stale/legacy cleanup candidates include paths like:
+
+```text
+.powerpacks/network-import/network-runs/<run-id>/
+.powerpacks/network-import/import-network-run*.json
+.powerpacks/network-import/<timestamp-or-run-id>/
+```
+
+Do not delete or quarantine these during the normal fixer run. Report them so
+the user can decide whether to clean them up.
 
 ## Standard flow
 
@@ -108,6 +146,22 @@ Summarize:
 - legacy `.powerpacks` roots found;
 - managed paths copied/adopted, including whether `.env` was copied or kept without showing contents;
 - linked source checks that failed;
+- operator bootstrap bundle health, including whether local bundles contain
+  `.powerpacks/network-import/directory.csv`, how many usable LinkedIn mappings
+  they contain, and whether canonical `directory.csv` was repaired from one;
+- exact missing bootstrap files/artifacts. For each expected bootstrap artifact,
+  say `present`, `missing`, or `stale`, with the observed path. Do not infer that
+  another similarly named file is acceptable unless the code explicitly supports
+  that fallback;
+- per-source discovery/import manifest health:
+  `.powerpacks/network-import/discover/<vertical>/manifest.json` and
+  `.powerpacks/network-import/import/<vertical>/manifest.json`;
+- stale run-id/temp artifact directories under `.powerpacks/network-import/`,
+  with path, approximate size, and why they are not part of the current stable
+  contract;
+- local gcloud active-account/config status. This is only a local auth snapshot;
+  it does not prove the latest GCS bootstrap was pulled. If the local bundle is
+  stale or missing, run `$powerset setup` and then rerun `$fix-powerpacks`;
 - whether Gmail accounts were repaired from msgvault;
 - whether WhatsApp/wacli was authenticated, copied from a better store, or
   scrubbed for reauth;
@@ -140,6 +194,14 @@ Allowed by default:
 - read `~/.msgvault/msgvault.db` and repair `accounts.json` Gmail linkage when
   the local DB clearly contains the selected Gmail accounts;
 - read-only test WhatsApp/wacli auth using the canonical store;
+- inspect local operator bootstrap tarballs under
+  `.powerpacks/operator-bootstrap/bundles/`;
+- replace canonical `.powerpacks/network-import/directory.csv` from the best
+  local operator bootstrap bundle when the bundle has strictly more nonempty
+  `linkedin_url` mappings than the canonical file, with backup;
+- report discovery/import manifest status for Gmail, LinkedIn, and Messages;
+- report stale run-id/temp artifact directories so the harness can propose a
+  cleanup plan;
 - compare legacy wacli stores and copy a better authenticated store into the
   canonical repo when the canonical store is missing or unauthenticated;
 - move aside a bad unauthenticated canonical wacli placeholder when no better
@@ -150,10 +212,11 @@ Requires explicit approval:
 
 - overwrite canonical files with older/equal legacy files;
 - quarantine/rename legacy `.powerpacks` directories;
+- quarantine/remove stale run-id/temp artifact directories;
 - move aside dirty ledgers;
 - delete anything;
 - run browser auth, WhatsApp QR linking, msgvault sync, imports, enrichment,
-  processing, or uploads.
+  processing, GCS bootstrap pulls, or uploads.
 
 Never do:
 
@@ -171,6 +234,10 @@ Canonical repo: ...
 Copied/adopted: N files / M directories
 Kept target because newer: ...
 Linked source checks: Gmail ok, WhatsApp store present/auth unknown, LinkedIn CSV missing, ...
+Bootstrap directory: canonical X LinkedIn URLs, best bundle Y LinkedIn URLs, repaired yes/no
+Source stages: Gmail discovery/import ok, LinkedIn discovery/import ok, Messages discovery/import missing/stale
+Missing bootstrap files: ...
+Stale run dirs: ...
 Quarantined legacy state: yes/no
 Next: open /setup from canonical repo
 ```

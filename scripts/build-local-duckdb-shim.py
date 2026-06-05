@@ -22,17 +22,22 @@ Then test local search with:
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import csv
+import fcntl
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+DUCKDB_LOCK_NAME = ".local-search-duckdb.lock"
 
 from packs.indexing.lib.people import build_people_records, flatten_people  # noqa: E402
 _limit = sys.maxsize
@@ -105,6 +110,9 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "position_id": "VARCHAR",
         "person_id": "VARCHAR",
         "base_id": "VARCHAR",
+        "title_hash": "VARCHAR",
+        "raw_title": "VARCHAR",
+        "role_type_category": "VARCHAR",
         "vector": "DOUBLE[]",
         "word_tokens": "VARCHAR[]",
         "char_tokens": "VARCHAR[]",
@@ -228,7 +236,6 @@ POSITION_PERSON_DUPLICATE_COLUMNS = [
     "linkedin_followers",
     "linkedin_connections",
     "ig_followers",
-    "inferred_birth_year",
     "allowed_operator_ids",
 ]
 EXTRA_COLUMNS = LOCAL_TABLE_CONTRACT
@@ -236,6 +243,59 @@ EXTRA_COLUMNS = LOCAL_TABLE_CONTRACT
 
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def now_iso() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def read_lock_owner(lock_path: Path) -> dict[str, Any]:
+    try:
+        text = lock_path.read_text(encoding="utf-8").strip()
+        if not text:
+            return {}
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+@contextmanager
+def local_duckdb_writer_lock(run_dir: Path):
+    """Serialize local-search.duckdb writers across app and CLI invocations."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = run_dir / DUCKDB_LOCK_NAME
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            owner = read_lock_owner(lock_path)
+            owner_pid = owner.get("pid") or "unknown"
+            print(
+                f"[build-local-duckdb] waiting for writer lock: {lock_path} owner_pid={owner_pid}",
+                file=sys.stderr,
+                flush=True,
+            )
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps({"pid": os.getpid(), "started_at": now_iso(), "argv": sys.argv}, sort_keys=True))
+        handle.flush()
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            handle.truncate()
+            handle.flush()
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def remove_duckdb_file_set(db_path: Path) -> None:
+    for candidate in [db_path, Path(str(db_path) + ".wal")]:
+        if candidate.exists():
+            candidate.unlink()
 
 
 def run(cmd: list[str]) -> None:
@@ -325,6 +385,12 @@ def materialize_records_dir(records_dir: Path, run_dir: Path, *, force: bool = F
         raise SystemExit(f"missing records directory: {records_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
     copied: dict[str, str] = {}
+    src = record_source_path(records_dir, PERSON_PROFILE_RECORD)
+    if src:
+        dst = run_dir / PERSON_PROFILE_RECORD
+        link_or_copy(src, dst, force=force)
+        if dst.exists():
+            copied[PERSON_PROFILE_RECORD] = str(dst)
     for _table, rel in LOCAL_TABLES.items():
         src = record_source_path(records_dir, rel)
         if not src:
@@ -405,7 +471,7 @@ def materialize_aleph_output_dir(aleph_dir: Path, run_dir: Path, operator_id: st
 
     This follows the checked-in Aleph upload scripts' artifact names and field
     shapes: companies_corpus_v3 + company_embeddings_v3, summary_embeddings +
-    person_tech_skills + unified_person.csv, people_education, schools_corpus.
+    person_tech_skills + summary_embeddings, people_education, schools_corpus.
     No network calls, uploads, or paid providers are used.
     """
     if not aleph_dir.exists():
@@ -488,7 +554,6 @@ def materialize_aleph_output_dir(aleph_dir: Path, run_dir: Path, operator_id: st
     write_jsonl(run_dir / "records/companies.records.jsonl", company_rows())
 
     # Summaries: data_pipeline_v2/pipelines/people/indexing/upload_summaries_turbopuffer.py
-    unified = _load_csv_by_id(aleph_dir / "unified/unified_person.csv")
     skills = {str(row.get("person_id")): row.get("tech_skills") or [] for row in read_jsonl(aleph_dir / "unified/person_tech_skills.jsonl") if row.get("person_id")}
 
     def summary_rows():
@@ -496,7 +561,7 @@ def materialize_aleph_output_dir(aleph_dir: Path, run_dir: Path, operator_id: st
             pid = str(row.get("person_id") or "")
             if not pid:
                 continue
-            summary = (unified.get(pid) or {}).get("summary") or ""
+            summary = str(row.get("summary") or row.get("text") or "")
             yield {
                 "id": pid,
                 "person_id": pid,
@@ -805,9 +870,11 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_
     db_path = run_dir / "local-search.duckdb"
     if db_path.exists():
         if force:
-            db_path.unlink()
+            remove_duckdb_file_set(db_path)
         else:
             raise SystemExit(f"DuckDB already exists: {db_path}. Use --force to replace it.")
+    elif force:
+        remove_duckdb_file_set(db_path)
 
     con = duckdb.connect(str(db_path))
     counts: dict[str, int] = {}
@@ -817,6 +884,9 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_
             if profile_record:
                 counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", profile_record)
                 postprocess_table(con, "local_person_profiles", operator_id)
+        elif has_records(run_dir / PERSON_PROFILE_RECORD):
+            counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", run_dir / PERSON_PROFILE_RECORD)
+            postprocess_table(con, "local_person_profiles", operator_id)
         if derive_positions_csv:
             materialize_positions_from_csv(derive_positions_csv, run_dir, operator_id, force=True)
         for table, rel in LOCAL_TABLES.items():
@@ -953,45 +1023,53 @@ def explicit_output_dir(args: argparse.Namespace, fallback: Path) -> Path:
 def main() -> None:
     args = build_parser().parse_args()
     if args.aleph_output_dir:
+        mode = "aleph"
         run_dir = explicit_output_dir(args, DEFAULT_OUTPUT_DIR)
         aleph_dir = ROOT / args.aleph_output_dir if not Path(args.aleph_output_dir).is_absolute() else Path(args.aleph_output_dir)
         args.aleph_output_dir = str(aleph_dir)
-        materialize_aleph_output_dir(aleph_dir, run_dir, args.operator_id, limit=args.limit, force=args.force)
     elif args.records_dir:
+        mode = "records"
         records_dir = ROOT / args.records_dir if not Path(args.records_dir).is_absolute() else Path(args.records_dir)
         args.records_dir = str(records_dir)
         run_dir = explicit_output_dir(args, infer_run_dir_from_records(records_dir))
-        materialize_records_dir(records_dir, run_dir, force=args.force)
     else:
+        mode = "source"
         run_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT_DIR
         source = ROOT / args.source if not Path(args.source).is_absolute() else Path(args.source)
         if not source.exists() and not args.skip_pipeline:
             raise SystemExit(f"missing source CSV: {source}")
         args.source = str(source)
-        build_pipeline(args, run_dir)
-    if not run_dir.exists():
-        raise SystemExit(f"missing run dir after pipeline/artifact materialization: {run_dir}")
-    person_profiles_csv = Path(args.person_profiles_csv) if args.person_profiles_csv else None
-    if person_profiles_csv and not person_profiles_csv.is_absolute():
-        person_profiles_csv = ROOT / person_profiles_csv
-    if not person_profiles_csv:
-        source_candidate = Path(args.source)
-        if not source_candidate.is_absolute():
-            source_candidate = ROOT / source_candidate
-        merged_candidate = ROOT / ".powerpacks/network-import/merged/people.csv"
-        person_profiles_csv = source_candidate if source_candidate.exists() else merged_candidate if merged_candidate.exists() else None
-    args._resolved_person_profiles_csv = str(person_profiles_csv) if person_profiles_csv else None
-    derive_positions_csv = person_profiles_csv if args.derive_positions_from_person_profiles else None
-    db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force, person_profiles_csv=person_profiles_csv, derive_positions_csv=derive_positions_csv)
-    manifest_path = write_manifest(run_dir, args, db_path, table_counts)
-    emit({
-        "status": "ok",
-        "run_dir": str(run_dir),
-        "manifest": str(manifest_path),
-        "duckdb": str(db_path),
-        "tables": table_counts,
-        "env": f"POWERPACKS_LOCAL_SEARCH_DB={db_path}",
-    })
+
+    with local_duckdb_writer_lock(run_dir):
+        if mode == "aleph":
+            materialize_aleph_output_dir(aleph_dir, run_dir, args.operator_id, limit=args.limit, force=args.force)
+        elif mode == "records":
+            materialize_records_dir(records_dir, run_dir, force=args.force)
+        else:
+            build_pipeline(args, run_dir)
+        if not run_dir.exists():
+            raise SystemExit(f"missing run dir after pipeline/artifact materialization: {run_dir}")
+        person_profiles_csv = Path(args.person_profiles_csv) if args.person_profiles_csv else None
+        if person_profiles_csv and not person_profiles_csv.is_absolute():
+            person_profiles_csv = ROOT / person_profiles_csv
+        if not person_profiles_csv:
+            source_candidate = Path(args.source)
+            if not source_candidate.is_absolute():
+                source_candidate = ROOT / source_candidate
+            merged_candidate = ROOT / ".powerpacks/network-import/merged/people.csv"
+            person_profiles_csv = source_candidate if source_candidate.exists() else merged_candidate if merged_candidate.exists() else None
+        args._resolved_person_profiles_csv = str(person_profiles_csv) if person_profiles_csv else None
+        derive_positions_csv = person_profiles_csv if args.derive_positions_from_person_profiles else None
+        db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force, person_profiles_csv=person_profiles_csv, derive_positions_csv=derive_positions_csv)
+        manifest_path = write_manifest(run_dir, args, db_path, table_counts)
+        emit({
+            "status": "ok",
+            "run_dir": str(run_dir),
+            "manifest": str(manifest_path),
+            "duckdb": str(db_path),
+            "tables": table_counts,
+            "env": f"POWERPACKS_LOCAL_SEARCH_DB={db_path}",
+        })
 
 
 if __name__ == "__main__":

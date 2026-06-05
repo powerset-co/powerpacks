@@ -8,7 +8,8 @@
   "attributes": [
     {"name": "id", "type": "string", "notes": "Canonical school URN."},
     {"name": "school_name", "type": "string"},
-    {"name": "person_count", "type": "integer"}
+    {"name": "person_count", "type": "integer"},
+    {"name": "canonical_key", "type": "string", "notes": "Normalized school identity key for dedup."}
   ],
   "filters": [
     {"field": "school_name", "operators": ["ContainsAllTokens"], "value_type": "string"}

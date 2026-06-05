@@ -128,6 +128,15 @@ function jobSummary(job?: SetupJob | null): string {
   return "No output yet.";
 }
 
+function reviewDisplayName(row: MessageReviewRow): string {
+  const candidates = [row.fullName, row.networkName, row.phone, row.handle];
+  for (const candidate of candidates) {
+    const text = String(candidate || "").trim();
+    if (text && text.toLowerCase() !== "unknown") return text;
+  }
+  return "Unnamed contact";
+}
+
 function ReviewFilters({
   active,
   response,
@@ -185,13 +194,14 @@ function ReviewCard({
   const linkedin = row.retargetLinkedInUrl || row.networkLinkedInUrl;
   const isRetargeted = Boolean(row.retargetStatus);
   const hasUnsavedHint = draft !== row.retargetHint;
+  const displayName = reviewDisplayName(row);
 
   return (
     <article className={cn("rounded-md border bg-card p-4", row.selected ? "border-emerald-200" : "border-border opacity-80")}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-base font-semibold">{row.fullName || "Unknown"}</h3>
+            <h3 className="truncate text-base font-semibold">{displayName}</h3>
             {linkedin && (
               <a
                 href={linkedin}

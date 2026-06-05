@@ -9,7 +9,6 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 from argparse import Namespace
 from pathlib import Path
 from typing import Any
@@ -36,6 +35,8 @@ from packs.indexing.lib.people import build_people_records, build_unified_profil
 from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed  # noqa: E402
 from packs.indexing.primitives.enrich_companies_checkpointed import enrich_companies_checkpointed  # noqa: E402
 from packs.indexing.primitives.embed_records_checkpointed import embed_records_checkpointed  # noqa: E402
+from packs.indexing.primitives.detect_ceo_founders import detect_ceo_founders  # noqa: E402
+from packs.indexing.primitives.infer_ages import infer_ages  # noqa: E402
 
 STEPS = [
     "flatten_people",
@@ -45,6 +46,8 @@ STEPS = [
     "embed_companies",
     "build_education_corpus",
     "build_location_corpus",
+    "detect_ceo_founders",
+    "infer_ages",
     "build_people_records",
     "build_unified_profiles",
     "build_summary_records",
@@ -83,7 +86,6 @@ def paths(rd: Path) -> dict[str, Path]:
     return {
         "ledger": rd / "ledger.json",
         "flattened": rd / "unified/flattened_people.jsonl",
-        "unified_csv": rd / "unified/unified_person.csv",
         "profiles": rd / "profiles/hydrated_profiles.jsonl",
         "raw_titles": rd / "roles/raw_titles.jsonl",
         "role_mapping": rd / "roles/role_mapping.csv",
@@ -110,6 +112,8 @@ def paths(rd: Path) -> dict[str, Path]:
         "aleph_roles_dir": rd / "unified/roles",
         "aleph_roles_dense": rd / "unified/roles/roles_with_dense_text_remapped.jsonl",
         "aleph_roles_embeddings": rd / "unified/roles/roles_with_embeddings.jsonl",
+        "founder_enrichment": rd / "unified/roles/founder_enrichment.jsonl",
+        "inferred_ages": rd / "unified/inferred_ages.jsonl",
     }
 
 
@@ -232,13 +236,218 @@ def _row_id_set(rows: list[dict[str, Any]], key: str) -> set[str]:
     return {str(row.get(key) or "").strip() for row in rows if str(row.get(key) or "").strip()}
 
 
-def _jsonl_id_set(path_text: str | None, key: str) -> set[str]:
+def _jsonl_id_set(path_text: str | Path | None, key: str, *, require_vector: bool = False) -> set[str]:
     if not path_text:
         return set()
     path = Path(path_text)
     if not path.exists():
         return set()
-    return _row_id_set(read_jsonl(path), key)
+    rows = read_jsonl(path)
+    if require_vector:
+        rows = [row for row in rows if isinstance(row.get("vector") or row.get("embedding") or row.get("dense_embedding"), list) and bool(row.get("vector") or row.get("embedding") or row.get("dense_embedding"))]
+    return _row_id_set(rows, key)
+
+
+def _jsonl_id_set_any(paths: list[str | Path | None], key: str, *, require_vector: bool = False) -> set[str]:
+    out: set[str] = set()
+    for path in paths:
+        out.update(_jsonl_id_set(path, key, require_vector=require_vector))
+    return out
+
+
+def _person_id(row: dict[str, Any]) -> str:
+    return str(row.get("id") or row.get("person_id") or row.get("base_id") or "").strip()
+
+
+def _processed_person_ids(output_dir: Path) -> set[str]:
+    return _jsonl_id_set_any(
+        [
+            output_dir / "unified/summary_embeddings.jsonl",
+            output_dir / "summaries/summary_embeddings.jsonl",
+            output_dir / "records/summaries.records.jsonl",
+        ],
+        "person_id",
+        require_vector=True,
+    ) | _jsonl_id_set(output_dir / "records/summaries.records.jsonl", "id", require_vector=True)
+
+
+def _records_role_ids(output_dir: Path, *, require_vector: bool = False) -> set[str]:
+    return _jsonl_id_set(output_dir / "records/people.records.jsonl", "title_hash", require_vector=require_vector)
+
+
+def _records_company_names(output_dir: Path) -> set[str]:
+    path = output_dir / "records/companies.records.jsonl"
+    if not path.exists():
+        return set()
+    return {_company_name_key(row.get("company_name")) for row in read_jsonl(path) if _company_name_key(row.get("company_name"))}
+
+
+def _records_company_ids(output_dir: Path, *, require_vector: bool = False) -> set[str]:
+    return _jsonl_id_set(output_dir / "records/companies.records.jsonl", "company_urn", require_vector=require_vector) | _jsonl_id_set(
+        output_dir / "records/companies.records.jsonl",
+        "id",
+        require_vector=require_vector,
+    )
+
+
+def _jsonl_has_rows(path: Path) -> bool:
+    if not path.exists():
+        return False
+    with path.open(encoding="utf-8", errors="replace") as handle:
+        return any(line.strip() for line in handle)
+
+
+def _vector_value(row: dict[str, Any]) -> list[Any]:
+    value = row.get("vector") or row.get("embedding") or row.get("dense_embedding")
+    return value if isinstance(value, list) and value else []
+
+
+def _record_company_to_aleph_corpus(row: dict[str, Any]) -> dict[str, Any]:
+    name = str(row.get("company_name") or "")
+    return {
+        "company_urn": str(row.get("company_urn") or row.get("id") or ""),
+        "company_name": name,
+        "original_name": name,
+        "name_aliases": row.get("aliases") or row.get("name_aliases") or ([name] if name else []),
+        "description": str(row.get("description") or ""),
+        "city": str(row.get("city") or ""),
+        "state": str(row.get("state") or ""),
+        "country": str(row.get("country") or ""),
+        "metro_area": str(row.get("metro_area") or ""),
+        "macro_region": str(row.get("macro_region") or ""),
+        "headcount": row.get("headcount") or row.get("company_headcount"),
+        "founded_year": row.get("founded_year"),
+        "linkedin_url": str(row.get("linkedin_url") or row.get("company_linkedin_url") or ""),
+        "logo_url": str(row.get("logo_url") or ""),
+        "website_domain": str(row.get("website_domain") or row.get("company_domain") or ""),
+        "funding_total": row.get("funding_total") or row.get("company_funding_total"),
+        "funding_stage": row.get("funding_stage") or "VENTURE_UNKNOWN",
+        "last_funding_at": row.get("last_funding_at"),
+        "valuation": row.get("valuation"),
+        "investor_urns": row.get("investor_urns") or [],
+        "stage": row.get("stage") or row.get("company_stage") or "",
+        "accelerators": row.get("accelerators") or [],
+        "yc_batches": row.get("yc_batches") or [],
+        "customer_type": row.get("customer_type") or "",
+        "ownership_status": row.get("ownership_status") or "",
+        "company_type": row.get("company_type") or "",
+        "entity_types": row.get("entity_types") or row.get("company_entity_types") or [],
+        "sector_types": row.get("sector_types") or row.get("company_sector_types") or [],
+        "technology_types": row.get("technology_types") or [],
+        "word_text": str(row.get("word_text") or row.get("entity_sector_text") or ""),
+        "char_text": str(row.get("char_text") or ""),
+        "d2q_text": str(row.get("d2q_text") or row.get("doc2query_text") or ""),
+        "doc2query": row.get("doc2query") or [],
+        "semantic_text": str(row.get("semantic_text") or row.get("description") or name),
+        "confidence_score": row.get("confidence_score") or 0.0,
+    }
+
+
+def restore_stage_artifacts_from_records(rd: Path) -> dict[str, Any]:
+    """Rehydrate fixed stage cache files from final record artifacts.
+
+    Bootstrap bundles intentionally favor final local-search records. Normal
+    processing still expects fixed stage artifacts, so recreate those files when
+    records are present and the stage files are missing/empty.
+    """
+
+    ps = paths(rd)
+    restored: dict[str, Any] = {}
+    people_records = read_jsonl(ps["people_records"]) if ps["people_records"].exists() else []
+    summary_records = read_jsonl(ps["summaries_records"]) if ps["summaries_records"].exists() else []
+    company_records = read_jsonl(ps["companies_records"]) if ps["companies_records"].exists() else []
+
+    role_rows: dict[str, dict[str, Any]] = {}
+    role_embedding_rows: dict[str, dict[str, Any]] = {}
+    for row in people_records:
+        title_hash = str(row.get("title_hash") or "").strip()
+        if not title_hash:
+            continue
+        role = {
+            "title_hash": title_hash,
+            "raw_title": row.get("raw_title") or row.get("position_title") or "",
+            "description": row.get("description") or "",
+            "dense_text": row.get("dense_text") or row.get("description") or row.get("position_title") or title_hash,
+            "doc2query": row.get("doc2query") or [],
+            "inferred_skills": row.get("inferred_skills") or [],
+            "role_ids": row.get("role_ids") or [],
+            "role_track": row.get("role_track") or "",
+            "seniority_band": row.get("seniority_band") or "",
+            "cluster": row.get("cluster") or "",
+            "role_type": row.get("role_type") or row.get("role_type_category") or "",
+            "specialization": row.get("specialization") or "",
+        }
+        role_rows.setdefault(title_hash, role)
+        vector = _vector_value(row)
+        if vector:
+            role_embedding_rows.setdefault(title_hash, role | {"dense_embedding": vector})
+
+    if role_rows and not _jsonl_has_rows(ps["roles_dense"]):
+        write_jsonl(ps["roles_dense"], role_rows.values())
+        ps["aleph_roles_dir"].mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ps["roles_dense"], ps["aleph_roles_dense"])
+        restored["roles_with_dense_text"] = {"path": str(ps["roles_dense"]), "rows": len(role_rows)}
+    if role_embedding_rows and not _jsonl_has_rows(ps["roles_embeddings"]):
+        write_jsonl(ps["roles_embeddings"], role_embedding_rows.values())
+        ps["aleph_roles_dir"].mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ps["roles_embeddings"], ps["aleph_roles_embeddings"])
+        restored["roles_with_embeddings"] = {"path": str(ps["roles_embeddings"]), "rows": len(role_embedding_rows)}
+
+    age_rows = []
+    for row in people_records:
+        person_id = str(row.get("base_id") or row.get("person_id") or "").strip()
+        birth_year = row.get("inferred_birth_year")
+        if person_id and isinstance(birth_year, (int, float)) and int(birth_year) > 0:
+            age_rows.append({"person_id": person_id, "birth_year": int(birth_year)})
+    if age_rows and not _jsonl_has_rows(ps["inferred_ages"]):
+        write_jsonl(ps["inferred_ages"], age_rows)
+        restored["inferred_ages"] = {"path": str(ps["inferred_ages"]), "rows": len(age_rows)}
+
+    summary_internal_rows = []
+    summary_embedding_rows = []
+    tech_skill_rows = []
+    for row in summary_records:
+        person_id = str(row.get("person_id") or row.get("id") or row.get("base_id") or "").strip()
+        if not person_id:
+            continue
+        text = str(row.get("summary") or row.get("text") or "")
+        summary_internal_rows.append({"person_id": person_id, "base_id": row.get("base_id") or person_id, "text": text})
+        tech_skill_rows.append({"person_id": person_id, "tech_skills": row.get("tech_skills") or []})
+        vector = _vector_value(row)
+        if vector:
+            summary_embedding_rows.append({"person_id": person_id, "embedding": vector})
+    if summary_internal_rows and not _jsonl_has_rows(ps["summary_internal"]):
+        write_jsonl(ps["summary_internal"], summary_internal_rows)
+        restored["summary_internal"] = {"path": str(ps["summary_internal"]), "rows": len(summary_internal_rows)}
+    if tech_skill_rows and not _jsonl_has_rows(ps["person_tech_skills"]):
+        write_jsonl(ps["person_tech_skills"], tech_skill_rows)
+        write_jsonl(ps["person_tech_skills_legacy"], tech_skill_rows)
+        restored["person_tech_skills"] = {"path": str(ps["person_tech_skills"]), "rows": len(tech_skill_rows)}
+    if summary_embedding_rows and not _jsonl_has_rows(ps["summary_embeddings"]):
+        write_jsonl(ps["summary_embeddings"], summary_embedding_rows)
+        shutil.copyfile(ps["summary_embeddings"], ps["summary_embeddings_legacy"])
+        restored["summary_embeddings"] = {"path": str(ps["summary_embeddings"]), "rows": len(summary_embedding_rows)}
+
+    company_corpus_rows = [_record_company_to_aleph_corpus(row) for row in company_records if str(row.get("company_urn") or row.get("id") or "").strip()]
+    if company_corpus_rows and not _jsonl_has_rows(ps["companies_corpus_v3"]):
+        write_jsonl(ps["companies_corpus_v3"], company_corpus_rows)
+        restored["companies_corpus_v3"] = {"path": str(ps["companies_corpus_v3"]), "rows": len(company_corpus_rows)}
+    company_embedding_rows = []
+    for row in company_records:
+        company_urn = str(row.get("company_urn") or row.get("id") or "").strip()
+        vector = _vector_value(row)
+        if company_urn and vector:
+            company_embedding_rows.append({
+                "company_urn": company_urn,
+                "company_name": row.get("company_name") or "",
+                "semantic_text": row.get("semantic_text") or row.get("description") or "",
+                "embedding": vector,
+            })
+    if company_embedding_rows and not _jsonl_has_rows(ps["company_embeddings"]):
+        write_jsonl(ps["company_embeddings"], company_embedding_rows)
+        restored["company_embeddings"] = {"path": str(ps["company_embeddings"]), "rows": len(company_embedding_rows)}
+
+    return restored
 
 
 def _company_name_key(value: Any) -> str:
@@ -267,13 +476,15 @@ def _embedding_cost_stage(
     text_fields: str,
     input_embeddings: str | None,
     artifact_id_field: str | None = None,
+    available_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     required = _row_id_set(rows, id_field)
-    available = _jsonl_id_set(input_embeddings, artifact_id_field or id_field)
+    available = set(available_ids or set())
+    available.update(_jsonl_id_set(input_embeddings, artifact_id_field or id_field))
     coverage = _coverage(required, available, input_embeddings)
-    if input_embeddings and coverage["complete"]:
+    if coverage["complete"]:
         return {
-            "provider": "precomputed_artifact",
+            "provider": "precomputed_artifact" if input_embeddings else "existing_output",
             "model": model,
             "calls": 0,
             "rows": 0,
@@ -288,7 +499,7 @@ def _embedding_cost_stage(
     embeddable_rows = 0
     for record in rows:
         rid = str(record.get(id_field) or "").strip()
-        if not rid or (input_embeddings and rid in available):
+        if not rid or rid in available:
             continue
         embeddable_rows += 1
         text = embed_records_checkpointed.text_for_record(record, fields) or rid
@@ -322,6 +533,7 @@ def _role_inputs_for_estimate(people: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], companies: list[dict[str, Any]]) -> dict[str, Any]:
+    output_dir = Path(args.output_dir)
     role_input = _arg_artifact(args, "role_input_classifications", "unified/roles/roles_with_dense_text_remapped.jsonl")
     role_emb = _arg_artifact(args, "role_input_embeddings", "unified/roles/roles_with_embeddings.jsonl")
     company_input = _arg_artifact(args, "company_input_classifications", "company/companies_corpus_v3.jsonl")
@@ -336,9 +548,9 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
 
     role_inputs = _role_inputs_for_estimate(people)
     role_required = _row_id_set(role_inputs, "title_hash")
-    role_available = _jsonl_id_set(role_input, "title_hash")
+    role_available = _jsonl_id_set(role_input, "title_hash") | _records_role_ids(output_dir)
     role_coverage = _coverage(role_required, role_available, role_input)
-    role_missing = [role for role in role_inputs if not role_input or str(role.get("title_hash") or "").strip() not in role_available]
+    role_missing = [role for role in role_inputs if str(role.get("title_hash") or "").strip() not in role_available]
     role_input_tokens = 0
     for role in role_missing:
         payload = {
@@ -354,18 +566,18 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
         calls=len(role_missing),
         input_tokens=role_input_tokens,
         output_tokens=len(role_missing) * DEFAULT_ROLE_OUTPUT_TOKENS,
-        precomputed=bool(role_input) and not role_missing,
+        precomputed=not role_missing,
     )
     role_stage["artifact_coverage"] = role_coverage
 
-    company_artifact_keys = set()
+    company_artifact_keys = _records_company_names(output_dir)
     if company_input:
-        company_artifact_keys = {_company_name_key(row.get("company_name")) for row in read_jsonl(Path(company_input)) if _company_name_key(row.get("company_name"))}
+        company_artifact_keys.update({_company_name_key(row.get("company_name")) for row in read_jsonl(Path(company_input)) if _company_name_key(row.get("company_name"))})
     company_required = {_company_name_key(row.get("company_name")) for row in companies if _company_name_key(row.get("company_name"))}
     company_coverage = _coverage(company_required, company_artifact_keys, company_input)
     company_missing_rows = [
         row for row in companies
-        if not company_input or _company_name_key(row.get("company_name")) not in company_artifact_keys
+        if _company_name_key(row.get("company_name")) not in company_artifact_keys
     ]
     company_payload_rows = [enrich_companies_checkpointed.shape_company(row) for row in company_missing_rows]
     company_input_tokens = 0
@@ -379,12 +591,45 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
         calls=len(company_payload_rows),
         input_tokens=company_input_tokens,
         output_tokens=len(company_payload_rows) * DEFAULT_COMPANY_OUTPUT_TOKENS,
-        precomputed=bool(company_input) and not company_payload_rows,
+        precomputed=not company_payload_rows,
     )
     company_stage["artifact_coverage"] = company_coverage
 
     profile_rows = build_unified_profiles(people)
     summary_rows = build_summary_records(profile_rows, getattr(args, "default_operator_id", None))["internal_text"]
+    # CEO/founder detection estimate: ~150 input + ~50 output tokens per candidate
+    ceo_candidates = sum(
+        1 for person in people
+        for exp in (person.get("work_experiences") or [])
+        if isinstance(exp, dict)
+        and bool(exp.get("is_current") or str(exp.get("end_date", "")).lower() in ("", "present", "current", "now"))
+        and detect_ceo_founders.CEO_CTO_RE.search(str(exp.get("title") or exp.get("position_title") or ""))
+        and not detect_ceo_founders.FOUNDER_RE.search(str(exp.get("title") or exp.get("position_title") or ""))
+    ) if detect_ceo_founders else 0
+    existing_people_record_ids = _jsonl_id_set(output_dir / "records/people.records.jsonl", "person_id") | _jsonl_id_set(output_dir / "records/people.records.jsonl", "base_id")
+    if existing_people_record_ids:
+        ceo_candidates = sum(
+            1 for person in people
+            if _person_id(person) not in existing_people_record_ids
+            for exp in (person.get("work_experiences") or [])
+            if isinstance(exp, dict)
+            and bool(exp.get("is_current") or str(exp.get("end_date", "")).lower() in ("", "present", "current", "now"))
+            and detect_ceo_founders.CEO_CTO_RE.search(str(exp.get("title") or exp.get("position_title") or ""))
+            and not detect_ceo_founders.FOUNDER_RE.search(str(exp.get("title") or exp.get("position_title") or ""))
+        ) if detect_ceo_founders else 0
+    ceo_stage = _chat_cost_stage(
+        provider=role_provider, model=role_model,
+        calls=ceo_candidates, input_tokens=ceo_candidates * 150, output_tokens=ceo_candidates * 50,
+        precomputed=False,
+    )
+    # Age inference estimate: ~400 input + ~30 output tokens per person
+    existing_age_ids = _jsonl_id_set(output_dir / "unified/inferred_ages.jsonl", "person_id") | existing_people_record_ids
+    age_candidates = sum(1 for person in people if _person_id(person) and _person_id(person) not in existing_age_ids)
+    age_stage = _chat_cost_stage(
+        provider=role_provider, model=role_model,
+        calls=age_candidates, input_tokens=age_candidates * 400, output_tokens=age_candidates * 30,
+        precomputed=False,
+    )
     stages = {
         "role_enrichment": role_stage,
         "role_embeddings": _embedding_cost_stage(
@@ -395,6 +640,7 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
             text_fields="dense_text,raw_title,description",
             input_embeddings=role_emb,
             artifact_id_field="title_hash",
+            available_ids=_records_role_ids(output_dir, require_vector=True),
         ),
         "company_enrichment": company_stage,
         "company_embeddings": _embedding_cost_stage(
@@ -405,6 +651,7 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
             text_fields="semantic_text,word_text,d2q_text,company_name,description",
             input_embeddings=company_emb,
             artifact_id_field="company_urn",
+            available_ids=_records_company_ids(output_dir, require_vector=True),
         ),
         "summary_embeddings": _embedding_cost_stage(
             provider=embedding_provider,
@@ -414,7 +661,10 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
             text_fields="text",
             input_embeddings=summary_emb,
             artifact_id_field="person_id",
+            available_ids=_processed_person_ids(output_dir),
         ),
+        "ceo_founder_detection": ceo_stage,
+        "age_inference": age_stage,
     }
     known = all(stage.get("known_pricing") for stage in stages.values())
     total = None
@@ -444,11 +694,7 @@ def default_ledger(
     input_path: Path,
     rd: Path,
     default_operator_id: str | None = None,
-    limit: int | None = None,
     *,
-    limit_mode: str = "all",
-    existing_people_csv: str | None = None,
-    existing_duckdb: str | None = None,
     checkpoint_every: int = 1000,
     role_provider: str = "openai",
     allow_paid_role_provider: bool = False,
@@ -482,10 +728,6 @@ def default_ledger(
         "input": str(input_path),
         "input_sha256": sha256_file(input_path) if input_path.exists() else "",
         "default_operator_id": default_operator_id,
-        "limit": limit,
-        "limit_mode": limit_mode,
-        "existing_people_csv": existing_people_csv,
-        "existing_duckdb": existing_duckdb,
         "checkpoint_every": checkpoint_every,
         "role_provider": role_provider,
         "allow_paid_role_provider": allow_paid_role_provider,
@@ -545,92 +787,64 @@ def person_keys(row: dict[str, Any]) -> set[str]:
     return keys
 
 
-def existing_keys_from_csv(path_text: str | None) -> set[str]:
-    if not path_text:
-        return set()
-    path = Path(path_text)
-    if not path.exists():
-        return set()
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return {key for row in csv.DictReader(handle) for key in person_keys(row)}
+def primary_person_key(row: dict[str, Any]) -> str:
+    for field in ["id", "person_id", "base_id"]:
+        value = str(row.get(field) or "").strip().lower()
+        if value:
+            return f"id:{value}"
+    url = normalize_linkedin_url(row.get("linkedin_url"))
+    if url:
+        return f"linkedin_url:{url}"
+    public_id = str(row.get("public_identifier") or "").strip().lower() or public_identifier_from_url(url)
+    if public_id:
+        return f"public_identifier:{public_id}"
+    return hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
-def existing_keys_from_duckdb(path_text: str | None) -> set[str]:
-    """Return people already covered by processed local-search vectors.
+def upsert_people_jsonl(path: Path, incoming: list[dict[str, Any]]) -> dict[str, Any]:
+    existing_rows = read_jsonl(path) if path.exists() else []
+    rows_by_key: dict[str, dict[str, Any]] = {}
+    key_index: dict[str, str] = {}
+    order: list[str] = []
+    for row in existing_rows:
+        primary = primary_person_key(row)
+        if primary not in rows_by_key:
+            order.append(primary)
+        rows_by_key[primary] = row
+        for key in person_keys(row) or {primary}:
+            key_index[key] = primary
 
-    ``local_person_profiles`` is intentionally not enough: setup/bootstrap can
-    now materialize one profile row for every person without running paid role or
-    embedding providers. For ``--limit-mode missing`` we want missing/new people
-    relative to the processed/vectorized index, so only vector-bearing summary or
-    position rows count as existing.
-    """
-    if not path_text:
-        return set()
-    path = Path(path_text)
-    if not path.exists():
-        return set()
-    try:
-        import duckdb  # type: ignore
-    except ModuleNotFoundError:
-        return set()
-    keys: set[str] = set()
-    with duckdb.connect(str(path), read_only=True) as con:
-        tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
-        for table in ["local_summaries", "local_people_positions"]:
-            if table not in tables:
-                continue
-            columns = {str(row[1]) for row in con.execute(f"pragma table_info({table})").fetchall()}
-            if "vector" not in columns:
-                continue
-            wanted = [field for field in ["id", "person_id", "base_id"] if field in columns]
-            if not wanted:
-                continue
-            selected = ", ".join(wanted)
-            try:
-                rows = con.execute(f"select distinct {selected} from {table} where vector is not null and len(vector) > 0").fetchall()
-            except Exception:
-                rows = []
-            for values in rows:
-                keys.update(person_keys(dict(zip(wanted, values))))
-    return keys
+    inserted = 0
+    updated = 0
+    for row in incoming:
+        keys = person_keys(row)
+        primary = next((key_index[key] for key in keys if key in key_index), None) if keys else None
+        if not primary:
+            primary = primary_person_key(row)
+        if primary not in rows_by_key:
+            order.append(primary)
+            inserted += 1
+        else:
+            updated += 1
+        rows_by_key[primary] = row
+        for key in keys or {primary}:
+            key_index[key] = primary
 
-
-def select_people_for_run(people: list[dict[str, Any]], ledger_or_args: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    original_count = len(people)
-    mode = str(getattr(ledger_or_args, "limit_mode", None) or (ledger_or_args.get("limit_mode") if isinstance(ledger_or_args, dict) else None) or "all")
-    existing_csv = getattr(ledger_or_args, "existing_people_csv", None) if not isinstance(ledger_or_args, dict) else ledger_or_args.get("existing_people_csv")
-    existing_duckdb = getattr(ledger_or_args, "existing_duckdb", None) if not isinstance(ledger_or_args, dict) else ledger_or_args.get("existing_duckdb")
-    limit = getattr(ledger_or_args, "limit", None) if not isinstance(ledger_or_args, dict) else ledger_or_args.get("limit")
-    missing_basis: dict[str, Any] = {"mode": mode, "input_people": original_count}
-    if mode == "missing":
-        existing_keys = set()
-        csv_keys = existing_keys_from_csv(str(existing_csv)) if existing_csv else set()
-        duckdb_keys = existing_keys_from_duckdb(str(existing_duckdb)) if existing_duckdb else set()
-        existing_keys.update(csv_keys)
-        existing_keys.update(duckdb_keys)
-        filtered = [person for person in people if person_keys(person).isdisjoint(existing_keys)]
-        missing_basis.update({
-            "existing_people_csv": str(existing_csv or ""),
-            "existing_duckdb": str(existing_duckdb or ""),
-            "existing_keys": len(existing_keys),
-            "existing_csv_keys": len(csv_keys),
-            "existing_duckdb_keys": len(duckdb_keys),
-            "missing_people": len(filtered),
-            "reused_or_existing_people": original_count - len(filtered),
-        })
-        people = filtered
-    if limit is not None:
-        people = people[: int(limit)]
-    missing_basis["selected_people"] = len(people)
-    missing_basis["limit"] = limit
-    return people, missing_basis
+    write_jsonl(path, (rows_by_key[key] for key in order))
+    return {
+        "existing_rows": len(existing_rows),
+        "incoming_rows": len(incoming),
+        "inserted_rows": inserted,
+        "updated_rows": updated,
+        "rows": len(order),
+    }
 
 
 def step_flatten(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     people = flatten_people(ledger["input"])
-    people, selection = select_people_for_run(people, ledger)
-    write_jsonl(ps["flattened"], people)
-    stats = {"people": len(people), "selection": selection}
+    upsert = upsert_people_jsonl(ps["flattened"], people)
+    selection = {"mode": "fixed_output_upsert", "input_people": len(people), "selected_people": len(people)}
+    stats = {"people": upsert["rows"], "upsert": upsert, "selection": selection}
     write_stats(ledger, "flatten_people", stats)
     return {"flattened_people": str(ps["flattened"])}, stats
 
@@ -648,10 +862,9 @@ def paid_checkpoint_every(ledger: dict[str, Any]) -> int:
     return min(configured, int(os.getenv("POWERPACKS_PAID_CHECKPOINT_EVERY", "25")))
 
 
-def step_roles(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
+def step_roles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     """Run mandatory checkpointed role enrichment; no scaffold fallback."""
 
-    runtime = runtime or {}
     role_provider = str(ledger.get("role_provider") or "openai")
     role_input_classifications = _cache_path(ledger, "role_input_classifications", "unified/roles/roles_with_dense_text_remapped.jsonl")
     if role_provider not in {"openai", "tlm"}:
@@ -674,7 +887,7 @@ def step_roles(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, A
             allow_paid=bool(ledger.get("allow_paid_role_provider")),
             dry_run=False,
             force=False,
-            stop_after_chunks=runtime.get("stop_after_role_chunks"),
+            stop_after_chunks=None,
         )
     )
 
@@ -740,12 +953,11 @@ def _cache_path(ledger: dict[str, Any], explicit_key: str, relative: str) -> str
         candidate = Path(str(cache_dir)) / relative
         if candidate.exists():
             return str(candidate)
-    if not ledger.get("disable_output_dir_cache"):
-        run_root = ledger.get("run_dir")
-        if run_root:
-            candidate = Path(str(run_root)) / relative
-            if candidate.exists():
-                return str(candidate)
+    run_root = ledger.get("run_dir")
+    if run_root:
+        candidate = Path(str(run_root)) / relative
+        if candidate.exists():
+            return str(candidate)
     return None
 
 
@@ -767,8 +979,6 @@ def _run_embedding_stage(
     id_field: str,
     text_fields: str,
     copy_fields: str,
-    runtime: dict[str, Any],
-    stop_key: str,
     input_embeddings: str | None = None,
     input_id_field: str | None = None,
     input_embedding_field: str = "embedding",
@@ -797,7 +1007,7 @@ def _run_embedding_stage(
             cost_per_1k_tokens=0.00002,
             dry_run=False,
             force=False,
-            stop_after_chunks=runtime.get(stop_key),
+            stop_after_chunks=None,
         )
     )
 
@@ -818,8 +1028,7 @@ def _embedding_stats(result: dict[str, Any], ledger: dict[str, Any]) -> dict[str
     }
 
 
-def step_role_embeddings(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
-    runtime = runtime or {}
+def step_role_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     result = _run_embedding_stage(
         ledger,
         ps["roles_dense"],
@@ -828,8 +1037,6 @@ def step_role_embeddings(ledger: dict[str, Any], ps: dict[str, Path], runtime: d
         "title_hash",
         "dense_text,raw_title,description",
         "title_hash,raw_title,description,dense_text,doc2query,inferred_skills,role_ids,role_track,seniority_band,cluster,role_type,specialization",
-        runtime,
-        "stop_after_embedding_chunks",
         input_embeddings=_cache_path(ledger, "role_input_embeddings", "unified/roles/roles_with_embeddings.jsonl"),
         input_id_field="title_hash",
         input_embedding_field="dense_embedding",
@@ -995,8 +1202,7 @@ def _company_corpus_to_record(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def step_company(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
-    runtime = runtime or {}
+def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     raw_corpus = build_company_corpus(read_jsonl(ps["flattened"]), ledger.get("default_operator_id"))
     write_jsonl(ps["companies_raw"], raw_corpus)
     artifact_path = _cache_path(ledger, "company_input_classifications", "company/companies_corpus_v3.jsonl")
@@ -1021,7 +1227,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str,
         api_key=ledger.get("company_openai_api_key"),
         base_url=ledger.get("company_openai_base_url"),
         force=False,
-        stop_after_chunks=runtime.get("stop_after_company_chunks"),
+        stop_after_chunks=None,
     ))
     artifacts_out = {
         "companies_raw": str(ps["companies_raw"]),
@@ -1073,8 +1279,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str,
     return artifacts_out, stats
 
 
-def step_company_embeddings(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
-    runtime = runtime or {}
+def step_company_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     result = _run_embedding_stage(
         ledger,
         ps["companies_corpus_v3"],
@@ -1083,8 +1288,6 @@ def step_company_embeddings(ledger: dict[str, Any], ps: dict[str, Path], runtime
         "company_urn",
         "semantic_text,word_text,d2q_text,company_name,description",
         "company_urn,company_name,semantic_text",
-        runtime,
-        "stop_after_embedding_chunks",
         input_embeddings=_cache_path(ledger, "company_input_embeddings", "company/company_embeddings_v3.jsonl"),
         input_id_field="company_urn",
         input_embedding_field="embedding",
@@ -1169,18 +1372,78 @@ def step_location(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str
     return {"locations": str(ps["locations_corpus"])}, stats
 
 
+def step_detect_ceo_founders(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    result = detect_ceo_founders.run(Namespace(
+        flattened=str(ps["flattened"]),
+        output=str(ps["founder_enrichment"]),
+        model=ledger.get("role_openai_model") or "gpt-5.1",
+        confidence_threshold=0.7,
+        concurrency=int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", "30")),
+        limit=None,
+        dry_run=False,
+    ))
+    stats = {
+        "status": result.get("status", "completed"),
+        "total_candidates": result.get("total_candidates", 0),
+        "founders_detected": result.get("founders_detected", 0),
+        "founder_rate": result.get("founder_rate", 0),
+        "high_confidence_founder_ids": result.get("high_confidence_founder_ids", 0),
+    }
+    write_stats(ledger, "detect_ceo_founders", stats)
+    return {"founder_enrichment": str(ps["founder_enrichment"])}, stats
+
+
+def step_infer_ages(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    result = infer_ages.run(Namespace(
+        flattened=str(ps["flattened"]),
+        output=str(ps["inferred_ages"]),
+        model=ledger.get("role_openai_model") or "gpt-5.1",
+        concurrency=int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", "50")),
+        limit=None,
+        dry_run=False,
+    ))
+    stats = {
+        "status": result.get("status", "completed"),
+        "total_people": result.get("total_people", 0),
+        "inferred": result.get("inferred", 0),
+        "coverage": result.get("coverage", 0),
+    }
+    write_stats(ledger, "infer_ages", stats)
+    return {"inferred_ages": str(ps["inferred_ages"])}, stats
+
+
 def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     people = read_jsonl(ps["flattened"])
     records = build_people_records(people, default_operator_id=ledger.get("default_operator_id"))
     role_data = _load_by_id(ps["roles_dense"], "title_hash")
     role_embeddings = _load_by_id(ps["roles_embeddings"], "title_hash")
     hashes = _role_hashes_for_flattened(people)
+    # Load founder enrichment
+    founder_position_ids: set[str] = set()
+    founder_person_ids: set[str] = set()
+    if ps["founder_enrichment"].exists():
+        for row in read_jsonl(ps["founder_enrichment"]):
+            if row.get("is_founder") and float(row.get("confidence", 0)) >= 0.7:
+                founder_position_ids.add(str(row.get("position_id", "")))
+                founder_person_ids.add(str(row.get("person_id", "")))
+    # Load inferred ages
+    age_lookup: dict[str, int] = {}
+    if ps["inferred_ages"].exists():
+        for row in read_jsonl(ps["inferred_ages"]):
+            pid = str(row.get("person_id", "")).strip()
+            by = row.get("birth_year")
+            if pid and isinstance(by, (int, float)) and int(by) > 0:
+                age_lookup[pid] = int(by)
     enriched = []
     for idx, record in enumerate(records):
         role_hash = hashes[idx] if idx < len(hashes) else ""
         role = role_data.get(role_hash, {})
         embedding_row = role_embeddings.get(role_hash, {})
+        if role_hash:
+            record["title_hash"] = role_hash
         if role:
+            record["raw_title"] = role.get("raw_title") or record.get("raw_title") or record.get("position_title", "")
+            record["role_type_category"] = role.get("role_type") or record.get("role_type_category", "")
             record["description"] = role.get("description") or record.get("description", "")
             record["dense_text"] = role.get("dense_text") or record.get("dense_text", "")
             record["seniority_band"] = role.get("seniority_band") or record.get("seniority_band", "")
@@ -1199,6 +1462,20 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
         vector = embedding_row.get("dense_embedding") or embedding_row.get("embedding")
         if vector:
             record["vector"] = vector
+        # Founder injection
+        record_id = str(record.get("id") or "")
+        person_id = str(record.get("base_id") or record.get("person_id") or "")
+        if record_id in founder_position_ids or person_id in founder_person_ids:
+            d2q = record.get("d2q_tokens") or []
+            if "founder" not in d2q:
+                d2q = list(d2q) + _word_tokenize("founder co-founder startup")
+                record["d2q_tokens"] = d2q
+            role_ids = record.get("role_ids") or []
+            if "founder" not in role_ids:
+                record["role_ids"] = list(role_ids) + ["founder"]
+        # Inferred birth year
+        if person_id in age_lookup and not record.get("inferred_birth_year"):
+            record["inferred_birth_year"] = age_lookup[person_id]
         enriched.append(record)
     contract = load_search_contract("turbopuffer/people.namespace.json")
     normalized = [normalize_record_for_contract(row, contract) for row in enriched]
@@ -1219,82 +1496,9 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
 def step_profiles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     profiles = build_unified_profiles(read_jsonl(ps["flattened"]))
     write_jsonl(ps["profiles"], profiles)
-    ps["unified_csv"].parent.mkdir(parents=True, exist_ok=True)
-    with ps["unified_csv"].open("w", newline="", encoding="utf-8") as handle:
-        fieldnames = [
-            "id",
-            "linkedin_url",
-            "public_identifier",
-            "enrichment_provider",
-            "provider_entity_urn",
-            "full_name",
-            "first_name",
-            "last_name",
-            "headline",
-            "summary",
-            "profile_pic_url",
-            "location_raw",
-            "city",
-            "state",
-            "country",
-            "work_experiences",
-            "education",
-            "current_title",
-            "current_company_urn",
-            "role_ids",
-            "seniority_bands",
-            "role_tracks",
-            "emails",
-            "phone_numbers",
-            "inferred_birth_year",
-            "hydrated_context",
-            "source_operator_id",
-            "created_at",
-            "updated_at",
-        ]
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for profile in profiles:
-            location = profile.get("location") or ""
-            city = state = country = ""
-            parts = [part.strip() for part in location.split(",")]
-            if len(parts) >= 3:
-                city, state, country = parts[0], parts[1], ",".join(parts[2:]).strip()
-            payload = {
-                "id": profile["id"],
-                "linkedin_url": profile.get("linkedin_url") or "",
-                "public_identifier": "",
-                "enrichment_provider": "powerpacks-processing",
-                "provider_entity_urn": "",
-                "full_name": profile.get("name", ""),
-                "first_name": "",
-                "last_name": "",
-                "headline": profile.get("headline") or "",
-                "summary": profile.get("summary") or "",
-                "profile_pic_url": profile.get("profile_picture_url") or "",
-                "location_raw": location,
-                "city": city,
-                "state": state,
-                "country": country,
-                "work_experiences": profile.get("positions") or [],
-                "education": profile.get("education") or [],
-                "current_title": (profile.get("positions") or [{}])[0].get("title", "") if profile.get("positions") else "",
-                "current_company_urn": (profile.get("positions") or [{}])[0].get("company_id", "") if profile.get("positions") else "",
-                "role_ids": [],
-                "seniority_bands": [],
-                "role_tracks": [],
-                "emails": [],
-                "phone_numbers": [],
-                "inferred_birth_year": "",
-                "hydrated_context": profile,
-                "source_operator_id": "",
-                "created_at": "",
-                "updated_at": "",
-            }
-            writer.writerow({key: json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else value for key, value in payload.items()})
     stats = {"profiles": len(profiles)}
     write_stats(ledger, "build_unified_profiles", stats)
-    return {"profiles": str(ps["profiles"]), "unified_person": str(ps["unified_csv"])}, stats
+    return {"profiles": str(ps["profiles"])}, stats
 
 
 def step_summary(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
@@ -1318,8 +1522,7 @@ def step_summary(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
     return {"summaries": str(ps["summaries_records"])}, stats
 
 
-def step_summary_embeddings(ledger: dict[str, Any], ps: dict[str, Path], runtime: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
-    runtime = runtime or {}
+def step_summary_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     result = _run_embedding_stage(
         ledger,
         ps["summary_internal"],
@@ -1328,8 +1531,6 @@ def step_summary_embeddings(ledger: dict[str, Any], ps: dict[str, Path], runtime
         "person_id",
         "text",
         "person_id,base_id,text",
-        runtime,
-        "stop_after_embedding_chunks",
         input_embeddings=_cache_path(ledger, "summary_input_embeddings", "unified/summary_embeddings.jsonl"),
         input_id_field="person_id",
         input_embedding_field="embedding",
@@ -1439,6 +1640,8 @@ STEP_FUNCTIONS = {
     "build_roles": step_roles,
     "embed_role_positions": step_role_embeddings,
     "build_company_corpus": step_company,
+    "detect_ceo_founders": step_detect_ceo_founders,
+    "infer_ages": step_infer_ages,
     "embed_companies": step_company_embeddings,
     "build_education_corpus": step_education,
     "build_location_corpus": step_location,
@@ -1451,8 +1654,7 @@ STEP_FUNCTIONS = {
 }
 
 
-def execute(ledger_path: Path, runtime: dict[str, Any] | None = None) -> dict[str, Any]:
-    runtime = runtime or {}
+def execute(ledger_path: Path) -> dict[str, Any]:
     ledger = load_ledger(ledger_path)
     existing_steps = {str(item.get("id")) for item in ledger.get("steps", [])}
     for step in STEPS:
@@ -1463,33 +1665,33 @@ def execute(ledger_path: Path, runtime: dict[str, Any] | None = None) -> dict[st
         current = next(item for item in ledger["steps"] if item["id"] == step)
         if current.get("status") == "completed":
             continue
+        print(f"[build-processing] start {step}", file=sys.stderr, flush=True)
         try:
-            if step == "build_roles":
-                artifacts, stats = step_roles(ledger, ps, runtime)
-            elif step in {"build_company_corpus", "embed_role_positions", "embed_companies", "embed_summaries"}:
-                artifacts, stats = STEP_FUNCTIONS[step](ledger, ps, runtime)
-            else:
-                artifacts, stats = STEP_FUNCTIONS[step](ledger, ps)
+            artifacts, stats = STEP_FUNCTIONS[step](ledger, ps)
         except PipelinePartial as partial:
             ledger = mark_step(ledger_path, ledger, partial.step_id, "partial", artifacts=partial.artifacts, stats=partial.stats)
             ledger["status"] = "partial"
             save_ledger(ledger_path, ledger)
+            print(f"[build-processing] partial {partial.step_id}", file=sys.stderr, flush=True)
             return ledger
         ledger = mark_step(ledger_path, ledger, step, "completed", artifacts=artifacts, stats=stats)
+        print(f"[build-processing] completed {step}", file=sys.stderr, flush=True)
     ledger["status"] = "completed"
     save_ledger(ledger_path, ledger)
     return ledger
 
 
-def reset_incremental_progress(rd: Path) -> None:
-    """Clear checkpoint bookkeeping while preserving reusable output artifacts."""
+def reset_processing_checkpoints(rd: Path) -> None:
+    """Clear resumable bookkeeping while preserving reusable stage outputs."""
 
     for path in [
-        rd / "roles",
+        rd / "roles/checkpoint.json",
+        rd / "roles/manifest.json",
+        rd / "roles/chunks",
+        rd / "roles/embedding_checkpoints",
         rd / "company/enrichment_checkpoints",
         rd / "company/embedding_checkpoints",
         rd / "summaries/embedding_checkpoints",
-        rd / "stats",
         rd / "manifest.json",
         rd / "vectors/checkpoint.json",
     ]:
@@ -1497,146 +1699,6 @@ def reset_incremental_progress(rd: Path) -> None:
             shutil.rmtree(path)
         elif path.exists():
             path.unlink()
-
-
-MERGE_JSONL_ARTIFACTS: dict[str, tuple[str, ...]] = {
-    "unified/flattened_people.jsonl": ("id", "person_id", "base_id"),
-    "profiles/hydrated_profiles.jsonl": ("id", "person_id"),
-    "records/people.records.jsonl": ("id", "position_id"),
-    "records/companies.records.jsonl": ("id", "company_urn"),
-    "records/summaries.records.jsonl": ("id", "person_id"),
-    "records/education.records.jsonl": ("id",),
-    "records/schools.records.jsonl": ("id", "canonical_education_id"),
-    "roles/raw_titles.jsonl": ("title_hash",),
-    "roles/roles_with_dense_text.jsonl": ("title_hash",),
-    "roles/roles_with_dense_text_remapped.jsonl": ("title_hash",),
-    "roles/roles_with_embeddings.jsonl": ("title_hash",),
-    "unified/roles/roles_with_dense_text_remapped.jsonl": ("title_hash",),
-    "unified/roles/roles_with_embeddings.jsonl": ("title_hash",),
-    "company/companies_corpus_v3.jsonl": ("company_urn", "id"),
-    "company/company_embeddings_v3.jsonl": ("company_urn", "id"),
-    "education/people_education.jsonl": ("person_id", "education_id"),
-    "education/schools_corpus.jsonl": ("entity_urn", "id"),
-    "location/locations_corpus.jsonl": ("id", "location", "display_value"),
-    "summaries/summary_records.jsonl": ("id", "person_id"),
-    "summaries/summary_embeddings.jsonl": ("person_id", "id"),
-    "summaries/person_tech_skills.jsonl": ("person_id",),
-    "unified/summary_embeddings.jsonl": ("person_id", "id"),
-    "unified/person_tech_skills.jsonl": ("person_id",),
-}
-
-
-def _merge_key(row: dict[str, Any], keys: tuple[str, ...]) -> str:
-    values = [str(row.get(key) or "").strip() for key in keys]
-    if any(values):
-        return "|".join(values)
-    return hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode("utf-8")).hexdigest()
-
-
-def snapshot_existing_merge_artifacts(rd: Path) -> Path | None:
-    if not rd.exists():
-        return None
-    snapshot = Path(tempfile.mkdtemp(prefix="powerpacks-index-prev-"))
-    copied = 0
-    for rel_path in [*MERGE_JSONL_ARTIFACTS.keys(), "unified/unified_person.csv", "roles/role_mapping.csv"]:
-        src = rd / rel_path
-        if not src.exists():
-            continue
-        dst = snapshot / rel_path
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-        copied += 1
-    if copied == 0:
-        shutil.rmtree(snapshot, ignore_errors=True)
-        return None
-    return snapshot
-
-
-def merge_jsonl_file(previous: Path, current: Path, keys: tuple[str, ...]) -> dict[str, Any]:
-    if not previous.exists():
-        return {"action": "no_previous"}
-    rows_by_key: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
-    previous_rows = 0
-    current_rows = 0
-    for row in read_jsonl(previous):
-        key = _merge_key(row, keys)
-        if key not in rows_by_key:
-            order.append(key)
-        rows_by_key[key] = row
-        previous_rows += 1
-    if current.exists():
-        for row in read_jsonl(current):
-            key = _merge_key(row, keys)
-            if key not in rows_by_key:
-                order.append(key)
-            rows_by_key[key] = row
-            current_rows += 1
-    current.parent.mkdir(parents=True, exist_ok=True)
-    write_jsonl(current, (rows_by_key[key] for key in order))
-    return {"action": "merged", "previous_rows": previous_rows, "new_rows": current_rows, "merged_rows": len(order)}
-
-
-def merge_csv_by_id(previous: Path, current: Path, key_field: str = "id") -> dict[str, Any]:
-    if not previous.exists():
-        return {"action": "no_previous"}
-    rows_by_key: dict[str, dict[str, str]] = {}
-    order: list[str] = []
-    fieldnames: list[str] = []
-    previous_rows = current_rows = 0
-    for source, is_current in [(previous, False), (current, True)]:
-        if not source.exists():
-            continue
-        with source.open(newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            for field in reader.fieldnames or []:
-                if field not in fieldnames:
-                    fieldnames.append(field)
-            for row in reader:
-                key = str(row.get(key_field) or "").strip() or hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
-                if key not in rows_by_key:
-                    order.append(key)
-                rows_by_key[key] = row
-                if is_current:
-                    current_rows += 1
-                else:
-                    previous_rows += 1
-    if not fieldnames:
-        return {"action": "empty"}
-    current.parent.mkdir(parents=True, exist_ok=True)
-    with current.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for key in order:
-            writer.writerow({field: rows_by_key[key].get(field, "") for field in fieldnames})
-    return {"action": "merged", "previous_rows": previous_rows, "new_rows": current_rows, "merged_rows": len(order)}
-
-
-def merge_existing_outputs_after_limited_run(rd: Path, snapshot: Path | None, ledger: dict[str, Any]) -> dict[str, Any]:
-    if not snapshot:
-        return {"status": "skipped", "reason": "no_previous_artifacts"}
-    merged: dict[str, Any] = {}
-    for rel_path, keys in MERGE_JSONL_ARTIFACTS.items():
-        previous = snapshot / rel_path
-        if previous.exists():
-            merged[rel_path] = merge_jsonl_file(previous, rd / rel_path, keys)
-    if (snapshot / "unified/unified_person.csv").exists():
-        merged["unified/unified_person.csv"] = merge_csv_by_id(snapshot / "unified/unified_person.csv", rd / "unified/unified_person.csv")
-    if (snapshot / "roles/role_mapping.csv").exists():
-        merged["roles/role_mapping.csv"] = merge_csv_by_id(snapshot / "roles/role_mapping.csv", rd / "roles/role_mapping.csv", key_field="title_hash")
-    ps = paths(rd)
-    vector_artifacts, vector_stats = step_vectors(ledger, ps)
-    validate_artifacts, validate_stats = step_validate(ledger, ps)
-    write_stats(ledger, "build_vectors", vector_stats)
-    write_stats(ledger, "validate_contracts", validate_stats)
-    return {
-        "status": "merged",
-        "artifacts": merged,
-        "build_vectors": vector_stats,
-        "validate_contracts": validate_stats,
-        "vector_artifacts": vector_artifacts,
-        "validate_artifacts": validate_artifacts,
-    }
 
 
 def _arg_artifact(args: argparse.Namespace, attr: str, relative: str) -> str | None:
@@ -1660,8 +1722,16 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
     input_path = Path(args.input)
     if not input_path.exists():
         raise SystemExit(f"missing input: {input_path}")
-    people = flatten_people(input_path)
-    people, selection = select_people_for_run(people, args)
+    all_people = flatten_people(input_path)
+    processed_ids = _processed_person_ids(Path(args.output_dir))
+    people = [person for person in all_people if not _person_id(person) or _person_id(person) not in processed_ids]
+    selection = {
+        "mode": "fixed_output_incremental",
+        "input_people": len(all_people),
+        "processed_people": len(all_people) - len(people),
+        "pending_people": len(people),
+        "selected_people": len(people),
+    }
     role_hashes: set[str] = set()
     missing_title_hashes = 0
     for person in people:
@@ -1690,6 +1760,9 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
         "run_dir": str(run_dir(Path(args.output_dir))),
         "counts": {
             "people": len(people),
+            "total_people": len(all_people),
+            "processed_people": len(all_people) - len(people),
+            "pending_people": len(people),
             "unique_roles": len(role_hashes),
             "companies": len(companies),
             "summaries": len(people),
@@ -1730,10 +1803,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--input", required=True)
     run.add_argument("--output-dir", required=True)
     run.add_argument("--default-operator-id", default=None)
-    run.add_argument("--limit", type=int)
-    run.add_argument("--limit-mode", choices=["all", "missing"], default="all", help="Apply --limit to all input people or only people missing from an existing index/baseline.")
-    run.add_argument("--existing-people-csv", help="Baseline people.csv used by --limit-mode missing to identify already-processed people.")
-    run.add_argument("--existing-duckdb", help="Local DuckDB with local_person_profiles/local_people_profiles used by --limit-mode missing.")
     run.add_argument("--checkpoint-every", type=int, default=1000)
     run.add_argument("--role-provider", choices=["openai", "tlm"], default="openai")
     run.add_argument("--allow-paid-role-provider", action="store_true")
@@ -1759,11 +1828,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--company-input-classifications")
     run.add_argument("--company-input-embeddings")
     run.add_argument("--dry-run", action="store_true", help="Validate/count/estimate only; no provider calls and no artifact writes")
-    run.add_argument("--estimate", action="store_true", help="Alias for --dry-run")
-    run.add_argument("--stop-after-role-chunks", type=int, help="Test hook: stop after N role chunks and leave the run resumable")
-    run.add_argument("--stop-after-company-chunks", type=int, help="Test hook: stop after N company enrichment chunks and leave the run resumable")
-    run.add_argument("--stop-after-embedding-chunks", type=int, help="Test hook: stop after N embedding chunks and leave the run resumable")
-    run.add_argument("--force", action="store_true")
     cont = sub.add_parser("continue")
     cont.add_argument("--ledger", required=True)
     status = sub.add_parser("status")
@@ -1790,38 +1854,26 @@ def main() -> None:
     if args.cmd == "run":
         rd = run_dir(Path(args.output_dir))
         ledger_path = paths(rd)["ledger"]
-        if args.dry_run or args.estimate:
+        if args.dry_run:
             emit_json(estimate_run(args))
             return
         previous_ledger: dict[str, Any] | None = None
-        merge_snapshot: Path | None = None
-        limited_incremental = args.limit is not None or args.limit_mode == "missing"
         if rd.exists():
-            if args.force:
-                shutil.rmtree(rd)
-            elif paths(rd)["ledger"].exists():
+            if paths(rd)["ledger"].exists():
                 ledger = load_ledger(paths(rd)["ledger"])
                 if ledger.get("status") in {"pending", "running", "partial"}:
-                    ledger = execute(paths(rd)["ledger"], {"stop_after_role_chunks": args.stop_after_role_chunks, "stop_after_company_chunks": args.stop_after_company_chunks, "stop_after_embedding_chunks": args.stop_after_embedding_chunks})
+                    ledger = execute(paths(rd)["ledger"])
                     emit_json({"status": ledger["status"], "run_dir": ledger["run_dir"], "counts": {step["id"]: step.get("stats", {}) for step in ledger.get("steps", [])}})
                     return
                 previous_ledger = ledger
-                if limited_incremental:
-                    merge_snapshot = snapshot_existing_merge_artifacts(rd)
-                reset_incremental_progress(rd)
+                reset_processing_checkpoints(rd)
             else:
-                if limited_incremental:
-                    merge_snapshot = snapshot_existing_merge_artifacts(rd)
-                reset_incremental_progress(rd)
+                reset_processing_checkpoints(rd)
         rd.mkdir(parents=True, exist_ok=True)
         ledger = default_ledger(
             Path(args.input),
             rd,
             args.default_operator_id,
-            args.limit,
-            limit_mode=args.limit_mode,
-            existing_people_csv=args.existing_people_csv,
-            existing_duckdb=args.existing_duckdb,
             checkpoint_every=args.checkpoint_every,
             role_provider=args.role_provider,
             allow_paid_role_provider=args.allow_paid_role_provider,
@@ -1847,26 +1899,20 @@ def main() -> None:
             company_input_classifications=args.company_input_classifications,
             company_input_embeddings=args.company_input_embeddings,
         )
-        ledger["sync_mode"] = "incremental_existing_outputs"
-        if limited_incremental:
-            ledger["disable_output_dir_cache"] = True
+        ledger["sync_mode"] = "fixed_outputs_incremental_diff"
         if previous_ledger:
             ledger["previous_ledger"] = {
                 "status": previous_ledger.get("status"),
                 "completed_at": previous_ledger.get("updated_at") or previous_ledger.get("completed_at"),
                 "artifact_check": check_artifact_paths(previous_ledger),
             }
+        restored_stage_artifacts = restore_stage_artifacts_from_records(rd)
+        if restored_stage_artifacts:
+            ledger["restored_stage_artifacts"] = restored_stage_artifacts
         ledger_path = paths(rd)["ledger"]
         save_ledger(ledger_path, ledger)
-        ledger = execute(ledger_path, {"stop_after_role_chunks": args.stop_after_role_chunks, "stop_after_company_chunks": args.stop_after_company_chunks, "stop_after_embedding_chunks": args.stop_after_embedding_chunks})
-        incremental_merge: dict[str, Any] = {"status": "skipped"}
-        if ledger.get("status") == "completed" and limited_incremental:
-            incremental_merge = merge_existing_outputs_after_limited_run(rd, merge_snapshot, ledger)
-            ledger["incremental_merge"] = incremental_merge
-            save_ledger(ledger_path, ledger)
-            if merge_snapshot:
-                shutil.rmtree(merge_snapshot, ignore_errors=True)
-        emit_json({"status": ledger["status"], "run_dir": str(rd), "counts": {step["id"]: step.get("stats", {}) for step in ledger["steps"]}, "incremental_merge": incremental_merge})
+        ledger = execute(ledger_path)
+        emit_json({"status": ledger["status"], "run_dir": str(rd), "counts": {step["id"]: step.get("stats", {}) for step in ledger["steps"]}})
         return
     if args.cmd == "continue":
         ledger = execute(Path(args.ledger))

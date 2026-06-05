@@ -534,6 +534,37 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertIsNone(mod.archive_existing_run_artifacts(args))
             self.assertTrue(contacts.exists())
 
+    def test_messages_discovery_run_does_not_archive_fixed_contact_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            contacts = Path(tmp) / "contacts.csv"
+            imessage = Path(tmp) / "imessage.contacts.csv"
+            whatsapp = Path(tmp) / "whatsapp.contacts.csv"
+            for path in (contacts, imessage, whatsapp):
+                path.write_text("old\n", encoding="utf-8")
+            args = SimpleNamespace(
+                command="run",
+                reuse_existing_artifacts=False,
+                ledger=Path(tmp) / "import-run.setup-messages.json",
+                contacts=contacts,
+                candidates=Path(tmp) / "powerset_contacts.csv",
+                research_queue=Path(tmp) / "research_queue.csv",
+                review_csv=Path(tmp) / "research_review.csv",
+                retarget_queue=Path(tmp) / "retarget_queue.csv",
+                retarget_ledger=Path(tmp) / "retarget_attempts.json",
+                include_imessage=True,
+                include_whatsapp=True,
+                include_contact_merge=True,
+            )
+            with mock.patch.object(mod, "DEFAULT_IMESSAGE_CONTACTS", imessage), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", whatsapp), \
+                    mock.patch.object(mod, "ARCHIVE_ROOT", Path(tmp) / "archive"):
+                self.assertIsNone(mod.archive_existing_run_artifacts(args))
+
+            self.assertTrue(contacts.exists())
+            self.assertTrue(imessage.exists())
+            self.assertTrue(whatsapp.exists())
+            self.assertFalse((Path(tmp) / "archive").exists())
+
     def test_review_url_defaults_to_yes_tab(self):
         args = SimpleNamespace(review_host="127.0.0.1", review_port=8766)
         self.assertEqual(mod.review_url(args), "http://127.0.0.1:8766/?tab=yes")
@@ -765,7 +796,55 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertNotIn("qr_path", block)
             self.assertEqual(saved["steps"]["extract_whatsapp"]["status"], "blocked_user_action")
 
-    def test_extract_whatsapp_rejects_non_wacli_provider(self):
+    def test_extract_whatsapp_can_use_waha_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "import-run.json"
+            ledger = mod.load_ledger(ledger_path)
+            whatsapp_csv = tmp_path / "whatsapp.contacts.csv"
+            whatsapp_jsonl = tmp_path / "whatsapp.contacts.jsonl"
+            whatsapp_manifest = tmp_path / "whatsapp.contacts.csv.manifest.json"
+            whatsapp_count_cache = tmp_path / "whatsapp.message-count-cache.json"
+            args = SimpleNamespace(
+                force_whatsapp=True,
+                whatsapp_provider="waha",
+                wacli_max_messages=0,
+                wacli_max_group_participants=30,
+                waha_wait_timeout=120,
+                waha_force_session=True,
+                timeout=30,
+                parallel_timeout=60,
+                env_file=".env",
+            )
+            payload = {
+                "primitive": "extract_whatsapp_contacts",
+                "status": "completed",
+                "counts": {"contacts": 2},
+            }
+            with mock.patch.object(mod, "DEFAULT_WHATSAPP_CONTACTS", whatsapp_csv), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_JSONL", whatsapp_jsonl), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_MANIFEST", whatsapp_manifest), \
+                    mock.patch.object(mod, "DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE", whatsapp_count_cache), \
+                    mock.patch.object(mod, "run_command", side_effect=[
+                        {"returncode": 0, "json": {"primitive": "waha_runtime", "status": "ok"}},
+                        {"returncode": 0, "json": {"primitive": "waha_session", "status": "working"}},
+                        {"returncode": 0, "json": payload},
+                    ]) as run_command:
+                mod.extract_whatsapp(args, ledger_path, ledger)
+
+            self.assertEqual(run_command.call_count, 3)
+            self.assertIn("waha_runtime.py", run_command.call_args_list[0].args[0][1])
+            session_cmd = run_command.call_args_list[1].args[0]
+            self.assertIn("waha_session.py", session_cmd[1])
+            self.assertIn("--force", session_cmd)
+            extract_cmd = run_command.call_args_list[2].args[0]
+            self.assertIn("extract_whatsapp_contacts.py", extract_cmd[1])
+            self.assertIn("--message-count-cache", extract_cmd)
+            saved = mod.read_json(ledger_path)
+            self.assertEqual(saved["artifacts"]["whatsapp_provider"], "waha")
+            self.assertEqual(saved["steps"]["extract_whatsapp"]["summary"], payload)
+
+    def test_extract_whatsapp_preserves_waha_qr_block(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             ledger_path = tmp_path / "import-run.json"
@@ -775,16 +854,24 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 whatsapp_provider="waha",
                 wacli_max_messages=0,
                 wacli_max_group_participants=30,
+                waha_wait_timeout=120,
+                waha_force_session=False,
                 timeout=30,
                 parallel_timeout=60,
                 env_file=".env",
             )
-            with mock.patch.object(mod, "run_command") as run_command:
-                with self.assertRaises(mod.PipelineFailed) as ctx:
+            with mock.patch.object(mod, "run_command", side_effect=[
+                {"returncode": 0, "json": {"primitive": "waha_runtime", "status": "ok"}},
+                {"returncode": 1, "json": {"primitive": "waha_session", "status": "timeout"}},
+            ]):
+                with self.assertRaises(mod.PipelineBlocked):
                     mod.extract_whatsapp(args, ledger_path, ledger)
 
-            run_command.assert_not_called()
-            self.assertIn("wacli is the only supported provider", str(ctx.exception))
+            saved = mod.read_json(ledger_path)
+            block = saved["current_block"]
+            self.assertEqual(block["whatsapp_provider"], "waha")
+            self.assertEqual(block["qr_path"], ".powerpacks/messages/whatsapp/qr.png")
+            self.assertEqual(saved["steps"]["authenticate_whatsapp"]["status"], "blocked_user_action")
 
     def test_import_contacts_task_uses_wacli_browser_qr_flow(self):
         task = json.loads((ROOT / "packs/messages/tasks/import-contacts.task.json").read_text(encoding="utf-8"))
@@ -1427,6 +1514,62 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertFalse(payload["privacy"]["ran_powerset_sync"])
             self.assertFalse(payload["privacy"]["ran_research"])
             self.assertFalse(payload["privacy"]["uploaded"])
+
+    def test_discovery_run_ignores_stale_run_owned_ledger_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "import-run.setup-messages.json"
+            fixed_contacts = Path(tmp) / "contacts.csv"
+            stale_contacts = Path(tmp) / "runs" / "messages-20260604T000000Z" / "contacts.csv"
+            fixed_contacts.write_text(",".join(mod.CONTACT_CSV_HEADERS) + "\n", encoding="utf-8")
+            mod.write_json(ledger_path, {
+                "primitive": "import_contacts_pipeline",
+                "run_id": "messages-20260604T000000Z",
+                "run_dir": str(stale_contacts.parent),
+                "fresh_run": {"archive_dir": str(Path(tmp) / "archive" / "20260604T000000Z")},
+                "config": {"contacts": str(stale_contacts)},
+                "steps": {},
+                "approvals": {},
+                "warnings": [],
+                "artifacts": {},
+            })
+            args = SimpleNamespace(
+                command="run",
+                ledger=ledger_path,
+                processor="core2x",
+                contacts=fixed_contacts,
+                candidates=Path(tmp) / "powerset_contacts.csv",
+                research_queue=Path(tmp) / "research_queue.csv",
+                research_dir=Path(tmp) / "research",
+                review_csv=Path(tmp) / "research_review.csv",
+                model="anthropic/claude-sonnet-4-6",
+                no_open_review=True,
+                stop_before_upload=False,
+                review_host="127.0.0.1",
+                review_port=8766,
+                force_imessage=True,
+                force_whatsapp=False,
+                include_imessage=True,
+                include_whatsapp=False,
+                include_contact_merge=True,
+            )
+            calls = []
+
+            def ensure_contacts_uses_fixed_path(pipeline_args, *_args, **_kwargs):
+                calls.append("ensure_contacts")
+                self.assertEqual(Path(pipeline_args.contacts), fixed_contacts)
+
+            with self.patch_pipeline_steps(calls, ensure_contacts=ensure_contacts_uses_fixed_path):
+                payload = mod.run_pipeline(args)
+
+            self.assertEqual(payload["status"], "selected_steps_completed")
+            self.assertIn("ensure_contacts", calls)
+            self.assertTrue(fixed_contacts.exists())
+            self.assertFalse(stale_contacts.parent.exists())
+            saved = mod.read_json(ledger_path)
+            self.assertNotIn("run_id", saved)
+            self.assertNotIn("run_dir", saved)
+            self.assertNotIn("fresh_run", saved)
+            self.assertEqual(saved["config"]["contacts"], str(fixed_contacts))
 
     def test_include_review_without_research_opens_raw_review_after_llm(self):
         with tempfile.TemporaryDirectory() as tmp:

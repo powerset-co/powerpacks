@@ -15,7 +15,7 @@ Use the primitive at:
 packs/ingestion/primitives/twitter_network_import/twitter_network_import.py
 ```
 
-The source crawl is RapidAPI-backed only; do not ask for or use a local Twitter CSV as the production source. All artifacts must remain under `.powerpacks/network-import/twitter/`.
+The source crawl is RapidAPI-backed only; do not ask for or use a local Twitter CSV as the production source. All artifacts must remain under `.powerpacks/network-import/discover/twitter/`.
 
 Pipeline stages: RapidAPI Twitter crawl → local heuristic score → OpenAI MOE expert evaluation → free parallel LinkedIn pre-resolution → parallel RapidAPI LinkedIn validation → canonical `people.csv` formatting with temporary legacy alias.
 

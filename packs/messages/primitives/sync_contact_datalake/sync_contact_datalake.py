@@ -9,15 +9,20 @@ Stdlib-only. Does not upload unless `sync --confirm-sync` is passed.
 """
 from __future__ import annotations
 
-import argparse, csv, hashlib, json, os, re, subprocess, sys, urllib.error, urllib.request, uuid
+import argparse, csv, hashlib, json, os, re, subprocess, sys, urllib.error, urllib.request
 from pathlib import Path
 from typing import Any
+
+try:
+    from packs.ingestion.schemas.people_schema import generate_person_id
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.ingestion.schemas.people_schema import generate_person_id
 
 DEFAULT_API_URL="https://search-api-7wk4uhe77q-uw.a.run.app"
 DEFAULT_CSV=Path(".powerpacks/messages/research_review.csv")
 DEFAULT_RESEARCH_DIR=Path(".powerpacks/messages/research")
 DEFAULT_RETARGET_RESEARCH_DIR=Path(".powerpacks/messages/research_retarget")
-UUID_NAMESPACE=uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 TRUTHY={"yes","true","1","y","on"}
 FALSY={"no","false","0","n","off"}
 INCLUDE_DECISIONS={"include","approved","approve","yes","true","1"}
@@ -105,8 +110,6 @@ def compute_public_identifier(social, person):
     if phone: return "synth-phone-"+hashlib.md5(phone.encode()).hexdigest()[:8]
     name=(person.get("full_name") or "unknown").strip().lower()
     return "synth-"+hashlib.md5(name.encode()).hexdigest()[:8]
-def generate_person_id(public_identifier):
-    return str(uuid.uuid5(UUID_NAMESPACE, f"linkedin:{public_identifier.lower()}"))
 def norm_text(v):
     if v is None: return None
     if isinstance(v,list):

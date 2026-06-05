@@ -114,6 +114,9 @@ export interface SetupNextAction {
 export interface SetupJob {
   id: string;
   action: string;
+  actionKey?: string;
+  source?: string;
+  stages?: Array<{ label: string; index: number; total: number }>;
   status: "running" | "completed" | "failed" | "blocked";
   startedAt: string;
   completedAt?: string | null;
@@ -137,7 +140,7 @@ export interface SetupImportSource {
   runnable?: boolean;
   disabledReason?: string;
   updatedAt?: string | null;
-  runId?: string;
+  artifactDir?: string;
 }
 
 export interface SetupEnrichmentSource {
@@ -152,6 +155,66 @@ export interface SetupEnrichmentSource {
   estimatedCostUsd?: number | null;
   blocked?: boolean;
   updatedAt?: string | null;
+}
+
+export interface EnvKeyStatus {
+  key: string;
+  label: string;
+  provider: string;
+  description: string;
+  required: boolean;
+  getUrl: string;
+  docsUrl?: string;
+  status: "present" | "present_via_alias" | "empty" | "missing" | string;
+  satisfied: boolean;
+  satisfiedBy?: string;
+  valuePreview?: string;
+  aliases?: Array<{
+    key: string;
+    status: "present" | "empty" | "missing" | string;
+    valuePreview?: string;
+  }>;
+}
+
+export interface EnvStatusResponse {
+  path: string;
+  exists: boolean;
+  updatedAt?: string | null;
+  sizeBytes?: number;
+  keys: EnvKeyStatus[];
+  summary: {
+    total: number;
+    required: number;
+    ready: boolean;
+    missingRequired: number;
+    present: number;
+    empty: number;
+    missing: number;
+  };
+}
+
+export interface LocalProfileResponse {
+  operator: {
+    id: string;
+    email?: string;
+    label: string;
+  };
+  accounts: {
+    path: string;
+    exists: boolean;
+    updatedAt?: string | null;
+    sizeBytes?: number;
+    linkedCount: number;
+    skippedCount: number;
+    sources: Array<{
+      id: SetupSourceId | string;
+      label: string;
+      status: string;
+      linked: boolean;
+      skipped: boolean;
+      usernames: string[];
+    }>;
+  };
 }
 
 export interface SetupStatusResponse {
@@ -210,7 +273,7 @@ export interface SetupStatusResponse {
     exists: boolean;
     status: string;
     updatedAt?: string | null;
-    runId?: string;
+    artifactDir?: string;
     linkedSources: string[];
     gmailSyncAfter?: string;
     sources: SetupImportSource[];
@@ -242,6 +305,14 @@ export interface SetupStatusResponse {
       error?: string;
       tables?: Record<string, number>;
     } | null;
+    coverage?: {
+      status?: string;
+      totalPeople?: number;
+      indexedPeople?: number;
+      pendingPeople?: number;
+      existingDuckdbKeys?: number;
+      error?: string;
+    };
     processingEstimate?: {
       status?: string;
       totalEstimatedUsd?: number;

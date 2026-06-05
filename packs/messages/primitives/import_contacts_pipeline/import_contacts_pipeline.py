@@ -48,8 +48,9 @@ DEFAULT_WHATSAPP_NORMALIZED = Path(".powerpacks/messages/whatsapp.contacts.norma
 DEFAULT_WHATSAPP_MANIFEST = Path(".powerpacks/messages/whatsapp.contacts.csv.manifest.json")
 DEFAULT_WHATSAPP_NORMALIZED_MANIFEST = Path(".powerpacks/messages/whatsapp.contacts.normalized.jsonl.manifest.json")
 DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE = Path(".powerpacks/messages/whatsapp.message-count-cache.json")
-DEFAULT_WHATSAPP_PROVIDER = "wacli"
+DEFAULT_WHATSAPP_PROVIDER = os.environ.get("POWERPACKS_WHATSAPP_PROVIDER", "wacli").strip().lower() or "wacli"
 DEFAULT_WACLI_QR_HTML = Path(".powerpacks/messages/wacli-login-qr.html")
+DEFAULT_WAHA_QR_PNG = Path(".powerpacks/messages/whatsapp/qr.png")
 DEFAULT_CANDIDATES = Path(".powerpacks/messages/powerset_contacts.csv")
 DEFAULT_RESEARCH_QUEUE = Path(".powerpacks/messages/research_queue.csv")
 DEFAULT_RESEARCH_DIR = Path(".powerpacks/messages/research")
@@ -546,6 +547,29 @@ def block_from_wacli_auth_result(
     return {key: value for key, value in block.items() if value}
 
 
+def block_from_waha_auth_result(
+    result: dict[str, Any],
+    ledger_path: Path,
+) -> dict[str, Any] | None:
+    payload = result.get("json") or {}
+    if result.get("returncode") == 0:
+        return None
+    if payload.get("primitive") not in {"waha_session", "import_contacts_pipeline"}:
+        return None
+    if payload.get("status") not in {"timeout", "blocked_user_action"}:
+        return None
+    block = {
+        "primitive": "import_contacts_pipeline",
+        "status": "blocked_user_action",
+        "message": "WhatsApp needs a QR scan.",
+        "whatsapp_provider": "waha",
+        "qr_path": str(DEFAULT_WAHA_QR_PNG),
+        "continue_command": f"uv run --project . python {rel(Path(__file__).resolve())} continue",
+        "ledger": str(ledger_path),
+    }
+    return {key: value for key, value in block.items() if value}
+
+
 def approval_id(kind: str, payload: dict[str, Any]) -> str:
     stable = json.dumps({"kind": kind, **payload}, sort_keys=True, default=str)
     digest = hashlib.sha1(stable.encode("utf-8")).hexdigest()[:12]
@@ -742,6 +766,8 @@ def archive_existing_run_artifacts(args: argparse.Namespace) -> dict[str, Any] |
     if getattr(args, "command", "") != "run":
         return None
     if getattr(args, "reuse_existing_artifacts", False):
+        return None
+    if selected_messages_discovery_mode(args):
         return None
 
     paths = [path for path in fresh_run_artifact_paths(args) if path.exists() and path.is_file()]
@@ -1140,10 +1166,11 @@ def normalize_channel(
 
 
 def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    provider = (getattr(args, "whatsapp_provider", DEFAULT_WHATSAPP_PROVIDER) or DEFAULT_WHATSAPP_PROVIDER).strip().lower()
     completed_provider = (ledger.get("artifacts") or {}).get("whatsapp_provider")
     if DEFAULT_WHATSAPP_CONTACTS.exists() and not args.force_whatsapp and getattr(args, "reuse_existing_artifacts", False):
         ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
-        ledger.setdefault("artifacts", {})["whatsapp_provider"] = "wacli"
+        ledger.setdefault("artifacts", {})["whatsapp_provider"] = provider
         mark_step(
             ledger_path,
             ledger,
@@ -1154,12 +1181,12 @@ def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
         return
     if (
         completed(ledger, "extract_whatsapp")
-        and completed_provider == "wacli"
+        and completed_provider == provider
         and DEFAULT_WHATSAPP_CONTACTS.exists()
         and not args.force_whatsapp
     ):
         ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
-        ledger.setdefault("artifacts", {})["whatsapp_provider"] = "wacli"
+        ledger.setdefault("artifacts", {})["whatsapp_provider"] = provider
         mark_step(
             ledger_path,
             ledger,
@@ -1169,8 +1196,67 @@ def extract_whatsapp(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
         )
         return
 
-    if args.whatsapp_provider != "wacli":
-        raise PipelineFailed(f"unsupported WhatsApp provider {args.whatsapp_provider!r}; wacli is the only supported provider")
+    if provider == "waha":
+        runtime_cmd = [
+            sys.executable,
+            primitive_path("packs/messages/primitives/waha_runtime/waha_runtime.py"),
+            "up",
+        ]
+        mark_step(ledger_path, ledger, "start_waha_container", "running", command=runtime_cmd)
+        runtime_result = run_command(runtime_cmd, timeout=args.parallel_timeout, env=pipeline_env(args))
+        runtime_payload = require_ok(runtime_result, "start_waha_container")
+        mark_step(ledger_path, ledger, "start_waha_container", "completed", summary=runtime_payload, command=runtime_cmd)
+
+        session_cmd = [
+            sys.executable,
+            primitive_path("packs/messages/primitives/waha_session/waha_session.py"),
+            "start",
+            "--open",
+            "--wait",
+            "--wait-timeout", str(args.waha_wait_timeout),
+        ]
+        if getattr(args, "waha_force_session", False):
+            session_cmd.append("--force")
+        mark_step(ledger_path, ledger, "authenticate_whatsapp", "running", command=session_cmd)
+        session_result = run_command(
+            session_cmd,
+            timeout=max(args.timeout, args.waha_wait_timeout + 30),
+            env=pipeline_env(args),
+            heartbeat_message="WhatsApp needs a QR scan.",
+        )
+        block = block_from_waha_auth_result(session_result, ledger_path)
+        if block:
+            ledger["current_block"] = block
+            mark_step(ledger_path, ledger, "authenticate_whatsapp", "blocked_user_action", summary=block, command=session_cmd)
+            raise PipelineBlocked(block, code=21)
+        session_payload = require_ok(session_result, "authenticate_whatsapp")
+        mark_step(ledger_path, ledger, "authenticate_whatsapp", "completed", summary=session_payload, command=session_cmd)
+
+        cmd = [
+            sys.executable,
+            primitive_path("packs/messages/primitives/extract_whatsapp_contacts/extract_whatsapp_contacts.py"),
+            "extract",
+            "--output-csv", str(DEFAULT_WHATSAPP_CONTACTS),
+            "--output-jsonl", str(DEFAULT_WHATSAPP_JSONL),
+            "--manifest", str(DEFAULT_WHATSAPP_MANIFEST),
+            "--message-count-cache", str(DEFAULT_WHATSAPP_MESSAGE_COUNT_CACHE),
+            "--max-group-participants", str(args.wacli_max_group_participants),
+        ]
+        mark_step(ledger_path, ledger, "extract_whatsapp", "running", command=cmd)
+        result = run_command(
+            cmd,
+            timeout=args.parallel_timeout,
+            env=pipeline_env(args),
+            heartbeat_message=heartbeat_message_for_step("extract_whatsapp"),
+        )
+        payload = require_ok(result, "extract_whatsapp")
+        ledger.setdefault("artifacts", {})["whatsapp_contacts_csv"] = str(DEFAULT_WHATSAPP_CONTACTS)
+        ledger.setdefault("artifacts", {})["whatsapp_provider"] = "waha"
+        mark_step(ledger_path, ledger, "extract_whatsapp", "completed", summary=payload, command=cmd)
+        return
+
+    if provider != "wacli":
+        raise PipelineFailed(f"unsupported WhatsApp provider {provider!r}; expected 'wacli' or 'waha'")
     cmd = [
         sys.executable,
         primitive_path("packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py"),
@@ -1402,9 +1488,10 @@ def estimate_network_review_scoring(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def prepare_queue(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
-    # Pre-research queue is derived from the canonical matched/LLM-triaged
-    # contacts.csv. The review CSV is for post-research human decisions.
-    queue_input = Path(args.contacts)
+    # Before app review completes, the queue is derived from the canonical
+    # matched/LLM-triaged contacts.csv. After app review completes, the review
+    # CSV is the source of truth for user-selected rows.
+    queue_input = Path(args.review_csv) if completed(ledger, "review_research_web") and Path(args.review_csv).exists() else Path(args.contacts)
     cmd = [
         sys.executable,
         primitive_path("packs/messages/primitives/prepare_research_queue/prepare_research_queue.py"),
@@ -1503,6 +1590,16 @@ def build_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[s
     research_dir.mkdir(parents=True, exist_ok=True)
     research_packets = list(research_dir.glob("*/01_research_parallel.json"))
     if not research_packets:
+        if completed(ledger, "build_raw_review_csv") and Path(args.review_csv).exists():
+            ledger.setdefault("artifacts", {})["research_review_csv"] = str(args.review_csv)
+            mark_step(
+                ledger_path,
+                ledger,
+                "build_research_review_csv",
+                "skipped",
+                summary={"reason": "raw_review_csv_active", "review_csv": str(args.review_csv)},
+            )
+            return
         write_empty_csv(Path(args.review_csv), REVIEW_CSV_HEADERS, manifest_reason="no_research_packets")
         mark_step(
             ledger_path,
@@ -1759,6 +1856,8 @@ def raw_contacts_review(args: argparse.Namespace, ledger_path: Path, ledger: dic
     if has_research_review(args):
         reapply_previous_review_state(args, ledger_path, ledger)
 
+    if completed(ledger, "review_research_web") and Path(args.review_csv).exists():
+        return
     if args.no_open_review:
         return
 
@@ -1829,6 +1928,17 @@ def raw_decision(row: dict[str, str]) -> tuple[str, str, str]:
 
 
 def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, Any]) -> None:
+    review_csv = Path(args.review_csv)
+    if completed(ledger, "build_raw_review_csv") and review_csv.exists() and not getattr(args, "force_build_review", False):
+        ledger.setdefault("artifacts", {})["research_review_csv"] = str(review_csv)
+        mark_step(
+            ledger_path,
+            ledger,
+            "build_raw_review_csv",
+            "completed",
+            summary={"reason": "raw_review_csv_active", "review_csv": str(review_csv), "rows": csv_data_rows(review_csv)},
+        )
+        return
     contacts_path = Path(args.contacts)
     queue_by_phone = load_queue_rows_by_phone(Path(args.research_queue))
     previous_sources = previous_review_state_sources(args, ledger, include_active_for_rebuild=True)
@@ -1900,7 +2010,6 @@ def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: di
                     if applied_decision:
                         previous_decisions_applied += 1
                 rows.append(row)
-    review_csv = Path(args.review_csv)
     review_csv.parent.mkdir(parents=True, exist_ok=True)
     with review_csv.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=REVIEW_CSV_HEADERS)
@@ -2315,6 +2424,8 @@ def hydrate_args_from_ledger(args: argparse.Namespace, ledger: dict[str, Any]) -
     This keeps resume commands short while still preserving custom artifact
     paths across exits.
     """
+    if selected_messages_discovery_mode(args):
+        return
     cfg = ledger.get("config") or {}
     path_defaults = {
         "contacts": DEFAULT_CONTACTS,
@@ -2339,6 +2450,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     fill_arg_defaults(args)
     ledger_path = Path(args.ledger)
     ensure_artifact_dirs(args)
+    discovery_mode = selected_messages_discovery_mode(args)
     fresh_archive = archive_existing_run_artifacts(args)
     ledger = load_ledger(ledger_path)
     hydrate_args_from_ledger(args, ledger)
@@ -2349,6 +2461,10 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             f"allowed processors: {', '.join(ALLOWED_PARALLEL_PROCESSORS)}"
         )
     ledger["current_block"] = None
+    if discovery_mode:
+        ledger.pop("run_id", None)
+        ledger.pop("run_dir", None)
+        ledger.pop("fresh_run", None)
     ledger["config"] = {
         "contacts": str(args.contacts),
         "candidates": str(args.candidates),
@@ -2551,10 +2667,20 @@ SELECTIVE_STEP_FLAGS = [
     "include_upload",
     "include_datalake_sync",
 ]
+MESSAGES_DISCOVERY_STEP_FLAGS = {
+    "include_imessage",
+    "include_whatsapp",
+    "include_contact_merge",
+}
 
 
 def selective_step_mode(args: argparse.Namespace) -> bool:
     return any(bool(getattr(args, flag, False)) for flag in SELECTIVE_STEP_FLAGS)
+
+
+def selected_messages_discovery_mode(args: argparse.Namespace) -> bool:
+    selected = {flag for flag in SELECTIVE_STEP_FLAGS if bool(getattr(args, flag, False))}
+    return bool(selected) and selected.issubset(MESSAGES_DISCOVERY_STEP_FLAGS)
 
 
 def step_enabled(args: argparse.Namespace, flag: str) -> bool:
@@ -2629,9 +2755,11 @@ def add_pipeline_args(parser: argparse.ArgumentParser) -> None:
     add_hidden_arg(parser, "--force-imessage", action="store_true")
     add_hidden_arg(parser, "--force-whatsapp", action="store_true")
     add_hidden_arg(parser, "--reuse-existing-artifacts", action="store_true")
-    add_hidden_arg(parser, "--whatsapp-provider", default=DEFAULT_WHATSAPP_PROVIDER, choices=("wacli",))
+    add_hidden_arg(parser, "--whatsapp-provider", default=DEFAULT_WHATSAPP_PROVIDER, choices=("wacli", "waha"))
     add_hidden_arg(parser, "--wacli-max-messages", type=int, default=0)
     add_hidden_arg(parser, "--wacli-max-group-participants", type=int, default=30)
+    add_hidden_arg(parser, "--waha-wait-timeout", type=int, default=int(os.environ.get("POWERPACKS_WAHA_WAIT_TIMEOUT", "180")))
+    add_hidden_arg(parser, "--waha-force-session", action="store_true", default=os.environ.get("POWERPACKS_WAHA_FORCE_SESSION", "").strip().lower() in {"1", "true", "yes", "on"})
     add_hidden_arg(parser, "--force-sync-candidates", action="store_true")
     add_hidden_arg(parser, "--force-match", action="store_true")
     add_hidden_arg(parser, "--force-prepare-queue", action="store_true")

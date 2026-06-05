@@ -1,11 +1,11 @@
 ---
-name: import-network
-description: Orchestrate local LinkedIn CSV, msgvault email, existing messages, and Twitter artifacts into merged network contacts plus DuckDB. Use for $import-network.
+name: discover-contacts
+description: Discover local LinkedIn CSV, msgvault email, existing messages, and Twitter source artifacts. Use for $discover-contacts.
 ---
 
-# import-network
+# discover-contacts
 
-Use this skill for `$import-network` or end-to-end local network ingestion testing.
+Use this skill for `$discover-contacts` source discovery.
 
 ## User-facing tone
 
@@ -22,8 +22,8 @@ I found these connected sources:
 - LinkedIn: Connections.csv
 - Messages: contacts.csv
 
-I’m going to import each source in parallel where possible, then combine the
-results into one local network and prepare it for local search.
+I’m going to discover each source in parallel where possible. Import/enrichment
+and indexing run as separate stages.
 
 I won’t upload anything automatically. I’ll only stop if I need a browser login,
 a QR/device link, an overwrite approval, or approval for a paid provider step.
@@ -32,13 +32,11 @@ a QR/device link, an overwrite approval, or approval for a paid provider step.
 For progress updates, report user-visible progress and counts:
 
 ```text
-Gmail import is running for 2 accounts. LinkedIn import is also running. After
-those finish, I’ll combine the results into one local network.
+Gmail discovery is running for 2 accounts. LinkedIn discovery is also running.
 ```
 
 ```text
-Import finished. I combined the connected sources into the local network files.
-Next I’ll prepare the local search index.
+Discovery finished. Next run import/enrichment, then indexing.
 ```
 
 If a provider/spend step blocks, explain the choice plainly:
@@ -55,15 +53,13 @@ If `$onboard` has linked sources, propose the concrete import command and ask
 for one confirmation before long sync/import work:
 
 ```text
-Your sources are connected. I can now import them, combine the results into one
-local network, and prepare the files needed for local search. Large mailboxes or
-large networks can take a while. I won’t upload anything automatically, and I’ll
-only ask again if a login, QR/device link, overwrite, or paid provider step needs
-approval. Continue?
+Your sources are connected. I can now discover local source contacts. Large
+mailboxes or large networks can take a while. I won’t upload anything
+automatically. Continue?
 ```
 
-After confirmation, run the pipeline until it completes or reaches a real
-approval confirmation. Do not ask again for routine local metadata import work.
+After confirmation, run discovery until it completes or reaches a real approval
+confirmation. Do not ask again for routine local metadata work.
 
 ## Inputs
 
@@ -73,34 +69,31 @@ approval confirmation. Do not ask again for routine local metadata import work.
   before reading the local msgvault DB. Do not run this sync from onboarding.
   Use `--skip-msgvault-sync` only for tests or known pre-synced local DBs.
 - `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` to consume link-only state from `$setup` / `$onboard`.
-- `--include-existing-artifacts` to include already-generated messages and Twitter people artifacts.
+- `--include-existing-artifacts` is legacy and should not be used for merge.
 
 ## Command
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run \
   --from-accounts .powerpacks/ingestion/accounts.json
 ```
 
-`run --dry-run --from-accounts ...` reports source worker jobs with
+`run --dry-run --from-accounts ...` reports source discovery jobs with
 `parallelizable: true/false`. LinkedIn, Gmail/msgvault accounts, approved
 Twitter imports, and existing messages/iMessage/WhatsApp artifacts have no
 cross-source dependency, so `$setup` may dispatch them in parallel sub-agents.
-The fan-in merge and network DuckDB phases must wait for all selected source
-workers to complete or block on an approval confirmation.
+Merge and indexing are owned by `index_contacts_pipeline.py`, not this skill.
 
 That paragraph is for execution planning. Do not repeat it to the user. Say:
 
 ```text
-These sources can be imported at the same time, so I’ll run them in parallel and
-then combine the results when they finish.
+These sources can be discovered at the same time, so I’ll run them in parallel.
 ```
 
-For manual worker fan-out, run source workers with `--only-source` and isolated
-ledgers/run ids, then run the normal command (or `--fan-in-only`) for merge and
-DuckDB after all source workers finish. Do not approve RapidAPI/Parallel/OpenAI
-spend confirmations inside workers; return those confirmations to the main
-thread.
+For manual source discovery, run workers with `--only-source`; each source
+writes to its fixed `.powerpacks/network-import/discover/<source>/` folder. Do
+not approve RapidAPI/Parallel/OpenAI spend confirmations inside workers; return
+those confirmations to the main thread.
 
 ## Bootstrap Prior Checkpoints
 
@@ -124,19 +117,19 @@ Then run the command printed in
 Resume after a child approval confirmation:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve
-uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py approve
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py continue
 ```
 
 ## Long Runs
 
-Run the command in a visible shell and keep `[import-network]` /
+Run the command in a visible shell and keep `[discover-contacts]` /
 `[enrich-people]` progress lines visible. For large mailboxes or profile sets,
 use the status command every few minutes instead of treating silence as failure:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py status \
-  --ledger .powerpacks/network-import/import-network-run.json
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py status \
+  --ledger .powerpacks/network-import/discover/ledger.json
 ```
 
 RapidAPI LinkedIn hydration now runs directly when a RapidAPI key is configured.
@@ -145,18 +138,16 @@ approval before running `approve`.
 
 ## Outputs
 
-The orchestrator writes merged CSVs and DuckDB under:
+Discovery writes stable per-source artifacts only:
 
 ```text
-.powerpacks/network-import/network-runs/<run-id>/
+.powerpacks/network-import/discover/gmail/contacts.csv
+.powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv
+.powerpacks/network-import/discover/linkedin/contacts.csv
+.powerpacks/network-import/discover/messages/contacts.csv
 ```
 
-Key artifacts:
-
-- `merged/people.csv`
-- `merged/network_contacts.csv`
-- `merged/network_contact_sources.csv`
-- `merged/network_companies.csv`
-- `duckdb/network.<run-id>.duckdb`
+Import/enrichment owns `directory.csv` and source `people.csv` outputs. Indexing
+owns merged `people.csv`, network DuckDB, and local search-index artifacts.
 
 Do not upload automatically. Report artifact paths and counts only.

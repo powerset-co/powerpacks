@@ -12,11 +12,13 @@ import {
   Database,
   FileText,
   HardDrive,
+  KeyRound,
   Link2,
   Loader2,
   Mail,
   MessageSquare,
   Play,
+  ClipboardCopy,
   Sparkles,
   Terminal,
 } from "lucide-react";
@@ -26,11 +28,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
+  fetchEnvStatus,
   fetchSetupStatus,
   runSetupAction,
   uploadLinkedInCsv,
 } from "./powerpacksApi";
 import type {
+  EnvStatusResponse,
   SetupEnrichmentSource,
   SetupImportSource,
   SetupJob,
@@ -39,13 +43,13 @@ import type {
   SetupStatusResponse,
 } from "./types";
 
-type SetupTabId = "link" | "import" | "enrichment" | "index";
+type SetupTabId = "link" | "discover" | "enrichment" | "index";
 type LinkRowId = "gmail" | "linkedin_csv" | "imessage" | "whatsapp" | "twitter";
 type SetupStepState = "complete" | "current" | "blocked" | "upcoming";
 
 const TABS: Array<{ id: SetupTabId; label: string; shortLabel: string; icon: typeof Link2; description: string; action: string }> = [
   { id: "link", label: "Link accounts", shortLabel: "Link", icon: Link2, description: "Connect the sources you want to use. Skip anything you do not need.", action: "Link or skip each source" },
-  { id: "import", label: "Discovery Contacts", shortLabel: "Discover", icon: Database, description: "Discover local contacts and source metadata from linked accounts.", action: "Run discovery" },
+  { id: "discover", label: "Discovery Contacts", shortLabel: "Discover", icon: Database, description: "Discover local contacts and source metadata from linked accounts.", action: "Run discovery" },
   { id: "enrichment", label: "Import and Enrichment", shortLabel: "Import + Enrich", icon: Sparkles, description: "Resolve profiles, enrich linked sources, and review researched people before adding them.", action: "Run import and enrichment" },
   { id: "index", label: "Process index", shortLabel: "Process", icon: HardDrive, description: "Merge source-specific people and build the searchable local index.", action: "Build index" },
 ];
@@ -146,8 +150,13 @@ function hasSetupTabParam(): boolean {
   return new URLSearchParams(window.location.search).has("tab");
 }
 
+function rawSetupTabParam(): string {
+  return new URLSearchParams(window.location.search).get("tab") || "";
+}
+
 function setupTabFromLocation(): SetupTabId {
-  const tab = new URLSearchParams(window.location.search).get("tab") || "";
+  const tab = rawSetupTabParam();
+  if (tab === "import") return "discover";
   return TAB_IDS.has(tab as SetupTabId) ? tab as SetupTabId : "link";
 }
 
@@ -173,7 +182,97 @@ function latestJobLine(job: SetupJob): string {
     .slice(-1)[0] || "";
 }
 
+type JobStage = { label: string; index: number; total: number };
+
+function normalizeStageLabel(label: string): string {
+  const cleaned = label.replace(/\s+\(\d+\/\d+\)\s*$/, "").trim();
+  return cleaned.replace(/[A-Za-z][A-Za-z0-9]*/g, (word) => {
+    if (/[A-Z]/.test(word.slice(1))) return word;
+    if (word === word.toUpperCase()) return word;
+    return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+  });
+}
+
+function jobStages(job: SetupJob): JobStage[] {
+  const explicitStages = Array.isArray(job.stages) ? job.stages : [];
+  if (explicitStages.length > 0) {
+    return explicitStages
+      .map((stage, index) => ({
+        label: normalizeStageLabel(String(stage.label || "")),
+        index: Number(stage.index || index + 1),
+        total: Number(stage.total || explicitStages.length),
+      }))
+      .filter((stage) => stage.label);
+  }
+
+  const outputStages = Array.isArray((job.output as Record<string, unknown> | null | undefined)?.stages)
+    ? ((job.output as Record<string, unknown>).stages as Array<Record<string, unknown>>)
+    : [];
+  if (outputStages.length > 0) {
+    return outputStages
+      .map((stage, index) => ({
+        label: normalizeStageLabel(String(stage.label || "")),
+        index: Number(stage.index || index + 1),
+        total: Number(stage.total || outputStages.length),
+      }))
+      .filter((stage) => stage.label);
+  }
+
+  const stages: JobStage[] = [];
+  const seen = new Set<string>();
+  const text = cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n"));
+  for (const match of text.matchAll(/^setup:\s+(.+?)(?:\s+\((\d+)\/(\d+)\))?\s*$/gm)) {
+    const label = normalizeStageLabel(match[1] || "");
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    stages.push({
+      label,
+      index: Number(match[2] || stages.length + 1),
+      total: Number(match[3] || 0),
+    });
+  }
+  const total = Math.max(...stages.map((stage) => stage.total || 0), stages.length);
+  return stages.map((stage, index) => ({ ...stage, index: stage.index || index + 1, total }));
+}
+
+function loggedJobStages(job: SetupJob): JobStage[] {
+  const stages: JobStage[] = [];
+  const seen = new Set<string>();
+  const text = cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n"));
+  for (const match of text.matchAll(/^setup:\s+(.+?)(?:\s+\((\d+)\/(\d+)\))?\s*$/gm)) {
+    const label = normalizeStageLabel(match[1] || "");
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    stages.push({
+      label,
+      index: Number(match[2] || stages.length + 1),
+      total: Number(match[3] || 0),
+    });
+  }
+  const total = Math.max(...stages.map((stage) => stage.total || 0), job.stages?.length || 0, stages.length);
+  return stages.map((stage, index) => ({ ...stage, index: stage.index || index + 1, total }));
+}
+
+function stageJobSummary(job: SetupJob): string {
+  const stages = jobStages(job);
+  if (stages.length <= 1) return "";
+  const labels = stages.map((stage) => stage.label);
+  const output = (job.output || {}) as Record<string, unknown>;
+  const failedStage = normalizeStageLabel(String(output.failed_stage || ""));
+  if (job.status === "running") {
+    const reachedStages = loggedJobStages(job);
+    const latestReached = reachedStages[reachedStages.length - 1];
+    const latestStage = stages.find((stage) => stage.label === latestReached?.label) || stages[0];
+    return `Running ${latestStage.label} (${latestStage.index}/${latestStage.total || stages.length})`;
+  }
+  if (job.status === "failed" && failedStage) return `Failed during ${failedStage}`;
+  if (job.status === "completed") return `Completed ${labels.join(", ")}`;
+  return labels.join(", ");
+}
+
 function jobSummary(job: SetupJob): string {
+  const stages = stageJobSummary(job);
+  if (stages) return stages;
   const output = job.output || {};
   const payload = (output.payload || output) as Record<string, unknown>;
   const message = cleanJobText(
@@ -275,13 +374,13 @@ function setupStepProgress(status: SetupStatusResponse, active: SetupTabId) {
     || Boolean(status.index.duckdbExists && status.index.peopleSha256 && status.index.indexInputSha256 === status.index.peopleSha256);
   const completeByStep: Record<SetupTabId, boolean> = {
     link: isCompleteStatus(phases.link) || status.accounts.unresolvedSources.length === 0,
-    import: isCompleteStatus(phases.import) || isCompleteStatus(status.import.status),
+    discover: isCompleteStatus(phases.import) || isCompleteStatus(status.import.status),
     enrichment: enrichmentComplete,
     index: indexComplete,
   };
   const blockedByStep: Record<SetupTabId, boolean> = {
     link: isBlockedStatus(phases.link),
-    import: isBlockedStatus(phases.import) || isBlockedStatus(status.import.status),
+    discover: isBlockedStatus(phases.import) || isBlockedStatus(status.import.status),
     enrichment: isBlockedStatus(status.enrichment.status) || sourceRows.some((source) => Boolean(source.blocked)),
     index: isBlockedStatus(phases.index),
   };
@@ -393,18 +492,29 @@ function KeyValue({ label, value }: { label: string; value?: string | number | n
 interface ActionState {
   running: boolean;
   activeAction?: string | null;
+  activeActionKey?: string | null;
+  runningActions: Set<string>;
+  runningActionKeys: Set<string>;
 }
 
 function ActionButton({
   action,
+  actionKey,
   actionState,
   disabled,
+  disableWhileAnyRunning = true,
   children,
   ...props
-}: ComponentProps<typeof Button> & { action: string; actionState: ActionState; children: ReactNode }) {
-  const isRunning = actionState.running && actionState.activeAction === action;
+}: ComponentProps<typeof Button> & { action: string; actionKey?: string; actionState: ActionState; disableWhileAnyRunning?: boolean; children: ReactNode }) {
+  const buttonKey = actionKey || action;
+  const isRunning = actionState.running && (
+    actionState.runningActionKeys.has(buttonKey)
+    || (!actionKey && actionState.runningActions.has(action))
+    || actionState.activeActionKey === buttonKey
+  );
+  const runningDisabled = isRunning || disableWhileAnyRunning;
   return (
-    <Button {...props} disabled={disabled || actionState.running}>
+    <Button {...props} disabled={disabled || (actionState.running && runningDisabled)}>
       {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
       {children}
     </Button>
@@ -429,8 +539,8 @@ function money(value?: number | null): string {
 function duckdbTableLabel(name: string): string {
   const labels: Record<string, string> = {
     local_person_profiles: "Person profiles",
-    local_people_positions: "Role / position vectors",
-    local_summaries: "Person summary vectors",
+    local_people_positions: "Role / position rows",
+    local_summaries: "Person summary rows",
     local_people_education: "Person education rows",
     local_education: "School lookup rows",
     local_companies: "Company vectors",
@@ -768,6 +878,8 @@ function MessagesChannelPanel({
   const whatsAppQrPath = stringValue(whatsApp.qr_png);
   const whatsAppQrPage = stringValue(whatsApp.qr_page);
   const whatsAppQrUpdatedAt = stringValue(whatsApp.qr_updated_at);
+  const whatsAppProvider = stringValue(whatsApp.provider) || "wacli";
+  const whatsAppEngine = stringValue(whatsApp.engine);
   const whatsAppQrSrc = whatsAppQrPath
     ? `/local-api/setup/whatsapp-qr?path=${encodeURIComponent(whatsAppQrPath)}${whatsAppQrUpdatedAt ? `&t=${encodeURIComponent(whatsAppQrUpdatedAt)}` : ""}`
     : "";
@@ -820,9 +932,10 @@ function MessagesChannelPanel({
               <StatusBadge status="not_authenticated" />
             )}
           </div>
+          <KeyValue label="Provider" value={whatsAppEngine ? `${whatsAppProvider} / ${whatsAppEngine}` : whatsAppProvider} />
           <KeyValue label="Account" value={whatsAppAuthenticated ? "authenticated" : "not authenticated"} />
-          {!whatsAppAuthenticated && whatsAppQrPage && (
-            <KeyValue label="QR file" value={whatsAppQrPage} />
+          {!whatsAppAuthenticated && (whatsAppQrPage || whatsAppQrPath) && (
+            <KeyValue label="QR file" value={whatsAppQrPage || whatsAppQrPath} />
           )}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1009,14 +1122,16 @@ function ImportSourceRow({
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <KeyValue label="Source" value={source.label} />
                 <KeyValue label="Last refreshed" value={updated} />
-                <KeyValue label="Run ID" value={source.runId} />
+                <KeyValue label="Artifacts" value={source.artifactDir} />
                 <KeyValue label="Blocked reason" value={source.disabledReason} />
               </div>
             </div>
             <div className="flex justify-end">
               <ActionButton
                 action="import-source"
+                actionKey={`import-source:${source.id}`}
                 actionState={actionState}
+                disableWhileAnyRunning={false}
                 size="sm"
                 onClick={() => onRun({ action: "import-source", source: source.id })}
                 disabled={!canRun}
@@ -1107,6 +1222,7 @@ function EnrichmentSourceRow({
   const updated = sourceSkipped ? "" : updatedLabel(source.updatedAt || importSource?.updatedAt);
   const skippedLabel = source.id === "messages" ? "Skipped" : "Not found";
   const hasUnresolved = (source.unresolved || 0) > 0;
+  const messagesImportConfirmationBlocked = source.id === "messages" && String(source.status || "").toLowerCase() === "blocked_approval";
   const canReviewMessages = source.id === "messages" && canRun && messagesReviewReady;
   const costLabel = source.estimatedCostUsd != null && source.estimatedCostUsd > 0
     ? `~$${source.estimatedCostUsd.toFixed(2)}` : null;
@@ -1149,7 +1265,9 @@ function EnrichmentSourceRow({
           )}
           <ActionButton
             action="enrich-source"
+            actionKey={`enrich-source:${importSource?.id || source.id}`}
             actionState={actionState}
+            disableWhileAnyRunning={false}
             size="sm"
             onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id })}
             disabled={!canRun}
@@ -1174,6 +1292,23 @@ function EnrichmentSourceRow({
           <Loader2 className="h-4 w-4 animate-spin" /> Materializing Messages people and profile enrichment…
         </div>
       )}
+      {messagesImportConfirmationBlocked && canRun && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-4 py-3">
+          <div className="flex-1 text-sm text-muted-foreground">
+            Confirm adding reviewed Messages LinkedIn profiles into your local network.
+          </div>
+          <ActionButton
+            action="enrich-source"
+            actionKey={`enrich-source:${importSource?.id || source.id}:approve`}
+            actionState={actionState}
+            disableWhileAnyRunning={false}
+            size="sm"
+            onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id, approveSpend: true })}
+          >
+            <Play className="h-4 w-4" /> Confirm
+          </ActionButton>
+        </div>
+      )}
       {hasUnresolved && canRun && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-4 py-3">
           <div className="flex-1 text-sm">
@@ -1183,7 +1318,9 @@ function EnrichmentSourceRow({
           </div>
           <ActionButton
             action="enrich-source"
+            actionKey={`enrich-source:${importSource?.id || source.id}:approve`}
             actionState={actionState}
+            disableWhileAnyRunning={false}
             size="sm"
             onClick={() => importSource && onRun({ action: "enrich-source", source: importSource.id, approveSpend: true })}
           >
@@ -1262,11 +1399,13 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
   const paidCalls = paidCallTotal(estimate.estimatedPaidCalls);
   const cost = money(estimate.totalEstimatedUsd);
   const counts = estimate.counts || {};
+  const coverage = status.index.coverage || {};
+  const indexedPeople = Number(coverage.indexedPeople || 0);
+  const pendingPeople = Number(coverage.pendingPeople || 0);
   const bootstrapRecordCount = Number(status.index.bootstrapRecords?.nonemptyRecordFiles || 0);
   const localRecordsMode = String(estimate.status || "") === "local_records_restore" || (bootstrapRecordCount > 0 && !status.index.duckdbTables?.length);
   const duckdbRepaired = status.index.duckdbRepair?.status === "ok";
   const hasProviderEstimate = paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0;
-  const requiresProviderSpend = !localRecordsMode && hasProviderEstimate;
   const updateAvailable = ["needs_processing", "people_csv_ready_for_processing"].includes(String(readiness || "").toLowerCase())
     || status.index.reason === "search_index_stale_for_people_csv"
     || hasProviderEstimate;
@@ -1281,10 +1420,8 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               <h3 className="text-base font-semibold">Local search index</h3>
               <Badge variant={updateAvailable ? "secondary" : phaseTone(readiness)}>{indexLabel(readiness)}</Badge>
               <MetricChip label="Total people" value={status.index.peopleRecords || 0} />
-              <MetricChip label="Bootstrap record files" value={bootstrapRecordCount || null} />
-              {showProviderEstimate && <MetricChip label="Cost" value={cost || "$0.00"} />}
-              {showProviderEstimate && <MetricChip label="Paid calls" value={paidCalls} />}
-              <MetricChip label="DuckDB" value={formatBytes(status.index.duckdbSizeBytes)} />
+              <MetricChip label="Indexed" value={indexedPeople || null} />
+              <MetricChip label="Pending" value={pendingPeople || null} />
             </div>
             {localRecordsMode ? (
               <div className="text-sm text-muted-foreground">
@@ -1296,7 +1433,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
               </div>
             ) : showProviderEstimate ? (
               <div className="text-sm text-muted-foreground">
-                Full processing dry-run found provider work for the current people.csv. Review the estimate before rebuilding.
+                Pending processing dry-run found provider work for people missing from the vector index. Review the estimate before updating.
               </div>
             ) : updateAvailable ? (
               <div className="text-sm text-muted-foreground">
@@ -1308,13 +1445,6 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                 {estimate.error}
               </div>
             )}
-            <div className="grid gap-3 md:grid-cols-2">
-              <KeyValue label="DuckDB" value={status.index.duckdb} />
-              <KeyValue label="Last updated" value={updatedLabel(status.index.duckdbUpdatedAt)} />
-              <KeyValue label="People CSV" value={status.index.peopleCsv} />
-              <KeyValue label="People SHA" value={status.index.peopleSha256} />
-              <KeyValue label="Input SHA" value={status.index.indexInputSha256} />
-            </div>
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="overflow-hidden rounded-md border">
                 <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">DuckDB tables</div>
@@ -1343,7 +1473,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                 )}
               </div>
               <div className="overflow-hidden rounded-md border">
-                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Full processing dry-run</div>
+                <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Pending dry-run estimates</div>
                 {localRecordsMode ? (
                   <div className="grid gap-3 p-3 sm:grid-cols-2">
                     <KeyValue label="Action" value="Build DuckDB from bootstrap records" />
@@ -1353,12 +1483,11 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                   </div>
                 ) : showProviderEstimate ? (
                   <div className="grid gap-3 p-3 sm:grid-cols-2">
-                    <KeyValue label="People" value={Number(counts.people || 0).toLocaleString()} />
-                    <KeyValue label="Summaries" value={Number(counts.summaries || 0).toLocaleString()} />
-                    <KeyValue label="Unique roles" value={Number(counts.unique_roles || 0).toLocaleString()} />
-                    <KeyValue label="Companies" value={Number(counts.companies || 0).toLocaleString()} />
-                    <KeyValue label="Role chunks" value={Number(counts.role_chunks || 0).toLocaleString()} />
-                    <KeyValue label="Company chunks" value={Number(counts.company_chunks || 0).toLocaleString()} />
+                    <KeyValue label="Cost" value={cost || "$0.00"} />
+                    <KeyValue label="Pending people" value={Number(counts.people || counts.pending_people || 0).toLocaleString()} />
+                    <KeyValue label="Pending summaries" value={Number(counts.summaries || 0).toLocaleString()} />
+                    <KeyValue label="Pending unique roles" value={Number(counts.unique_roles || 0).toLocaleString()} />
+                    <KeyValue label="Pending companies" value={Number(counts.companies || 0).toLocaleString()} />
                   </div>
                 ) : (
                   <div className="px-3 py-4 text-sm text-muted-foreground">No provider processing work detected by dry-run.</div>
@@ -1367,15 +1496,49 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
-            <ActionButton action="index-one" actionState={actionState} variant="outline" onClick={() => onRun({ action: "index-one" })}>
-              <Play className="h-4 w-4" /> Process 1 missing person
-            </ActionButton>
-            <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index", approveProviderSpend: requiresProviderSpend })}>
-              <Play className="h-4 w-4" /> {localRecordsMode ? "Build DuckDB" : requiresProviderSpend ? "Approve & Update" : "Process"}
+            <ActionButton action="index" actionState={actionState} onClick={() => onRun({ action: "index" })}>
+              <Play className="h-4 w-4" /> {localRecordsMode ? "Build DuckDB" : "Process"}
             </ActionButton>
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function JobStageStrip({ job }: { job: SetupJob }) {
+  const stages = jobStages(job);
+  if (stages.length <= 1) return null;
+  const reachedStages = loggedJobStages(job);
+  const reachedLabels = new Set(reachedStages.map((stage) => stage.label));
+  const latestReached = reachedStages[reachedStages.length - 1];
+  const activeStage = stages.find((stage) => stage.label === latestReached?.label) || stages[0];
+  const failedStage = normalizeStageLabel(String((job.output as Record<string, unknown> | null | undefined)?.failed_stage || ""));
+
+  return (
+    <div className="flex flex-wrap gap-2 border-b px-4 py-3">
+      {stages.map((stage) => {
+        const isFailed = job.status === "failed" && failedStage === stage.label;
+        const isRunning = job.status === "running" && stage.label === activeStage.label;
+        const isDone = job.status === "completed" || (reachedLabels.has(stage.label) && !isRunning && !isFailed);
+        const Icon = isFailed ? CircleAlert : isRunning ? Loader2 : isDone ? CheckCircle2 : CircleDot;
+        return (
+          <div
+            key={`${stage.index}:${stage.label}`}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs",
+              isFailed && "border-destructive/40 bg-destructive/5 text-destructive",
+              isRunning && "border-primary/30 bg-primary/5 text-primary",
+              isDone && "border-emerald-500/30 bg-emerald-500/5 text-emerald-700",
+              !isFailed && !isRunning && !isDone && "bg-muted/30 text-muted-foreground",
+            )}
+          >
+            <Icon className={cn("h-3.5 w-3.5", isRunning && "animate-spin")} />
+            <span>{stage.label}</span>
+            <span className="text-muted-foreground">{stage.index}/{stage.total || stages.length}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1401,6 +1564,7 @@ function JobPanel({
           </div>
           <StatusBadge status={job.status} />
       </div>
+      <JobStageStrip job={job} />
       {commands.length > 0 && (
         <div className="space-y-2 border-b p-4">
           {commands.map((command) => (
@@ -1426,7 +1590,20 @@ function JobPanel({
             </pre>
           </div>
           <div>
-            <div className="mb-1 font-medium">Logs</div>
+            <div className="mb-1 flex items-center justify-between">
+              <span className="font-medium">Logs</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 gap-1 px-2 text-xs"
+                onClick={() => {
+                  const text = cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n")) || "";
+                  navigator.clipboard.writeText(text).catch(() => {});
+                }}
+              >
+                <ClipboardCopy className="h-3 w-3" /> Copy
+              </Button>
+            </div>
             <pre className="max-h-[28rem] overflow-auto rounded-md bg-muted/40 p-3 font-mono whitespace-pre-wrap break-words">
               {cleanJobText(job.log || [job.stdout, job.stderr].filter(Boolean).join("\n")) || "No output yet."}
             </pre>
@@ -1440,19 +1617,30 @@ function JobPanel({
 export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
   const [activeTab, setActiveTab] = useState<SetupTabId>(() => setupTabFromLocation());
   const [status, setStatus] = useState<SetupStatusResponse | null>(null);
+  const [envStatus, setEnvStatus] = useState<EnvStatusResponse | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [pendingRequest, setPendingRequest] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const nextStatus = await fetchSetupStatus();
+      const nextStatus = await fetchSetupStatus({ tab: activeTab });
       setStatus(nextStatus);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load setup status");
     } finally {
       setIsLoading(false);
+    }
+  }, [activeTab]);
+
+  const refreshEnv = useCallback(async () => {
+    try {
+      setEnvStatus(await fetchEnvStatus());
+    } catch {
+      setEnvStatus(null);
     }
   }, []);
 
@@ -1461,18 +1649,22 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
   }, [refresh]);
 
   useEffect(() => {
+    refreshEnv();
+  }, [refreshEnv]);
+
+  useEffect(() => {
     const handlePopState = () => setActiveTab(setupTabFromLocation());
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   useEffect(() => {
-    if (!status || hasSetupTabParam()) return;
-    const recommended = setupStepProgress(status, activeTab).find((step) => step.recommended)?.id;
-    if (recommended && recommended !== activeTab) setActiveTab(recommended);
-  }, [activeTab, status]);
+    if (hasSetupTabParam() && rawSetupTabParam() !== "import") return;
+    setSetupTabParam(activeTab);
+  }, [activeTab]);
 
-  const running = status?.jobs.some((job) => job.status === "running") || false;
+  const actualRunning = status?.jobs.some((job) => job.status === "running") || false;
+  const running = actualRunning || pendingRequest || Boolean(pendingActionKey);
   useEffect(() => {
     if (!running) return undefined;
     const timer = window.setInterval(refresh, 2000);
@@ -1483,18 +1675,47 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
     if (!status?.jobs.length) return null;
     return status.jobs.find((job) => job.id === activeJobId) || status.jobs[0];
   }, [activeJobId, status?.jobs]);
+	  const runningJobs = useMemo(() => (status?.jobs || []).filter((job) => job.status === "running"), [status?.jobs]);
+  const missingRequiredEnv = useMemo(() => (envStatus?.keys || []).filter((key) => key.required && !key.satisfied), [envStatus]);
+  const pendingAction = pendingActionKey?.split(":")[0] || null;
   const actionState: ActionState = {
     running,
-    activeAction: activeJob?.status === "running" ? activeJob.action : null,
+    activeAction: activeJob?.status === "running" ? activeJob.action : pendingAction,
+    activeActionKey: activeJob?.status === "running" ? activeJob.actionKey || pendingActionKey : pendingActionKey,
+    runningActions: new Set([
+      ...runningJobs.map((job) => job.action),
+      ...(pendingAction ? [pendingAction] : []),
+    ]),
+    runningActionKeys: new Set([
+      ...runningJobs.map((job) => job.actionKey || "").filter(Boolean),
+      ...(pendingActionKey ? [pendingActionKey] : []),
+    ]),
   };
+
+  useEffect(() => {
+    if (!pendingRequest && !actualRunning) setPendingActionKey(null);
+  }, [actualRunning, pendingRequest]);
 
   const runAction = async (body: Record<string, unknown>) => {
     setError(null);
+    const requestedAction = String(body.action || "");
+    const requestedSource = typeof body.source === "string" ? body.source : "";
+    const requestedActionKey = requestedAction && requestedSource
+      ? `${requestedAction}:${requestedSource}${body.approveSpend === true ? ":approve" : ""}`
+      : requestedAction || null;
+    if (requestedActionKey) {
+      setPendingActionKey(requestedActionKey);
+      setPendingRequest(true);
+    }
     try {
       const response = await runSetupAction(body);
       setActiveJobId(response.job.id);
+      setPendingActionKey(response.job.actionKey || requestedActionKey);
       await refresh();
+      setPendingRequest(false);
     } catch (err) {
+      if (requestedActionKey) setPendingActionKey(null);
+      setPendingRequest(false);
       setError(err instanceof Error ? err.message : "Failed to start setup action");
     }
   };
@@ -1541,11 +1762,24 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
         </div>
       )}
 
+      {missingRequiredEnv.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <CircleAlert className="h-4 w-4 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <span className="font-medium">{missingRequiredEnv.length} required environment key{missingRequiredEnv.length === 1 ? "" : "s"} missing or empty.</span>{" "}
+            <span>Add them before running provider-backed imports or indexing.</span>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => { window.location.href = "/env"; }}>
+            <KeyRound className="h-4 w-4" /> Open Env
+          </Button>
+        </div>
+      )}
+
       <SetupStepper active={activeTab} status={status} onChange={changeTab} />
 
       {activeTab === "link" && <AccountLinkingTab status={status} onRun={runAction} />}
 
-      {activeTab === "import" && <ImportTab status={status} onRun={runAction} actionState={actionState} />}
+      {activeTab === "discover" && <ImportTab status={status} onRun={runAction} actionState={actionState} />}
 
       {activeTab === "enrichment" && <EnrichmentTab status={status} onRun={runAction} actionState={actionState} />}
 

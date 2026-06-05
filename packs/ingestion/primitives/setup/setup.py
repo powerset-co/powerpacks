@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -23,11 +24,11 @@ SETUP_LEDGER = Path('.powerpacks/setup/setup-run.json')
 DEFAULT_REFRESH_INTERVAL_HOURS = 168
 DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS = int(os.environ.get('POWERPACKS_SETUP_GMAIL_SYNC_LOOKBACK_DAYS', '14'))
 DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS', '900'))
-DEFAULT_AUTO_SPEND_LIMIT_USD = float(os.environ.get('POWERPACKS_SETUP_AUTO_SPEND_LIMIT_USD', '10'))
 EMPTY_LOCAL_SEARCH_DUCKDB_MAX_BYTES = int(os.environ.get('POWERPACKS_SETUP_EMPTY_DUCKDB_MAX_BYTES', str(1024 * 1024)))
-SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/import-network-run.setup-refresh.json')
+SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/discover/ledger.setup.json')
 SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
 SETUP_SOURCE_CHANNELS = ['gmail', 'linkedin_csv', 'messages', 'twitter']
+BOOTSTRAP_DIRECTORY_RESTORE_PATH = '.powerpacks/network-import/directory.csv'
 REQUIRED_PRIVACY = [
     'raw_msgvault_db_copied', 'raw_mail_copied', 'message_bodies_copied',
     'attachments_copied', 'secrets_copied',
@@ -42,12 +43,21 @@ PRIVACY_ALIASES = {
 ALLOWED_ROOTS = [
     PurePosixPath('.powerpacks/search-index'),
     PurePosixPath('.powerpacks/network-import/directory.csv'),
+    PurePosixPath('.powerpacks/network-import/discover'),
+    PurePosixPath('.powerpacks/network-import/final'),
     PurePosixPath('.powerpacks/network-import/merged'),
     PurePosixPath('.powerpacks/network-import/profile_cache_v2'),
     PurePosixPath('.powerpacks/operator-bootstrap/restore-manifest.json'),
 ]
 SEARCH_BOOTSTRAP_PREFIX_MEMBERS = [
     PurePosixPath('.powerpacks/search-index/records'),
+    PurePosixPath('.powerpacks/search-index/company'),
+    PurePosixPath('.powerpacks/search-index/education'),
+    PurePosixPath('.powerpacks/search-index/location'),
+    PurePosixPath('.powerpacks/search-index/profiles'),
+    PurePosixPath('.powerpacks/search-index/roles'),
+    PurePosixPath('.powerpacks/search-index/summaries'),
+    PurePosixPath('.powerpacks/search-index/unified'),
 ]
 SEARCH_BOOTSTRAP_EXACT_MEMBERS = {
     PurePosixPath('.powerpacks/search-index/ledger.json'),
@@ -275,9 +285,6 @@ def privacy_flags(manifest: dict[str, Any]) -> tuple[dict[str, bool | None], lis
 
 
 def allowed_restore_path(pp: PurePosixPath) -> bool:
-    if str(pp).startswith('.powerpacks/network-import/network-runs/'):
-        parts = pp.parts
-        return len(parts) >= 4 and re.fullmatch(r'[A-Za-z0-9._-]+', parts[3] or '') is not None
     for root in ALLOWED_ROOTS:
         if pp == root or str(pp).startswith(str(root) + '/'):
             return True
@@ -530,6 +537,54 @@ def copy_replace(src: Path, dst: Path, force: bool, backup_root: Path, overwritt
         shutil.copy2(src, dst)
 
 
+def directory_linkedin_stats(path: Path) -> dict[str, int]:
+    if not path.exists() or not path.is_file():
+        return {'rows': 0, 'linkedin_urls': 0}
+    rows = 0
+    linkedin_urls = 0
+    try:
+        with path.open(newline='', encoding='utf-8-sig', errors='replace') as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                rows += 1
+                if str(row.get('linkedin_url') or '').strip():
+                    linkedin_urls += 1
+    except Exception:
+        return {'rows': 0, 'linkedin_urls': 0}
+    return {'rows': rows, 'linkedin_urls': linkedin_urls}
+
+
+def copy_bootstrap_directory_if_better(src: Path, dst: Path, backup_root: Path, overwritten: list[str]) -> dict[str, Any]:
+    src_stats = directory_linkedin_stats(src)
+    dst_stats = directory_linkedin_stats(dst)
+    payload: dict[str, Any] = {
+        'path': BOOTSTRAP_DIRECTORY_RESTORE_PATH,
+        'source_stats': src_stats,
+        'target_stats': dst_stats,
+    }
+    if src_stats['linkedin_urls'] <= 0:
+        return {**payload, 'status': 'skipped', 'reason': 'bootstrap_directory_has_no_linkedin_urls'}
+    if dst.exists() and dst_stats['linkedin_urls'] >= src_stats['linkedin_urls']:
+        return {**payload, 'status': 'kept_target', 'reason': 'target_has_equal_or_more_linkedin_urls'}
+    if dst.exists():
+        rel = dst.relative_to(ROOT)
+        backup = backup_root / rel
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(dst, backup)
+        dst.unlink()
+        if str(rel) not in overwritten:
+            overwritten.append(str(rel))
+        payload['backup'] = str(backup)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return {
+        **payload,
+        'status': 'restored',
+        'reason': 'bootstrap_directory_has_more_linkedin_urls',
+        'target_after_stats': directory_linkedin_stats(dst),
+    }
+
+
 def mark_restored_ledgers(paths: list[Path], operator_id: str) -> list[str]:
     touched = []
     for p in paths:
@@ -575,18 +630,14 @@ def restore_candidates(wanted: set[str]) -> list[str]:
             candidates.append(root_rel)
     if '.powerpacks/operator-bootstrap/restore-manifest.json' in wanted:
         candidates.append('.powerpacks/operator-bootstrap/restore-manifest.json')
-    candidates.extend(
-        rel for rel in sorted(wanted)
-        if rel.startswith('.powerpacks/network-import/network-runs/')
-    )
     return list(dict.fromkeys(candidates))
 
 
 def restored_ledger_paths(restored: list[str]) -> list[Path]:
     paths = [ROOT / rel / 'ledger.json' for rel in restored]
-    network_runs = ROOT / '.powerpacks/network-import/network-runs'
-    if network_runs.exists():
-        paths.extend(network_runs.glob('*/**/*.json'))
+    discover = ROOT / '.powerpacks/network-import/discover'
+    if discover.exists():
+        paths.extend(discover.glob('**/*.json'))
     return paths
 
 
@@ -606,6 +657,7 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
     backup_root = ROOT / '.powerpacks/operator-bootstrap/backups' / ts
     overwritten: list[str] = []
     restored: list[str] = []
+    directory_restore: dict[str, Any] = {'status': 'not_attempted'}
     with tempfile.TemporaryDirectory(prefix='setup-restore-') as td:
         tmp = Path(td)
         with tarfile.open(bundle, 'r:*') as tf:
@@ -622,6 +674,11 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
         for rel in restore_candidates(wanted):
             src = tmp / rel
             if src.exists():
+                if rel == BOOTSTRAP_DIRECTORY_RESTORE_PATH and not bool(args.force):
+                    directory_restore = copy_bootstrap_directory_if_better(src, ROOT / rel, backup_root, overwritten)
+                    if (ROOT / rel).exists():
+                        restored.append(rel)
+                    continue
                 try:
                     copy_replace(src, ROOT / rel, bool(args.force), backup_root, overwritten)
                 except FileExistsError as exc:
@@ -630,8 +687,17 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
                         'reason': str(exc),
                         'requires_approval': [{'id': 'destructive_restore_overwrite'}],
                         'inspect': inspect,
+                        'directory_restore': directory_restore,
                     }
                 restored.append(rel)
+                if rel == BOOTSTRAP_DIRECTORY_RESTORE_PATH:
+                    directory_restore = {
+                        'status': 'restored',
+                        'path': rel,
+                        'source_stats': directory_linkedin_stats(src),
+                        'target_after_stats': directory_linkedin_stats(ROOT / rel),
+                        'reason': 'force_restore',
+                    }
     touched = mark_restored_ledgers(restored_ledger_paths(restored), args.operator_id)
     directory_bootstrap = materialize_bootstrap_directory()
     op_slug = re.sub(r'[^A-Za-z0-9._-]+', '-', str(inspect.get('operator') or args.operator_id)).strip('-') or 'operator'
@@ -645,6 +711,7 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
         'restored': restored,
         'overwritten': overwritten,
         'directory_bootstrap': directory_bootstrap,
+        'directory_restore': directory_restore,
     }
     write_json(ROOT / '.powerpacks/operator-bootstrap/applied' / op_slug / 'manifest.json', provenance)
     ledger = load_setup_ledger(Path(args.setup_ledger))
@@ -818,17 +885,6 @@ def processing_dry_run_command_text(operator_id: str) -> str:
     return f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --dry-run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {operator_id}'
 
 
-def index_limit_args(args: argparse.Namespace) -> list[str]:
-    cmd = [
-        '--limit-mode', str(getattr(args, 'limit_mode', 'missing') or 'missing'),
-        '--existing-duckdb', '.powerpacks/search-index/local-search.duckdb',
-    ]
-    limit = getattr(args, 'limit', None)
-    if limit is not None:
-        cmd.extend(['--limit', str(int(limit))])
-    return cmd
-
-
 def processing_dry_run_command_args(operator_id: str, args: argparse.Namespace | None = None) -> list[str]:
     cmd = [
         sys.executable,
@@ -842,15 +898,11 @@ def processing_dry_run_command_args(operator_id: str, args: argparse.Namespace |
         '--default-operator-id',
         operator_id,
     ]
-    if args is not None:
-        cmd.extend(index_limit_args(args))
     return cmd
 
 
 def processing_run_command_text(operator_id: str, *, allow_paid: bool = False, args: argparse.Namespace | None = None) -> str:
     text = f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {operator_id}'
-    if args is not None:
-        text += ' ' + ' '.join(index_limit_args(args))
     if allow_paid:
         text += ' --allow-paid-role-provider --allow-paid-embeddings --allow-paid-company-provider'
     return text
@@ -868,15 +920,13 @@ def processing_run_command_args(operator_id: str, *, allow_paid: bool = False, a
         '--default-operator-id',
         operator_id,
     ]
-    if args is not None:
-        cmd.extend(index_limit_args(args))
     if allow_paid:
         cmd.extend(['--allow-paid-role-provider', '--allow-paid-embeddings', '--allow-paid-company-provider'])
     return cmd
 
 
 def build_local_duckdb_shim_command_text(operator_id: str) -> str:
-    return f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --derive-positions-from-person-profiles --operator-id {operator_id} --force'
+    return f'uv run --project . python scripts/build-local-duckdb-shim.py --records-dir .powerpacks/search-index --operator-id {operator_id} --force'
 
 
 def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
@@ -885,11 +935,127 @@ def build_local_duckdb_shim_command_args(operator_id: str) -> list[str]:
         'scripts/build-local-duckdb-shim.py',
         '--records-dir',
         '.powerpacks/search-index',
-        '--derive-positions-from-person-profiles',
         '--operator-id',
         operator_id,
         '--force',
     ]
+
+
+def _processing_selected_person_ids(processing_payload: dict[str, Any]) -> list[str]:
+    counts = processing_payload.get('counts') if isinstance(processing_payload.get('counts'), dict) else {}
+    flatten = counts.get('flatten_people') if isinstance(counts.get('flatten_people'), dict) else {}
+    selected = flatten.get('selected_person_ids') if isinstance(flatten.get('selected_person_ids'), list) else []
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in selected:
+        text = str(value or '').strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+    return out
+
+
+def _duckdb_columns(con: Any, table: str) -> set[str]:
+    try:
+        return {str(row[1]) for row in con.execute(f'pragma table_info({table})').fetchall()}
+    except Exception:
+        return set()
+
+
+def local_duckdb_processing_dq(processing_payload: dict[str, Any], duckdb_payload: dict[str, Any]) -> dict[str, Any]:
+    selected_ids = _processing_selected_person_ids(processing_payload)
+    counts = processing_payload.get('counts') if isinstance(processing_payload.get('counts'), dict) else {}
+    flatten = counts.get('flatten_people') if isinstance(counts.get('flatten_people'), dict) else {}
+    selection = flatten.get('selection') if isinstance(flatten.get('selection'), dict) else {}
+    selected_count = int(selection.get('selected_people') or 0)
+    if selected_count == 0:
+        return {'status': 'ok', 'reason': 'no_people_selected', 'selected_people': 0}
+    if not selected_ids:
+        return {'status': 'skipped', 'reason': 'processing_payload_missing_selected_person_ids', 'selected_people': selected_count}
+    db_path = Path(str(duckdb_payload.get('duckdb') or '.powerpacks/search-index/local-search.duckdb'))
+    if not db_path.is_absolute():
+        db_path = ROOT / db_path
+    if not db_path.exists():
+        return {'status': 'failed', 'reason': 'missing_duckdb', 'duckdb': str(db_path), 'selected_person_ids': selected_ids}
+    try:
+        import duckdb  # type: ignore
+    except ModuleNotFoundError:
+        return {'status': 'skipped', 'reason': 'duckdb_python_module_missing', 'duckdb': str(db_path), 'selected_person_ids': selected_ids}
+    # Retry with short delay to handle transient locks from the rebuild process
+    con = None
+    for attempt in range(5):
+        try:
+            con = duckdb.connect(str(db_path), read_only=True)
+            break
+        except Exception as lock_err:
+            if attempt < 4 and 'lock' in str(lock_err).lower():
+                import time
+                time.sleep(1 + attempt)
+                continue
+            return {'status': 'skipped', 'reason': 'duckdb_locked', 'duckdb': str(db_path), 'error': f'{type(lock_err).__name__}: {lock_err}', 'selected_person_ids': selected_ids}
+    try:
+        tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
+        profile_hits: set[str] = set()
+        vector_hits: set[str] = set()
+        position_vector_hits: set[str] = set()
+        summary_vector_hits: set[str] = set()
+        if 'local_person_profiles' in tables:
+            profile_cols = _duckdb_columns(con, 'local_person_profiles')
+            profile_id_cols = [col for col in ['person_id', 'base_id', 'id'] if col in profile_cols]
+            for person_id in selected_ids:
+                if not profile_id_cols:
+                    continue
+                where = ' OR '.join([f"cast({col} as varchar) = ?" for col in profile_id_cols])
+                params = [person_id] * len(profile_id_cols)
+                if int(con.execute(f"select count(*) from local_person_profiles where {where}", params).fetchone()[0] or 0) > 0:
+                    profile_hits.add(person_id)
+        for table in ['local_people_positions', 'local_summaries']:
+            if table not in tables:
+                continue
+            cols = _duckdb_columns(con, table)
+            if 'vector' not in cols:
+                continue
+            id_cols = [col for col in ['person_id', 'base_id', 'id'] if col in cols]
+            if not id_cols:
+                continue
+            for person_id in selected_ids:
+                where_ids = ' OR '.join([f"cast({col} as varchar) = ?" for col in id_cols])
+                params = [person_id] * len(id_cols)
+                query = f"select count(*) from {table} where ({where_ids}) and vector is not null and len(vector) > 0"
+                if int(con.execute(query, params).fetchone()[0] or 0) > 0:
+                    vector_hits.add(person_id)
+                    if table == 'local_people_positions':
+                        position_vector_hits.add(person_id)
+                    elif table == 'local_summaries':
+                        summary_vector_hits.add(person_id)
+        people_counts = counts.get('build_people_records') if isinstance(counts.get('build_people_records'), dict) else {}
+        expected_position_vectors = int(people_counts.get('with_vectors') or 0) > 0
+        missing_vectors = [person_id for person_id in selected_ids if person_id not in vector_hits]
+        missing_position_vectors = [person_id for person_id in selected_ids if expected_position_vectors and person_id not in position_vector_hits]
+        missing_profiles = [person_id for person_id in selected_ids if person_id not in profile_hits]
+        failed = bool(missing_vectors or missing_position_vectors)
+        return {
+            'status': 'ok' if not failed else 'failed',
+            'duckdb': str(db_path),
+            'selected_people': selected_count,
+            'selected_person_ids': selected_ids,
+            'profile_hits': len(profile_hits),
+            'vector_hits': len(vector_hits),
+            'position_vector_hits': len(position_vector_hits),
+            'summary_vector_hits': len(summary_vector_hits),
+            'expected_position_vectors': expected_position_vectors,
+            'missing_profile_person_ids': missing_profiles,
+            'missing_vector_person_ids': missing_vectors,
+            'missing_position_vector_person_ids': missing_position_vectors,
+        }
+    except Exception as exc:
+        return {'status': 'failed', 'reason': 'duckdb_dq_query_failed', 'duckdb': str(db_path), 'error': f'{type(exc).__name__}: {exc}', 'selected_person_ids': selected_ids}
+    finally:
+        if con:
+            try:
+                con.close()
+            except Exception:
+                pass
 
 
 def search_record_summary() -> dict[str, Any]:
@@ -1015,11 +1181,6 @@ def estimated_cost_usd(estimate: dict[str, Any]) -> float | None:
         return None
 
 
-def estimate_has_known_pricing(estimate: dict[str, Any]) -> bool:
-    costs = estimate.get('estimated_costs') if isinstance(estimate.get('estimated_costs'), dict) else {}
-    return bool(costs.get('known_pricing', True))
-
-
 def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledger_path: Path) -> tuple[dict[str, Any], int]:
     people = ROOT / '.powerpacks/network-import/merged/people.csv'
     idx = indexing_readiness(args.operator_id)
@@ -1118,7 +1279,6 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         save_setup_ledger(ledger, ledger_path)
         return payload, 0
 
-    spend_limit = float(getattr(args, 'auto_spend_limit_usd', DEFAULT_AUTO_SPEND_LIMIT_USD))
     estimate = run_processing_dry_run(args.operator_id, args)
     if estimate.get('status') == 'failed':
         payload = {'status': 'failed', 'step': 'index_dry_run', 'processing_estimate': estimate}
@@ -1129,30 +1289,7 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
 
     paid_calls = estimated_paid_calls(estimate)
     total_cost = estimated_cost_usd(estimate)
-    known_pricing = estimate_has_known_pricing(estimate)
-    approve_provider_spend = bool(getattr(args, 'approve_provider_spend', False))
-    needs_paid_approval = paid_calls > 0 and (not known_pricing or total_cost is None or total_cost >= spend_limit)
-    if total_cost is not None and total_cost >= spend_limit:
-        needs_paid_approval = True
-
-    if needs_paid_approval and not approve_provider_spend:
-        payload = {
-            'status': 'blocked_approval',
-            'step': 'index_processing',
-            'reason': 'estimated_processing_cost_requires_approval',
-            'auto_spend_limit_usd': spend_limit,
-            'estimated_cost_usd': total_cost,
-            'estimated_paid_calls': estimate.get('estimated_paid_calls', {}),
-            'processing_estimate': estimate,
-            'requires_approval': [{'id': 'provider_spend'}],
-            'approve_command': processing_run_command_text(args.operator_id, allow_paid=True, args=args),
-        }
-        ledger.setdefault('phases', {})['index'] = payload
-        ledger['status'] = 'blocked_approval'
-        save_setup_ledger(ledger, ledger_path)
-        return payload, 20
-
-    allow_paid = approve_provider_spend or paid_calls > 0 or bool(total_cost and total_cost > 0)
+    allow_paid = paid_calls > 0 or bool(total_cost and total_cost > 0)
     code, processing_payload, processing_stderr = run_json_command(
         processing_run_command_args(args.operator_id, allow_paid=allow_paid, args=args),
         timeout=6 * 60 * 60,
@@ -1185,17 +1322,32 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         save_setup_ledger(ledger, ledger_path)
         return payload, 1
 
+    duckdb_dq = local_duckdb_processing_dq(processing_payload, duckdb_payload if isinstance(duckdb_payload, dict) else {})
+    if duckdb_dq.get('status') == 'failed' and duckdb_dq.get('reason') != 'duckdb_locked':
+        payload = {
+            'status': 'failed',
+            'step': 'local_duckdb_dq',
+            'processing_estimate': estimate,
+            'processing': processing_payload,
+            'local_duckdb': duckdb_payload,
+            'local_duckdb_dq': duckdb_dq,
+            'error': 'processed people were not found with vectors in canonical DuckDB',
+        }
+        ledger.setdefault('phases', {})['index'] = payload
+        ledger['status'] = 'failed'
+        save_setup_ledger(ledger, ledger_path)
+        return payload, 1
+
     payload = {
         'status': 'ready',
         'people_csv': '.powerpacks/network-import/merged/people.csv',
         'people_sha256': sha256_file(people),
-        'auto_spend_limit_usd': spend_limit,
-        'auto_approved_paid_calls': paid_calls if allow_paid else 0,
-        'provider_spend_approved': approve_provider_spend,
         'estimated_cost_usd': total_cost,
+        'estimated_paid_calls': estimate.get('estimated_paid_calls', {}),
         'processing_estimate': estimate,
         'processing': processing_payload,
         'local_duckdb': duckdb_payload,
+        'local_duckdb_dq': duckdb_dq,
         'duckdb': duckdb_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb') if isinstance(duckdb_payload, dict) else '.powerpacks/search-index/local-search.duckdb',
         'updated_at': now(),
     }
@@ -1264,7 +1416,6 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
         'people_sha256': people_hash,
         'plan_command': processing_plan_command_text(),
         'dry_run_command': processing_dry_run_command_text(operator_id),
-        'requires_approval': ['provider_spend', 'provider_allow_flags'],
     }
     if duck.exists() and ledger.exists():
         lg = read_json(ledger) if ledger.exists() else {}
@@ -1397,7 +1548,6 @@ def normalize_setup_phases(
             'people_csv': '.powerpacks/network-import/merged/people.csv',
             'plan_command': idx.get('plan_command') or processing_plan_command_text(),
             'dry_run_command': idx.get('dry_run_command') or processing_dry_run_command_text(operator_id),
-            'requires_approval': idx.get('requires_approval') or ['provider_spend', 'provider_allow_flags'],
             'people_sha256': idx.get('people_sha256', ''),
             'index_input_sha256': idx.get('index_input_sha256', ''),
         }
@@ -1730,9 +1880,8 @@ def run_fan_in_phase(args: argparse.Namespace) -> int:
     accounts = accounts_summary(Path(args.accounts))
 
     started_at = now()
-    run_id = f"setup-fan-in-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     before_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
-    code, payload, stderr = run_json_command(network_fan_in_command(args, run_id, force=bool(getattr(args, 'force', False))))
+    code, payload, stderr = run_json_command(network_fan_in_command(args, force=bool(getattr(args, 'force', False))))
     if code == 20 or payload.get('status') == 'blocked_approval':
         emit({'status': 'blocked_approval', 'phase': 'fan-in', 'payload': payload, 'stderr': tail(stderr)})
         return 20
@@ -1746,7 +1895,7 @@ def run_fan_in_phase(args: argparse.Namespace) -> int:
         'status': 'completed',
         'started_at': started_at,
         'completed_at': now(),
-        'run_id': payload.get('run_id') or run_id,
+        'artifact_dir': payload.get('artifact_dir') or '.powerpacks/network-import/final',
         'ledger': str(SETUP_REFRESH_LEDGER),
         'source_fingerprint': linked_source_fingerprint(accounts),
         'linked_sources': linked_sources(accounts),
@@ -1789,8 +1938,7 @@ def run_index_phase(args: argparse.Namespace) -> int:
     ledger_path = Path(args.setup_ledger)
     ledger = load_setup_ledger(ledger_path)
     process_started_at = now()
-    process_run_id = f"setup-process-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    process_code, process_payload, process_stderr = run_json_command(network_fan_in_command(args, process_run_id, force=True, merge_only=True))
+    process_code, process_payload, process_stderr = run_json_command(network_fan_in_command(args, force=True, merge_only=True))
     if process_code == 20 or process_payload.get('status') == 'blocked_approval':
         emit({'status': 'blocked_approval', 'phase': 'process', 'payload': process_payload, 'stderr': tail(process_stderr)})
         return 20
@@ -1804,7 +1952,7 @@ def run_index_phase(args: argparse.Namespace) -> int:
         'source': 'index_phase',
         'started_at': process_started_at,
         'completed_at': now(),
-        'run_id': process_payload.get('run_id') or process_run_id,
+        'artifact_dir': process_payload.get('artifact_dir') or '.powerpacks/network-import/final',
         'ledger': str(SETUP_REFRESH_LEDGER),
         'people_csv': '.powerpacks/network-import/merged/people.csv',
         'promoted': promoted,
@@ -1827,12 +1975,28 @@ def run_index_phase(args: argparse.Namespace) -> int:
     )
     final_status = status_payload(status_args)
     save_setup_ledger(final_status['setup_ledger'], ledger_path)
+    index_summary = {
+        'status': index_payload.get('status'),
+        'source': index_payload.get('source', ''),
+        'step': index_payload.get('step', ''),
+        'estimated_cost_usd': index_payload.get('estimated_cost_usd', 0),
+        'estimated_paid_calls': index_payload.get('estimated_paid_calls', {}),
+        'processing_estimate': index_payload.get('processing_estimate', {}),
+        'bootstrap_records_restore': index_payload.get('bootstrap_records_restore', {}),
+        'people_csv': index_payload.get('people_csv', '.powerpacks/network-import/merged/people.csv'),
+        'people_sha256': index_payload.get('people_sha256', ''),
+        'duckdb': index_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb'),
+        'processing_counts': (index_payload.get('processing') or {}).get('counts', {}) if isinstance(index_payload.get('processing'), dict) else {},
+        'local_duckdb': index_payload.get('local_duckdb', {}),
+        'local_duckdb_dq': index_payload.get('local_duckdb_dq', {}),
+        'error': index_payload.get('error', ''),
+    }
     emit({
         'status': index_payload.get('status'),
         'phase': 'index',
         'operator_id': args.operator_id,
-        'index': index_payload,
-        'setup_ledger': final_status['setup_ledger'],
+        'index': index_summary,
+        'setup_ledger_path': str(ledger_path),
         'next': next_action_payload(status_args)['next'],
     })
     return index_code
@@ -1840,12 +2004,12 @@ def run_index_phase(args: argparse.Namespace) -> int:
 
 def setup_commands(args: argparse.Namespace) -> dict[str, str]:
     return {
-        'import_network_dry_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
-        'import_network_run': f'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
-        'import_network_fan_in': f'uv run --project . python packs/ingestion/primitives/setup/setup.py fan-in --operator-id {args.operator_id} --accounts {args.accounts} --setup-ledger {args.setup_ledger} --force',
-        'import_network_status': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py status',
-        'import_network_continue': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py continue',
-        'import_network_approve': 'uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py approve',
+        'discover_contacts_dry_run': f'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run --dry-run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
+        'discover_contacts_run': f'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run --from-accounts {args.accounts} --operator-id {args.operator_id} --include-existing-artifacts',
+        'discover_contacts_fan_in': f'uv run --project . python packs/ingestion/primitives/setup/setup.py fan-in --operator-id {args.operator_id} --accounts {args.accounts} --setup-ledger {args.setup_ledger} --force',
+        'discover_contacts_status': 'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py status',
+        'discover_contacts_continue': 'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py continue',
+        'discover_contacts_approve': 'uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py approve',
         'processing_plan': processing_plan_command_text(),
         'processing_dry_run': processing_dry_run_command_text(args.operator_id),
         'processing_run': processing_run_command_text(args.operator_id),
@@ -1873,7 +2037,7 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
                 'account_count': len(emails),
                 'parallelizable': False,
                 'ledger': str(SETUP_REFRESH_LEDGER),
-                'command': commands['import_network_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source gmail --force',
+                'command': commands['discover_contacts_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source gmail --force',
             })
         else:
             if ch == 'messages':
@@ -1892,23 +2056,19 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 requires_approval = ['whatsapp_qr'] if '--include-whatsapp' in include_flags else []
                 ledger = str(SETUP_MESSAGES_LEDGER)
-                run_id = ''
             elif ch == 'twitter':
                 command = ''
                 requires_approval = []
                 ledger = ''
-                run_id = ''
             else:
-                command = commands['import_network_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source {ch} --force'
+                command = commands['discover_contacts_run'] + f' --ledger {SETUP_REFRESH_LEDGER} --only-source {ch} --force'
                 requires_approval = []
                 ledger = str(SETUP_REFRESH_LEDGER)
-                run_id = ''
             worker_jobs.append({
                 'id': ch,
                 'source': ch,
                 'parallelizable': ch == 'messages',
                 'ledger': ledger,
-                'run_id': run_id,
                 'command': command,
                 'requires_approval': requires_approval,
                 **({'status': 'recorded_only', 'reason': 'Twitter/X handle is recorded; follower import is not wired into setup yet.'} if ch == 'twitter' else {}),
@@ -1924,8 +2084,8 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
         'indexing': idx,
         'requires_approval': approvals,
         'local_only_command_ids': [
-            'import_network_dry_run',
-            'import_network_status',
+            'discover_contacts_dry_run',
+            'discover_contacts_status',
             'processing_plan',
             'processing_dry_run',
             'build_local_duckdb_shim',
@@ -1973,10 +2133,10 @@ def message_refresh_command(accounts: dict[str, Any], ledger_path: Path, *, forc
     return cmd
 
 
-def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: bool, gmail_sync_after: str = '') -> list[str]:
+def network_refresh_command(args: argparse.Namespace, *, force: bool, gmail_sync_after: str = '') -> list[str]:
     cmd = [
         sys.executable,
-        'packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py',
+        'packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py',
         'run',
         '--from-accounts',
         args.accounts,
@@ -1985,8 +2145,6 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
         '--include-existing-artifacts',
         '--ledger',
         str(SETUP_REFRESH_LEDGER),
-        '--run-id',
-        run_id,
         '--source-import-only',
     ]
     if force:
@@ -1996,35 +2154,18 @@ def network_refresh_command(args: argparse.Namespace, run_id: str, *, force: boo
     return cmd
 
 
-def network_fan_in_command(args: argparse.Namespace, run_id: str, *, force: bool, merge_only: bool = False) -> list[str]:
-    cmd = [
+def network_fan_in_command(args: argparse.Namespace, *, force: bool, merge_only: bool = False) -> list[str]:
+    return [
         sys.executable,
-        'packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py',
-        'run',
-        '--from-accounts',
-        args.accounts,
+        'packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py',
+        'fan-in',
         '--operator-id',
         args.operator_id,
-        '--include-existing-artifacts',
-        '--fan-in-only',
-        '--ledger',
-        str(SETUP_REFRESH_LEDGER),
-        '--run-id',
-        run_id,
+        '--accounts',
+        args.accounts,
+        '--manifest',
+        '.powerpacks/network-import/index/contacts/manifest.json',
     ]
-    if force:
-        cmd.append('--force')
-    if merge_only or bool(getattr(args, 'merge_only', False)):
-        cmd.append('--merge-only')
-    for source in getattr(args, 'only_source', []) or []:
-        cmd.extend(['--only-source', source])
-    if bool(getattr(args, 'resolve_gmail_linkedin', False)):
-        cmd.append('--resolve-gmail-linkedin')
-    if bool(getattr(args, 'approve_parallel_spend', False)):
-        cmd.append('--approve-parallel-spend')
-    if getattr(args, 'gmail_linkedin_limit', None) is not None:
-        cmd.extend(['--gmail-linkedin-limit', str(args.gmail_linkedin_limit)])
-    return cmd
 
 
 def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
@@ -2109,14 +2250,6 @@ def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> t
     inspected = inspect_bundle(bundle)
     if inspected.get('status') != 'ok':
         return {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected, 'bootstrap_sync': sync_payload}, 20
-    if inspected.get('would_overwrite') and not force:
-        return {
-            'status': 'blocked_user_action',
-            'step': 'bootstrap',
-            'reason': 'bootstrap restore would overwrite existing artifacts',
-            'requires_approval': [{'id': 'destructive_restore_overwrite'}],
-            'inspect': inspected,
-        }, 20
     apply_args = argparse.Namespace(
         bundle=str(bundle),
         operator_id=args.operator_id,
@@ -2134,10 +2267,9 @@ def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> t
 
 def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts: dict[str, Any], due: dict[str, Any]) -> tuple[dict[str, Any], int]:
     started_at = now()
-    run_id = f"setup-refresh-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     before_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
-    results: dict[str, Any] = {'status': 'running', 'started_at': started_at, 'reason': due.get('reason'), 'run_id': run_id}
-    progress(f"Import refresh started: run_id={run_id}, reason={due.get('reason')}, linked_sources={','.join(due.get('linked_sources') or linked_sources(accounts)) or 'none'}")
+    results: dict[str, Any] = {'status': 'running', 'started_at': started_at, 'reason': due.get('reason')}
+    progress(f"Import refresh started: reason={due.get('reason')}, linked_sources={','.join(due.get('linked_sources') or linked_sources(accounts)) or 'none'}")
 
     refresh_reason = str(due.get('reason') or '')
     force_reasons = {'forced', 'refresh_interval_elapsed', 'linked_sources_changed', 'missing_import_artifact', 'import_artifact_drift'}
@@ -2161,12 +2293,12 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
             return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': payload or tail(stderr)}, 1
 
     force_network = refresh_reason in force_reasons
-    # Leave Gmail mailbox cursoring to import_network_pipeline. That layer can
+    # Leave Gmail mailbox cursoring to discover_contacts_pipeline. That layer can
     # inspect msgvault per account and pass sync-full --after from the newest
     # local source/message timestamp. The setup wrapper should not replace that
     # with a broad run-level lookback.
     gmail_sync_after = ''
-    network_cmd = network_refresh_command(args, run_id, force=force_network, gmail_sync_after=gmail_sync_after)
+    network_cmd = network_refresh_command(args, force=force_network, gmail_sync_after=gmail_sync_after)
     progress("Starting network import refresh (Gmail/LinkedIn/Twitter as linked)...")
     progress("Command: " + ' '.join(shlex.quote(part) for part in network_cmd))
     code, payload, stderr = run_json_command(network_cmd, stream_stderr=True)
@@ -2190,7 +2322,7 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
         'status': 'completed',
         'started_at': started_at,
         'completed_at': now(),
-        'run_id': payload.get('run_id') or run_id,
+        'artifact_dir': payload.get('artifact_dir') or '.powerpacks/network-import/discover',
         'ledger': str(SETUP_REFRESH_LEDGER),
         'source_fingerprint': due.get('source_fingerprint') or linked_source_fingerprint(accounts),
         'linked_sources': due.get('linked_sources') or linked_sources(accounts),
@@ -2395,10 +2527,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
-    s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
-    s.add_argument('--approve-provider-spend', action='store_true')
-    s.add_argument('--limit', type=int, default=None, help='Process at most N people in this index run')
-    s.add_argument('--limit-mode', choices=['all', 'missing'], default='missing', help='When --limit is set, select from all people or only people missing from the canonical DuckDB')
     s.set_defaults(func=run_index_phase)
 
     s = sub.add_parser('handoff')
@@ -2416,7 +2544,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--skip-bootstrap-sync', action='store_true', help=argparse.SUPPRESS)
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
-    s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
     s.add_argument('--gmail-db', default='')
     s.add_argument('--gmail-account', action='append', default=[])
     s.add_argument('--gmail-add-email', action='append', default=[])

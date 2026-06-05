@@ -50,17 +50,33 @@ or use `~/.codex/powerpacks` as the runtime checkout.
 
 ## Update code
 
-If the repo has no local changes, pull fast-forward:
+Check for local changes, but ignore known generated dependency lockfile churn:
 
 ```bash
+ignored_dirty_paths='^(app/package-lock\.json)$'
 git status --short
+blocking_dirty="$(git status --short --porcelain=v1 | awk '{print $2}' | grep -Ev "$ignored_dirty_paths" || true)"
+```
+
+If `blocking_dirty` is empty, pull fast-forward:
+
+```bash
 git fetch --quiet || true
 git pull --ff-only || true
 ```
 
-If local changes are present or `git pull --ff-only` fails, stop and report the
-status. Do not stash, reset, merge, or overwrite user changes without explicit
-approval.
+If only ignored generated paths are dirty, do not stop just because of them.
+If `git pull --ff-only` refuses to continue because one of those ignored paths
+would be overwritten, restore only the ignored path and retry once:
+
+```bash
+git restore -- app/package-lock.json
+git pull --ff-only || true
+```
+
+If `blocking_dirty` is non-empty or the retry still fails, stop and report the
+status. Do not stash, reset, merge, or overwrite other user changes without
+explicit approval.
 
 ## Reinstall skills
 

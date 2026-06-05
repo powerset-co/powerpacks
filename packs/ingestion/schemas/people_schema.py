@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.parse
+import uuid
 from typing import Any
 
 PEOPLE_SCHEMA_COLUMNS = [
@@ -52,6 +53,7 @@ PEOPLE_SCHEMA_COLUMNS = [
 
 JSON_LIST_COLUMNS = {"work_experiences", "education"}
 JSON_OBJECT_COLUMNS = {"harmonic_response", "harmonic_location", "rapidapi_response", "twitter_response"}
+PERSON_ID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 
 def extract_public_identifier(linkedin_url: str) -> str:
@@ -81,6 +83,19 @@ def stable_linkedin_key(row: dict[str, Any]) -> str:
     if not public_id:
         public_id = extract_public_identifier(row.get("linkedin_url") or "")
     return f"linkedin:{public_id}" if public_id else ""
+
+
+def stable_person_id_from_key(key: str) -> str:
+    """Return the Aleph-compatible deterministic person UUID for a stable key."""
+
+    return str(uuid.uuid5(PERSON_ID_NAMESPACE, str(key or "").strip().lower()))
+
+
+def generate_person_id(public_identifier: str) -> str:
+    """Return Aleph's canonical UUIDv5 for a LinkedIn public identifier."""
+
+    public_id = str(public_identifier or "").strip().lower()
+    return stable_person_id_from_key(f"linkedin:{public_id}")
 
 
 def normalize_people_row(row: dict[str, Any]) -> dict[str, str]:

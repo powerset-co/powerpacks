@@ -8,7 +8,7 @@ description: Walk a user through linking/exporting all local network ingestion s
 Onboarding is the top-level Codex-run state machine. Task 2 onboarding is
 **link-only**: it records source links in `.powerpacks/ingestion/accounts.json`
 and must not run `gmail_network_import`, `msgvault sync-full`,
-`linkedin_network_import`, `import_network_pipeline`, Twitter crawls, messages
+`linkedin_network_import`, `discover_contacts_pipeline`, Twitter crawls, messages
 import/research, or downstream enrichment. Keep human/browser account linking in the main thread,
 then hand long local import/index work to worker sub-agents only after the
 completed handoff and user confirmation.

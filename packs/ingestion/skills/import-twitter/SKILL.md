@@ -9,7 +9,7 @@ Use this skill for `$import-twitter` or Twitter/X network import testing.
 
 This is an alias/wrapper around `twitter_network_import`. The production source
 crawl is RapidAPI-backed and requires approval. Keep artifacts under
-`.powerpacks/network-import/twitter/`.
+`.powerpacks/network-import/discover/twitter/`.
 
 ## Jake 10-row sanity command
 
@@ -37,4 +37,4 @@ uv run --project . python packs/ingestion/primitives/twitter_network_import/twit
 - RapidAPI LinkedIn validation uses `RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` and requires approval.
 - Final output should include `people.csv`; summarize as `x/10 linkedins` plus counts, not raw rows.
 
-After Twitter finishes, run `$import-network --include-existing-artifacts` or the import-network primitive to merge into local network contacts and DuckDB.
+After Twitter finishes, run `$discover-contacts --include-existing-artifacts` to merge into local network contacts and DuckDB.

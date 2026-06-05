@@ -1,4 +1,6 @@
 import type {
+  EnvStatusResponse,
+  LocalProfileResponse,
   LocalRunResultsResponse,
   LocalRunSummary,
   MessageReviewFilter,
@@ -20,6 +22,14 @@ export function fetchRuns(): Promise<LocalRunSummary[]> {
   return getJson<LocalRunSummary[]>("/local-api/runs");
 }
 
+export function fetchEnvStatus(): Promise<EnvStatusResponse> {
+  return getJson<EnvStatusResponse>("/local-api/env/status");
+}
+
+export function fetchLocalProfile(): Promise<LocalProfileResponse> {
+  return getJson<LocalProfileResponse>("/local-api/profile");
+}
+
 export function fetchRunResults(
   taskId: string,
   options: { offset?: number; limit?: number } = {}
@@ -31,8 +41,11 @@ export function fetchRunResults(
   return getJson<LocalRunResultsResponse>(`/local-api/runs/${encodeURIComponent(taskId)}/results${query}`);
 }
 
-export function fetchSetupStatus(): Promise<SetupStatusResponse> {
-  return getJson<SetupStatusResponse>("/local-api/setup/status");
+export function fetchSetupStatus(options: { tab?: string } = {}): Promise<SetupStatusResponse> {
+  const params = new URLSearchParams();
+  if (options.tab) params.set("tab", options.tab);
+  const query = params.toString() ? `?${params.toString()}` : "";
+  return getJson<SetupStatusResponse>(`/local-api/setup/status${query}`);
 }
 
 export function fetchSetupJob(jobId: string): Promise<SetupJob> {

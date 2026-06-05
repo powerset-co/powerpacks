@@ -97,5 +97,32 @@
       "current_role_category",
       "employment_status"
     ]
+  },
+  {
+    "id": "complex-jd-recruiter-loop",
+    "query": "$search-network pasted JD: CTO/technical co-founder, software product builders on top of cloud and AI infrastructure, not active cofounders, examples Databricks/Snowflake/Roblox/Meta, skills include multi-cloud usage data, Kafka/Kinesis telemetry, spend orchestration or recommendation engines, SQL/Python/TypeScript. This is complex, so plan and do the searches rather than one broad query.",
+    "must_include": [
+      "complex-JD recruiter loop",
+      "Execute this search plan or modify it?",
+      "llm_review_budget",
+      "100",
+      "planned_review_count",
+      "remaining_review_budget",
+      "score >= 0.3",
+      "initial probes",
+      "cluster",
+      "fan-out",
+      "candidate_feedback",
+      "criteria_mutation",
+      "search_plan_revision",
+      "run_lineage",
+      "append-lineage",
+      "execute_command",
+      "--execute-approved"
+    ],
+    "must_not_include": [
+      "Stop after planning"
+    ],
+    "notes": "A complex JD passed to search-network should plan internally, then execute probes/review/fan-out after one search-plan approval. The review budget limits LLM-reviewed profiles, not retrieval counts or final result count."
   }
 ]

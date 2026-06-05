@@ -8,7 +8,7 @@ description: Walk a user through linking/exporting all local network ingestion s
 Use the onboarding primitive for status/plan checks. Current onboarding is
 **link-only**: record source links in `.powerpacks/ingestion/accounts.json` and
 do not run Gmail/LinkedIn network imports, `msgvault sync-full`,
-`import_network_pipeline`, Twitter crawls, messages import/research, or
+`discover_contacts_pipeline`, Twitter crawls, messages import/research, or
 enrichment until the completed handoff.
 
 Start/resume the conversational setup flow:
@@ -114,7 +114,7 @@ It tracks non-secret v2 state in `.powerpacks/ingestion/accounts.json`:
 `linkedin_csv.csv_path/source_label`, `twitter.handle`, and
 `messages.contacts_csv`, while preserving v1 `usernames`/`artifacts` mirrors.
 When `step` returns completed, use the emitted handoff; its import phase calls
-`import_network_pipeline.py run --from-accounts ...` after user confirmation.
+`discover_contacts_pipeline.py run --from-accounts ...` after user confirmation.
 
 Never store tokens/passwords/cookies there. Only store usernames, linked status,
 artifact paths, and notes.

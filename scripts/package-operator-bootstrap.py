@@ -452,6 +452,7 @@ PROCESSING_STEPS = [
 
 
 SEARCH_INDEX_RECORD_FILES = [
+    Path("records/person_profiles.records.jsonl"),
     Path("records/people.records.jsonl"),
     Path("records/summaries.records.jsonl"),
     Path("records/education.records.jsonl"),
@@ -467,7 +468,6 @@ SEARCH_INDEX_METADATA_FILES = [
 
 SEARCH_INDEX_INCREMENTAL_FILES = [
     Path("unified/flattened_people.jsonl"),
-    Path("unified/unified_person.csv"),
     Path("unified/summary_embeddings.jsonl"),
     Path("unified/person_tech_skills.jsonl"),
     Path("unified/linkedin_counts.jsonl"),
@@ -489,7 +489,10 @@ def should_copy_referenced_restore_path(path_text: str) -> bool:
     return (
         path_text == ".powerpacks/network-import/merged"
         or path_text.startswith(".powerpacks/network-import/merged/")
-        or path_text.startswith(".powerpacks/network-import/network-runs/")
+        or path_text == ".powerpacks/network-import/discover"
+        or path_text.startswith(".powerpacks/network-import/discover/")
+        or path_text == ".powerpacks/network-import/final"
+        or path_text.startswith(".powerpacks/network-import/final/")
         or path_text == ".powerpacks/network-import/profile_cache_v2"
         or path_text.startswith(".powerpacks/network-import/profile_cache_v2/")
     )
@@ -506,8 +509,8 @@ def write_processing_restore_ledger(restore_powerpacks_root: Path, operator: dic
         "schools": ".powerpacks/search-index/records/schools.records.jsonl",
         "education": ".powerpacks/search-index/records/education.records.jsonl",
         "summaries": ".powerpacks/search-index/records/summaries.records.jsonl",
+        "person_profiles": ".powerpacks/search-index/records/person_profiles.records.jsonl",
         "flattened_people": ".powerpacks/search-index/unified/flattened_people.jsonl",
-        "unified_person": ".powerpacks/search-index/unified/unified_person.csv",
         "role_classifications": ".powerpacks/search-index/unified/roles/roles_with_dense_text_remapped.jsonl",
         "role_embeddings": ".powerpacks/search-index/unified/roles/roles_with_embeddings.jsonl",
         "company_classifications": ".powerpacks/search-index/company/companies_corpus_v3.jsonl",
@@ -570,6 +573,13 @@ def copy_import_restore_payload(operator_dir: Path, restore_powerpacks_root: Pat
         target = restore_powerpacks_root / "network-import/directory.csv"
         copy_file(directory_src, target)
         copied.append(".powerpacks/network-import/directory.csv")
+    profile_cache_src = operator_dir / "enrich/enrichment/profile_cache_v2"
+    if profile_cache_src.exists():
+        target = restore_powerpacks_root / "network-import/profile_cache_v2"
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(profile_cache_src, target)
+        copied.append(".powerpacks/network-import/profile_cache_v2")
     return copied
 
 
@@ -592,9 +602,10 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
     missing: list[str] = []
     skipped: list[str] = []
 
-    import_ledger_path = operator_dir / "import/outputs/import-network.ledger.json"
+    import_ledger_path = operator_dir / "import/outputs/discover-contacts.ledger.json"
     import_ledger = read_json(import_ledger_path) if import_ledger_path.exists() else {}
-    run_dir_text = clean(import_ledger.get("run_dir"))
+    artifact_dir_text = clean(import_ledger.get("artifact_dir"))
+    ledger_text = clean(import_ledger.get("ledger"))
     if import_ledger:
         for path_text in sorted(set(collect_stage_paths(import_ledger))):
             if not should_copy_referenced_restore_path(path_text):
@@ -605,13 +616,14 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
                 copied.append(copied_path)
             else:
                 missing.append(path_text)
-    if run_dir_text:
-        restored_ledger_path = restore_powerpacks_root / Path(run_dir_text).relative_to(".powerpacks") / "import-network.ledger.json"
+    if artifact_dir_text:
+        restored_ledger_rel = Path(ledger_text).relative_to(".powerpacks") if ledger_text else Path(artifact_dir_text).relative_to(".powerpacks") / "ledger.json"
+        restored_ledger_path = restore_powerpacks_root / restored_ledger_rel
         restored_ledger = dict(import_ledger)
-        restored_ledger["ledger"] = str(Path(run_dir_text) / "import-network.ledger.json")
+        restored_ledger["ledger"] = str(Path(".powerpacks") / restored_ledger_rel)
         write_json(restored_ledger_path, restored_ledger)
-        copied.append(str(Path(run_dir_text) / "import-network.ledger.json"))
-        merged_dir = ROOT / run_dir_text / "merged"
+        copied.append(str(Path(".powerpacks") / restored_ledger_rel))
+        merged_dir = ROOT / artifact_dir_text / "merged"
         if merged_dir.exists():
             dst = restore_powerpacks_root / "network-import/merged"
             if dst.exists():
@@ -644,7 +656,7 @@ def build_restore_payload(operator: dict[str, Any], operator_dir: Path, network_
             ".powerpacks/search-index/summaries/embedding_checkpoints",
         ],
         "commands": {
-            "import_dry_run": f"uv run --project . python packs/ingestion/primitives/import_network_pipeline/import_network_pipeline.py run --ledger {run_dir_text}/import-network.ledger.json --run-id {Path(run_dir_text).name if run_dir_text else 'network-bootstrap'} --dry-run" if run_dir_text else "",
+            "import_dry_run": f"uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run --ledger {str(Path('.powerpacks') / restored_ledger_rel)} --dry-run" if artifact_dir_text else "",
             "processing_dry_run": "uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --dry-run",
         },
     }
@@ -671,6 +683,7 @@ def package_bundle(operator_dir: Path, restore_powerpacks_root: Path, bundles_di
         cmd.extend(["--exclude", f"{operator_dir.name}/import/inputs/linkedin_candidates"])
         cmd.extend(["--exclude", f"{operator_dir.name}/import/inputs/linkedin_candidates_manifest.csv"])
         cmd.extend(["--exclude", f"{operator_dir.name}/enrich/resolution"])
+        cmd.extend(["--exclude", f"{operator_dir.name}/enrich/enrichment/profile_cache_v2"])
     cmd.extend(["-C", str(operator_dir.parent.resolve()), operator_dir.name])
     if restore_powerpacks_root.exists():
         cmd.extend(["-C", str(restore_powerpacks_root.parent.resolve()), ".powerpacks"])

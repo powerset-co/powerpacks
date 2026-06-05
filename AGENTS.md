@@ -20,6 +20,17 @@ re-run `bin/sync-agent-files.sh` from the repo root.
 
 ---
 
+## Reference fidelity
+
+Do not be lazy when the user asks to copy, mirror, reference, or base work on an
+existing implementation. For frontend work, copy the referenced style, layout,
+component choices, spacing, colors, and code structure as close to 1:1 as
+possible unless underlying functionality makes that impossible. For backend
+work, copy the same interface, logic, and behavior as closely as possible unless
+the user explicitly asks not to copy it or asks for a different approach.
+
+---
+
 ## Sub-agent delegation
 
 The user explicitly authorizes Codex to use sub-agents for this repo. If skills
@@ -153,15 +164,17 @@ application-default credentials are not needed for normal Powerpacks workflows.
   `.powerpacks/network-import/merged/people.csv` and writes
   `.powerpacks/search-index/`; do not run LLM, network, Supabase,
   Postgres, or TurboPuffer calls for this workflow.
-- **Search pack** (search-network, search-company): requires `.env` with
-  TurboPuffer + Postgres credentials. If `.env` is present, run the search
-  primitive directly and use its error to diagnose; use the doctor only if env
-  or auth looks broken and the cause is unclear. For `$search-network`, after
+- **Search pack** (search-network, search-company):
+  `$search-network` and `$search-company` require `.env` with TurboPuffer +
+  Postgres credentials. If `.env` is present, run the search
+  primitive directly and use its error to diagnose; use the doctor only if env or
+  auth looks broken and the cause is unclear. For `$search-network`, after
   loading `packs/search/skills/search-network/SKILL.md`, use its documented
-  company-directory MCP fast path for company-only people lookups; otherwise
-  start with `search_network_pipeline.py prepare --query ...`. Do not
-  grep/search/read search docs, schemas, primitive source, or prior artifacts on
-  the happy path.
+  company-directory MCP fast path for company-only people lookups; use the
+  normal `search_network_pipeline.py prepare --query ...` path for ordinary
+  role searches; and use the complex-JD recruiter loop when a pasted JD or broad
+  role brief needs bounded multi-query execution. Do not grep/search/read
+  search docs, schemas, primitive source, or prior artifacts on the happy path.
 
 Don't run pack-specific checks pre-emptively. Only when the user's request
 implies that pack.
@@ -177,7 +190,8 @@ internals, primitive sequences, or orchestration details.
 Routes:
 
 - `$search-network`, people search, network search, role/title/location/school
-  searches, "who is...", "find people...", company-directory queries →
+  searches, "who is...", "find people...", complex JD plan-and-execute,
+  company-directory queries →
   `packs/search/skills/search-network/SKILL.md`
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
@@ -210,9 +224,9 @@ Routes:
   `packs/ingestion/skills/import-email/SKILL.md`
 - `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
   `packs/ingestion/skills/import-twitter/SKILL.md`
-- `$import-network`, local network ingestion orchestration, LinkedIn CSV plus
+- `$discover-contacts`, local network ingestion orchestration, LinkedIn CSV plus
   msgvault/messages/Twitter merge, DuckDB materialization →
-  `packs/ingestion/skills/import-network/SKILL.md`
+  `packs/ingestion/skills/discover-contacts/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Ask a brief
 clarifying question only when the same wording could mean multiple surfaces,

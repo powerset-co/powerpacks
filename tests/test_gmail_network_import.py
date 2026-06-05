@@ -5,10 +5,11 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+
+from packs.ingestion.schemas.people_schema import generate_person_id
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
 spec = importlib.util.spec_from_file_location("gmail_network_import", MODULE_PATH)
@@ -39,7 +40,6 @@ class GmailNetworkImportTests(unittest.TestCase):
                 "--operator-id", "operator-12345678",
                 "--output-dir", str(Path(tmp) / "out"),
                 "--ledger", str(ledger),
-                "--run-id", "run-test",
                 "--force",
             ])
             self.assertEqual(code, 0)
@@ -127,7 +127,6 @@ class GmailNetworkImportTests(unittest.TestCase):
                 "--db", str(db),
                 "--account-email", "me@gmail.com",
                 "--output-dir", str(Path(tmp) / "out"),
-                "--run-id", "msgvault-test",
             ])
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "completed")
@@ -136,6 +135,12 @@ class GmailNetworkImportTests(unittest.TestCase):
             targeted = Path(artifacts["targeted_emails_csv"])
             people = Path(artifacts["people_csv"])
             queue = Path(artifacts["linkedin_resolution_queue_csv"])
+            expected_dir = Path(tmp) / "out" / "discover" / "gmail" / "me-gmail.com"
+            self.assertEqual(Path(payload["artifact_dir"]), expected_dir)
+            self.assertEqual(targeted, expected_dir / "targeted_emails.csv")
+            self.assertEqual(people, expected_dir / "people.csv")
+            self.assertEqual(queue, expected_dir / "linkedin_resolution_queue.csv")
+            self.assertNotIn("msgvault-test", str(targeted))
             with targeted.open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
@@ -153,6 +158,95 @@ class GmailNetworkImportTests(unittest.TestCase):
                 queue_rows = list(csv.DictReader(handle))
             self.assertEqual(queue_rows[0]["handle"], "jane@example.com")
             self.assertEqual(queue_rows[0]["source"], "gmail_msgvault")
+
+    def test_msgvault_import_reruns_upsert_fixed_discover_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgvault.db"
+
+            def write_db(contacts):
+                if db.exists():
+                    db.unlink()
+                con = sqlite3.connect(db)
+                con.executescript("""
+                    CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+                    CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY,
+                        source_id INTEGER,
+                        conversation_id INTEGER,
+                        message_type TEXT,
+                        sent_at TEXT,
+                        received_at TEXT,
+                        internal_date TEXT,
+                        deleted_at TEXT,
+                        deleted_from_source_at TEXT
+                    );
+                    CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
+                    INSERT INTO sources (id, source_type, identifier, display_name) VALUES (1, 'gmail', 'me@gmail.com', 'Me');
+                """)
+                participant_id = 1
+                message_id = 10
+                for email, name in contacts:
+                    con.execute(
+                        "INSERT INTO participants (id, email_address, display_name, domain) VALUES (?, ?, ?, ?)",
+                        (participant_id, email, name, email.rsplit("@", 1)[1]),
+                    )
+                    con.execute(
+                        "INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at) VALUES (?, 1, ?, 'email', ?)",
+                        (message_id, message_id, f"2026-01-{participant_id:02d}T00:00:00Z"),
+                    )
+                    con.execute(
+                        "INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES (?, ?, 'from', ?)",
+                        (message_id, participant_id, name),
+                    )
+                    message_id += 1
+                    con.execute(
+                        "INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at) VALUES (?, 1, ?, 'email', ?)",
+                        (message_id, message_id, f"2026-01-{participant_id:02d}T01:00:00Z"),
+                    )
+                    con.execute(
+                        "INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES (?, ?, 'to', ?)",
+                        (message_id, participant_id, name),
+                    )
+                    participant_id += 1
+                    message_id += 1
+                con.commit()
+                con.close()
+
+            out_dir = Path(tmp) / "out"
+            expected_dir = out_dir / "discover" / "gmail" / "me-gmail.com"
+            write_db([("jane@example.com", "Jane Example")])
+            code, first = self.invoke([
+                "msgvault",
+                "--db", str(db),
+                "--account-email", "me@gmail.com",
+                "--output-dir", str(out_dir),
+            ])
+            self.assertEqual(code, 0)
+            self.assertEqual(Path(first["artifact_dir"]), expected_dir)
+
+            write_db([("john@example.com", "John Example")])
+            code, second = self.invoke([
+                "msgvault",
+                "--db", str(db),
+                "--account-email", "me@gmail.com",
+                "--output-dir", str(out_dir),
+            ])
+            self.assertEqual(code, 0)
+            self.assertEqual(Path(second["artifact_dir"]), expected_dir)
+            self.assertEqual(first["artifacts"]["people_csv"], second["artifacts"]["people_csv"])
+            self.assertNotIn("first-run", second["artifacts"]["people_csv"])
+            self.assertNotIn("second-run", second["artifacts"]["people_csv"])
+            self.assertEqual(second["counts"]["contacts_written"], 1)
+            self.assertEqual(second["counts"]["contacts_final"], 2)
+            self.assertEqual(second["counts"]["contacts_preserved_existing"], 1)
+
+            with Path(second["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                people_rows = list(csv.DictReader(handle))
+            self.assertEqual([row["primary_email"] for row in people_rows], ["jane@example.com", "john@example.com"])
+            with Path(second["artifacts"]["targeted_emails_csv"]).open(newline="", encoding="utf-8") as handle:
+                targeted_rows = list(csv.DictReader(handle))
+            self.assertEqual([row["primary_email"] for row in targeted_rows], ["jane@example.com", "john@example.com"])
 
     def test_msgvault_import_requires_round_trip_contacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,7 +291,6 @@ class GmailNetworkImportTests(unittest.TestCase):
                 "--db", str(db),
                 "--account-email", "me@gmail.com",
                 "--output-dir", str(Path(tmp) / "out"),
-                "--run-id", "round-trip",
             ])
             self.assertEqual(code, 0)
             self.assertEqual(payload["counts"]["contacts_seen"], 3)
@@ -254,7 +347,6 @@ class GmailNetworkImportTests(unittest.TestCase):
                 "--db", str(db),
                 "--account-email", "me@gmail.com",
                 "--output-dir", str(Path(tmp) / "out"),
-                "--run-id", "filtered",
             ])
             self.assertEqual(code, 0)
             self.assertEqual(payload["counts"]["excluded_labels"], ["CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES"])
@@ -267,7 +359,6 @@ class GmailNetworkImportTests(unittest.TestCase):
                 "--db", str(db),
                 "--account-email", "me@gmail.com",
                 "--output-dir", str(Path(tmp) / "out"),
-                "--run-id", "unfiltered",
                 "--include-category-mail",
             ])
             self.assertEqual(code, 0)
@@ -310,7 +401,6 @@ class GmailNetworkImportTests(unittest.TestCase):
                 "--people-csv", str(people),
                 "--resolutions-csv", str(resolutions),
                 "--output-dir", str(Path(tmp) / "out"),
-                "--run-id", "resolved-test",
             ])
             self.assertEqual(code, 0)
             self.assertEqual(payload["resolved"], 1)
@@ -319,7 +409,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(rows[0]["public_identifier"], "jane-example")
             self.assertEqual(rows[0]["linkedin_url"], "https://www.linkedin.com/in/jane-example")
             self.assertEqual(rows[0]["headline"], "Founder at Example")
-            self.assertEqual(rows[0]["id"], str(uuid.uuid5(uuid.NAMESPACE_URL, "linkedin:jane-example")))
+            self.assertEqual(rows[0]["id"], generate_person_id("jane-example"))
 
     def test_msgvault_accounts_lists_local_sources(self):
         with tempfile.TemporaryDirectory() as tmp:

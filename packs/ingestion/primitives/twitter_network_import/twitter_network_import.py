@@ -35,13 +35,14 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, normalize_people_row
+    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, generate_person_id, normalize_people_row
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, normalize_people_row
+    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, generate_person_id, normalize_people_row
 
-DEFAULT_LEDGER = Path(".powerpacks/network-import/twitter/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
+DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "twitter"
+DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "twitter_network_import.ledger.json"
 TWITTER_API_BASE = "https://twitter241.p.rapidapi.com"
 LINKEDIN_API_BASE = "https://professional-network-data.p.rapidapi.com"
 
@@ -109,6 +110,10 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def source_slug(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", (value or "").strip().lower()).strip("-._") or "source"
+
+
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -132,8 +137,7 @@ def sha(value: str, length: int = 12) -> str:
 
 
 def generate_linkedin_id(public_identifier: str) -> str:
-    import uuid
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"linkedin:{public_identifier.lower().strip()}"))
+    return generate_person_id(public_identifier)
 
 
 def generate_synthetic_id(handle: str) -> str:
@@ -629,7 +633,11 @@ def next_pending_step(ledger: dict[str, Any]) -> str | None:
 
 
 def approval_id(ledger: dict[str, Any], step_id: str) -> str:
-    return f"{ledger.get('run_id', 'run')}:{step_id}"
+    return f"twitter:{step_id}"
+
+
+def artifact_dir_from_ledger(ledger: dict[str, Any]) -> Path:
+    return Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_DISCOVER_DIR))
 
 
 def is_approved(ledger: dict[str, Any], step_id: str) -> bool:
@@ -654,8 +662,8 @@ def block_for_approval(ledger_path: Path, ledger: dict[str, Any], step_id: str, 
 
 def step_load_or_crawl(ledger: dict[str, Any]) -> dict[str, Any]:
     inp = ledger["input"]
-    out = Path(ledger["run_dir"]) / "followers_dump.csv"
-    raw_dir = Path(ledger["run_dir"]) / "raw_twitter_responses"
+    out = artifact_dir_from_ledger(ledger) / "followers_dump.csv"
+    raw_dir = artifact_dir_from_ledger(ledger) / "raw_twitter_responses"
     raw_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
     key = os.getenv("RAPIDAPI_TWITTER_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
@@ -719,7 +727,7 @@ def step_score_candidates(ledger: dict[str, Any]) -> dict[str, Any]:
         })
         out_rows.append(row)
     out_rows.sort(key=lambda x: int(x.get("enrichment_score") or 0), reverse=True)
-    out = Path(ledger["run_dir"]) / "candidates.csv"
+    out = artifact_dir_from_ledger(ledger) / "candidates.csv"
     write_csv(out, CANDIDATE_COLUMNS, out_rows)
     ledger["artifacts"]["candidates_csv"] = str(out)
     return {"rows": len(out_rows), "output_file": str(out)}
@@ -728,7 +736,7 @@ def step_score_candidates(ledger: dict[str, Any]) -> dict[str, Any]:
 def step_moe_evaluate(ledger: dict[str, Any]) -> dict[str, Any]:
     inp = ledger["input"]
     rows = read_csv(Path(ledger["artifacts"]["candidates_csv"]))
-    out = Path(ledger["run_dir"]) / "moe_evaluated.csv"
+    out = artifact_dir_from_ledger(ledger) / "moe_evaluated.csv"
     if inp.get("skip_moe"):
         out_rows = []
         for row in rows:
@@ -777,9 +785,9 @@ def step_moe_evaluate(ledger: dict[str, Any]) -> dict[str, Any]:
         merged.update(agg)
         out_rows.append(merged)
     write_csv(out, MOE_COLUMNS, out_rows)
-    write_json(Path(ledger["run_dir"]) / "moe_usage.json", raw_usage)
+    write_json(artifact_dir_from_ledger(ledger) / "moe_usage.json", raw_usage)
     ledger["artifacts"]["moe_evaluated_csv"] = str(out)
-    ledger["artifacts"]["moe_usage_json"] = str(Path(ledger["run_dir"]) / "moe_usage.json")
+    ledger["artifacts"]["moe_usage_json"] = str(artifact_dir_from_ledger(ledger) / "moe_usage.json")
     counts: dict[str, int] = {}
     for row in out_rows:
         counts[row.get("moe_verdict", "")] = counts.get(row.get("moe_verdict", ""), 0) + 1
@@ -816,8 +824,8 @@ def step_pre_resolve_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
                     output[idx]["linkedin_status"] = "found_pre_resolved"
                     pre_count += 1
                     fetched += 1
-    out = Path(ledger["run_dir"]) / "linkedin_resolved.csv"
-    queue = Path(ledger["run_dir"]) / "linkedin_resolution_queue.csv"
+    out = artifact_dir_from_ledger(ledger) / "linkedin_resolved.csv"
+    queue = artifact_dir_from_ledger(ledger) / "linkedin_resolution_queue.csv"
     unresolved = [r for r in output if not r.get("linkedin_url")]
     write_csv(out, MOE_COLUMNS, output)
     write_csv(queue, MOE_COLUMNS, unresolved)
@@ -832,7 +840,7 @@ def step_validate_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
     if not key:
         raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
     rows = read_csv(Path(ledger["artifacts"]["linkedin_resolved_csv"]))
-    raw_dir = Path(ledger["run_dir"]) / "raw_linkedin_responses"
+    raw_dir = artifact_dir_from_ledger(ledger) / "raw_linkedin_responses"
     raw_dir.mkdir(parents=True, exist_ok=True)
     out_rows: list[dict[str, Any]] = [dict(row) for row in rows]
     jobs = [(i, row, key, raw_dir) for i, row in enumerate(rows)]
@@ -848,7 +856,7 @@ def step_validate_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
     for row in out_rows:
         status = row.get("linkedin_validation_status") or row.get("linkedin_status") or "no_url"
         stats[status] = stats.get(status, 0) + 1
-    out = Path(ledger["run_dir"]) / "linkedin_validated.csv"
+    out = artifact_dir_from_ledger(ledger) / "linkedin_validated.csv"
     write_csv(out, VALIDATED_COLUMNS, out_rows)
     ledger["artifacts"]["linkedin_validated_csv"] = str(out)
     ledger["artifacts"]["raw_linkedin_responses_dir"] = str(raw_dir)
@@ -934,8 +942,8 @@ def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
             "source_channels": "twitter",
             "source_artifacts": json.dumps(source_artifacts, ensure_ascii=False),
         })
-    out = Path(ledger["run_dir"]) / "people.csv"
-    legacy = Path(ledger["run_dir"]) / "people_harmonic_all.csv"
+    out = artifact_dir_from_ledger(ledger) / "people.csv"
+    legacy = artifact_dir_from_ledger(ledger) / "people_harmonic_all.csv"
     write_csv(out, PEOPLE_COLUMNS, people)
     shutil.copyfile(out, legacy)
     ledger["artifacts"]["people_csv"] = str(out)
@@ -996,14 +1004,12 @@ def ensure_api_keys_for_step(step_id: str) -> None:
 
 def run_pipeline(ledger_path: Path, *, stop_after: str | None = None) -> dict[str, Any]:
     ledger = load_ledger(ledger_path)
-    if not ledger.get("run_id"):
-        raise PipelineFailed(f"Ledger has no run_id: {ledger_path}")
     while True:
         step_id = next_pending_step(ledger)
         if not step_id:
             ledger.pop("blocked", None)
             save_ledger(ledger_path, ledger)
-            return {"status": "completed", "ledger": str(ledger_path), "run_dir": ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})}
+            return {"status": "completed", "ledger": str(ledger_path), "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})}
         if stop_after and ledger.get("steps", {}).get(stop_after, {}).get("status") == "completed":
             save_ledger(ledger_path, ledger)
             return {"status": "stopped", "ledger": str(ledger_path), "next_step": step_id}
@@ -1030,8 +1036,7 @@ def create_ledger(args: argparse.Namespace) -> dict[str, Any]:
     handle = args.handle.lstrip("@").strip().lower()
     if not handle:
         raise PipelineFailed("--handle is required")
-    run_id = args.run_id or f"twitter-{handle}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{sha(handle + now_iso(), 6)}"
-    run_dir = DEFAULT_BASE_DIR / "twitter" / run_id
+    artifact_dir = DEFAULT_DISCOVER_DIR / source_slug(handle)
     inp = TwitterInput(
         handle=handle,
         source=args.source or handle,
@@ -1051,10 +1056,9 @@ def create_ledger(args: argparse.Namespace) -> dict[str, Any]:
     ledger = {
         "primitive": "twitter_network_import",
         "version": 1,
-        "run_id": run_id,
         "created_at": now_iso(),
         "updated_at": now_iso(),
-        "run_dir": str(run_dir),
+        "artifact_dir": str(artifact_dir),
         "input": asdict(inp),
         "steps": {},
         "approvals": {},
@@ -1064,8 +1068,11 @@ def create_ledger(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    ledger_path = Path(args.ledger)
     ledger = create_ledger(args)
+    ledger_path = Path(args.ledger)
+    if str(ledger_path) == str(DEFAULT_LEDGER):
+        ledger_path = artifact_dir_from_ledger(ledger) / "twitter_network_import.ledger.json"
+    ledger["ledger"] = str(ledger_path)
     save_ledger(ledger_path, ledger)
     result = run_pipeline(ledger_path, stop_after=args.stop_after)
     emit(result)
@@ -1084,8 +1091,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     emit({
         "status": "blocked" if ledger.get("blocked") else ("completed" if not next_pending_step(ledger) else "running"),
         "ledger": str(args.ledger),
-        "run_id": ledger.get("run_id"),
-        "run_dir": ledger.get("run_dir"),
+        "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir"),
         "next_step": next_pending_step(ledger),
         "blocked": ledger.get("blocked"),
         "steps": ledger.get("steps", {}),
@@ -1138,7 +1144,6 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", parents=[common], help="Create a run and advance until the first approval gate")
     run.add_argument("--handle", required=True, help="Operator Twitter/X handle whose followers should be imported")
     run.add_argument("--source", default="", help="Source label; defaults to --handle")
-    run.add_argument("--run-id", default="", help="Optional stable run id")
     run.add_argument("--max-pages", type=int, default=1, help="Maximum RapidAPI follower pages to crawl")
     run.add_argument("--min-score", type=int, default=20, help="Minimum heuristic score for enrichment candidates")
     run.add_argument("--verdicts", default="enrich,maybe", help="MOE verdicts to carry into LinkedIn resolution")

@@ -71,7 +71,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`search-network`](packs/search/skills/search-network/SKILL.md) | `$search-network <query>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. |
+| [`search-network`](packs/search/skills/search-network/SKILL.md) | `$search-network <query-or-jd>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. For complex JDs, it detects that one query would be too broad, plans a bounded multi-query recruiter loop, shows one search-plan approval with an LLM review budget (default 100 profiles) and `score >= 0.3` cutoff, then executes initial probes, reviews, clusters exemplars, runs bounded fan-out, and exports results. |
 | [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
 | [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds deterministic local indexing artifacts from `.powerpacks/network-import/merged/people.csv` under `.powerpacks/search-index/<run-id>/` with no remote calls. |
 
@@ -101,7 +101,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
-- give the agent operational entrypoints: `$search-network <query>`,
+- give the agent operational entrypoints: `$search-network <query-or-jd>`,
   `$search-company <query>`, `$powerset setup`, and the messages-pack import
   skill
 - decompose broad recruiting queries into bounded retrieval plans
