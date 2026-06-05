@@ -150,7 +150,6 @@ class PackageOperatorBootstrapTests(unittest.TestCase):
                     (out / "local-search.duckdb").write_text("duckdb", encoding="utf-8")
                     (out / "records/people.records.jsonl").write_text("{}\n", encoding="utf-8")
                     (out / "unified/flattened_people.jsonl").write_text("{}\n", encoding="utf-8")
-                    (out / "unified/unified_person.csv").write_text("id\np1\n", encoding="utf-8")
                     (out / "unified/person_tech_skills.jsonl").write_text("{}\n", encoding="utf-8")
                     (out / "unified/roles/roles_with_dense_text_remapped.jsonl").write_text("role dense\n", encoding="utf-8")
                     (out / "unified/roles/roles_with_embeddings.jsonl").write_text("role embeddings\n", encoding="utf-8")

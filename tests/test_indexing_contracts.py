@@ -222,14 +222,13 @@ class IndexingContractTest(unittest.TestCase):
         self.assertTrue(validate_record(company_record, company_contract)["ok"])
 
         summary_contract = load_search_contract("turbopuffer/summaries.namespace.json")
-        with (seed / "unified/unified_person.csv").open(newline="", encoding="utf-8") as handle:
-            summary_row = next(row for row in csv.DictReader(handle) if row.get("summary"))
         summary_embedding = first_jsonl(seed / "unified/summary_embeddings.jsonl")
+        summary_text = "summary fixture"
         summary_record = {
-            "id": summary_row["id"],
-            "summary": summary_row["summary"],
+            "id": summary_embedding["person_id"],
+            "summary": summary_text,
             "vector": summary_embedding["embedding"],
-            "summary_tokens": _word_tokenize(summary_row["summary"]),
+            "summary_tokens": _word_tokenize(summary_text),
             "tech_skills": [],
             "allowed_operator_ids": [],
         }

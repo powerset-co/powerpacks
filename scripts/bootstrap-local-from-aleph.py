@@ -597,18 +597,41 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
         write_stage_chunks(run_dir / "company/enrichment_checkpoints", "companies", company_rows_seed, args.checkpoint_every, "company_urn", "input-classifications", run_dir / "company/companies_corpus_v3.jsonl")
         write_stage_chunks(run_dir / "company/embedding_checkpoints", "embeddings", [{"id": r.get("company_urn"), "embedding": r.get("embedding"), **r} for r in company_embedding_rows], args.checkpoint_every, "id", "input-embeddings", run_dir / "company/company_embeddings_v3.jsonl")
 
-    unified_rows, unified_scanned = load_csv_by_ids(seed / "unified/unified_person.csv", selected_person_ids)
+    profile_rows: dict[str, dict[str, Any]] = {}
+    for row in flattened:
+        pid = clean(row.get("base_person_id"))
+        if not pid or pid in profile_rows:
+            continue
+        profile_url = clean(row.get("profile_url") or row.get("linkedin_url"))
+        profile_context = row.get("profile_context") if isinstance(row.get("profile_context"), dict) else {}
+        headline = clean(row.get("headline") or profile_context.get("linkedin_headline"))
+        summary = clean(row.get("summary") or headline)
+        profile_rows[pid] = {
+            "id": pid,
+            "name": clean(row.get("name")),
+            "full_name": clean(row.get("name")),
+            "headline": headline,
+            "summary": summary,
+            "linkedin_url": normalize_linkedin_url(profile_url),
+            "profile_url": profile_url,
+            "public_identifier": extract_public_identifier(profile_url),
+            "city": clean(row.get("city")),
+            "state": clean(row.get("state")),
+            "country": clean(row.get("country")),
+            "location": ", ".join(part for part in [clean(row.get("city")), clean(row.get("state")), clean(row.get("country"))] if part),
+        }
+
     def local_person_id(old_person_id: str, row: dict[str, Any] | None = None) -> str:
         row = row or {}
-        unified_row = unified_rows.get(old_person_id) or {}
+        profile_row = profile_rows.get(old_person_id) or {}
         public_id = clean(
-            unified_row.get("public_identifier")
+            profile_row.get("public_identifier")
             or row.get("public_identifier")
-            or extract_public_identifier(clean(unified_row.get("linkedin_url") or row.get("linkedin_url")))
+            or extract_public_identifier(clean(profile_row.get("linkedin_url") or profile_row.get("profile_url") or row.get("linkedin_url") or row.get("profile_url")))
         ).lower()
         return generate_person_id(public_id) if public_id else old_person_id
 
-    person_id_map = {old_id: local_person_id(old_id) for old_id in selected_person_ids}
+    person_id_map = {old_id: local_person_id(old_id, profile_rows.get(old_id)) for old_id in selected_person_ids}
 
     def local_position_row(row: dict[str, Any]) -> dict[str, Any]:
         old_base_id = clean(row.get("base_person_id"))
@@ -625,7 +648,7 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     summary_embeddings, summary_emb_scanned = load_by_ids(seed / "unified/summary_embeddings.jsonl", selected_person_ids, "person_id")
     tech_skills, tech_scanned = load_by_ids(seed / "unified/person_tech_skills.jsonl", selected_person_ids, "person_id")
     linkedin_counts, linkedin_counts_scanned = load_optional_by_ids(seed / "unified/linkedin_counts.jsonl", selected_person_ids, "person_id")
-    public_identifiers = {clean(row.get("public_identifier")).lower() for row in unified_rows.values() if clean(row.get("public_identifier"))}
+    public_identifiers = {clean(row.get("public_identifier")).lower() for row in profile_rows.values() if clean(row.get("public_identifier"))}
     x_twitter_counts, x_twitter_counts_scanned = load_optional_by_ids(seed / "unified/x_twitter_counts.jsonl", public_identifiers, "public_identifier")
     if not args.restore_records_only:
         write_jsonl(run_dir / "unified/flattened_people.jsonl", local_flattened)
@@ -634,12 +657,6 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
         write_jsonl(run_dir / "unified/linkedin_counts.jsonl", [{**linkedin_counts[pid], "person_id": person_id_map.get(pid, pid)} for pid in sorted(linkedin_counts)])
         write_jsonl(run_dir / "unified/x_twitter_counts.jsonl", [x_twitter_counts[pid] for pid in sorted(x_twitter_counts)])
         write_stage_chunks(run_dir / "summaries/embedding_checkpoints", "embeddings", [{"id": person_id_map.get(clean(r.get("person_id")), clean(r.get("person_id"))), "person_id": person_id_map.get(clean(r.get("person_id")), clean(r.get("person_id"))), "embedding": r.get("embedding"), **{k: v for k, v in r.items() if k not in {"id", "person_id", "embedding"}}} for r in summary_embeddings.values()], args.checkpoint_every, "id", "input-embeddings", run_dir / "unified/summary_embeddings.jsonl")
-        with (run_dir / "unified/unified_person.csv").open("w", newline="", encoding="utf-8") as handle:
-            fields = sorted({k for row in unified_rows.values() for k in row}) or ["id"]
-            writer = csv.DictWriter(handle, fieldnames=fields)
-            writer.writeheader()
-            for pid in sorted(unified_rows):
-                writer.writerow({**unified_rows[pid], "id": person_id_map.get(pid, pid), "person_id": person_id_map.get(pid, pid)})
 
     ages, _ = load_birth_years(seed / "unified/inferred_ages.jsonl", selected_person_ids)
     founders, _ = load_founder_position_ids(seed / "unified/roles/founder_enrichment.jsonl", position_ids)
@@ -662,11 +679,11 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
                 role_ids.append("founder")
             old_base_id = clean(row.get("base_person_id"))
             base_id = person_id_map.get(old_base_id, old_base_id)
-            unified_row = unified_rows.get(base_id) or {}
-            public_id = clean(unified_row.get("public_identifier")).lower()
+            profile_row = profile_rows.get(old_base_id) or {}
+            public_id = clean(profile_row.get("public_identifier")).lower()
             social = social_counts_from_rows(
-                unified_row,
-                linkedin_counts.get(base_id) or {},
+                profile_row,
+                linkedin_counts.get(old_base_id) or {},
                 x_twitter_counts.get(public_id) or {},
                 row,
                 position,
@@ -707,7 +724,7 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
 
     def summary_records() -> Iterable[dict[str, Any]]:
         for pid in sorted(selected_person_ids):
-            summary = clean((unified_rows.get(pid) or {}).get("summary"))
+            summary = clean((profile_rows.get(pid) or {}).get("summary"))
             emb = summary_embeddings.get(pid, {}).get("embedding")
             if summary and emb:
                 local_pid = person_id_map.get(pid, pid)
@@ -740,7 +757,7 @@ def build_operator(args: argparse.Namespace, operator_id: str, person_ids: set[s
     vector_counts = {"people": people_count, "summaries": summaries_count, "companies": companies_count}
     write_json(run_dir / "vectors/checkpoint.json", {"status": "completed", "provider": "input-embeddings", "dimension": 1536, "counts": vector_counts, "updated_at": now_iso()})
 
-    stats = {"status": "ok", "mode": mode, "operator_id": operator_id, "operator_email": operator_email, "run_dir": str(run_dir), "id_scheme": "aleph_linkedin_public_identifier_uuid5", "company_source": str(company_csv_path), "counts": {"people_records": people_count, "person_profiles_records": person_profiles_count, "summaries_records": summaries_count, "companies_records": companies_count, "education_records": education_count, "schools_records": schools_count, "selected_people": len(selected_person_ids), "selected_positions": len(flattened), "roles": len(role_dense_rows), "role_embeddings": len(role_embedding_rows), "companies_from_company_harmonic_csv": len(company_harmonic), "companies_with_enrichment_cache": len(company_corpus), "linkedin_counts": len(linkedin_counts), "x_twitter_counts": len(x_twitter_counts)}, "id_backfill_needed": {"companies_without_linkedin_url": sum(1 for row in company_source.values() if not clean(row.get("linkedin_url"))), "schools_without_linkedin_url": sum(1 for row in schools.values() if not clean(row.get("linkedin_url")))}, "scanned_rows": {"flattened_people": flattened_scanned, "roles_dense": role_dense_scanned, "role_embeddings": role_emb_scanned, "companies_corpus_enrichment_cache": company_scanned, "company_harmonic_all_csv": company_harmonic_scanned, "company_embeddings": company_emb_scanned, "unified_person_csv": unified_scanned, "summary_embeddings": summary_emb_scanned, "tech_skills": tech_scanned, "linkedin_counts": linkedin_counts_scanned, "x_twitter_counts": x_twitter_counts_scanned, "people_education": people_education_scanned, "schools": schools_scanned}, "duckdb": duckdb_payload.get("duckdb"), "duckdb_tables": duckdb_payload.get("tables", {}), "elapsed_seconds": round(time.time() - started, 3)}
+    stats = {"status": "ok", "mode": mode, "operator_id": operator_id, "operator_email": operator_email, "run_dir": str(run_dir), "id_scheme": "aleph_linkedin_public_identifier_uuid5", "company_source": str(company_csv_path), "counts": {"people_records": people_count, "person_profiles_records": person_profiles_count, "summaries_records": summaries_count, "companies_records": companies_count, "education_records": education_count, "schools_records": schools_count, "selected_people": len(selected_person_ids), "selected_positions": len(flattened), "roles": len(role_dense_rows), "role_embeddings": len(role_embedding_rows), "companies_from_company_harmonic_csv": len(company_harmonic), "companies_with_enrichment_cache": len(company_corpus), "linkedin_counts": len(linkedin_counts), "x_twitter_counts": len(x_twitter_counts)}, "id_backfill_needed": {"companies_without_linkedin_url": sum(1 for row in company_source.values() if not clean(row.get("linkedin_url"))), "schools_without_linkedin_url": sum(1 for row in schools.values() if not clean(row.get("linkedin_url")))}, "scanned_rows": {"flattened_people": flattened_scanned, "roles_dense": role_dense_scanned, "role_embeddings": role_emb_scanned, "companies_corpus_enrichment_cache": company_scanned, "company_harmonic_all_csv": company_harmonic_scanned, "company_embeddings": company_emb_scanned, "summary_embeddings": summary_emb_scanned, "tech_skills": tech_scanned, "linkedin_counts": linkedin_counts_scanned, "x_twitter_counts": x_twitter_counts_scanned, "people_education": people_education_scanned, "schools": schools_scanned}, "duckdb": duckdb_payload.get("duckdb"), "duckdb_tables": duckdb_payload.get("tables", {}), "elapsed_seconds": round(time.time() - started, 3)}
     write_json(stats_dir / "bootstrap_from_aleph.json", stats)
     return stats
 

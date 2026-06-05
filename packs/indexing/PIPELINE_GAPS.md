@@ -35,7 +35,8 @@ Both pipelines follow the same core shape:
 - [x] Education/school corpus
 - [x] Join role enrichment back to position records with trace fields
   (`title_hash`, `raw_title`, `role_type_category`, `person_id`, `position_id`)
-- [x] Incremental processing with `--limit-mode missing`
+- [x] Fixed-output incremental processing: reruns upsert into canonical stage
+  artifacts and fill missing role/company/embedding rows from those artifacts
 - [x] Checkpointed role/company/embedding stages
 - [x] Strict contract validation (zero extra/missing fields)
 

@@ -27,8 +27,7 @@ Artifacts are written under:
 .powerpacks/search-index/
 ├── ledger.json
 ├── unified/
-│   ├── flattened_people.jsonl
-│   └── unified_person.csv
+│   └── flattened_people.jsonl
 ├── profiles/hydrated_profiles.jsonl
 ├── roles/
 │   ├── raw_titles.jsonl

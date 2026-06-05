@@ -33,12 +33,9 @@ Run the full local contacts indexing pipeline:
 uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run --operator-id <operator-id>
 ```
 
-If the pipeline reports provider work above the approval threshold, rerun with
-explicit approval:
-
-```bash
-uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run --operator-id <operator-id> --approve-provider-spend
-```
+The run emits a dry-run cost estimate in the stage manifest before processing.
+When the user starts indexing from the app or this command, the same run proceeds
+with the fixed-output pipeline and uses existing stage artifacts as caches.
 
 The run is single-index and idempotent: a partial index resumes from
 `.powerpacks/search-index/ledger.json`; a completed index refreshes the same
@@ -75,7 +72,7 @@ Artifacts are written under `.powerpacks/search-index/`. The local DuckDB is
 
 - local files only
 - `plan`, `status`, and `run --dry-run` are local inspection only
-- no LLM/provider calls unless the user explicitly approves the required allow flags
+- no LLM/provider calls from dry-run/status/plan
 - no network calls unless explicitly approved by the generated plan
 - no Supabase/Postgres calls
 - no TurboPuffer calls

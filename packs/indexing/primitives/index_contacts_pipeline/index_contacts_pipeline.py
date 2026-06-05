@@ -14,6 +14,7 @@ wrapper owns orchestration and writes a stable stage manifest.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import shutil
@@ -30,11 +31,14 @@ DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 DEFAULT_ARTIFACT_DIR = Path(".powerpacks/network-import/index/contacts")
 DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
-DEFAULT_AUTO_SPEND_LIMIT_USD = 10.0
 
 
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def progress(message: str) -> None:
+    print(f"[index-contacts] {message}", file=sys.stderr, flush=True)
 
 
 def now_iso() -> str:
@@ -53,6 +57,19 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def count_csv_rows(path: str | Path) -> int:
+    target = ROOT / Path(path)
+    if not target.exists():
+        return 0
+    with target.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        reader = csv.reader(handle)
+        try:
+            next(reader)
+        except StopIteration:
+            return 0
+        return sum(1 for _ in reader)
 
 
 def parse_json_fragment(text: str) -> dict[str, Any] | None:
@@ -75,7 +92,32 @@ def parse_json_fragment(text: str) -> dict[str, Any] | None:
     return None
 
 
-def run_json_command(cmd: list[str], *, timeout: int) -> tuple[int, dict[str, Any], str]:
+def run_json_command(cmd: list[str], *, timeout: int, stream_stderr: bool = False) -> tuple[int, dict[str, Any], str]:
+    if stream_stderr:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stderr_parts: list[str] = []
+        assert proc.stderr is not None
+        try:
+            for line in proc.stderr:
+                stderr_parts.append(line)
+                print(line, end="", file=sys.stderr, flush=True)
+            stdout = proc.stdout.read() if proc.stdout is not None else ""
+            returncode = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            stderr_parts.append(stderr or "")
+            return 124, parse_json_fragment(stdout or "") or {}, "".join(stderr_parts)
+        payload = parse_json_fragment(stdout or "") or {}
+        return returncode, payload, "".join(stderr_parts)
+
     proc = subprocess.run(
         cmd,
         cwd=ROOT,
@@ -132,13 +174,7 @@ def processing_args(args: argparse.Namespace, *, dry_run: bool, allow_paid: bool
         str(args.output_dir),
         "--default-operator-id",
         str(args.operator_id),
-        "--limit-mode",
-        str(args.limit_mode),
-        "--existing-duckdb",
-        str(Path(args.output_dir) / "local-search.duckdb"),
     ]
-    if args.limit is not None:
-        cmd.extend(["--limit", str(args.limit)])
     if dry_run:
         cmd.append("--dry-run")
     if allow_paid:
@@ -352,9 +388,47 @@ def estimated_cost_usd(estimate: dict[str, Any]) -> float | None:
         return None
 
 
-def estimate_has_known_pricing(estimate: dict[str, Any]) -> bool:
-    costs = estimate.get("estimated_costs") if isinstance(estimate.get("estimated_costs"), dict) else {}
-    return bool(costs.get("known_pricing", True))
+def compact_run_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    estimate = payload.get("processing_estimate") if isinstance(payload.get("processing_estimate"), dict) else {}
+    counts = estimate.get("counts") if isinstance(estimate.get("counts"), dict) else {}
+    fan_in = payload.get("fan_in") if isinstance(payload.get("fan_in"), dict) else {}
+    merge = fan_in.get("merge") if isinstance(fan_in.get("merge"), dict) else {}
+    local_duckdb = payload.get("local_duckdb") if isinstance(payload.get("local_duckdb"), dict) else {}
+    tables = local_duckdb.get("tables") if isinstance(local_duckdb.get("tables"), dict) else {}
+    standard_tables = [
+        "local_person_profiles",
+        "local_people_positions",
+        "local_summaries",
+        "local_people_education",
+        "local_education",
+        "local_companies",
+    ]
+    merged_people_csv = str((fan_in.get("artifacts") if isinstance(fan_in.get("artifacts"), dict) else {}).get("merged_people_csv") or "")
+    fan_in_people_rows = int(merge.get("people_rows") or merge.get("output_rows") or 0)
+    if not fan_in_people_rows and merged_people_csv:
+        fan_in_people_rows = count_csv_rows(merged_people_csv)
+    summary: dict[str, Any] = {
+        "status": payload.get("status"),
+        "step": payload.get("step") or "",
+        "people_csv": payload.get("people_csv") or "",
+        "people": int(counts.get("total_people") or counts.get("people") or merge.get("people_rows") or merge.get("output_rows") or 0),
+        "pending_people_before_run": int(counts.get("pending_people") or counts.get("people") or 0),
+        "estimated_cost_usd": estimated_cost_usd(estimate) or payload.get("estimated_cost_usd") or 0.0,
+        "estimated_paid_calls": estimated_paid_calls(estimate),
+        "duckdb": payload.get("duckdb") or local_duckdb.get("duckdb") or "",
+        "manifest": payload.get("manifest") or str(DEFAULT_MANIFEST),
+    }
+    if merge:
+        summary["fan_in"] = {
+            "input_rows": int(merge.get("input_rows") or 0),
+            "people_rows": fan_in_people_rows,
+            "company_rows": int(merge.get("company_rows") or 0),
+        }
+    if tables:
+        summary["duckdb_tables"] = {key: tables[key] for key in standard_tables if key in tables}
+    if payload.get("error"):
+        summary["error"] = payload.get("error")
+    return summary
 
 
 def write_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -412,6 +486,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         write_manifest(manifest_path, payload)
         return payload, 0
 
+    progress("preflight: checking existing local records")
     preflight_duckdb = maybe_materialize_existing_records(args)
     if preflight_duckdb.get("status") == "failed":
         payload = {
@@ -427,6 +502,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         write_manifest(manifest_path, payload)
         return payload, 1
 
+    progress("processing: dry-run incremental estimate")
     estimate_code, estimate, estimate_stderr = run_json_command(processing_args(args, dry_run=True, allow_paid=False), timeout=60 * 60)
     if estimate_code != 0:
         payload = {
@@ -446,35 +522,13 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 
     paid_calls = estimated_paid_calls(estimate)
     total_cost = estimated_cost_usd(estimate)
-    known_pricing = estimate_has_known_pricing(estimate)
-    spend_limit = float(args.auto_spend_limit_usd)
-    needs_paid_approval = paid_calls > 0 and (not known_pricing or total_cost is None or total_cost >= spend_limit)
-    if total_cost is not None and total_cost >= spend_limit:
-        needs_paid_approval = True
-    if needs_paid_approval and not args.approve_provider_spend:
-        payload = {
-            "status": "blocked_approval",
-            "stage": "index_contacts_pipeline",
-            "step": "index_processing",
-            "reason": "estimated_processing_cost_requires_approval",
-            "people_csv": str(args.people_csv),
-            "people_sha256": sha256_file(people_path),
-            "auto_spend_limit_usd": spend_limit,
-            "estimated_cost_usd": total_cost,
-            "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
-            "processing_estimate": estimate,
-            "fan_in": fan_in_payload,
-            "promoted": promoted,
-            "preflight_duckdb": preflight_duckdb,
-            "approve_command": command_text(processing_args(args, dry_run=False, allow_paid=True)),
-            "started_at": started_at,
-            "updated_at": now_iso(),
-        }
-        write_manifest(manifest_path, payload)
-        return payload, 20
-
-    allow_paid = bool(args.approve_provider_spend or paid_calls > 0 or (total_cost and total_cost > 0))
-    process_code, processing, processing_stderr = run_json_command(processing_args(args, dry_run=False, allow_paid=allow_paid), timeout=6 * 60 * 60)
+    allow_paid = bool(paid_calls > 0 or (total_cost and total_cost > 0))
+    progress("processing: running fixed-output incremental pipeline")
+    process_code, processing, processing_stderr = run_json_command(
+        processing_args(args, dry_run=False, allow_paid=allow_paid),
+        timeout=6 * 60 * 60,
+        stream_stderr=True,
+    )
     if process_code != 0:
         payload = {
             "status": "failed",
@@ -492,6 +546,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         write_manifest(manifest_path, payload)
         return payload, 1
 
+    progress("duckdb: materializing local search tables")
     duckdb_code, duckdb_payload, duckdb_stderr = run_json_command(duckdb_command(args), timeout=60 * 60)
     if duckdb_code != 0:
         payload = {
@@ -519,10 +574,8 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "output_dir": str(args.output_dir),
         "duckdb": duckdb_payload.get("duckdb", str(Path(args.output_dir) / "local-search.duckdb")) if isinstance(duckdb_payload, dict) else str(Path(args.output_dir) / "local-search.duckdb"),
         "manifest": str(manifest_path),
-        "auto_spend_limit_usd": spend_limit,
-        "auto_approved_paid_calls": paid_calls if allow_paid else 0,
-        "provider_spend_approved": bool(args.approve_provider_spend),
         "estimated_cost_usd": total_cost,
+        "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
         "processing_estimate": estimate,
         "processing": processing,
         "local_duckdb": duckdb_payload,
@@ -561,8 +614,7 @@ def plan_payload(args: argparse.Namespace) -> dict[str, Any]:
             "fan_in_merge": command_text(merge_command(args, inputs)) if inputs else "",
             "fan_in_network_duckdb": command_text(network_duckdb_command(args)),
             "processing_dry_run": command_text(processing_args(args, dry_run=True, allow_paid=False)),
-            "processing_run": command_text(processing_args(args, dry_run=False, allow_paid=False)),
-            "processing_run_approved": command_text(processing_args(args, dry_run=False, allow_paid=True)),
+            "processing_run": command_text(processing_args(args, dry_run=False, allow_paid=True)),
             "local_duckdb": command_text(duckdb_command(args)),
         },
     }
@@ -581,10 +633,6 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
         s.add_argument("--input", action="append", default=[], help="Additional people.csv input to include in fan-in.")
         s.add_argument("--include-existing-artifacts", action=argparse.BooleanOptionalAction, default=True)
-        s.add_argument("--limit", type=int)
-        s.add_argument("--limit-mode", choices=["all", "missing"], default="missing")
-        s.add_argument("--auto-spend-limit-usd", type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
-        s.add_argument("--approve-provider-spend", action="store_true")
 
     run = sub.add_parser("run")
     add_common(run)
@@ -608,7 +656,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     payload, code = args.func(args)
-    emit(payload)
+    emit(compact_run_payload(payload) if args.cmd == "run" else payload)
     return code
 
 

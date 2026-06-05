@@ -16,7 +16,7 @@ spec.loader.exec_module(index_contacts_pipeline)
 
 
 class IndexContactsPipelineTest(unittest.TestCase):
-    def test_run_promotes_fan_in_before_spend_block(self) -> None:
+    def test_run_promotes_fan_in_then_runs_processing_after_cost_estimate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             final = tmp / ".powerpacks/network-import/final/merged"
@@ -28,7 +28,7 @@ class IndexContactsPipelineTest(unittest.TestCase):
             index_contacts_pipeline.ROOT = tmp
             calls: list[list[str]] = []
 
-            def fake_run_json_command(cmd: list[str], *, timeout: int):
+            def fake_run_json_command(cmd: list[str], *, timeout: int, stream_stderr: bool = False):
                 calls.append(cmd)
                 joined = " ".join(cmd)
                 if "merge_network_sources.py" in joined:
@@ -55,6 +55,16 @@ class IndexContactsPipelineTest(unittest.TestCase):
                         "estimated_costs": {"known_pricing": True, "total_estimated_usd": 25.0},
                         "estimated_paid_calls": {"role_enrichment": 40},
                     }, ""
+                if "build_processing_pipeline.py" in joined:
+                    self.assertIn("--allow-paid-role-provider", cmd)
+                    self.assertIn("--allow-paid-embeddings", cmd)
+                    self.assertIn("--allow-paid-company-provider", cmd)
+                    return 0, {"status": "completed", "counts": {}}, ""
+                if "build-local-duckdb-shim.py" in joined:
+                    duck = tmp / ".powerpacks/search-index/local-search.duckdb"
+                    duck.parent.mkdir(parents=True)
+                    duck.write_text("duckdb", encoding="utf-8")
+                    return 0, {"status": "completed", "duckdb": ".powerpacks/search-index/local-search.duckdb"}, ""
                 return 1, {"status": "unexpected"}, joined
 
             args = argparse.Namespace(
@@ -66,10 +76,6 @@ class IndexContactsPipelineTest(unittest.TestCase):
                 manifest=".powerpacks/network-import/index/contacts/manifest.json",
                 input=[".powerpacks/network-import/final/merged/people.csv"],
                 include_existing_artifacts=False,
-                limit=None,
-                limit_mode="missing",
-                auto_spend_limit_usd=10.0,
-                approve_provider_spend=False,
             )
 
             try:
@@ -78,15 +84,15 @@ class IndexContactsPipelineTest(unittest.TestCase):
             finally:
                 index_contacts_pipeline.ROOT = old_root
 
-            self.assertEqual(code, 20)
-            self.assertEqual(payload["status"], "blocked_approval")
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "ready")
             self.assertTrue((tmp / ".powerpacks/network-import/merged/people.csv").exists())
             self.assertEqual(payload["people_sha256"], index_contacts_pipeline.sha256_file(tmp / ".powerpacks/network-import/merged/people.csv"))
             manifest = json.loads((tmp / ".powerpacks/network-import/index/contacts/manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["status"], "blocked_approval")
+            self.assertEqual(manifest["status"], "ready")
             self.assertTrue(any("merge_network_sources.py" in " ".join(cmd) for cmd in calls))
             self.assertTrue(any("build_network_duckdb.py" in " ".join(cmd) for cmd in calls))
-            self.assertFalse(any("build-local-duckdb-shim.py" in " ".join(cmd) for cmd in calls))
+            self.assertTrue(any("build-local-duckdb-shim.py" in " ".join(cmd) for cmd in calls))
 
 
 if __name__ == "__main__":

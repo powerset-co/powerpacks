@@ -24,7 +24,6 @@ SETUP_LEDGER = Path('.powerpacks/setup/setup-run.json')
 DEFAULT_REFRESH_INTERVAL_HOURS = 168
 DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS = int(os.environ.get('POWERPACKS_SETUP_GMAIL_SYNC_LOOKBACK_DAYS', '14'))
 DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS', '900'))
-DEFAULT_AUTO_SPEND_LIMIT_USD = float(os.environ.get('POWERPACKS_SETUP_AUTO_SPEND_LIMIT_USD', '10'))
 EMPTY_LOCAL_SEARCH_DUCKDB_MAX_BYTES = int(os.environ.get('POWERPACKS_SETUP_EMPTY_DUCKDB_MAX_BYTES', str(1024 * 1024)))
 SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/discover/ledger.setup.json')
 SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
@@ -886,17 +885,6 @@ def processing_dry_run_command_text(operator_id: str) -> str:
     return f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --dry-run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {operator_id}'
 
 
-def index_limit_args(args: argparse.Namespace) -> list[str]:
-    cmd = [
-        '--limit-mode', str(getattr(args, 'limit_mode', 'missing') or 'missing'),
-        '--existing-duckdb', '.powerpacks/search-index/local-search.duckdb',
-    ]
-    limit = getattr(args, 'limit', None)
-    if limit is not None:
-        cmd.extend(['--limit', str(int(limit))])
-    return cmd
-
-
 def processing_dry_run_command_args(operator_id: str, args: argparse.Namespace | None = None) -> list[str]:
     cmd = [
         sys.executable,
@@ -910,15 +898,11 @@ def processing_dry_run_command_args(operator_id: str, args: argparse.Namespace |
         '--default-operator-id',
         operator_id,
     ]
-    if args is not None:
-        cmd.extend(index_limit_args(args))
     return cmd
 
 
 def processing_run_command_text(operator_id: str, *, allow_paid: bool = False, args: argparse.Namespace | None = None) -> str:
     text = f'uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --default-operator-id {operator_id}'
-    if args is not None:
-        text += ' ' + ' '.join(index_limit_args(args))
     if allow_paid:
         text += ' --allow-paid-role-provider --allow-paid-embeddings --allow-paid-company-provider'
     return text
@@ -936,8 +920,6 @@ def processing_run_command_args(operator_id: str, *, allow_paid: bool = False, a
         '--default-operator-id',
         operator_id,
     ]
-    if args is not None:
-        cmd.extend(index_limit_args(args))
     if allow_paid:
         cmd.extend(['--allow-paid-role-provider', '--allow-paid-embeddings', '--allow-paid-company-provider'])
     return cmd
@@ -984,7 +966,8 @@ def local_duckdb_processing_dq(processing_payload: dict[str, Any], duckdb_payloa
     selected_ids = _processing_selected_person_ids(processing_payload)
     counts = processing_payload.get('counts') if isinstance(processing_payload.get('counts'), dict) else {}
     flatten = counts.get('flatten_people') if isinstance(counts.get('flatten_people'), dict) else {}
-    selected_count = int(flatten.get('people') or (flatten.get('selection') or {}).get('selected_people') or 0)
+    selection = flatten.get('selection') if isinstance(flatten.get('selection'), dict) else {}
+    selected_count = int(selection.get('selected_people') or 0)
     if selected_count == 0:
         return {'status': 'ok', 'reason': 'no_people_selected', 'selected_people': 0}
     if not selected_ids:
@@ -1198,11 +1181,6 @@ def estimated_cost_usd(estimate: dict[str, Any]) -> float | None:
         return None
 
 
-def estimate_has_known_pricing(estimate: dict[str, Any]) -> bool:
-    costs = estimate.get('estimated_costs') if isinstance(estimate.get('estimated_costs'), dict) else {}
-    return bool(costs.get('known_pricing', True))
-
-
 def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledger_path: Path) -> tuple[dict[str, Any], int]:
     people = ROOT / '.powerpacks/network-import/merged/people.csv'
     idx = indexing_readiness(args.operator_id)
@@ -1301,7 +1279,6 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         save_setup_ledger(ledger, ledger_path)
         return payload, 0
 
-    spend_limit = float(getattr(args, 'auto_spend_limit_usd', DEFAULT_AUTO_SPEND_LIMIT_USD))
     estimate = run_processing_dry_run(args.operator_id, args)
     if estimate.get('status') == 'failed':
         payload = {'status': 'failed', 'step': 'index_dry_run', 'processing_estimate': estimate}
@@ -1312,30 +1289,7 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
 
     paid_calls = estimated_paid_calls(estimate)
     total_cost = estimated_cost_usd(estimate)
-    known_pricing = estimate_has_known_pricing(estimate)
-    approve_provider_spend = bool(getattr(args, 'approve_provider_spend', False))
-    needs_paid_approval = paid_calls > 0 and (not known_pricing or total_cost is None or total_cost >= spend_limit)
-    if total_cost is not None and total_cost >= spend_limit:
-        needs_paid_approval = True
-
-    if needs_paid_approval and not approve_provider_spend:
-        payload = {
-            'status': 'blocked_approval',
-            'step': 'index_processing',
-            'reason': 'estimated_processing_cost_requires_approval',
-            'auto_spend_limit_usd': spend_limit,
-            'estimated_cost_usd': total_cost,
-            'estimated_paid_calls': estimate.get('estimated_paid_calls', {}),
-            'processing_estimate': estimate,
-            'requires_approval': [{'id': 'provider_spend'}],
-            'approve_command': processing_run_command_text(args.operator_id, allow_paid=True, args=args),
-        }
-        ledger.setdefault('phases', {})['index'] = payload
-        ledger['status'] = 'blocked_approval'
-        save_setup_ledger(ledger, ledger_path)
-        return payload, 20
-
-    allow_paid = approve_provider_spend or paid_calls > 0 or bool(total_cost and total_cost > 0)
+    allow_paid = paid_calls > 0 or bool(total_cost and total_cost > 0)
     code, processing_payload, processing_stderr = run_json_command(
         processing_run_command_args(args.operator_id, allow_paid=allow_paid, args=args),
         timeout=6 * 60 * 60,
@@ -1388,10 +1342,8 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
         'status': 'ready',
         'people_csv': '.powerpacks/network-import/merged/people.csv',
         'people_sha256': sha256_file(people),
-        'auto_spend_limit_usd': spend_limit,
-        'auto_approved_paid_calls': paid_calls if allow_paid else 0,
-        'provider_spend_approved': approve_provider_spend,
         'estimated_cost_usd': total_cost,
+        'estimated_paid_calls': estimate.get('estimated_paid_calls', {}),
         'processing_estimate': estimate,
         'processing': processing_payload,
         'local_duckdb': duckdb_payload,
@@ -1464,7 +1416,6 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
         'people_sha256': people_hash,
         'plan_command': processing_plan_command_text(),
         'dry_run_command': processing_dry_run_command_text(operator_id),
-        'requires_approval': ['provider_spend', 'provider_allow_flags'],
     }
     if duck.exists() and ledger.exists():
         lg = read_json(ledger) if ledger.exists() else {}
@@ -1597,7 +1548,6 @@ def normalize_setup_phases(
             'people_csv': '.powerpacks/network-import/merged/people.csv',
             'plan_command': idx.get('plan_command') or processing_plan_command_text(),
             'dry_run_command': idx.get('dry_run_command') or processing_dry_run_command_text(operator_id),
-            'requires_approval': idx.get('requires_approval') or ['provider_spend', 'provider_allow_flags'],
             'people_sha256': idx.get('people_sha256', ''),
             'index_input_sha256': idx.get('index_input_sha256', ''),
         }
@@ -2029,17 +1979,14 @@ def run_index_phase(args: argparse.Namespace) -> int:
         'status': index_payload.get('status'),
         'source': index_payload.get('source', ''),
         'step': index_payload.get('step', ''),
-        'provider_spend_approved': bool(index_payload.get('provider_spend_approved', False)),
-        'auto_spend_limit_usd': index_payload.get('auto_spend_limit_usd', 0),
-        'auto_approved_paid_calls': index_payload.get('auto_approved_paid_calls', 0),
         'estimated_cost_usd': index_payload.get('estimated_cost_usd', 0),
+        'estimated_paid_calls': index_payload.get('estimated_paid_calls', {}),
         'processing_estimate': index_payload.get('processing_estimate', {}),
         'bootstrap_records_restore': index_payload.get('bootstrap_records_restore', {}),
         'people_csv': index_payload.get('people_csv', '.powerpacks/network-import/merged/people.csv'),
         'people_sha256': index_payload.get('people_sha256', ''),
         'duckdb': index_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb'),
         'processing_counts': (index_payload.get('processing') or {}).get('counts', {}) if isinstance(index_payload.get('processing'), dict) else {},
-        'incremental_merge': (index_payload.get('processing') or {}).get('incremental_merge', {}) if isinstance(index_payload.get('processing'), dict) else {},
         'local_duckdb': index_payload.get('local_duckdb', {}),
         'local_duckdb_dq': index_payload.get('local_duckdb_dq', {}),
         'error': index_payload.get('error', ''),
@@ -2580,10 +2527,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
-    s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
-    s.add_argument('--approve-provider-spend', action='store_true')
-    s.add_argument('--limit', type=int, default=None, help='Process at most N people in this index run')
-    s.add_argument('--limit-mode', choices=['all', 'missing'], default='missing', help='When --limit is set, select from all people or only people missing from the canonical DuckDB')
     s.set_defaults(func=run_index_phase)
 
     s = sub.add_parser('handoff')
@@ -2601,7 +2544,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--skip-bootstrap-sync', action='store_true', help=argparse.SUPPRESS)
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
-    s.add_argument('--auto-spend-limit-usd', type=float, default=DEFAULT_AUTO_SPEND_LIMIT_USD)
     s.add_argument('--gmail-db', default='')
     s.add_argument('--gmail-account', action='append', default=[])
     s.add_argument('--gmail-add-email', action='append', default=[])

@@ -468,7 +468,6 @@ SEARCH_INDEX_METADATA_FILES = [
 
 SEARCH_INDEX_INCREMENTAL_FILES = [
     Path("unified/flattened_people.jsonl"),
-    Path("unified/unified_person.csv"),
     Path("unified/summary_embeddings.jsonl"),
     Path("unified/person_tech_skills.jsonl"),
     Path("unified/linkedin_counts.jsonl"),
@@ -512,7 +511,6 @@ def write_processing_restore_ledger(restore_powerpacks_root: Path, operator: dic
         "summaries": ".powerpacks/search-index/records/summaries.records.jsonl",
         "person_profiles": ".powerpacks/search-index/records/person_profiles.records.jsonl",
         "flattened_people": ".powerpacks/search-index/unified/flattened_people.jsonl",
-        "unified_person": ".powerpacks/search-index/unified/unified_person.csv",
         "role_classifications": ".powerpacks/search-index/unified/roles/roles_with_dense_text_remapped.jsonl",
         "role_embeddings": ".powerpacks/search-index/unified/roles/roles_with_embeddings.jsonl",
         "company_classifications": ".powerpacks/search-index/company/companies_corpus_v3.jsonl",
