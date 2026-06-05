@@ -191,7 +191,7 @@ Routes:
   `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
-- `$build-outbound`, outbound handoff setup/status, Apollo campaign/sequence handoff, prepare LinkedIn leads for Apollo →
+- `$build-outbound`, Apollo setup/status, Sales Nav outbound copy preview, inactive Apollo sequence/contact build, separate campaign activation →
   `packs/apollo/skills/build-outbound/SKILL.md`
 - `$powerset`, `$powerset setup`, Powerset login/status/whoami/sets/MCP/env credentials →
   `packs/powerset/skills/powerset/SKILL.md`
@@ -238,7 +238,7 @@ the primitive blocks/fails or the user asks for implementation details.
   `uv run --project . ...` so agents use the locked environment.
 - **Test additions** go in `tests/` and run via `uv run --project . python -m unittest discover -s tests`.
   Run the full suite after non-trivial edits.
-- **Apollo outbound safety**: Apollo enrichment/contact writes/sequence enrollment are spend-bearing or mutating and may send email through Apollo sequence settings. Require explicit user confirmation before those MCP tool calls; setup/status/lead preparation are safe.
+- **Apollo outbound safety**: `$build-outbound` uses `packs/apollo/primitives/build_outbound/build_outbound.py` for Sales Nav resolution, preview, inactive sequence/contact builds, and exact-id activation. Preview/resolve are safe; enrichment, contact writes, sequence/campaign creation, enrollment, and activation are spend-bearing or mutating. Require explicit confirmation before build unless the user clearly asked to build now, and require exact `campaign_id` confirmation before activation. Do not run live activation tests.
 - **Privacy contract**: no message bodies are ever read or sent. Only
   contact metadata (phone, name, source, group flags, message counts,
   last_message). Carry this through any new primitive.
