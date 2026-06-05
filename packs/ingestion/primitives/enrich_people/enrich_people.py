@@ -259,11 +259,56 @@ def safe_cache_slug(public_identifier: str) -> str:
     return cleaned.strip("._")
 
 
+def legacy_byte_cache_slug(public_identifier: str) -> str:
+    parts: list[str] = []
+    for ch in public_identifier.lower().strip():
+        if ch.isascii() and (ch.isalnum() or ch in {"-", "_", "."}):
+            parts.append(ch)
+        elif ch.isascii():
+            parts.append("_")
+        else:
+            parts.extend(f"_{byte:02x}" for byte in ch.encode("utf-8"))
+    return "".join(parts).strip("._")
+
+
+def cache_slug_candidates(public_identifier: str) -> list[str]:
+    values = [
+        public_identifier,
+        urllib.parse.unquote(public_identifier or ""),
+    ]
+    slugs: list[str] = []
+    for value in values:
+        for slug in (value.lower().strip(), safe_cache_slug(value), legacy_byte_cache_slug(value)):
+            if slug and slug not in slugs:
+                slugs.append(slug)
+    return slugs
+
+
+def profile_cache_index(cache_dir: Path | str | None) -> set[str]:
+    if not cache_dir:
+        return set()
+    root = Path(cache_dir)
+    if not root.exists() or not root.is_dir():
+        return set()
+    return {path.stem for path in root.glob("*.json") if path.name != "_metadata.json"}
+
+
 def profile_cache_path(cache_dir: Path | str | None, public_identifier: str) -> Path | None:
-    slug = safe_cache_slug(public_identifier)
+    slug = cache_slug_candidates(public_identifier)[0] if public_identifier else ""
     if not cache_dir or not slug:
         return None
     return Path(cache_dir) / f"{slug}.json"
+
+
+def indexed_profile_cache_path(cache_dir: Path | str | None, public_identifier: str, cache_index: set[str] | None) -> Path | None:
+    if not cache_dir:
+        return None
+    if cache_index is not None:
+        for slug in cache_slug_candidates(public_identifier):
+            if slug in cache_index:
+                return Path(cache_dir) / f"{slug}.json"
+        return profile_cache_path(cache_dir, public_identifier)
+    return profile_cache_path(cache_dir, public_identifier)
 
 
 class StartRateLimiter:
@@ -298,6 +343,16 @@ def read_usable_cached_profile(cache_path: Path | None) -> dict[str, Any] | None
     raw = cached.get("raw_response")
     if isinstance(normalized, dict) and normalized.get("success") is True and isinstance(raw, dict):
         return cached
+    normalized = normalize_linkedin_profile(cached)
+    if normalized.get("success") is True:
+        return {
+            "fetched_at": cached.get("fetched_at") or cached.get("last_checked_at") or "",
+            "last_checked_at": cached.get("last_checked_at") or cached.get("fetched_at") or "",
+            "public_identifier": cached.get("public_identifier") or normalized.get("public_identifier") or cache_path.stem,
+            "linkedin_url": cached.get("linkedin_url") or normalized.get("linkedin_url") or "",
+            "raw_response": cached,
+            "normalized_profile": normalized,
+        }
     return None
 
 
@@ -481,14 +536,22 @@ def confirmed_people_row(row: dict[str, Any]) -> bool:
     return isinstance(raw, dict) and normalize_linkedin_profile(raw).get("success") is True
 
 
-def classify_rapidapi_cache_status(row: dict[str, str], profile_cache_dir: Path, refresh_cache: bool, retry_hours: float) -> tuple[str, str, Path | None, dict[str, Any] | None]:
+def classify_rapidapi_cache_status(
+    row: dict[str, str],
+    profile_cache_dir: Path,
+    refresh_cache: bool,
+    retry_hours: float,
+    cache_index: set[str] | None = None,
+) -> tuple[str, str, Path | None, dict[str, Any] | None]:
     public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
-    cache_path = profile_cache_path(profile_cache_dir, public_identifier)
+    cache_path = indexed_profile_cache_path(profile_cache_dir, public_identifier, cache_index)
     if refresh_cache:
         return "miss", "refresh requested", cache_path, None
     if cached_profile_from_row(row, public_identifier, row.get("linkedin_url") or "") is not None:
         return "hit", "input rapidapi_response", cache_path, None
-    if read_usable_cached_profile(cache_path):
+    if cache_index is not None and any(slug in cache_index for slug in cache_slug_candidates(public_identifier)):
+        return "hit", "profile cache", cache_path, None
+    if cache_index is None and cache_path and cache_path.exists():
         return "hit", "profile cache", cache_path, None
     recent_failure = recent_cached_failure(cache_path, retry_hours)
     if recent_failure:
@@ -580,6 +643,7 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
     route_counts: dict[str, int] = {}
     profile_cache_dir = Path(ledger["input"].get("profile_cache_dir") or DEFAULT_BASE_DIR / "profile_cache_v2")
     refresh_cache = bool(ledger["input"].get("refresh_cache"))
+    cache_index = set() if refresh_cache else profile_cache_index(profile_cache_dir)
     failure_retry_hours = float(ledger["input"].get("failure_retry_hours") if ledger["input"].get("failure_retry_hours") is not None else DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
     for row in rows:
         route, reason = route_row(row, force=bool(ledger["input"].get("force")))
@@ -588,7 +652,7 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
         route_counts[route] = route_counts.get(route, 0) + 1
         if route == "linkedin_provider":
             queue.append(row)
-            status, cache_reason, cache_path, recent_failure = classify_rapidapi_cache_status(row, profile_cache_dir, refresh_cache, failure_retry_hours)
+            status, cache_reason, cache_path, recent_failure = classify_rapidapi_cache_status(row, profile_cache_dir, refresh_cache, failure_retry_hours, cache_index)
             cache_row = dict(row)
             cache_row.update({"cache_status": status, "cache_path": str(cache_path or ""), "cache_reason": cache_reason})
             if status == "hit":
@@ -697,9 +761,24 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
             if cached_payload and normalized and normalized.get("success") is True:
                 rapid = {"status_code": 200, "data": cached_payload, "error": "", "from_cache": True, "normalized_profile": normalized}
             else:
-                rapid = rapidapi_profile(public_identifier, linkedin_url, "", cache_dir=profile_cache_dir, refresh_cache=False)
-            if not rapid.get("from_cache"):
-                raise PipelineFailed(f"usable RapidAPI cache was expected for {public_identifier or linkedin_url}")
+                cache_path = Path(row.get("cache_path") or "") if row.get("cache_path") else profile_cache_path(profile_cache_dir, public_identifier)
+                cached = read_usable_cached_profile(cache_path)
+                if cached:
+                    rapid = {
+                        "status_code": 200,
+                        "data": cached.get("raw_response"),
+                        "error": "",
+                        "from_cache": True,
+                        "normalized_profile": cached.get("normalized_profile"),
+                    }
+                else:
+                    rapid = {
+                        "status_code": 0,
+                        "data": None,
+                        "error": "cache entry unusable",
+                        "from_cache": True,
+                        "normalized_profile": {"success": False, "error": "cache entry unusable"},
+                    }
         else:
             rate_limiter.wait()
             rapid = rapidapi_profile(public_identifier, linkedin_url, rapid_key, cache_dir=profile_cache_dir, refresh_cache=refresh_cache)
