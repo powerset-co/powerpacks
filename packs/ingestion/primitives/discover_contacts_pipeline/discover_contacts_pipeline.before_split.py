@@ -2754,10 +2754,11 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
                 emit({"status": "blocked_approval", "step_id": "gmail_apply_enrich", "ledger": str(ledger_path), "child": enrich_payload})
                 return False
             if code != 0:
-                mark_step(ledger, "gmail_apply_enrich", "failed", error=stderr or enrich_payload)
+                error = child_error(enrich_payload, stderr)
+                mark_step(ledger, "gmail_apply_enrich", "failed", error=error)
                 ledger["status"] = "failed"
                 save_ledger(ledger_path, ledger)
-                emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": stderr or enrich_payload})
+                emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": error})
                 return False
             for key, value in (enrich_payload.get("artifacts") or {}).items():
                 artifacts[f"gmail_{slug}_enriched_{key}"] = value
