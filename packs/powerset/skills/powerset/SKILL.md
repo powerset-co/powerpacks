@@ -118,6 +118,33 @@ User-facing output must be terse:
 - If still blocked, give one short sentence with the required action. Do not
   paste raw reports or secret values.
 
+### Visible gcloud reauthentication
+
+When `gcloud` credentials need reauthentication inside Codex/Claude-style
+harnesses, use a live PTY-backed command and keep the session open until the
+user provides the code. Prefer the current active gcloud account so the user
+sees the expected identity:
+
+```bash
+acct="$(gcloud config get-value account 2>/dev/null || true)"
+if [[ -n "$acct" ]]; then
+  gcloud auth login "$acct" --no-launch-browser --force
+else
+  gcloud auth login --no-launch-browser --force
+fi
+```
+
+For Codex specifically: run that command as an ongoing `exec_command` session
+with `tty: true` and a large output budget. Relay the full
+`https://accounts.google.com/...` URL in chat, ask the user to paste the
+authorization code, then send the code plus a newline to the still-running
+session. Do not wrap `gcloud auth login` in `expect` from Codex; failures inside
+that wrapper can leave a stale OAuth challenge and a stuck process. If the URL
+is truncated in the UI, poll the running session again with a larger output
+budget; do not use an auth URL captured from a command that has already exited.
+If the harness cannot keep the `gcloud` process open with stdin attached, stop
+and ask the user to run the command directly in their terminal.
+
 Run one internal setup check first:
 
 ```bash
@@ -152,11 +179,8 @@ uv run --project . python packs/powerset/primitives/provision_runtime_env/provis
 
 If this reports expired gcloud credentials, immediately run:
 
-```bash
-gcloud auth login --no-launch-browser
-```
-
-Relay the URL/code prompt tersely, then rerun the env pull command.
+Run the visible gcloud reauthentication flow above, then rerun the env pull
+command.
 
 Then sync the operator bootstrap:
 
@@ -167,14 +191,11 @@ uv run --project . python packs/powerset/primitives/operator_bootstrap/operator_
 
 If this reports expired gcloud credentials, immediately run:
 
-```bash
-gcloud auth login --no-launch-browser
-```
-
-Relay the URL/code prompt tersely, then rerun the env pull command and the
-operator bootstrap sync command. If bootstrap sync reports `skipped` because no
-matching bundle is published or the registry is not available, continue with MCP
-installation; `$setup` can still proceed from local account linking/import.
+Run the visible gcloud reauthentication flow above, then rerun the env pull
+command and the operator bootstrap sync command. If bootstrap sync reports
+`skipped` because no matching bundle is published or the registry is not
+available, continue with MCP installation; `$setup` can still proceed from local
+account linking/import.
 
 Then install/refresh MCP:
 
@@ -245,9 +266,9 @@ If the setup check reports `user_secrets` with `fix_kind: interactive` or a mess
 like `gcloud credentials need reauthentication`, this is not a Slack/IAM issue:
 the selected `@powerset.co` account is fine, but gcloud's cached token expired.
 For explicit `$powerset setup`, `$powerset login`, or `$powerset env pull`
-requests, immediately run `gcloud auth login --no-launch-browser`, relay the
-verification URL/code prompt, and ask them to paste the code. Do not stop for a
-separate yes/no confirmation.
+requests, immediately run the visible gcloud reauthentication flow above, relay
+the full verification URL/code prompt, and ask them to paste the code. Do not
+stop for a separate yes/no confirmation.
 
 Re-run the setup check at the end and use one of the terse final messages above.
 If `user_secrets` is still
@@ -305,13 +326,8 @@ uv run --project . python packs/powerset/primitives/provision_runtime_env/provis
 ```
 
 If this reports expired gcloud credentials or the setup check reports
-`user_secrets` with `fix_kind: interactive`, immediately run:
-
-```bash
-gcloud auth login --no-launch-browser
-```
-
-Relay the URL/code prompt tersely, then rerun the env pull command.
+`user_secrets` with `fix_kind: interactive`, immediately run the visible gcloud
+reauthentication flow above, then rerun the env pull command.
 
 For non-`@powerset.co` users, do not block on the email domain. Secret Manager
 is the source of truth: if the matching per-user secrets are missing or IAM does

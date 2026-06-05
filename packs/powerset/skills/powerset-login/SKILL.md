@@ -128,13 +128,21 @@ uv run --project . python packs/powerset/primitives/auth/auth.py login
 If `gcloud_account` is missing, run:
 
 ```bash
-gcloud auth login --no-launch-browser
+acct="$(gcloud config get-value account 2>/dev/null || true)"
+if [[ -n "$acct" ]]; then
+  gcloud auth login "$acct" --no-launch-browser --force
+else
+  gcloud auth login --no-launch-browser --force
+fi
 ```
 
 Relay the full `https://accounts.google.com/...` URL from stdout to the user.
 When `gcloud` asks for the verification code, ask the user for it and write it
-to the running command's stdin. If `gcloud` cannot read or write
-`~/.config/gcloud`, request escalation for `gcloud auth ...`.
+to the running command's stdin. In Codex, run this as an ongoing
+`exec_command` session with `tty: true`; do not wrap `gcloud auth login` in
+`expect`, because wrapper failures can leave a stale OAuth challenge and a
+stuck process. If `gcloud` cannot read or write `~/.config/gcloud`, request
+escalation for `gcloud auth ...`.
 
 If `gcloud_account` is a non-`@powerset.co` account, do not reject it only
 because of the domain. The env pull path is per-user scoped and GCP Secret

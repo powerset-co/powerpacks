@@ -76,16 +76,16 @@ def check(
     - `none`              — nothing to do (status `ok` or `warn` you can ignore)
     - `auto`              — safe to run without prompting (no network, no
                             new costs, no new credentials)
-    - `interactive`       — our primitive that pops a browser and waits for
-                            the user (auth0 login, etc.). Safe to invoke
-                            without asking each time — the user is right
-                            there and the browser ask IS the consent.
+    - `interactive`       — requires visible user interaction (browser/code
+                            login). Some entries provide `fix_args`; TTY-bound
+                            CLIs such as gcloud intentionally omit them so
+                            `doctor fix --interactive` cannot swallow prompts.
     - `shell_install`     — OS-level install / package change. Always show
                             the command and ask before running.
     - `human_action`      — cannot be fixed locally (e.g. ping #powerpacks)
 
     `fix_args` are the argv-style command + args that `doctor fix` runs for
-    `auto` and `interactive` kinds.
+    `auto` and eligible `interactive` kinds.
     """
     out = {"id": id_, "status": status, "message": message, "fix_kind": fix_kind}
     if fix_command is not None:
@@ -199,8 +199,8 @@ def check_gcloud_account() -> dict[str, Any]:
             "gcloud_account", "missing",
             "no active gcloud account",
             fix_kind="interactive",
-            fix_command="gcloud auth login",
-            fix_args=["gcloud", "auth", "login"],
+            fix_command="gcloud auth login --no-launch-browser",
+            requires_tty=True,
         )
     account = out.strip().splitlines()[0].strip()
     return check("gcloud_account", "ok", f"signed in as {account}", account=account)
@@ -215,8 +215,8 @@ def check_gcloud_adc() -> dict[str, Any]:
         "gcloud_adc", "warn",
         "application-default credentials not set up; some SDK clients may need them",
         fix_kind="interactive",
-        fix_command="gcloud auth application-default login",
-        fix_args=["gcloud", "auth", "application-default", "login"],
+        fix_command="gcloud auth application-default login --no-launch-browser",
+        requires_tty=True,
     )
 
 
@@ -335,8 +335,8 @@ def check_user_secrets(profile: str, project: str) -> dict[str, Any]:
             email=payload.get("email"),
             auth_error=payload.get("auth_error"),
             fix_kind="interactive",
-            fix_command="gcloud auth login",
-            fix_args=["gcloud", "auth", "login"],
+            fix_command="gcloud auth login --no-launch-browser",
+            requires_tty=True,
         )
     if status == "gcloud_missing":
         return check(
@@ -566,7 +566,8 @@ def cmd_fix(args: argparse.Namespace) -> int:
                 "id": c["id"],
                 "fix_kind": kind,
                 "reason": (
-                    "interactive (pass --interactive to allow)" if kind == "interactive"
+                    "interactive TTY required; run fix_command directly" if kind == "interactive" and c.get("requires_tty")
+                    else "interactive (pass --interactive to allow)" if kind == "interactive"
                     else "shell install (agent must ask user before running)" if kind == "shell_install"
                     else "human action required (Slack)" if kind == "human_action"
                     else "no fix_args"

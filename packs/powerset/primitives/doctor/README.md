@@ -55,3 +55,8 @@ A flat list of `fix_command` values from every `missing`/`fail` check, in
 order, so the agent can offer them sequentially. Each `fix_command` is either
 a string (single command) or an object with platform-specific variants
 (`macos_homebrew`, `linux`, etc.).
+
+TTY-bound commands such as `gcloud auth login --no-launch-browser` may include
+`requires_tty: true` and intentionally omit `fix_args`. In that case,
+`doctor fix --interactive` reports the action but does not run it through a
+captured subprocess; run the command directly in a visible terminal/PTY.

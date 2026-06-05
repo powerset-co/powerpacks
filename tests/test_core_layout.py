@@ -181,6 +181,8 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("provision_user_secrets", text)
         # The setup classification must be documented.
         self.assertIn("fix_kind", text)
+        self.assertIn("with `tty: true`", text)
+        self.assertIn("do not wrap `gcloud auth login` in\n`expect`", text)
 
     def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()
@@ -191,6 +193,8 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py sync", text)
         self.assertIn("packs/powerset/primitives/mcp_install/mcp_install.py install --host all", text)
         self.assertIn("Powerset setup complete. Please restart Codex", text)
+        self.assertIn("with `tty: true`", text)
+        self.assertIn("Do not wrap `gcloud auth login` in `expect`", text)
 
         login_alias = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
         self.assertIn("prefer the unified `$powerset setup`", login_alias)
