@@ -692,7 +692,7 @@ def enrich_mutual_attribution_step(args: argparse.Namespace, ledger_path_: Path,
         str(ROOT / "packs/sales-nav/primitives/enrich_mutual_attribution/enrich_mutual_attribution.py"),
         "--state", str(state),
         "--mode", mode,
-        "--env-file", args.env_file,
+        "--env-file", str(ROOT / ".env"),
     ]
     if getattr(args, "discover_stagger", None):
         cmd.extend(["--stagger", str(args.discover_stagger)])

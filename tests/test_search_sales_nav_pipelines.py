@@ -356,5 +356,29 @@ class SalesNavPipelineTests(unittest.TestCase):
             sales.write_json(state, {"files": {"leads_jsonl": str(leads)}})
             self.assertEqual(sales.member_ids_for_enrichment(state, artifact_id="art-a", limit=10), [2, 1])
 
+    def test_sales_mutual_attribution_uses_repo_env_without_cli_arg(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger_path = root / "pipeline.json"
+            state = root / "state.json"
+            sales.write_json(ledger_path, {})
+            sales.write_json(state, {"set_id": "set-123"})
+            args = SimpleNamespace(
+                force=False,
+                discover_mutuals=False,
+                discover_stagger=None,
+                discover_max_leads=None,
+            )
+            with mock.patch.object(
+                sales,
+                "run",
+                return_value={"returncode": 0, "json": {"status": "completed"}},
+            ) as run_mock:
+                sales.enrich_mutual_attribution_step(args, ledger_path, sales.load(ledger_path), state)
+
+        cmd = run_mock.call_args.args[0]
+        self.assertIn("--env-file", cmd)
+        self.assertEqual(cmd[cmd.index("--env-file") + 1], str(sales.ROOT / ".env"))
+
 if __name__ == "__main__":
     unittest.main()
