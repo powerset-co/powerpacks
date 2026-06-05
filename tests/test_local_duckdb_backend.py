@@ -1078,33 +1078,14 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(rows[0]["position_title"], "Backend Engineer")
         self.assertEqual(rows[0]["retrieval_mode"], "hybrid")
 
-    def test_light_semantic_bm25_role_search_with_deterministic_embedding(self) -> None:
-        original_embedding = turbopuffer_client.embedding
-
-        async def fake_embedding(text: str):
-            return [0.0, 1.0, 0.0] if "backend" in text.lower() else [1.0, 0.0, 0.0]
-
-        turbopuffer_client.embedding = fake_embedding
-        try:
-            founder_rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
-                {"semantic_query": LONG_FOUNDER_QUERY, "bm25_queries": ["founder CEO"], "is_current_role": True},
-                turbopuffer_client.filters_from_role_payload({"is_current_role": True}),
-                top_k=5,
-                include_attributes=["base_id", "position_title"],
-            ))
-            engineer_rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
+    def test_local_semantic_role_search_requires_query_embedding(self) -> None:
+        with self.assertRaisesRegex(Exception, "requires query_embedding"):
+            asyncio.run(turbopuffer_client.local_store().hybrid_role_rows(
                 {"semantic_query": LONG_BACKEND_QUERY, "bm25_queries": ["backend engin"], "is_current_role": True},
                 turbopuffer_client.filters_from_role_payload({"is_current_role": True}),
                 top_k=5,
                 include_attributes=["base_id", "position_title"],
             ))
-        finally:
-            turbopuffer_client.embedding = original_embedding
-
-        self.assertEqual(founder_rows[0]["person_id"], "person-founder")
-        self.assertEqual(founder_rows[0]["position_title"], "Founder and CEO")
-        self.assertEqual(engineer_rows[0]["person_id"], "person-engineer")
-        self.assertEqual(engineer_rows[0]["position_title"], "Backend Engineer")
 
     def test_explicit_query_embedding_does_not_force_filter_only_for_short_query(self) -> None:
         rows = asyncio.run(turbopuffer_client._hybrid_role_rows_single(
@@ -1394,3 +1375,82 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertNotEqual(rows[0].model_extra["person_id"], "person-sf")
             self.assertRegex(rows[0].model_extra["person_id"], r"^[0-9a-f-]{36}$")
+
+    def test_age_filter_uses_position_birth_year_when_profile_age_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            records = tmp / "records"
+            write_jsonl(records / "people.records.jsonl", [
+                {
+                    "id": "role-young",
+                    "position_id": "role-young",
+                    "person_id": "person-young",
+                    "base_id": "person-young",
+                    "vector": [0.0, 1.0],
+                    "position_title": "Founder",
+                    "company_name": "YoungCo",
+                    "role_ids": ["founder"],
+                    "is_current": True,
+                    "inferred_birth_year": 1998,
+                    "allowed_operator_ids": ["op-test"],
+                },
+                {
+                    "id": "role-old",
+                    "position_id": "role-old",
+                    "person_id": "person-old",
+                    "base_id": "person-old",
+                    "vector": [0.0, 1.0],
+                    "position_title": "Founder",
+                    "company_name": "OldCo",
+                    "role_ids": ["founder"],
+                    "is_current": True,
+                    "inferred_birth_year": 1975,
+                    "allowed_operator_ids": ["op-test"],
+                },
+            ])
+            write_jsonl(records / "summaries.records.jsonl", [])
+            write_jsonl(records / "education.records.jsonl", [])
+            write_jsonl(records / "schools.records.jsonl", [])
+            write_jsonl(records / "companies.records.jsonl", [])
+            people_csv = tmp / "people.csv"
+            people_csv.write_text(
+                "id,linkedin_url,full_name,headline,city,state,country,work_experiences,education,source_channels\n"
+                "person-young,https://www.linkedin.com/in/person-young,Young Person,Founder,San Francisco,CA,US,\"[{\"\"title\"\": \"\"Founder\"\", \"\"company\"\": \"\"YoungCo\"\"}]\",[],linkedin_csv\n"
+                "person-old,https://www.linkedin.com/in/person-old,Old Person,Founder,San Francisco,CA,US,\"[{\"\"title\"\": \"\"Founder\"\", \"\"company\"\": \"\"OldCo\"\"}]\",[],linkedin_csv\n",
+                encoding="utf-8",
+            )
+            payload = run_shim_json(
+                "--records-dir", str(records),
+                "--person-profiles-csv", str(people_csv),
+                "--output-dir", str(tmp / "search-index"),
+                "--operator-id", "op-test",
+                "--force",
+            )
+
+            import duckdb
+            with duckdb.connect(payload["duckdb"], read_only=True) as conn:
+                columns = {row[1] for row in conn.execute("pragma table_info('local_people_positions')").fetchall()}
+            self.assertIn("inferred_birth_year", columns)
+
+            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
+            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
+            turbopuffer_client._local_store_for_path.cache_clear()
+            try:
+                filters = turbopuffer_client.filters_from_role_payload({
+                    "role_ids": ["founder"],
+                    "age_max": 35,
+                    "is_current_role": True,
+                })
+                rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+                    "people",
+                    filters,
+                    ["base_id", "position_title", "inferred_birth_year"],
+                ))
+            finally:
+                turbopuffer_client._local_store_for_path.cache_clear()
+                if old_db is None:
+                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
+                else:
+                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
+            self.assertEqual([row["base_id"] for row in rows], ["person-young"])
+            self.assertEqual(rows[0]["inferred_birth_year"], 1998)

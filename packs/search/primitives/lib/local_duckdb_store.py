@@ -8,13 +8,12 @@ require the local backend dependency to be importable at module import time.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 from uuid import UUID
 
 K_RRF = 60
@@ -63,6 +62,7 @@ PERSON_PROFILE_FILTER_FIELDS = {
     "ig_followers",
     "inferred_birth_year",
 }
+ROLE_ROW_PREFERRED_PROFILE_FIELDS = {"inferred_birth_year"}
 
 
 class LocalDuckDBError(RuntimeError):
@@ -344,11 +344,14 @@ class LocalDuckDBSearchStore:
             return {filters[0]}
         return set()
 
-    def _is_person_profile_filter(self, filters: Any) -> bool:
+    def _is_person_profile_filter(self, filters: Any, role_columns: dict[str, str] | None = None) -> bool:
         fields = self._filter_fields(filters)
+        if role_columns and fields & ROLE_ROW_PREFERRED_PROFILE_FIELDS:
+            if all(field in role_columns for field in fields & ROLE_ROW_PREFERRED_PROFILE_FIELDS):
+                return False
         return bool(fields) and fields.issubset(PERSON_PROFILE_FILTER_FIELDS)
 
-    def _split_person_role_filters(self, filters: Any) -> tuple[Any | None, Any | None]:
+    def _split_person_role_filters(self, filters: Any, role_columns: dict[str, str] | None = None) -> tuple[Any | None, Any | None]:
         if filters is None:
             return None, None
         if not isinstance(filters, (list, tuple)) or not filters:
@@ -358,7 +361,7 @@ class LocalDuckDBSearchStore:
             person_clauses: list[Any] = []
             role_clauses: list[Any] = []
             for clause in filters[1]:
-                person_filter, role_filter = self._split_person_role_filters(clause)
+                person_filter, role_filter = self._split_person_role_filters(clause, role_columns)
                 if person_filter is not None:
                     person_clauses.append(person_filter)
                 if role_filter is not None:
@@ -368,10 +371,10 @@ class LocalDuckDBSearchStore:
                 ["And", role_clauses] if role_clauses else None,
             )
         if op_or_field == "Or" and len(filters) == 2 and isinstance(filters[1], (list, tuple)):
-            if all(self._is_person_profile_filter(clause) for clause in filters[1]):
+            if all(self._is_person_profile_filter(clause, role_columns) for clause in filters[1]):
                 return filters, None
             return None, filters
-        if self._is_person_profile_filter(filters):
+        if self._is_person_profile_filter(filters, role_columns):
             return filters, None
         return None, filters
 
@@ -450,7 +453,7 @@ class LocalDuckDBSearchStore:
         person_filters = None
         profile_table = self._person_profile_table()
         if profile_table and self._person_profile_can_constrain_positions():
-            person_filters, effective_filters = self._split_person_role_filters(filters)
+            person_filters, effective_filters = self._split_person_role_filters(filters, columns)
         where_sql, params = self._compile_filter_sql(effective_filters, columns)
         if person_filters is None or not profile_table:
             return where_sql, params
@@ -761,11 +764,12 @@ class LocalDuckDBSearchStore:
         filters: Any,
         top_k: int,
         include_attributes: list[str],
-        embedding_fn: Callable[[str], Any] | None = None,
     ) -> list[dict[str, Any]]:
         semantic_query = str(payload.get("semantic_query") or "").strip()
-        has_explicit_query_embedding = payload.get("query_embedding") is not None
-        if len(semantic_query) < 80 and not has_explicit_query_embedding:
+        query_embedding = payload.get("query_embedding")
+        if semantic_query and query_embedding is None:
+            raise LocalDuckDBError("local semantic role search requires query_embedding")
+        if not semantic_query and not payload.get("bm25_queries") and query_embedding is None:
             rows = sorted(self._filtered_rows("people", filters), key=lambda row: self._row_id(row))
             if top_k and top_k > 0:
                 rows = rows[:top_k]
@@ -791,13 +795,15 @@ class LocalDuckDBSearchStore:
                 result_lists.append([row for row, _score in self._bm25_rank(candidates, field, tokens)[:top_k]])
                 weights.append(weight)
 
-        query_embedding = payload.get("query_embedding")
-        if query_embedding is None and embedding_fn is not None:
-            maybe = embedding_fn(semantic_query)
-            query_embedding = await maybe if asyncio.iscoroutine(maybe) else maybe
         if query_embedding is not None:
             result_lists.append(self._vector_rank_sql("people", filters, "vector", query_embedding, top_k))
             weights.append(0.6)
+
+        if not result_lists:
+            rows = sorted(self._filtered_rows("people", filters), key=lambda row: self._row_id(row))
+            if top_k and top_k > 0:
+                rows = rows[:top_k]
+            return [self._role_output_row(row, include_attributes, 1.0, "filter_only") for row in rows]
 
         by_id = {self._row_id(row): row for rows in result_lists for row in rows}
         fused = self._rrf(result_lists, weights) if result_lists else []
