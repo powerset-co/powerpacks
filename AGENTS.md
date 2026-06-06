@@ -199,16 +199,16 @@ application-default credentials are not needed for normal Powerpacks workflows.
   `.powerpacks/network-import/merged/people.csv` and writes
   `.powerpacks/search-index/`; do not run LLM, network, Supabase,
   Postgres, or TurboPuffer calls for this workflow.
-- **Search pack** (search-network, search-company):
+- **Search pack** (search-network, search-network-jd, search-company):
   `$search-network` and `$search-company` require `.env` with TurboPuffer +
   Postgres credentials. If `.env` is present, run the search
   primitive directly and use its error to diagnose; use the doctor only if env or
   auth looks broken and the cause is unclear. For `$search-network`, after
-  loading `packs/search/skills/search-network/SKILL.md`, use its documented
-  company-directory MCP fast path for company-only people lookups; use the
-  normal `search_network_pipeline.py prepare --query ...` path for ordinary
-  role searches; and use the complex-JD recruiter loop when a pasted JD or broad
-  role brief needs bounded multi-query execution. Do not grep/search/read
+  loading `packs/search/skills/search-network/SKILL.md`, use the
+  `search_network_pipeline.py prepare --query ...` path for ordinary people
+  searches and company-only lookups; the primitive owns company-directory fast
+  path detection. For job posting URLs, pasted JDs, or broad role briefs, load
+  `packs/search/skills/search-network-jd/SKILL.md`. Do not grep/search/read
   search docs, schemas, primitive source, or prior artifacts on the happy path.
 
 Don't run pack-specific checks pre-emptively. Only when the user's request
@@ -225,9 +225,10 @@ internals, primitive sequences, or orchestration details.
 Routes:
 
 - `$search-network`, people search, network search, role/title/location/school
-  searches, "who is...", "find people...", complex JD plan-and-execute,
-  company-directory queries →
+  searches, "who is...", "find people...", company-directory queries →
   `packs/search/skills/search-network/SKILL.md`
+- job posting URLs, pasted job descriptions, complex role briefs, complex JD
+  plan-and-execute → `packs/search/skills/search-network-jd/SKILL.md`
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
 - `$search-contacts`, my contacts, set contacts, contact field filtering →

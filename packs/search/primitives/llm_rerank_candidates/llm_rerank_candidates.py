@@ -61,6 +61,12 @@ from typing import Any, Optional
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 
+LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
+sys.path.insert(0, str(LIB_DIR))
+
+from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
+
+
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-4o-mini")
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -136,6 +142,7 @@ class RerankResult:
     input: dict[str, Any]
     confidence: float = 0.0
     trait_scores: dict[str, float] = field(default_factory=dict)
+    prompt_tokens_estimate: int = 0
     error: Optional[str] = None
     prompt: Optional[str] = None
 
@@ -149,6 +156,7 @@ class RerankResult:
             "elapsed_ms": self.elapsed_ms,
             "confidence": self.confidence,
             "trait_scores": self.trait_scores,
+            "prompt_tokens_estimate": self.prompt_tokens_estimate,
             "error": self.error,
             "input": self.input,
         }
@@ -270,6 +278,13 @@ async def rerank_one(
     include_prompt: bool,
 ) -> RerankResult:
     user_prompt = build_user_prompt(query, traits, item)
+    prompt_tokens_estimate = count_chat_prompt_tokens(
+        model,
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
     started = time.monotonic()
     error: Optional[str] = None
     score = 0.0
@@ -324,6 +339,7 @@ async def rerank_one(
         input=item.payload,
         confidence=confidence,
         trait_scores=trait_scores,
+        prompt_tokens_estimate=prompt_tokens_estimate,
         error=error,
         prompt=user_prompt if include_prompt else None,
     )
@@ -745,6 +761,12 @@ def main() -> int:
         )
     )
     elapsed = time.monotonic() - started
+    elapsed_ms = int(elapsed * 1000)
+    token_usage_estimate = summarize_token_counts(
+        [result.prompt_tokens_estimate for result in results],
+        model=args.model,
+        elapsed_ms=elapsed_ms,
+    )
 
     artifacts: dict[str, Any] = {}
     if state_path and state is not None:
@@ -774,10 +796,11 @@ def main() -> int:
             "ranked_count": len(results),
             "ranked_candidate_ids": ordered_ids,
             "profile_scope": "full",
+            "token_usage_estimate": token_usage_estimate,
             "artifacts": artifacts,
         }
         if args.write_state:
-            record_state_step(state_path, state, output, int((time.monotonic() - started) * 1000))
+            record_state_step(state_path, state, output, elapsed_ms)
         print(json.dumps(output, indent=2, sort_keys=True))
     else:
         write_results(results, args.out_path)

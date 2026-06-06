@@ -174,6 +174,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             "role_search_filters": {
                 "company_names": ["OpenAI"],
                 "is_current_company": True,
+                "has_domain_intent": False,
             }
         }
 
@@ -181,6 +182,17 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             search.company_directory_tool_args(payload),
             {"company_name": "OpenAI", "page": 0, "page_size": 50, "company_limit": 5},
         )
+
+    def test_company_directory_fast_path_ignores_domain_intent_payload(self):
+        payload = {
+            "role_search_filters": {
+                "company_names": ["OpenAI"],
+                "is_current_company": True,
+                "has_domain_intent": True,
+            }
+        }
+
+        self.assertIsNone(search.company_directory_tool_args(payload))
 
     def test_company_directory_fast_path_ignores_role_constrained_payload(self):
         payload = {
@@ -245,6 +257,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             "role_search_filters": {
                 "company_names": ["OpenAI"],
                 "is_current_company": True,
+                "has_domain_intent": False,
             },
             "notes": [],
         }

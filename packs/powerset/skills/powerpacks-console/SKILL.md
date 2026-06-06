@@ -88,9 +88,8 @@ Current implemented views:
 - `/setup/imessage/review` local messages review
 - lists `.powerpacks/runs/search-network-*.json`
 - reads run state and `expand_search_request` query expansion
-- reads result JSONL in pages of 50
+- reads persisted result CSV in pages of 50
 - reads hydrated profiles for the visible page only
-- uses rerank CSV (`llm_rerank_candidates/query_results.csv`) when present
 - shows app-style person/results table with tags, trait scores, overall score,
   and reasoning
 

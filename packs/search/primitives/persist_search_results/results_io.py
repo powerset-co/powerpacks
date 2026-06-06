@@ -15,6 +15,14 @@ from typing import Any
 CSV_FIELDS = [
     "rank",
     "person_id",
+    "result_index",
+    "final_score",
+    "trait_scores",
+    "overall_reasoning",
+    "matched_position_indexes",
+    "pre_rerank_score",
+    "tags",
+    "vertical_sources",
     "name",
     "headline",
     "location",
@@ -82,6 +90,22 @@ def hydrated_profiles(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return profiles
 
 
+def rerank_rows(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    output = step_output(state, "llm_rerank_candidates")
+    artifacts = output.get("artifacts", {}) or {}
+    path = artifacts.get("query_results_csv") or output.get("query_results_csv")
+    if not path:
+        return {}
+
+    rows: dict[str, dict[str, Any]] = {}
+    with Path(str(path)).open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            person_id = row.get("person_id")
+            if person_id:
+                rows[person_id] = row
+    return rows
+
+
 def frontier_ids(state: dict[str, Any]) -> list[str]:
     llm_rerank = step_output(state, "llm_rerank_candidates")
     ids = llm_rerank.get("ranked_candidate_ids") or []
@@ -140,6 +164,7 @@ def compact_positions(profile: dict[str, Any]) -> tuple[str, str]:
 
 def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     profiles = hydrated_profiles(state)
+    rerank_by_id = rerank_rows(state)
     ids = frontier_ids(state)
     if not ids:
         ids = list(profiles)
@@ -147,10 +172,19 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for rank, person_id in enumerate(ids, start=1):
         profile = profiles.get(person_id, {})
+        rerank = rerank_by_id.get(person_id, {})
         titles, companies = compact_positions(profile)
         rows.append({
             "rank": rank,
             "person_id": person_id,
+            "result_index": rerank.get("result_index", ""),
+            "final_score": rerank.get("final_score", ""),
+            "trait_scores": rerank.get("trait_scores", ""),
+            "overall_reasoning": rerank.get("overall_reasoning", ""),
+            "matched_position_indexes": rerank.get("matched_position_indexes", ""),
+            "pre_rerank_score": rerank.get("pre_rerank_score", ""),
+            "tags": rerank.get("tags", ""),
+            "vertical_sources": rerank.get("vertical_sources", ""),
             "name": profile.get("name", ""),
             "headline": profile.get("headline", ""),
             "location": profile.get("location", ""),

@@ -22,7 +22,7 @@ class CoreLayoutTests(unittest.TestCase):
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(search_pack, ["search-company", "search-network"])
+        self.assertEqual(search_pack, ["search-company", "search-network", "search-network-jd"])
         messages_pack = sorted(
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
         )
@@ -69,7 +69,8 @@ class CoreLayoutTests(unittest.TestCase):
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
         self.assertNotIn("skills/add-", text)
         self.assertNotIn("view_search_results", text)
-        self.assertIn("workflows/query-decomposition.md", text)
+        self.assertNotIn("workflows/query-decomposition.md", text)
+        self.assertIn("search_network_pipeline.py prepare", text)
 
     def test_search_company_skill_uses_company_resolver(self) -> None:
         text = (ROOT / "packs/search/skills/search-company/SKILL.md").read_text()
@@ -92,6 +93,7 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "search-network" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "search-network-jd" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-email" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "discover-contacts" / "SKILL.md").exists())
@@ -131,6 +133,7 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((bundle / "scripts" / "run-powerpacks-console.sh").exists())
             self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "search-network-jd" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
@@ -220,11 +223,11 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("skill", expand_step)
 
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
-        self.assertIn("## Skill Composition", text)
-        self.assertIn("search-company", text)
-        self.assertIn("handoff", text.lower())
-        self.assertIn("harness-only code paths", text)
-        self.assertIn("Use this parallel primitive directly", text)
+        self.assertIn("## Happy Path", text)
+        self.assertIn("search_network_pipeline.py prepare", text)
+        self.assertIn("company_directory_fast_path", text)
+        self.assertIn("search-network-jd", text)
+        self.assertIn("Do not inspect repo docs, source, memory", text)
 
     def test_json_contracts_and_schemas_parse(self) -> None:
         roots = [
@@ -254,10 +257,10 @@ class CoreLayoutTests(unittest.TestCase):
 
     def test_search_network_uses_single_execute_preview_gate(self) -> None:
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
-        self.assertIn("`execute` or `modify`", text)
+        self.assertIn("Execute this search or modify it?", text)
         self.assertNotIn("execute`, `modify`, or `search only`", text)
         self.assertIn("--execute-approved", text)
-        self.assertIn("without a second approval gate", text)
+        self.assertIn("do not ask for another approval", text)
 
     def test_task_state_tracks_planned_steps_separately_from_execution_log(self) -> None:
         task_state = ROOT / "packs/search/primitives/task_state/task_state.py"

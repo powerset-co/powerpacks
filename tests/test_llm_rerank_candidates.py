@@ -369,6 +369,11 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
             output = json.loads(proc.stdout)
             artifacts = output["artifacts"]
             self.assertEqual(set(artifacts), {"query_results_csv"})
+            token_usage = output["token_usage_estimate"]
+            self.assertEqual(token_usage["estimator"], "tiktoken_chat_prompt")
+            self.assertEqual(token_usage["request_count"], 1)
+            self.assertGreater(token_usage["prompt_tokens_total"], 0)
+            self.assertGreater(token_usage["prompt_tokens_per_minute"], 0)
             with Path(artifacts["query_results_csv"]).open(newline="") as handle:
                 import csv
                 rows = list(csv.DictReader(handle))
@@ -405,6 +410,7 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
             self.assertIn("reason", trait_scores["ai engineer"])
             updated = json.loads(state_path.read_text())
             self.assertEqual(updated["steps"][-1]["id"], "llm_rerank_candidates")
+            self.assertIn("token_usage_estimate", updated["steps"][-1]["output"])
 
 
 class FanOutRetryTests(unittest.TestCase):
