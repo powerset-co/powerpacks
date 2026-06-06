@@ -49,6 +49,14 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
 
 
+def write_people_csv(path: Path, rows: list[tuple[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["id,public_identifier,linkedin_url,full_name,headline,summary,city,state,country,work_experiences,education,source_channels"]
+    for slug, full_name in rows:
+        lines.append(f"{slug},{slug},https://www.linkedin.com/in/{slug},{full_name},Headline,Summary,San Francisco,CA,US,[],[],test")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def run_shim_json(*args: str) -> dict:
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts/build-local-duckdb-shim.py"), *args],
@@ -61,6 +69,16 @@ def run_shim_json(*args: str) -> dict:
     if proc.returncode != 0:
         raise AssertionError(f"shim failed: {proc.stderr}\nstdout={proc.stdout}")
     return json.loads(proc.stdout)
+
+
+def query_duckdb(db_path: Path, sql: str):
+    import duckdb
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        return con.execute(sql).fetchall()
+    finally:
+        con.close()
 
 
 class LocalDuckDBFixtureMixin:
@@ -1245,6 +1263,111 @@ class LocalFilterEvalTests(unittest.TestCase):
             local_filter_eval.filter_matches({}, ("field", "Eq", 1, {}))
         with self.assertRaises(ValueError):
             local_filter_eval.filter_matches({}, ("field", "ContainsAllTokens", "x", "bad-options"))
+
+
+class LocalDuckDBIncrementalShimTests(unittest.TestCase):
+    def test_incremental_bootstraps_hashes_then_noops_without_force(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            records = tmp / "records"
+            out = tmp / "search-index"
+            people_csv = tmp / "people.csv"
+            write_people_csv(people_csv, [("person-one", "Person One")])
+            write_jsonl(records / "people.records.jsonl", [{"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Engineer", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_jsonl(records / "summaries.records.jsonl", [{"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "Old", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_jsonl(records / "companies.records.jsonl", [{"company_urn": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+
+            first = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--force")
+            bootstrap = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--incremental")
+            noop = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--incremental")
+
+            self.assertEqual(first["status"], "ok")
+            self.assertEqual(bootstrap["duckdb_update_mode"], "incremental")
+            for table in ["local_people_positions", "local_summaries", "local_companies", "local_person_profiles"]:
+                self.assertEqual(bootstrap["table_diffs"][table]["mode"], "noop")
+                self.assertEqual(noop["table_diffs"][table]["mode"], "noop")
+                self.assertEqual(noop["table_diffs"][table]["inserted_rows"], 0)
+                self.assertEqual(noop["table_diffs"][table]["updated_rows"], 0)
+                self.assertEqual(noop["table_diffs"][table]["deleted_rows"], 0)
+            hash_rows = query_duckdb(Path(first["duckdb"]), "select count(*) from _local_record_hashes")
+            self.assertGreater(hash_rows[0][0], 0)
+
+    def test_incremental_updates_inserts_and_deletes_rows_in_existing_duckdb(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            records = tmp / "records"
+            out = tmp / "search-index"
+            people_csv = tmp / "people.csv"
+            write_people_csv(people_csv, [("person-one", "Person One"), ("person-delete", "Person Delete")])
+            write_jsonl(records / "people.records.jsonl", [
+                {"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Engineer", "company_id": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
+                {"id": "pos-delete", "position_id": "pos-delete", "person_id": "person-delete", "base_id": "person-delete", "position_title": "Delete", "vector": [0.0, 1.0], "allowed_operator_ids": ["op-test"]},
+            ])
+            write_jsonl(records / "summaries.records.jsonl", [
+                {"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "Old", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
+                {"id": "person-delete", "person_id": "person-delete", "base_id": "person-delete", "summary": "Delete", "vector": [0.0, 1.0], "allowed_operator_ids": ["op-test"]},
+            ])
+            write_jsonl(records / "companies.records.jsonl", [
+                {"company_urn": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
+                {"company_urn": "company-delete", "company_name": "Company Delete", "vector": [0.0, 1.0], "allowed_operator_ids": ["op-test"]},
+            ])
+            first = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--force")
+            run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--incremental")
+
+            write_people_csv(people_csv, [("person-one", "Person One Updated"), ("person-two", "Person Two")])
+            write_jsonl(records / "people.records.jsonl", [
+                {"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Staff Engineer", "company_id": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
+                {"id": "pos-2", "position_id": "pos-2", "person_id": "person-two", "base_id": "person-two", "position_title": "Founder", "company_id": "company-two", "company_name": "Company Two", "vector": [0.5, 0.5], "allowed_operator_ids": ["op-test"]},
+            ])
+            write_jsonl(records / "summaries.records.jsonl", [
+                {"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "New", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
+                {"id": "person-two", "person_id": "person-two", "base_id": "person-two", "summary": "Two", "vector": [0.5, 0.5], "allowed_operator_ids": ["op-test"]},
+            ])
+            write_jsonl(records / "companies.records.jsonl", [
+                {"company_urn": "company-one", "company_name": "Company One Updated", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
+                {"company_urn": "company-two", "company_name": "Company Two", "vector": [0.5, 0.5], "allowed_operator_ids": ["op-test"]},
+            ])
+            second = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--incremental")
+            db = Path(first["duckdb"])
+
+            for table in ["local_people_positions", "local_summaries", "local_companies", "local_person_profiles"]:
+                self.assertEqual(second["table_diffs"][table]["inserted_rows"], 1, table)
+                self.assertEqual(second["table_diffs"][table]["updated_rows"], 1, table)
+                self.assertEqual(second["table_diffs"][table]["deleted_rows"], 1, table)
+            self.assertEqual(query_duckdb(db, "select id, position_title, company_name from local_people_positions order by id"), [("pos-1", "Staff Engineer", "Company One Updated"), ("pos-2", "Founder", "Company Two")])
+            self.assertEqual(query_duckdb(db, "select id, summary from local_summaries order by id"), [("person-one", "New"), ("person-two", "Two")])
+            self.assertEqual(query_duckdb(db, "select company_urn, company_name from local_companies order by company_urn"), [("company-one", "Company One Updated"), ("company-two", "Company Two")])
+            self.assertEqual(query_duckdb(db, "select full_name from local_person_profiles order by full_name"), [("Person One Updated",), ("Person Two",)])
+
+    def test_incremental_missing_hashes_replaces_stale_matching_ids(self) -> None:
+        import duckdb
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            records = tmp / "records"
+            out = tmp / "search-index"
+            people_csv = tmp / "people.csv"
+            write_people_csv(people_csv, [("person-one", "Person One")])
+            write_jsonl(records / "people.records.jsonl", [{"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Engineer", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_jsonl(records / "summaries.records.jsonl", [{"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "Correct", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_jsonl(records / "companies.records.jsonl", [{"company_urn": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            first = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--force")
+            db = Path(first["duckdb"])
+            con = duckdb.connect(str(db))
+            try:
+                con.execute("drop table _local_record_hashes")
+                con.execute("update local_people_positions set position_title = 'Stale' where id = 'pos-1'")
+                con.execute("update local_summaries set summary = 'Stale' where id = 'person-one'")
+                con.execute("checkpoint")
+            finally:
+                con.close()
+
+            payload = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--incremental")
+
+            self.assertEqual(payload["table_diffs"]["local_people_positions"]["mode"], "bootstrap_replace_missing_hashes")
+            self.assertEqual(payload["table_diffs"]["local_people_positions"]["updated_rows"], 1)
+            self.assertEqual(query_duckdb(db, "select position_title from local_people_positions where id = 'pos-1'"), [("Engineer",)])
+            self.assertEqual(query_duckdb(db, "select summary from local_summaries where id = 'person-one'"), [("Correct",)])
 
 
 if __name__ == "__main__":

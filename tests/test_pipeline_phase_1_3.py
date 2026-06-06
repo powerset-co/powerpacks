@@ -396,6 +396,32 @@ class PipelinePhase13Tests(unittest.TestCase):
             self.assertEqual(payload["step"], "local_duckdb_refresh")
             self.assertEqual(payload["reason"], "processing_outputs_complete_duckdb_refreshed")
             self.assertEqual(run_json.call_count, 2)
+            duckdb_cmd = run_json.call_args_list[1].args[0]
+            self.assertIn("--incremental", duckdb_cmd)
+            self.assertNotIn("--force", duckdb_cmd)
+
+    def test_duckdb_freshness_checks_record_inputs_not_only_person_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            people = root / ".powerpacks/network-import/merged/people.csv"
+            people.parent.mkdir(parents=True)
+            people.write_text("id\n1\n", encoding="utf-8")
+            duckdb = root / ".powerpacks/search-index/local-search.duckdb"
+            duckdb.parent.mkdir(parents=True)
+            duckdb.write_bytes(b"x" * 2048)
+            time.sleep(0.01)
+            records = root / ".powerpacks/search-index/records/people.records.jsonl"
+            records.parent.mkdir(parents=True)
+            records.write_text('{"id":"newer-record"}\n', encoding="utf-8")
+            args = SimpleNamespace(
+                people_csv=".powerpacks/network-import/merged/people.csv",
+                output_dir=".powerpacks/search-index",
+            )
+            with mock.patch.object(index_contacts, "ROOT", root):
+                self.assertFalse(index_contacts.duckdb_current_for_processing_hashes(args))
+                freshness = index_contacts.duckdb_freshness_payload(args)
+            self.assertEqual(freshness["reason"], "stale_duckdb_inputs")
+            self.assertIn(".powerpacks/search-index/records/people.records.jsonl", freshness["stale_inputs"])
 
 
 if __name__ == "__main__":

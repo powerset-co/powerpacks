@@ -217,7 +217,7 @@ def duckdb_command(args: argparse.Namespace) -> list[str]:
         str(args.output_dir),
         "--operator-id",
         str(args.operator_id),
-        "--force",
+        "--incremental",
     ]
 
 
@@ -225,18 +225,45 @@ def local_search_duckdb_path(args: argparse.Namespace) -> Path:
     return ROOT / Path(args.output_dir) / "local-search.duckdb"
 
 
-def processed_person_hashes_path(args: argparse.Namespace) -> Path:
-    return ROOT / Path(args.output_dir) / "unified/person_hashes.json"
+def duckdb_input_paths(args: argparse.Namespace) -> list[Path]:
+    output_dir = ROOT / Path(args.output_dir)
+    candidates = [
+        ROOT / Path(args.people_csv),
+        output_dir / "unified/person_hashes.json",
+        output_dir / "records/person_profiles.records.jsonl",
+        output_dir / "records/people.records.jsonl",
+        output_dir / "records/summaries.records.jsonl",
+        output_dir / "records/companies.records.jsonl",
+        output_dir / "records/education.records.jsonl",
+        output_dir / "records/schools.records.jsonl",
+        output_dir / "records/people.records.hashes.json",
+        output_dir / "records/summaries.records.hashes.json",
+        output_dir / "records/companies.records.hashes.json",
+    ]
+    return [path for path in candidates if path.exists()]
 
 
 def duckdb_current_for_processing_hashes(args: argparse.Namespace) -> bool:
     duckdb = local_search_duckdb_path(args)
     if not duckdb.exists() or duckdb.stat().st_size <= 1024:
         return False
-    hashes = processed_person_hashes_path(args)
-    if hashes.exists() and duckdb.stat().st_mtime_ns < hashes.stat().st_mtime_ns:
-        return False
+    duckdb_mtime = duckdb.stat().st_mtime_ns
+    for input_path in duckdb_input_paths(args):
+        if duckdb_mtime < input_path.stat().st_mtime_ns:
+            return False
     return True
+
+
+def duckdb_freshness_payload(args: argparse.Namespace) -> dict[str, Any]:
+    duckdb = local_search_duckdb_path(args)
+    if not duckdb.exists() or duckdb.stat().st_size <= 1024:
+        return {"current_for_processing_hashes": False, "reason": "missing_or_small_duckdb", "checked_inputs": []}
+    duckdb_mtime = duckdb.stat().st_mtime_ns
+    inputs = duckdb_input_paths(args)
+    stale = [str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path) for path in inputs if duckdb_mtime < path.stat().st_mtime_ns]
+    if stale:
+        return {"current_for_processing_hashes": False, "reason": "stale_duckdb_inputs", "stale_inputs": stale, "checked_inputs": len(inputs)}
+    return {"current_for_processing_hashes": True, "checked_inputs": len(inputs)}
 
 
 def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
@@ -505,6 +532,19 @@ def compact_run_payload(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if tables:
         summary["duckdb_tables"] = {key: tables[key] for key in standard_tables if key in tables}
+    if local_duckdb.get("duckdb_update_mode"):
+        summary["duckdb_update_mode"] = local_duckdb.get("duckdb_update_mode")
+    table_diffs = local_duckdb.get("table_diffs") if isinstance(local_duckdb.get("table_diffs"), dict) else {}
+    if table_diffs:
+        summary["duckdb_table_diffs"] = {
+            table: {
+                key: diff.get(key)
+                for key in ["mode", "inserted_rows", "updated_rows", "deleted_rows", "unchanged_rows", "old_hashes_present"]
+                if key in diff
+            }
+            for table, diff in table_diffs.items()
+            if isinstance(diff, dict)
+        }
     if payload.get("error"):
         summary["error"] = payload.get("error")
     return summary
@@ -629,7 +669,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "fan_in": fan_in_payload,
             "promoted": promoted,
             "preflight_duckdb": preflight_duckdb,
-            "duckdb_freshness": {"current_for_processing_hashes": True},
+            "duckdb_freshness": duckdb_freshness_payload(args),
             "started_at": started_at,
             "updated_at": now_iso(),
         }
@@ -649,7 +689,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 "promoted": promoted,
                 "preflight_duckdb": preflight_duckdb,
                 "local_duckdb": duckdb_payload,
-                "duckdb_freshness": {"current_for_processing_hashes": False},
+                "duckdb_freshness": duckdb_freshness_payload(args),
                 "error": tail(duckdb_stderr) or duckdb_payload,
                 "started_at": started_at,
                 "updated_at": now_iso(),
@@ -673,7 +713,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "fan_in": fan_in_payload,
             "promoted": promoted,
             "preflight_duckdb": preflight_duckdb,
-            "duckdb_freshness": {"current_for_processing_hashes": duckdb_current_for_processing_hashes(args)},
+            "duckdb_freshness": duckdb_freshness_payload(args),
             "started_at": started_at,
             "updated_at": now_iso(),
         }
