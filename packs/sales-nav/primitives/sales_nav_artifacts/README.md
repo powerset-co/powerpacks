@@ -21,7 +21,11 @@ Typical workflow:
 python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py init \
   --query "VP engineering at Stripe" --set-id "$SET_ID" --conversation-id "$CONV_ID"
 
-# After an MCP sales_nav_search or get_artifact response has been saved to page.json:
+# Normal fast handoff: after MCP sales_nav_search returns artifact_id, download the persisted artifact directly (uses powerset_auth/Auth0 credentials):
+python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py download-artifact \
+  --artifact-id "$ARTIFACT_ID" --out page.json
+
+# After a Sales Nav artifact response has been saved to page.json:
 python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-page \
   --state .powerpacks/sales-nav/runs/<id>/state.json --response page.json
 

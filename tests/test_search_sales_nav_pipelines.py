@@ -322,9 +322,11 @@ class SalesNavPipelineTests(unittest.TestCase):
     def test_sales_plan_normalization_supports_multi_query_and_strips_metadata(self):
         raw = {
             "score_criteria": "investment team",
+            "min_leads": 10,
+            "stop_after_min_leads": True,
             "queries": [
                 {"id": "finance", "args": {"company_ids": [123], "company_names": {"123": "Acme"}, "function_ids": ["10"]}},
-                {"id": "past_company", "label": "past company", "past_company_ids": [123], "past_company_names": {"123": "Acme"}},
+                {"id": "past_company", "label": "past company", "required": True, "past_company_ids": [123], "past_company_names": {"123": "Acme"}},
                 {"id": "keyword_last", "label": "keyword", "args": {"keywords": "Acme"}},
             ],
         }
@@ -340,6 +342,7 @@ class SalesNavPipelineTests(unittest.TestCase):
         self.assertEqual(plan[0]["args"]["conversation_id"], "conv-123")
         self.assertTrue(plan[0]["args"]["persist_artifact"])
         self.assertNotIn("label", plan[1]["args"])
+        self.assertTrue(plan[1]["required"])
 
     def test_sales_member_ids_for_enrichment_filters_current_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -379,6 +382,210 @@ class SalesNavPipelineTests(unittest.TestCase):
         cmd = run_mock.call_args.args[0]
         self.assertIn("--env-file", cmd)
         self.assertEqual(cmd[cmd.index("--env-file") + 1], str(sales.ROOT / ".env"))
+
+    def _base_sales_args(self, state, plan):
+        return SimpleNamespace(
+            ledger=None,
+            state=str(state),
+            query=None,
+            set_id=None,
+            conversation_id=None,
+            run_id=None,
+            search_args_json=None,
+            search_plan_json=str(plan),
+            response=None,
+            prefer_content=False,
+            enriched=False,
+            require_enriched=False,
+            skip_enrich=False,
+            enrich_limit=100,
+            artifact_limit=1000,
+            skip_mutual_url_resolution=True,
+            mutual_url_limit=100,
+            resolve_mutuals_external=False,
+            discover_mutuals=False,
+            discover_stagger=None,
+            discover_max_leads=None,
+            count=25,
+            criteria=None,
+            threshold=0.7,
+            confirm_llm=False,
+            force=False,
+            timeout=60,
+        )
+
+    def test_sales_pipeline_downloads_artifact_without_get_artifact_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state.json"
+            pages = root / "pages"
+            pages.mkdir()
+            leads = root / "leads.jsonl"
+            sales.write_json(state, {"set_id": "set-123", "conversation_id": "conv-123", "files": {"leads_jsonl": str(leads)}})
+            plan = root / "plan.json"
+            sales.write_json(plan, {"queries": [{"args": {"title": "CFO"}}]})
+            lp = sales.ledger_path(self._base_sales_args(state, plan))
+            ledger = sales.load(lp)
+            ledger["artifacts"].update({"state": str(state), "run_dir": str(root), "conversation_id": "conv-123", "set_id": "set-123"})
+            ledger["steps"]["search_000"] = {"status": "completed", "summary": {"artifact_id": "art-1", "results_returned": 1}}
+            sales.save(lp, ledger)
+
+            calls = []
+            def fake_run(cmd, timeout=300):
+                calls.append(cmd)
+                if "download-artifact" in cmd:
+                    out = Path(cmd[cmd.index("--out") + 1])
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_text(json.dumps({"content": {"extended_results": {"leads": [{"member_id": "1"}]}}}))
+                    return {"returncode": 0, "json": {"response": "downloaded", "lead_count": 1}, "stdout": "{}", "stderr": ""}
+                if "ingest-page" in cmd:
+                    leads.write_text(json.dumps({"member_id": "1", "artifact_id": "art-1", "enriched": True}) + "\n")
+                    return {"returncode": 0, "json": {"lead_count": 1, "new_leads_ingested": 1, "new_member_ids": ["1"]}, "stdout": "{}", "stderr": ""}
+                raise AssertionError(f"unexpected command {cmd}")
+
+            args = self._base_sales_args(state, plan)
+            with mock.patch.object(sales, "run", side_effect=fake_run):
+                rc = sales.advance_searches(args, lp, sales.load(lp), state)
+
+            self.assertIsNone(rc)
+            self.assertTrue(any("download-artifact" in cmd for cmd in calls))
+            self.assertFalse(any("get_artifact" in cmd for cmd in calls))
+            saved = sales.read_json(lp)
+            self.assertEqual(saved["steps"]["get_artifact_000"]["status"], "completed")
+            self.assertIn("artifact_download_seconds", saved["steps"]["get_artifact_000"]["durations"])
+
+    def test_sales_pipeline_zero_result_skips_artifact_and_enrichment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state.json"
+            sales.write_json(state, {"set_id": "set-123", "conversation_id": "conv-123"})
+            plan = root / "plan.json"
+            sales.write_json(plan, {"queries": [{"args": {"title": "CFO"}}]})
+            args = self._base_sales_args(state, plan)
+            lp = sales.ledger_path(args)
+            ledger = sales.load(lp)
+            ledger["artifacts"].update({"state": str(state), "run_dir": str(root), "conversation_id": "conv-123", "set_id": "set-123"})
+            ledger["steps"]["search_000"] = {"status": "completed", "summary": {"artifact_id": "art-1", "results_returned": 0}}
+            sales.save(lp, ledger)
+
+            rc = sales.advance_searches(args, lp, sales.load(lp), state)
+
+            self.assertIsNone(rc)
+            saved = sales.read_json(lp)
+            self.assertEqual(saved["steps"]["get_artifact_000"]["summary"]["reason"], "zero_results_no_new_leads")
+            self.assertEqual(saved["steps"]["enrich_profiles_000"]["summary"]["reason"], "zero_results_no_new_leads")
+
+    def test_sales_pipeline_zero_new_leads_skips_enrichment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state.json"
+            leads = root / "leads.jsonl"
+            sales.write_json(state, {"set_id": "set-123", "conversation_id": "conv-123", "files": {"leads_jsonl": str(leads)}})
+            plan = root / "plan.json"
+            sales.write_json(plan, {"queries": [{"args": {"title": "CFO"}}]})
+            args = self._base_sales_args(state, plan)
+            lp = sales.ledger_path(args)
+            ledger = sales.load(lp)
+            ledger["artifacts"].update({"state": str(state), "run_dir": str(root), "conversation_id": "conv-123", "set_id": "set-123"})
+            ledger["steps"]["search_000"] = {"status": "completed", "summary": {"artifact_id": "art-1", "results_returned": 1}}
+            sales.save(lp, ledger)
+
+            def fake_run(cmd, timeout=300):
+                if "download-artifact" in cmd:
+                    return {"returncode": 0, "json": {"response": "downloaded"}, "stdout": "{}", "stderr": ""}
+                if "ingest-page" in cmd:
+                    return {"returncode": 0, "json": {"lead_count": 1, "new_leads_ingested": 0, "new_member_ids": []}, "stdout": "{}", "stderr": ""}
+                raise AssertionError(f"unexpected command {cmd}")
+
+            with mock.patch.object(sales, "run", side_effect=fake_run):
+                rc = sales.advance_searches(args, lp, sales.load(lp), state)
+
+            self.assertIsNone(rc)
+            saved = sales.read_json(lp)
+            self.assertEqual(saved["steps"]["enrich_profiles_000"]["summary"]["reason"], "zero_new_leads_after_ingest")
+
+    def test_sales_pipeline_threshold_skip_respects_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state.json"
+            leads = root / "leads.jsonl"
+            leads.write_text(json.dumps({"member_id": "1"}) + "\n")
+            sales.write_json(state, {"set_id": "set-123", "conversation_id": "conv-123", "files": {"leads_jsonl": str(leads)}})
+            plan = root / "plan.json"
+            sales.write_json(plan, {"min_leads": 1, "queries": [{"args": {"title": "CFO"}}, {"args": {"title": "VP"}}, {"required": True, "args": {"title": "CEO"}}]})
+            args = self._base_sales_args(state, plan)
+            lp = sales.ledger_path(args)
+            ledger = sales.load(lp)
+            ledger["artifacts"].update({"state": str(state), "run_dir": str(root), "conversation_id": "conv-123", "set_id": "set-123"})
+            ledger["artifacts"]["search_plan"] = sales.normalize_search_plan(sales.read_json(plan), set_id="set-123", conversation_id="conv-123", default_count=25)[0]
+            ledger["artifacts"]["min_leads"] = 1
+            ledger["artifacts"]["stop_after_min_leads"] = True
+            for step in ("search_000", "get_artifact_000", "enrich_profiles_000", "get_artifact_after_enrich_000"):
+                ledger["steps"][step] = {"status": "completed", "summary": {}}
+            sales.save(lp, ledger)
+
+            rc = sales.advance_searches(args, lp, sales.load(lp), state)
+
+            self.assertEqual(rc, 30)
+            saved = sales.read_json(lp)
+            self.assertEqual(saved["steps"]["search_001"]["summary"]["reason"], "minimum_lead_threshold_met")
+            self.assertEqual(saved["current_block"]["step"], "search_002")
+
+    def test_sales_pipeline_reingests_after_enrichment_without_get_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state.json"
+            leads = root / "leads.jsonl"
+            sales.write_json(state, {"set_id": "set-123", "conversation_id": "conv-123", "files": {"leads_jsonl": str(leads)}})
+            plan = root / "plan.json"
+            sales.write_json(plan, {"queries": [{"args": {"title": "CFO"}}]})
+            args = self._base_sales_args(state, plan)
+            lp = sales.ledger_path(args)
+            ledger = sales.load(lp)
+            ledger["artifacts"].update({"state": str(state), "run_dir": str(root), "conversation_id": "conv-123", "set_id": "set-123"})
+            for step in ("search_000", "get_artifact_000", "enrich_profiles_000"):
+                ledger["steps"][step] = {"status": "completed", "summary": {"artifact_id": "art-1", "updated_leads": 1}}
+            sales.save(lp, ledger)
+
+            calls = []
+            def fake_run(cmd, timeout=300):
+                calls.append(cmd)
+                if "download-artifact" in cmd:
+                    return {"returncode": 0, "json": {"response": "downloaded"}, "stdout": "{}", "stderr": ""}
+                if "ingest-page" in cmd:
+                    return {"returncode": 0, "json": {"lead_count": 1, "new_leads_ingested": 0}, "stdout": "{}", "stderr": ""}
+                raise AssertionError(f"unexpected command {cmd}")
+
+            with mock.patch.object(sales, "run", side_effect=fake_run):
+                rc = sales.advance_searches(args, lp, sales.load(lp), state)
+
+            self.assertIsNone(rc)
+            self.assertTrue(any("download-artifact" in cmd for cmd in calls))
+            self.assertFalse(any("get_artifact" in cmd for cmd in calls))
+
+    def test_sales_export_records_timing_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state.json"
+            lp = root / "pipeline.json"
+            sales.write_json(state, {})
+            ledger = sales.load(lp)
+            args = self._base_sales_args(state, root / "plan.json")
+            args.force = False
+
+            with mock.patch.object(
+                sales,
+                "run",
+                return_value={"returncode": 0, "json": {"leads_csv": "leads.csv", "mutuals_csv": "mutuals.csv"}, "stdout": "{}", "stderr": ""},
+            ):
+                sales.export_state(args, lp, ledger, state)
+
+            saved = sales.read_json(lp)
+            rec = saved["steps"]["export"]
+            self.assertEqual(rec["status"], "completed")
+            self.assertIn("export_started_at", rec)
+            self.assertIn("export_completed_at", rec)
+            self.assertIn("export_seconds", rec["durations"])
 
 if __name__ == "__main__":
     unittest.main()

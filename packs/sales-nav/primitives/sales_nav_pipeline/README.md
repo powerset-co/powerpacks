@@ -56,9 +56,9 @@ before any keyword-only fallback. Use keyword-only search last.
 For every query the runner:
 
 1. blocks for `sales_nav_search` with `persist_artifact=true`
-2. blocks for `get_artifact(include_content=true)` and ingests full content
-3. blocks for `enrich_extended_profiles` for currently loaded unenriched leads
-4. reloads/ingests the enriched artifact
+2. downloads the persisted artifact by `artifact_id` with `sales_nav_artifacts download-artifact` and ingests full content without sending the JSON through MCP/LLM context
+3. blocks for `enrich_extended_profiles` only when newly ingested leads need enrichment
+4. downloads/re-ingests the same artifact after enrichment when leads were updated
 5. after all searches, resolves pending mutual member IDs through
    `sales_nav_resolve_member_ids` and exports `leads.csv` / `mutuals.csv`
 
