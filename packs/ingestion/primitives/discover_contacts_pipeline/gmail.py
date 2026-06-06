@@ -28,7 +28,7 @@ try:
         run_cmd,
         source_slug,
         write_csv_rows,
-        write_json,
+        write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
         accounts_path as configured_accounts_path,
@@ -52,7 +52,7 @@ except ModuleNotFoundError:
         run_cmd,
         source_slug,
         write_csv_rows,
-        write_json,
+        write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
         accounts_path as configured_accounts_path,
@@ -348,17 +348,41 @@ def run_gmail_apply_and_enrich(_ledger_path: Path, _ledger: dict[str, Any]) -> b
 
 
 def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any], _worker: dict[str, Any]) -> bool:
-    payload = discover(accounts_file=Path(str((ledger.get("input") or {}).get("from_accounts") or ".powerpacks/ingestion/accounts.json")))
+    input_cfg = ledger.get("input") or {}
+    payload = discover(
+        accounts_file=Path(str(input_cfg.get("from_accounts") or ".powerpacks/ingestion/accounts.json")),
+        selected_accounts=_as_list(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email") or []),
+        msgvault_db=str(input_cfg.get("msgvault_db") or ""),
+        sync_query=str(input_cfg.get("gmail_sync_query") or ""),
+        skip_msgvault_sync=bool(input_cfg.get("skip_msgvault_sync")),
+    )
     ledger.setdefault("artifacts", {})["gmail_contacts_csv"] = payload.get("contacts_csv", "")
     ledger.setdefault("artifacts", {})["gmail_linkedin_resolution_queue_csv"] = payload.get("linkedin_resolution_queue_csv", "")
     return payload.get("status") in {"completed", "skipped"}
 
 
-def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = None, **_: Any) -> dict[str, Any]:
+def discover(
+    *,
+    accounts_file: Path | None = None,
+    accounts_path: Path | None = None,
+    selected_accounts: list[str] | None = None,
+    account_email: str | None = None,
+    msgvault_db: str | None = None,
+    sync_query: str | None = None,
+    skip_msgvault_sync: bool = False,
+    **_: Any,
+) -> dict[str, Any]:
     cfg = load_config()
     accounts_file = accounts_file or accounts_path or configured_accounts_path()
     account_state = read_json(accounts_file, {}) or {}
     source_inputs = inputs(account_state, cfg)
+    explicit_accounts = ordered_unique([*(selected_accounts or []), *([account_email] if account_email else [])])
+    if explicit_accounts:
+        source_inputs["selected_accounts"] = explicit_accounts
+    if msgvault_db:
+        source_inputs["msgvault_db"] = str(Path(str(msgvault_db)).expanduser())
+    if sync_query is not None:
+        source_inputs["sync_query"] = str(sync_query or "").strip()
     contacts_csv = output_path("gmail", "contacts_csv")
     queue_csv = output_path("gmail", "linkedin_resolution_queue_csv")
     manifest_json = output_path("gmail", "manifest_json")
@@ -372,7 +396,7 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             "contacts_csv": str(contacts_csv),
             "linkedin_resolution_queue_csv": str(queue_csv),
         }
-        write_json(manifest_json, payload)
+        write_stage_manifest(manifest_json, payload)
         return payload
 
     incoming_outputs: list[dict[str, Any]] = []
@@ -381,10 +405,18 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
     raw_root = contacts_csv.parent / "raw"
     for email in source_inputs["selected_accounts"]:
         account_raw_dir = raw_root / source_slug(email)
-        sync = sync_msgvault_account(email, source_inputs["msgvault_db"], source_inputs["sync_query"])
+        if skip_msgvault_sync:
+            sync = {
+                "status": "skipped",
+                "reason": "skip_msgvault_sync",
+                "account_email": email,
+                "query": source_inputs["sync_query"],
+            }
+        else:
+            sync = sync_msgvault_account(email, source_inputs["msgvault_db"], source_inputs["sync_query"])
         if sync["status"] == "failed":
             payload = {"status": "failed", "source": "gmail", "account_email": email, "error": sync}
-            write_json(manifest_json, payload)
+            write_stage_manifest(manifest_json, payload)
             return payload
         cmd = py_cmd(
             "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
@@ -427,7 +459,7 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
         })
         if code != 0:
             payload = {"status": "failed", "source": "gmail", "account_email": email, "error": stderr or child}
-            write_json(manifest_json, payload)
+            write_stage_manifest(manifest_json, payload)
             return payload
 
     existing_manifest = read_json(manifest_json, {}) or {}
@@ -485,26 +517,29 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
         "updated_at": now_iso(),
         "privacy": {
             "message_bodies_read": False,
-            "gmail_sync_ran": True,
+            "gmail_sync_ran": not skip_msgvault_sync,
             "parallel_called": False,
             "rapidapi_called": False
         },
         "children": children,
     }
-    write_json(manifest_json, payload)
-    return payload
+    return write_stage_manifest(manifest_json, payload)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Discover Gmail contacts from existing msgvault metadata")
     parser.add_argument("command", choices=["discover"])
     parser.add_argument("--accounts", type=Path, default=None)
+    parser.add_argument("--account-email", default="")
+    parser.add_argument("--msgvault-db", default="")
+    parser.add_argument("--sync-query", default=None)
+    parser.add_argument("--skip-msgvault-sync", action="store_true")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    emit(discover(accounts_file=args.accounts))
+    emit(discover(accounts_file=args.accounts, account_email=args.account_email, msgvault_db=args.msgvault_db, sync_query=args.sync_query, skip_msgvault_sync=args.skip_msgvault_sync))
     return 0
 
 
