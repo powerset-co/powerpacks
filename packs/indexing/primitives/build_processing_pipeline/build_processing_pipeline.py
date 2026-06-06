@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import csv
+import array
 import hashlib
 import json
 import os
@@ -11,7 +11,7 @@ import shutil
 import sys
 from argparse import Namespace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
@@ -29,7 +29,7 @@ from packs.indexing.lib.contracts import (  # noqa: E402
     normalize_record_for_contract,
     validate_jsonl,
 )
-from packs.indexing.lib.io import emit_json, read_jsonl, write_json, write_jsonl  # noqa: E402
+from packs.indexing.lib.io import atomic_write_text, emit_json, read_jsonl, write_json, write_jsonl  # noqa: E402
 from packs.indexing.lib.ledger import load_ledger, mark_step, save_ledger  # noqa: E402
 from packs.indexing.lib.people import build_people_records, build_unified_profiles, flatten_people  # noqa: E402
 from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed  # noqa: E402
@@ -87,6 +87,7 @@ def paths(rd: Path) -> dict[str, Path]:
         "ledger": rd / "ledger.json",
         "flattened": rd / "unified/flattened_people.jsonl",
         "profiles": rd / "profiles/hydrated_profiles.jsonl",
+        "person_hashes": rd / "unified/person_hashes.json",
         "raw_titles": rd / "roles/raw_titles.jsonl",
         "role_mapping": rd / "roles/role_mapping.csv",
         "roles_dense": rd / "roles/roles_with_dense_text.jsonl",
@@ -99,11 +100,14 @@ def paths(rd: Path) -> dict[str, Path]:
         "locations_corpus": rd / "location/locations_corpus.jsonl",
         "summary_internal": rd / "summaries/summary_records.jsonl",
         "people_records": rd / "records/people.records.jsonl",
+        "people_record_hashes": rd / "records/people.records.hashes.json",
         "companies_records": rd / "records/companies.records.jsonl",
+        "companies_record_hashes": rd / "records/companies.records.hashes.json",
         "company_embeddings": rd / "company/company_embeddings_v3.jsonl",
         "schools_records": rd / "records/schools.records.jsonl",
         "education_records": rd / "records/education.records.jsonl",
         "summaries_records": rd / "records/summaries.records.jsonl",
+        "summaries_record_hashes": rd / "records/summaries.records.hashes.json",
         "vector_checkpoint": rd / "vectors/checkpoint.json",
         "summary_embeddings": rd / "unified/summary_embeddings.jsonl",
         "person_tech_skills": rd / "unified/person_tech_skills.jsonl",
@@ -123,6 +127,15 @@ def stats_path(ledger: dict[str, Any], name: str) -> Path:
 
 def write_stats(ledger: dict[str, Any], name: str, payload: dict[str, Any]) -> None:
     write_json(stats_path(ledger, name), payload)
+
+
+def write_json_if_changed(path: str | Path, payload: Any) -> bool:
+    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    out = Path(path)
+    if out.exists() and out.read_text(encoding="utf-8") == text:
+        return False
+    atomic_write_text(out, text)
+    return True
 
 
 def collect_artifact_paths(value: Any) -> list[str]:
@@ -259,6 +272,152 @@ def _person_id(row: dict[str, Any]) -> str:
     return str(row.get("id") or row.get("person_id") or row.get("base_id") or "").strip()
 
 
+def compute_record_hash(record: dict[str, Any]) -> str:
+    """Compute deterministic SHA-256 hash of an indexing record.
+
+    Mirrors Network Search API's incremental upload hash: vectors are hashed as
+    deterministic float-array bytes and all other fields are sorted JSON. This
+    lets indexing compare current records to the last successful run and skip
+    unchanged inserts/updates.
+    """
+
+    vector = record.get("vector")
+    if vector is not None:
+        try:
+            vector_bytes = array.array("d", vector).tobytes()
+        except (TypeError, ValueError):
+            vector_bytes = json.dumps(vector, sort_keys=True, default=str).encode("utf-8")
+    else:
+        vector_bytes = b""
+    other_fields = {key: value for key, value in record.items() if key not in {"vector", "_powerpacks_content_hash"}}
+    json_bytes = json.dumps(other_fields, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(vector_bytes + json_bytes).hexdigest()
+
+
+def load_hashes(hash_file: Path) -> dict[str, str]:
+    if not hash_file.exists():
+        return {}
+    try:
+        payload = json.loads(hash_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {str(key): str(value) for key, value in payload.items() if isinstance(value, str)}
+
+
+def save_hashes(hashes: dict[str, str], hash_file: Path) -> bool:
+    return write_json_if_changed(hash_file, hashes)
+
+
+def record_id(record: dict[str, Any], id_fields: tuple[str, ...] = ("id",)) -> str:
+    for field in id_fields:
+        value = str(record.get(field) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def compute_record_diff(
+    records: list[dict[str, Any]],
+    hash_file: Path,
+    old_hashes: dict[str, str] | None = None,
+    *,
+    id_fn: Callable[[dict[str, Any]], str] | None = None,
+    id_fields: tuple[str, ...] = ("id",),
+) -> dict[str, Any]:
+    """Compare current records against a saved per-record hash sidecar.
+
+    Shape intentionally follows Network Search API incremental_upload:
+    ``new``, ``changed``, ``unchanged_count``, ``deleted_ids``, and
+    ``new_hashes``.
+    """
+
+    old_hashes = dict(old_hashes) if old_hashes is not None else load_hashes(hash_file)
+    new_hashes: dict[str, str] = {}
+    records_by_id: dict[str, dict[str, Any]] = {}
+    skipped_unkeyed_rows = 0
+    for record in records:
+        rid = str(id_fn(record) if id_fn else record_id(record, id_fields)).strip()
+        if not rid:
+            skipped_unkeyed_rows += 1
+            continue
+        new_hashes[rid] = compute_record_hash(record)
+        records_by_id[rid] = record
+    if not old_hashes:
+        return {
+            "new": [records_by_id[key] for key in new_hashes],
+            "changed": [],
+            "unchanged_count": 0,
+            "deleted_ids": [],
+            "new_hashes": new_hashes,
+            "old_hashes_present": False,
+            "skipped_unkeyed_rows": skipped_unkeyed_rows,
+        }
+    new_records = []
+    changed_records = []
+    unchanged_count = 0
+    for rid, new_hash in new_hashes.items():
+        old_hash = old_hashes.get(rid)
+        if old_hash is None:
+            new_records.append(records_by_id[rid])
+        elif old_hash != new_hash:
+            changed_records.append(records_by_id[rid])
+        else:
+            unchanged_count += 1
+    return {
+        "new": new_records,
+        "changed": changed_records,
+        "unchanged_count": unchanged_count,
+        "deleted_ids": sorted(set(old_hashes) - set(new_hashes)),
+        "new_hashes": new_hashes,
+        "old_hashes_present": True,
+        "skipped_unkeyed_rows": skipped_unkeyed_rows,
+    }
+
+
+def diff_summary(diff: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "new_rows": len(diff.get("new") or []),
+        "changed_rows": len(diff.get("changed") or []),
+        "unchanged_rows": int(diff.get("unchanged_count") or 0),
+        "deleted_rows": len(diff.get("deleted_ids") or []),
+        "hashes": len(diff.get("new_hashes") or {}),
+        "old_hashes_present": bool(diff.get("old_hashes_present")),
+        "skipped_unkeyed_rows": int(diff.get("skipped_unkeyed_rows") or 0),
+    }
+
+
+def existing_hashes_by_primary(rows: list[dict[str, Any]]) -> dict[str, str]:
+    return {primary_person_key(row): compute_record_hash(row) for row in rows if primary_person_key(row)}
+
+
+def write_jsonl_if_changed(path: Path, rows: list[dict[str, Any]]) -> bool:
+    text = "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in rows)
+    if path.exists() and path.read_text(encoding="utf-8") == text:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return True
+
+
+def write_record_jsonl_with_hashes(
+    path: Path,
+    rows: list[dict[str, Any]],
+    hash_file: Path,
+    *,
+    id_fn: Callable[[dict[str, Any]], str] | None = None,
+    id_fields: tuple[str, ...] = ("id",),
+) -> dict[str, Any]:
+    diff = compute_record_diff(rows, hash_file, id_fn=id_fn, id_fields=id_fields)
+    changed = bool(diff.get("new") or diff.get("changed") or diff.get("deleted_ids") or diff.get("skipped_unkeyed_rows"))
+    file_written = False
+    if changed or not path.exists():
+        file_written = write_jsonl_if_changed(path, rows)
+    hashes_written = save_hashes(diff["new_hashes"], hash_file)
+    return diff_summary(diff) | {"file_written": file_written, "hashes_written": hashes_written}
+
+
 def _processed_person_ids(output_dir: Path) -> set[str]:
     return _jsonl_id_set_any(
         [
@@ -269,6 +428,35 @@ def _processed_person_ids(output_dir: Path) -> set[str]:
         "person_id",
         require_vector=True,
     ) | _jsonl_id_set(output_dir / "records/summaries.records.jsonl", "id", require_vector=True)
+
+
+def _processed_person_ids_with_current_hashes(output_dir: Path, people: list[dict[str, Any]]) -> set[str]:
+    processed_ids = _processed_person_ids(output_dir)
+    hash_file = paths(output_dir)["person_hashes"]
+    old_hashes = load_hashes(hash_file)
+    ledger_status: str | None = None
+    ledger_path = paths(output_dir)["ledger"]
+    try:
+        ledger = load_ledger(ledger_path)
+        ledger_status = str(ledger.get("status") or "")
+    except FileNotFoundError:
+        ledger_status = None
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if not old_hashes:
+        if ledger_status and ledger_status != "completed":
+            return set()
+        return processed_ids
+    if ledger_status != "completed":
+        return set()
+    current_hashes = {primary_person_key(person): compute_record_hash(person) for person in people if primary_person_key(person)}
+    return {
+        _person_id(person)
+        for person in people
+        if _person_id(person) in processed_ids
+        and primary_person_key(person)
+        and old_hashes.get(primary_person_key(person)) == current_hashes.get(primary_person_key(person))
+    }
 
 
 def _records_role_ids(output_dir: Path, *, require_vector: bool = False) -> set[str]:
@@ -598,6 +786,7 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
     profile_rows = build_unified_profiles(people)
     summary_rows = build_summary_records(profile_rows, getattr(args, "default_operator_id", None))["internal_text"]
     # CEO/founder detection estimate: ~150 input + ~50 output tokens per candidate
+    existing_people_record_ids = _jsonl_id_set(output_dir / "records/people.records.jsonl", "person_id") | _jsonl_id_set(output_dir / "records/people.records.jsonl", "base_id")
     ceo_candidates = sum(
         1 for person in people
         for exp in (person.get("work_experiences") or [])
@@ -606,7 +795,6 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
         and detect_ceo_founders.CEO_CTO_RE.search(str(exp.get("title") or exp.get("position_title") or ""))
         and not detect_ceo_founders.FOUNDER_RE.search(str(exp.get("title") or exp.get("position_title") or ""))
     ) if detect_ceo_founders else 0
-    existing_people_record_ids = _jsonl_id_set(output_dir / "records/people.records.jsonl", "person_id") | _jsonl_id_set(output_dir / "records/people.records.jsonl", "base_id")
     if existing_people_record_ids:
         ceo_candidates = sum(
             1 for person in people
@@ -801,7 +989,7 @@ def primary_person_key(row: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
-def upsert_people_jsonl(path: Path, incoming: list[dict[str, Any]]) -> dict[str, Any]:
+def upsert_people_jsonl(path: Path, incoming: list[dict[str, Any]], hash_file: Path | None = None, *, prune_stale: bool = False) -> dict[str, Any]:
     existing_rows = read_jsonl(path) if path.exists() else []
     rows_by_key: dict[str, dict[str, Any]] = {}
     key_index: dict[str, str] = {}
@@ -814,35 +1002,62 @@ def upsert_people_jsonl(path: Path, incoming: list[dict[str, Any]]) -> dict[str,
         for key in person_keys(row) or {primary}:
             key_index[key] = primary
 
+    old_hashes = load_hashes(hash_file) if hash_file else {}
+    if not old_hashes and existing_rows:
+        old_hashes = existing_hashes_by_primary(existing_rows)
+    incoming_by_primary: dict[str, dict[str, Any]] = {}
     inserted = 0
     updated = 0
+    unchanged = 0
     for row in incoming:
         keys = person_keys(row)
         primary = next((key_index[key] for key in keys if key in key_index), None) if keys else None
         if not primary:
             primary = primary_person_key(row)
+        incoming_by_primary[primary] = row
+        new_hash = compute_record_hash(row)
         if primary not in rows_by_key:
             order.append(primary)
             inserted += 1
+        elif old_hashes.get(primary) == new_hash:
+            unchanged += 1
         else:
             updated += 1
         rows_by_key[primary] = row
         for key in keys or {primary}:
             key_index[key] = primary
 
-    write_jsonl(path, (rows_by_key[key] for key in order))
+    deleted_ids: list[str] = []
+    if prune_stale:
+        incoming_keys = set(incoming_by_primary)
+        deleted_ids = [key for key in order if key not in incoming_keys]
+        order = [key for key in order if key in incoming_keys]
+    final_rows = [rows_by_key[key] for key in order]
+    file_written = write_jsonl_if_changed(path, final_rows)
+    hash_written = False
+    if hash_file:
+        hash_written = save_hashes({primary_person_key(row): compute_record_hash(row) for row in final_rows}, hash_file)
     return {
         "existing_rows": len(existing_rows),
         "incoming_rows": len(incoming),
         "inserted_rows": inserted,
         "updated_rows": updated,
+        "unchanged_rows": unchanged,
+        "deleted_rows": len(deleted_ids),
+        "deleted_ids": deleted_ids[:50],
+        "file_written": file_written,
+        "hashes_written": hash_written,
         "rows": len(order),
     }
 
 
 def step_flatten(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     people = flatten_people(ledger["input"])
-    upsert = upsert_people_jsonl(ps["flattened"], people)
+    # This stage owns the canonical flattened JSONL, but deliberately does not
+    # persist person_hashes.json. That sidecar is authoritative for dry-run
+    # skip decisions, so execute() commits it only after all downstream search
+    # sink outputs have completed successfully.
+    upsert = upsert_people_jsonl(ps["flattened"], people, prune_stale=True)
     selection = {"mode": "fixed_output_upsert", "input_people": len(people), "selected_people": len(people)}
     stats = {"people": upsert["rows"], "upsert": upsert, "selection": selection}
     write_stats(ledger, "flatten_people", stats)
@@ -1259,11 +1474,12 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
     write_jsonl(ps["companies_corpus_v3"], aleph_corpus_output)
     contract = load_search_contract("turbopuffer/companies.namespace.json")
     records = [normalize_record_for_contract(row, contract) for row in record_inputs]
-    write_jsonl(ps["companies_records"], records)
+    record_diff = write_record_jsonl_with_hashes(ps["companies_records"], records, ps["companies_record_hashes"], id_fields=("id", "company_urn"))
     counts = manifest.get("counts", {}) if isinstance(manifest.get("counts"), dict) else {}
     stats = {
         "status": "completed",
         "companies": len(records),
+        "record_diff": record_diff,
         "aleph_shape": "companies_corpus_v3",
         "provider": provider,
         "checkpointed": True,
@@ -1312,8 +1528,9 @@ def step_company_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tupl
         if emb:
             row["vector"] = emb
         rows.append(row)
-    write_jsonl(ps["companies_records"], rows)
+    record_diff = write_record_jsonl_with_hashes(ps["companies_records"], rows, ps["companies_record_hashes"], id_fields=("id", "company_urn"))
     stats = _embedding_stats(result, ledger)
+    stats["record_diff"] = record_diff
     write_stats(ledger, "embed_companies", stats)
     return {"company_embeddings": str(ps["company_embeddings"]), "companies": str(ps["companies_records"])}, stats
 
@@ -1482,9 +1699,10 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
     for out, src in zip(normalized, enriched):
         if isinstance(src.get("vector"), list):
             out["vector"] = src["vector"]
-    write_jsonl(ps["people_records"], normalized)
+    record_diff = write_record_jsonl_with_hashes(ps["people_records"], normalized, ps["people_record_hashes"], id_fields=("id", "person_id", "base_id"))
     stats = {
         "people_records": len(normalized),
+        "record_diff": record_diff,
         "with_vectors": sum(1 for row in normalized if row.get("vector")),
         "defaulted_numeric_fields": {"people": count_defaulted_numeric(enriched, contract)},
         "allowed_operator_ids_default": ledger.get("default_operator_id") or "local:user",
@@ -1516,8 +1734,9 @@ def step_summary(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
             record["tech_skills"] = skill_map.get(record["id"], record.get("tech_skills", []))
     write_jsonl(ps["person_tech_skills"], skills_rows)
     write_jsonl(ps["person_tech_skills_legacy"], skills_rows)
-    write_jsonl(ps["summaries_records"], records)
+    record_diff = write_record_jsonl_with_hashes(ps["summaries_records"], records, ps["summaries_record_hashes"], id_fields=("id", "person_id"))
     stats = {"summaries": len(records), "person_tech_skills": len(records), "defaulted_numeric_fields": {"summaries": count_defaulted_numeric(result["summaries"], contract)}}
+    stats["record_diff"] = record_diff
     write_stats(ledger, "build_summary_records", stats)
     return {"summaries": str(ps["summaries_records"])}, stats
 
@@ -1556,8 +1775,9 @@ def step_summary_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tupl
         if emb:
             row["vector"] = emb
         rows.append(row)
-    write_jsonl(ps["summaries_records"], rows)
+    record_diff = write_record_jsonl_with_hashes(ps["summaries_records"], rows, ps["summaries_record_hashes"], id_fields=("id", "person_id"))
     stats = _embedding_stats(result, ledger)
+    stats["record_diff"] = record_diff
     write_stats(ledger, "embed_summaries", stats)
     return {"summary_embeddings": str(ps["summary_embeddings"]), "person_tech_skills": str(ps["person_tech_skills"]), "summaries": str(ps["summaries_records"])}, stats
 
@@ -1654,6 +1874,21 @@ STEP_FUNCTIONS = {
 }
 
 
+def commit_processed_person_hashes(ledger: dict[str, Any], ps: dict[str, Path]) -> dict[str, Any]:
+    """Persist processed-person hashes only after downstream sinks complete.
+
+    ``person_hashes.json`` is the authoritative dry-run skip sidecar. Writing it
+    from flatten would be unsafe because a crash after flatten but before
+    summaries/records/DuckDB are rebuilt could make stale sink outputs look
+    current. This function is called only at the end of execute(), after all
+    processing steps finished successfully.
+    """
+
+    rows = read_jsonl(ps["flattened"])
+    hashes = {primary_person_key(row): compute_record_hash(row) for row in rows if primary_person_key(row)}
+    return {"people": len(rows), "hashes": len(hashes), "hashes_written": save_hashes(hashes, ps["person_hashes"]), "path": str(ps["person_hashes"])}
+
+
 def execute(ledger_path: Path) -> dict[str, Any]:
     ledger = load_ledger(ledger_path)
     existing_steps = {str(item.get("id")) for item in ledger.get("steps", [])}
@@ -1676,6 +1911,7 @@ def execute(ledger_path: Path) -> dict[str, Any]:
             return ledger
         ledger = mark_step(ledger_path, ledger, step, "completed", artifacts=artifacts, stats=stats)
         print(f"[build-processing] completed {step}", file=sys.stderr, flush=True)
+    ledger["processed_person_hashes"] = commit_processed_person_hashes(ledger, ps)
     ledger["status"] = "completed"
     save_ledger(ledger_path, ledger)
     return ledger
@@ -1723,7 +1959,7 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
     if not input_path.exists():
         raise SystemExit(f"missing input: {input_path}")
     all_people = flatten_people(input_path)
-    processed_ids = _processed_person_ids(Path(args.output_dir))
+    processed_ids = _processed_person_ids_with_current_hashes(Path(args.output_dir), all_people)
     people = [person for person in all_people if not _person_id(person) or _person_id(person) not in processed_ids]
     selection = {
         "mode": "fixed_output_incremental",
@@ -1747,10 +1983,7 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
     companies = build_company_corpus(people, getattr(args, "default_operator_id", None))
     checkpoint_every = max(1, int(getattr(args, "checkpoint_every", 1000) or 1000))
     role_input = _arg_artifact(args, "role_input_classifications", "unified/roles/roles_with_dense_text_remapped.jsonl")
-    role_emb = _arg_artifact(args, "role_input_embeddings", "unified/roles/roles_with_embeddings.jsonl")
     company_input = _arg_artifact(args, "company_input_classifications", "company/companies_corpus_v3.jsonl")
-    company_emb = _arg_artifact(args, "company_input_embeddings", "company/company_embeddings_v3.jsonl")
-    summary_emb = _arg_artifact(args, "summary_input_embeddings", "unified/summary_embeddings.jsonl")
     cost_estimate = estimate_costs(args, people, companies)
     stages = cost_estimate.get("stages", {}) if isinstance(cost_estimate.get("stages"), dict) else {}
     return {

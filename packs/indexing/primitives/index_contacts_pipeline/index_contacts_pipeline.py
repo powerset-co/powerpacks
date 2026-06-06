@@ -221,6 +221,24 @@ def duckdb_command(args: argparse.Namespace) -> list[str]:
     ]
 
 
+def local_search_duckdb_path(args: argparse.Namespace) -> Path:
+    return ROOT / Path(args.output_dir) / "local-search.duckdb"
+
+
+def processed_person_hashes_path(args: argparse.Namespace) -> Path:
+    return ROOT / Path(args.output_dir) / "unified/person_hashes.json"
+
+
+def duckdb_current_for_processing_hashes(args: argparse.Namespace) -> bool:
+    duckdb = local_search_duckdb_path(args)
+    if not duckdb.exists() or duckdb.stat().st_size <= 1024:
+        return False
+    hashes = processed_person_hashes_path(args)
+    if hashes.exists() and duckdb.stat().st_mtime_ns < hashes.stat().st_mtime_ns:
+        return False
+    return True
+
+
 def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
     promoted: dict[str, str] = {}
     merged_people = artifacts.get("merged_people_csv")
@@ -592,8 +610,9 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     total_cost = estimated_cost_usd(estimate)
     counts = estimate.get("counts") if isinstance(estimate.get("counts"), dict) else {}
     pending_people = int(counts.get("pending_people") or counts.get("people") or 0)
-    existing_duckdb = ROOT / Path(args.output_dir) / "local-search.duckdb"
-    if pending_people == 0 and paid_calls == 0 and existing_duckdb.exists() and existing_duckdb.stat().st_size > 1024:
+    existing_duckdb = local_search_duckdb_path(args)
+    duckdb_current = duckdb_current_for_processing_hashes(args)
+    if pending_people == 0 and paid_calls == 0 and duckdb_current:
         payload = {
             "status": "ready",
             "stage": "index_contacts_pipeline",
@@ -610,6 +629,51 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "fan_in": fan_in_payload,
             "promoted": promoted,
             "preflight_duckdb": preflight_duckdb,
+            "duckdb_freshness": {"current_for_processing_hashes": True},
+            "started_at": started_at,
+            "updated_at": now_iso(),
+        }
+        write_manifest(manifest_path, payload)
+        return payload, 0
+    if pending_people == 0 and paid_calls == 0:
+        progress("duckdb: refreshing local search tables from current records")
+        duckdb_code, duckdb_payload, duckdb_stderr = run_json_command(duckdb_command(args), timeout=60 * 60)
+        if duckdb_code != 0:
+            payload = {
+                "status": "failed",
+                "stage": "index_contacts_pipeline",
+                "step": "local_duckdb_refresh",
+                "people_csv": str(args.people_csv),
+                "processing_estimate": estimate,
+                "fan_in": fan_in_payload,
+                "promoted": promoted,
+                "preflight_duckdb": preflight_duckdb,
+                "local_duckdb": duckdb_payload,
+                "duckdb_freshness": {"current_for_processing_hashes": False},
+                "error": tail(duckdb_stderr) or duckdb_payload,
+                "started_at": started_at,
+                "updated_at": now_iso(),
+            }
+            write_manifest(manifest_path, payload)
+            return payload, 1
+        payload = {
+            "status": "ready",
+            "stage": "index_contacts_pipeline",
+            "step": "local_duckdb_refresh",
+            "reason": "processing_outputs_complete_duckdb_refreshed",
+            "people_csv": str(args.people_csv),
+            "people_sha256": sha256_file(people_path),
+            "output_dir": str(args.output_dir),
+            "duckdb": duckdb_payload.get("duckdb", str(Path(args.output_dir) / "local-search.duckdb")) if isinstance(duckdb_payload, dict) else str(Path(args.output_dir) / "local-search.duckdb"),
+            "manifest": str(manifest_path),
+            "estimated_cost_usd": total_cost,
+            "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
+            "processing_estimate": estimate,
+            "local_duckdb": duckdb_payload,
+            "fan_in": fan_in_payload,
+            "promoted": promoted,
+            "preflight_duckdb": preflight_duckdb,
+            "duckdb_freshness": {"current_for_processing_hashes": duckdb_current_for_processing_hashes(args)},
             "started_at": started_at,
             "updated_at": now_iso(),
         }

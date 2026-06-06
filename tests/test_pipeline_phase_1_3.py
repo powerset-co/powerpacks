@@ -359,6 +359,44 @@ class PipelinePhase13Tests(unittest.TestCase):
             self.assertEqual(payload["reason"], "processing_outputs_complete")
             run_json.assert_called_once()
 
+    def test_index_run_refreshes_duckdb_when_processing_hashes_are_newer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            people = root / ".powerpacks/network-import/merged/people.csv"
+            people.parent.mkdir(parents=True)
+            people.write_text("id\n1\n", encoding="utf-8")
+            duckdb = root / ".powerpacks/search-index/local-search.duckdb"
+            duckdb.parent.mkdir(parents=True)
+            duckdb.write_bytes(b"x" * 2048)
+            time.sleep(0.01)
+            hashes = root / ".powerpacks/search-index/unified/person_hashes.json"
+            hashes.parent.mkdir(parents=True)
+            hashes.write_text('{"id:1":"hash"}\n', encoding="utf-8")
+            manifest = root / ".powerpacks/network-import/index/contacts/manifest.json"
+            manifest.parent.mkdir(parents=True)
+            args = SimpleNamespace(
+                people_csv=".powerpacks/network-import/merged/people.csv",
+                output_dir=".powerpacks/search-index",
+                manifest=".powerpacks/network-import/index/contacts/manifest.json",
+                operator_id="arthur",
+            )
+            estimate = {
+                "status": "dry_run",
+                "counts": {"total_people": 1, "processed_people": 1, "pending_people": 0},
+                "estimated_paid_calls": {"role_embeddings": 0},
+                "estimated_cost_usd": 0,
+            }
+            duckdb_payload = {"duckdb": ".powerpacks/search-index/local-search.duckdb"}
+            with mock.patch.object(index_contacts, "ROOT", root), \
+                mock.patch.object(index_contacts, "run_fan_in", return_value=({"status": "completed", "step": "fan_in"}, 0)), \
+                mock.patch.object(index_contacts, "maybe_materialize_existing_records", return_value={"status": "skipped", "reason": "duckdb_exists"}), \
+                mock.patch.object(index_contacts, "run_json_command", side_effect=[(0, estimate, ""), (0, duckdb_payload, "")]) as run_json:
+                payload, code = index_contacts.run_pipeline(args)
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["step"], "local_duckdb_refresh")
+            self.assertEqual(payload["reason"], "processing_outputs_complete_duckdb_refreshed")
+            self.assertEqual(run_json.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
