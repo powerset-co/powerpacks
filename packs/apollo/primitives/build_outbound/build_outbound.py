@@ -640,6 +640,19 @@ def email_from_person(person: dict[str, Any]) -> str:
     return ""
 
 
+def contact_id_for_email(search_resp: dict[str, Any], email: str) -> str | None:
+    expected = email.strip().lower()
+    if not expected:
+        return None
+    for contact in list_from_response(search_resp, ("contacts", "people", "data")):
+        if email_from_person(contact) != expected:
+            continue
+        cid = contact.get("id") or contact.get("contact_id")
+        if cid:
+            return str(cid)
+    return None
+
+
 def id_from_response(resp: dict[str, Any], *keys: str) -> str | None:
     for key in keys:
         val = resp.get(key)
@@ -1007,19 +1020,20 @@ def command_build(args: argparse.Namespace) -> int:
             write_mutation_artifacts(run_dir, manifest, created)
 
     contact_ids: list[str] = []
+    seen_contact_ids: set[str] = set()
     contacts_detail: list[dict[str, Any]] = []
     for payload in contact_payloads:
         search_resp = client.search_contacts(payload["email"])
-        existing = list_from_response(search_resp, ("contacts", "people", "data"))
-        cid = str(existing[0].get("id")) if existing and existing[0].get("id") else None
+        cid = contact_id_for_email(search_resp, payload["email"])
         action = "deduped"
         create_resp = None
         if not cid:
             create_resp = client.create_contact({k: v for k, v in payload.items() if v is not None})
             cid = id_from_response(create_resp, "id", "contact_id")
             action = "created"
-        if cid:
+        if cid and cid not in seen_contact_ids:
             contact_ids.append(cid)
+            seen_contact_ids.add(cid)
         contacts_detail.append({
             "email": payload["email"],
             "contact_id": cid,

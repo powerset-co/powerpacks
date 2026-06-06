@@ -215,7 +215,7 @@ class BuildOutboundTests(unittest.TestCase):
             no_match = module.resolve_sales_nav_state("banking compliance", None, None, None)
 
         self.assertTrue(result["ok"])
-        self.assertEqual(Path(result["selected"]["state_path"]), newest / "state.json")
+        self.assertEqual(Path(result["selected"]["state_path"]), (newest / "state.json").resolve())
         self.assertFalse(no_match["ok"])
         self.assertIn("no matching", no_match["error"])
         self.assertEqual(no_match["candidates"], [])
@@ -234,11 +234,11 @@ class BuildOutboundTests(unittest.TestCase):
             (state_dir / "same.jsonl").write_text("state")
             state_path = state_dir / "state.json"
             with Chdir(cwd):
-                self.assertEqual(module.resolve_existing_path("same.jsonl", state_path=state_path, repo_root=repo), cwd / "same.jsonl")
+                self.assertEqual(module.resolve_existing_path("same.jsonl", state_path=state_path, repo_root=repo), (cwd / "same.jsonl").resolve())
                 (cwd / "same.jsonl").unlink()
-                self.assertEqual(module.resolve_existing_path("same.jsonl", state_path=state_path, repo_root=repo), repo / "same.jsonl")
+                self.assertEqual(module.resolve_existing_path("same.jsonl", state_path=state_path, repo_root=repo), (repo / "same.jsonl").resolve())
                 (repo / "same.jsonl").unlink()
-                self.assertEqual(module.resolve_existing_path("same.jsonl", state_path=state_path, repo_root=repo), state_dir / "same.jsonl")
+                self.assertEqual(module.resolve_existing_path("same.jsonl", state_path=state_path, repo_root=repo), (state_dir / "same.jsonl").resolve())
                 with self.assertRaises(FileNotFoundError) as ctx:
                     module.resolve_existing_path("missing.jsonl", state_path=state_path, repo_root=repo)
 
@@ -347,6 +347,109 @@ class BuildOutboundTests(unittest.TestCase):
         self.assertEqual(add["url"], "/emailer_campaigns/camp-1/add_contact_ids")
         self.assertEqual(add["body"]["emailer_campaign_id"], "camp-1")
         self.assertEqual(add["body"]["send_email_from_email_account_id"], "sender-1")
+
+    def test_non_dry_run_reuses_exact_email_contact_search_match(self):
+        module = load_module()
+
+        class ExistingExactContactFake(FakeApolloClient):
+            def bulk_match(self, linkedin_urls):
+                self.calls.append(("bulk_match", list(linkedin_urls)))
+                return [{"people": [
+                    {
+                        "email": "ada@example.com",
+                        "first_name": "Ada",
+                        "last_name": "Lovelace",
+                        "linkedin_url": linkedin_urls[0],
+                    },
+                    {
+                        "email": "grace@example.com",
+                        "first_name": "Grace",
+                        "last_name": "Hopper",
+                        "linkedin_url": linkedin_urls[1],
+                    },
+                ]}]
+
+            def search_contacts(self, email):
+                self.calls.append(("search_contacts", email))
+                prefix = email.split("@", 1)[0]
+                return {"contacts": [{"id": f"contact-{prefix}", "email": email}]}
+
+        with tempfile.TemporaryDirectory() as td:
+            module.ROOT = Path(td)
+            run = self.make_sales_nav_run(td, leads=[
+                {"name": "Ada Lovelace", "linkedin_url": "https://linkedin.com/in/ada"},
+                {"name": "Grace Hopper", "linkedin_url": "https://linkedin.com/in/grace"},
+            ])
+            sequence = Path(td) / "sequence.json"
+            write_json(sequence, {"name": "Seq", "steps": [{"subject": "Hi {{first_name}}", "body_text": "Hi {{first_name}}"}]})
+            FakeApolloClient.instances = []
+            module.ApolloClient = ExistingExactContactFake
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = module.main([
+                    "build", "--instructions", "x", "--state", str(run / "state.json"),
+                    "--sequence-json", str(sequence), "--out-dir", str(Path(td) / "out"),
+                ])
+            fake = FakeApolloClient.instances[0]
+            run_dir = next((Path(td) / "out").iterdir())
+            contacts = json.loads((run_dir / "contacts.json").read_text())
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("create_contact", [call[0] for call in fake.calls])
+        self.assertEqual(contacts["contact_ids"], ["contact-ada", "contact-grace"])
+        self.assertEqual(fake.add_payloads[0]["body"]["contact_ids"], ["contact-ada", "contact-grace"])
+
+    def test_non_dry_run_ignores_non_matching_contact_search_results(self):
+        module = load_module()
+
+        class WrongSearchContactFake(FakeApolloClient):
+            def bulk_match(self, linkedin_urls):
+                self.calls.append(("bulk_match", list(linkedin_urls)))
+                return [{"people": [
+                    {
+                        "email": "ada@example.com",
+                        "first_name": "Ada",
+                        "last_name": "Lovelace",
+                        "linkedin_url": linkedin_urls[0],
+                    },
+                    {
+                        "email": "grace@example.com",
+                        "first_name": "Grace",
+                        "last_name": "Hopper",
+                        "linkedin_url": linkedin_urls[1],
+                    },
+                ]}]
+
+            def search_contacts(self, email):
+                self.calls.append(("search_contacts", email))
+                return {"contacts": [{"id": "wrong-contact", "email": "someone-else@example.com"}]}
+
+            def create_contact(self, payload):
+                self.calls.append(("create_contact", payload))
+                return {"contact": {"id": f"contact-{payload['first_name'].lower()}"}}
+
+        with tempfile.TemporaryDirectory() as td:
+            module.ROOT = Path(td)
+            run = self.make_sales_nav_run(td, leads=[
+                {"name": "Ada Lovelace", "linkedin_url": "https://linkedin.com/in/ada"},
+                {"name": "Grace Hopper", "linkedin_url": "https://linkedin.com/in/grace"},
+            ])
+            sequence = Path(td) / "sequence.json"
+            write_json(sequence, {"name": "Seq", "steps": [{"subject": "Hi {{first_name}}", "body_text": "Hi {{first_name}}"}]})
+            FakeApolloClient.instances = []
+            module.ApolloClient = WrongSearchContactFake
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = module.main([
+                    "build", "--instructions", "x", "--state", str(run / "state.json"),
+                    "--sequence-json", str(sequence), "--out-dir", str(Path(td) / "out"),
+                ])
+            fake = FakeApolloClient.instances[0]
+            run_dir = next((Path(td) / "out").iterdir())
+            contacts = json.loads((run_dir / "contacts.json").read_text())
+
+        self.assertEqual(code, 0)
+        self.assertEqual([call[0] for call in fake.calls].count("create_contact"), 2)
+        self.assertEqual(contacts["contact_ids"], ["contact-ada", "contact-grace"])
+        self.assertEqual(fake.add_payloads[0]["body"]["contact_ids"], ["contact-ada", "contact-grace"])
 
     def test_non_dry_run_refuses_empty_campaign_when_no_usable_contacts(self):
         module = load_module()
