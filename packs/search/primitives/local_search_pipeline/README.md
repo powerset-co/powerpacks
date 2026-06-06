@@ -7,6 +7,10 @@ The DuckDB file is the search scope. If a prepared payload contains remote
 scope keys such as `set_id` or `operator_ids`, this pipeline records them for
 traceability but the local backend ignores them.
 
+Local execution passes `--db` to explicit `packs/search/primitives/local_duckdb/*`
+entrypoints. Do not export `POWERPACKS_LOCAL_SEARCH_DB` for normal local
+pipeline runs.
+
 Role searches use the local vectors by default when the payload includes a
 semantic query. The DuckDB stays local, but generating the query embedding still
 requires the normal OpenAI embedding credentials.

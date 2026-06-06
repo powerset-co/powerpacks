@@ -562,11 +562,13 @@ def fetch_local_person_rows(
     person_ids: list[str],
     env_file: Path | None = None,
     *,
+    db_path: str | None = None,
     workers: int | None = None,
     batch_size: int | None = None,
 ) -> list[dict[str, Any]] | None:
     load_env_file(env_file)
-    db_path = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
+    if db_path is None and os.getenv("POWERPACKS_ENABLE_LEGACY_LOCAL_SEARCH_ENV") == "1":
+        db_path = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
     if not db_path:
         return None
     if not person_ids:
@@ -673,7 +675,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         return
 
     env_file = Path(args.env_file) if args.env_file else None
-    rows = fetch_local_person_rows(requested, env_file=env_file, workers=args.local_workers, batch_size=args.local_batch_size)
+    rows = fetch_local_person_rows(requested, env_file=env_file, db_path=args.local_db, workers=args.local_workers, batch_size=args.local_batch_size)
     if rows is None:
         rows = fetch_person_rows(requested, env_file=env_file)
         interaction_counts = fetch_interaction_counts(requested, env_file=env_file)
@@ -687,7 +689,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         source = {
             "type": "local_duckdb",
             "backend": "duckdb",
-            "duckdb": os.getenv("POWERPACKS_LOCAL_SEARCH_DB"),
+            "duckdb": args.local_db,
             "batch_size": args.local_batch_size or positive_int(os.getenv("POWERPACKS_LOCAL_HYDRATE_BATCH_SIZE"), DEFAULT_LOCAL_BATCH_SIZE),
             "workers": args.local_workers or positive_int(os.getenv("POWERPACKS_LOCAL_HYDRATE_WORKERS"), DEFAULT_LOCAL_WORKERS),
         }
@@ -740,6 +742,7 @@ def main() -> None:
     parser.add_argument("--no-compress-profiles", action="store_true", help="Write raw profiles.jsonl instead of the default profiles.jsonl.gz")
     parser.add_argument("--local-workers", type=int, help="Read-only DuckDB hydration worker count for local backend")
     parser.add_argument("--local-batch-size", type=int, help="Candidate IDs per read-only DuckDB hydration batch")
+    parser.add_argument("--local-db", help=argparse.SUPPRESS)
     args = parser.parse_args()
     cmd_hydrate(args)
 

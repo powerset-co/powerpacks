@@ -287,6 +287,13 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(hydrate["output"]["source"]["backend"], "duckdb")
             self.assertEqual(hydrate["output"]["source"]["type"], "local_duckdb")
 
+            ledger_doc = json.loads(ledger.read_text())
+            for step in ["resolve_education", "apply_prefilters", "execute_role_search", "hydrate_people"]:
+                command = ledger_doc["steps"][step]["command"]
+                self.assertIn("packs/search/primitives/local_duckdb/", command)
+                self.assertIn("--db", command)
+            self.assertNotIn("POWERPACKS_LOCAL_SEARCH_DB", json.dumps(ledger_doc))
+
             with Path(out["artifacts"]["csv"]).open(newline="") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)

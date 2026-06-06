@@ -19,6 +19,7 @@ def load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -64,15 +65,18 @@ def run_shim_json(*args: str) -> dict:
 
 class LocalDuckDBFixtureMixin:
     def setUp(self) -> None:
-        self._old_env = {key: os.environ.get(key) for key in ["POWERPACKS_LOCAL_SEARCH_DB", "POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH"]}
+        self._old_env = {key: os.environ.get(key) for key in ["POWERPACKS_LOCAL_SEARCH_DB", "POWERPACKS_ENABLE_LEGACY_LOCAL_SEARCH_ENV", "POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH"]}
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = str(Path(self.tmpdir.name) / "local-search.duckdb")
         self._create_fixture(self.db_path)
-        os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = self.db_path
+        os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
+        os.environ.pop("POWERPACKS_ENABLE_LEGACY_LOCAL_SEARCH_ENV", None)
         os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
+        turbopuffer_client.configure_local_backend(self.db_path)
         turbopuffer_client._local_store_for_path.cache_clear()
 
     def tearDown(self) -> None:
+        turbopuffer_client.configure_local_backend(None)
         turbopuffer_client._local_store_for_path.cache_clear()
         for key, value in self._old_env.items():
             if value is None:
@@ -720,9 +724,9 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             self.assertEqual(payload["tables"]["local_companies"], 1)
             self.assertEqual(payload["tables"]["local_people_positions"], 1)
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
             os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
+            previous_db = turbopuffer_client.explicit_local_backend_path()
+            turbopuffer_client.configure_local_backend(payload["duckdb"])
             turbopuffer_client._local_store_for_path.cache_clear()
             original_embedding = resolve_companies.embedding
 
@@ -766,11 +770,8 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                 )))
             finally:
                 resolve_companies.embedding = original_embedding
+                turbopuffer_client.configure_local_backend(previous_db)
                 turbopuffer_client._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
 
             self.assertEqual(people_knn.rows[0].id, "pos-artifact-engineer")
             self.assertEqual(people_knn.rows[0].position_title, "Backend Engineer")
@@ -1156,7 +1157,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(out["candidates"][0]["position_id"], "pos-founder-past-product")
 
         state = {"steps": [{"id": "execute_role_search", "output": out}]}
-        rows = hydrate_people.fetch_local_person_rows(["person-founder"], workers=1, batch_size=1)
+        rows = hydrate_people.fetch_local_person_rows(["person-founder"], db_path=self.db_path, workers=1, batch_size=1)
         profile = hydrate_people.normalize_hydrated_context(rows[0])
         enriched = hydrate_people.apply_candidate_metadata(
             profile,
@@ -1167,7 +1168,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertIn("filter_only", enriched["vertical_sources"])
 
     def test_local_hydration_projects_profile_fields_without_vectors(self) -> None:
-        rows = hydrate_people.fetch_local_person_rows(["person-engineer"], workers=2, batch_size=1)
+        rows = hydrate_people.fetch_local_person_rows(["person-engineer"], db_path=self.db_path, workers=2, batch_size=1)
         self.assertEqual(len(rows), 1)
         context = rows[0]["hydrated_context"]
         position = context["positions"][0]
@@ -1204,6 +1205,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
 
     def test_default_mode_safety(self) -> None:
         os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
+        turbopuffer_client.configure_local_backend(None)
         turbopuffer_client._local_store_for_path.cache_clear()
         self.assertFalse(turbopuffer_client.is_local_backend())
         self.assertIsInstance(turbopuffer_client.namespace_name("people"), str)
@@ -1292,15 +1294,7 @@ class LocalPersonProfilesShimTest(unittest.TestCase):
             with duckdb.connect(payload["duckdb"], read_only=True) as conn:
                 profile_only_id = conn.execute("select person_id from local_person_profiles where full_name = 'Profile Only'").fetchone()[0]
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
-            try:
-                rows = hydrate_people.fetch_local_person_rows([str(profile_only_id)], workers=1, batch_size=1)
-            finally:
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
+            rows = hydrate_people.fetch_local_person_rows([str(profile_only_id)], db_path=payload["duckdb"], workers=1, batch_size=1)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["full_name"], "Profile Only")
             self.assertEqual(rows[0]["location_raw"], "New York, New York, United States")
@@ -1360,18 +1354,15 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_people_positions"], 2)
             self.assertEqual(payload["tables"]["local_people_positions_person_columns_dropped"], 1)
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
+            previous_db = turbopuffer_client.explicit_local_backend_path()
+            turbopuffer_client.configure_local_backend(payload["duckdb"])
             turbopuffer_client._local_store_for_path.cache_clear()
             try:
                 store = turbopuffer_client.namespace("people")
                 rows = store.query(filters=["city", "IGlob", "*san francisco*"], top_k=10, include_attributes=["person_id", "position_title"]).rows
             finally:
+                turbopuffer_client.configure_local_backend(previous_db)
                 turbopuffer_client._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
             self.assertEqual(len(rows), 1)
             self.assertNotEqual(rows[0].model_extra["person_id"], "person-sf")
             self.assertRegex(rows[0].model_extra["person_id"], r"^[0-9a-f-]{36}$")
@@ -1432,8 +1423,8 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
                 columns = {row[1] for row in conn.execute("pragma table_info('local_people_positions')").fetchall()}
             self.assertIn("inferred_birth_year", columns)
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
+            previous_db = turbopuffer_client.explicit_local_backend_path()
+            turbopuffer_client.configure_local_backend(payload["duckdb"])
             turbopuffer_client._local_store_for_path.cache_clear()
             try:
                 filters = turbopuffer_client.filters_from_role_payload({
@@ -1447,10 +1438,7 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
                     ["base_id", "position_title", "inferred_birth_year"],
                 ))
             finally:
+                turbopuffer_client.configure_local_backend(previous_db)
                 turbopuffer_client._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
             self.assertEqual([row["base_id"] for row in rows], ["person-young"])
             self.assertEqual(rows[0]["inferred_birth_year"], 1998)

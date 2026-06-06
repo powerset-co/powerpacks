@@ -233,6 +233,12 @@ def candidate_from_row(row: dict[str, Any], *, source: str, rank: int | None = N
     return out
 
 
+PEOPLE_ATTRIBUTES = [
+    "base_id", "position_title", "city", "state", "country", "macro_region", "metro_areas",
+    "role_track", "seniority_band", "company_id", "is_current",
+]
+
+
 async def company_base_ids(
     payload: dict[str, Any],
     *,
@@ -279,10 +285,7 @@ async def company_base_ids(
                 return await filter_only_rows_for_namespace(
                     "people",
                     filters,
-                    [
-                        "base_id", "position_title", "city", "state", "country", "macro_region", "metro_areas",
-                        "role_track", "seniority_band", "company_name", "company_id", "is_current",
-                    ],
+                    PEOPLE_ATTRIBUTES,
                     page_size=page_size,
                     max_results=max_ids,
                 )
@@ -300,10 +303,7 @@ async def company_base_ids(
                     adjacency_queries,
                     filters,
                     top_k=min(max_ids, ADJACENCY_LIMIT),
-                    include_attributes=[
-                        "base_id", "position_title", "city", "state", "country", "macro_region", "metro_areas",
-                        "role_track", "seniority_band", "company_name", "company_id", "is_current",
-                    ],
+                    include_attributes=PEOPLE_ATTRIBUTES,
                 )
                 return [row for row in rows if not is_non_operational_title(str(row.get("position_title") or ""))]
 
@@ -319,10 +319,7 @@ async def company_base_ids(
             return await filter_only_rows_for_namespace(
                 "people",
                 filters,
-                [
-                    "base_id", "position_title", "city", "state", "country", "macro_region", "metro_areas",
-                    "role_track", "seniority_band", "company_name", "company_id", "is_current",
-                ],
+                PEOPLE_ATTRIBUTES,
                 page_size=page_size,
                 max_results=max_ids,
             )

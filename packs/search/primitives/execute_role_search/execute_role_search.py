@@ -33,7 +33,6 @@ from turbopuffer_client import (  # noqa: E402
 
 
 INCLUDE_ATTRIBUTES = [
-    "position_id",
     "position_title",
     "base_id",
     "city",
@@ -43,7 +42,6 @@ INCLUDE_ATTRIBUTES = [
     "metro_areas",
     "role_track",
     "seniority_band",
-    "company_name",
     "company_id",
     "is_current",
 ]

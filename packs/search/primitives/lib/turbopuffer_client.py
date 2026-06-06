@@ -36,6 +36,7 @@ ADJACENCY_LIMIT = int(os.getenv("POWERPACKS_COMPANY_ADJACENCY_LIMIT", "1000"))
 ADJACENCY_EXCLUDE_SENIORITY = ["entry", "trainee"]
 ROLE_ADJACENCY_MAP_PATH = Path(__file__).resolve().parents[3] / "data" / "roles" / "role_adjacency.opus.json"
 _ROLE_ADJACENCY_MAP: dict[str, list[str]] | None = None
+_EXPLICIT_LOCAL_SEARCH_DB: str | None = None
 LOCAL_BACKEND_NAMESPACES = {"people", "summaries", "education", "schools", "companies"}
 LOCAL_BACKEND_TABLES = {
     "people": "local_people_positions",
@@ -242,7 +243,7 @@ def ensure_packages() -> None:
 
 
 def namespace_name(logical_name: str = "people") -> str:
-    if os.getenv("POWERPACKS_LOCAL_SEARCH_DB") and logical_name in LOCAL_BACKEND_TABLES:
+    if is_local_backend() and logical_name in LOCAL_BACKEND_TABLES:
         return LOCAL_BACKEND_TABLES[logical_name]
     env_key = f"POWERPACKS_TURBOPUFFER_{logical_name.upper()}_NAMESPACE"
     configured = os.getenv(env_key)
@@ -267,8 +268,21 @@ def client() -> Any:
     return turbopuffer.Turbopuffer(api_key=api_key, region=os.getenv("TURBOPUFFER_REGION", DEFAULT_REGION))
 
 
+def configure_local_backend(db_path: str | Path | None) -> None:
+    global _EXPLICIT_LOCAL_SEARCH_DB
+    _EXPLICIT_LOCAL_SEARCH_DB = str(db_path) if db_path else None
+
+
+def explicit_local_backend_path() -> str | None:
+    if _EXPLICIT_LOCAL_SEARCH_DB:
+        return _EXPLICIT_LOCAL_SEARCH_DB
+    if os.getenv("POWERPACKS_ENABLE_LEGACY_LOCAL_SEARCH_ENV") == "1":
+        return os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
+    return None
+
+
 def is_local_backend() -> bool:
-    return bool(os.getenv("POWERPACKS_LOCAL_SEARCH_DB"))
+    return bool(explicit_local_backend_path())
 
 
 @functools.lru_cache(maxsize=None)
@@ -279,9 +293,9 @@ def _local_store_for_path(path: str) -> Any:
 
 
 def local_store() -> Any:
-    db_path = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
+    db_path = explicit_local_backend_path()
     if not db_path:
-        raise RuntimeError("POWERPACKS_LOCAL_SEARCH_DB is required for local DuckDB search")
+        raise RuntimeError("configure_local_backend(db_path) is required for local DuckDB search")
     return _local_store_for_path(db_path)
 
 

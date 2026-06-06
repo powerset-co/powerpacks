@@ -169,7 +169,6 @@ def load_env_file_into(env: dict[str, str], env_file: str | None) -> None:
 def local_child_env(db_path: Path, *, env_file: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
     load_env_file_into(env, env_file)
-    env["POWERPACKS_LOCAL_SEARCH_DB"] = str(db_path)
     return env
 
 
@@ -466,28 +465,31 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     state = init_state(args, ledger_path, ledger, payload)
     filters = payload_filters(payload)
     child_env_file = "/dev/null"
+    local_primitive_dir = ROOT / "packs/search/primitives/local_duckdb"
 
     steps: list[tuple[str, list[str]]] = []
     if any(is_present(filters.get(key)) for key in COMPANY_RESOLVE_FILTER_KEYS):
         steps.append((
             "resolve_companies",
-            [sys.executable, str(ROOT / "packs/search/primitives/resolve_companies/resolve_companies.py"), "--state", str(state), "--env-file", child_env_file, "--write-state"],
+            [sys.executable, str(local_primitive_dir / "resolve_companies.py"), "--db", str(args.db_path), "--state", str(state), "--env-file", child_env_file, "--write-state"],
         ))
     if filters.get("education_names"):
         steps.append((
             "resolve_education",
-            [sys.executable, str(ROOT / "packs/search/primitives/resolve_education/resolve_education.py"), "--state", str(state), "--env-file", child_env_file, "--write-state"],
+            [sys.executable, str(local_primitive_dir / "resolve_education.py"), "--db", str(args.db_path), "--state", str(state), "--env-file", child_env_file, "--write-state"],
         ))
     steps.extend([
         (
             "apply_prefilters",
-            [sys.executable, str(ROOT / "packs/search/primitives/apply_prefilters/apply_prefilters.py"), "--state", str(state), "--env-file", child_env_file, "--write-state"],
+            [sys.executable, str(local_primitive_dir / "apply_prefilters.py"), "--db", str(args.db_path), "--state", str(state), "--env-file", child_env_file, "--write-state"],
         ),
         (
             "execute_role_search",
             [
                 sys.executable,
-                str(ROOT / "packs/search/primitives/execute_role_search/execute_role_search.py"),
+                str(local_primitive_dir / "execute_role_search.py"),
+                "--db",
+                str(args.db_path),
                 "--state",
                 str(state),
                 "--env-file",
@@ -501,7 +503,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         ),
         (
             "hydrate_people",
-            [sys.executable, str(ROOT / "packs/search/primitives/hydrate_people/hydrate_people.py"), "--state", str(state), "--env-file", child_env_file, "--write-state"],
+            [sys.executable, str(local_primitive_dir / "hydrate_people.py"), "--db", str(args.db_path), "--state", str(state), "--env-file", child_env_file, "--write-state"],
         ),
         (
             "persist_search_results",

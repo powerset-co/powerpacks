@@ -236,7 +236,6 @@ def sector_min_results(payload: dict[str, Any], default: int) -> int:
 
 
 COMPANY_INCLUDE_ATTRIBUTES = [
-    "company_urn",
     "company_name",
     "name_aliases_text",
     "semantic_text",

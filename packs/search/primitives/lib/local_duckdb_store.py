@@ -509,6 +509,8 @@ class LocalDuckDBSearchStore:
             value = self._field_value(row, key)
             if value is not None:
                 out[key] = value
+        if "position_id" not in out and row.get("position_id") is not None:
+            out["position_id"] = row.get("position_id")
         return out
 
     def _filtered_rows(self, logical_name: str, filters: Any) -> list[dict[str, Any]]:

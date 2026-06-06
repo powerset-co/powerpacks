@@ -1,0 +1,1 @@
+"""Local DuckDB primitive entrypoints."""
