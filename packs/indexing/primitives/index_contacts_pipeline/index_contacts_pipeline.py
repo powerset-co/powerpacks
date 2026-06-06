@@ -31,6 +31,7 @@ DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 DEFAULT_ARTIFACT_DIR = Path(".powerpacks/network-import/index/contacts")
 DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
+CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -57,6 +58,32 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def file_fingerprint(path: Path) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return {"path": str(path), "exists": False}
+    stat = path.stat()
+    return {"path": str(path), "exists": True, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "sha256": sha256_file(path)}
+
+
+def input_fingerprints(paths: list[Path]) -> dict[str, Any]:
+    return {str(path): file_fingerprint(ROOT / path if not path.is_absolute() else path) for path in paths}
+
+
+def payload_without_volatile_timestamps(payload: dict[str, Any]) -> dict[str, Any]:
+    stable = dict(payload)
+    stable.pop("updated_at", None)
+    stable.pop("started_at", None)
+    return stable
+
+
+def copy_if_changed(src: Path, dst: Path) -> bool:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() and dst.is_file() and src.stat().st_size == dst.stat().st_size and sha256_file(src) == sha256_file(dst):
+        return False
+    shutil.copy2(src, dst)
+    return True
 
 
 def count_csv_rows(path: str | Path) -> int:
@@ -214,7 +241,7 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
             src = source_dir / name
             if src.exists():
                 dst = dest_dir / name
-                shutil.copy2(src, dst)
+                copy_if_changed(src, dst)
                 promoted[f"merged_{name}"] = str(dst.relative_to(ROOT))
 
     duckdb = artifacts.get("duckdb")
@@ -224,7 +251,7 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
             dest_dir = ROOT / ".powerpacks/network-import/duckdb"
             dest_dir.mkdir(parents=True, exist_ok=True)
             dst = dest_dir / "network.duckdb"
-            shutil.copy2(src, dst)
+            copy_if_changed(src, dst)
             promoted["network_duckdb"] = str(dst.relative_to(ROOT))
 
     duckdb_manifest = artifacts.get("duckdb_manifest")
@@ -234,7 +261,7 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
             dest_dir = ROOT / ".powerpacks/network-import/duckdb"
             dest_dir.mkdir(parents=True, exist_ok=True)
             dst = dest_dir / "manifest.json"
-            shutil.copy2(src, dst)
+            copy_if_changed(src, dst)
             promoted["network_duckdb_manifest"] = str(dst.relative_to(ROOT))
     return promoted
 
@@ -257,13 +284,18 @@ def read_manifest_people_csv(path: Path) -> Path | None:
 def fan_in_input_paths(args: argparse.Namespace) -> list[Path]:
     base = ROOT / ".powerpacks/network-import"
     candidates: list[Path] = []
-    if args.include_existing_artifacts:
-        candidates.append(base / "merged" / "people.csv")
+    source_candidates: list[Path] = []
+    expected_source_people = [base / "import" / source / "people.csv" for source in ["gmail", "linkedin", "messages"]]
     for source in ["gmail", "linkedin", "messages"]:
         manifest_people = read_manifest_people_csv(base / "import" / source / "manifest.json")
         if manifest_people:
-            candidates.append(manifest_people)
-        candidates.append(base / "import" / source / "people.csv")
+            source_candidates.append(manifest_people)
+        source_candidates.append(base / "import" / source / "people.csv")
+    source_inputs = [path for path in source_candidates if path.exists()]
+    all_expected_sources_exist = all(path.exists() for path in expected_source_people)
+    candidates.extend(source_inputs)
+    if args.include_existing_artifacts and not all_expected_sources_exist:
+        candidates.append(base / "merged" / "people.csv")
     for path in getattr(args, "input", []) or []:
         candidates.append(ROOT / Path(str(path)))
     out: list[Path] = []
@@ -280,10 +312,38 @@ def fan_in_input_paths(args: argparse.Namespace) -> list[Path]:
     return out
 
 
+def fan_in_fingerprints_match(existing: Any, current: dict[str, Any]) -> bool:
+    if existing == current:
+        return True
+    if not isinstance(existing, dict):
+        return False
+    existing_keys = set(existing)
+    current_keys = set(current)
+    extra_existing = existing_keys - current_keys
+    if extra_existing and extra_existing != {CANONICAL_MERGED_PEOPLE_CSV}:
+        return False
+    return all(existing.get(key) == value for key, value in current.items())
+
+
 def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tuple[dict[str, Any], int]:
     started_at = started_at or now_iso()
     manifest_path = Path(args.manifest)
     inputs = fan_in_input_paths(args)
+    fingerprints = input_fingerprints(inputs)
+    existing = status_payload(argparse.Namespace(manifest=str(manifest_path)))
+    existing_fan_in = existing if existing.get("step") == "fan_in" else existing.get("fan_in") if isinstance(existing.get("fan_in"), dict) else {}
+    existing_artifacts = existing_fan_in.get("artifacts") if isinstance(existing_fan_in.get("artifacts"), dict) else {}
+    existing_promoted = existing_fan_in.get("promoted") if isinstance(existing_fan_in.get("promoted"), dict) else {}
+    if (
+        existing_fan_in.get("status") == "completed"
+        and existing_fan_in.get("step") == "fan_in"
+        and fan_in_fingerprints_match(existing_fan_in.get("input_fingerprints"), fingerprints)
+        and existing_artifacts.get("merged_people_csv")
+        and (ROOT / Path(str(existing_artifacts.get("merged_people_csv")))).exists()
+        and existing_promoted.get("network_duckdb")
+        and (ROOT / Path(str(existing_promoted.get("network_duckdb")))).exists()
+    ):
+        return {**existing_fan_in, "noop": True, "reason": "fan_in_inputs_unchanged"}, 0
     if not inputs:
         payload = {
             "status": "not_ready",
@@ -353,6 +413,7 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tu
         "step": "fan_in",
         "artifact_dir": str(args.artifact_dir),
         "inputs": [str(path) for path in inputs],
+        "input_fingerprints": fingerprints,
         "artifacts": artifacts,
         "promoted": promoted,
         "merge": merge_payload,
@@ -434,6 +495,13 @@ def compact_run_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def write_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     target = ROOT / path
     target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if isinstance(existing, dict) and payload_without_volatile_timestamps(existing) == payload_without_volatile_timestamps(payload):
+            return existing
     target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return payload
 
@@ -522,6 +590,31 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 
     paid_calls = estimated_paid_calls(estimate)
     total_cost = estimated_cost_usd(estimate)
+    counts = estimate.get("counts") if isinstance(estimate.get("counts"), dict) else {}
+    pending_people = int(counts.get("pending_people") or counts.get("people") or 0)
+    existing_duckdb = ROOT / Path(args.output_dir) / "local-search.duckdb"
+    if pending_people == 0 and paid_calls == 0 and existing_duckdb.exists() and existing_duckdb.stat().st_size > 1024:
+        payload = {
+            "status": "ready",
+            "stage": "index_contacts_pipeline",
+            "step": "noop",
+            "reason": "processing_outputs_complete",
+            "people_csv": str(args.people_csv),
+            "people_sha256": sha256_file(people_path),
+            "output_dir": str(args.output_dir),
+            "duckdb": str(existing_duckdb.relative_to(ROOT)),
+            "manifest": str(manifest_path),
+            "estimated_cost_usd": total_cost,
+            "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
+            "processing_estimate": estimate,
+            "fan_in": fan_in_payload,
+            "promoted": promoted,
+            "preflight_duckdb": preflight_duckdb,
+            "started_at": started_at,
+            "updated_at": now_iso(),
+        }
+        write_manifest(manifest_path, payload)
+        return payload, 0
     allow_paid = bool(paid_calls > 0 or (total_cost and total_cost > 0))
     progress("processing: running fixed-output incremental pipeline")
     process_code, processing, processing_stderr = run_json_command(

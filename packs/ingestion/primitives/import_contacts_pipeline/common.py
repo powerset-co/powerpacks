@@ -68,6 +68,11 @@ def linkedin_csv_path(accounts: dict[str, Any]) -> str:
     value = cfg.get("csv_path") or ""
     if not value and isinstance(channel.get("artifacts"), list) and channel["artifacts"]:
         value = channel["artifacts"][0]
+    if value and Path(str(value)).exists():
+        return str(value)
+    repo_local = DEFAULT_BASE_DIR / "discover" / "linkedin" / "Connections.csv"
+    if repo_local.exists():
+        return str(repo_local)
     return str(value or "")
 
 
@@ -148,8 +153,8 @@ def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
     return signature
 
 
-def write_manifest(source: str, payload: dict[str, Any]) -> dict[str, Any]:
-    import_dir = DEFAULT_IMPORT_DIR / source
+def write_manifest(source: str, payload: dict[str, Any], import_dir: Path | None = None) -> dict[str, Any]:
+    import_dir = (import_dir or DEFAULT_IMPORT_DIR) / source
     manifest = import_dir / "manifest.json"
     existing = read_json(manifest, {}) or {}
     payload = {
@@ -165,13 +170,47 @@ def write_manifest(source: str, payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def copy_people_csv(source: str, people_csv: str) -> str:
+def fingerprint_matches(path_text: str, fingerprint: dict[str, Any]) -> bool:
+    current = artifact_fingerprint(path_text, fingerprint)
+    return current == fingerprint
+
+
+def import_manifest_current(source: str, expected_input: dict[str, Any] | None = None, import_dir: Path | None = None) -> dict[str, Any] | None:
+    manifest = (import_dir or DEFAULT_IMPORT_DIR) / source / "manifest.json"
+    existing = read_json(manifest, {}) or {}
+    if not isinstance(existing, dict) or existing.get("status") != "completed":
+        return None
+    if expected_input:
+        existing_input = existing.get("input") if isinstance(existing.get("input"), dict) else {}
+        for key, expected in expected_input.items():
+            if existing_input.get(key) != expected:
+                return None
+    fingerprints = existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else {}
+    groups = [fingerprints.get("input_artifacts"), fingerprints.get("output_artifacts")]
+    saw_file = False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        for path_text, fingerprint in group.items():
+            if str(path_text) == str(DEFAULT_DIRECTORY_CSV):
+                continue
+            if not isinstance(fingerprint, dict) or not fingerprint.get("exists"):
+                continue
+            saw_file = True
+            if not fingerprint_matches(str(path_text), fingerprint):
+                return None
+    if not saw_file:
+        return None
+    return {**existing, "noop": True, "reason": "import_manifest_current"}
+
+
+def copy_people_csv(source: str, people_csv: str, import_dir: Path | None = None) -> str:
     if not people_csv:
         return ""
     src = Path(str(people_csv))
     if not src.exists():
         return ""
-    dest = DEFAULT_IMPORT_DIR / source / "people.csv"
+    dest = (import_dir or DEFAULT_IMPORT_DIR) / source / "people.csv"
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.resolve() != dest.resolve():
         if dest.exists() and dest.is_file() and src.stat().st_size == dest.stat().st_size and sha256_file(src) == sha256_file(dest):

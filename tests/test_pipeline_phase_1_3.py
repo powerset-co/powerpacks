@@ -41,6 +41,14 @@ import_common = load_module(
     "phase13_import_common",
     "packs/ingestion/primitives/import_contacts_pipeline/common.py",
 )
+import_dispatcher = load_module(
+    "phase13_import_dispatcher",
+    "packs/ingestion/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
+)
+index_contacts = load_module(
+    "phase13_index_contacts",
+    "packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py",
+)
 setup_mod = load_module(
     "phase13_setup",
     "packs/ingestion/primitives/setup/setup.py",
@@ -132,6 +140,22 @@ class PipelinePhase13Tests(unittest.TestCase):
     def test_csv_count_empty_path_is_zero_not_current_directory(self):
         self.assertEqual(import_common.csv_count(""), 0)
 
+    def test_linkedin_csv_path_falls_back_to_repo_local_discovered_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "network-import"
+            repo_local = base / "discover" / "linkedin" / "Connections.csv"
+            repo_local.parent.mkdir(parents=True)
+            repo_local.write_text("First Name,Last Name\nAda,Lovelace\n", encoding="utf-8")
+            accounts = {
+                "accounts": {
+                    "linkedin_csv": {
+                        "config": {"csv_path": "/Users/arthur/Downloads/missing/Connections.csv"},
+                    }
+                }
+            }
+            with mock.patch.object(import_common, "DEFAULT_BASE_DIR", base):
+                self.assertEqual(import_common.linkedin_csv_path(accounts), str(repo_local))
+
     def test_setup_status_does_not_write_setup_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "setup-run.json"
@@ -176,6 +200,81 @@ class PipelinePhase13Tests(unittest.TestCase):
             self.assertIn("fingerprints", first)
             self.assertEqual(second["updated_at"], first["updated_at"])
             self.assertEqual(manifest.stat().st_mtime_ns, first_mtime)
+
+    def test_import_manifest_current_returns_noop_for_matching_fingerprints(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(import_common, "DEFAULT_IMPORT_DIR", Path(tmp) / "import"):
+            artifact = Path(tmp) / "people.csv"
+            directory = Path(tmp) / "directory.csv"
+            artifact.write_text("id\n1\n", encoding="utf-8")
+            directory.write_text("id\n1\n", encoding="utf-8")
+            with mock.patch.object(import_common, "DEFAULT_DIRECTORY_CSV", directory):
+                import_common.write_manifest("gmail", {
+                    "status": "completed",
+                    "input": {"people_csv": str(artifact)},
+                    "outputs": {"people_csv": str(artifact), "directory_csv": str(directory)},
+                    "stats": {"people": 1},
+                })
+                current = import_common.import_manifest_current("gmail")
+                self.assertIsNotNone(current)
+                self.assertTrue(current["noop"])
+                self.assertEqual(current["reason"], "import_manifest_current")
+                self.assertIsNotNone(import_common.import_manifest_current("gmail", {"people_csv": str(artifact)}))
+                self.assertIsNone(import_common.import_manifest_current("gmail", {"people_csv": str(artifact.with_name("other.csv"))}))
+                directory.write_text("id\n2\n", encoding="utf-8")
+                self.assertIsNotNone(import_common.import_manifest_current("gmail"))
+                artifact.write_text("id\n2\n", encoding="utf-8")
+                self.assertIsNone(import_common.import_manifest_current("gmail"))
+
+    def test_import_all_manifest_skips_unchanged_parent_write(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(import_dispatcher, "DEFAULT_IMPORT_DIR", Path(tmp) / "import"):
+            payload = {"status": "completed", "sources": {"gmail": {"status": "completed"}}, "updated_at": "first"}
+            first = import_dispatcher.write_aggregate_manifest(payload)
+            manifest = Path(tmp) / "import" / "manifest.json"
+            first_mtime = manifest.stat().st_mtime_ns
+            time.sleep(0.01)
+            second = import_dispatcher.write_aggregate_manifest({**payload, "updated_at": "second"})
+            self.assertEqual(first, second)
+            self.assertEqual(manifest.stat().st_mtime_ns, first_mtime)
+
+    def test_fan_in_excludes_canonical_merged_only_when_all_sources_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            merged = root / ".powerpacks/network-import/merged/people.csv"
+            gmail = root / ".powerpacks/network-import/import/gmail/people.csv"
+            linkedin = root / ".powerpacks/network-import/import/linkedin/people.csv"
+            messages = root / ".powerpacks/network-import/import/messages/people.csv"
+            merged.parent.mkdir(parents=True)
+            gmail.parent.mkdir(parents=True)
+            linkedin.parent.mkdir(parents=True)
+            messages.parent.mkdir(parents=True)
+            merged.write_text("id\nmerged\n", encoding="utf-8")
+            gmail.write_text("id\ngmail\n", encoding="utf-8")
+            args = SimpleNamespace(include_existing_artifacts=True, input=[])
+            with mock.patch.object(index_contacts, "ROOT", root):
+                inputs = [str(path) for path in index_contacts.fan_in_input_paths(args)]
+                self.assertIn(".powerpacks/network-import/import/gmail/people.csv", inputs)
+                self.assertIn(".powerpacks/network-import/merged/people.csv", inputs)
+                linkedin.write_text("id\nlinkedin\n", encoding="utf-8")
+                messages.write_text("id\nmessages\n", encoding="utf-8")
+                inputs = [str(path) for path in index_contacts.fan_in_input_paths(args)]
+                self.assertNotIn(".powerpacks/network-import/merged/people.csv", inputs)
+                gmail.unlink()
+                linkedin.unlink()
+                messages.unlink()
+                inputs = [str(path) for path in index_contacts.fan_in_input_paths(args)]
+                self.assertEqual(inputs, [".powerpacks/network-import/merged/people.csv"])
+
+    def test_fan_in_currentness_accepts_legacy_canonical_merged_fingerprint(self):
+        current = {
+            ".powerpacks/network-import/import/gmail/people.csv": {"sha256": "a"},
+        }
+        legacy = {
+            ".powerpacks/network-import/merged/people.csv": {"sha256": "bootstrap"},
+            ".powerpacks/network-import/import/gmail/people.csv": {"sha256": "a"},
+        }
+        self.assertTrue(index_contacts.fan_in_fingerprints_match(legacy, current))
+        changed = {**legacy, ".powerpacks/network-import/import/gmail/people.csv": {"sha256": "b"}}
+        self.assertFalse(index_contacts.fan_in_fingerprints_match(changed, current))
 
     def test_discovery_stage_manifest_adopts_fingerprints_once_and_preserves_timestamp(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -226,6 +325,39 @@ class PipelinePhase13Tests(unittest.TestCase):
             self.assertEqual(payload["source_csv"], str(source_csv))
             self.assertTrue(contacts_csv.exists())
             self.assertTrue(manifest_json.exists())
+
+    def test_index_run_noops_when_processing_dry_run_reports_complete_restored_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            people = root / ".powerpacks/network-import/merged/people.csv"
+            people.parent.mkdir(parents=True)
+            people.write_text("id\n1\n", encoding="utf-8")
+            duckdb = root / ".powerpacks/search-index/local-search.duckdb"
+            duckdb.parent.mkdir(parents=True)
+            duckdb.write_bytes(b"x" * 2048)
+            manifest = root / ".powerpacks/network-import/index/contacts/manifest.json"
+            manifest.parent.mkdir(parents=True)
+            args = SimpleNamespace(
+                people_csv=".powerpacks/network-import/merged/people.csv",
+                output_dir=".powerpacks/search-index",
+                manifest=".powerpacks/network-import/index/contacts/manifest.json",
+                operator_id="arthur",
+            )
+            estimate = {
+                "status": "dry_run",
+                "counts": {"total_people": 1, "processed_people": 1, "pending_people": 0},
+                "estimated_paid_calls": {"role_embeddings": 0},
+                "estimated_cost_usd": 0,
+            }
+            with mock.patch.object(index_contacts, "ROOT", root), \
+                mock.patch.object(index_contacts, "run_fan_in", return_value=({"status": "completed", "step": "fan_in"}, 0)), \
+                mock.patch.object(index_contacts, "maybe_materialize_existing_records", return_value={"status": "skipped", "reason": "duckdb_exists"}), \
+                mock.patch.object(index_contacts, "run_json_command", return_value=(0, estimate, "")) as run_json:
+                payload, code = index_contacts.run_pipeline(args)
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["step"], "noop")
+            self.assertEqual(payload["reason"], "processing_outputs_complete")
+            run_json.assert_called_once()
 
 
 if __name__ == "__main__":
