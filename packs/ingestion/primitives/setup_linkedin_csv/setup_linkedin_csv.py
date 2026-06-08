@@ -69,11 +69,15 @@ IMPORT_ARTIFACT_DIR = IMPORT_DIR
 DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "linkedin"
 DISCOVER_CONNECTIONS_CSV = DISCOVER_DIR / "Connections.csv"
 STAGES = [
-    {"id": "inspect", "label": "Inspect LinkedIn CSV"},
-    {"id": "discover", "label": "Copy and parse LinkedIn CSV"},
-    {"id": "enrich", "label": "Enrich LinkedIn people"},
-    {"id": "lake", "label": "Write LinkedIn people to lake"},
-    {"id": "index", "label": "Merge and index local network"},
+    {"id": "inspect", "label": "Check LinkedIn CSV"},
+    {"id": "discover", "label": "Import LinkedIn contacts"},
+    {"id": "enrich", "label": "Enrich LinkedIn profiles"},
+    {"id": "source_people", "label": "Save LinkedIn people file"},
+    {"id": "merge_network", "label": "Merge contact sources"},
+    {"id": "network_duckdb", "label": "Prepare contact lookup database"},
+    {"id": "index_estimate", "label": "Estimate search updates"},
+    {"id": "index_records", "label": "Build searchable people records"},
+    {"id": "search_duckdb", "label": "Update local search database"},
 ]
 
 
@@ -115,6 +119,11 @@ class RunContext:
     def event(self, stage_id: str, message: str, *, status: str = "running", progress: float | None = None, payload: dict[str, Any] | None = None) -> None:
         stage_index = next((idx + 1 for idx, stage in enumerate(STAGES) if stage["id"] == stage_id), 0)
         stage_label = next((stage["label"] for stage in STAGES if stage["id"] == stage_id), stage_id)
+        if progress is None:
+            if status == "completed":
+                progress = stage_index / len(STAGES) if stage_index else 0
+            else:
+                progress = max(stage_index - 1, 0) / len(STAGES) if stage_index else 0
         event = {
             "run_id": self.run_id,
             "vertical": VERTICAL,
@@ -124,7 +133,7 @@ class RunContext:
             "stage_index": stage_index,
             "stage_total": len(STAGES),
             "message": message,
-            "progress": progress if progress is not None else (stage_index / len(STAGES) if stage_index else 0),
+            "progress": progress,
             "updated_at": now_iso(),
             "payload": payload or {},
         }
@@ -135,7 +144,13 @@ class RunContext:
         emit_json({"event": "progress", **event})
         stages = dict(self.status.get("stages") or {})
         stages[stage_id] = {"status": status, "label": stage_label, "message": message, "updated_at": event["updated_at"], "payload": payload or {}}
-        self.update(status=status if status in {"failed", "blocked_approval", "completed"} else "running", current_stage=stage_id, progress=event["progress"], stages=stages)
+        if status in {"failed", "blocked_approval"}:
+            overall_status = status
+        elif status == "completed" and stage_index == len(STAGES):
+            overall_status = "completed"
+        else:
+            overall_status = "running"
+        self.update(status=overall_status, current_stage=stage_id, progress=event["progress"], stages=stages)
 
 
 def make_context(run_id: str | None = None) -> RunContext:
@@ -315,12 +330,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         csv_stats = read_csv_stats(csv_path, source_user)
         if csv_stats.get("status") != "ok":
             raise RuntimeError(csv_stats.get("error") or "Could not parse LinkedIn CSV")
+        ctx.event("inspect", "LinkedIn CSV is readable", status="completed", payload=csv_stats)
 
         ctx.event("discover", "Copying and parsing LinkedIn contacts", payload=csv_stats)
         discovery_payload = linkedin_discovery.discover(accounts_path=Path(args.accounts), connections_csv=csv_path, source_user_label=source_user)
         if discovery_payload.get("status") != "completed":
             raise RuntimeError(discovery_payload.get("reason") or discovery_payload.get("error") or "LinkedIn discovery did not complete")
         stable_csv_path = Path(str(discovery_payload.get("source_csv") or DISCOVER_CONNECTIONS_CSV))
+        ctx.event("discover", "LinkedIn contacts CSV is parsed", status="completed", payload=discovery_payload)
 
         ctx.event("enrich", "Running LinkedIn import and RapidAPI/cache enrichment", payload={"contacts": discovery_payload.get("contacts")})
         current = None if args.force else import_manifest_current(IMPORT_SOURCE, {"connections_csv": str(stable_csv_path), "source_user": source_user}, import_dir=DEFAULT_IMPORT_DIR)
@@ -336,10 +353,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if code != 0 or ledger.get("status") != "completed":
                 raise RuntimeError(f"LinkedIn import failed: {ledger.get('status') or code}")
             import_payload = finalize_import_manifest(ledger, stable_csv_path, source_user)
+        ctx.event("enrich", "LinkedIn people are enriched", status="completed", payload={"people": (import_payload.get("stats") or {}).get("people"), "noop": import_payload.get("noop", False)})
 
-        ctx.event("lake", "LinkedIn people are in the lake", payload={"people_csv": (import_payload.get("outputs") or {}).get("people_csv"), "people": (import_payload.get("stats") or {}).get("people")})
-        ctx.event("index", "Merging lake and updating local index", payload={"people_csv": str(index_contacts_pipeline.DEFAULT_PEOPLE_CSV)})
-        index_payload, index_code = index_contacts_pipeline.run_pipeline(args_for_index(args.operator_id))
+        ctx.event("source_people", "Writing LinkedIn people file", payload={"people_csv": (import_payload.get("outputs") or {}).get("people_csv"), "people": (import_payload.get("stats") or {}).get("people")})
+        ctx.event("source_people", "LinkedIn people file is ready", status="completed", payload={"people_csv": (import_payload.get("outputs") or {}).get("people_csv"), "people": (import_payload.get("stats") or {}).get("people")})
+
+        def index_progress(stage_id: str, message: str, status: str, payload: dict[str, Any] | None) -> None:
+            ctx.event(stage_id, message, status=status, payload=payload or {})
+
+        index_payload, index_code = index_contacts_pipeline.run_pipeline(args_for_index(args.operator_id), progress_callback=index_progress)
         if index_code != 0:
             raise RuntimeError(index_payload.get("error") or "Indexing failed")
         duckdb_path = ready_duckdb_path(index_payload)
@@ -360,7 +382,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "events_path": str(ctx.events_path),
             },
         }
-        ctx.event("index", "LinkedIn CSV is searchable", status="completed", progress=1.0, payload=result["outputs"])
+        ctx.event("search_duckdb", "LinkedIn CSV is searchable", status="completed", progress=1.0, payload=result["outputs"])
         ctx.update(status="completed", progress=1.0, result=result, completed_at=now_iso())
         return result
     except Exception as exc:

@@ -22,7 +22,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -32,6 +32,7 @@ DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 DEFAULT_ARTIFACT_DIR = Path(".powerpacks/network-import/index/contacts")
 DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
 CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
+ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -40,6 +41,11 @@ def emit(payload: dict[str, Any]) -> None:
 
 def progress(message: str) -> None:
     print(f"[index-contacts] {message}", file=sys.stderr, flush=True)
+
+
+def notify_progress(progress_callback: ProgressCallback | None, stage_id: str, message: str, *, status: str = "running", payload: dict[str, Any] | None = None) -> None:
+    if progress_callback:
+        progress_callback(stage_id, message, status, payload or {})
 
 
 def now_iso() -> str:
@@ -370,7 +376,7 @@ def fan_in_fingerprints_match(existing: Any, current: dict[str, Any]) -> bool:
     return all(existing.get(key) == value for key, value in current.items())
 
 
-def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tuple[dict[str, Any], int]:
+def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progress_callback: ProgressCallback | None = None) -> tuple[dict[str, Any], int]:
     started_at = started_at or now_iso()
     manifest_path = Path(args.manifest)
     inputs = fan_in_input_paths(args)
@@ -388,7 +394,10 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tu
         and existing_promoted.get("network_duckdb")
         and (ROOT / Path(str(existing_promoted.get("network_duckdb")))).exists()
     ):
-        return {**existing_fan_in, "noop": True, "reason": "fan_in_inputs_unchanged"}, 0
+        payload = {**existing_fan_in, "noop": True, "reason": "fan_in_inputs_unchanged"}
+        notify_progress(progress_callback, "merge_network", "Source people merge is current", status="completed", payload=payload.get("merge") if isinstance(payload.get("merge"), dict) else payload)
+        notify_progress(progress_callback, "network_duckdb", "Contact lookup database is current", status="completed", payload=payload.get("network_duckdb") if isinstance(payload.get("network_duckdb"), dict) else payload)
+        return payload, 0
     if not inputs:
         payload = {
             "status": "not_ready",
@@ -405,9 +414,11 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tu
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "merge_network", "No source people CSVs found to merge", status="failed", payload=payload)
         return payload, 0
 
     merge_cmd = merge_command(args, inputs)
+    notify_progress(progress_callback, "merge_network", "Merging source people CSVs", payload={"inputs": [str(path) for path in inputs]})
     merge_code, merge_payload, merge_stderr = run_json_command(merge_cmd, timeout=60 * 60)
     if merge_code != 0:
         payload = {
@@ -422,9 +433,12 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tu
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "merge_network", "Source people merge failed", status="failed", payload=payload)
         return payload, 1
+    notify_progress(progress_callback, "merge_network", "Source people CSVs are merged", status="completed", payload=merge_payload)
 
     duck_cmd = network_duckdb_command(args)
+    notify_progress(progress_callback, "network_duckdb", "Preparing contact lookup database from merged contacts", payload={"people_csv": merge_payload.get("people_csv")})
     duck_code, duck_payload, duck_stderr = run_json_command(duck_cmd, timeout=60 * 60)
     if duck_code != 0:
         payload = {
@@ -440,7 +454,9 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tu
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "network_duckdb", "Contact lookup database build failed", status="failed", payload=payload)
         return payload, 1
+    notify_progress(progress_callback, "network_duckdb", "Contact lookup database is ready", status="completed", payload=duck_payload)
 
     artifacts = {
         "merged_people_csv": merge_payload.get("people_csv"),
@@ -578,11 +594,11 @@ def maybe_materialize_existing_records(args: argparse.Namespace) -> dict[str, An
     return {"status": "completed", "payload": payload}
 
 
-def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback | None = None) -> tuple[dict[str, Any], int]:
     started_at = now_iso()
     manifest_path = Path(args.manifest)
 
-    fan_in_payload, fan_in_code = run_fan_in(args, started_at=started_at)
+    fan_in_payload, fan_in_code = run_fan_in(args, started_at=started_at, progress_callback=progress_callback)
     if fan_in_code != 0:
         payload = {
             "status": "failed",
@@ -610,6 +626,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_estimate", "Merged people CSV is missing", status="failed", payload=payload)
         return payload, 0
 
     progress("preflight: checking existing local records")
@@ -626,9 +643,11 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "search_duckdb", "Existing local search database materialization failed", status="failed", payload=payload)
         return payload, 1
 
     progress("processing: dry-run incremental estimate")
+    notify_progress(progress_callback, "index_estimate", "Estimating local index work", payload={"people_csv": str(args.people_csv)})
     estimate_code, estimate, estimate_stderr = run_json_command(processing_args(args, dry_run=True, allow_paid=False), timeout=60 * 60)
     if estimate_code != 0:
         payload = {
@@ -644,7 +663,9 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_estimate", "Local index estimate failed", status="failed", payload=payload)
         return payload, 1
+    notify_progress(progress_callback, "index_estimate", "Local index work is estimated", status="completed", payload=estimate)
 
     paid_calls = estimated_paid_calls(estimate)
     total_cost = estimated_cost_usd(estimate)
@@ -674,9 +695,13 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_records", "Local search records are current", status="completed", payload={"reason": "processing_outputs_complete"})
+        notify_progress(progress_callback, "search_duckdb", "Local search database is current", status="completed", payload={"duckdb": str(existing_duckdb.relative_to(ROOT))})
         return payload, 0
     if pending_people == 0 and paid_calls == 0:
         progress("duckdb: refreshing local search tables from current records")
+        notify_progress(progress_callback, "index_records", "Local search records are current", status="completed", payload={"reason": "processing_outputs_complete"})
+        notify_progress(progress_callback, "search_duckdb", "Refreshing local search database tables", payload={"people_csv": str(args.people_csv)})
         duckdb_code, duckdb_payload, duckdb_stderr = run_json_command(duckdb_command(args), timeout=60 * 60)
         if duckdb_code != 0:
             payload = {
@@ -695,6 +720,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 "updated_at": now_iso(),
             }
             write_manifest(manifest_path, payload)
+            notify_progress(progress_callback, "search_duckdb", "Local search database refresh failed", status="failed", payload=payload)
             return payload, 1
         payload = {
             "status": "ready",
@@ -718,9 +744,11 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "search_duckdb", "Local search database is ready", status="completed", payload=duckdb_payload if isinstance(duckdb_payload, dict) else {})
         return payload, 0
     allow_paid = bool(paid_calls > 0 or (total_cost and total_cost > 0))
     progress("processing: running fixed-output incremental pipeline")
+    notify_progress(progress_callback, "index_records", "Building local search records", payload={"pending_people": pending_people, "estimated_paid_calls": estimate.get("estimated_paid_calls", {})})
     process_code, processing, processing_stderr = run_json_command(
         processing_args(args, dry_run=False, allow_paid=allow_paid),
         timeout=6 * 60 * 60,
@@ -741,9 +769,12 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_records", "Local search record build failed", status="failed", payload=payload)
         return payload, 1
+    notify_progress(progress_callback, "index_records", "Local search records are built", status="completed", payload=processing)
 
     progress("duckdb: materializing local search tables")
+    notify_progress(progress_callback, "search_duckdb", "Updating local search database", payload={"people_csv": str(args.people_csv)})
     duckdb_code, duckdb_payload, duckdb_stderr = run_json_command(duckdb_command(args), timeout=60 * 60)
     if duckdb_code != 0:
         payload = {
@@ -761,6 +792,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "search_duckdb", "Local search database update failed", status="failed", payload=payload)
         return payload, 1
 
     payload = {
@@ -783,6 +815,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "updated_at": now_iso(),
     }
     write_manifest(manifest_path, payload)
+    notify_progress(progress_callback, "search_duckdb", "Local search database is ready", status="completed", payload=duckdb_payload if isinstance(duckdb_payload, dict) else {})
     return payload, 0
 
 

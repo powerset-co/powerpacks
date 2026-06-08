@@ -1,20 +1,40 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, CircleAlert, Loader2, RefreshCcw, Upload } from "lucide-react";
+import { CheckCircle2, CircleAlert, CircleDot, Loader2, RefreshCcw, Upload } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import {
   dryRunOnboardingV2LinkedIn,
   fetchOnboardingV2LinkedInStatus,
   runOnboardingV2LinkedIn,
   uploadLinkedInCsv,
 } from "./powerpacksApi";
+import type { SetupJob } from "./types";
 
 type JsonObject = Record<string, unknown>;
 
 const DEFAULT_LINKEDIN_CSV = ".powerpacks/network-import/discover/linkedin/Connections.csv";
+const DEFAULT_STAGES = [
+  { id: "inspect", label: "Check LinkedIn CSV" },
+  { id: "discover", label: "Import LinkedIn contacts" },
+  { id: "enrich", label: "Enrich LinkedIn profiles" },
+  { id: "source_people", label: "Save LinkedIn people file" },
+  { id: "merge_network", label: "Merge contact sources" },
+  { id: "network_duckdb", label: "Prepare contact lookup database" },
+  { id: "index_estimate", label: "Estimate search updates" },
+  { id: "index_records", label: "Build searchable people records" },
+  { id: "search_duckdb", label: "Update local search database" },
+];
+
+function selectedFileDisplayPath(file: File): string {
+  const fileWithPath = file as File & { path?: string; webkitRelativePath?: string };
+  const browserPath = fileWithPath.path || fileWithPath.webkitRelativePath || "";
+  if (browserPath && !browserPath.includes("fakepath")) return browserPath;
+  return `~/Downloads/${file.name}`;
+}
 
 function objectValue(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -33,6 +53,11 @@ function numberValue(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function commandText(command: unknown): string {
+  if (Array.isArray(command)) return command.map((part) => String(part)).join(" ");
+  return stringValue(command);
+}
+
 function statusTone(status: string): "default" | "secondary" | "destructive" | "outline" {
   if (status === "completed" || status === "ok" || status === "dry_run") return "default";
   if (status === "failed" || status === "blocked_approval") return "destructive";
@@ -40,11 +65,32 @@ function statusTone(status: string): "default" | "secondary" | "destructive" | "
   return "outline";
 }
 
+function stageRows(status: JsonObject | null) {
+  const order = arrayValue(status?.stage_order);
+  const stages = objectValue(status?.stages);
+  const activeOrder = order.length > 0 ? order : DEFAULT_STAGES;
+  return activeOrder.map((stage, index) => {
+    const id = stringValue(stage.id);
+    const detail = objectValue(stages[id]);
+    return {
+      id,
+      index: index + 1,
+      total: activeOrder.length,
+      label: stringValue(stage.label || detail.label || id),
+      message: stringValue(detail.message),
+      status: stringValue(detail.status || "pending"),
+      updatedAt: stringValue(detail.updated_at),
+    };
+  });
+}
+
 export function LocalOnboardingV2Page() {
   const [csvPath, setCsvPath] = useState(DEFAULT_LINKEDIN_CSV);
+  const [displayCsvPath, setDisplayCsvPath] = useState(DEFAULT_LINKEDIN_CSV);
   const [sourceLabel, setSourceLabel] = useState("arthur");
   const [status, setStatus] = useState<JsonObject | null>(null);
   const [dryRun, setDryRun] = useState<JsonObject | null>(null);
+  const [latestJob, setLatestJob] = useState<SetupJob | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,10 +111,14 @@ export function LocalOnboardingV2Page() {
 
   const statusText = stringValue(status?.status || "missing");
   const progress = Math.max(0, Math.min(1, numberValue(status?.progress)));
-  const events = useMemo(() => arrayValue(status?.events).slice(-8).reverse(), [status]);
+  const steps = useMemo(() => stageRows(status), [status]);
   const dryRunOutput = objectValue(dryRun?.output);
   const csvStats = objectValue(dryRunOutput.csv_stats || status?.csv_stats);
   const outputs = objectValue(objectValue(status?.result).outputs || status?.outputs || dryRunOutput.outputs);
+  const latestCommand = commandText(latestJob?.command || dryRun?.command);
+  const latestOutput = latestJob?.output || dryRun?.output || null;
+  const latestStdout = stringValue(latestJob?.stdout || dryRun?.stdout);
+  const latestStderr = stringValue(latestJob?.stderr || dryRun?.stderr);
 
   async function handleUpload(file?: File | null) {
     if (!file) return;
@@ -77,6 +127,7 @@ export function LocalOnboardingV2Page() {
     try {
       const uploaded = await uploadLinkedInCsv(file);
       setCsvPath(uploaded.path);
+      setDisplayCsvPath(selectedFileDisplayPath(file));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -88,7 +139,9 @@ export function LocalOnboardingV2Page() {
     setLoading(true);
     setError(null);
     try {
-      setDryRun(await dryRunOnboardingV2LinkedIn({ csvPath, sourceLabel }));
+      const response = await dryRunOnboardingV2LinkedIn({ csvPath, sourceLabel });
+      setDryRun(response);
+      setLatestJob(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Dry-run failed");
     } finally {
@@ -101,6 +154,7 @@ export function LocalOnboardingV2Page() {
     setError(null);
     try {
       const response = await runOnboardingV2LinkedIn({ csvPath, sourceLabel });
+      setLatestJob(response.job);
       setStatus(response.status);
       await loadStatus();
     } catch (err) {
@@ -138,7 +192,13 @@ export function LocalOnboardingV2Page() {
           <div className="grid gap-3 md:grid-cols-[1fr_180px]">
             <label className="space-y-1 text-sm">
               <span className="font-medium">CSV path</span>
-              <Input value={csvPath} onChange={(event) => setCsvPath(event.target.value)} />
+              <Input
+                value={displayCsvPath}
+                onChange={(event) => {
+                  setDisplayCsvPath(event.target.value);
+                  setCsvPath(event.target.value);
+                }}
+              />
             </label>
             <label className="space-y-1 text-sm">
               <span className="font-medium">Source label</span>
@@ -168,6 +228,30 @@ export function LocalOnboardingV2Page() {
               <div><div className="text-muted-foreground">Current import</div><div className="font-medium">{String(dryRunOutput.current_import ?? "—")}</div></div>
             </div>
           )}
+          {(latestCommand || latestOutput || latestStdout || latestStderr) && (
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+              <div className="mb-2 font-medium">Command</div>
+              <pre className="overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{latestCommand || "—"}</pre>
+              {latestOutput ? (
+                <>
+                  <div className="mb-2 mt-3 font-medium">Output</div>
+                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{JSON.stringify(latestOutput, null, 2)}</pre>
+                </>
+              ) : null}
+              {latestStdout ? (
+                <>
+                  <div className="mb-2 mt-3 font-medium">Stdout</div>
+                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{latestStdout}</pre>
+                </>
+              ) : null}
+              {latestStderr ? (
+                <>
+                  <div className="mb-2 mt-3 font-medium">Stderr</div>
+                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap text-xs text-destructive">{latestStderr}</pre>
+                </>
+              ) : null}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -192,18 +276,39 @@ export function LocalOnboardingV2Page() {
             <div><div className="text-muted-foreground">Stage</div><div className="font-medium">{stringValue(status?.current_stage || "—")}</div></div>
             <div><div className="text-muted-foreground">Updated</div><div className="font-medium">{stringValue(status?.updated_at || "—")}</div></div>
           </div>
-          {events.length > 0 && (
+          {steps.length > 0 && (
             <div className="space-y-2">
-              <div className="text-sm font-medium">Recent progress</div>
-              {events.map((event, index) => (
-                <div key={`${stringValue(event.updated_at)}-${index}`} className="flex items-start gap-2 rounded-md border p-2 text-sm">
-                  {stringValue(event.status) === "completed" ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" /> : <Loader2 className="mt-0.5 h-4 w-4 text-muted-foreground" />}
+              <div className="text-sm font-medium">Steps</div>
+              {steps.map((step) => {
+                const isRunning = step.status === "running";
+                const isCompleted = step.status === "completed";
+                const isFailed = step.status === "failed" || step.status === "blocked_approval";
+                const Icon = isFailed ? CircleAlert : isCompleted ? CheckCircle2 : isRunning ? Loader2 : CircleDot;
+                return (
+                <div
+                  key={step.id}
+                  className={cn(
+                    "flex items-start gap-2 rounded-md border p-2 text-sm",
+                    isRunning && "border-primary/30 bg-primary/5",
+                    isCompleted && "border-emerald-500/30 bg-emerald-500/5",
+                    isFailed && "border-destructive/40 bg-destructive/5",
+                    !isRunning && !isCompleted && !isFailed && "bg-muted/20",
+                  )}
+                >
+                  <Icon className={cn(
+                    "mt-0.5 h-4 w-4 shrink-0",
+                    isRunning && "animate-spin text-primary",
+                    isCompleted && "text-emerald-600",
+                    isFailed && "text-destructive",
+                    !isRunning && !isCompleted && !isFailed && "text-muted-foreground",
+                  )} />
                   <div>
-                    <div className="font-medium">{stringValue(event.stage_label || event.stage)}</div>
-                    <div className="text-muted-foreground">{stringValue(event.message)}</div>
+                    <div className="font-medium">{step.label}</div>
+                    <div className="text-muted-foreground">{step.message || `${step.index}/${step.total}`}</div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
           {Object.keys(outputs).length > 0 && (
