@@ -35,10 +35,7 @@ DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
 CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
 ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
 
-from packs.indexing.lib.openai_usage_tiers import (  # noqa: E402
-    OPENAI_USAGE_TIER_PROFILES,
-    openai_usage_tier_profile,
-)
+from packs.indexing.lib.openai_usage_tiers import openai_usage_tier_profile  # noqa: E402
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -800,6 +797,24 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         write_manifest(manifest_path, payload)
         notify_progress(progress_callback, "index_records", "Local search record build failed", status="failed", payload=payload)
         return payload, 1
+    if not isinstance(processing, dict) or processing.get("status") != "completed":
+        payload = {
+            "status": "not_ready",
+            "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
+            "step": "index_processing",
+            "reason": "processing_incomplete",
+            "people_csv": str(args.people_csv),
+            "processing_estimate": estimate,
+            "processing": processing,
+            "fan_in": fan_in_payload,
+            "promoted": promoted,
+            "started_at": started_at,
+            "updated_at": now_iso(),
+        }
+        write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_records", "Local search record build is not complete yet", status="running", payload=payload)
+        return payload, 0
     notify_progress(progress_callback, "index_records", "Local search records are built", status="completed", payload=processing)
 
     progress("duckdb: materializing local search tables")
@@ -893,7 +908,7 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
         s.add_argument("--artifact-dir", default=str(DEFAULT_ARTIFACT_DIR))
         s.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
-        s.add_argument("--openai-usage-tier", choices=sorted(OPENAI_USAGE_TIER_PROFILES), default=None)
+        s.add_argument("--openai-usage-tier", default=None)
         s.add_argument("--input", action="append", default=[], help="Additional people.csv input to include in fan-in.")
         s.add_argument("--include-existing-artifacts", action=argparse.BooleanOptionalAction, default=True)
 

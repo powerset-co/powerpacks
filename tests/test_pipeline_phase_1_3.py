@@ -207,11 +207,22 @@ class PipelinePhase13Tests(unittest.TestCase):
             people_csv=".powerpacks/network-import/merged/people.csv",
             output_dir=".powerpacks/search-index",
             operator_id="arthur",
-            openai_usage_tier="tier_2",
+            openai_usage_tier="tier-2",
         )
         with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_USAGE_TIER": "tier_1"}, clear=True):
             cmd = index_contacts.processing_args(args, dry_run=True, allow_paid=False)
         self.assertEqual(cmd[cmd.index("--openai-usage-tier") + 1], "tier_2")
+
+    def test_openai_usage_tier_cli_accepts_aliases(self):
+        build_args = build_processing.build_parser().parse_args([
+            "run",
+            "--input", "people.csv",
+            "--output-dir", "out",
+            "--openai-usage-tier", "tier-2",
+        ])
+        index_args = index_contacts.build_parser().parse_args(["plan", "--openai-usage-tier", "1"])
+        self.assertEqual(build_processing.openai_usage_tier_profile(build_args.openai_usage_tier)["tier"], "tier_2")
+        self.assertEqual(index_contacts.selected_openai_usage_tier(index_args)["tier"], "tier_1")
 
     def test_rapidapi_defaults_use_authorized_throughput(self):
         self.assertEqual(enrich_people.DEFAULT_RAPIDAPI_MAX_WORKERS, 64)
@@ -229,11 +240,13 @@ class PipelinePhase13Tests(unittest.TestCase):
             mock.patch.object(enrich_people, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 1.0), \
             mock.patch.object(enrich_people, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (200, payload, "")]) as http_json, \
             mock.patch.object(enrich_people.time, "sleep") as sleep:
-            result = enrich_people.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True)
+            wait = mock.Mock()
+            result = enrich_people.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True, wait_for_attempt=wait)
             cached = json.loads((Path(tmp) / "ada.json").read_text(encoding="utf-8"))
         self.assertEqual(result["status_code"], 200)
         self.assertEqual(result["attempts"], 2)
         self.assertEqual(http_json.call_count, 2)
+        self.assertEqual(wait.call_count, 2)
         sleep.assert_called_once_with(1.0)
         self.assertEqual(cached["attempts"], 2)
 
@@ -288,6 +301,27 @@ class PipelinePhase13Tests(unittest.TestCase):
         self.assertEqual(summary["retry_failures"], 0)
         self.assertEqual(rows[0]["rapidapi_attempts"], "2")
         self.assertEqual(rows[0]["rapidapi_retry_outcome"], "success")
+
+    def test_recent_rapidapi_failure_is_not_classified_as_cache_hit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            cache_path = cache_dir / "ada.json"
+            cache_path.write_text(json.dumps({
+                "status_code": 429,
+                "last_checked_at": enrich_people.now_iso(),
+                "normalized_profile": {"success": False, "error": "rate limited"},
+            }), encoding="utf-8")
+            status, reason, path, failure = enrich_people.classify_rapidapi_cache_status(
+                {"public_identifier": "ada", "linkedin_url": "https://www.linkedin.com/in/ada"},
+                cache_dir,
+                refresh_cache=False,
+                retry_hours=24,
+                cache_index={"ada"},
+            )
+        self.assertEqual(status, "recent_failure")
+        self.assertEqual(reason, "recent provider failure")
+        self.assertEqual(path, cache_path)
+        self.assertIsNotNone(failure)
 
     def test_linkedin_csv_path_falls_back_to_repo_local_discovered_export(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -373,6 +407,21 @@ class PipelinePhase13Tests(unittest.TestCase):
                 self.assertIsNotNone(import_common.import_manifest_current("gmail"))
                 artifact.write_text("id\n2\n", encoding="utf-8")
                 self.assertIsNone(import_common.import_manifest_current("gmail"))
+
+    def test_import_manifest_current_ignores_absolute_shared_directory_csv(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(import_common, "DEFAULT_IMPORT_DIR", Path(tmp) / "import"):
+            artifact = Path(tmp) / "people.csv"
+            directory = Path(tmp) / "directory.csv"
+            artifact.write_text("id\n1\n", encoding="utf-8")
+            directory.write_text("id\n1\n", encoding="utf-8")
+            with mock.patch.object(import_common, "DEFAULT_DIRECTORY_CSV", directory):
+                import_common.write_manifest("linkedin", {
+                    "status": "completed",
+                    "input": {"people_csv": str(artifact)},
+                    "outputs": {"people_csv": str(artifact), "directory_csv": str(directory.resolve())},
+                })
+                directory.write_text("id\nchanged\n", encoding="utf-8")
+                self.assertIsNotNone(import_common.import_manifest_current("linkedin"))
 
     def test_setup_linkedin_csv_dry_run_uses_stable_discovered_csv_for_currentness(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -677,6 +726,38 @@ class PipelinePhase13Tests(unittest.TestCase):
             duckdb_cmd = run_json.call_args_list[1].args[0]
             self.assertIn("--incremental", duckdb_cmd)
             self.assertNotIn("--force", duckdb_cmd)
+
+    def test_index_run_does_not_mark_ready_for_partial_processing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            people = root / ".powerpacks/network-import/merged/people.csv"
+            people.parent.mkdir(parents=True)
+            people.write_text("id\n1\n", encoding="utf-8")
+            manifest = root / ".powerpacks/network-import/index/contacts/manifest.json"
+            manifest.parent.mkdir(parents=True)
+            args = SimpleNamespace(
+                people_csv=".powerpacks/network-import/merged/people.csv",
+                output_dir=".powerpacks/search-index",
+                manifest=".powerpacks/network-import/index/contacts/manifest.json",
+                operator_id="arthur",
+            )
+            estimate = {
+                "status": "dry_run",
+                "counts": {"pending_people": 1},
+                "estimated_paid_calls": {"role_enrichment": 1},
+                "estimated_cost_usd": 0.01,
+            }
+            partial = {"status": "partial", "next_step": "build_roles"}
+            with mock.patch.object(index_contacts, "ROOT", root), \
+                mock.patch.object(index_contacts, "run_fan_in", return_value=({"status": "completed", "step": "fan_in"}, 0)), \
+                mock.patch.object(index_contacts, "maybe_materialize_existing_records", return_value={"status": "skipped", "reason": "missing_records"}), \
+                mock.patch.object(index_contacts, "run_json_command", side_effect=[(0, estimate, ""), (0, partial, "")]) as run_json:
+                payload, code = index_contacts.run_pipeline(args)
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "not_ready")
+        self.assertEqual(payload["reason"], "processing_incomplete")
+        self.assertEqual(payload["processing"], partial)
+        self.assertEqual(run_json.call_count, 2)
 
     def test_duckdb_freshness_checks_record_inputs_not_only_person_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
-from packs.indexing.lib.openai_usage_tiers import env_or_profile_int, openai_usage_tier_choices  # noqa: E402
+from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
 DEFAULT_DIMENSION = 1536
 DEFAULT_MODEL = "text-embedding-3-small"
@@ -460,7 +460,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--dimension", type=int, default=DEFAULT_DIMENSION)
     run_p.add_argument("--api-batch-size", type=int, default=128)
     run_p.add_argument("--concurrency", type=int, default=None)
-    run_p.add_argument("--openai-usage-tier", choices=openai_usage_tier_choices(), default=None)
+    run_p.add_argument("--openai-usage-tier", default=None)
     run_p.add_argument("--cost-per-1k-tokens", type=float, default=DEFAULT_COST_PER_1K_TOKENS)
     run_p.add_argument("--input-embeddings", help="Precomputed real embedding JSONL; not a provider")
     run_p.add_argument("--input-id-field", default=None)

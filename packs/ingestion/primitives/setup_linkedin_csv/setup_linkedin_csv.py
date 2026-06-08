@@ -20,45 +20,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.primitives.discover_contacts_pipeline import linkedin as linkedin_discovery
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import read_json
-    from packs.ingestion.primitives.discover_contacts_pipeline.directory import commit_people_csv_to_directory
-    from packs.ingestion.primitives.import_contacts_pipeline.common import (
-        DEFAULT_ACCOUNTS,
-        DEFAULT_BASE_DIR,
-        DEFAULT_DIRECTORY_CSV,
-        DEFAULT_IMPORT_DIR,
-        copy_people_csv,
-        csv_count,
-        import_manifest_current,
-        linkedin_csv_path,
-        linkedin_source_user,
-        sha256_file,
-        write_manifest,
-    )
-    from packs.ingestion.primitives.linkedin_network_import import linkedin_network_import
-    from packs.indexing.primitives.index_contacts_pipeline import index_contacts_pipeline
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.primitives.discover_contacts_pipeline import linkedin as linkedin_discovery
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import read_json
-    from packs.ingestion.primitives.discover_contacts_pipeline.directory import commit_people_csv_to_directory
-    from packs.ingestion.primitives.import_contacts_pipeline.common import (
-        DEFAULT_ACCOUNTS,
-        DEFAULT_BASE_DIR,
-        DEFAULT_DIRECTORY_CSV,
-        DEFAULT_IMPORT_DIR,
-        copy_people_csv,
-        csv_count,
-        import_manifest_current,
-        linkedin_csv_path,
-        linkedin_source_user,
-        sha256_file,
-        write_manifest,
-    )
-    from packs.ingestion.primitives.linkedin_network_import import linkedin_network_import
-    from packs.indexing.primitives.index_contacts_pipeline import index_contacts_pipeline
+ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT))
+
+from packs.ingestion.primitives.discover_contacts_pipeline import linkedin as linkedin_discovery  # noqa: E402
+from packs.ingestion.primitives.discover_contacts_pipeline.common import read_json  # noqa: E402
+from packs.ingestion.primitives.discover_contacts_pipeline.directory import commit_people_csv_to_directory  # noqa: E402
+from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa: E402
+    DEFAULT_ACCOUNTS,
+    DEFAULT_BASE_DIR,
+    DEFAULT_DIRECTORY_CSV,
+    DEFAULT_IMPORT_DIR,
+    copy_people_csv,
+    csv_count,
+    import_manifest_current,
+    linkedin_csv_path,
+    linkedin_source_user,
+    sha256_file,
+    write_manifest,
+)
+from packs.ingestion.primitives.linkedin_network_import import linkedin_network_import  # noqa: E402
+from packs.indexing.primitives.index_contacts_pipeline import index_contacts_pipeline  # noqa: E402
 
 VERTICAL = "linkedin_csv"
 RUN_ROOT = Path(".powerpacks/runs/setup-linkedin-csv")

@@ -32,7 +32,6 @@ from packs.indexing.lib.contracts import (  # noqa: E402
 from packs.indexing.lib.io import atomic_write_text, emit_json, read_jsonl, write_json, write_jsonl  # noqa: E402
 from packs.indexing.lib.ledger import load_ledger, mark_step, save_ledger  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import (  # noqa: E402
-    OPENAI_USAGE_TIER_PROFILES,
     env_or_profile_int,
     openai_usage_tier_profile,
     profile_paid_checkpoint_every,
@@ -2061,7 +2060,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output-dir", required=True)
     run.add_argument("--default-operator-id", default=None)
     run.add_argument("--checkpoint-every", type=int, default=1000)
-    run.add_argument("--openai-usage-tier", choices=sorted(OPENAI_USAGE_TIER_PROFILES), default=None, help="Powerpacks OpenAI throughput profile; defaults to POWERPACKS_OPENAI_USAGE_TIER or Tier 5; actual OpenAI limits are org/model-specific")
+    run.add_argument("--openai-usage-tier", default=None, help="Powerpacks OpenAI throughput profile; defaults to POWERPACKS_OPENAI_USAGE_TIER or Tier 5; actual OpenAI limits are org/model-specific")
     run.add_argument("--role-provider", choices=["openai", "tlm"], default="openai")
     run.add_argument("--allow-paid-role-provider", action="store_true")
     run.add_argument("--role-openai-api-key")

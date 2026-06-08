@@ -28,7 +28,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 
 try:
     from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
@@ -387,6 +387,7 @@ def rapidapi_profile(
     *,
     cache_dir: Path | str | None = None,
     refresh_cache: bool = False,
+    wait_for_attempt: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     cache_path = profile_cache_path(cache_dir, public_identifier)
     if not refresh_cache:
@@ -405,6 +406,8 @@ def rapidapi_profile(
     data: dict[str, Any] | None = None
     error = ""
     for attempt in range(1, attempts + 1):
+        if wait_for_attempt:
+            wait_for_attempt()
         status, data, error = http_json(
             "GET",
             f"{RAPIDAPI_BASE_URL}/get-profile-data-by-url",
@@ -564,14 +567,15 @@ def classify_rapidapi_cache_status(
         return "miss", "refresh requested", cache_path, None
     if cached_profile_from_row(row, public_identifier, row.get("linkedin_url") or "") is not None:
         return "hit", "input rapidapi_response", cache_path, None
-    if cache_index is not None and any(slug in cache_index for slug in cache_slug_candidates(public_identifier)):
-        return "hit", "profile cache", cache_path, None
-    if cache_index is None and cache_path and cache_path.exists():
+    cached_file_exists = bool(cache_path and cache_path.exists())
+    if cache_index is not None:
+        cached_file_exists = any(slug in cache_index for slug in cache_slug_candidates(public_identifier))
+    if cached_file_exists and read_usable_cached_profile(cache_path):
         return "hit", "profile cache", cache_path, None
     recent_failure = recent_cached_failure(cache_path, retry_hours)
     if recent_failure:
         return "recent_failure", "recent provider failure", cache_path, recent_failure
-    if cache_path and cache_path.exists():
+    if cached_file_exists:
         return "miss", "cache entry unusable", cache_path, None
     return "miss", "no usable cache", cache_path, None
 
@@ -799,8 +803,14 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
                         "attempts": 1,
                     }
         else:
-            rate_limiter.wait()
-            rapid = rapidapi_profile(public_identifier, linkedin_url, rapid_key, cache_dir=profile_cache_dir, refresh_cache=refresh_cache)
+            rapid = rapidapi_profile(
+                public_identifier,
+                linkedin_url,
+                rapid_key,
+                cache_dir=profile_cache_dir,
+                refresh_cache=refresh_cache,
+                wait_for_attempt=rate_limiter.wait,
+            )
         attempts = max(1, int(rapid.get("attempts") or 1))
         status_code = int(rapid.get("status_code") or 0)
         retry_outcome = "none"

@@ -175,6 +175,15 @@ def fingerprint_matches(path_text: str, fingerprint: dict[str, Any]) -> bool:
     return current == fingerprint
 
 
+def is_shared_directory_csv(path_text: str) -> bool:
+    if str(path_text) == str(DEFAULT_DIRECTORY_CSV):
+        return True
+    try:
+        return Path(path_text).resolve() == DEFAULT_DIRECTORY_CSV.resolve()
+    except (OSError, RuntimeError):
+        return False
+
+
 def import_manifest_current(source: str, expected_input: dict[str, Any] | None = None, import_dir: Path | None = None) -> dict[str, Any] | None:
     manifest = (import_dir or DEFAULT_IMPORT_DIR) / source / "manifest.json"
     existing = read_json(manifest, {}) or {}
@@ -192,7 +201,7 @@ def import_manifest_current(source: str, expected_input: dict[str, Any] | None =
         if not isinstance(group, dict):
             continue
         for path_text, fingerprint in group.items():
-            if str(path_text) == str(DEFAULT_DIRECTORY_CSV):
+            if is_shared_directory_csv(str(path_text)):
                 continue
             if not isinstance(fingerprint, dict) or not fingerprint.get("exists"):
                 continue
