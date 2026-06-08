@@ -254,7 +254,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 return 0, {
                     "status": "completed",
                     "calculation_mode": discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
-                    "batch_id": "sync-window-1",
                     "artifacts": {
                         "linkedin_resolution_queue_csv": str(scratch_queue),
                         "people_csv": str(tmp / "scratch" / "people.csv"),
@@ -285,8 +284,8 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(replay_payload["status"], "completed")
             replay_manifest = json.loads(paths[("gmail", "manifest_json")].read_text(encoding="utf-8"))
             self.assertEqual(replay_manifest["calculation_mode"], "incremental_update")
-            self.assertEqual(len(replay_manifest["applied_incremental_batches"]), 1)
-            self.assertEqual(replay_manifest["skipped_incremental_batches"], replay_manifest["applied_incremental_batches"])
+            self.assertEqual(len(replay_manifest["applied_incremental_inputs"]), 1)
+            self.assertEqual(replay_manifest["skipped_incremental_inputs"], replay_manifest["applied_incremental_inputs"])
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
                 replay_rows = list(csv.DictReader(handle))
             self.assertEqual(replay_rows[0]["total_messages"], "3")
@@ -334,7 +333,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 return 0, {
                     "status": "completed",
                     "calculation_mode": discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
-                    "batch_id": "sync-window-1",
                     "artifacts": {"linkedin_resolution_queue_csv": str(scratch_queue)},
                     "counts": {"contacts_written": 1},
                 }, ""
@@ -368,7 +366,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
             }
 
-            def run_with_child(mode: str, *, total_messages: str, thread_count: str, last_interaction: str, batch_id: str = "") -> dict[str, object]:
+            def run_with_child(mode: str, *, total_messages: str, thread_count: str, last_interaction: str) -> dict[str, object]:
                 write_csv(
                     scratch_queue,
                     discover_gmail.GMAIL_DISCOVERY_COLUMNS,
@@ -395,8 +393,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                         "artifacts": {"linkedin_resolution_queue_csv": str(scratch_queue)},
                         "counts": {"contacts_written": 1},
                     }
-                    if batch_id:
-                        child["batch_id"] = batch_id
                     return 0, child, ""
 
                 with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
@@ -412,19 +408,18 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             )
             self.assertEqual(full_payload["status"], "completed")
             self.assertEqual(full_payload["calculation_mode"], "full_rewrite")
-            self.assertEqual(full_payload["applied_incremental_batches"], [])
+            self.assertEqual(full_payload["applied_incremental_inputs"], [])
 
             incremental_payload = run_with_child(
                 discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
                 total_messages="1",
                 thread_count="1",
                 last_interaction="2026-01-03T00:00:00Z",
-                batch_id="sync-window-1",
             )
             self.assertEqual(incremental_payload["status"], "completed")
             self.assertEqual(incremental_payload["calculation_mode"], "incremental_update")
-            self.assertEqual(len(incremental_payload["applied_incremental_batches"]), 1)
-            first_batch = incremental_payload["applied_incremental_batches"][0]
+            self.assertEqual(len(incremental_payload["applied_incremental_inputs"]), 1)
+            first_input = incremental_payload["applied_incremental_inputs"][0]
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
                 incremental_rows = list(csv.DictReader(handle))
             self.assertEqual(incremental_rows[0]["total_messages"], "3")
@@ -435,10 +430,9 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 total_messages="1",
                 thread_count="1",
                 last_interaction="2026-01-03T00:00:00Z",
-                batch_id="sync-window-1",
             )
             self.assertEqual(replay_payload["status"], "completed")
-            self.assertEqual(replay_payload["skipped_incremental_batches"], [first_batch])
+            self.assertEqual(replay_payload["skipped_incremental_inputs"], [first_input])
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
                 replay_rows = list(csv.DictReader(handle))
             self.assertEqual(replay_rows[0]["total_messages"], "3")
@@ -452,27 +446,26 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             )
             self.assertEqual(full_recount_payload["status"], "completed")
             self.assertEqual(full_recount_payload["calculation_mode"], "full_rewrite")
-            self.assertEqual(full_recount_payload["applied_incremental_batches"], [first_batch])
+            self.assertEqual(full_recount_payload["applied_incremental_inputs"], [first_input])
 
             stale_replay_payload = run_with_child(
                 discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
                 total_messages="1",
                 thread_count="1",
                 last_interaction="2026-01-03T00:00:00Z",
-                batch_id="sync-window-1",
             )
             self.assertEqual(stale_replay_payload["status"], "completed")
-            self.assertEqual(stale_replay_payload["skipped_incremental_batches"], [first_batch])
+            self.assertEqual(stale_replay_payload["skipped_incremental_inputs"], [first_input])
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
                 stale_replay_rows = list(csv.DictReader(handle))
             self.assertEqual(stale_replay_rows[0]["total_messages"], "3")
             self.assertEqual(stale_replay_rows[0]["thread_count"], "2")
 
-    def test_gmail_incremental_child_batch_ids_are_namespaced_by_account(self) -> None:
+    def test_gmail_incremental_input_ids_are_namespaced_by_account(self) -> None:
         rows: list[dict[str, str]] = []
         self.assertNotEqual(
-            discover_gmail.gmail_incremental_batch_id("one@example.com", rows, "same-child-batch"),
-            discover_gmail.gmail_incremental_batch_id("two@example.com", rows, "same-child-batch"),
+            discover_gmail.gmail_incremental_input_id("one@example.com", rows),
+            discover_gmail.gmail_incremental_input_id("two@example.com", rows),
         )
 
     def test_gmail_discovery_ignores_missing_child_queue_instead_of_reading_dot(self) -> None:

@@ -134,27 +134,23 @@ def _merge_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
     return [{field: str(row.get(field) or "") for field in GMAIL_DISCOVERY_COLUMNS} for _, row in sorted(keyed.items())]
 
 
-def gmail_incremental_batch_id(account_email: str, rows: list[dict[str, Any]], child_batch_id: Any = "") -> str:
-    """Return a stable idempotency key for an incremental child output.
+def gmail_incremental_input_id(account_email: str, rows: list[dict[str, Any]]) -> str:
+    """Return a stable manifest key for an incremental child output.
 
     Incremental rows are additive, so replaying the same child output must not
-    be merged twice. Incremental children are required to provide a stable
-    batch/window id; the manifest stores only a namespaced hash of that id, not
-    raw contact data.
+    be merged twice. This key is derived from the account and normalized child
+    CSV rows already produced by the command; it does not create any directories
+    or require a separate batch concept.
     """
+    normalized_rows = [
+        {field: str(row.get(field) or "") for field in GMAIL_DISCOVERY_COLUMNS}
+        for row in rows
+    ]
     payload = {
         "account_email": str(account_email or "").strip().lower(),
         "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
+        "rows": sorted(normalized_rows, key=lambda row: json.dumps(row, sort_keys=True, ensure_ascii=False)),
     }
-    child_batch_text = str(child_batch_id or "").strip()
-    if child_batch_text:
-        payload["child_batch_id"] = child_batch_text
-    elif rows:
-        normalized_rows = [
-            {field: str(row.get(field) or "") for field in GMAIL_DISCOVERY_COLUMNS}
-            for row in rows
-        ]
-        payload["rows"] = sorted(normalized_rows, key=lambda row: json.dumps(row, sort_keys=True, ensure_ascii=False))
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -378,7 +374,7 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
         write_json(manifest_json, payload)
         return payload
 
-    incoming_batches: list[dict[str, Any]] = []
+    incoming_outputs: list[dict[str, Any]] = []
     children: list[dict[str, Any]] = []
     child_modes: list[str] = []
     raw_root = contacts_csv.parent / "raw"
@@ -410,20 +406,11 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
         if child_queue and child_queue.is_file():
             _fields, rows = read_csv_rows(child_queue)
             rows_written = len(rows)
-        child_counts = child.get("counts", {}) if isinstance(child, dict) else {}
-        child_batch_id = (
-            child.get("incremental_batch_id")
-            or child.get("batch_id")
-            or child_counts.get("incremental_batch_id")
-            or child_counts.get("batch_id")
-            or ""
-        ) if isinstance(child, dict) else ""
-        incremental_batch_id = gmail_incremental_batch_id(email, rows, child_batch_id)
-        incoming_batches.append({
+        incremental_input_id = gmail_incremental_input_id(email, rows)
+        incoming_outputs.append({
             "account_email": email,
             "calculation_mode": child_mode,
-            "child_batch_id": str(child_batch_id or ""),
-            "incremental_batch_id": incremental_batch_id,
+            "incremental_input_id": incremental_input_id,
             "rows": rows,
         })
         children.append({
@@ -433,7 +420,7 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             "status": child.get("status") if isinstance(child, dict) else "",
             "contacts": child.get("contacts") or child.get("counts", {}).get("contacts_written", "") if isinstance(child, dict) else "",
             "calculation_mode": child_mode,
-            "incremental_batch_id": incremental_batch_id if child_mode == GMAIL_CALCULATION_INCREMENTAL_DELTA else "",
+            "incremental_input_id": incremental_input_id if child_mode == GMAIL_CALCULATION_INCREMENTAL_DELTA else "",
             "rows_read": rows_written,
             "raw_dir": str(account_raw_dir),
         })
@@ -446,25 +433,14 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
     merge_plan = gmail_discovery_merge_plan(existing_manifest, source_inputs["selected_accounts"], child_modes)
     existing: list[dict[str, Any]] = []
     incoming: list[dict[str, Any]] = []
-    applied_incremental_batches = _as_list(existing_manifest.get("applied_incremental_batches"))
-    applied_incremental_batch_set = set(applied_incremental_batches)
-    skipped_incremental_batches: list[str] = []
-    incremental_batches = [batch for batch in incoming_batches if batch.get("calculation_mode") == GMAIL_CALCULATION_INCREMENTAL_DELTA]
-    missing_batch_ids = [str(batch.get("account_email") or "") for batch in incremental_batches if not str(batch.get("child_batch_id") or "").strip()]
-    if missing_batch_ids:
-        payload = {
-            "status": "failed",
-            "source": "gmail",
-            "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
-            "calculation_mode": merge_plan["mode"],
-            "calculation_reason": "incremental_delta_missing_batch_id",
-            "selected_accounts": source_inputs["selected_accounts"],
-            "accounts_missing_incremental_batch_id": missing_batch_ids,
-            "children": children,
-        }
-        write_json(manifest_json, payload)
-        return payload
-    if merge_plan["mode"] != "incremental_update" and incremental_batches:
+    applied_incremental_inputs = _as_list(existing_manifest.get("applied_incremental_inputs"))
+    # Backward-compatible read for manifests written by earlier PR drafts.
+    if not applied_incremental_inputs:
+        applied_incremental_inputs = _as_list(existing_manifest.get("applied_incremental_batches"))
+    applied_incremental_input_set = set(applied_incremental_inputs)
+    skipped_incremental_inputs: list[str] = []
+    incremental_outputs = [output for output in incoming_outputs if output.get("calculation_mode") == GMAIL_CALCULATION_INCREMENTAL_DELTA]
+    if merge_plan["mode"] != "incremental_update" and incremental_outputs:
         payload = {
             "status": "failed",
             "source": "gmail",
@@ -479,18 +455,18 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
         return payload
     if merge_plan["mode"] == "incremental_update" and contacts_csv.exists():
         _fields, existing = read_csv_rows(contacts_csv)
-        for batch in incoming_batches:
-            batch_id = str(batch.get("incremental_batch_id") or "")
-            if batch_id and batch_id in applied_incremental_batch_set:
-                skipped_incremental_batches.append(batch_id)
+        for output in incoming_outputs:
+            input_id = str(output.get("incremental_input_id") or "")
+            if input_id and input_id in applied_incremental_input_set:
+                skipped_incremental_inputs.append(input_id)
                 continue
-            incoming.extend(batch.get("rows") or [])
-            if batch_id:
-                applied_incremental_batches.append(batch_id)
-                applied_incremental_batch_set.add(batch_id)
+            incoming.extend(output.get("rows") or [])
+            if input_id:
+                applied_incremental_inputs.append(input_id)
+                applied_incremental_input_set.add(input_id)
     else:
-        for batch in incoming_batches:
-            incoming.extend(batch.get("rows") or [])
+        for output in incoming_outputs:
+            incoming.extend(output.get("rows") or [])
     merged = _merge_rows([*existing, *incoming])
     write_csv_rows(contacts_csv, GMAIL_DISCOVERY_COLUMNS, merged)
     write_csv_rows(queue_csv, GMAIL_DISCOVERY_COLUMNS, merged)
@@ -501,8 +477,8 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
         "calculation_mode": merge_plan["mode"],
         "calculation_reason": merge_plan["reason"],
         "child_calculation_modes": child_modes,
-        "applied_incremental_batches": applied_incremental_batches,
-        "skipped_incremental_batches": skipped_incremental_batches,
+        "applied_incremental_inputs": applied_incremental_inputs,
+        "skipped_incremental_inputs": skipped_incremental_inputs,
         "contacts_csv": str(contacts_csv),
         "linkedin_resolution_queue_csv": str(queue_csv),
         "contacts": len(merged),
