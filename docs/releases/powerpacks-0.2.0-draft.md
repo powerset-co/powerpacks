@@ -8,24 +8,21 @@ Powerpacks 0.2.0 is the first end-to-end local network-search pipeline: import l
 
 ### Linking / local source setup
 
-- Gmail/msgvault: local email/contact metadata import path; emits LinkedIn resolution queues when URLs are missing.
-- LinkedIn: Connections CSV upload/import path; seeds LinkedIn URLs, public identifiers, current title/company, email, and connected-on metadata.
-- Messages/WhatsApp: iMessage + WhatsApp local contact metadata import paths; no message bodies.
-- Twitter/X: optional RapidAPI follower/network import path; not part of the default LinkedIn/Gmail/messages path.
+- Gmail/msgvault: local email/contact metadata import path
+- LinkedIn: Connections CSV upload/import path
+- Messages/WhatsApp: iMessage + WhatsApp local contact metadata import paths
 
 ### Discovery / import
 
 - Gmail: `gmail_network_import.py msgvault` imports msgvault email metadata into local network artifacts.
 - LinkedIn: `linkedin_network_import.py` converts Connections CSV into the shared people schema.
 - Messages/WhatsApp: messages primitives produce contact artifacts that can be merged into the local network.
-- Twitter/X: `twitter_network_import.py` can crawl followers, score candidates, pre-resolve LinkedIn URLs, and emit `people.csv`.
 
 ### Enrichment / identity resolution
 
 - RapidAPI LinkedIn: hydrates LinkedIn-identified rows with profile data, work history, education, location, headline, summary, profile photo, skills, and social counts when returned.
 - Cache-first profile enrichment: local RapidAPI cache hits complete without provider calls; cache misses are approval-gated.
 - Gmail LinkedIn resolution: queues unresolved email/name/company candidates; Parallel-based resolution is spend-gated.
-- Twitter/X LinkedIn validation: optional and approval-gated.
 - OpenAI: role enrichment, company sector/entity classification, age inference, and embeddings. The indexing artifacts are local, but full processing can make OpenAI calls.
 
 ### Merge / indexing / materialization
@@ -63,7 +60,3 @@ Powerpacks 0.2.0 is the first end-to-end local network-search pipeline: import l
 - LinkedIn follower/connection counts are not guaranteed; they depend on provider fields returned by RapidAPI/cache.
 - No broad Sales Nav import into the local DuckDB search index in this release.
 - No Supabase/Postgres/TurboPuffer write path for local indexes; local release uses DuckDB.
-
-## Release trigger
-
-Use a `feat: ...` commit to make this a minor release (`0.2.0`). Release Please should open the release PR after the feature commit lands on `main`; merge that release PR to create the component tag/release.
