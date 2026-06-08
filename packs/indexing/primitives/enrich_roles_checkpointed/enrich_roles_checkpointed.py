@@ -10,7 +10,6 @@ import argparse
 import asyncio
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -25,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.indexing.lib.openai_usage_tiers import env_or_profile_int, openai_usage_tier_choices  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
@@ -247,7 +247,7 @@ def call_openai_role_enrichments(
         base_url=base_url,
         model=model,
         timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
-        concurrency=concurrency or int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY))),
+        concurrency=concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=DEFAULT_OPENAI_CONCURRENCY),
         max_retries=max_retries,
     ))
 
@@ -437,7 +437,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     seen_hashes = set(state.get("seen_title_hashes") or [])
     batch: list[dict[str, Any]] = []
     paid_pending: list[dict[str, Any]] = []
-    paid_concurrency = int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY)))
+    usage_tier = getattr(args, "openai_usage_tier", None)
+    paid_concurrency = int(
+        getattr(args, "concurrency", None)
+        or env_or_profile_int(
+            "POWERPACKS_OPENAI_CONCURRENCY",
+            "openai_concurrency",
+            tier=usage_tier,
+            fallback=DEFAULT_OPENAI_CONCURRENCY,
+        )
+    )
     paid_timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     chunks_this_run = 0
     started = time.time()
@@ -542,6 +551,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--api-key")
     run_p.add_argument("--base-url")
     run_p.add_argument("--model", default=None)
+    run_p.add_argument("--concurrency", type=int, default=None)
+    run_p.add_argument("--openai-usage-tier", choices=openai_usage_tier_choices(), default=None)
     run_p.add_argument("--allow-paid", action="store_true")
     run_p.add_argument("--dry-run", action="store_true")
     run_p.add_argument("--force", action="store_true")

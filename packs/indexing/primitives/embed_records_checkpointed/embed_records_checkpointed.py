@@ -15,7 +15,6 @@ import json
 import os
 import sys
 import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -26,6 +25,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.indexing.lib.openai_usage_tiers import env_or_profile_int, openai_usage_tier_choices  # noqa: E402
 
 DEFAULT_DIMENSION = 1536
 DEFAULT_MODEL = "text-embedding-3-small"
@@ -185,7 +185,7 @@ def openai_embedding_batches(
         model=model,
         dimension=dimension,
         timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
-        concurrency=concurrency or int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY))),
+        concurrency=concurrency or env_or_profile_int("POWERPACKS_OPENAI_EMBEDDING_CONCURRENCY", "embedding_concurrency", fallback=DEFAULT_OPENAI_CONCURRENCY),
         max_retries=max_retries,
     ))
 
@@ -336,6 +336,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     fields = [field for field in str(args.text_fields).split(",") if field]
     dimension = int(getattr(args, "dimension", DEFAULT_DIMENSION) or DEFAULT_DIMENSION)
     input_embeddings = load_input_embeddings(getattr(args, "input_embeddings", None), getattr(args, "input_id_field", None) or args.id_field, getattr(args, "input_embedding_field", "embedding"))
+    usage_tier = getattr(args, "openai_usage_tier", None)
+    concurrency = int(
+        getattr(args, "concurrency", None)
+        or env_or_profile_int(
+            "POWERPACKS_OPENAI_EMBEDDING_CONCURRENCY",
+            "embedding_concurrency",
+            tier=usage_tier,
+            fallback=DEFAULT_OPENAI_CONCURRENCY,
+        )
+    )
     allow_paid = bool(getattr(args, "allow_paid", False))
     if input_embeddings:
         provider = "input-embeddings+openai" if allow_paid else "input-embeddings"
@@ -385,6 +395,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     base_url=base_url,
                     model=model,
                     dimension=dimension,
+                    concurrency=concurrency,
                 )
                 for group, embeddings in zip(groups, embedding_groups):
                     state["paid_calls"] = int(state.get("paid_calls") or 0) + len(group)
@@ -398,6 +409,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 base_url=base_url,
                 model=model,
                 dimension=dimension,
+                concurrency=concurrency,
             )
             for group, embeddings in zip(groups, embedding_groups):
                 state["paid_calls"] = int(state.get("paid_calls") or 0) + len(group)
@@ -447,6 +459,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--model", default=None)
     run_p.add_argument("--dimension", type=int, default=DEFAULT_DIMENSION)
     run_p.add_argument("--api-batch-size", type=int, default=128)
+    run_p.add_argument("--concurrency", type=int, default=None)
+    run_p.add_argument("--openai-usage-tier", choices=openai_usage_tier_choices(), default=None)
     run_p.add_argument("--cost-per-1k-tokens", type=float, default=DEFAULT_COST_PER_1K_TOKENS)
     run_p.add_argument("--input-embeddings", help="Precomputed real embedding JSONL; not a provider")
     run_p.add_argument("--input-id-field", default=None)

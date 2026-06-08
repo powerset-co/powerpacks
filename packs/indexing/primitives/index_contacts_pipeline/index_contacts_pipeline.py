@@ -26,6 +26,7 @@ from typing import Any, Callable
 
 
 ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT))
 DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
 DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
@@ -33,6 +34,11 @@ DEFAULT_ARTIFACT_DIR = Path(".powerpacks/network-import/index/contacts")
 DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
 CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
 ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
+
+from packs.indexing.lib.openai_usage_tiers import (  # noqa: E402
+    OPENAI_USAGE_TIER_PROFILES,
+    openai_usage_tier_profile,
+)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -46,6 +52,10 @@ def progress(message: str) -> None:
 def notify_progress(progress_callback: ProgressCallback | None, stage_id: str, message: str, *, status: str = "running", payload: dict[str, Any] | None = None) -> None:
     if progress_callback:
         progress_callback(stage_id, message, status, payload or {})
+
+
+def selected_openai_usage_tier(args: argparse.Namespace) -> dict[str, Any]:
+    return openai_usage_tier_profile(getattr(args, "openai_usage_tier", None))
 
 
 def now_iso() -> str:
@@ -208,6 +218,8 @@ def processing_args(args: argparse.Namespace, *, dry_run: bool, allow_paid: bool
         "--default-operator-id",
         str(args.operator_id),
     ]
+    usage_tier = selected_openai_usage_tier(args)["tier"]
+    cmd.extend(["--openai-usage-tier", usage_tier])
     if dry_run:
         cmd.append("--dry-run")
     if allow_paid:
@@ -394,7 +406,12 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
         and existing_promoted.get("network_duckdb")
         and (ROOT / Path(str(existing_promoted.get("network_duckdb")))).exists()
     ):
-        payload = {**existing_fan_in, "noop": True, "reason": "fan_in_inputs_unchanged"}
+        payload = {
+            **existing_fan_in,
+            "openai_usage_tier": selected_openai_usage_tier(args),
+            "noop": True,
+            "reason": "fan_in_inputs_unchanged",
+        }
         notify_progress(progress_callback, "merge_network", "Source people merge is current", status="completed", payload=payload.get("merge") if isinstance(payload.get("merge"), dict) else payload)
         notify_progress(progress_callback, "network_duckdb", "Contact lookup database is current", status="completed", payload=payload.get("network_duckdb") if isinstance(payload.get("network_duckdb"), dict) else payload)
         return payload, 0
@@ -402,6 +419,7 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
         payload = {
             "status": "not_ready",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "fan_in",
             "reason": "missing_import_people_csvs",
             "inputs": [],
@@ -424,6 +442,7 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "merge_network_sources",
             "command": command_text(merge_cmd),
             "inputs": [str(path) for path in inputs],
@@ -444,6 +463,7 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "network_duckdb",
             "command": command_text(duck_cmd),
             "inputs": [str(path) for path in inputs],
@@ -471,6 +491,7 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
     payload = {
         "status": "completed",
         "stage": "index_contacts_pipeline",
+        "openai_usage_tier": selected_openai_usage_tier(args),
         "step": "fan_in",
         "artifact_dir": str(args.artifact_dir),
         "inputs": [str(path) for path in inputs],
@@ -603,6 +624,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "fan_in",
             "fan_in": fan_in_payload,
             "error": fan_in_payload.get("error") or fan_in_payload,
@@ -618,6 +640,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         payload = {
             "status": "not_ready",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "reason": "missing_people_csv",
             "fan_in": fan_in_payload,
             "promoted": promoted,
@@ -635,6 +658,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "local_duckdb_preflight",
             "fan_in": fan_in_payload,
             "promoted": promoted,
@@ -653,6 +677,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "processing_dry_run",
             "fan_in": fan_in_payload,
             "promoted": promoted,
@@ -677,6 +702,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         payload = {
             "status": "ready",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "noop",
             "reason": "processing_outputs_complete",
             "people_csv": str(args.people_csv),
@@ -707,6 +733,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
             payload = {
                 "status": "failed",
                 "stage": "index_contacts_pipeline",
+                "openai_usage_tier": selected_openai_usage_tier(args),
                 "step": "local_duckdb_refresh",
                 "people_csv": str(args.people_csv),
                 "processing_estimate": estimate,
@@ -725,6 +752,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         payload = {
             "status": "ready",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "local_duckdb_refresh",
             "reason": "processing_outputs_complete_duckdb_refreshed",
             "people_csv": str(args.people_csv),
@@ -758,6 +786,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "index_processing",
             "people_csv": str(args.people_csv),
             "processing_estimate": estimate,
@@ -780,6 +809,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "local_duckdb",
             "people_csv": str(args.people_csv),
             "processing_estimate": estimate,
@@ -798,6 +828,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
     payload = {
         "status": "ready",
         "stage": "index_contacts_pipeline",
+        "openai_usage_tier": selected_openai_usage_tier(args),
         "people_csv": str(args.people_csv),
         "people_sha256": sha256_file(people_path),
         "output_dir": str(args.output_dir),
@@ -835,6 +866,7 @@ def plan_payload(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "status": "plan",
         "stage": "index_contacts_pipeline",
+        "openai_usage_tier": selected_openai_usage_tier(args),
         "artifact_dir": str(args.artifact_dir),
         "manifest": str(args.manifest),
         "people_csv": str(args.people_csv),
@@ -861,6 +893,7 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
         s.add_argument("--artifact-dir", default=str(DEFAULT_ARTIFACT_DIR))
         s.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
+        s.add_argument("--openai-usage-tier", choices=sorted(OPENAI_USAGE_TIER_PROFILES), default=None)
         s.add_argument("--input", action="append", default=[], help="Additional people.csv input to include in fan-in.")
         s.add_argument("--include-existing-artifacts", action=argparse.BooleanOptionalAction, default=True)
 

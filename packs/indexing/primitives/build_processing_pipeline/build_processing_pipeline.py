@@ -31,6 +31,12 @@ from packs.indexing.lib.contracts import (  # noqa: E402
 )
 from packs.indexing.lib.io import atomic_write_text, emit_json, read_jsonl, write_json, write_jsonl  # noqa: E402
 from packs.indexing.lib.ledger import load_ledger, mark_step, save_ledger  # noqa: E402
+from packs.indexing.lib.openai_usage_tiers import (  # noqa: E402
+    OPENAI_USAGE_TIER_PROFILES,
+    env_or_profile_int,
+    openai_usage_tier_profile,
+    profile_paid_checkpoint_every,
+)
 from packs.indexing.lib.people import build_people_records, build_unified_profiles, flatten_people  # noqa: E402
 from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed  # noqa: E402
 from packs.indexing.primitives.enrich_companies_checkpointed import enrich_companies_checkpointed  # noqa: E402
@@ -907,7 +913,9 @@ def default_ledger(
     person_tech_skills_input: str | None = None,
     company_input_classifications: str | None = None,
     company_input_embeddings: str | None = None,
+    openai_usage_tier: str | None = None,
 ) -> dict[str, Any]:
+    usage_profile = openai_usage_tier_profile(openai_usage_tier)
     return {
         "primitive": "build_processing_pipeline",
         "version": 1,
@@ -940,6 +948,7 @@ def default_ledger(
         "person_tech_skills_input": person_tech_skills_input,
         "company_input_classifications": company_input_classifications,
         "company_input_embeddings": company_input_embeddings,
+        "openai_usage_tier": usage_profile,
         "steps": [{"id": step, "status": "pending"} for step in STEPS],
         "artifacts": {},
     }
@@ -1074,7 +1083,18 @@ class PipelinePartial(Exception):
 
 def paid_checkpoint_every(ledger: dict[str, Any]) -> int:
     configured = int(ledger.get("checkpoint_every") or 1000)
-    return min(configured, int(os.getenv("POWERPACKS_PAID_CHECKPOINT_EVERY", "25")))
+    profile = ledger.get("openai_usage_tier") if isinstance(ledger.get("openai_usage_tier"), dict) else {}
+    return profile_paid_checkpoint_every(configured, tier=str(profile.get("tier")) if profile.get("tier") else None)
+
+
+def openai_concurrency(ledger: dict[str, Any]) -> int:
+    profile = ledger.get("openai_usage_tier") if isinstance(ledger.get("openai_usage_tier"), dict) else {}
+    return env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", tier=str(profile.get("tier")) if profile.get("tier") else None, fallback=256)
+
+
+def embedding_concurrency(ledger: dict[str, Any]) -> int:
+    profile = ledger.get("openai_usage_tier") if isinstance(ledger.get("openai_usage_tier"), dict) else {}
+    return env_or_profile_int("POWERPACKS_OPENAI_EMBEDDING_CONCURRENCY", "embedding_concurrency", tier=str(profile.get("tier")) if profile.get("tier") else None, fallback=8)
 
 
 def step_roles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
@@ -1099,6 +1119,7 @@ def step_roles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, s
             api_key=ledger.get("role_openai_api_key"),
             base_url=ledger.get("role_openai_base_url"),
             model=ledger.get("role_openai_model"),
+            concurrency=openai_concurrency(ledger),
             allow_paid=bool(ledger.get("allow_paid_role_provider")),
             dry_run=False,
             force=False,
@@ -1217,6 +1238,7 @@ def _run_embedding_stage(
             api_key=ledger.get("embedding_openai_api_key"),
             base_url=ledger.get("embedding_openai_base_url"),
             model=ledger.get("embedding_openai_model") or "text-embedding-3-small",
+            concurrency=embedding_concurrency(ledger),
             dimension=1536,
             api_batch_size=128,
             cost_per_1k_tokens=0.00002,
@@ -1439,6 +1461,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
         estimate=False,
         allow_paid=bool(ledger.get("allow_paid_company_provider")),
         model=ledger.get("company_openai_model"),
+        concurrency=openai_concurrency(ledger),
         api_key=ledger.get("company_openai_api_key"),
         base_url=ledger.get("company_openai_base_url"),
         force=False,
@@ -1595,7 +1618,7 @@ def step_detect_ceo_founders(ledger: dict[str, Any], ps: dict[str, Path]) -> tup
         output=str(ps["founder_enrichment"]),
         model=ledger.get("role_openai_model") or "gpt-5.1",
         confidence_threshold=0.7,
-        concurrency=int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", "30")),
+        concurrency=openai_concurrency(ledger),
         limit=None,
         dry_run=False,
     ))
@@ -1615,7 +1638,7 @@ def step_infer_ages(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[s
         flattened=str(ps["flattened"]),
         output=str(ps["inferred_ages"]),
         model=ledger.get("role_openai_model") or "gpt-5.1",
-        concurrency=int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", "50")),
+        concurrency=openai_concurrency(ledger),
         limit=None,
         dry_run=False,
     ))
@@ -2011,6 +2034,7 @@ def estimate_run(args: argparse.Namespace) -> dict[str, Any]:
             "embeddings": getattr(args, "embedding_provider", "openai"),
             "companies": stages.get("company_enrichment", {}).get("provider") or ("precomputed_artifact" if company_input else getattr(args, "company_provider", "openai")),
         },
+        "openai_usage_tier": openai_usage_tier_profile(getattr(args, "openai_usage_tier", None)),
         "estimated_paid_calls": {
             "role_enrichment": int(stages.get("role_enrichment", {}).get("calls", 0) or 0),
             "role_embeddings": int(stages.get("role_embeddings", {}).get("calls", 0) or 0),
@@ -2037,6 +2061,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output-dir", required=True)
     run.add_argument("--default-operator-id", default=None)
     run.add_argument("--checkpoint-every", type=int, default=1000)
+    run.add_argument("--openai-usage-tier", choices=sorted(OPENAI_USAGE_TIER_PROFILES), default=None, help="Powerpacks OpenAI throughput profile; defaults to POWERPACKS_OPENAI_USAGE_TIER or Tier 5; actual OpenAI limits are org/model-specific")
     run.add_argument("--role-provider", choices=["openai", "tlm"], default="openai")
     run.add_argument("--allow-paid-role-provider", action="store_true")
     run.add_argument("--role-openai-api-key")
@@ -2131,6 +2156,7 @@ def main() -> None:
             person_tech_skills_input=args.person_tech_skills_input,
             company_input_classifications=args.company_input_classifications,
             company_input_embeddings=args.company_input_embeddings,
+            openai_usage_tier=args.openai_usage_tier,
         )
         ledger["sync_mode"] = "fixed_outputs_incremental_diff"
         if previous_ledger:

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,18 @@ setup_mod = load_module(
 setup_linkedin_csv = load_module(
     "phase13_setup_linkedin_csv",
     "packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py",
+)
+openai_usage_tiers = load_module(
+    "phase13_openai_usage_tiers",
+    "packs/indexing/lib/openai_usage_tiers.py",
+)
+build_processing = load_module(
+    "phase13_build_processing",
+    "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py",
+)
+enrich_people = load_module(
+    "phase13_enrich_people",
+    "packs/ingestion/primitives/enrich_people/enrich_people.py",
 )
 
 
@@ -143,6 +156,138 @@ class PipelinePhase13Tests(unittest.TestCase):
 
     def test_csv_count_empty_path_is_zero_not_current_directory(self):
         self.assertEqual(import_common.csv_count(""), 0)
+
+    def test_openai_usage_tier_defaults_to_tier_5_profile(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            profile = openai_usage_tiers.openai_usage_tier_profile()
+        self.assertEqual(profile["tier"], "tier_5")
+        self.assertEqual(profile["powerpacks_tpm_budget"], 10_000_000)
+        self.assertEqual(profile["openai_concurrency"], 256)
+        self.assertEqual(profile["paid_checkpoint_every"], 512)
+        self.assertEqual(profile["embedding_concurrency"], 8)
+        self.assertEqual(openai_usage_tiers.openai_usage_tier_profile("tier-2")["paid_checkpoint_every"], 32)
+        self.assertEqual(openai_usage_tiers.openai_usage_tier_profile("1")["openai_concurrency"], 16)
+
+    def test_paid_checkpoint_every_uses_profile_and_env_override(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            ledger = {"checkpoint_every": 1000, "openai_usage_tier": openai_usage_tiers.openai_usage_tier_profile("tier_5")}
+            self.assertEqual(build_processing.paid_checkpoint_every(ledger), 512)
+        with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_USAGE_TIER": "tier_1"}, clear=True):
+            self.assertEqual(openai_usage_tiers.profile_paid_checkpoint_every(1000), 16)
+            self.assertEqual(build_processing.paid_checkpoint_every({"checkpoint_every": 1000}), 16)
+            self.assertEqual(build_processing.openai_concurrency({}), 16)
+        with mock.patch.dict(os.environ, {"POWERPACKS_PAID_CHECKPOINT_EVERY": "77"}, clear=True):
+            self.assertEqual(openai_usage_tiers.profile_paid_checkpoint_every(1000, tier="tier_5"), 77)
+
+    def test_index_processing_args_forwards_default_tier_5(self):
+        args = SimpleNamespace(
+            people_csv=".powerpacks/network-import/merged/people.csv",
+            output_dir=".powerpacks/search-index",
+            operator_id="arthur",
+        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            cmd = index_contacts.processing_args(args, dry_run=True, allow_paid=False)
+        self.assertIn("--openai-usage-tier", cmd)
+        self.assertEqual(cmd[cmd.index("--openai-usage-tier") + 1], "tier_5")
+
+    def test_openai_usage_tier_env_overrides_pipeline_default(self):
+        args = SimpleNamespace(
+            people_csv=".powerpacks/network-import/merged/people.csv",
+            output_dir=".powerpacks/search-index",
+            operator_id="arthur",
+        )
+        with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_USAGE_TIER": "tier_1"}, clear=True):
+            cmd = index_contacts.processing_args(args, dry_run=True, allow_paid=False)
+            setup_args = setup_linkedin_csv.args_for_index("arthur")
+        self.assertEqual(cmd[cmd.index("--openai-usage-tier") + 1], "tier_1")
+        self.assertEqual(setup_args.openai_usage_tier, "tier_1")
+
+    def test_explicit_openai_usage_tier_wins_over_env(self):
+        args = SimpleNamespace(
+            people_csv=".powerpacks/network-import/merged/people.csv",
+            output_dir=".powerpacks/search-index",
+            operator_id="arthur",
+            openai_usage_tier="tier_2",
+        )
+        with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_USAGE_TIER": "tier_1"}, clear=True):
+            cmd = index_contacts.processing_args(args, dry_run=True, allow_paid=False)
+        self.assertEqual(cmd[cmd.index("--openai-usage-tier") + 1], "tier_2")
+
+    def test_rapidapi_defaults_use_authorized_throughput(self):
+        self.assertEqual(enrich_people.DEFAULT_RAPIDAPI_MAX_WORKERS, 64)
+        self.assertEqual(enrich_people.DEFAULT_RAPIDAPI_MAX_RPM, 300)
+
+    def test_rapidapi_profile_retries_429_then_succeeds(self):
+        payload = {
+            "public_identifier": "ada",
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "experiences": [{"title": "Founder", "company_name": "Analytical Engines"}],
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.object(enrich_people, "DEFAULT_RAPIDAPI_RETRY_ATTEMPTS", 3), \
+            mock.patch.object(enrich_people, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 1.0), \
+            mock.patch.object(enrich_people, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (200, payload, "")]) as http_json, \
+            mock.patch.object(enrich_people.time, "sleep") as sleep:
+            result = enrich_people.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True)
+            cached = json.loads((Path(tmp) / "ada.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["status_code"], 200)
+        self.assertEqual(result["attempts"], 2)
+        self.assertEqual(http_json.call_count, 2)
+        sleep.assert_called_once_with(1.0)
+        self.assertEqual(cached["attempts"], 2)
+
+    def test_rapidapi_profile_records_final_retry_failure(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.object(enrich_people, "DEFAULT_RAPIDAPI_RETRY_ATTEMPTS", 2), \
+            mock.patch.object(enrich_people, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 0.5), \
+            mock.patch.object(enrich_people, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (429, {"message": "Too many requests"}, "")]) as http_json, \
+            mock.patch.object(enrich_people.time, "sleep") as sleep:
+            result = enrich_people.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True)
+            cached = json.loads((Path(tmp) / "ada.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["status_code"], 429)
+        self.assertEqual(result["attempts"], 2)
+        self.assertEqual(http_json.call_count, 2)
+        sleep.assert_called_once_with(0.5)
+        self.assertEqual(cached["status_code"], 429)
+        self.assertEqual(cached["attempts"], 2)
+
+    def test_enrich_linkedin_reports_retry_summary_and_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact_dir = root / "enrichment"
+            hits = artifact_dir / "rapidapi_cache_hits.csv"
+            misses = artifact_dir / "rapidapi_cache_misses.csv"
+            enrich_people.write_csv(hits, enrich_people.CACHE_COLUMNS, [])
+            enrich_people.write_csv(misses, enrich_people.CACHE_COLUMNS, [{
+                "id": "p1",
+                "public_identifier": "ada",
+                "linkedin_url": "https://www.linkedin.com/in/ada",
+                "cache_status": "miss",
+            }])
+            ledger = {
+                "artifact_dir": str(artifact_dir),
+                "input": {"profile_cache_dir": str(root / "cache"), "refresh_cache": True, "max_workers": 1, "max_rpm": 0},
+                "artifacts": {"rapidapi_cache_hits_csv": str(hits), "rapidapi_cache_misses_csv": str(misses)},
+                "paid_call_count": 1,
+            }
+            rapid = {
+                "status_code": 200,
+                "data": {"public_identifier": "ada", "full_name": "Ada Lovelace"},
+                "error": "",
+                "from_cache": False,
+                "normalized_profile": {"success": True},
+                "attempts": 2,
+            }
+            with mock.patch.object(enrich_people, "rapidapi_key", return_value="key"), \
+                mock.patch.object(enrich_people, "rapidapi_profile", return_value=rapid):
+                summary = enrich_people.step_enrich_linkedin(ledger)
+            rows = enrich_people.read_csv(Path(summary["output_file"]))
+        self.assertEqual(summary["retried"], 1)
+        self.assertEqual(summary["retry_successes"], 1)
+        self.assertEqual(summary["retry_failures"], 0)
+        self.assertEqual(rows[0]["rapidapi_attempts"], "2")
+        self.assertEqual(rows[0]["rapidapi_retry_outcome"], "success")
 
     def test_linkedin_csv_path_falls_back_to_repo_local_discovered_export(self):
         with tempfile.TemporaryDirectory() as tmp:

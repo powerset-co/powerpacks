@@ -219,6 +219,7 @@ def args_for_index(operator_id: str) -> argparse.Namespace:
         output_dir=str(index_contacts_pipeline.DEFAULT_OUTPUT_DIR),
         artifact_dir=str(index_contacts_pipeline.DEFAULT_ARTIFACT_DIR),
         manifest=str(index_contacts_pipeline.DEFAULT_MANIFEST),
+        openai_usage_tier=os.getenv("POWERPACKS_OPENAI_USAGE_TIER") or None,
         input=[],
         include_existing_artifacts=True,
     )
