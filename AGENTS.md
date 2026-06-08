@@ -63,26 +63,6 @@ possible unless underlying functionality makes that impossible. For backend
 work, copy the same interface, logic, and behavior as closely as possible unless
 the user explicitly asks not to copy it or asks for a different approach.
 
-## Behavior-change guardrail
-
-Do not change product behavior, data flow, provider usage, spend behavior,
-runtime semantics, or pipeline logic when the user asks for wording, UI
-presentation, progress reporting, logging, status-file shape, diagnostics, or
-an explanation of how a flow works. In those cases, preserve the existing flow
-and make the smallest observability or presentation change that answers the
-request.
-
-If a user asks whether a stage calls RapidAPI, OpenAI, TurboPuffer, Parallel, or
-another external provider, answer from the code and surface the cache/spend
-behavior. Do not disable, bypass, convert to local-only, skip enrichment, switch
-providers, change batch/concurrency, or alter the artifact contract unless the
-user explicitly asks for that behavior change.
-
-Before changing any ingestion, indexing, search, upload, enrichment, approval,
-or spend-bearing path, state the exact behavior change in chat and wait for an
-explicit confirmation unless the user's request already unambiguously asks for
-that change. UI labels must not redefine what the backend actually does.
-
 ---
 
 ## Sub-agent delegation

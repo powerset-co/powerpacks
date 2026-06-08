@@ -33,7 +33,7 @@ function selectedFileDisplayPath(file: File): string {
   const fileWithPath = file as File & { path?: string; webkitRelativePath?: string };
   const browserPath = fileWithPath.path || fileWithPath.webkitRelativePath || "";
   if (browserPath && !browserPath.includes("fakepath")) return browserPath;
-  return `~/Downloads/${file.name}`;
+  return file.name;
 }
 
 function objectValue(value: unknown): JsonObject {
@@ -87,6 +87,8 @@ function stageRows(status: JsonObject | null) {
 export function LocalOnboardingV2Page() {
   const [csvPath, setCsvPath] = useState(DEFAULT_LINKEDIN_CSV);
   const [displayCsvPath, setDisplayCsvPath] = useState(DEFAULT_LINKEDIN_CSV);
+  const [uploadedDisplayPath, setUploadedDisplayPath] = useState("");
+  const [uploadedCachePath, setUploadedCachePath] = useState("");
   const [sourceLabel, setSourceLabel] = useState("arthur");
   const [status, setStatus] = useState<JsonObject | null>(null);
   const [dryRun, setDryRun] = useState<JsonObject | null>(null);
@@ -126,8 +128,11 @@ export function LocalOnboardingV2Page() {
     setError(null);
     try {
       const uploaded = await uploadLinkedInCsv(file);
+      const displayPath = selectedFileDisplayPath(file);
       setCsvPath(uploaded.path);
-      setDisplayCsvPath(selectedFileDisplayPath(file));
+      setDisplayCsvPath(displayPath);
+      setUploadedDisplayPath(displayPath);
+      setUploadedCachePath(uploaded.path);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -197,8 +202,19 @@ export function LocalOnboardingV2Page() {
                 onChange={(event) => {
                   setDisplayCsvPath(event.target.value);
                   setCsvPath(event.target.value);
+                  setUploadedDisplayPath("");
+                  setUploadedCachePath("");
                 }}
               />
+              {uploadedCachePath ? (
+                <span className="block text-xs text-muted-foreground">
+                  Selected upload: {uploadedDisplayPath}. Powerpacks will run from the cached upload copy.
+                </span>
+              ) : (
+                <span className="block text-xs text-muted-foreground">
+                  Use the restored local Connections.csv, or upload a CSV from your machine.
+                </span>
+              )}
             </label>
             <label className="space-y-1 text-sm">
               <span className="font-medium">Source label</span>
