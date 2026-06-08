@@ -1,7 +1,7 @@
 {
   "task": "local_prod_parity",
   "version": 1,
-  "description": "Track measurable Powerpacks local search parity against network-search-api, split into data pipeline and local search work.",
+  "description": "Track measurable Powerpacks search parity against network-search-api. Current session focus is local search behavior parity; data-pipeline rows remain tracked but are not the active workstream.",
   "source_repos": {
     "powerpacks": {
       "repo": "powerpacks",
@@ -19,7 +19,7 @@
         "track": "data_pipeline",
         "parity_dimension": "field",
         "status": "partial",
-        "priority": "P0",
+        "priority": "P2",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -59,7 +59,7 @@
             "total_interactions"
           ]
         },
-        "target_behavior": "Local DuckDB can load records/person_source_summary.records.jsonl and hydrate total_interactions by summing per-person source rows.",
+        "target_behavior": "Interaction counts are handled outside this session. Keep local source-summary consumption tracked, but do not use it as the primary search-parity milestone.",
         "acceptance": {
           "type": "static_and_unit",
           "commands": [
@@ -69,14 +69,15 @@
             "local source table is optional",
             "hydrated profile includes total_interactions"
           ]
-        }
+        },
+        "session_scope": "tracked_not_active"
       },
       {
         "id": "DP-02",
         "track": "data_pipeline",
         "parity_dimension": "field",
         "status": "gap",
-        "priority": "P0",
+        "priority": "P2",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -114,14 +115,15 @@
           "required_checks": [
             "Gmail aggregate fields reconcile into records/person_source_summary.records.jsonl"
           ]
-        }
+        },
+        "session_scope": "tracked_not_active"
       },
       {
         "id": "DP-03",
         "track": "data_pipeline",
         "parity_dimension": "artifact",
         "status": "gap",
-        "priority": "P0",
+        "priority": "P2",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -157,14 +159,15 @@
             "DuckDB person id",
             "exclusion reason"
           ]
-        }
+        },
+        "session_scope": "tracked_not_active"
       },
       {
         "id": "DP-04",
         "track": "data_pipeline",
         "parity_dimension": "validation",
         "status": "needs_runtime_data",
-        "priority": "P1",
+        "priority": "P2",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -189,14 +192,15 @@
             "named work-email contact inclusion",
             "excluded contact reason"
           ]
-        }
+        },
+        "session_scope": "tracked_not_active"
       },
       {
         "id": "DP-05",
         "track": "data_pipeline",
         "parity_dimension": "validation",
         "status": "partial",
-        "priority": "P1",
+        "priority": "P2",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -233,7 +237,8 @@
             "table counts match",
             "inputs are not newer than DB"
           ]
-        }
+        },
+        "session_scope": "tracked_not_active"
       },
       {
         "id": "DP-06",
@@ -267,7 +272,8 @@
           "required_checks": [
             "company field coverage report"
           ]
-        }
+        },
+        "session_scope": "tracked_not_active"
       }
     ],
     "local_search": [
@@ -276,7 +282,7 @@
         "track": "local_search",
         "parity_dimension": "pipeline_stage",
         "status": "partial",
-        "priority": "P0",
+        "priority": "P2",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -296,7 +302,7 @@
             "cmd_hydrate"
           ]
         },
-        "target_behavior": "Hydration supports local total_interactions. Interaction prefilters remain future work.",
+        "target_behavior": "Interaction hydration/prefilters are tracked but not the search-parity focus for this session.",
         "acceptance": {
           "type": "unit",
           "commands": [
@@ -305,14 +311,15 @@
           "required_checks": [
             "total_interactions is hydrated from local DuckDB"
           ]
-        }
+        },
+        "session_scope": "tracked_not_active"
       },
       {
         "id": "LS-02",
         "track": "local_search",
         "parity_dimension": "algorithm",
         "status": "gap",
-        "priority": "P1",
+        "priority": "P0",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -337,21 +344,24 @@
             "role_company_location_education_temporal_seniority_social_trait"
           ]
         },
-        "target_behavior": "Track and close expansion gaps or mark accepted_non_parity.",
+        "target_behavior": "Third milestone: compare local and prod expansion payloads for fixed queries, especially adjacency extraction, interaction extraction, title clustering, role IDs, and trait/domain intent.",
         "acceptance": {
           "type": "payload_diff",
           "commands": [],
           "required_checks": [
-            "fixed-query expansion diff"
+            "fixed-query expansion diff",
+            "missing extractor list",
+            "role/title expansion delta"
           ]
-        }
+        },
+        "session_scope": "active"
       },
       {
         "id": "LS-03",
         "track": "local_search",
         "parity_dimension": "pipeline_stage",
         "status": "partial",
-        "priority": "P1",
+        "priority": "P0",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -379,23 +389,26 @@
             "role_search"
           ]
         },
-        "target_behavior": "Measure role/summary/company-signal vertical parity and decide implementation scope.",
+        "target_behavior": "Second milestone: measure local role-only retrieval against prod role + summary + company-signal verticals and decide whether to port summary/company-signal locally or mark accepted_non_parity.",
         "acceptance": {
           "type": "harness_metadata",
           "commands": [
             "python packs/search/evals/run_local_prod_parity.py --help"
           ],
           "required_checks": [
-            "verticals used are reported"
+            "verticals used are reported",
+            "role-only vs prod multi-vertical overlap",
+            "missing vertical attribution"
           ]
-        }
+        },
+        "session_scope": "active"
       },
       {
         "id": "LS-04",
         "track": "local_search",
         "parity_dimension": "prompt",
         "status": "gap",
-        "priority": "P1",
+        "priority": "P0",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -425,7 +438,7 @@
             "per_candidate_prompt"
           ]
         },
-        "target_behavior": "Version-match prod rerank behavior before marking this row parity.",
+        "target_behavior": "Fourth milestone: evaluate behavior gap between local rerank and prod bulk scoring/grouped evidence/micro-sort before porting prompts or algorithms.",
         "acceptance": {
           "type": "behavior_eval",
           "commands": [],
@@ -434,14 +447,15 @@
             "bucket_agreement",
             "top_k_overlap"
           ]
-        }
+        },
+        "session_scope": "active"
       },
       {
         "id": "LS-05",
         "track": "local_search",
         "parity_dimension": "algorithm",
         "status": "partial",
-        "priority": "P2",
+        "priority": "P1",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -473,7 +487,8 @@
           "required_checks": [
             "filter constants report"
           ]
-        }
+        },
+        "session_scope": "active"
       },
       {
         "id": "LS-06",
@@ -507,7 +522,8 @@
           "required_checks": [
             "result row provenance fields"
           ]
-        }
+        },
+        "session_scope": "active"
       },
       {
         "id": "LS-07",
@@ -536,14 +552,15 @@
           "required_checks": [
             "two-step refinement diff"
           ]
-        }
+        },
+        "session_scope": "tracked_not_active"
       },
       {
         "id": "LS-08",
         "track": "local_search",
         "parity_dimension": "validation",
         "status": "partial",
-        "priority": "P1",
+        "priority": "P0",
         "prod": {
           "repo": "network-search-api",
           "paths": [
@@ -560,17 +577,44 @@
           ],
           "symbols": []
         },
-        "target_behavior": "Extend existing recall harness to emit field, expansion, vertical, hydration, and rerank parity metadata.",
+        "target_behavior": "First search-parity milestone: extend the existing local/prod recall harness to emit comparable metadata for request payloads, expansion output, verticals, hydration fields, filter/rerank stages, and artifact paths.",
         "acceptance": {
           "type": "harness_metadata",
           "commands": [
             "python packs/search/evals/run_local_prod_parity.py --help"
           ],
           "required_checks": [
-            "metadata report path"
+            "metadata report path",
+            "payload mapping summary",
+            "verticals used",
+            "hydration field coverage",
+            "rerank/filter stage status"
           ]
-        }
+        },
+        "session_scope": "active"
       }
+    ]
+  },
+  "session_focus": {
+    "track": "local_search",
+    "reason": "Interaction-count handling is being resolved separately; this session should prioritize search behavior parity: expansion, search verticals, filtering/ranking, and result provenance.",
+    "work_order": [
+      "LS-08",
+      "LS-03",
+      "LS-02",
+      "LS-04",
+      "LS-05",
+      "LS-06"
+    ],
+    "out_of_scope_for_session": [
+      "DP-01",
+      "DP-02",
+      "DP-03",
+      "DP-04",
+      "DP-05",
+      "DP-06",
+      "LS-01",
+      "LS-07"
     ]
   }
 }
