@@ -9,7 +9,7 @@ HOST_CODEX_HOME="${HOST_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}"
 CONTAINER_CODEX_HOME_VOLUME="${POWERPACKS_CODEX_CONTAINER_HOME_VOLUME:-powerpacks-codex-home}"
 CONTAINER_CACHE_VOLUME="${POWERPACKS_CODEX_CACHE_VOLUME:-powerpacks-codex-cache}"
 CODEX_HOME_MODE="${POWERPACKS_CODEX_HOME_MODE:-snapshot}"
-HEARTBEAT_INTERVAL_SECONDS="${HEARTBEAT_INTERVAL_SECONDS:-300}"
+HEARTBEAT_POLL_SECONDS="${HEARTBEAT_POLL_SECONDS:-${HEARTBEAT_INTERVAL_SECONDS:-300}}"
 
 usage() {
   cat <<'USAGE'
@@ -29,7 +29,9 @@ Environment:
   POWERPACKS_CODEX_HEARTBEAT_CONTAINER    Docker container name
   POWERPACKS_CODEX_CONTAINER_HOME_VOLUME  Docker volume for container ~/.codex in snapshot mode
   POWERPACKS_CODEX_CACHE_VOLUME           Docker volume for Powerpacks uv/cache state
-  HEARTBEAT_INTERVAL_SECONDS              Delay between heartbeat runs
+  HEARTBEAT_POLL_SECONDS                  Delay between local due checks; no Codex call until config is due
+  POWERPACKS_HEARTBEAT_CONFIG             Optional JSON config path inside container
+  POWERPACKS_HEARTBEAT_STATE              Optional JSON state path inside container
   CODEX_HEARTBEAT_PROMPT                  Prompt passed to codex exec
   OPENAI_API_KEY                          Optional API key alternative to Codex login
 
@@ -93,7 +95,8 @@ run_args() {
     -e "CODEX_HOME=/root/.codex" \
     -e "HOST_CODEX_HOME=/host-codex" \
     -e "POWERPACKS_REPO_ROOT=/workspace/powerpacks" \
-    -e "HEARTBEAT_INTERVAL_SECONDS=$HEARTBEAT_INTERVAL_SECONDS" \
+    -e "HEARTBEAT_POLL_SECONDS=$HEARTBEAT_POLL_SECONDS" \
+    -e "POWERPACKS_HEARTBEAT_STATE=/root/.cache/powerpacks/codex-heartbeat-state.json" \
     --mount "type=bind,source=$ROOT,target=/workspace/powerpacks,readonly" \
     -v "$CONTAINER_CACHE_VOLUME:/root/.cache/powerpacks" \
     -w /workspace/powerpacks
@@ -104,6 +107,8 @@ run_args() {
     printf '%s\0' -e "CODEX_HEARTBEAT_PROMPT=$CODEX_HEARTBEAT_PROMPT"
   fi
   pass_env_if_set POWERPACKS_HEARTBEAT_SKIP_INSTALL
+  pass_env_if_set POWERPACKS_HEARTBEAT_CONFIG
+  pass_env_if_set POWERPACKS_HEARTBEAT_STATE
   pass_env_if_set POWERPACKS_SKIP_UV_SYNC
   pass_env_if_set UV_PROJECT_ENVIRONMENT
   codex_home_mounts
@@ -111,16 +116,15 @@ run_args() {
 
 warn_login() {
   if [[ ! -d "$HOST_CODEX_HOME" ]]; then
-    if [[ "$CODEX_HOME_MODE" == "direct" || -z "${OPENAI_API_KEY:-}" ]]; then
+    if [[ "$CODEX_HOME_MODE" == "direct" ]]; then
       echo "error: host Codex home does not exist: $HOST_CODEX_HOME" >&2
-      echo "       run codex login in your regular shell first, set HOST_CODEX_HOME, or use snapshot mode with OPENAI_API_KEY" >&2
+      echo "       run codex login in your regular shell first, set HOST_CODEX_HOME, or use snapshot mode" >&2
       return 1
     fi
-    echo "warning: host Codex home does not exist: $HOST_CODEX_HOME; relying on OPENAI_API_KEY" >&2
+    echo "warning: host Codex home does not exist: $HOST_CODEX_HOME; heartbeat can still no-op until a due run needs auth" >&2
   elif [[ ! -f "$HOST_CODEX_HOME/auth.json" && -z "${OPENAI_API_KEY:-}" ]]; then
-    echo "error: $HOST_CODEX_HOME/auth.json not found and OPENAI_API_KEY is unset" >&2
-    echo "       run codex login in your regular shell first, then restart this container" >&2
-    return 1
+    echo "warning: $HOST_CODEX_HOME/auth.json not found and OPENAI_API_KEY is unset" >&2
+    echo "         run codex login in your regular shell before the next due Codex run" >&2
   fi
 }
 

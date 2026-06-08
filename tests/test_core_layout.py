@@ -17,7 +17,15 @@ class CoreLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             powerset_pack,
-            ["fix-powerpacks", "powerpacks-console", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
+            [
+                "codex-loop",
+                "fix-powerpacks",
+                "powerpacks-console",
+                "powerset",
+                "powerset-login",
+                "powerset-set",
+                "update-powerpacks",
+            ],
         )
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
@@ -130,18 +138,29 @@ class CoreLayoutTests(unittest.TestCase):
             bundle = codex_home / "powerpacks"
             self.assertTrue((bundle / "packs").is_dir())
             self.assertTrue((bundle / "pyproject.toml").exists())
+            self.assertTrue((bundle / "compose.powerpacks.yml").exists())
             self.assertTrue((bundle / "scripts" / "run-powerpacks-console.sh").exists())
+            self.assertTrue((bundle / "scripts" / "run-powerpacks-compose.sh").exists())
+            self.assertTrue((bundle / "scripts" / "powerpacks-console-daemon.sh").exists())
+            self.assertTrue((bundle / "scripts" / "install-powerpacks-stack-launchd.sh").exists())
+            self.assertTrue((bundle / "scripts" / "install-powerpacks-console-launchd.sh").exists())
+            self.assertTrue((bundle / "scripts" / "install-powerpacks-console-hostname.sh").exists())
+            self.assertTrue((bundle / "scripts" / "codex-heartbeat-runner.py").exists())
+            self.assertTrue((bundle / "scripts" / "codex-heartbeat.sh").exists())
             self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "search-network-jd" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "codex-loop" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
+            self.assertTrue((skills_dir / "codex-loop" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "import-contacts" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "setup" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "build-outbound" / "powerpacks").is_symlink())
             self.assertEqual((skills_dir / "powerset" / "powerpacks").resolve(), bundle.resolve())
+            self.assertEqual((skills_dir / "codex-loop" / "powerpacks").resolve(), bundle.resolve())
             self.assertEqual((skills_dir / "import-contacts" / "powerpacks").resolve(), bundle.resolve())
             self.assertEqual((skills_dir / "setup" / "powerpacks").resolve(), bundle.resolve())
             self.assertEqual((skills_dir / "build-outbound" / "powerpacks").resolve(), bundle.resolve())
@@ -166,6 +185,16 @@ class CoreLayoutTests(unittest.TestCase):
                 for path in skills_dir.glob("*/powerpacks/packs/*/skills/*/SKILL.md")
             )
             self.assertEqual(nested_skill_files, [])
+
+    def test_codex_loop_skill_documents_scheduler_tasks(self) -> None:
+        text = (ROOT / "packs/powerset/skills/codex-loop/SKILL.md").read_text()
+        self.assertIn("name: codex-loop", text)
+        self.assertIn("$codex-loop add <id>", text)
+        self.assertIn("scripts/codex-heartbeat-runner.py", text)
+        self.assertIn("max_tasks_per_tick", text)
+        self.assertIn("session.mode", text)
+        self.assertIn("resume-id", text)
+        self.assertIn("No-op polls must stay free", text)
 
     def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()

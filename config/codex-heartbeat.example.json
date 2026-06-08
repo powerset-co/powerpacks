@@ -1,0 +1,29 @@
+{
+  "enabled": true,
+  "interval_seconds": 3600,
+  "retry_interval_seconds": 900,
+  "run_on_start": true,
+  "max_tasks_per_tick": 1,
+  "prompt": "Powerpacks scheduled heartbeat: inspect the local Powerpacks checkout and report one terse line with current status. Do not run spend-bearing searches, uploads, or external workflows unless the prompt explicitly asks for them.",
+  "tasks": [
+    {
+      "id": "powerpacks-status",
+      "interval_seconds": 3600,
+      "session": {
+        "mode": "new"
+      },
+      "prompt": "Powerpacks status loop: inspect the local checkout and report one terse line with health/status. Do not run spend-bearing searches, uploads, or external workflows."
+    },
+    {
+      "id": "example-followup-queue",
+      "enabled": false,
+      "interval_seconds": 900,
+      "retry_interval_seconds": 300,
+      "session": {
+        "mode": "resume-id",
+        "id": "paste-codex-session-id-here"
+      },
+      "prompt": "Example disabled loop task. Replace this with a concrete recurring Codex task prompt, then set enabled=true."
+    }
+  ]
+}

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="${POWERPACKS_APP_DIR:-$ROOT/app}"
-HOST="${HOST:-0.0.0.0}"
+HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-5177}"
 CLEAN="0"
 START_DEV="0"
@@ -20,7 +20,7 @@ Installs and verifies the local Powerpacks Vite app with npm.
   --repair-only  skip npm install when node_modules passes the local health check
   --no-build     skip npm run build verification
   --dev          after setup, run npm run dev in the foreground
-  --host HOST    host passed to vite when --dev is used (default: 0.0.0.0)
+  --host HOST    host passed to vite when --dev is used (default: 127.0.0.1)
   --port PORT    port passed to vite when --dev is used (default: 5177)
 EOF
 }

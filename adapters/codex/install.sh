@@ -8,7 +8,7 @@ BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 MANAGED_SKILLS=(
   search-network search-network-jd search-company search-contacts build-local-search-index
-  powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
+  powerset powerset-login powerset-set update-powerpacks fix-powerpacks codex-loop sales-nav-search build-outbound
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
   import-email discover-contacts import-twitter
   import-messages import-imessage import-contacts-review
@@ -25,6 +25,9 @@ install_powerpacks_bundle() {
   rm -rf "$tmp"
   mkdir -p "$tmp"
   cp "$REPO_ROOT/pyproject.toml" "$tmp/pyproject.toml"
+  if [[ -f "$REPO_ROOT/compose.powerpacks.yml" ]]; then
+    cp "$REPO_ROOT/compose.powerpacks.yml" "$tmp/compose.powerpacks.yml"
+  fi
   if [[ -f "$REPO_ROOT/uv.lock" ]]; then
     cp "$REPO_ROOT/uv.lock" "$tmp/uv.lock"
   fi
@@ -42,7 +45,20 @@ install_powerpacks_bundle() {
   # scripts/build-local-duckdb-shim.py to materialize restored bootstrap records
   # into .powerpacks/search-index/local-search.duckdb.
   mkdir -p "$tmp/scripts"
-  for script in run-powerpacks-console.sh build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
+  for script in \
+    run-powerpacks-console.sh \
+    run-powerpacks-compose.sh \
+    powerpacks-console-daemon.sh \
+    install-powerpacks-stack-launchd.sh \
+    install-powerpacks-console-launchd.sh \
+    install-powerpacks-console-hostname.sh \
+    codex-heartbeat-runner.py \
+    codex-heartbeat.sh \
+    install-codex-heartbeat-launchd.sh \
+    run-codex-heartbeat-docker.sh \
+    build-local-duckdb-shim.py \
+    adopt-powerpacks-state.py \
+    fix-powerpacks-state.py; do
     cp "$REPO_ROOT/scripts/$script" "$tmp/scripts/$script"
     chmod +x "$tmp/scripts/$script"
   done
@@ -106,6 +122,7 @@ install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SK
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
+install_skill codex-loop "$REPO_ROOT/packs/powerset/skills/codex-loop/SKILL.md"
 install_skill import-contacts "$REPO_ROOT/packs/messages/skills/import-contacts/SKILL.md"
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
@@ -127,5 +144,5 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-network-jd search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email discover-contacts import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-network-jd search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks codex-loop sales-nav-search build-outbound setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email discover-contacts import-twitter"
 echo "restart Codex to pick up the skill list"

@@ -124,24 +124,31 @@ class CodexHeartbeatDockerTests(unittest.TestCase):
             self.assertNotIn("target=/host-codex", log)
             self.assertIn("HEARTBEAT_ONCE=1", log)
 
-    def test_docker_wrapper_requires_login_without_api_key(self) -> None:
+    def test_docker_wrapper_allows_noop_start_without_login_in_snapshot_mode(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
+            docker_log = tmp / "docker.log"
             fake_bin = tmp / "bin"
             fake_bin.mkdir()
             fake_docker = fake_bin / "docker"
-            fake_docker.write_text("#!/usr/bin/env bash\nexit 0\n")
+            fake_docker.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' '--- docker invocation ---' >> \"$DOCKER_LOG\"\n"
+                "printf '%s\\n' \"$@\" >> \"$DOCKER_LOG\"\n"
+                "case \"${1:-}\" in build|run) exit 0 ;; *) exit 1 ;; esac\n"
+            )
             fake_docker.chmod(0o755)
             missing_home = tmp / "missing-codex-home"
             proc = subprocess.run(
                 [str(ROOT / "scripts/run-codex-heartbeat-docker.sh"), "once"],
                 cwd=ROOT,
-                env={**os_environ_with_path(fake_bin), "HOST_CODEX_HOME": str(missing_home)},
+                env={**os_environ_with_path(fake_bin), "DOCKER_LOG": str(docker_log), "HOST_CODEX_HOME": str(missing_home)},
                 capture_output=True,
                 text=True,
             )
-            self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("host Codex home does not exist", proc.stderr)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("heartbeat can still no-op", proc.stderr)
+            self.assertIn("POWERPACKS_SYNC_HOST_CODEX_HOME=0", docker_log.read_text())
 
     def test_codex_install_can_skip_agent_bootstrap_for_readonly_mounts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -170,11 +177,12 @@ class CodexHeartbeatDockerTests(unittest.TestCase):
         self.assertIn('$HOST_CODEX_HOME"/ "$CODEX_HOME"/', heartbeat)
         self.assertIn('POWERPACKS_SYNC_HOST_CODEX_HOME', heartbeat)
         self.assertIn('codex login --with-api-key', heartbeat)
+        self.assertIn('--check-due', heartbeat)
+        self.assertIn("date -u '+%Y-%m-%dT%H:%M:%SZ'", heartbeat)
         self.assertIn('install.sh" codex', heartbeat)
         self.assertIn('UV_PROJECT_ENVIRONMENT', heartbeat)
         self.assertIn('POWERPACKS_SKIP_AGENT_BOOTSTRAP', heartbeat)
-        self.assertIn('codex exec "$CODEX_HEARTBEAT_PROMPT"', heartbeat)
-        self.assertIn('Codex heartbeat appears unauthenticated', heartbeat)
+        self.assertIn('codex-heartbeat-runner.py', heartbeat)
         self.assertIn('exit "$heartbeat_status"', heartbeat)
 
     def test_dockerfile_installs_codex_and_uses_heartbeat_entrypoint(self) -> None:
@@ -200,6 +208,8 @@ class CodexHeartbeatDockerTests(unittest.TestCase):
         self.assertIn("codex login --with-api-key", docs)
         self.assertIn("read-only checkout", docs)
         self.assertIn("POWERPACKS_HEARTBEAT_SKIP_INSTALL=1", docs)
+        self.assertIn("macOS `launchd`", docs)
+        self.assertIn("retry_interval_seconds", docs)
         self.assertIn("POWERPACKS_CODEX_HOME_MODE=direct", docs)
 
 
