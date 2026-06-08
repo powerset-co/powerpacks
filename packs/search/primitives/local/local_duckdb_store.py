@@ -18,6 +18,7 @@ from uuid import UUID
 
 K_RRF = 60
 TOKEN_RE = re.compile(r"[a-z0-9]+")
+TITLE_SPLIT_RE = re.compile(r"[,|@\-–—/\(]")
 _STEMMER: Any | None = None
 ARRAY_FILTER_FIELDS = {
     "accelerators",
@@ -63,6 +64,13 @@ PERSON_PROFILE_FILTER_FIELDS = {
     "inferred_birth_year",
 }
 ROLE_ROW_PREFERRED_PROFILE_FIELDS = {"inferred_birth_year"}
+TITLE_CLUSTER_SENIORITY_PREFIXES = {
+    "senior", "sr", "staff", "principal", "lead", "junior", "jr",
+    "associate", "intern", "founding", "chief", "head",
+    "vp", "vice", "president", "director", "avp",
+    "founder", "co", "owner",
+}
+TITLE_CLUSTER_NOISE_WORDS = {"at", "the", "and", "of", "for", "in", "on", "to", "a", "an", "with", "ii", "iii", "iv", "i"}
 
 
 class LocalDuckDBError(RuntimeError):
@@ -115,6 +123,7 @@ class LocalDuckDBSearchStore:
     NAMESPACE_TABLES = {
         "people": "local_people_positions",
         "summaries": "local_summaries",
+        "company_signals": "local_company_signals",
         "education": "local_people_education",
         "schools": "local_education",
         "companies": "local_companies",
@@ -159,6 +168,17 @@ class LocalDuckDBSearchStore:
             [table],
         ).fetchone()
         return bool(row and row[0])
+
+    def namespace_exists(self, logical_name: str) -> bool:
+        table = self.NAMESPACE_TABLES.get(str(logical_name))
+        return bool(table and self._table_exists(table))
+
+    def namespace_row_count(self, logical_name: str) -> int:
+        table = self.NAMESPACE_TABLES.get(str(logical_name))
+        if not table or not self._table_exists(table):
+            return 0
+        row = self.conn.execute(f"select count(*) from {self._quote_ident(table)}").fetchone()
+        return int(row[0] or 0) if row else 0
 
     def _person_profile_table(self) -> str | None:
         for table in PERSON_PROFILE_TABLES:
@@ -758,7 +778,97 @@ class LocalDuckDBSearchStore:
         out["person_id"] = row.get("person_id") or row.get("base_id") or self._base_person_id(row_id)
         out["position_id"] = row.get("position_id") or row_id
         out["retrieval_mode"] = retrieval_mode
+        for key in ["has_core_regex", "has_adjacent_regex", "bucket"]:
+            if key in row:
+                out[key] = row[key]
         return out
+
+    def _cluster_stem_title(self, title: str) -> str:
+        core = TITLE_SPLIT_RE.split(str(title or ""))[0].strip()
+        tokens = TOKEN_RE.findall(core.lower())
+        meaningful = [token for token in tokens if token not in TITLE_CLUSTER_NOISE_WORDS]
+        while meaningful and meaningful[0] in TITLE_CLUSTER_SENIORITY_PREFIXES:
+            meaningful.pop(0)
+        return " ".join(self._stem_words(meaningful)) if meaningful else ""
+
+    def title_clusters_for_filters(self, filters: Any, *, max_titles: int = 10000) -> list[dict[str, Any]]:
+        rows = self._filtered_rows_sql("people", filters, limit=max_titles)
+        clusters: dict[str, Counter[str]] = {}
+        for row in rows:
+            title = str(row.get("position_title") or "").strip()
+            if not title:
+                continue
+            stemmed = self._cluster_stem_title(title)
+            if not stemmed:
+                continue
+            clusters.setdefault(stemmed, Counter())[title] += 1
+        out: list[dict[str, Any]] = []
+        for stemmed, raw_counts in sorted(clusters.items(), key=lambda item: (-sum(item[1].values()), item[0])):
+            raw_titles = [title for title, _count in raw_counts.most_common()]
+            out.append({
+                "stemmed": stemmed,
+                "count": sum(raw_counts.values()),
+                "raw_titles": raw_titles[:5],
+                "display_title": raw_titles[0],
+            })
+        return out
+
+    def _compile_patterns(self, patterns: Any) -> list[re.Pattern[str]]:
+        compiled: list[re.Pattern[str]] = []
+        for item in patterns or []:
+            if not isinstance(item, dict):
+                continue
+            regex = str(item.get("regex") or "").strip()
+            if not regex:
+                continue
+            try:
+                compiled.append(re.compile(regex, re.IGNORECASE))
+            except re.error:
+                continue
+        return compiled
+
+    def _uses_regex_patterns(self, payload: dict[str, Any]) -> bool:
+        role_function = str(payload.get("role_function") or "").strip().lower()
+        role_ids = {str(value).strip().lower() for value in payload.get("role_ids") or [] if value}
+        # network-search-api disables regex pattern execution for the founder
+        # shortcut; mirror that before adding local regex rows so founder title
+        # filters do not get misleading regex provenance.
+        if role_function == "founder" or "founder" in role_ids:
+            return False
+        return bool(payload.get("role_core_patterns") or payload.get("role_adjacent_patterns"))
+
+    def _regex_match_rank(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        core_patterns: Any,
+        adjacent_patterns: Any,
+        text_fields: list[str],
+    ) -> list[dict[str, Any]]:
+        core = self._compile_patterns(core_patterns)
+        adjacent = self._compile_patterns(adjacent_patterns)
+        if not core and not adjacent:
+            return []
+        ranked: list[tuple[dict[str, Any], float]] = []
+        for row in rows:
+            text = " ".join(str(self._field_value(row, field) or "") for field in text_fields)
+            has_core = any(pattern.search(text) for pattern in core)
+            has_adjacent = False if has_core else any(pattern.search(text) for pattern in adjacent)
+            if not (has_core or has_adjacent):
+                continue
+            out = dict(row)
+            out["has_core_regex"] = has_core
+            out["has_adjacent_regex"] = has_adjacent
+            out["bucket"] = "good" if has_core else "maybe"
+            ranked.append((out, 1.0 if has_core else 0.5))
+        return [row for row, _score in sorted(ranked, key=lambda item: (-item[1], self._row_id(item[0])))]
+
+    def _best_text_field(self, table: str, preferred: list[str]) -> str | None:
+        columns = self._table_columns(table)
+        for field in preferred:
+            if field in columns:
+                return field
+        return None
 
     async def hybrid_role_rows(
         self,
@@ -771,7 +881,8 @@ class LocalDuckDBSearchStore:
         query_embedding = payload.get("query_embedding")
         if semantic_query and query_embedding is None:
             raise LocalDuckDBError("local semantic role search requires query_embedding")
-        if not semantic_query and not payload.get("bm25_queries") and query_embedding is None:
+        has_regex_patterns = self._uses_regex_patterns(payload)
+        if not semantic_query and not payload.get("bm25_queries") and query_embedding is None and not has_regex_patterns:
             rows = sorted(self._filtered_rows("people", filters), key=lambda row: self._row_id(row))
             if top_k and top_k > 0:
                 rows = rows[:top_k]
@@ -801,6 +912,19 @@ class LocalDuckDBSearchStore:
             result_lists.append(self._vector_rank_sql("people", filters, "vector", query_embedding, top_k))
             weights.append(0.6)
 
+        if has_regex_patterns:
+            if candidates is None:
+                candidates = self._filtered_rows("people", filters)
+            regex_ranked = self._regex_match_rank(
+                candidates,
+                core_patterns=payload.get("role_core_patterns"),
+                adjacent_patterns=payload.get("role_adjacent_patterns"),
+                text_fields=["position_title"],
+            )
+            if regex_ranked:
+                result_lists.append(regex_ranked[:top_k])
+                weights.append(0.5)
+
         if not result_lists:
             rows = sorted(self._filtered_rows("people", filters), key=lambda row: self._row_id(row))
             if top_k and top_k > 0:
@@ -815,6 +939,134 @@ class LocalDuckDBSearchStore:
             if row_id in by_id
         ]
 
+    def summary_search_rows(
+        self,
+        payload: dict[str, Any],
+        people_filters: Any,
+        top_k: int,
+        include_attributes: list[str],
+    ) -> list[dict[str, Any]]:
+        if not self.namespace_exists("summaries"):
+            return []
+        rows = self._filtered_rows("summaries", None)
+        if people_filters is not None:
+            eligible = {
+                str(row.get("base_id") or row.get("person_id"))
+                for row in self._filtered_rows("people", people_filters)
+                if row.get("base_id") or row.get("person_id")
+            }
+            if not eligible:
+                return []
+            rows = [row for row in rows if str(row.get("base_id") or row.get("person_id") or row.get("id")) in eligible]
+        if payload.get("tech_skills"):
+            wanted = {str(value).lower() for value in payload.get("tech_skills") or []}
+            rows = [row for row in rows if wanted & {str(value).lower() for value in self._value_list(row.get("tech_skills"))}]
+        if not rows:
+            return []
+
+        result_lists: list[list[dict[str, Any]]] = []
+        weights: list[float] = []
+        table = self._table_for_namespace("summaries")
+        bm25_field = self._best_text_field(table, ["summary_tokens", "word_tokens", "doc2query", "summary"])
+        bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
+        if bm25_field and bm25_queries:
+            tokens: list[str] = []
+            for query in bm25_queries:
+                tokens.extend(self._word_query_tokens(query))
+            ranked = [row for row, _score in self._bm25_rank(rows, bm25_field, list(dict.fromkeys(tokens)))[:top_k]]
+            if ranked:
+                result_lists.append(ranked)
+                weights.append(1.0)
+        if payload.get("query_embedding") is not None and "vector" in self._table_columns(table):
+            ranked = [row for row, _score in self._vector_rank(rows, "vector", payload.get("query_embedding"))[:top_k]]
+            if ranked:
+                result_lists.append(ranked)
+                weights.append(0.6)
+        if self._uses_regex_patterns(payload):
+            regex_ranked = self._regex_match_rank(
+                rows,
+                core_patterns=payload.get("role_core_patterns"),
+                adjacent_patterns=payload.get("role_adjacent_patterns"),
+                text_fields=["summary", "headline", "doc2query_text"],
+            )
+            if regex_ranked:
+                result_lists.append(regex_ranked[:top_k])
+                weights.append(0.5)
+        if not result_lists:
+            return []
+        by_id = {self._row_id(row): row for ranked_rows in result_lists for row in ranked_rows}
+        fused = self._rrf(result_lists, weights)
+        out: list[dict[str, Any]] = []
+        for row_id, score in fused[:top_k]:
+            row = by_id[row_id]
+            person_id = str(row.get("base_id") or row.get("person_id") or row.get("id"))
+            item = self._project_dict(row, include_attributes)
+            # Summary vertical matches are person-level in prod.  Do not attach
+            # a position_id even if a future local_summaries schema happens to
+            # carry one, otherwise downstream provenance would imply fake title
+            # evidence for a summary-only hit.
+            item.pop("position_id", None)
+            item.update({
+                "id": row_id,
+                "person_id": person_id,
+                "base_id": person_id,
+                "position_id": None,
+                "score": score,
+                "retrieval_mode": "summary",
+                "summary": row.get("summary"),
+            })
+            for key in ["has_core_regex", "has_adjacent_regex", "bucket"]:
+                if key in row:
+                    item[key] = row[key]
+            out.append(item)
+        return out
+
+    def company_signal_company_ids(self, payload: dict[str, Any], top_k: int) -> list[str]:
+        if not self.namespace_exists("company_signals"):
+            return []
+        rows = self._filtered_rows("company_signals", None)
+        if not rows:
+            return []
+        table = self._table_for_namespace("company_signals")
+        bm25_field = self._best_text_field(table, ["signal_tokens", "signals_tokens", "summary_tokens", "word_tokens", "signals_text", "summary", "doc2query_text"])
+        bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
+        result_lists: list[list[dict[str, Any]]] = []
+        weights: list[float] = []
+        if bm25_field and bm25_queries:
+            tokens: list[str] = []
+            for query in bm25_queries:
+                tokens.extend(self._word_query_tokens(query))
+            ranked = [row for row, _score in self._bm25_rank(rows, bm25_field, list(dict.fromkeys(tokens)))[:top_k]]
+            if ranked:
+                result_lists.append(ranked)
+                weights.append(1.0)
+        if payload.get("query_embedding") is not None and "vector" in self._table_columns(table):
+            ranked = self._vector_rank_sql("company_signals", None, "vector", payload.get("query_embedding"), top_k)
+            if ranked:
+                result_lists.append(ranked)
+                weights.append(0.6)
+        if self._uses_regex_patterns(payload):
+            regex_ranked = self._regex_match_rank(
+                rows,
+                core_patterns=payload.get("role_core_patterns"),
+                adjacent_patterns=payload.get("role_adjacent_patterns"),
+                text_fields=["signals_text", "summary", "doc2query_text"],
+            )
+            if regex_ranked:
+                result_lists.append(regex_ranked[:top_k])
+                weights.append(0.5)
+        if not result_lists:
+            return []
+        by_id = {self._row_id(row): row for ranked_rows in result_lists for row in ranked_rows}
+        fused = self._rrf(result_lists, weights)
+        out: list[str] = []
+        for row_id, _score in fused[:top_k]:
+            row = by_id[row_id]
+            company_id = row.get("company_id") or row.get("company_urn") or row.get("id")
+            if company_id and str(company_id) not in out:
+                out.append(str(company_id))
+        return out
+
     def bm25_adjacency_rows(
         self,
         queries: list[str],
@@ -826,10 +1078,13 @@ class LocalDuckDBSearchStore:
         result_lists: list[list[dict[str, Any]]] = []
         query_indexes: dict[str, list[int]] = {}
         for query_index, query in enumerate(queries):
-            tokens = self._phrase_query_tokens(str(query))
-            if not tokens:
+            phrase_tokens = self._phrase_query_tokens(str(query))
+            word_tokens = self._word_query_tokens(str(query))
+            if not phrase_tokens and not word_tokens:
                 continue
-            ranked = [row for row, _score in self._bm25_rank(candidates, "phrase_tokens", tokens)[:top_k]]
+            ranked = [row for row, _score in self._bm25_rank(candidates, "phrase_tokens", phrase_tokens)[:top_k]] if phrase_tokens else []
+            if not ranked and word_tokens:
+                ranked = [row for row, _score in self._bm25_rank(candidates, "word_tokens", word_tokens)[:top_k]]
             result_lists.append(ranked)
             for row in ranked:
                 query_indexes.setdefault(self._row_id(row), []).append(query_index)
@@ -842,3 +1097,18 @@ class LocalDuckDBSearchStore:
             row["adjacency_query_indexes"] = query_indexes.get(row_id, [])
             out.append(row)
         return out
+
+    def company_signal_rows(
+        self,
+        payload: dict[str, Any],
+        people_filters: Any,
+        top_k: int,
+        include_attributes: list[str],
+    ) -> list[dict[str, Any]]:
+        company_ids = self.company_signal_company_ids(payload, top_k)
+        if not company_ids:
+            return []
+        company_filter = ("company_id", "In", company_ids)
+        filters = company_filter if people_filters is None else ("And", [people_filters, company_filter])
+        rows = self._filtered_rows_sql("people", filters, limit=top_k, order_by_id=True)
+        return [self._role_output_row(row, include_attributes, 1.0, "company_signal") for row in rows]

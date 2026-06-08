@@ -1,27 +1,19 @@
-"""Standalone TurboPuffer client for Powerpacks primitives.
-
-This module uses only checked-in Powerpacks contracts plus external packages
-loaded through uv when needed.
-"""
+"""Backend-neutral search helpers shared by local DuckDB and TurboPuffer pipelines."""
 
 from __future__ import annotations
 
-import asyncio
-import functools
 import json
 import os
 import re
-import shutil
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from powerpacks_contracts import TURBOPUFFER_FILTER_OPERATORS, TURBOPUFFER_NAMESPACES
+import search_backend_mode
+import search_result_merge
+from powerpacks_contracts import TURBOPUFFER_FILTER_OPERATORS
 
 
-STRONG_CONSISTENCY = {"level": "strong"}
-DEFAULT_REGION = "gcp-us-central1"
 K_RRF = 60
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 ARRAY_FILTER_FIELDS = {"metro_areas", "allowed_operator_ids", "role_ids"}
@@ -36,17 +28,6 @@ ADJACENCY_LIMIT = int(os.getenv("POWERPACKS_COMPANY_ADJACENCY_LIMIT", "1000"))
 ADJACENCY_EXCLUDE_SENIORITY = ["entry", "trainee"]
 ROLE_ADJACENCY_MAP_PATH = Path(__file__).resolve().parents[2] / "data" / "roles" / "role_adjacency.opus.json"
 _ROLE_ADJACENCY_MAP: dict[str, list[str]] | None = None
-_EXPLICIT_LOCAL_SEARCH_DB: str | None = None
-LOCAL_BACKEND_NAMESPACES = {"people", "summaries", "education", "schools", "companies"}
-LOCAL_BACKEND_TABLES = {
-    "people": "local_people_positions",
-    "summaries": "local_summaries",
-    "education": "local_people_education",
-    "schools": "local_education",
-    "companies": "local_companies",
-}
-
-
 ADJACENCY_QUERIES: dict[tuple[str | None, str | None], list[str]] = {
     ("engineer", "leader"): [
         "CTO", "Chief Technology Officer", "VP of Engineering", "VP Engineering",
@@ -219,100 +200,16 @@ def load_env_file(path: Path | None) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def ensure_packages() -> None:
-    missing: list[str] = []
-    for module_name in ["turbopuffer", "openai", "snowballstemmer"]:
-        try:
-            __import__(module_name)
-        except ModuleNotFoundError:
-            missing.append(module_name)
-    if not missing:
+def ensure_snowballstemmer() -> None:
+    try:
+        __import__("snowballstemmer")
         return
-    if os.getenv("POWERPACKS_TPUF_UV_REEXEC") == "1":
-        raise RuntimeError(f"Missing required packages: {', '.join(missing)}")
-    uv = shutil.which("uv")
-    if not uv:
-        raise RuntimeError(f"Missing required packages: {', '.join(missing)}. Install uv for auto re-exec.")
-    env = os.environ.copy()
-    env["POWERPACKS_TPUF_UV_REEXEC"] = "1"
-    args = [uv, "run"]
-    for package in ["turbopuffer", "openai", "snowballstemmer"]:
-        args.extend(["--with", package])
-    args.extend(["python", str(Path(sys.argv[0]).resolve()), *sys.argv[1:]])
-    os.execvpe(uv, args, env)
-
-
-def namespace_name(logical_name: str = "people") -> str:
-    if is_local_backend() and logical_name in LOCAL_BACKEND_TABLES:
-        return LOCAL_BACKEND_TABLES[logical_name]
-    env_key = f"POWERPACKS_TURBOPUFFER_{logical_name.upper()}_NAMESPACE"
-    configured = os.getenv(env_key)
-    if configured:
-        return configured
-    base = TURBOPUFFER_NAMESPACES[logical_name]
-    env = os.getenv("ALEPH_ENV", "").strip().lower()
-    if not env or env == "prod":
-        return base
-    if env == "staging":
-        env = "dev"
-    return base if base.endswith(f"_{env}") else f"{base}_{env}"
-
-
-def client() -> Any:
-    ensure_packages()
-    import turbopuffer
-
-    api_key = os.getenv("TURBOPUFFER_API_KEY")
-    if not api_key:
-        raise RuntimeError("TURBOPUFFER_API_KEY is required")
-    return turbopuffer.Turbopuffer(api_key=api_key, region=os.getenv("TURBOPUFFER_REGION", DEFAULT_REGION))
-
-
-def configure_local_backend(db_path: str | Path | None) -> None:
-    global _EXPLICIT_LOCAL_SEARCH_DB
-    _EXPLICIT_LOCAL_SEARCH_DB = str(db_path) if db_path else None
-
-
-def explicit_local_backend_path() -> str | None:
-    if _EXPLICIT_LOCAL_SEARCH_DB:
-        return _EXPLICIT_LOCAL_SEARCH_DB
-    if os.getenv("POWERPACKS_ENABLE_LEGACY_LOCAL_SEARCH_ENV") == "1":
-        return os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
-    return None
-
-
-def is_local_backend() -> bool:
-    return bool(explicit_local_backend_path())
-
-
-@functools.lru_cache(maxsize=None)
-def _local_store_for_path(path: str) -> Any:
-    from local_duckdb_store import LocalDuckDBSearchStore
-
-    return LocalDuckDBSearchStore(path)
-
-
-def local_store() -> Any:
-    db_path = explicit_local_backend_path()
-    if not db_path:
-        raise RuntimeError("configure_local_backend(db_path) is required for local DuckDB search")
-    return _local_store_for_path(db_path)
-
-
-def local_namespace_has_vectors(logical_name: str, field: str = "vector") -> bool:
-    return bool(is_local_backend() and logical_name in LOCAL_BACKEND_NAMESPACES and local_store().has_nonempty_vectors(logical_name, field))
-
-
-def namespace(logical_name: str = "people") -> Any:
-    if is_local_backend() and logical_name in LOCAL_BACKEND_NAMESPACES:
-        return local_store().namespace(logical_name)
-    # Investors remain TurboPuffer-backed in local mode. Local DuckDB covers
-    # people, summaries, education, schools, and companies.
-    return client().namespace(namespace_name(logical_name))
+    except ModuleNotFoundError:
+        raise RuntimeError("Missing required package: snowballstemmer. Run bin/setup-python.")
 
 
 def stemmer() -> Any:
-    ensure_packages()
+    ensure_snowballstemmer()
     import snowballstemmer
 
     return snowballstemmer.stemmer("english")
@@ -343,22 +240,6 @@ def bm25_queries_per_field(queries: list[str]) -> dict[str, list[str]]:
     if word_tokens:
         result["word_tokens"] = list(dict.fromkeys(word_tokens))
     return result
-
-
-async def embedding(text: str) -> list[float]:
-    ensure_packages()
-    import openai
-
-    client = openai.AsyncOpenAI()
-    response = await client.embeddings.create(input=[text], model=os.getenv("POWERPACKS_EMBEDDING_MODEL", "text-embedding-3-small"))
-    return response.data[0].embedding
-
-
-def base_person_id(value: str) -> str:
-    parts = str(value).split("-")
-    if len(parts) == 6 and parts[5].isdigit():
-        return "-".join(parts[:5])
-    return str(value)
 
 
 def _trait_value(trait: Any, key: str) -> str:
@@ -474,7 +355,7 @@ def comparison(field: str, op: str, value: Any) -> tuple:
 
 
 def allowed_operator_ids_from_payload(payload: dict[str, Any]) -> list[str]:
-    if is_local_backend():
+    if search_backend_mode.is_local_backend_configured():
         return []
 
     explicit = payload.get("operator_ids") or payload.get("allowed_operator_ids")
@@ -965,66 +846,6 @@ def is_non_operational_title(title: str) -> bool:
     return not bool(RESCUE_OPERATIONAL_PATTERN.search(text))
 
 
-async def filter_only_rows_for_namespace(
-    logical_name: str,
-    filters: tuple,
-    include_attributes: list[str],
-    *,
-    page_size: int = 10000,
-    max_results: int = 0,
-) -> list[dict[str, Any]]:
-    if is_local_backend() and logical_name in LOCAL_BACKEND_NAMESPACES:
-        return await asyncio.to_thread(
-            local_store().filter_only_rows_for_namespace,
-            logical_name,
-            filters,
-            include_attributes,
-            page_size,
-            max_results,
-        )
-
-    ns = namespace(logical_name)
-    page_size = min(page_size, 10000)
-    max_batches = int(os.getenv("TURBOPUFFER_FILTER_ONLY_MAX_BATCHES", "100"))
-    all_rows: list[dict[str, Any]] = []
-    last_id: str | None = None
-    batch_count = 0
-
-    while True:
-        paginated = filters
-        if last_id is not None:
-            paginated = ("And", list(filters[1]) + [("id", "Gt", last_id)]) if filters[0] == "And" else ("And", [filters, ("id", "Gt", last_id)])
-
-        def run_query() -> Any:
-            return ns.query(
-                rank_by=["id", "asc"],
-                filters=paginated,
-                top_k=page_size,
-                include_attributes=include_attributes,
-                consistency=STRONG_CONSISTENCY,
-            )
-
-        response = await asyncio.to_thread(run_query)
-        batch_count += 1
-        if not response or not response.rows:
-            break
-        for row in response.rows:
-            all_rows.append(row_attrs(row, include_attributes))
-        if max_results and len(all_rows) >= max_results:
-            all_rows = all_rows[:max_results]
-            break
-        if len(response.rows) < page_size:
-            break
-        last_id = str(response.rows[-1].id)
-        if batch_count >= max_batches:
-            break
-    return all_rows
-
-
-async def filter_only_rows(filters: tuple, include_attributes: list[str], *, page_size: int = 10000, max_results: int = 0) -> list[dict[str, Any]]:
-    return await filter_only_rows_for_namespace("people", filters, include_attributes, page_size=page_size, max_results=max_results)
-
-
 def extract_base_ids(rows: list[dict[str, Any]]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -1032,7 +853,7 @@ def extract_base_ids(rows: list[dict[str, Any]]) -> list[str]:
         raw_id = row.get("person_id") or row.get("base_id") or row.get("id")
         if not raw_id:
             continue
-        person_id = base_person_id(str(raw_id))
+        person_id = search_result_merge.base_person_id(str(raw_id))
         if person_id in seen:
             continue
         seen.add(person_id)
@@ -1108,336 +929,3 @@ def is_filter_only_payload(payload: dict[str, Any]) -> bool:
     semantic_query = str(payload.get("semantic_query") or "").strip()
     bm25_queries = [str(query).strip() for query in payload.get("bm25_queries") or [] if str(query).strip()]
     return not semantic_query and not bm25_queries and payload.get("query_embedding") is None
-
-
-async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
-    if filters is None:
-        raise ValueError("filter-only search requires at least one TurboPuffer filter")
-    max_results = top_k if top_k and top_k > 0 else 0
-    if is_local_backend():
-        rows = await asyncio.to_thread(
-            local_store().filter_only_rows_for_namespace,
-            "people",
-            filters,
-            include_attributes,
-            10000,
-            max_results,
-        )
-    else:
-        rows = await filter_only_rows(filters, include_attributes, max_results=max_results)
-    out: list[dict[str, Any]] = []
-    for index, row in enumerate(rows, start=1):
-        doc_id = str(row.get("id") or "")
-        if not doc_id:
-            continue
-        row = dict(row)
-        row["score"] = 1.0
-        row["person_id"] = row.get("base_id") or base_person_id(doc_id)
-        row["position_id"] = row.get("position_id") or doc_id
-        row["retrieval_mode"] = "filter_only"
-        row["filter_rank"] = index
-        out.append(row)
-    return out
-
-
-async def bm25_adjacency_rows(
-    queries: list[str],
-    filters: tuple | None,
-    *,
-    top_k: int = ADJACENCY_LIMIT,
-    include_attributes: list[str],
-) -> list[dict[str, Any]]:
-    """BM25-only title adjacency retrieval for company-domain UNION mode."""
-    if is_local_backend():
-        return await asyncio.to_thread(
-            local_store().bm25_adjacency_rows,
-            queries,
-            filters,
-            top_k,
-            include_attributes,
-        )
-
-    prepared: list[tuple[str, list[str]]] = []
-    for query in queries:
-        tokens = phrase_query_tokenize(str(query))
-        if tokens:
-            prepared.append((str(query), tokens))
-    if not prepared:
-        return []
-
-    tp_queries = [
-        {
-            "rank_by": ("phrase_tokens", "BM25", tokens),
-            "top_k": top_k,
-            "include_attributes": include_attributes,
-            "filters": filters,
-        }
-        for _, tokens in prepared
-    ]
-    ns = namespace("people")
-
-    def run_multi_query() -> Any:
-        return ns.multi_query(queries=tp_queries, consistency=STRONG_CONSISTENCY)
-
-    response = await asyncio.to_thread(run_multi_query)
-    result_sets = response.results or []
-    result_lists = [result_set.rows or [] for result_set in result_sets]
-    fused = reciprocal_rank_fusion(result_lists, [1.0] * len(result_lists))
-
-    attrs: dict[str, dict[str, Any]] = {}
-    for query_index, result_set in enumerate(result_sets):
-        for row in result_set.rows or []:
-            doc_id = str(row.id)
-            item = attrs.setdefault(doc_id, row_attrs(row, include_attributes))
-            item.setdefault("adjacency_query_indexes", []).append(query_index)
-
-    rows: list[dict[str, Any]] = []
-    for rank, (doc_id, score) in enumerate(fused[:top_k], start=1):
-        row = dict(attrs.get(doc_id) or {"id": doc_id})
-        row["score"] = score
-        row["person_id"] = row.get("base_id") or base_person_id(doc_id)
-        row["position_id"] = doc_id
-        row["retrieval_mode"] = "company_adjacency_bm25"
-        row["company_adjacency_rank"] = rank
-        rows.append(row)
-    return rows
-
-
-async def _hybrid_role_rows_single(
-    payload: dict[str, Any],
-    filters: tuple | None,
-    *,
-    top_k: int,
-    include_attributes: list[str],
-    query_embedding: list[float] | None = None,
-) -> list[dict[str, Any]]:
-    if is_local_backend():
-        local_payload = dict(payload)
-        semantic_query = str(payload.get("semantic_query") or "").strip()
-        if query_embedding is None and semantic_query:
-            query_embedding = await embedding(semantic_query)
-        if query_embedding is not None:
-            local_payload["query_embedding"] = query_embedding
-        return await local_store().hybrid_role_rows(
-            local_payload,
-            filters,
-            top_k,
-            include_attributes,
-        )
-
-    semantic_query = str(payload.get("semantic_query") or "").strip()
-    bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
-    if query_embedding is None and semantic_query:
-        query_embedding = await embedding(semantic_query)
-    per_field = bm25_queries_per_field(bm25_queries)
-
-    queries: list[dict[str, Any]] = []
-    weights: list[float] = []
-    for field, tokens, weight in [
-        ("phrase_tokens", per_field.get("phrase_tokens"), 1.5),
-        ("word_tokens", per_field.get("word_tokens"), 1.0),
-    ]:
-        if tokens:
-            queries.append({
-                "rank_by": (field, "BM25", tokens),
-                "top_k": top_k,
-                "include_attributes": include_attributes,
-                "filters": filters,
-            })
-            weights.append(weight)
-    if query_embedding is not None:
-        queries.append({
-            "rank_by": ("vector", "kNN", query_embedding),
-            "top_k": top_k,
-            "include_attributes": include_attributes,
-            "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
-        })
-        weights.append(0.6)
-
-    ns = namespace("people")
-
-    def run_multi_query() -> Any:
-        return ns.multi_query(queries=queries, consistency=STRONG_CONSISTENCY)
-
-    response = await asyncio.to_thread(run_multi_query)
-    result_sets = response.results or []
-    result_lists = [result_set.rows or [] for result_set in result_sets]
-    fused = reciprocal_rank_fusion(result_lists, weights[: len(result_lists)])
-
-    attrs: dict[str, dict[str, Any]] = {}
-    for result_set in result_sets:
-        for row in result_set.rows or []:
-            attrs.setdefault(str(row.id), row_attrs(row, include_attributes))
-
-    rows: list[dict[str, Any]] = []
-    for doc_id, score in fused:
-        row = dict(attrs.get(doc_id) or {"id": doc_id})
-        row["score"] = score
-        row["person_id"] = row.get("base_id") or base_person_id(doc_id)
-        row["position_id"] = doc_id
-        rows.append(row)
-    return rows
-
-
-async def _batched_base_id_rows(
-    payload: dict[str, Any],
-    filters: tuple | None,
-    *,
-    top_k: int,
-    include_attributes: list[str],
-) -> list[dict[str, Any]]:
-    """Run retrieval in base_id batches, following network-search-api V3 parity.
-
-    Reference: `RoleSearchVerticalV3` in `../network-search-api` batches large
-    base_candidate_ids into 500-ID chunks so TurboPuffer kNN/BM25 does not carry
-    one huge `base_id In [...]` filter. Company-id batching happens earlier in
-    `apply_prefilters.company_base_ids`, mirroring `CompanyPeoplePreFilterStage`.
-    """
-    base_ids = [str(value) for value in payload.get("base_candidate_ids") or [] if value]
-    batch_values = chunks(base_ids, BASE_ID_BATCH_SIZE)
-    base_filter = strip_base_candidate_filter(filters)
-    filter_only = is_filter_only_payload(payload)
-    semantic_query = str(payload.get("semantic_query") or "").strip()
-    query_embedding = None if filter_only or not semantic_query else await embedding(semantic_query)
-    semaphore = asyncio.Semaphore(max(1, BASE_ID_BATCH_CONCURRENCY))
-
-    async def run_batch(batch_index: int, batch: list[str]) -> list[dict[str, Any]]:
-        async with semaphore:
-            batch_filters = and_filters(base_filter, comparison("base_id", "In", batch))
-            if filter_only:
-                rows = await _filter_only_role_rows(batch_filters, top_k=top_k, include_attributes=include_attributes)
-            else:
-                rows = await _hybrid_role_rows_single(
-                    payload,
-                    batch_filters,
-                    top_k=top_k,
-                    include_attributes=include_attributes,
-                    query_embedding=query_embedding,
-                )
-            for row in rows:
-                row["base_id_batch_index"] = batch_index
-            return rows
-
-    row_batches = await asyncio.gather(*(run_batch(index, batch) for index, batch in enumerate(batch_values)))
-    rows = merge_ranked_rows(row_batches)
-    for row in rows:
-        row["retrieval_batched_base_ids"] = True
-        row["base_id_batch_size"] = BASE_ID_BATCH_SIZE
-        row["base_id_batch_count"] = len(batch_values)
-    return rows
-
-
-async def hybrid_role_rows(
-    payload: dict[str, Any],
-    filters: tuple | None,
-    *,
-    top_k: int,
-    include_attributes: list[str],
-) -> list[dict[str, Any]]:
-    if should_batch_base_ids(payload):
-        return await _batched_base_id_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
-    if is_filter_only_payload(payload):
-        return await _filter_only_role_rows(filters, top_k=top_k, include_attributes=include_attributes)
-    return await _hybrid_role_rows_single(payload, filters, top_k=top_k, include_attributes=include_attributes)
-
-
-def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
-    """Collapse position rows to unique people.
-
-    limit <= 0 means keep the full retrieved frontier. This is the Powerpacks
-    default so agents can save/query local artifacts instead of truncating data
-    for chat display.
-    """
-    seen: set[str] = set()
-    candidates: list[dict[str, Any]] = []
-    for row in rows:
-        person_id = str(row.get("person_id") or row.get("base_id") or base_person_id(str(row.get("id"))))
-        if person_id in seen:
-            continue
-        seen.add(person_id)
-        vertical_sources = list(row.get("vertical_sources") or [])
-        retrieval_mode = row.get("retrieval_mode")
-        if retrieval_mode and retrieval_mode not in vertical_sources:
-            vertical_sources.append(str(retrieval_mode))
-        candidate = {
-            "person_id": person_id,
-            "position_id": row.get("position_id") or row.get("id"),
-            "score": row.get("score"),
-            "position_title": row.get("position_title"),
-            "city": row.get("city"),
-            "state": row.get("state"),
-            "country": row.get("country"),
-            "macro_region": row.get("macro_region"),
-            "metro_areas": row.get("metro_areas"),
-            "role_track": row.get("role_track"),
-            "seniority_band": row.get("seniority_band"),
-            "company_name": row.get("company_name"),
-            "company_id": row.get("company_id"),
-            "is_current": row.get("is_current"),
-            "vertical_sources": vertical_sources,
-            "matched_position_ids": [row.get("position_id") or row.get("id")] if (row.get("position_id") or row.get("id")) else [],
-        }
-        if row.get("retrieval_batched_base_ids"):
-            candidate["retrieval_batched_base_ids"] = True
-            candidate["base_id_batch_count"] = row.get("base_id_batch_count")
-            candidate["base_id_batch_size"] = row.get("base_id_batch_size")
-        candidates.append(candidate)
-        if limit and limit > 0 and len(candidates) >= limit:
-            break
-    return candidates
-
-
-def merge_company_union_candidates(
-    candidates: list[dict[str, Any]],
-    union_candidates: list[Any],
-    *,
-    limit: int,
-) -> list[dict[str, Any]]:
-    if not union_candidates:
-        return candidates
-    merged = [dict(candidate) for candidate in candidates]
-    by_person = {str(candidate.get("person_id")): candidate for candidate in merged if candidate.get("person_id")}
-    for rank, raw in enumerate(union_candidates, start=1):
-        item = raw if isinstance(raw, dict) else {"person_id": raw}
-        person_id = base_person_id(str(item.get("person_id") or item.get("base_id") or item.get("id") or ""))
-        if not person_id:
-            continue
-        existing = by_person.get(person_id)
-        if existing is not None:
-            sources = list(existing.get("vertical_sources") or [])
-            if "company_filter" not in sources:
-                sources.append("company_filter")
-            existing["vertical_sources"] = sources
-            existing.setdefault("company_union_rank", rank)
-            if item.get("position_id") or item.get("id"):
-                matched = list(existing.get("matched_position_ids") or [])
-                position_id = item.get("position_id") or item.get("id")
-                if position_id and position_id not in matched:
-                    matched.append(position_id)
-                existing["matched_position_ids"] = matched
-            continue
-        candidate = {
-            "person_id": person_id,
-            "position_id": item.get("position_id") or item.get("id"),
-            "score": item.get("score"),
-            "position_title": item.get("position_title"),
-            "city": item.get("city"),
-            "state": item.get("state"),
-            "country": item.get("country"),
-            "macro_region": item.get("macro_region"),
-            "metro_areas": item.get("metro_areas"),
-            "role_track": item.get("role_track"),
-            "seniority_band": item.get("seniority_band"),
-            "company_name": item.get("company_name"),
-            "company_id": item.get("company_id"),
-            "is_current": item.get("is_current"),
-            "vertical_sources": ["company_filter"],
-            "company_union_rank": rank,
-        }
-        if candidate.get("position_id"):
-            candidate["matched_position_ids"] = [candidate["position_id"]]
-        merged.append(candidate)
-        by_person[person_id] = candidate
-        if limit and limit > 0 and len(merged) >= limit:
-            break
-    return merged

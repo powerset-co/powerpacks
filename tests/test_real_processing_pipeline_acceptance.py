@@ -13,7 +13,11 @@ FIXTURE_PEOPLE = ROOT / "tests/fixtures/indexing/people.csv"
 ROLE_STAGE = ROOT / "packs/indexing/primitives/enrich_roles_checkpointed/enrich_roles_checkpointed.py"
 PIPELINE = ROOT / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
 DUCKDB_SHIM = ROOT / "scripts/build-local-duckdb-shim.py"
-SEARCH_LIB = ROOT / "packs/search/primitives/lib"
+SEARCH_PRIMITIVES = ROOT / "packs/search/primitives"
+SEARCH_LIB = SEARCH_PRIMITIVES / "lib"
+SEARCH_SHARED = SEARCH_PRIMITIVES / "shared"
+SEARCH_LOCAL = SEARCH_PRIMITIVES / "local"
+SEARCH_TURBOPUFFER = SEARCH_PRIMITIVES / "turbopuffer"
 
 FULL_COMPATIBLE_GREEN_CRITERIA = {
     "role_artifacts": "roles_with_dense_text_remapped.jsonl + roles_with_embeddings.jsonl keyed by 16-char title_hash with Aleph classifier fields and 1536-d dense_embedding",
@@ -441,14 +445,16 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertEqual(db_payload["status"], "ok")
 
-            sys.path.insert(0, str(SEARCH_LIB))
-            import turbopuffer_client  # type: ignore
+            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+                sys.path.insert(0, str(_path))
+            import local_search_backend as local_backend  # type: ignore
+            from search_common import filters_from_role_payload  # type: ignore
 
             old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
             os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = db_payload["duckdb"]
-            turbopuffer_client._local_store_for_path.cache_clear()
+            local_backend._local_store_for_path.cache_clear()
             try:
-                knn = turbopuffer_client.namespace("people").query(
+                knn = local_backend.namespace("people").query(
                     rank_by=("vector", "kNN", product_row["vector"]),
                     top_k=3,
                     include_attributes=["position_title", "base_id"],
@@ -457,14 +463,14 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual(knn.rows[0].position_title, "Product Manager")
                 self.assertGreater(knn.rows[0].score, 0.99)
 
-                role_rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
+                role_rows = asyncio.run(local_backend.hybrid_role_rows(
                     {
                         "semantic_query": "Product manager building roadmaps and product strategy for users across a software company",
                         "bm25_queries": ["Product Manager"],
                         "query_embedding": product_row["vector"],
                         "is_current_role": True,
                     },
-                    turbopuffer_client.filters_from_role_payload({"is_current_role": True}),
+                    filters_from_role_payload({"is_current_role": True}),
                     top_k=5,
                     include_attributes=["position_title", "base_id"],
                 ))
@@ -472,7 +478,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual(role_rows[0]["position_title"], "Product Manager")
                 self.assertIn("hybrid", role_rows[0]["retrieval_mode"])
             finally:
-                turbopuffer_client._local_store_for_path.cache_clear()
+                local_backend._local_store_for_path.cache_clear()
                 if old_db is None:
                     os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
                 else:
@@ -686,19 +692,20 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_people_positions"], 1)
             self.assertEqual(payload["tables"]["local_companies"], 1)
 
-            sys.path.insert(0, str(SEARCH_LIB))
-            import turbopuffer_client  # type: ignore
+            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+                sys.path.insert(0, str(_path))
+            import local_search_backend as local_backend  # type: ignore
 
             old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
             os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
-            turbopuffer_client._local_store_for_path.cache_clear()
+            local_backend._local_store_for_path.cache_clear()
             try:
-                people = turbopuffer_client.namespace("people").query(
+                people = local_backend.namespace("people").query(
                     rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
                     top_k=1,
                     include_attributes=["base_id", "position_title", "role_ids"],
                 )
-                companies = turbopuffer_client.namespace("companies").query(
+                companies = local_backend.namespace("companies").query(
                     rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
                     top_k=1,
                     include_attributes=["company_name", "entity_types", "sector_types"],
@@ -708,7 +715,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual(companies.rows[0].id, "company-vector-db")
                 self.assertEqual(companies.rows[0].entity_types, ["developer_tool"])
             finally:
-                turbopuffer_client._local_store_for_path.cache_clear()
+                local_backend._local_store_for_path.cache_clear()
                 if old_db is None:
                     os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
                 else:
@@ -845,29 +852,30 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_people_education"], 3)
             self.assertEqual(payload["tables"]["local_education"], 3)
 
-            sys.path.insert(0, str(SEARCH_LIB))
-            import turbopuffer_client  # type: ignore
+            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+                sys.path.insert(0, str(_path))
+            import local_search_backend as local_backend  # type: ignore
 
             old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
             os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
-            turbopuffer_client._local_store_for_path.cache_clear()
+            local_backend._local_store_for_path.cache_clear()
             try:
-                company = turbopuffer_client.namespace("companies").query(
+                company = local_backend.namespace("companies").query(
                     rank_by=["id", "asc"],
                     top_k=1,
                     include_attributes=["company_name", "semantic_text", "doc2query_text", "entity_sector_text"],
                 ).rows[0]
                 self.assertTrue(company.company_name)
                 self.assertTrue(company.semantic_text or company.doc2query_text or company.entity_sector_text)
-                self.assertTrue(turbopuffer_client.local_namespace_has_vectors("companies"))
-                self.assertTrue(turbopuffer_client.local_namespace_has_vectors("summaries"))
+                self.assertTrue(local_backend.local_namespace_has_vectors("companies"))
+                self.assertTrue(local_backend.local_namespace_has_vectors("summaries"))
 
                 env = os.environ.copy()
                 env["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
                 proc = subprocess.run(
                     [
                         sys.executable,
-                        str(ROOT / "packs/search/primitives/resolve_companies/resolve_companies.py"),
+                        str(ROOT / "packs/search/primitives/local/local_resolve_companies.py"),
                         "--payload-json",
                         json.dumps({"company_names": [company.company_name], "operator_ids": ["op-aleph-seed"]}),
                         "--no-ce",
@@ -884,7 +892,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual(resolved["namespace"], "local_companies")
                 self.assertIn(company.id, resolved["company_ids"])
             finally:
-                turbopuffer_client._local_store_for_path.cache_clear()
+                local_backend._local_store_for_path.cache_clear()
                 if old_db is None:
                     os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
                 else:
@@ -918,14 +926,15 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_summaries"], 5)
             self.assertGreaterEqual(payload["tables"]["local_people_positions"], 4)
 
-            sys.path.insert(0, str(SEARCH_LIB))
-            import turbopuffer_client  # type: ignore
+            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+                sys.path.insert(0, str(_path))
+            import local_search_backend as local_backend  # type: ignore
 
             old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
             os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
-            turbopuffer_client._local_store_for_path.cache_clear()
+            local_backend._local_store_for_path.cache_clear()
             try:
-                response = turbopuffer_client.namespace("people").query(
+                response = local_backend.namespace("people").query(
                     filters=("position_title", "IGlob", "*Product*"),
                     top_k=5,
                     include_attributes=["base_id", "position_title", "allowed_operator_ids"],
@@ -934,7 +943,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual(response.rows[0].position_title, "Product Manager")
                 self.assertIn("op-acceptance", response.rows[0].allowed_operator_ids)
             finally:
-                turbopuffer_client._local_store_for_path.cache_clear()
+                local_backend._local_store_for_path.cache_clear()
                 if old_db is None:
                     os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
                 else:

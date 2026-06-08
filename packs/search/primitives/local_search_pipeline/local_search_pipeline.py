@@ -23,6 +23,11 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[4]
+PRIMITIVES_DIR = ROOT / "packs/search/primitives"
+LIB_DIR = PRIMITIVES_DIR / "lib"
+SHARED_DIR = PRIMITIVES_DIR / "shared"
+LOCAL_DIR = PRIMITIVES_DIR / "local"
+TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
 PAYLOAD_KEYS = {"intent_type", "source_type", "normalized_query", "vertical", "role_search_filters", "traits", "notes"}
 REMOTE_SCOPE_KEYS = {"set_id", "operator_ids", "allowed_operator_ids", "searcher_operator_id"}
 UNSUPPORTED_LOCAL_FILTERS = {
@@ -408,6 +413,95 @@ def payload_filters(payload: dict[str, Any]) -> dict[str, Any]:
     return dict(filters) if isinstance(filters, dict) else {}
 
 
+def _query_tokens_for_title_cluster(payload: dict[str, Any]) -> set[str]:
+    filters = payload_filters(payload)
+    text_parts = [str(payload.get("normalized_query") or "")]
+    text_parts.extend(str(value) for value in filters.get("bm25_queries") or [] if value)
+    return {token for token in re.findall(r"[a-z0-9]+", " ".join(text_parts).lower()) if len(token) > 2}
+
+
+def _with_local_title_clustering_status(payload: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
+    out = json.loads(json.dumps(payload))
+    filters = payload_filters(out)
+    filters["local_title_clustering_status"] = status
+    out["role_search_filters"] = filters
+    notes = out.get("notes")
+    if not isinstance(notes, list):
+        notes = []
+    if status.get("status") == "error":
+        notes.append(f"local title clustering skipped: {status.get('error')}")
+    out["notes"] = notes
+    return out
+
+
+def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_clusters: int = 20) -> dict[str, Any]:
+    """Augment local expansion with DuckDB-scoped title clusters.
+
+    Prod runs TitleClusterer during query expansion before search execution.
+    Local mirrors that layer boundary by reading title inventory from the DuckDB
+    people table while preparing the payload.  This is intentionally
+    conservative: clusters must overlap the original/BM25 query tokens before
+    they become executable BM25/regex hints, so local clustering does not broaden
+    hard role filters with unrelated in-scope titles.
+    """
+    filters = payload_filters(payload)
+    if not filters or not db_path.exists():
+        return _with_local_title_clustering_status(payload, {"status": "skipped_no_filters_or_db"})
+    if not any(filters.get(key) for key in ["role_ids", "role_tracks", "seniority_bands", "company_ids"]):
+        return _with_local_title_clustering_status(payload, {"status": "skipped_no_title_scope"})
+    try:
+        for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+            if str(_path) not in sys.path:
+                sys.path.insert(0, str(_path))
+        from local_duckdb_store import LocalDuckDBSearchStore  # type: ignore
+        from search_common import filters_from_role_payload  # type: ignore
+
+        store = LocalDuckDBSearchStore(str(db_path))
+        title_filters = filters_from_role_payload(filters)
+        clusters = store.title_clusters_for_filters(title_filters, max_titles=10000)
+    except Exception as exc:
+        return _with_local_title_clustering_status(payload, {"status": "error", "error": str(exc)[:300]})
+    finally:
+        try:
+            store.conn.close()  # type: ignore[name-defined]
+        except Exception:
+            pass
+
+    if not clusters:
+        return _with_local_title_clustering_status(payload, {"status": "completed", "cluster_count": 0, "selected_count": 0})
+    query_tokens = _query_tokens_for_title_cluster(payload)
+    selected: list[dict[str, Any]] = []
+    keywords: list[str] = []
+    for cluster in clusters:
+        title = str(cluster.get("display_title") or "").strip()
+        title_tokens = {token for token in re.findall(r"[a-z0-9]+", title.lower()) if len(token) > 2}
+        if not title or (query_tokens and not (query_tokens & title_tokens)):
+            continue
+        selected.append(cluster)
+        keywords.append(title)
+        if len(selected) >= max_clusters:
+            break
+    if not selected:
+        return _with_local_title_clustering_status(payload, {"status": "completed", "cluster_count": len(clusters), "selected_count": 0})
+
+    out = json.loads(json.dumps(payload))
+    out_filters = payload_filters(out)
+    out_filters["local_title_clusters"] = selected
+    out_filters["local_title_cluster_keywords"] = list(dict.fromkeys(keywords))
+    out_filters["local_title_clustering_status"] = {"status": "completed", "cluster_count": len(clusters), "selected_count": len(selected)}
+    out_filters["bm25_queries"] = _dedupe_present([*(out_filters.get("bm25_queries") or []), *keywords])
+    existing_patterns = list(out_filters.get("role_core_patterns") or [])
+    seen_regex = {str(item.get("regex")) for item in existing_patterns if isinstance(item, dict)}
+    for keyword in keywords:
+        regex = r"\b" + r"\s+".join(re.escape(token) for token in re.findall(r"[A-Za-z0-9]+", keyword)) + r"\b"
+        if regex not in seen_regex:
+            existing_patterns.append({"regex": regex, "examples": [keyword], "source": "local_title_cluster"})
+            seen_regex.add(regex)
+    out_filters["role_core_patterns"] = existing_patterns
+    out["role_search_filters"] = out_filters
+    return out
+
+
 def is_present(value: Any) -> bool:
     return value not in (None, "", [], {})
 
@@ -552,6 +646,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
         raise PipelineError("Need --payload-json, or --state with an expand_search_request step")
     payload = normalize_query_expansion_payload(payload, query=args.query)
+    payload = apply_local_title_clustering(payload, args.db_path)
     payload, ignored_scope_keys = prepare_local_payload(payload)
     if args.payload_json:
         sanitized_path = ledger_path.parent / f"{ledger_path.stem}.local-payload.json"
@@ -663,7 +758,9 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         if proc.returncode != 0:
             raise PipelineError(f"expand_search_request failed rc={proc.returncode}: {((proc.stderr or proc.stdout or '').strip())[-1200:]}")
         expanded = parsed[-1] if parsed else {}
-        payload, removed_scope_keys = prepare_local_payload(normalize_query_expansion_payload(payload_from_expand_output(expanded), query=args.query))
+        payload = normalize_query_expansion_payload(payload_from_expand_output(expanded), query=args.query)
+        payload = apply_local_title_clustering(payload, db_path)
+        payload, removed_scope_keys = prepare_local_payload(payload)
         write_json(full_json, expanded)
         write_json(payload_json, payload)
         execute_command = (

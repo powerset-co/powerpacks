@@ -11,8 +11,13 @@ from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LIB = ROOT / "packs/search/primitives/lib"
-sys.path.insert(0, str(LIB))
+PRIMITIVES = ROOT / "packs/search/primitives"
+LIB = PRIMITIVES / "lib"
+SHARED = PRIMITIVES / "shared"
+LOCAL = PRIMITIVES / "local"
+TURBOPUFFER = PRIMITIVES / "turbopuffer"
+for _path in [LIB, SHARED, LOCAL, TURBOPUFFER]:
+    sys.path.insert(0, str(_path))
 
 
 def load_module(name: str, path: Path):
@@ -23,8 +28,9 @@ def load_module(name: str, path: Path):
     return module
 
 
-turbopuffer_client = load_module("turbopuffer_client", LIB / "turbopuffer_client.py")
-resolve_companies = load_module("resolve_companies", ROOT / "packs/search/primitives/resolve_companies" / "resolve_companies.py")
+search_result_merge = load_module("search_result_merge", SHARED / "search_result_merge.py")
+turbopuffer_client = load_module("turbopuffer_search_backend", TURBOPUFFER / "turbopuffer_search_backend.py")
+resolve_companies = load_module("turbopuffer_resolve_companies", TURBOPUFFER / "turbopuffer_resolve_companies.py")
 apply_prefilters = load_module("apply_prefilters", ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py")
 hydrate_people = load_module("hydrate_people", ROOT / "packs/search/primitives/hydrate_people" / "hydrate_people.py")
 results_io = load_module("results_io", ROOT / "packs/search/primitives/persist_search_results" / "results_io.py")
@@ -305,8 +311,8 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             {"id": "p2-0", "base_id": "p2", "score": 0.9},
             {"id": "p3-0", "base_id": "p3", "score": 0.8},
         ]
-        self.assertEqual(len(turbopuffer_client.dedupe_people(rows, limit=0)), 3)
-        self.assertEqual(len(turbopuffer_client.dedupe_people(rows, limit=2)), 2)
+        self.assertEqual(len(search_result_merge.dedupe_people(rows, limit=0)), 3)
+        self.assertEqual(len(search_result_merge.dedupe_people(rows, limit=2)), 2)
 
     def test_compressed_hydration_jsonl_round_trips_for_results(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -474,7 +480,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             {"person_id": "p2", "position_id": "p2-0", "position_title": "Engineer", "company_id": "c1"},
         ]
 
-        merged = turbopuffer_client.merge_company_union_candidates(candidates, union, limit=0)
+        merged = search_result_merge.merge_company_union_candidates(candidates, union, limit=0)
 
         self.assertEqual([row["person_id"] for row in merged], ["p1", "p2"])
         self.assertEqual(merged[0]["vertical_sources"], ["hybrid", "company_filter"])
@@ -655,13 +661,13 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
 
     def test_scripts_do_not_import_aleph_mvp(self) -> None:
         for path in [
-            LIB / "turbopuffer_client.py",
+            TURBOPUFFER / "turbopuffer_search_backend.py",
             ROOT / "packs/search/primitives/count_candidates" / "count_candidates.py",
             ROOT / "packs/search/primitives/execute_role_search" / "execute_role_search.py",
             ROOT / "packs/search/primitives/execute_search_slice" / "execute_search_slice.py",
-            ROOT / "packs/search/primitives/resolve_education" / "resolve_education.py",
+            TURBOPUFFER / "turbopuffer_resolve_education.py",
             ROOT / "packs/search/primitives/resolve_investors" / "resolve_investors.py",
-            ROOT / "packs/search/primitives/resolve_companies" / "resolve_companies.py",
+            TURBOPUFFER / "turbopuffer_resolve_companies.py",
             ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py",
         ]:
             text = path.read_text()

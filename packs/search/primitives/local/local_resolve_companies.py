@@ -14,24 +14,30 @@ from pathlib import Path
 from typing import Any
 
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
-sys.path.insert(0, str(LIB_DIR))
+PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+LIB_DIR = PRIMITIVES_DIR / "lib"
+SHARED_DIR = PRIMITIVES_DIR / "shared"
+LOCAL_DIR = PRIMITIVES_DIR / "local"
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
+    sys.path.insert(0, str(_path))
 
-from turbopuffer_client import (  # noqa: E402
-    STRONG_CONSISTENCY,
+import local_search_backend as local_backend  # noqa: E402
+from search_common import (  # noqa: E402
     allowed_operator_ids_from_payload,
     comparison,
-    embedding,
-    filter_only_rows_for_namespace,
-    is_local_backend,
     load_env_file,
-    local_namespace_has_vectors,
-    namespace,
-    namespace_name,
     reciprocal_rank_fusion,
     role_payload_from_state,
     row_attrs,
 )
+from search_embeddings import embedding  # noqa: E402
+
+
+STRONG_CONSISTENCY = {"level": "strong"}
+
+
+def local_namespace_has_vectors(logical_name: str, field: str = "vector") -> bool:
+    return local_backend.local_namespace_has_vectors(logical_name, field)
 
 
 FUNDING_STAGE_MAP = {
@@ -273,7 +279,7 @@ def company_attrs(row: Any) -> dict[str, Any]:
 
 async def exact_name_lookup(names: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    ns = namespace("companies")
+    ns = local_backend.namespace("companies")
     for name in names:
         name_filter = comparison("company_name", "Eq", name)
         query_filter = ("And", [filters, name_filter]) if filters else name_filter
@@ -294,7 +300,7 @@ async def exact_name_lookup(names: list[str], filters: tuple | None, *, top_k: i
 
 async def name_bm25_lookup(names: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    ns = namespace("companies")
+    ns = local_backend.namespace("companies")
     for name in names:
         def run_query() -> Any:
             return ns.query(
@@ -338,11 +344,11 @@ async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: i
     if not query and query_vector is None:
         return []
 
-    ns = namespace("companies")
+    ns = local_backend.namespace("companies")
     include_attributes = COMPANY_INCLUDE_ATTRIBUTES
     subqueries = []
     weights = []
-    if is_local_backend():
+    if True:
         if query:
             for field, weight in [
                 ("name_aliases_text", 0.25),
@@ -429,7 +435,7 @@ async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: i
 async def filter_only_company_rows(filters: tuple | None, *, page_size: int, max_results: int) -> list[dict[str, Any]]:
     if filters is None:
         return []
-    return await filter_only_rows_for_namespace(
+    return await local_backend.filter_only_rows_for_namespace(
         "companies",
         filters,
         COMPANY_INCLUDE_ATTRIBUTES,
@@ -545,7 +551,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     company_ids = list(dict.fromkeys([*existing, *(str(row["id"]) for row in rows if row.get("id"))]))
     result = {
-        "namespace": namespace_name("companies"),
+        "namespace": local_backend.namespace_name("companies"),
         "company_names": names,
         "company_semantic_queries": semantic_queries,
         "company_ids": company_ids[:args.max_companies] if args.max_companies else company_ids,

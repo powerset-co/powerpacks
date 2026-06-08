@@ -16,8 +16,13 @@ from typing import Any
 from uuid import UUID
 
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
-sys.path.insert(0, str(LIB_DIR))
+PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+LIB_DIR = PRIMITIVES_DIR / "lib"
+SHARED_DIR = PRIMITIVES_DIR / "shared"
+LOCAL_DIR = PRIMITIVES_DIR / "local"
+TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+    sys.path.insert(0, str(_path))
 
 from postgres_client import fetch_interaction_counts, fetch_person_rows, load_env_file  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402

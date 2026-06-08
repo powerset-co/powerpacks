@@ -351,7 +351,7 @@ def run_case(app_dir: Path, case: dict[str, Any], env: dict[str, str], run_dir: 
         sh(
             [
                 sys.executable,
-                str(PRIMITIVES / "resolve_companies" / "resolve_companies.py"),
+                str(PRIMITIVES / "turbopuffer" / "turbopuffer_resolve_companies.py"),
                 "--state",
                 str(state_path),
                 "--env-file",
