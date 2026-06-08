@@ -199,7 +199,9 @@ export function LocalOnboardingV2Page() {
               <span className="font-medium">CSV path</span>
               <Input
                 value={displayCsvPath}
+                readOnly={Boolean(uploadedCachePath)}
                 onChange={(event) => {
+                  if (uploadedCachePath) return;
                   setDisplayCsvPath(event.target.value);
                   setCsvPath(event.target.value);
                   setUploadedDisplayPath("");
@@ -208,7 +210,7 @@ export function LocalOnboardingV2Page() {
               />
               {uploadedCachePath ? (
                 <span className="block text-xs text-muted-foreground">
-                  Selected upload: {uploadedDisplayPath}. Powerpacks will run from the cached upload copy.
+                  Selected upload: {uploadedDisplayPath}. Powerpacks will run from the cached upload copy; upload another CSV to change it.
                 </span>
               ) : (
                 <span className="block text-xs text-muted-foreground">
