@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PIPELINE = ROOT / "packs/search/primitives/local_search_pipeline/local_search_pipeline.py"
 PERSON_STANFORD = "00000000-0000-0000-0000-000000000001"
 PERSON_OTHER = "00000000-0000-0000-0000-000000000002"
+PERSON_ADJACENT = "00000000-0000-0000-0000-000000000003"
 OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
 STANFORD_ID = "linkedin:school:stanford-university"
 
@@ -109,6 +110,29 @@ def write_local_search_db(path: Path) -> None:
                 1577836800,
                 0,
                 5.0,
+            ),
+            (
+                f"{PERSON_ADJACENT}-1",
+                PERSON_ADJACENT,
+                PERSON_ADJACENT,
+                f"{PERSON_ADJACENT}-1",
+                "Backend Engineer",
+                "San Francisco",
+                "California",
+                "United States",
+                ["San Francisco Bay Area"],
+                "engineering",
+                ["backend_engineer"],
+                True,
+                "linkedin:company:one",
+                "Company One",
+                [OPERATOR_ID],
+                ["backend engin"],
+                ["backend", "engineer", "backend engineer"],
+                [0.8, 0.2, 0.0],
+                1577836800,
+                0,
+                6.0,
             ),
         ],
     )
@@ -212,6 +236,7 @@ def write_local_search_db(path: Path) -> None:
         [
             (PERSON_STANFORD, PERSON_STANFORD, PERSON_STANFORD, "Builds production software systems.", ["Python"], [OPERATOR_ID]),
             (PERSON_OTHER, PERSON_OTHER, PERSON_OTHER, "Builds backend services.", ["Go"], [OPERATOR_ID]),
+            (PERSON_ADJACENT, PERSON_ADJACENT, PERSON_ADJACENT, "Builds backend systems at Company One.", ["Python"], [OPERATOR_ID]),
         ],
     )
     conn.close()
@@ -306,6 +331,64 @@ class LocalSearchPipelineTests(unittest.TestCase):
             with Path(out["artifacts"]["csv"]).open(newline="") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual([row["person_id"] for row in rows], [PERSON_STANFORD])
+
+    def test_company_union_uses_static_adjacent_role_ids_against_duckdb(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_raw:
+            tmp = Path(tmp_raw)
+            db = tmp / "local-search.duckdb"
+            payload_path = tmp / "prod-expand-company-union.json"
+            ledger = tmp / "ledger.json"
+            write_local_search_db(db)
+            payload = {
+                "original_query": "software engineers at AI companies",
+                "filters": {
+                    "has_domain_intent": True,
+                    "company_ids": [{"id": "linkedin:company:one", "display_value": "Company One"}],
+                    "role_bm25_queries": ["software engineer"],
+                    "role_ids": [{"id": "software_engineer", "display_value": "Software Engineer"}],
+                },
+            }
+            payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE),
+                    "run",
+                    "--db",
+                    str(db),
+                    "--ledger",
+                    str(ledger),
+                    "--query",
+                    "software engineers at AI companies",
+                    "--payload-json",
+                    str(payload_path),
+                    "--limit",
+                    "0",
+                    "--top-k",
+                    "50",
+                    "--timeout",
+                    "30",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            out = json.loads(proc.stdout)
+            self.assertEqual(out["summary"]["search_mode"], "COMPANY_UNION")
+            self.assertEqual(out["summary"]["company_union_candidates"], 1)
+            self.assertEqual(out["summary"]["company_union_added"], 1)
+            state = json.loads(Path(out["state"]).read_text())
+            prefilters = next(step for step in state["steps"] if step["id"] == "apply_prefilters")
+            self.assertEqual(prefilters["output"]["stages"][0]["adjacency_method"], "role_id")
+            self.assertEqual(prefilters["output"]["company_union_candidate_ids"], [PERSON_ADJACENT])
+
+            with Path(out["artifacts"]["csv"]).open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual([row["person_id"] for row in rows], [PERSON_STANFORD, PERSON_ADJACENT])
 
     def test_run_uses_duckdb_scope_without_set_resolution_or_postgres(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_raw:
