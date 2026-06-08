@@ -306,6 +306,103 @@ def payload_from_expand_output(output: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in output.items() if key in PAYLOAD_KEYS}
 
 
+def _dedupe_present(values: list[Any]) -> list[Any]:
+    out: list[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in (None, "", [], {}):
+            continue
+        marker = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        out.append(value)
+    return out
+
+
+def _entity_values(values: Any, *, prefer_display: bool = False) -> list[str]:
+    out: list[str] = []
+    for value in values or []:
+        if isinstance(value, dict):
+            raw = (
+                value.get("display_value") or value.get("value") or value.get("name") or value.get("id")
+                if prefer_display
+                else value.get("id") or value.get("display_value") or value.get("value") or value.get("name")
+            )
+        else:
+            raw = value
+        if raw not in (None, ""):
+            out.append(str(raw))
+    return list(dict.fromkeys(out))
+
+
+def _pattern_examples(patterns: Any) -> list[str]:
+    """Extract safe lexical hints from prod role pattern metadata."""
+    examples: list[str] = []
+    for item in patterns or []:
+        if not isinstance(item, dict):
+            continue
+        for example in item.get("examples") or []:
+            if isinstance(example, str) and example.strip():
+                examples.append(example.strip())
+    return list(dict.fromkeys(examples))
+
+
+def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | None = None) -> dict[str, Any]:
+    """Return local DuckDB payload shape for Powerpacks or prod/API expansion.
+
+    Prod/network expansion uses `filters.role_semantic_query`,
+    `filters.role_bm25_queries`, and entity objects. Local DuckDB primitives use
+    `role_search_filters.semantic_query`, `role_search_filters.bm25_queries`, and
+    scalar local filters. Normalizing at this boundary lets local_search_pipeline
+    consume the same query-expansion artifact where fields are statically
+    translatable.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    source_filters = payload.get("role_search_filters")
+    if isinstance(source_filters, dict):
+        normalized = dict(source_filters)
+    elif isinstance(payload.get("filters"), dict):
+        normalized = dict(payload["filters"])
+    else:
+        return payload
+
+    if "role_semantic_query" in normalized and "semantic_query" not in normalized:
+        normalized["semantic_query"] = normalized.get("role_semantic_query")
+    if "role_bm25_queries" in normalized:
+        normalized["bm25_queries"] = _dedupe_present([
+            *(normalized.get("bm25_queries") or []),
+            *(normalized.get("role_bm25_queries") or []),
+        ])
+
+    id_entity_keys = {
+        "company_ids", "cities", "states", "countries", "metro_areas", "macro_regions",
+        "company_cities", "company_states", "company_countries", "company_metro_areas",
+        "company_macro_regions", "seniority_bands", "role_ids", "degree_levels", "fields_of_study",
+        "sector_types", "entity_types", "technology_types", "customer_types", "yc_batches",
+    }
+    for key in id_entity_keys:
+        if isinstance(normalized.get(key), list) and normalized[key] and isinstance(normalized[key][0], dict):
+            normalized[key] = _entity_values(normalized[key])
+    if isinstance(normalized.get("education_ids"), list) and normalized["education_ids"] and isinstance(normalized["education_ids"][0], dict):
+        normalized.setdefault("education_names", _entity_values(normalized["education_ids"], prefer_display=True))
+        normalized["education_ids"] = _entity_values(normalized["education_ids"])
+
+    examples = _pattern_examples(normalized.get("role_core_patterns"))
+    if examples:
+        normalized["bm25_queries"] = _dedupe_present([*(normalized.get("bm25_queries") or []), *examples])
+
+    normalized = {key: value for key, value in normalized.items() if is_present(value)}
+    out = dict(payload)
+    out["role_search_filters"] = normalized
+    out.setdefault("intent_type", "role_search")
+    out.setdefault("source_type", payload.get("source_type") or ("prod_expand_query" if "filters" in payload else "query"))
+    out.setdefault("normalized_query", payload.get("normalized_query") or payload.get("original_query") or query)
+    out.setdefault("vertical", payload.get("vertical") or "people")
+    return out
+
+
 def payload_filters(payload: dict[str, Any]) -> dict[str, Any]:
     filters = payload.get("role_search_filters")
     return dict(filters) if isinstance(filters, dict) else {}
@@ -454,6 +551,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         payload = {}
     if not isinstance(payload, dict) or not payload:
         raise PipelineError("Need --payload-json, or --state with an expand_search_request step")
+    payload = normalize_query_expansion_payload(payload, query=args.query)
     payload, ignored_scope_keys = prepare_local_payload(payload)
     if args.payload_json:
         sanitized_path = ledger_path.parent / f"{ledger_path.stem}.local-payload.json"
@@ -565,7 +663,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         if proc.returncode != 0:
             raise PipelineError(f"expand_search_request failed rc={proc.returncode}: {((proc.stderr or proc.stdout or '').strip())[-1200:]}")
         expanded = parsed[-1] if parsed else {}
-        payload, removed_scope_keys = prepare_local_payload(payload_from_expand_output(expanded))
+        payload, removed_scope_keys = prepare_local_payload(normalize_query_expansion_payload(payload_from_expand_output(expanded), query=args.query))
         write_json(full_json, expanded)
         write_json(payload_json, payload)
         execute_command = (

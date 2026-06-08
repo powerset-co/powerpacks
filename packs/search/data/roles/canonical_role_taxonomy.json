@@ -1,0 +1,324 @@
+{
+  "_source": "network-search-api/data/roles/canonical_role_map.json departments",
+  "departments": {
+    "academic_research": {
+      "function_count": 7,
+      "functions": [
+        "educator",
+        "lecturer",
+        "professor",
+        "research_assistant",
+        "researcher",
+        "student",
+        "teaching_assistant"
+      ],
+      "total_positions": 12075
+    },
+    "business_dev": {
+      "function_count": 3,
+      "functions": [
+        "business_development",
+        "corporate_development",
+        "partnerships"
+      ],
+      "total_positions": 3383
+    },
+    "customer_success": {
+      "function_count": 3,
+      "functions": [
+        "customer_success_manager",
+        "customer_support",
+        "engagement_manager"
+      ],
+      "total_positions": 1516
+    },
+    "data_ml": {
+      "function_count": 8,
+      "functions": [
+        "ai_engineer",
+        "ai_researcher",
+        "data_analyst",
+        "data_architect",
+        "data_engineer",
+        "data_science_manager",
+        "data_scientist",
+        "ml_engineer"
+      ],
+      "total_positions": 5608
+    },
+    "design": {
+      "function_count": 7,
+      "functions": [
+        "creative_director",
+        "graphic_designer",
+        "motion_designer",
+        "product_designer",
+        "ui_designer",
+        "ux_designer",
+        "ux_researcher"
+      ],
+      "total_positions": 3728
+    },
+    "engineering": {
+      "function_count": 29,
+      "functions": [
+        "aerospace_engineer",
+        "audio_engineer",
+        "backend_engineer",
+        "biomedical_engineer",
+        "blockchain_engineer",
+        "chief_technology_officer",
+        "civil_engineer",
+        "developer_advocate",
+        "devops_engineer",
+        "electrical_engineer",
+        "embedded_engineer",
+        "engineering_manager",
+        "field_engineer",
+        "frontend_engineer",
+        "full_stack_engineer",
+        "hardware_engineer",
+        "it_support",
+        "mechanical_engineer",
+        "mobile_engineer",
+        "network_engineer",
+        "process_engineer",
+        "qa_engineer",
+        "research_engineer",
+        "robotics_engineer",
+        "software_architect",
+        "software_engineer",
+        "solutions_engineer",
+        "support_engineer",
+        "systems_engineer",
+        "technical_lead"
+      ],
+      "total_positions": 23480
+    },
+    "finance": {
+      "function_count": 8,
+      "functions": [
+        "accountant",
+        "actuary",
+        "auditor",
+        "chief_financial_officer",
+        "controller",
+        "finance_manager",
+        "financial_analyst",
+        "investment_banker",
+        "underwriter"
+      ],
+      "total_positions": 6400
+    },
+    "general": {
+      "function_count": 14,
+      "functions": [
+        "analyst",
+        "associate",
+        "chief_executive_officer",
+        "consultant",
+        "coordinator",
+        "director",
+        "founder",
+        "head_of",
+        "manager",
+        "owner",
+        "president",
+        "principal",
+        "specialist",
+        "vice_president"
+      ],
+      "total_positions": 118783
+    },
+    "governance": {
+      "function_count": 5,
+      "functions": [
+        "advisor",
+        "board_advisor",
+        "board_chairman",
+        "board_member",
+        "trustee"
+      ],
+      "total_positions": 13135
+    },
+    "healthcare": {
+      "function_count": 7,
+      "functions": [
+        "clinical_researcher",
+        "dentist",
+        "healthcare_administrator",
+        "nurse",
+        "pharmacist",
+        "physician",
+        "therapist"
+      ],
+      "total_positions": 606
+    },
+    "investing": {
+      "function_count": 8,
+      "functions": [
+        "angel_investor",
+        "general_partner",
+        "limited_partner",
+        "portfolio_manager",
+        "scout",
+        "vc_associate",
+        "venture_capitalist",
+        "venture_partner"
+      ],
+      "total_positions": 8639
+    },
+    "legal": {
+      "function_count": 6,
+      "functions": [
+        "attorney",
+        "compliance_analyst",
+        "compliance_manager",
+        "general_counsel",
+        "legal_clerk",
+        "paralegal"
+      ],
+      "total_positions": 5773
+    },
+    "marketing": {
+      "function_count": 12,
+      "functions": [
+        "brand_manager",
+        "chief_marketing_officer",
+        "communications_manager",
+        "community_manager",
+        "content_marketer",
+        "developer_advocate",
+        "growth_marketer",
+        "marketing_analyst",
+        "marketing_coordinator",
+        "marketing_manager",
+        "marketing_ops",
+        "publicist",
+        "social_media_manager"
+      ],
+      "total_positions": 9185
+    },
+    "media_content": {
+      "function_count": 8,
+      "functions": [
+        "creator",
+        "editor",
+        "filmmaker",
+        "journalist",
+        "photographer",
+        "producer",
+        "technical_writer",
+        "writer"
+      ],
+      "total_positions": 6344
+    },
+    "noise": {
+      "function_count": 14,
+      "functions": [
+        "alumni",
+        "athlete",
+        "coach",
+        "food_service_worker",
+        "guide",
+        "laborer",
+        "participant",
+        "personal_trainer",
+        "pilot",
+        "referee",
+        "resident_advisor",
+        "retired",
+        "winner",
+        "officer"
+      ],
+      "total_positions": 516
+    },
+    "operations": {
+      "function_count": 6,
+      "functions": [
+        "admin_assistant",
+        "business_analyst",
+        "chief_of_staff",
+        "chief_operating_officer",
+        "logistics_manager",
+        "operations_manager",
+        "supply_chain"
+      ],
+      "total_positions": 15321
+    },
+    "people_hr": {
+      "function_count": 4,
+      "functions": [
+        "hr_coordinator",
+        "hr_manager",
+        "recruiter",
+        "training_manager"
+      ],
+      "total_positions": 5295
+    },
+    "product": {
+      "function_count": 3,
+      "functions": [
+        "chief_product_officer",
+        "product_analyst",
+        "product_manager",
+        "product_ops"
+      ],
+      "total_positions": 5945
+    },
+    "real_estate": {
+      "function_count": 7,
+      "functions": [
+        "mortgage_specialist",
+        "property_manager",
+        "real_estate_agent",
+        "real_estate_analyst",
+        "real_estate_appraiser",
+        "real_estate_developer",
+        "real_estate_investor"
+      ],
+      "total_positions": 318
+    },
+    "sales": {
+      "function_count": 8,
+      "functions": [
+        "account_executive",
+        "account_manager",
+        "chief_revenue_officer",
+        "enablement",
+        "sales_engineer",
+        "sales_manager",
+        "sales_operations",
+        "sales_rep",
+        "sdr"
+      ],
+      "total_positions": 9943
+    },
+    "security": {
+      "function_count": 4,
+      "functions": [
+        "security_analyst",
+        "security_architect",
+        "security_engineer",
+        "security_manager"
+      ],
+      "total_positions": 670
+    },
+    "strategy": {
+      "function_count": 3,
+      "functions": [
+        "management_consultant",
+        "policy_analyst",
+        "strategist"
+      ],
+      "total_positions": 8047
+    },
+    "trades": {
+      "function_count": 1,
+      "functions": [
+        "technician"
+      ],
+      "total_positions": 16
+    }
+  }
+}

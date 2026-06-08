@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 import os
 import subprocess
@@ -16,6 +17,14 @@ PERSON_STANFORD = "00000000-0000-0000-0000-000000000001"
 PERSON_OTHER = "00000000-0000-0000-0000-000000000002"
 OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
 STANFORD_ID = "linkedin:school:stanford-university"
+
+
+def load_pipeline_module():
+    spec = importlib.util.spec_from_file_location("local_search_pipeline_test", PIPELINE)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
 
 
 def write_local_search_db(path: Path) -> None:
@@ -38,6 +47,7 @@ def write_local_search_db(path: Path) -> None:
           country VARCHAR,
           metro_areas VARCHAR[],
           role_track VARCHAR,
+          role_ids VARCHAR[],
           is_current BOOLEAN,
           company_id VARCHAR,
           company_name VARCHAR,
@@ -52,7 +62,7 @@ def write_local_search_db(path: Path) -> None:
         """
     )
     conn.executemany(
-        "INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 f"{PERSON_STANFORD}-1",
@@ -65,6 +75,7 @@ def write_local_search_db(path: Path) -> None:
                 "United States",
                 ["San Francisco Bay Area"],
                 "engineering",
+                ["software_engineer"],
                 True,
                 "linkedin:company:one",
                 "Company One",
@@ -87,6 +98,7 @@ def write_local_search_db(path: Path) -> None:
                 "United States",
                 ["New York City Metropolitan Area"],
                 "engineering",
+                ["product_manager"],
                 True,
                 "linkedin:company:two",
                 "Company Two",
@@ -206,6 +218,95 @@ def write_local_search_db(path: Path) -> None:
 
 
 class LocalSearchPipelineTests(unittest.TestCase):
+    def test_normalize_query_expansion_payload_accepts_prod_role_schema(self) -> None:
+        mod = load_pipeline_module()
+        payload = {
+            "original_query": "software engineers in sf that went to stanford",
+            "traits": [{"value": "Software engineer", "temporal": "current", "meaning": "role"}],
+            "filters": {
+                "role_semantic_query": "Software engineers building production services and distributed systems.",
+                "role_bm25_queries": ["software engineer", "backend engineer"],
+                "role_core_patterns": [
+                    {"regex": "software\\s+engineer", "examples": ["Software Engineer", "Backend Engineer"]}
+                ],
+                "education_ids": [{"id": STANFORD_ID, "display_value": "Stanford University"}],
+                "metro_areas": [{"id": "San Francisco Bay Area", "display_value": "San Francisco Bay Area"}],
+                "seniority_bands": [{"id": "senior", "display_value": "Senior"}],
+            },
+        }
+
+        normalized = mod.normalize_query_expansion_payload(payload)
+        filters = normalized["role_search_filters"]
+
+        self.assertEqual(normalized["intent_type"], "role_search")
+        self.assertEqual(normalized["normalized_query"], payload["original_query"])
+        self.assertEqual(filters["semantic_query"], payload["filters"]["role_semantic_query"])
+        self.assertEqual(filters["role_semantic_query"], payload["filters"]["role_semantic_query"])
+        self.assertEqual(filters["education_names"], ["Stanford University"])
+        self.assertEqual(filters["education_ids"], [STANFORD_ID])
+        self.assertEqual(filters["metro_areas"], ["San Francisco Bay Area"])
+        self.assertEqual(filters["seniority_bands"], ["senior"])
+        self.assertEqual(
+            filters["bm25_queries"],
+            ["software engineer", "backend engineer", "Software Engineer", "Backend Engineer"],
+        )
+        self.assertEqual(normalized["traits"], payload["traits"])
+
+    def test_prod_shaped_role_expansion_reaches_local_duckdb_retrieval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_raw:
+            tmp = Path(tmp_raw)
+            db = tmp / "local-search.duckdb"
+            payload_path = tmp / "prod-expand.json"
+            ledger = tmp / "ledger.json"
+            write_local_search_db(db)
+            payload = {
+                "original_query": "software engineers",
+                "filters": {
+                    "role_bm25_queries": ["software engineer"],
+                    "role_ids": [{"id": "software_engineer", "display_value": "Software Engineer"}],
+                    "role_core_patterns": [{"regex": "software\\s+engineer", "examples": ["Software Engineer"]}],
+                },
+            }
+            payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE),
+                    "run",
+                    "--db",
+                    str(db),
+                    "--ledger",
+                    str(ledger),
+                    "--query",
+                    "software engineers",
+                    "--payload-json",
+                    str(payload_path),
+                    "--limit",
+                    "0",
+                    "--top-k",
+                    "50",
+                    "--timeout",
+                    "30",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            out = json.loads(proc.stdout)
+            self.assertEqual(out["summary"]["returned_people"], 1)
+            state = json.loads(Path(out["state"]).read_text())
+            expand = next(step for step in state["steps"] if step["id"] == "expand_search_request")
+            filters = expand["output"]["role_search_filters"]
+            self.assertEqual(filters["role_ids"], ["software_engineer"])
+            self.assertEqual(filters["bm25_queries"], ["software engineer", "Software Engineer"])
+            with Path(out["artifacts"]["csv"]).open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual([row["person_id"] for row in rows], [PERSON_STANFORD])
+
     def test_run_uses_duckdb_scope_without_set_resolution_or_postgres(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_raw:
             tmp = Path(tmp_raw)
