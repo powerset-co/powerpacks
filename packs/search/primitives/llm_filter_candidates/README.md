@@ -47,7 +47,7 @@ Profile handoff:
 
 Batching and concurrency:
 
-- `--batch-size` defaults to `5`, matching the API filter stage.
+- `--batch-size` defaults to `2`.
 - `--concurrency` defaults to `$POWERPACKS_LLM_FILTER_CONCURRENCY`, then
   `$SEARCH_V2_LLM_FILTER_MAX_CONCURRENT`, then `1000`.
 - Progress is written to stderr as batches complete.

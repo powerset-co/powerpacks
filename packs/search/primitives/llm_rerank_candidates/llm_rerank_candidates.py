@@ -18,7 +18,8 @@ Inputs:
 - `--query STRING` : the search query (for prompt context)
 - `--traits TRAIT` : expected traits (repeatable)
 - `--concurrency N` : asyncio.Semaphore size (default follows API env; 400)
-- `--model NAME` : chat completion model (default gpt-4o-mini)
+- `--model NAME` : chat completion model (default gpt-5.1)
+- `--reasoning-effort LEVEL` : reasoning effort for supported models (default low)
 - `--api-base URL` : base URL (default https://api.openai.com)
 - `--api-key KEY` : OpenAI API key (default $OPENAI_API_KEY)
 - `--out PATH | -` : where to write the enriched JSONL (default stdout)
@@ -61,8 +62,15 @@ from typing import Any, Optional
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 
+LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
+sys.path.insert(0, str(LIB_DIR))
+
+from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
+
+
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
-DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-4o-mini")
+DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.1")
+DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "low")
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_SECONDS_PER_WAVE = int(os.environ.get("LLM_RERANK_SECONDS_PER_WAVE", "30"))
 
@@ -136,6 +144,7 @@ class RerankResult:
     input: dict[str, Any]
     confidence: float = 0.0
     trait_scores: dict[str, float] = field(default_factory=dict)
+    prompt_tokens_estimate: int = 0
     error: Optional[str] = None
     prompt: Optional[str] = None
 
@@ -149,6 +158,7 @@ class RerankResult:
             "elapsed_ms": self.elapsed_ms,
             "confidence": self.confidence,
             "trait_scores": self.trait_scores,
+            "prompt_tokens_estimate": self.prompt_tokens_estimate,
             "error": self.error,
             "input": self.input,
         }
@@ -192,16 +202,20 @@ async def call_chat_completion(
     model: str,
     system_prompt: str,
     user_prompt: str,
+    reasoning_effort: str | None,
 ) -> dict[str, Any]:
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+    if reasoning_effort and supports_reasoning_effort(model):
+        kwargs["reasoning_effort"] = reasoning_effort
+    response = await client.chat.completions.create(**kwargs)
     return {
         "choices": [
             {
@@ -253,6 +267,11 @@ def parse_verdict(raw_response: dict[str, Any], traits: list[dict[str, str]]) ->
     return score, verdict, reason, confidence, trait_scores
 
 
+def supports_reasoning_effort(model: str) -> bool:
+    normalized = str(model or "").lower().split("/")[-1]
+    return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 # ---------------------------------------------------------------------------
 # Async fan-out
 # ---------------------------------------------------------------------------
@@ -265,11 +284,19 @@ async def rerank_one(
     traits: list[dict[str, str]],
     client: AsyncOpenAI,
     model: str,
+    reasoning_effort: str | None,
     semaphore: asyncio.Semaphore,
     max_retries: int,
     include_prompt: bool,
 ) -> RerankResult:
     user_prompt = build_user_prompt(query, traits, item)
+    prompt_tokens_estimate = count_chat_prompt_tokens(
+        model,
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
     started = time.monotonic()
     error: Optional[str] = None
     score = 0.0
@@ -288,6 +315,7 @@ async def rerank_one(
                     model,
                     SYSTEM_PROMPT,
                     user_prompt,
+                    reasoning_effort,
                 )
                 score, verdict, reason, confidence, trait_scores = parse_verdict(raw_response, traits)
                 error = None
@@ -324,6 +352,7 @@ async def rerank_one(
         input=item.payload,
         confidence=confidence,
         trait_scores=trait_scores,
+        prompt_tokens_estimate=prompt_tokens_estimate,
         error=error,
         prompt=user_prompt if include_prompt else None,
     )
@@ -337,6 +366,7 @@ async def rerank_all(
     api_base: str,
     api_key: str,
     model: str,
+    reasoning_effort: str | None,
     concurrency: int,
     timeout: int,
     max_retries: int,
@@ -357,6 +387,7 @@ async def rerank_all(
                 traits=traits,
                 client=client,
                 model=model,
+                reasoning_effort=reasoning_effort,
                 semaphore=semaphore,
                 max_retries=max_retries,
                 include_prompt=include_prompt,
@@ -660,6 +691,7 @@ def main() -> int:
     parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable, wrapped to structured dict at parse time)")
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--timeout", type=int, default=120)
@@ -738,6 +770,7 @@ def main() -> int:
             api_base=args.api_base,
             api_key=args.api_key,
             model=args.model,
+            reasoning_effort=args.reasoning_effort,
             concurrency=args.concurrency,
             timeout=args.timeout,
             max_retries=args.max_retries,
@@ -745,6 +778,12 @@ def main() -> int:
         )
     )
     elapsed = time.monotonic() - started
+    elapsed_ms = int(elapsed * 1000)
+    token_usage_estimate = summarize_token_counts(
+        [result.prompt_tokens_estimate for result in results],
+        model=args.model,
+        elapsed_ms=elapsed_ms,
+    )
 
     artifacts: dict[str, Any] = {}
     if state_path and state is not None:
@@ -769,15 +808,17 @@ def main() -> int:
             artifacts["raw_rerank_results_jsonl"] = str(raw_jsonl_path)
         output = {
             "model": args.model,
+            "reasoning_effort": args.reasoning_effort if supports_reasoning_effort(args.model) else None,
             "concurrency": args.concurrency,
             "estimated_seconds": estimate_seconds,
             "ranked_count": len(results),
             "ranked_candidate_ids": ordered_ids,
             "profile_scope": "full",
+            "token_usage_estimate": token_usage_estimate,
             "artifacts": artifacts,
         }
         if args.write_state:
-            record_state_step(state_path, state, output, int((time.monotonic() - started) * 1000))
+            record_state_step(state_path, state, output, elapsed_ms)
         print(json.dumps(output, indent=2, sort_keys=True))
     else:
         write_results(results, args.out_path)

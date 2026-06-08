@@ -2465,6 +2465,7 @@ async function readProfilesForIds(filePath: string, ids: Set<string>, gzipped = 
 
 async function loadResults(state: RunState, offset = 0, limit = 50) {
   const artifacts = state.artifacts || {};
+  const resultsCsv = safeJoinPowerpacks(artifacts.csv);
   const jsonlPath = safeJoinPowerpacks(artifacts.jsonl);
   const artifactDir = safeJoinPowerpacks(artifacts.artifact_dir);
   const rerankCsv = artifactDir ? path.join(artifactDir, "llm_rerank_candidates", "query_results.csv") : null;
@@ -2472,7 +2473,15 @@ async function loadResults(state: RunState, offset = 0, limit = 50) {
   let rows: any[] = [];
   let totalRows = Number(artifacts.row_count ?? 0) || null;
 
-  if (rerankCsv && fs.existsSync(rerankCsv)) {
+  if (resultsCsv && fs.existsSync(resultsCsv)) {
+    const { rows: resultRows, total } = await readCsvWindow(resultsCsv, offset, limit);
+    totalRows = total;
+    rows = resultRows.map((row) => ({
+      ...row,
+      rank: Number(row.rank ?? 0),
+      reranked: row.final_score != null && row.final_score !== "",
+    }));
+  } else if (rerankCsv && fs.existsSync(rerankCsv)) {
     const { rows: rerankRows, total } = await readCsvWindow(rerankCsv, offset, limit);
     totalRows = total;
     const ids = new Set(rerankRows.map((row) => String(row.person_id || "")).filter(Boolean));

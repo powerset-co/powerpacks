@@ -236,11 +236,19 @@ class LlmFilterProfileHandoffTests(unittest.TestCase):
             self.assertEqual(output["batch_count"], 20)
             self.assertEqual(output["concurrency"], 5)
             self.assertEqual(output["passed_count"], 20)
+            token_usage = output["token_usage_estimate"]
+            self.assertEqual(token_usage["estimator"], "tiktoken_chat_prompt")
+            self.assertEqual(token_usage["request_count"], 20)
+            self.assertGreater(token_usage["prompt_tokens_total"], 0)
+            self.assertGreater(token_usage["prompt_tokens_per_minute"], 0)
             self.assertEqual(mock.state["calls"], 20)
             self.assertGreater(mock.state["max_in_flight"], 1)
             self.assertLessEqual(mock.state["max_in_flight"], 5)
             self.assertIn("filter: starting candidates=20 batches=20", proc.stderr)
             self.assertIn("filter: completed 20/20 batches", proc.stderr)
+            updated = json.loads(state_path.read_text())
+            step_output = updated["steps"][-1]["output"]
+            self.assertIn("token_usage_estimate", step_output)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,61 @@
+Legacy normal search orchestration notes preserved from the former
+search-network skill body. This is not happy-path agent guidance.
+
+Use the packaged search_network_pipeline prepare/run flow instead. These notes
+exist only as a reference while we decide whether any details should move into
+primitive docs.
+
+1. Create task state from powerpacks/tasks/search-network.task.json.
+   Use task_state.py init --query "<query>" so the default run file is unique
+   under .powerpacks/runs/.
+2. Run the expand_search_request primitive to produce the extraction JSON.
+   Save the output to .powerpacks/search/<run>/expand_search_request.json.
+3. Record the expansion output.
+4. If the request mentions adjacency or domain intent, run
+   plan_adjacency_search and record whether to include adjacency, ask the user,
+   or stay strict.
+5. Choose the initial strategy with decide_search_strategy.
+6. Resolve set scoping before retrieval:
+   - if the user provides set_id, preserve it in role_search_filters.set_id
+   - otherwise allow resolve_set_operators to use POWERPACKS_DEFAULT_SET_ID /
+     POWERSET_DEFAULT_SET_ID, or the logged-in operator's active personal set
+     from ~/.powerpacks/credentials.json
+   - record the returned operator_ids; these are the values used for
+     TurboPuffer allowed_operator_ids, not the raw set UUID
+7. Resolve ID-producing constraints before retrieval:
+   - run resolve_education when education_names or unresolved school names are
+     present
+   - run resolve_investors when investor_names or unresolved investor names are
+     present
+   - run resolve_companies when company names or company attributes must become
+     company IDs
+   - run apply_prefilters when education, tech skills, social/interaction
+     metrics, or large company intersections must become base_candidate_ids
+8. Run one of:
+   - direct role search
+   - count then search
+   - multi-slice retrieval
+9. Record every primitive output into task state. steps[] is the append-only
+   execution log; planned_steps[] is the mutable checklist that should move
+   from pending to completed/failed/skipped as matching steps run.
+   Feedback-driven refinements should additionally use candidate_feedback[],
+   criteria_mutations[], search_plan_revisions[], exemplar_sets[],
+   fanout_threads[], and run_lineage[] so the historical progression is
+   auditable across follow-up searches.
+10. Assess the frontier with assess_frontier.
+11. Decide the next action with plan_candidate_review.
+12. Hydrate the full candidate frontier with hydrate_people --write-state.
+    Do not dump full hydrated profiles unless explicitly debugging hydration.
+13. Run conservative LLM filtering by default:
+    llm_filter_candidates --state "$STATE" --profile-scope auto --batch-size 5
+    --concurrency 1000 --write-state.
+14. Run async LLM reranking by default:
+    llm_rerank_candidates --state "$STATE" --concurrency 400 --model gpt-5.4
+    --write-state.
+15. Persist CSV/JSONL artifacts with persist_search_results. It should use
+    llm_rerank_candidates.output.ranked_candidate_ids when present so exported
+    results are in final reranked order.
+16. Present a compact result summary, one artifact directory, one user-facing
+    found count, top candidates with score + reason, and recommended follow-up
+    refinements.
+17. Stop when the frontier is coherent enough to present.

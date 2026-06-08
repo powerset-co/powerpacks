@@ -159,6 +159,67 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(queue_rows[0]["handle"], "jane@example.com")
             self.assertEqual(queue_rows[0]["source"], "gmail_msgvault")
 
+    def test_msgvault_group_email_counts_direction_at_message_level(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript("""
+            CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+            CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                source_id INTEGER,
+                conversation_id INTEGER,
+                message_type TEXT,
+                sent_at TEXT,
+                received_at TEXT,
+                internal_date TEXT,
+                deleted_at TEXT,
+                deleted_from_source_at TEXT
+            );
+            CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
+            INSERT INTO sources (id, source_type, identifier, display_name) VALUES (1, 'gmail', 'me@gmail.com', 'Me');
+            INSERT INTO participants (id, email_address, display_name, domain) VALUES
+                (1, 'me@gmail.com', 'Me', 'gmail.com'),
+                (2, 'alice@example.com', 'Alice', 'example.com'),
+                (3, 'bob@example.com', 'Bob', 'example.com'),
+                (4, 'carol@example.com', 'Carol', 'example.com');
+            INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at) VALUES
+                (10, 1, 100, 'email', '2026-01-01T00:00:00Z'),
+                (11, 1, 100, 'email', '2026-01-02T00:00:00Z');
+            INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
+                (10, 2, 'from', 'Alice'),
+                (10, 1, 'to', 'Me'),
+                (10, 3, 'to', 'Bob'),
+                (10, 4, 'cc', 'Carol'),
+                (11, 1, 'from', 'Me'),
+                (11, 2, 'to', 'Alice'),
+                (11, 3, 'to', 'Bob'),
+                (11, 4, 'cc', 'Carol');
+        """)
+
+        rows = gmail_network_import.aggregate_msgvault_contacts(con, "me@gmail.com")
+        by_email = {row["email"]: row for row in rows}
+
+        self.assertEqual(by_email["alice@example.com"]["total_sent"], 1)
+        self.assertEqual(by_email["alice@example.com"]["total_received"], 1)
+        self.assertEqual(by_email["alice@example.com"]["total_messages"], 2)
+        self.assertEqual(by_email["alice@example.com"]["group_sent"], 1)
+        self.assertEqual(by_email["alice@example.com"]["group_received"], 1)
+        self.assertEqual(by_email["alice@example.com"]["group_messages"], 2)
+
+        self.assertEqual(by_email["bob@example.com"]["total_sent"], 1)
+        self.assertEqual(by_email["bob@example.com"]["total_received"], 0)
+        self.assertEqual(by_email["bob@example.com"]["total_messages"], 1)
+        self.assertEqual(by_email["bob@example.com"]["group_sent"], 1)
+        self.assertEqual(by_email["bob@example.com"]["group_received"], 0)
+
+        self.assertEqual(by_email["carol@example.com"]["total_sent"], 1)
+        self.assertEqual(by_email["carol@example.com"]["total_received"], 0)
+        self.assertEqual(by_email["carol@example.com"]["total_messages"], 1)
+        self.assertEqual(by_email["carol@example.com"]["group_sent"], 1)
+        self.assertEqual(by_email["carol@example.com"]["group_received"], 0)
+        con.close()
+
     def test_msgvault_import_reruns_upsert_fixed_discover_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "msgvault.db"
@@ -336,8 +397,8 @@ class GmailNetworkImportTests(unittest.TestCase):
                     (11, 1, 'to', 'Jane Example'),
                     (12, 2, 'from', 'Promo Person'),
                     (13, 2, 'to', 'Promo Person');
-                INSERT INTO labels (id, name) VALUES (1, 'CATEGORY_PROMOTIONS');
-                INSERT INTO message_labels (message_id, label_id) VALUES (12, 1), (13, 1);
+                INSERT INTO labels (id, name) VALUES (1, 'CATEGORY_PROMOTIONS'), (2, 'SENT');
+                INSERT INTO message_labels (message_id, label_id) VALUES (11, 2), (12, 1), (13, 1), (13, 2);
             """)
             con.commit()
             con.close()

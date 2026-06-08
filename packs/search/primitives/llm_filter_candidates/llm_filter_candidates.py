@@ -22,6 +22,7 @@ LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 sys.path.insert(0, str(LIB_DIR))
 
 from powerpacks_contracts import validate_hydrated_profile  # noqa: E402
+from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
 
 
 RESULT_FILTER_BATCH_SYSTEM_PROMPT = """You are a fast pre-screener filtering search results.
@@ -69,7 +70,7 @@ Score each candidate for relevance."""
 DEFAULT_MODEL = os.getenv("POWERPACKS_LLM_FILTER_MODEL", "gpt-4.1-mini")
 DEFAULT_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com")
 DEFAULT_THRESHOLD = 0.3
-DEFAULT_BATCH_SIZE = 5
+DEFAULT_BATCH_SIZE = 2
 DEFAULT_CONCURRENCY = int(
     os.getenv(
         "POWERPACKS_LLM_FILTER_CONCURRENCY",
@@ -394,10 +395,18 @@ async def score_batch(
             traits_list=traits,
             candidates_profiles=candidates_profiles,
         )
+        prompt_token_count = count_chat_prompt_tokens(
+            args.model,
+            [
+                {"role": "system", "content": RESULT_FILTER_BATCH_SYSTEM_PROMPT},
+                {"role": "user", "content": human_prompt},
+            ],
+        )
         prompt_row = {
             "batch_index": batch_idx,
             "candidate_ids": batch,
             "prompt": human_prompt,
+            "prompt_tokens_estimate": prompt_token_count,
         }
         try:
             parsed = await call_openai(
@@ -574,6 +583,12 @@ def cmd_filter(args: argparse.Namespace) -> None:
     filtered = [pid for pid in ids if pid in scores and scores[pid]["score"] < args.threshold]
     score_rows = [scores[pid] for pid in filter_ids if pid in scores]
     filtered_rows = [scores[pid] for pid in filtered if pid in scores]
+    elapsed_ms = int((time.time() - started) * 1000)
+    token_usage_estimate = summarize_token_counts(
+        [int(row.get("prompt_tokens_estimate") or 0) for row in prompt_rows],
+        model=args.model,
+        elapsed_ms=elapsed_ms,
+    )
 
     artifacts: dict[str, Any] = {}
     if args.dump_debug:
@@ -602,13 +617,13 @@ def cmd_filter(args: argparse.Namespace) -> None:
         "missing_hydration_count": len(missing),
         "passed_count": len(passed),
         "filtered_count": len(filtered),
+        "token_usage_estimate": token_usage_estimate,
         "passed_candidate_ids": passed,
         "filtered_candidate_ids": filtered,
         "filtered_results": {pid: scores[pid] for pid in filtered if pid in scores},
         "artifacts": artifacts,
     }
 
-    elapsed_ms = int((time.time() - started) * 1000)
     if args.write_state:
         record_step(state_path, state, output, elapsed_ms)
     print(json.dumps(output, indent=2, sort_keys=True))

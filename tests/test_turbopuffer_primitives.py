@@ -339,6 +339,48 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual([row["person_id"] for row in rows], ["p2", "p1"])
         self.assertEqual([row["name"] for row in rows], ["Two", "One"])
 
+    def test_result_rows_join_rerank_score_and_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            query_results = Path(td) / "query_results.csv"
+            query_results.write_text(
+                "conversation_id,query,person_id,result_index,matched_position_indexes,"
+                "final_score,trait_scores,overall_reasoning,pre_rerank_score,tags,"
+                "vertical_sources,created_at\n"
+                'task,software engineers,p2,0,[],0.91,{},"Strong SWE match",0.4,,[],2026-01-01T00:00:00Z\n'
+                'task,software engineers,p1,1,[],0.72,{},"Relevant engineer",0.3,,[],2026-01-01T00:00:00Z\n'
+            )
+            state = {
+                "task_id": "task",
+                "query": "software engineers in sf",
+                "steps": [
+                    {
+                        "id": "llm_rerank_candidates",
+                        "output": {
+                            "ranked_candidate_ids": ["p2", "p1"],
+                            "artifacts": {"query_results_csv": str(query_results)},
+                        },
+                    },
+                    {
+                        "id": "hydrate_people",
+                        "output": {
+                            "profiles": [
+                                {"person_id": "p1", "name": "One", "positions": []},
+                                {"person_id": "p2", "name": "Two", "positions": []},
+                            ]
+                        },
+                    },
+                ],
+            }
+
+            rows = results_io.result_rows(state)
+            self.assertEqual([row["person_id"] for row in rows], ["p2", "p1"])
+            self.assertEqual(rows[0]["name"], "Two")
+            self.assertEqual(rows[0]["result_index"], "0")
+            self.assertEqual(rows[0]["final_score"], "0.91")
+            self.assertEqual(rows[0]["trait_scores"], "{}")
+            self.assertEqual(rows[0]["overall_reasoning"], "Strong SWE match")
+            self.assertEqual(rows[0]["matched_position_indexes"], "[]")
+
     def test_social_and_interaction_prefilters_are_postgres_backed(self) -> None:
         original_social = apply_prefilters.fetch_social_filter_person_ids
         original_interaction = apply_prefilters.fetch_interaction_filter_person_ids

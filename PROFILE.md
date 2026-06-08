@@ -24,7 +24,9 @@ Never paste secret env values into chat.
 ## Powerpacks Skill Routing
 
 - `$search-network`, people search, network search, role/title/location/school
-  searches, complex JD plan-and-execute, or company-directory people lookups →
+  searches, or company-directory people lookups →
   `packs/search/skills/search-network/SKILL.md`
+- job posting URLs, pasted job descriptions, or complex role briefs →
+  `packs/search/skills/search-network-jd/SKILL.md`
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
