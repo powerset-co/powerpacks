@@ -35,6 +35,7 @@ DEFAULT_LEDGER = Path(".powerpacks/network-import/discover/gmail-one/ledger.json
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 DEFAULT_EXCLUDED_MSGVAULT_LABELS = ("CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES")
+GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
 
 PERSONAL_DOMAINS = {
     "gmail.com",
@@ -1072,6 +1073,8 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     manifest = {
         "task": "import_gmail_network_msgvault",
         "version": 2,
+        "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
+        "calculation_mode": "full_recount",
         "created_at": existing_manifest.get("created_at") or discovered_at,
         "updated_at": discovered_at,
         "status": "completed",

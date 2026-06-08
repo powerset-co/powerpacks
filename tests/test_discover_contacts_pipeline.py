@@ -172,6 +172,9 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                     "primary_email": "jane@example.com",
                     "source": "gmail_msgvault",
                     "source_channels": "gmail_msgvault",
+                    "total_messages": "2",
+                    "thread_count": "1",
+                    "last_interaction": "2026-01-02T00:00:00Z",
                 }],
             )
 
@@ -211,6 +214,67 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual([row["primary_email"] for row in rows], ["jane@example.com"])
+            self.assertEqual(rows[0]["total_messages"], "2")
+            self.assertEqual(manifest["calculation_version"], discover_gmail.GMAIL_INTERACTION_CALCULATION_VERSION)
+            self.assertEqual(manifest["calculation_mode"], "full_rewrite")
+            self.assertEqual(manifest["calculation_reason"], "calculation_version_changed")
+
+            with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
+                with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
+                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                        payload = discover_gmail.discover(accounts_file=accounts)
+
+            self.assertEqual(payload["status"], "completed")
+            with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
+                rerun_rows = list(csv.DictReader(handle))
+            self.assertEqual([row["primary_email"] for row in rerun_rows], ["jane@example.com"])
+            self.assertEqual(rerun_rows[0]["total_messages"], "2")
+            self.assertEqual(rerun_rows[0]["thread_count"], "1")
+
+            write_csv(
+                scratch_queue,
+                discover_gmail.GMAIL_DISCOVERY_COLUMNS,
+                [{
+                    "handle": "jane@example.com",
+                    "id": "gmail:jane@example.com",
+                    "account_emails": json.dumps(["me@example.com"]),
+                    "source_ids": json.dumps(["gmail:jane@example.com"]),
+                    "display_name": "Jane Example",
+                    "full_name": "Jane Example",
+                    "primary_email": "jane@example.com",
+                    "source": "gmail_msgvault",
+                    "source_channels": "gmail_msgvault",
+                    "total_messages": "1",
+                    "thread_count": "1",
+                    "last_interaction": "2026-01-03T00:00:00Z",
+                }],
+            )
+
+            def fake_incremental_run_cmd(cmd, timeout=None):
+                return 0, {
+                    "status": "completed",
+                    "calculation_mode": discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
+                    "artifacts": {
+                        "linkedin_resolution_queue_csv": str(scratch_queue),
+                        "people_csv": str(tmp / "scratch" / "people.csv"),
+                    },
+                    "counts": {"contacts_written": 1},
+                }, ""
+
+            with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
+                with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
+                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_incremental_run_cmd):
+                        payload = discover_gmail.discover(accounts_file=accounts)
+
+            self.assertEqual(payload["status"], "completed")
+            manifest = json.loads(paths[("gmail", "manifest_json")].read_text(encoding="utf-8"))
+            self.assertEqual(manifest["calculation_mode"], "incremental_update")
+            self.assertEqual(manifest["calculation_reason"], "children_returned_incremental_deltas")
+            with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
+                incremental_rows = list(csv.DictReader(handle))
+            self.assertEqual(incremental_rows[0]["total_messages"], "3")
+            self.assertEqual(incremental_rows[0]["thread_count"], "2")
+            self.assertEqual(incremental_rows[0]["last_interaction"], "2026-01-03T00:00:00Z")
 
     def test_gmail_discovery_ignores_missing_child_queue_instead_of_reading_dot(self) -> None:
         with tempfile.TemporaryDirectory() as td:

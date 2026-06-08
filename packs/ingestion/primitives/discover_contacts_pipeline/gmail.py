@@ -76,6 +76,9 @@ GMAIL_DISCOVERY_COLUMNS = [
     "source_channels",
 ]
 DEFAULT_GMAIL_ESTIMATE_MAX_PAGES = 4
+GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
+GMAIL_CALCULATION_FULL_RECOUNT = "full_recount"
+GMAIL_CALCULATION_INCREMENTAL_DELTA = "incremental_delta"
 
 
 def _as_list(value: Any) -> list[str]:
@@ -128,6 +131,20 @@ def _merge_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
             ensure_ascii=False,
         )
     return [{field: str(row.get(field) or "") for field in GMAIL_DISCOVERY_COLUMNS} for _, row in sorted(keyed.items())]
+
+
+def _same_selected_accounts(left: Any, right: list[str]) -> bool:
+    return sorted(_as_list(left)) == sorted(_as_list(right))
+
+
+def gmail_discovery_merge_plan(existing_manifest: dict[str, Any], selected_accounts: list[str], child_modes: list[str]) -> dict[str, str]:
+    if existing_manifest.get("calculation_version") != GMAIL_INTERACTION_CALCULATION_VERSION:
+        return {"mode": "full_rewrite", "reason": "calculation_version_changed"}
+    if not _same_selected_accounts(existing_manifest.get("selected_accounts"), selected_accounts):
+        return {"mode": "full_rewrite", "reason": "selected_accounts_changed"}
+    if child_modes and all(mode == GMAIL_CALCULATION_INCREMENTAL_DELTA for mode in child_modes):
+        return {"mode": "incremental_update", "reason": "children_returned_incremental_deltas"}
+    return {"mode": "full_rewrite", "reason": "children_returned_full_recounts"}
 
 
 def inputs(accounts: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -337,6 +354,7 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
 
     incoming: list[dict[str, Any]] = []
     children: list[dict[str, Any]] = []
+    child_modes: list[str] = []
     raw_root = contacts_csv.parent / "raw"
     for email in source_inputs["selected_accounts"]:
         account_raw_dir = raw_root / source_slug(email)
@@ -356,6 +374,8 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             str(account_raw_dir),
         )
         code, child, stderr = run_cmd(cmd)
+        child_mode = str(child.get("calculation_mode") or child.get("counts", {}).get("calculation_mode") or GMAIL_CALCULATION_FULL_RECOUNT) if isinstance(child, dict) else GMAIL_CALCULATION_FULL_RECOUNT
+        child_modes.append(child_mode)
         child_artifacts = child.get("artifacts") if isinstance(child, dict) else {}
         child_queue_text = str((child_artifacts or {}).get("linkedin_resolution_queue_csv") or "").strip()
         child_queue = Path(child_queue_text) if child_queue_text else None
@@ -370,6 +390,7 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             "code": code,
             "status": child.get("status") if isinstance(child, dict) else "",
             "contacts": child.get("contacts") or child.get("counts", {}).get("contacts_written", "") if isinstance(child, dict) else "",
+            "calculation_mode": child_mode,
             "rows_read": rows_written,
             "raw_dir": str(account_raw_dir),
         })
@@ -378,8 +399,10 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             write_json(manifest_json, payload)
             return payload
 
+    existing_manifest = read_json(manifest_json, {}) or {}
+    merge_plan = gmail_discovery_merge_plan(existing_manifest, source_inputs["selected_accounts"], child_modes)
     existing: list[dict[str, Any]] = []
-    if contacts_csv.exists():
+    if merge_plan["mode"] == "incremental_update" and contacts_csv.exists():
         _fields, existing = read_csv_rows(contacts_csv)
     merged = _merge_rows([*existing, *incoming])
     write_csv_rows(contacts_csv, GMAIL_DISCOVERY_COLUMNS, merged)
@@ -387,6 +410,10 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
     payload = {
         "status": "completed",
         "source": "gmail",
+        "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
+        "calculation_mode": merge_plan["mode"],
+        "calculation_reason": merge_plan["reason"],
+        "child_calculation_modes": child_modes,
         "contacts_csv": str(contacts_csv),
         "linkedin_resolution_queue_csv": str(queue_csv),
         "contacts": len(merged),
