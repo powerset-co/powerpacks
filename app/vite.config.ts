@@ -6,6 +6,7 @@ import { powerpacksLocalApiPlugin } from "./local-api/powerpacksLocalApiPlugin";
 export default defineConfig(() => ({
   server: {
     host: "0.0.0.0",
+    allowedHosts: [".preview.us1.vorflux.com"],
     port: 5177,
     strictPort: false,
     watch: {

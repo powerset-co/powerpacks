@@ -15,6 +15,7 @@ const powerpacksRepoRoot = path.resolve(
 const powerpacksStateRoot = path.join(powerpacksRepoRoot, ".powerpacks");
 const discoverContactsSetupLedger = ".powerpacks/network-import/discover/ledger.setup.json";
 const runsDir = path.join(powerpacksStateRoot, "runs");
+const onboardingV2LinkedInRunsDir = path.join(powerpacksStateRoot, "runs", "setup-linkedin-csv");
 const setupLedgerPath = path.join(powerpacksStateRoot, "setup", "setup-run.json");
 const accountsPath = path.join(powerpacksStateRoot, "ingestion", "accounts.json");
 const importRefreshLedgerPath = path.join(powerpacksRepoRoot, discoverContactsSetupLedger);
@@ -424,6 +425,21 @@ function setupCommandArgs(operatorId: string, phase: "status" | "next" | "bootst
     "--setup-ledger", ".powerpacks/setup/setup-run.json",
     ...extra,
   ];
+}
+
+function onboardingV2LinkedInCommand(command: "dry-run" | "run", operatorId: string, options: { csvPath?: string; sourceLabel?: string; runId?: string; force?: boolean } = {}) {
+  const args = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py",
+    command,
+    "--operator-id", operatorId,
+    "--accounts", ".powerpacks/ingestion/accounts.json",
+  ];
+  if (options.runId) args.push("--run-id", options.runId);
+  if (options.csvPath) args.push("--csv", options.csvPath);
+  if (options.sourceLabel) args.push("--source-user", options.sourceLabel);
+  if (options.force) args.push("--force");
+  return args;
 }
 
 function shellQuote(value: string): string {
@@ -2232,6 +2248,147 @@ function saveLinkedInCsvUpload(body: Record<string, any>) {
   };
 }
 
+function validOnboardingV2RunId(runId: string): boolean {
+  return /^[a-zA-Z0-9_-][a-zA-Z0-9_:-]{0,127}$/.test(runId);
+}
+
+function resolveOnboardingV2RunPath(runId: string, fileName: "status.json" | "events.jsonl"): string | null {
+  if (!validOnboardingV2RunId(runId)) return null;
+  const root = path.resolve(onboardingV2LinkedInRunsDir);
+  const resolved = path.resolve(root, runId, fileName);
+  return resolved.startsWith(`${root}${path.sep}`) ? resolved : null;
+}
+
+function safeOnboardingV2LinkedInCsvPath(value: unknown): string | undefined {
+  const raw = String(value || "").trim();
+  if (!raw) return undefined;
+  const resolved = path.resolve(powerpacksRepoRoot, raw.replace(/^~(?=\/|$)/, process.env.HOME || ""));
+  const allowedUploadDir = `${path.resolve(powerpacksStateRoot, "ingestion", "uploads", "linkedin")}${path.sep}`;
+  const stableConnectionsCsv = path.resolve(powerpacksStateRoot, "network-import", "discover", "linkedin", "Connections.csv");
+  if (resolved === stableConnectionsCsv || resolved.startsWith(allowedUploadDir)) return resolved;
+  throw new Error("LinkedIn CSV path must be the stable local Connections.csv or an uploaded LinkedIn CSV");
+}
+
+function readOnboardingV2LinkedInEvents(runId: string): Record<string, any>[] {
+  const eventsPath = resolveOnboardingV2RunPath(runId, "events.jsonl");
+  if (!eventsPath || !fs.existsSync(eventsPath)) return [];
+  return fs.readFileSync(eventsPath, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-250)
+    .map((line) => {
+      try {
+        return JSON.parse(line) as Record<string, any>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((event): event is Record<string, any> => Boolean(event));
+}
+
+function activeOnboardingV2LinkedInJob(runId: string): SetupJob | null {
+  return setupJobsList().find((job) => (
+    job.action === "onboarding-v2-linkedin"
+    && job.actionKey === `onboarding-v2:linkedin:${runId}`
+    && job.status === "running"
+  )) || null;
+}
+
+function onboardingV2LinkedInStatus(runId = "") {
+  const explicitRunId = String(runId || "").trim();
+  if (explicitRunId && !validOnboardingV2RunId(explicitRunId)) {
+    return { status: "missing", vertical: "linkedin_csv", run_id: explicitRunId, error: "Invalid runId" };
+  }
+  const latest = readJsonSync(path.join(onboardingV2LinkedInRunsDir, "latest.json")) || null;
+  const id = explicitRunId || String(latest?.run_id || "");
+  const statusPath = id ? resolveOnboardingV2RunPath(id, "status.json") : path.join(onboardingV2LinkedInRunsDir, "latest.json");
+  const activeJob = id ? activeOnboardingV2LinkedInJob(id) : null;
+  const status = (statusPath ? readJsonSync(statusPath) : null)
+    || (explicitRunId
+      ? {
+          status: activeJob ? "running" : "missing",
+          vertical: "linkedin_csv",
+          run_id: explicitRunId,
+          progress: 0,
+          stage_order: [
+            { id: "inspect", label: "Inspect LinkedIn CSV" },
+            { id: "discover", label: "Copy and parse LinkedIn CSV" },
+            { id: "enrich", label: "Enrich LinkedIn people" },
+            { id: "lake", label: "Write LinkedIn people to lake" },
+            { id: "index", label: "Merge and index local network" },
+          ],
+          updated_at: activeJob?.startedAt || "",
+        }
+      : latest || { status: "missing", vertical: "linkedin_csv" });
+  const resolvedRunId = String(status.run_id || id || "");
+  const resolvedActiveJob = activeJob || (resolvedRunId ? activeOnboardingV2LinkedInJob(resolvedRunId) : null);
+  const updatedAt = Date.parse(String(status.updated_at || ""));
+  const missingHeartbeat = String(status.status || "") === "running" && !resolvedActiveJob && !Number.isFinite(updatedAt);
+  const stale = String(status.status || "") === "running"
+    && !resolvedActiveJob
+    && (missingHeartbeat || (Number.isFinite(updatedAt) && Date.now() - updatedAt > 10 * 60 * 1000));
+  return {
+    ...status,
+    status_path: statusPath && fs.existsSync(statusPath) ? path.relative(powerpacksRepoRoot, statusPath) : String(status.status_path || ""),
+    events: resolvedRunId ? readOnboardingV2LinkedInEvents(resolvedRunId) : [],
+    active_job: resolvedActiveJob,
+    stale,
+    stale_reason: stale ? missingHeartbeat ? "This persisted run is marked running but has no active local API job or heartbeat timestamp." : "No active local API job has updated this persisted run recently. The Python runner may have been killed or the dev server may have restarted." : "",
+  };
+}
+
+function dryRunOnboardingV2LinkedIn(body: Record<string, any>) {
+  const setupLedger = readJsonSync(setupLedgerPath) || {};
+  const accounts = readJsonSync(accountsPath) || {};
+  const operator = resolveOperator(setupLedger, accounts);
+  const command = onboardingV2LinkedInCommand("dry-run", operator.id, {
+    csvPath: safeOnboardingV2LinkedInCsvPath(body.csvPath),
+    sourceLabel: String(body.sourceLabel || "").trim() || undefined,
+  });
+  const result = spawnSync(command[0], command.slice(1), {
+    cwd: powerpacksRepoRoot,
+    env: setupProcessEnv(),
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: 5 * 60 * 1000,
+  });
+  const output = parseLastJsonFragment(result.stdout || "") || {};
+  return {
+    status: result.status === 0 ? "ok" : "failed",
+    code: result.status,
+    command,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    output,
+  };
+}
+
+function startOnboardingV2LinkedIn(body: Record<string, any>): SetupJob {
+  const setupLedger = readJsonSync(setupLedgerPath) || {};
+  const accounts = readJsonSync(accountsPath) || {};
+  const operator = resolveOperator(setupLedger, accounts);
+  const runId = sourceSlug(String(body.runId || `local-${Date.now()}-${randomUUID().slice(0, 8)}`)).replace(/[.]+/g, "-");
+  if (!validOnboardingV2RunId(runId)) throw new Error("Invalid onboarding run ID");
+  const command = onboardingV2LinkedInCommand("run", operator.id, {
+    runId,
+    csvPath: safeOnboardingV2LinkedInCsvPath(body.csvPath),
+    sourceLabel: String(body.sourceLabel || "").trim() || undefined,
+    force: body.force === true,
+  });
+  return startSetupJob("onboarding-v2-linkedin", command, 6 * 60 * 60 * 1000, {
+    actionKey: `onboarding-v2:linkedin:${runId}`,
+    source: "linkedin_csv",
+    stages: [
+      { label: "Inspect LinkedIn CSV", index: 1, total: 5 },
+      { label: "Copy and parse LinkedIn CSV", index: 2, total: 5 },
+      { label: "Enrich LinkedIn people", index: 3, total: 5 },
+      { label: "Write LinkedIn people to lake", index: 4, total: 5 },
+      { label: "Merge and index local network", index: 5, total: 5 },
+    ],
+  });
+}
+
 function buildSetupActionJob(body: Record<string, any>): SetupJob {
   const setupLedger = readJsonSync(setupLedgerPath) || {};
   const accounts = readJsonSync(accountsPath) || {};
@@ -2557,6 +2714,19 @@ export function powerpacksLocalApiPlugin(): Plugin {
 
           if (url.pathname === "/local-api/setup/linkedin-csv-upload" && req.method === "POST") {
             return sendJson(res, saveLinkedInCsvUpload(await readRequestJson(req)));
+          }
+
+          if (url.pathname === "/local-api/onboarding-v2/linkedin/status") {
+            return sendJson(res, onboardingV2LinkedInStatus(url.searchParams.get("runId") || ""));
+          }
+
+          if (url.pathname === "/local-api/onboarding-v2/linkedin/dry-run" && req.method === "POST") {
+            return sendJson(res, dryRunOnboardingV2LinkedIn(await readRequestJson(req)));
+          }
+
+          if (url.pathname === "/local-api/onboarding-v2/linkedin/run" && req.method === "POST") {
+            const job = startOnboardingV2LinkedIn(await readRequestJson(req));
+            return sendJson(res, { job, status: onboardingV2LinkedInStatus(String(job.actionKey || "").replace(/^onboarding-v2:linkedin:/, "")) });
           }
 
           const setupJobMatch = url.pathname.match(/^\/local-api\/setup\/jobs\/([^/]+)$/);

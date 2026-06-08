@@ -69,6 +69,21 @@ export function runSetupAction(body: Record<string, unknown>): Promise<{ job: Se
   return postJson<{ job: SetupJob }>("/local-api/setup/run", body);
 }
 
+export function fetchOnboardingV2LinkedInStatus(options: { runId?: string } = {}): Promise<Record<string, unknown>> {
+  const params = new URLSearchParams();
+  if (options.runId) params.set("runId", options.runId);
+  const query = params.toString() ? `?${params.toString()}` : "";
+  return getJson<Record<string, unknown>>(`/local-api/onboarding-v2/linkedin/status${query}`);
+}
+
+export function dryRunOnboardingV2LinkedIn(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/local-api/onboarding-v2/linkedin/dry-run", body);
+}
+
+export function runOnboardingV2LinkedIn(body: Record<string, unknown>): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/linkedin/run", body);
+}
+
 export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {
   const content = await file.text();
   return postJson<{ path: string }>("/local-api/setup/linkedin-csv-upload", {

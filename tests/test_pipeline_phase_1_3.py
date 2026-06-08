@@ -53,6 +53,10 @@ setup_mod = load_module(
     "phase13_setup",
     "packs/ingestion/primitives/setup/setup.py",
 )
+setup_linkedin_csv = load_module(
+    "phase13_setup_linkedin_csv",
+    "packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py",
+)
 
 
 class PipelinePhase13Tests(unittest.TestCase):
@@ -224,6 +228,135 @@ class PipelinePhase13Tests(unittest.TestCase):
                 self.assertIsNotNone(import_common.import_manifest_current("gmail"))
                 artifact.write_text("id\n2\n", encoding="utf-8")
                 self.assertIsNone(import_common.import_manifest_current("gmail"))
+
+    def test_setup_linkedin_csv_dry_run_uses_stable_discovered_csv_for_currentness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            upload_csv = tmp_path / "uploads" / "Connections.csv"
+            stable_csv = tmp_path / "network-import" / "discover" / "linkedin" / "Connections.csv"
+            import_dir = tmp_path / "network-import" / "import"
+            people_csv = tmp_path / "people.csv"
+            accounts = tmp_path / "accounts.json"
+            upload_csv.parent.mkdir(parents=True)
+            stable_csv.parent.mkdir(parents=True)
+            upload_csv.write_text("First Name,Last Name,URL\nAda,Lovelace,https://www.linkedin.com/in/ada\n", encoding="utf-8")
+            stable_csv.write_text(upload_csv.read_text(encoding="utf-8"), encoding="utf-8")
+            people_csv.write_text("id\n1\n", encoding="utf-8")
+            accounts.write_text("{}", encoding="utf-8")
+            import_common.write_manifest("linkedin", {
+                "status": "completed",
+                "input": {"connections_csv": str(stable_csv), "source_user": "arthur"},
+                "outputs": {"people_csv": str(people_csv)},
+                "stats": {"people": 1},
+            }, import_dir=import_dir)
+
+            args = SimpleNamespace(csv=str(upload_csv), source_user="arthur", accounts=str(accounts))
+            with mock.patch.object(setup_linkedin_csv, "DEFAULT_IMPORT_DIR", import_dir), \
+                mock.patch.object(setup_linkedin_csv, "DISCOVER_CONNECTIONS_CSV", stable_csv), \
+                mock.patch.object(setup_linkedin_csv, "read_csv_stats", return_value={"status": "ok", "valid_contacts": 1}):
+                payload = setup_linkedin_csv.dry_run(args)
+
+            self.assertTrue(payload["current_import"])
+            self.assertEqual(payload["manifest_csv"], str(stable_csv))
+
+    def test_setup_linkedin_csv_run_noops_uploaded_csv_after_discovery_stable_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            upload_csv = tmp_path / "uploads" / "Connections.csv"
+            stable_csv = tmp_path / "network-import" / "discover" / "linkedin" / "Connections.csv"
+            import_dir = tmp_path / "network-import" / "import"
+            people_csv = tmp_path / "people.csv"
+            duckdb = tmp_path / "local-search.duckdb"
+            accounts = tmp_path / "accounts.json"
+            run_root = tmp_path / "runs" / "setup-linkedin-csv"
+            upload_csv.parent.mkdir(parents=True)
+            stable_csv.parent.mkdir(parents=True)
+            upload_csv.write_text("First Name,Last Name,URL\nAda,Lovelace,https://www.linkedin.com/in/ada\n", encoding="utf-8")
+            stable_csv.write_text(upload_csv.read_text(encoding="utf-8"), encoding="utf-8")
+            people_csv.write_text("id\n1\n", encoding="utf-8")
+            duckdb.write_bytes(b"0" * 2048)
+            accounts.write_text("{}", encoding="utf-8")
+            import_common.write_manifest("linkedin", {
+                "status": "completed",
+                "input": {"connections_csv": str(stable_csv), "source_user": "arthur"},
+                "outputs": {"people_csv": str(people_csv)},
+                "stats": {"people": 1},
+            }, import_dir=import_dir)
+            args = SimpleNamespace(
+                run_id="stable-noop",
+                csv=str(upload_csv),
+                source_user="arthur",
+                accounts=str(accounts),
+                force=False,
+                operator_id="arthur",
+            )
+
+            with mock.patch.object(setup_linkedin_csv, "RUN_ROOT", run_root), \
+                mock.patch.object(setup_linkedin_csv, "DEFAULT_IMPORT_DIR", import_dir), \
+                mock.patch.object(setup_linkedin_csv, "DISCOVER_CONNECTIONS_CSV", stable_csv), \
+                mock.patch.object(setup_linkedin_csv, "read_csv_stats", return_value={"status": "ok", "valid_contacts": 1}), \
+                mock.patch.object(setup_linkedin_csv.linkedin_discovery, "discover", return_value={"status": "completed", "contacts": 1, "source_csv": str(stable_csv)}), \
+                mock.patch.object(setup_linkedin_csv, "run_linkedin_import") as import_mock, \
+                mock.patch.object(setup_linkedin_csv.index_contacts_pipeline, "run_pipeline", return_value=({"status": "ready", "step": "noop", "duckdb": str(duckdb)}, 0)):
+                payload = setup_linkedin_csv.run(args)
+
+            self.assertEqual(payload["status"], "completed")
+            self.assertTrue(payload["import"]["noop"])
+            import_mock.assert_not_called()
+            self.assertTrue((run_root / "stable-noop" / "status.json").exists())
+
+    def test_setup_linkedin_csv_rejects_invalid_run_id(self):
+        with self.assertRaises(ValueError):
+            setup_linkedin_csv.make_context("../bad")
+
+    def test_setup_linkedin_csv_does_not_complete_when_index_not_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            csv_path = tmp_path / "Connections.csv"
+            accounts = tmp_path / "accounts.json"
+            run_root = tmp_path / "runs" / "setup-linkedin-csv"
+            import_dir = tmp_path / "network-import" / "import"
+            people_csv = tmp_path / "people.csv"
+            csv_path.write_text("First Name,Last Name,URL\nAda,Lovelace,https://www.linkedin.com/in/ada\n", encoding="utf-8")
+            accounts.write_text("{}", encoding="utf-8")
+            people_csv.write_text("id\n1\n", encoding="utf-8")
+            import_payload = {
+                "status": "completed",
+                "noop": True,
+                "input": {"connections_csv": str(csv_path), "source_user": "arthur"},
+                "outputs": {"people_csv": str(people_csv)},
+                "stats": {"people": 1},
+            }
+            args = SimpleNamespace(
+                run_id="not-ready-index",
+                csv=str(csv_path),
+                source_user="arthur",
+                accounts=str(accounts),
+                force=False,
+                operator_id="arthur",
+            )
+            with mock.patch.object(setup_linkedin_csv, "RUN_ROOT", run_root), \
+                mock.patch.object(setup_linkedin_csv, "DEFAULT_IMPORT_DIR", import_dir), \
+                mock.patch.object(setup_linkedin_csv, "read_csv_stats", return_value={"status": "ok", "valid_contacts": 1}), \
+                mock.patch.object(setup_linkedin_csv.linkedin_discovery, "discover", return_value={"status": "completed", "contacts": 1, "source_csv": str(csv_path)}), \
+                mock.patch.object(setup_linkedin_csv, "import_manifest_current", return_value=import_payload), \
+                mock.patch.object(setup_linkedin_csv.index_contacts_pipeline, "run_pipeline", return_value=({"status": "not_ready", "reason": "missing_people_csv"}, 0)):
+                payload = setup_linkedin_csv.run(args)
+
+            self.assertEqual(payload["status"], "failed")
+            self.assertIn("missing_people_csv", payload["error"])
+
+    def test_setup_linkedin_csv_status_payload_reads_latest_and_run_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "runs" / "setup-linkedin-csv"
+            run_dir = run_root / "run-1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"status": "completed", "run_id": "run-1"}), encoding="utf-8")
+            (run_root / "latest.json").write_text(json.dumps({"status": "running", "run_id": "run-1"}), encoding="utf-8")
+
+            with mock.patch.object(setup_linkedin_csv, "RUN_ROOT", run_root):
+                self.assertEqual(setup_linkedin_csv.status_payload()["status"], "running")
+                self.assertEqual(setup_linkedin_csv.status_payload("run-1")["status"], "completed")
 
     def test_import_all_manifest_skips_unchanged_parent_write(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(import_dispatcher, "DEFAULT_IMPORT_DIR", Path(tmp) / "import"):
