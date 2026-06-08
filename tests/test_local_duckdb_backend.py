@@ -1301,6 +1301,91 @@ class LocalPersonProfilesShimTest(unittest.TestCase):
             self.assertEqual(rows[0]["public_profile_url"], "https://www.linkedin.com/in/profile-only")
             self.assertEqual(rows[0]["hydrated_context"]["positions"][0]["title"], "Founder")
 
+
+class LocalDuckDBHydrationInteractionCountsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        try:
+            import duckdb  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("duckdb is not installed")
+
+    def _build_records_duckdb(self, tmp: Path, *, include_source_summary: bool) -> str:
+        records = tmp / "records"
+        write_jsonl(records / "person_profiles.records.jsonl", [
+            {
+                "id": "person-interaction",
+                "person_id": "person-interaction",
+                "base_id": "person-interaction",
+                "full_name": "Interaction Person",
+                "headline": "Founder",
+                "location_raw": "San Francisco, California, United States",
+                "hydrated_context": {
+                    "person_id": "person-interaction",
+                    "name": "Interaction Person",
+                    "headline": "Founder",
+                    "positions": [],
+                    "education": [],
+                },
+            }
+        ])
+        write_jsonl(records / "people.records.jsonl", [])
+        if include_source_summary:
+            write_jsonl(records / "person_source_summary.records.jsonl", [
+                {
+                    "person_id": "person-interaction",
+                    "operator_id": "operator-a",
+                    "source_channel": "gmail",
+                    "source_account": "arthur@example.com",
+                    "total_interactions": 7,
+                },
+                {
+                    "person_id": "person-interaction",
+                    "operator_id": "operator-a",
+                    "source_channel": "imessage",
+                    "source_account": "arthur@example.com",
+                    "total_interactions": 5,
+                },
+                {
+                    "person_id": "other-person",
+                    "operator_id": "operator-a",
+                    "source_channel": "gmail",
+                    "source_account": "arthur@example.com",
+                    "total_interactions": 99,
+                },
+            ])
+
+        payload = run_shim_json(
+            "--records-dir",
+            str(records),
+            "--output-dir",
+            str(tmp / "search-index"),
+            "--force",
+        )
+        return str(payload["duckdb"])
+
+    def test_local_hydration_sums_duckdb_person_source_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            db_path = self._build_records_duckdb(Path(tmp_name), include_source_summary=True)
+
+            rows = hydrate_people.fetch_local_person_rows(["person-interaction"], db_path=db_path, workers=1, batch_size=1)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["total_interactions"], 12)
+            self.assertEqual(rows[0]["hydrated_context"]["total_interactions"], 12)
+            profile = hydrate_people.normalize_hydrated_context(rows[0])
+            self.assertEqual(profile["total_interactions"], 12)
+            self.assertEqual(hydrate_people.llm_profile_view(profile)["total_interactions"], 12)
+
+    def test_local_hydration_without_source_summary_does_not_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            db_path = self._build_records_duckdb(Path(tmp_name), include_source_summary=False)
+
+            rows = hydrate_people.fetch_local_person_rows(["person-interaction"], db_path=db_path, workers=1, batch_size=1)
+
+            self.assertEqual(len(rows), 1)
+            self.assertIsNone(rows[0]["total_interactions"])
+            self.assertIsNone(rows[0]["hydrated_context"]["total_interactions"])
+
 class LocalPersonProfilePrefilterTest(unittest.TestCase):
     def test_profile_filter_constrains_position_search_without_duplicate_position_columns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:

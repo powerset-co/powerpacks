@@ -61,6 +61,10 @@ LOCAL_TABLES = {
     "local_companies": "records/companies.records.jsonl",
 }
 PERSON_PROFILE_RECORD = "records/person_profiles.records.jsonl"
+PERSON_SOURCE_SUMMARY_RECORD = "records/person_source_summary.records.jsonl"
+OPTIONAL_LOCAL_TABLES = {
+    "local_person_source_summary": PERSON_SOURCE_SUMMARY_RECORD,
+}
 
 # Local DuckDB contract for the five search namespaces.  These columns mirror
 # the Aleph TurboPuffer upload contracts copied under .powerpacks/aleph-seed:
@@ -225,6 +229,25 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "school_name_tokens": "VARCHAR[]",
         "person_count": "BIGINT",
     },
+}
+OPTIONAL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
+    "local_person_source_summary": {
+        "person_id": "VARCHAR",
+        "operator_id": "VARCHAR",
+        "source_channel": "VARCHAR",
+        "source_account": "VARCHAR",
+        "total_interactions": "INTEGER",
+        "total_messages": "INTEGER",
+        "thread_count": "INTEGER",
+        "total_sent": "INTEGER",
+        "total_received": "INTEGER",
+        "first_interaction": "VARCHAR",
+        "last_interaction": "VARCHAR",
+    },
+}
+ALL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
+    **LOCAL_TABLE_CONTRACT,
+    **OPTIONAL_LOCAL_TABLE_CONTRACT,
 }
 
 VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies"]
@@ -391,6 +414,12 @@ def materialize_records_dir(records_dir: Path, run_dir: Path, *, force: bool = F
         link_or_copy(src, dst, force=force)
         if dst.exists():
             copied[PERSON_PROFILE_RECORD] = str(dst)
+    src = record_source_path(records_dir, PERSON_SOURCE_SUMMARY_RECORD)
+    if src:
+        dst = run_dir / PERSON_SOURCE_SUMMARY_RECORD
+        link_or_copy(src, dst, force=force)
+        if dst.exists():
+            copied[PERSON_SOURCE_SUMMARY_RECORD] = str(dst)
     for _table, rel in LOCAL_TABLES.items():
         src = record_source_path(records_dir, rel)
         if not src:
@@ -788,7 +817,7 @@ def load_jsonl_table(con: Any, table: str, path: Path) -> int:
 
 
 def postprocess_table(con: Any, table: str, operator_id: str) -> None:
-    add_missing_columns(con, table, LOCAL_TABLE_CONTRACT.get(table, {}))
+    add_missing_columns(con, table, ALL_LOCAL_TABLE_CONTRACT.get(table, {}))
     cols = table_columns(con, table)
 
     if table == "local_people_positions":
@@ -893,6 +922,11 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_
             path = resolve_artifact_path(run_dir, rel)
             counts[table] = load_jsonl_table(con, table, path)
             postprocess_table(con, table, operator_id)
+        for table, rel in OPTIONAL_LOCAL_TABLES.items():
+            path = resolve_artifact_path(run_dir, rel)
+            if path.exists():
+                counts[table] = load_jsonl_table(con, table, path)
+                postprocess_table(con, table, operator_id)
         postprocess_cross_tables(con)
         counts["local_person_profile_position_overlap"] = profile_position_id_overlap(con)
         counts["local_people_positions_person_columns_dropped"] = int(drop_position_person_duplicates(con))
@@ -989,6 +1023,7 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table
         "powerpacks_local_search_db": str(db_path),
         "tables": table_counts,
         "local_table_contract": LOCAL_TABLE_CONTRACT,
+        "optional_local_table_contract": OPTIONAL_LOCAL_TABLE_CONTRACT,
         "vector_tables": VECTOR_TABLES,
     }
     path = run_dir / "manifest.json"
