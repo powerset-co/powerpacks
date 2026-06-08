@@ -11,6 +11,18 @@ For pull-request actions, prefer Vorflux's GitHub integration over raw `gh` comm
 
 This keeps PR authorship, merge attribution, and repository permissions aligned with the available Vorflux GitHub integration rather than an incidental shell token.
 
+## Vorflux PR body checklist guardrail
+
+When a Vorflux session touches multiple repositories, every non-docs PR body must include the exact `## Cross-Repo Ship Checklist` section before the PR is considered ready. Add it at PR creation time with the Vorflux PR tool body/body-file; if it is missing or stale, update the PR body with `vflux pr edit` instead of pushing a no-op commit.
+
+Required checklist fields:
+- `**Touched repos:**` - comma-separated `org/repo` slugs for every repo changed in the session.
+- `**Companion PRs:**` - links to the other PRs in the session, or `N/A` only when a single repo was touched.
+- `**Production deploy plan:**` - what will be deployed/merged and in what order, or why no production deploy is required.
+- `**Post-deploy verification plan:**` - exact health, workflow, UI, or artifact checks that prove the shipped change is live.
+
+If a repo has a `scripts/cross_repo_ship.py` helper, prefer using its `prepare-pr` command to generate/update this section. Before finalizing, verify the latest edited PR-body-triggered checklist run passes when the repo has a Cross-Repo Ship Checklist workflow; do not treat an older failed run as current after the body has been fixed.
+
 
 This file is the canonical bootup instruction sheet for any coding agent
 (Codex, Claude Code, NanoClaw, pi, etc.) working in the `powerpacks` repo.
