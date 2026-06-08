@@ -22,6 +22,7 @@ DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "ledger.json"
 DEFAULT_DIRECTORY_CSV = DEFAULT_BASE_DIR / "directory.csv"
 DEFAULT_MSGVAULT_DB = Path.home() / ".msgvault" / "msgvault.db"
 DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS", str(6 * 60 * 60)))
+GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
