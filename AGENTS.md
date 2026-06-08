@@ -24,6 +24,29 @@ Required checklist fields:
 If a repo has a `scripts/cross_repo_ship.py` helper, prefer using its `prepare-pr` command to generate/update this section. Before finalizing, verify the latest edited PR-body-triggered checklist run passes when the repo has a Cross-Repo Ship Checklist workflow; do not treat an older failed run as current after the body has been fixed.
 
 
+## Release Please / Conventional Commit guidance
+
+Powerpacks uses `googleapis/release-please-action` on `main`. Do not manually push version tags for normal releases. Land conventional commits on `main`; Release Please opens or updates a release PR; merging that release PR creates the GitHub release and component tag.
+
+Releasable commit shapes for this repo:
+- `fix: ...` - patch release.
+- `feat: ...` - minor release, e.g. `0.1.0` -> `0.2.0`.
+- `feat!: ...`, `fix!: ...`, `refactor!: ...`, or any conventional commit with a `BREAKING CHANGE:` footer - major release.
+- `deps: ...` - Release Please treats dependency updates as releasable.
+- `docs: ...` - can be releasable for Java/Python release types; avoid relying on docs-only commits when you need a guaranteed minor/major bump.
+
+Usually non-releasable unless breaking: `chore: ...`, `ci: ...`, `build: ...`, `test: ...`, `refactor: ...`, `style: ...`.
+
+This repo has two Release Please packages:
+- `.` as Python package `powerpacks`, tagged like `powerpacks-vX.Y.Z`.
+- `app` as Node package `powerpacks-console`, tagged like `powerpacks-console-vX.Y.Z`.
+
+Commits whose changed files are under `app/` can affect the console component; root/package commits affect the `powerpacks` component. A root-only docs/guidance PR should release only `powerpacks`; `powerpacks-console` needs an `app/` change or app-scoped releasable commit to get its own release PR/tag. If one human-facing change should release both components, make sure the merged PR has meaningful changes in both paths and uses a releasable conventional commit.
+
+To intentionally cut a Powerpacks minor release such as `0.2.0`, merge a PR with a `feat: ...` commit/message after the release-please setup is on `main` (for example `feat: document Powerpacks 0.2.0 pipeline release`). To intentionally cut a major release, use `feat!: ...` or include a `BREAKING CHANGE:` footer. After that commit lands, wait for the `release-please` workflow to open/update the release PR, review the generated changelog/version bumps, then merge the release PR.
+
+Manual release escape hatch: run the Release Please workflow/CLI with an appropriately scoped token only if automation is blocked. Prefer the normal release PR flow so versions, changelogs, manifests, and tags stay consistent.
+
 This file is the canonical bootup instruction sheet for any coding agent
 (Codex, Claude Code, NanoClaw, pi, etc.) working in the `powerpacks` repo.
 
