@@ -18,7 +18,8 @@ Inputs:
 - `--query STRING` : the search query (for prompt context)
 - `--traits TRAIT` : expected traits (repeatable)
 - `--concurrency N` : asyncio.Semaphore size (default follows API env; 400)
-- `--model NAME` : chat completion model (default gpt-4o-mini)
+- `--model NAME` : chat completion model (default gpt-5.1)
+- `--reasoning-effort LEVEL` : reasoning effort for supported models (default low)
 - `--api-base URL` : base URL (default https://api.openai.com)
 - `--api-key KEY` : OpenAI API key (default $OPENAI_API_KEY)
 - `--out PATH | -` : where to write the enriched JSONL (default stdout)
@@ -68,7 +69,8 @@ from token_accounting import count_chat_prompt_tokens, summarize_token_counts  #
 
 
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
-DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-4o-mini")
+DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.1")
+DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "low")
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_SECONDS_PER_WAVE = int(os.environ.get("LLM_RERANK_SECONDS_PER_WAVE", "30"))
 
@@ -200,16 +202,20 @@ async def call_chat_completion(
     model: str,
     system_prompt: str,
     user_prompt: str,
+    reasoning_effort: str | None,
 ) -> dict[str, Any]:
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+    if reasoning_effort and supports_reasoning_effort(model):
+        kwargs["reasoning_effort"] = reasoning_effort
+    response = await client.chat.completions.create(**kwargs)
     return {
         "choices": [
             {
@@ -261,6 +267,11 @@ def parse_verdict(raw_response: dict[str, Any], traits: list[dict[str, str]]) ->
     return score, verdict, reason, confidence, trait_scores
 
 
+def supports_reasoning_effort(model: str) -> bool:
+    normalized = str(model or "").lower().split("/")[-1]
+    return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 # ---------------------------------------------------------------------------
 # Async fan-out
 # ---------------------------------------------------------------------------
@@ -273,6 +284,7 @@ async def rerank_one(
     traits: list[dict[str, str]],
     client: AsyncOpenAI,
     model: str,
+    reasoning_effort: str | None,
     semaphore: asyncio.Semaphore,
     max_retries: int,
     include_prompt: bool,
@@ -303,6 +315,7 @@ async def rerank_one(
                     model,
                     SYSTEM_PROMPT,
                     user_prompt,
+                    reasoning_effort,
                 )
                 score, verdict, reason, confidence, trait_scores = parse_verdict(raw_response, traits)
                 error = None
@@ -353,6 +366,7 @@ async def rerank_all(
     api_base: str,
     api_key: str,
     model: str,
+    reasoning_effort: str | None,
     concurrency: int,
     timeout: int,
     max_retries: int,
@@ -373,6 +387,7 @@ async def rerank_all(
                 traits=traits,
                 client=client,
                 model=model,
+                reasoning_effort=reasoning_effort,
                 semaphore=semaphore,
                 max_retries=max_retries,
                 include_prompt=include_prompt,
@@ -676,6 +691,7 @@ def main() -> int:
     parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable, wrapped to structured dict at parse time)")
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--timeout", type=int, default=120)
@@ -754,6 +770,7 @@ def main() -> int:
             api_base=args.api_base,
             api_key=args.api_key,
             model=args.model,
+            reasoning_effort=args.reasoning_effort,
             concurrency=args.concurrency,
             timeout=args.timeout,
             max_retries=args.max_retries,
@@ -791,6 +808,7 @@ def main() -> int:
             artifacts["raw_rerank_results_jsonl"] = str(raw_jsonl_path)
         output = {
             "model": args.model,
+            "reasoning_effort": args.reasoning_effort if supports_reasoning_effort(args.model) else None,
             "concurrency": args.concurrency,
             "estimated_seconds": estimate_seconds,
             "ranked_count": len(results),
