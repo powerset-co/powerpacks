@@ -17,6 +17,7 @@ from typing import Any
 try:
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_MSGVAULT_DB,
+        GMAIL_INTERACTION_CALCULATION_VERSION,
         emit,
         now_iso,
         ordered_unique,
@@ -40,6 +41,7 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_MSGVAULT_DB,
+        GMAIL_INTERACTION_CALCULATION_VERSION,
         emit,
         now_iso,
         ordered_unique,
@@ -77,7 +79,6 @@ GMAIL_DISCOVERY_COLUMNS = [
     "source_channels",
 ]
 DEFAULT_GMAIL_ESTIMATE_MAX_PAGES = 4
-GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
 GMAIL_CALCULATION_FULL_RECOUNT = "full_recount"
 GMAIL_CALCULATION_INCREMENTAL_DELTA = "incremental_delta"
 
@@ -434,9 +435,6 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
     existing: list[dict[str, Any]] = []
     incoming: list[dict[str, Any]] = []
     applied_incremental_inputs = _as_list(existing_manifest.get("applied_incremental_inputs"))
-    # Backward-compatible read for manifests written by earlier PR drafts.
-    if not applied_incremental_inputs:
-        applied_incremental_inputs = _as_list(existing_manifest.get("applied_incremental_batches"))
     applied_incremental_input_set = set(applied_incremental_inputs)
     skipped_incremental_inputs: list[str] = []
     incremental_outputs = [output for output in incoming_outputs if output.get("calculation_mode") == GMAIL_CALCULATION_INCREMENTAL_DELTA]

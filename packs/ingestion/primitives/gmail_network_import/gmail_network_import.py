@@ -35,7 +35,11 @@ DEFAULT_LEDGER = Path(".powerpacks/network-import/discover/gmail-one/ledger.json
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 DEFAULT_EXCLUDED_MSGVAULT_LABELS = ("CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES")
-GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
+try:
+    from packs.ingestion.primitives.discover_contacts_pipeline.common import GMAIL_INTERACTION_CALCULATION_VERSION
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.ingestion.primitives.discover_contacts_pipeline.common import GMAIL_INTERACTION_CALCULATION_VERSION
 
 PERSONAL_DOMAINS = {
     "gmail.com",
