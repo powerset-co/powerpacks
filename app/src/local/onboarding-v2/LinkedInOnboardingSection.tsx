@@ -27,7 +27,7 @@ export function LinkedInOnboardingSection() {
   const [displayCsvPath, setDisplayCsvPath] = useState(DEFAULT_LINKEDIN_CSV);
   const [uploadedDisplayPath, setUploadedDisplayPath] = useState("");
   const [uploadedCachePath, setUploadedCachePath] = useState("");
-  const [sourceLabel, setSourceLabel] = useState("arthur");
+  const sourceLabel = "local";
   const [status, setStatus] = useState<JsonObject | null>(null);
   const [dryRun, setDryRun] = useState<JsonObject | null>(null);
   const [latestJob, setLatestJob] = useState<SetupJob | null>(null);
@@ -49,7 +49,7 @@ export function LinkedInOnboardingSection() {
     return () => window.clearInterval(timer);
   }, [loadStatus]);
 
-  const dryRunOutput = objectValue(dryRun?.output);
+  const dryRunOutput = objectValue(null);
   const csvStats = objectValue(dryRunOutput.csv_stats || status?.csv_stats);
   const latestCommand = commandText(latestJob?.command || dryRun?.command);
   const latestOutput = latestJob?.output || dryRun?.output || null;
@@ -116,7 +116,7 @@ export function LinkedInOnboardingSection() {
           <CardTitle className="text-base">LinkedIn CSV</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-[1fr_180px]">
+          <div>
             <label className="space-y-1 text-sm">
               <span className="font-medium">CSV path</span>
               <Input
@@ -139,10 +139,6 @@ export function LinkedInOnboardingSection() {
                   Use the restored local Connections.csv, or upload a CSV from your machine.
                 </span>
               )}
-            </label>
-            <label className="space-y-1 text-sm">
-              <span className="font-medium">Source label</span>
-              <Input value={sourceLabel} onChange={(event) => setSourceLabel(event.target.value)} />
             </label>
           </div>
           <div className="flex flex-wrap items-center gap-2">

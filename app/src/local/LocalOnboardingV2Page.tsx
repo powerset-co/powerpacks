@@ -1,7 +1,7 @@
 import { RefreshCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { GmailOnboardingSection, LinkedInOnboardingSection } from "./onboarding-v2";
+import { GmailOnboardingSection, LinkedInOnboardingSection, MessagesOnboardingSection } from "./onboarding-v2";
 
 export function LocalOnboardingV2Page() {
   return (
@@ -27,6 +27,14 @@ export function LocalOnboardingV2Page() {
         </p>
       </div>
       <GmailOnboardingSection />
+
+      <div className="pt-2">
+        <h3 className="text-lg font-semibold">Messages</h3>
+        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+          Import contacts from iMessage and WhatsApp with AI-assisted review.
+        </p>
+      </div>
+      <MessagesOnboardingSection />
     </div>
   );
 }

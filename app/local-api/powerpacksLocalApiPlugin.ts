@@ -17,6 +17,7 @@ const discoverContactsSetupLedger = ".powerpacks/network-import/discover/ledger.
 const runsDir = path.join(powerpacksStateRoot, "runs");
 const onboardingV2LinkedInRunsDir = path.join(powerpacksStateRoot, "runs", "setup-linkedin-csv");
 const onboardingV2GmailRunsDir = path.join(powerpacksStateRoot, "runs", "setup-gmail");
+const onboardingV2MessagesRunsDir = path.join(powerpacksStateRoot, "runs", "setup-messages");
 const setupLedgerPath = path.join(powerpacksStateRoot, "setup", "setup-run.json");
 const accountsPath = path.join(powerpacksStateRoot, "ingestion", "accounts.json");
 const importRefreshLedgerPath = path.join(powerpacksRepoRoot, discoverContactsSetupLedger);
@@ -2330,6 +2331,26 @@ const ONBOARDING_V2_GMAIL: OnboardingV2Vertical = {
   ],
 };
 
+const ONBOARDING_V2_MESSAGES: OnboardingV2Vertical = {
+  vertical: "messages",
+  action: "onboarding-v2-messages",
+  actionKeyPrefix: "onboarding-v2:messages:",
+  runsDir: onboardingV2MessagesRunsDir,
+  defaultStages: [
+    { id: "inspect", label: "Check message sources" },
+    { id: "discover", label: "Discover message contacts" },
+    { id: "llm_review", label: "AI contact review" },
+    { id: "user_review", label: "Review contacts" },
+    { id: "enrich", label: "Enrich message contacts" },
+    { id: "source_people", label: "Save message people file" },
+    { id: "merge_network", label: "Merge contact sources" },
+    { id: "network_duckdb", label: "Prepare contact lookup database" },
+    { id: "index_estimate", label: "Estimate search updates" },
+    { id: "index_records", label: "Build searchable people records" },
+    { id: "search_duckdb", label: "Update local search database" },
+  ],
+};
+
 function activeOnboardingV2Job(config: OnboardingV2Vertical, runId: string): SetupJob | null {
   return setupJobsList().find((job) => (
     job.action === config.action
@@ -2498,6 +2519,45 @@ function startOnboardingV2Gmail(body: Record<string, any>): SetupJob {
   return startSetupJob(ONBOARDING_V2_GMAIL.action, command, 6 * 60 * 60 * 1000, {
     source: ONBOARDING_V2_GMAIL.vertical,
     stages: onboardingV2JobStages(ONBOARDING_V2_GMAIL),
+  });
+}
+
+function onboardingV2MessagesCommand(command: "dry-run" | "run", operatorId: string, options: { approveSpend?: boolean; maxEnrich?: number; continueRun?: boolean } = {}) {
+  const args = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/setup_messages/setup_messages.py",
+    command,
+    "--operator-id", operatorId,
+    "--accounts", ".powerpacks/ingestion/accounts.json",
+  ];
+  if (options.approveSpend) args.push("--approve-spend");
+  if (options.maxEnrich && options.maxEnrich > 0) args.push("--max-enrich", String(options.maxEnrich));
+  if (options.continueRun) args.push("--continue");
+  return args;
+}
+
+function onboardingV2MessagesStatus() {
+  const status = onboardingV2Status(ONBOARDING_V2_MESSAGES);
+  const accounts = readJsonSync(accountsPath) || {};
+  const messagesRecord = accountRecords(accounts).messages || {};
+  const messagesConfig = messagesRecord.config && typeof messagesRecord.config === "object" ? messagesRecord.config : {};
+  const linkStatus = messagesLinkStatus(messagesConfig);
+  return { ...status, sources: linkStatus, messages_linked: Boolean(messagesRecord.linked) };
+}
+
+function startOnboardingV2Messages(body: Record<string, any>): SetupJob {
+  const setupLedger = readJsonSync(setupLedgerPath) || {};
+  const accounts = readJsonSync(accountsPath) || {};
+  const operator = resolveOperator(setupLedger, accounts);
+  const existing = runningOnboardingV2VerticalJob(ONBOARDING_V2_MESSAGES);
+  if (existing) return existing;
+  const approveSpend = body.approveSpend === true;
+  const maxEnrich = typeof body.maxEnrich === "number" ? body.maxEnrich : 0;
+  const continueRun = body.continueRun === true;
+  const command = onboardingV2MessagesCommand("run", operator.id, { approveSpend, maxEnrich: maxEnrich || undefined, continueRun });
+  return startSetupJob(ONBOARDING_V2_MESSAGES.action, command, 6 * 60 * 60 * 1000, {
+    source: ONBOARDING_V2_MESSAGES.vertical,
+    stages: onboardingV2JobStages(ONBOARDING_V2_MESSAGES),
   });
 }
 
@@ -2688,6 +2748,24 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
 
   if (action === "whatsapp-auth") {
     cachedWhatsAppLinkStatus = null;
+    // Clean stale wacli lock if the holding process is dead
+    const wacliStore = path.resolve(powerpacksRepoRoot, ".powerpacks/messages/wacli");
+    const wacliLock = path.join(wacliStore, "LOCK");
+    if (fs.existsSync(wacliLock)) {
+      try {
+        const lockContent = fs.readFileSync(wacliLock, "utf8");
+        const pidMatch = lockContent.match(/pid=(\d+)/);
+        if (pidMatch) {
+          const lockPid = Number(pidMatch[1]);
+          try {
+            process.kill(lockPid, 0); // just checks if alive
+          } catch {
+            // Process is dead — remove stale lock
+            fs.unlinkSync(wacliLock);
+          }
+        }
+      } catch { /* ignore */ }
+    }
     if (whatsAppProvider() === "waha") {
       removeLocalFiles([whatsAppWahaQrPngPath, whatsAppWahaQrTxtPath]);
       const runtimeUp = wahaRuntimeCommand("up");
@@ -2702,22 +2780,65 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
         `${shellJoin(runtimeUp)} && ${shellJoin(sessionStart)}`,
       ], 10 * 60 * 1000);
     }
+    // Kill any lingering wacli processes before starting fresh auth
+    try {
+      const { execSync } = require("child_process");
+      execSync("pkill -f 'wacli.*--store.*wacli' 2>/dev/null || true", { timeout: 5000 });
+    } catch { /* ignore */ }
     removeLocalFiles([whatsAppWacliQrPngPath, whatsAppWacliQrHtmlPath]);
-    return startSetupJob(action, [
+    // Run auth, then probe doctor and write status back to accounts.json
+    const authCmd = shellJoin([
       "uv", "run", "--project", ".", "python",
       "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
-      "auth",
-      "--store", ".powerpacks/messages/wacli",
-      "--no-open-qr-page",
+      "auth", "--store", ".powerpacks/messages/wacli", "--no-open-qr-page",
+    ]);
+    const writeBackCmd = shellJoin([
+      "uv", "run", "--project", ".", "python", "-c",
+      [
+        "import json, subprocess, pathlib;",
+        "p=pathlib.Path('.powerpacks/ingestion/accounts.json');",
+        "d=json.loads(p.read_text()) if p.exists() else {'accounts':{},'version':2};",
+        "r=subprocess.run(['wacli','--store','.powerpacks/messages/wacli','doctor','--json'],capture_output=True,text=True,timeout=5);",
+        "ok=(json.loads(r.stdout).get('data',{}).get('authenticated') if r.stdout else False);",
+        "m=d.setdefault('accounts',{}).setdefault('messages',{});",
+        "c=m.setdefault('config',{});",
+        "c.setdefault('whatsapp',{}).update({'authenticated':bool(ok),'status':'authenticated' if ok else 'not_authenticated'});",
+        "m['linked']=bool(ok or c.get('imessage',{}).get('readable'));",
+        "p.write_text(json.dumps(d,indent=2)+'\\n');",
+        "print(json.dumps({'whatsapp_authenticated':bool(ok)}))",
+      ].join(""),
+    ]);
+    // Also clean QR files after successful auth
+    const cleanQr = `rm -f ${shellQuote(whatsAppWacliQrPngPath)} ${shellQuote(whatsAppWacliQrHtmlPath)} 2>/dev/null || true`;
+    return startSetupJob(action, [
+      "/bin/zsh", "-lc", `${authCmd} && ${writeBackCmd} && ${cleanQr}`,
     ], 10 * 60 * 1000);
   }
 
   if (action === "open-message-permissions") {
-    return startSetupJob(action, [
+    const openCmd = shellJoin([
       "uv", "run", "--project", ".", "python",
       "packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
-      "open-privacy-settings",
-      "--target", "both",
+      "open-privacy-settings", "--target", "both",
+    ]);
+    const writeBackImessage = shellJoin([
+      "uv", "run", "--project", ".", "python", "-c",
+      [
+        "import json, os, pathlib;",
+        "p=pathlib.Path('.powerpacks/ingestion/accounts.json');",
+        "d=json.loads(p.read_text()) if p.exists() else {'accounts':{},'version':2};",
+        "chat_db=os.path.expanduser('~/Library/Messages/chat.db');",
+        "readable=os.access(chat_db, os.R_OK);",
+        "m=d.setdefault('accounts',{}).setdefault('messages',{});",
+        "c=m.setdefault('config',{});",
+        "c['imessage']={'readable':readable,'status':'ready' if readable else 'not_ready','chat_db':chat_db};",
+        "m['linked']=bool(readable or c.get('whatsapp',{}).get('authenticated'));",
+        "p.write_text(json.dumps(d,indent=2)+'\\n');",
+        "print(json.dumps({'imessage_readable':readable}))",
+      ].join(""),
+    ]);
+    return startSetupJob(action, [
+      "/bin/zsh", "-lc", `${openCmd}; sleep 2; ${writeBackImessage}`,
     ], 2 * 60 * 1000);
   }
 
@@ -2910,6 +3031,15 @@ export function powerpacksLocalApiPlugin(): Plugin {
           if (url.pathname === "/local-api/onboarding-v2/gmail/run" && req.method === "POST") {
             const job = startOnboardingV2Gmail(await readRequestJson(req));
             return sendJson(res, { job, status: onboardingV2GmailStatus() });
+          }
+
+          if (url.pathname === "/local-api/onboarding-v2/messages/status") {
+            return sendJson(res, onboardingV2MessagesStatus());
+          }
+
+          if (url.pathname === "/local-api/onboarding-v2/messages/run" && req.method === "POST") {
+            const job = startOnboardingV2Messages(await readRequestJson(req));
+            return sendJson(res, { job, status: onboardingV2MessagesStatus() });
           }
 
           const setupJobMatch = url.pathname.match(/^\/local-api\/setup\/jobs\/([^/]+)$/);

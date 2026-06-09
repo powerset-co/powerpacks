@@ -315,6 +315,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(csv_stats.get("error") or "Could not parse LinkedIn CSV")
         ctx.event("inspect", "LinkedIn CSV is readable", status="completed", payload=csv_stats)
 
+        # Write csv path and source label back to accounts.json
+        accounts_data = read_json(Path(args.accounts), {}) or {}
+        li = accounts_data.setdefault("accounts", {}).setdefault("linkedin_csv", {})
+        li_config = li.setdefault("config", {})
+        li_config["csv_path"] = str(csv_path)
+        Path(args.accounts).write_text(json.dumps(accounts_data, indent=2) + "\n")
+
         ctx.event("discover", "Copying and parsing LinkedIn contacts", payload=csv_stats)
         discovery_payload = linkedin_discovery.discover(accounts_path=Path(args.accounts), connections_csv=csv_path, source_user_label=source_user)
         if discovery_payload.get("status") != "completed":

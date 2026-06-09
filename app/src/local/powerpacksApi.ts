@@ -97,6 +97,14 @@ export function checkGmailTokens(emails: string[]): Promise<{ expired: string[] 
   return postJson<{ expired: string[] }>("/local-api/onboarding-v2/gmail/check-tokens", { emails });
 }
 
+export function fetchOnboardingV2MessagesStatus(): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>("/local-api/onboarding-v2/messages/status");
+}
+
+export function runOnboardingV2Messages(body: Record<string, unknown> = {}): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/messages/run", body);
+}
+
 export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {
   const content = await file.text();
   return postJson<{ path: string }>("/local-api/setup/linkedin-csv-upload", {

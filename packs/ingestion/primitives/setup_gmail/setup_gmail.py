@@ -247,24 +247,49 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, list[str]]:
     return accounts_path, emails
 
 
+def _directory_emails() -> set[str]:
+    """Return emails already resolved in directory.csv."""
+    try:
+        import csv
+        directory_csv = DEFAULT_BASE_DIR / "directory.csv"
+        if not directory_csv.exists():
+            return set()
+        with open(directory_csv) as f:
+            return {row.get("email", "").lower() for row in csv.DictReader(f) if row.get("email")}
+    except Exception:
+        return set()
+
+
+def _queue_emails() -> list[str]:
+    """Return emails from the gmail resolution queue."""
+    try:
+        import csv
+        queue_csv = DISCOVER_DIR / "linkedin_resolution_queue.csv"
+        if not queue_csv.exists():
+            return []
+        with open(queue_csv) as f:
+            return [row.get("primary_email", "").lower() for row in csv.DictReader(f) if row.get("primary_email")]
+    except Exception:
+        return []
+
+
 def estimate_parallel_spend() -> dict[str, Any]:
     """Estimate Parallel.ai enrichment spend for the next Gmail run.
 
-    Gmail enrichment resolves contacts that are not already matched in the
-    LinkedIn directory through Parallel.ai. The number of pending lookups is the
-    size of the discovered resolution queue, so the cost is simply
-    pending_contacts * per-lookup price. Returns zero contacts/cost when nothing
-    has been discovered yet (the queue is built during the discover stage).
+    Subtracts contacts already resolved in directory.csv from the queue
+    so the estimate reflects actual new lookups needed.
     """
-    artifacts = gmail_import.gmail_artifacts_from_discovery()
-    pending = gmail_import.pending_gmail_parallel_contacts({"artifacts": artifacts})
+    queue = _queue_emails()
+    already_resolved = _directory_emails()
+    pending = len([e for e in queue if e not in already_resolved])
     estimated_usd = round(pending * GMAIL_PARALLEL_COST_PER_CONTACT_USD, 2)
     return {
         "pending_contacts": pending,
+        "queue_total": len(queue),
+        "already_resolved": len([e for e in queue if e in already_resolved]),
         "processor": GMAIL_PARALLEL_PROCESSOR,
         "cost_per_contact_usd": GMAIL_PARALLEL_COST_PER_CONTACT_USD,
         "estimated_usd": estimated_usd,
-        "auto_approved": True,
     }
 
 
