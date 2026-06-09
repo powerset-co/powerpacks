@@ -69,11 +69,8 @@ export function runSetupAction(body: Record<string, unknown>): Promise<{ job: Se
   return postJson<{ job: SetupJob }>("/local-api/setup/run", body);
 }
 
-export function fetchOnboardingV2LinkedInStatus(options: { runId?: string } = {}): Promise<Record<string, unknown>> {
-  const params = new URLSearchParams();
-  if (options.runId) params.set("runId", options.runId);
-  const query = params.toString() ? `?${params.toString()}` : "";
-  return getJson<Record<string, unknown>>(`/local-api/onboarding-v2/linkedin/status${query}`);
+export function fetchOnboardingV2LinkedInStatus(): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>("/local-api/onboarding-v2/linkedin/status");
 }
 
 export function dryRunOnboardingV2LinkedIn(body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -82,6 +79,18 @@ export function dryRunOnboardingV2LinkedIn(body: Record<string, unknown>): Promi
 
 export function runOnboardingV2LinkedIn(body: Record<string, unknown>): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
   return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/linkedin/run", body);
+}
+
+export function fetchOnboardingV2GmailStatus(): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>("/local-api/onboarding-v2/gmail/status");
+}
+
+export function dryRunOnboardingV2Gmail(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/local-api/onboarding-v2/gmail/dry-run", body);
+}
+
+export function runOnboardingV2Gmail(body: Record<string, unknown> = {}): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/gmail/run", body);
 }
 
 export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {

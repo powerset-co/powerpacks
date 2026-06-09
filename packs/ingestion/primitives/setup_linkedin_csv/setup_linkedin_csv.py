@@ -85,18 +85,14 @@ def valid_run_id(run_id: str) -> bool:
 @dataclass
 class RunContext:
     run_id: str
-    run_dir: Path
     state_path: Path
     events_path: Path
-    latest_path: Path
     status: dict[str, Any]
 
     def update(self, **fields: Any) -> None:
         self.status.update(fields)
         self.status["updated_at"] = now_iso()
         atomic_write_json(self.state_path, self.status)
-        latest = {"run_id": self.run_id, "status_path": str(self.state_path), "updated_at": self.status["updated_at"], **self.status}
-        atomic_write_json(self.latest_path, latest)
 
     def event(self, stage_id: str, message: str, *, status: str = "running", progress: float | None = None, payload: dict[str, Any] | None = None) -> None:
         stage_index = next((idx + 1 for idx, stage in enumerate(STAGES) if stage["id"] == stage_id), 0)
@@ -139,7 +135,6 @@ def make_context(run_id: str | None = None) -> RunContext:
     rid = run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     if not valid_run_id(rid):
         raise ValueError("run_id may only contain letters, numbers, underscore, dash, and colon")
-    run_dir = RUN_ROOT / rid
     status = {
         "schema_version": 1,
         "vertical": VERTICAL,
@@ -151,7 +146,12 @@ def make_context(run_id: str | None = None) -> RunContext:
         "stages": {},
         "stage_order": STAGES,
     }
-    ctx = RunContext(rid, run_dir, run_dir / "status.json", run_dir / "events.jsonl", RUN_ROOT / "latest.json", status)
+    # Single status/events file per vertical, overwritten when a new run starts.
+    state_path = RUN_ROOT / "status.json"
+    events_path = RUN_ROOT / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.write_text("", encoding="utf-8")
+    ctx = RunContext(rid, state_path, events_path, status)
     ctx.update()
     return ctx
 
@@ -392,9 +392,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def status_payload(run_id: str = "") -> dict[str, Any]:
-    path = RUN_ROOT / (run_id or "latest.json")
-    if run_id:
-        path = path / "status.json"
+    path = RUN_ROOT / "status.json"
     if not path.exists():
         return {"status": "missing", "vertical": VERTICAL, "path": str(path)}
     try:

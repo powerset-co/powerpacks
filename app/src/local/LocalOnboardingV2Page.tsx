@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, CircleAlert, CircleDot, Loader2, RefreshCcw, Upload } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { CheckCircle2, CircleAlert, CircleDot, Loader2, Mail, RefreshCcw, Upload } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,8 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
+  dryRunOnboardingV2Gmail,
   dryRunOnboardingV2LinkedIn,
+  fetchOnboardingV2GmailStatus,
   fetchOnboardingV2LinkedInStatus,
+  runOnboardingV2Gmail,
   runOnboardingV2LinkedIn,
   uploadLinkedInCsv,
 } from "./powerpacksApi";
@@ -17,11 +20,22 @@ import type { SetupJob } from "./types";
 type JsonObject = Record<string, unknown>;
 
 const DEFAULT_LINKEDIN_CSV = ".powerpacks/network-import/discover/linkedin/Connections.csv";
-const DEFAULT_STAGES = [
+const LINKEDIN_DEFAULT_STAGES = [
   { id: "inspect", label: "Check LinkedIn CSV" },
   { id: "discover", label: "Import LinkedIn contacts" },
   { id: "enrich", label: "Enrich LinkedIn profiles" },
   { id: "source_people", label: "Save LinkedIn people file" },
+  { id: "merge_network", label: "Merge contact sources" },
+  { id: "network_duckdb", label: "Prepare contact lookup database" },
+  { id: "index_estimate", label: "Estimate search updates" },
+  { id: "index_records", label: "Build searchable people records" },
+  { id: "search_duckdb", label: "Update local search database" },
+];
+const GMAIL_DEFAULT_STAGES = [
+  { id: "inspect", label: "Check linked Gmail accounts" },
+  { id: "discover", label: "Sync and discover Gmail contacts" },
+  { id: "enrich", label: "Enrich Gmail contacts" },
+  { id: "source_people", label: "Save Gmail people file" },
   { id: "merge_network", label: "Merge contact sources" },
   { id: "network_duckdb", label: "Prepare contact lookup database" },
   { id: "index_estimate", label: "Estimate search updates" },
@@ -65,10 +79,10 @@ function statusTone(status: string): "default" | "secondary" | "destructive" | "
   return "outline";
 }
 
-function stageRows(status: JsonObject | null) {
+function stageRows(status: JsonObject | null, defaultStages: { id: string; label: string }[]) {
   const order = arrayValue(status?.stage_order);
   const stages = objectValue(status?.stages);
-  const activeOrder = order.length > 0 ? order : DEFAULT_STAGES;
+  const activeOrder = order.length > 0 ? order : defaultStages;
   return activeOrder.map((stage, index) => {
     const id = stringValue(stage.id);
     const detail = objectValue(stages[id]);
@@ -82,6 +96,205 @@ function stageRows(status: JsonObject | null) {
       updatedAt: stringValue(detail.updated_at),
     };
   });
+}
+
+function OnboardingStatusCard({ status, defaultStages }: { status: JsonObject | null; defaultStages: { id: string; label: string }[] }) {
+  const statusText = stringValue(status?.status || "missing");
+  const progress = Math.max(0, Math.min(1, numberValue(status?.progress)));
+  const steps = stageRows(status, defaultStages);
+  const outputs = objectValue(objectValue(status?.result).outputs || status?.outputs);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          Status <Badge variant={statusTone(statusText)}>{statusText.replace(/_/g, " ")}</Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="h-2 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.round(progress * 100)}%` }} />
+        </div>
+        {status?.stale === true && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            <CircleAlert className="mt-0.5 h-4 w-4" />
+            <span>{stringValue(status.stale_reason) || "This run has not updated recently."}</span>
+          </div>
+        )}
+        <div className="grid gap-2 text-sm md:grid-cols-3">
+          <div><div className="text-muted-foreground">Run ID</div><div className="break-all font-medium">{stringValue(status?.run_id || "—")}</div></div>
+          <div><div className="text-muted-foreground">Stage</div><div className="font-medium">{stringValue(status?.current_stage || "—")}</div></div>
+          <div><div className="text-muted-foreground">Updated</div><div className="font-medium">{stringValue(status?.updated_at || "—")}</div></div>
+        </div>
+        {steps.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Steps</div>
+            {steps.map((step) => {
+              const isRunning = step.status === "running";
+              const isCompleted = step.status === "completed";
+              const isFailed = step.status === "failed" || step.status === "blocked_approval";
+              const Icon = isFailed ? CircleAlert : isCompleted ? CheckCircle2 : isRunning ? Loader2 : CircleDot;
+              return (
+                <div
+                  key={step.id}
+                  className={cn(
+                    "flex items-start gap-2 rounded-md border p-2 text-sm",
+                    isRunning && "border-primary/30 bg-primary/5",
+                    isCompleted && "border-emerald-500/30 bg-emerald-500/5",
+                    isFailed && "border-destructive/40 bg-destructive/5",
+                    !isRunning && !isCompleted && !isFailed && "bg-muted/20",
+                  )}
+                >
+                  <Icon className={cn(
+                    "mt-0.5 h-4 w-4 shrink-0",
+                    isRunning && "animate-spin text-primary",
+                    isCompleted && "text-emerald-600",
+                    isFailed && "text-destructive",
+                    !isRunning && !isCompleted && !isFailed && "text-muted-foreground",
+                  )} />
+                  <div>
+                    <div className="font-medium">{step.label}</div>
+                    <div className="text-muted-foreground">{step.message || `${step.index}/${step.total}`}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {Object.keys(outputs).length > 0 && (
+          <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+            <div className="mb-2 font-medium">Outputs</div>
+            <pre className="overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{JSON.stringify(outputs, null, 2)}</pre>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function GmailOnboardingSection() {
+  const [status, setStatus] = useState<JsonObject | null>(null);
+  const [dryRun, setDryRun] = useState<JsonObject | null>(null);
+  const [latestJob, setLatestJob] = useState<SetupJob | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      setStatus(await fetchOnboardingV2GmailStatus());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load Gmail onboarding status");
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+    const timer = window.setInterval(loadStatus, 2000);
+    return () => window.clearInterval(timer);
+  }, [loadStatus]);
+
+  const dryRunOutput = objectValue(dryRun?.output);
+  const linkedAccountList = (Array.isArray(status?.linked_accounts) ? status?.linked_accounts : dryRunOutput.linked_accounts) as unknown[] | undefined;
+  const accountEmails = (linkedAccountList || []).map((item) => stringValue(item)).filter(Boolean);
+  const latestCommand = commandText(latestJob?.command || dryRun?.command);
+  const latestOutput = latestJob?.output || dryRun?.output || null;
+  const latestStdout = stringValue(latestJob?.stdout || dryRun?.stdout);
+  const latestStderr = stringValue(latestJob?.stderr || dryRun?.stderr);
+
+  async function handleDryRun() {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await dryRunOnboardingV2Gmail();
+      setDryRun(response);
+      setLatestJob(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dry-run failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRun() {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await runOnboardingV2Gmail();
+      setLatestJob(response.job);
+      setStatus(response.status);
+      await loadStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Run failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {error && (
+        <Card className="border-destructive/40 bg-destructive/5">
+          <CardContent className="py-3 text-sm text-destructive">{error}</CardContent>
+        </Card>
+      )}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Mail className="h-4 w-4" /> Gmail
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Runs the linked Gmail accounts through sync, discovery, enrichment, and indexing in one shot. Parallel.ai enrichment spend is auto-approved so the single button completes end-to-end.
+          </p>
+          <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+            <div className="text-muted-foreground">Linked Gmail accounts</div>
+            {accountEmails.length > 0 ? (
+              <ul className="mt-1 space-y-1">
+                {accountEmails.map((email) => (
+                  <li key={email} className="break-all font-medium">{email}</li>
+                ))}
+              </ul>
+            ) : (
+              <div className="mt-1 font-medium">No Gmail accounts linked yet. Connect a Gmail account, then run.</div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" disabled={loading} onClick={handleDryRun}>
+              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null} Dry-run
+            </Button>
+            <Button disabled={loading || accountEmails.length === 0} onClick={handleRun}>
+              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null} Run Gmail v2
+            </Button>
+          </div>
+          {(latestCommand || latestOutput || latestStdout || latestStderr) && (
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+              <div className="mb-2 font-medium">Command</div>
+              <pre className="overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{latestCommand || "—"}</pre>
+              {latestOutput ? (
+                <>
+                  <div className="mb-2 mt-3 font-medium">Output</div>
+                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{JSON.stringify(latestOutput, null, 2)}</pre>
+                </>
+              ) : null}
+              {latestStdout ? (
+                <>
+                  <div className="mb-2 mt-3 font-medium">Stdout</div>
+                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{latestStdout}</pre>
+                </>
+              ) : null}
+              {latestStderr ? (
+                <>
+                  <div className="mb-2 mt-3 font-medium">Stderr</div>
+                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap text-xs text-destructive">{latestStderr}</pre>
+                </>
+              ) : null}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      <OnboardingStatusCard status={status} defaultStages={GMAIL_DEFAULT_STAGES} />
+    </div>
+  );
 }
 
 export function LocalOnboardingV2Page() {
@@ -111,12 +324,8 @@ export function LocalOnboardingV2Page() {
     return () => window.clearInterval(timer);
   }, [loadStatus]);
 
-  const statusText = stringValue(status?.status || "missing");
-  const progress = Math.max(0, Math.min(1, numberValue(status?.progress)));
-  const steps = useMemo(() => stageRows(status), [status]);
   const dryRunOutput = objectValue(dryRun?.output);
   const csvStats = objectValue(dryRunOutput.csv_stats || status?.csv_stats);
-  const outputs = objectValue(objectValue(status?.result).outputs || status?.outputs || dryRunOutput.outputs);
   const latestCommand = commandText(latestJob?.command || dryRun?.command);
   const latestOutput = latestJob?.output || dryRun?.output || null;
   const latestStdout = stringValue(latestJob?.stdout || dryRun?.stdout);
@@ -175,7 +384,7 @@ export function LocalOnboardingV2Page() {
         <div>
           <h2 className="text-2xl font-semibold">Onboarding v2</h2>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Temporary LinkedIn CSV flow for this PR. It imports the LinkedIn ingestion steps directly, writes people into the local lake, then reuses the existing indexing wrapper.
+            One-button verticals that run discovery, enrichment, and indexing in a single shot. Each source imports its ingestion steps directly, writes people into the local lake, then reuses the existing indexing wrapper.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={loadStatus}>
@@ -273,70 +482,15 @@ export function LocalOnboardingV2Page() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            Status <Badge variant={statusTone(statusText)}>{statusText.replace(/_/g, " ")}</Badge>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="h-2 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.round(progress * 100)}%` }} />
-          </div>
-          {status?.stale === true && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              <CircleAlert className="mt-0.5 h-4 w-4" />
-              <span>{stringValue(status.stale_reason) || "This run has not updated recently."}</span>
-            </div>
-          )}
-          <div className="grid gap-2 text-sm md:grid-cols-3">
-            <div><div className="text-muted-foreground">Run ID</div><div className="break-all font-medium">{stringValue(status?.run_id || "—")}</div></div>
-            <div><div className="text-muted-foreground">Stage</div><div className="font-medium">{stringValue(status?.current_stage || "—")}</div></div>
-            <div><div className="text-muted-foreground">Updated</div><div className="font-medium">{stringValue(status?.updated_at || "—")}</div></div>
-          </div>
-          {steps.length > 0 && (
-            <div className="space-y-2">
-              <div className="text-sm font-medium">Steps</div>
-              {steps.map((step) => {
-                const isRunning = step.status === "running";
-                const isCompleted = step.status === "completed";
-                const isFailed = step.status === "failed" || step.status === "blocked_approval";
-                const Icon = isFailed ? CircleAlert : isCompleted ? CheckCircle2 : isRunning ? Loader2 : CircleDot;
-                return (
-                <div
-                  key={step.id}
-                  className={cn(
-                    "flex items-start gap-2 rounded-md border p-2 text-sm",
-                    isRunning && "border-primary/30 bg-primary/5",
-                    isCompleted && "border-emerald-500/30 bg-emerald-500/5",
-                    isFailed && "border-destructive/40 bg-destructive/5",
-                    !isRunning && !isCompleted && !isFailed && "bg-muted/20",
-                  )}
-                >
-                  <Icon className={cn(
-                    "mt-0.5 h-4 w-4 shrink-0",
-                    isRunning && "animate-spin text-primary",
-                    isCompleted && "text-emerald-600",
-                    isFailed && "text-destructive",
-                    !isRunning && !isCompleted && !isFailed && "text-muted-foreground",
-                  )} />
-                  <div>
-                    <div className="font-medium">{step.label}</div>
-                    <div className="text-muted-foreground">{step.message || `${step.index}/${step.total}`}</div>
-                  </div>
-                </div>
-                );
-              })}
-            </div>
-          )}
-          {Object.keys(outputs).length > 0 && (
-            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
-              <div className="mb-2 font-medium">Outputs</div>
-              <pre className="overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{JSON.stringify(outputs, null, 2)}</pre>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <OnboardingStatusCard status={status} defaultStages={LINKEDIN_DEFAULT_STAGES} />
+
+      <div className="pt-2">
+        <h3 className="text-lg font-semibold">Gmail</h3>
+        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+          One button to sync, discover, enrich, and index your linked Gmail contacts.
+        </p>
+      </div>
+      <GmailOnboardingSection />
     </div>
   );
 }
