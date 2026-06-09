@@ -46,7 +46,7 @@ def api_call_kwargs(model: str) -> dict[str, Any]:
         ),
     }
     if is_reasoning_model(model):
-        kwargs["reasoning"] = {"effort": "low"}
+        kwargs["reasoning_effort"] = "low"
         kwargs["service_tier"] = "flex"
     else:
         kwargs["temperature"] = 0
