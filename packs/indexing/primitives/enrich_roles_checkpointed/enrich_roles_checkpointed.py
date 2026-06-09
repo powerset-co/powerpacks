@@ -29,23 +29,12 @@ from packs.indexing.lib.text import dense_text  # noqa: E402
 from packs.indexing.lib.role_clustering import cluster_title  # noqa: E402
 from packs.indexing.lib.role_prompts import get_system_user_prompts, format_title_with_context  # noqa: E402
 
+from packs.indexing.lib.llm_config import (  # noqa: E402
+    DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_OPENAI_TIMEOUT_SECONDS,
+    DEFAULT_OPENAI_CONCURRENCY, CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
+)
+
 DEFAULT_CHECKPOINT_EVERY = 1000
-DEFAULT_MODEL = "gpt-5.1"
-DEFAULT_MAX_COMPLETION_TOKENS = 2000
-DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
-DEFAULT_OPENAI_CONCURRENCY = 64
-CHAT_MODEL_PRICES_PER_1K_USD = {
-    "gpt-5.2": {"input": 0.00175, "output": 0.01400},
-    "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
-    "gpt-5.1": {"input": 0.00125, "output": 0.01000},
-    "gpt-5.1-chat-latest": {"input": 0.00125, "output": 0.01000},
-    "gpt-5": {"input": 0.00125, "output": 0.01000},
-    "gpt-5-chat-latest": {"input": 0.00125, "output": 0.01000},
-    "gpt-5-mini": {"input": 0.00025, "output": 0.00200},
-    "gpt-5-nano": {"input": 0.00005, "output": 0.00040},
-    "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},
-    "gpt-4o-mini-2024-07-18": {"input": 0.00015, "output": 0.00060},
-}
 DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE = 250
 ROLE_FIELDS = ["title_hash", "raw_title", "description", "cluster", "role_ids", "seniority_band", "role_type", "role_track", "specialization", "doc2query", "inferred_skills", "dense_text", "semantic_text"]
 
@@ -328,7 +317,6 @@ async def call_openai_role_enrichment_async(
     semaphore: asyncio.Semaphore,
     max_retries: int = 3,
 ) -> dict[str, Any]:
-    max_completion_tokens = int(os.getenv("POWERPACKS_ROLE_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS)))
     async with semaphore:
         attempt = 0
         while True:
@@ -337,8 +325,7 @@ async def call_openai_role_enrichment_async(
                     model=model,
                     response_format=ROLE_RESPONSE_SCHEMA,
                     messages=role_prompt(role),
-                    temperature=0,
-                    max_completion_tokens=max_completion_tokens,
+                    **api_call_kwargs(model),
                 )
                 return _parse_chat_json(response.choices[0].message.content, "OpenAI role enrichment")
             except APIStatusError as exc:
@@ -578,10 +565,9 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     for role in roles:
         payload = {
             "model": model,
-            "response_format": {"type": "json_object"},
+            "response_format": ROLE_RESPONSE_SCHEMA,
             "messages": role_prompt(role),
-            "temperature": 0,
-            "max_completion_tokens": int(os.getenv("POWERPACKS_ROLE_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
+            **api_call_kwargs(model),
         }
         input_tokens += estimate_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     output_tokens = 0 if provider == "input-classifications" else len(roles) * DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE

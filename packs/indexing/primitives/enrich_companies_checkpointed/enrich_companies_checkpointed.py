@@ -32,24 +32,13 @@ from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 
+from packs.indexing.lib.llm_config import (  # noqa: E402
+    DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_OPENAI_TIMEOUT_SECONDS,
+    DEFAULT_OPENAI_CONCURRENCY, CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
+)
+
 DEFAULT_CHECKPOINT_EVERY = 1000
-DEFAULT_MODEL = "gpt-5.1"
-DEFAULT_MAX_COMPLETION_TOKENS = 2500
-DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
-DEFAULT_OPENAI_CONCURRENCY = 64
 WORD_RE = re.compile(r"[a-z0-9]+")
-CHAT_MODEL_PRICES_PER_1K_USD = {
-    "gpt-5.2": {"input": 0.00175, "output": 0.01400},
-    "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
-    "gpt-5.1": {"input": 0.00125, "output": 0.01000},
-    "gpt-5.1-chat-latest": {"input": 0.00125, "output": 0.01000},
-    "gpt-5": {"input": 0.00125, "output": 0.01000},
-    "gpt-5-chat-latest": {"input": 0.00125, "output": 0.01000},
-    "gpt-5-mini": {"input": 0.00025, "output": 0.00200},
-    "gpt-5-nano": {"input": 0.00005, "output": 0.00040},
-    "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},
-    "gpt-4o-mini-2024-07-18": {"input": 0.00015, "output": 0.00060},
-}
 ALEPH_COMPANY_FIELDS = [
     "company_urn",
     "company_name",
@@ -550,16 +539,17 @@ def _build_company_context(local: dict[str, Any], rapidapi_context: dict[str, An
 
 
 def openai_classification_payload(local: dict[str, Any], rapidapi_context: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {
-        "model": os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL),
+    model = os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL)
+    payload: dict[str, Any] = {
+        "model": model,
         "response_format": COMPANY_RESPONSE_SCHEMA,
         "messages": [
             {"role": "system", "content": COMBINED_SYSTEM_PROMPT},
             {"role": "user", "content": f"Classify this company:\n\n{_build_company_context(local, rapidapi_context)}"},
         ],
-        "temperature": 0,
-        "max_completion_tokens": int(os.getenv("POWERPACKS_COMPANY_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
+        **api_call_kwargs(model),
     }
+    return payload
 
 
 def _parse_chat_json(content: str | None, context: str) -> dict[str, Any]:
