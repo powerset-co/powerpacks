@@ -428,7 +428,7 @@ function setupCommandArgs(operatorId: string, phase: "status" | "next" | "bootst
   ];
 }
 
-function onboardingV2LinkedInCommand(command: "dry-run" | "run", operatorId: string, options: { csvPath?: string; sourceLabel?: string; runId?: string; force?: boolean } = {}) {
+function onboardingV2LinkedInCommand(command: "dry-run" | "run", operatorId: string, options: { csvPath?: string; sourceLabel?: string; force?: boolean } = {}) {
   const args = [
     "uv", "run", "--project", ".", "python",
     "packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py",
@@ -436,7 +436,6 @@ function onboardingV2LinkedInCommand(command: "dry-run" | "run", operatorId: str
     "--operator-id", operatorId,
     "--accounts", ".powerpacks/ingestion/accounts.json",
   ];
-  if (options.runId) args.push("--run-id", options.runId);
   if (options.csvPath) args.push("--csv", options.csvPath);
   if (options.sourceLabel) args.push("--source-user", options.sourceLabel);
   if (options.force) args.push("--force");
@@ -2395,7 +2394,16 @@ function onboardingV2GmailStatus() {
   // on first page load without requiring a manual dry-run. The persisted status
   // only carries linked_accounts inside result once a run completes.
   const linkedAccounts = persisted.length > 0 ? persisted.map(String) : linkedGmailAccountEmails();
-  return { ...status, linked_accounts: linkedAccounts };
+  // Surface discovered msgvault accounts so the v2 page can offer a connect UI
+  // without requiring the user to run the CLI onboarding step first.
+  const dbPath = configuredMsgvaultDb(readJsonSync(accountsPath));
+  const discovered = discoverMsgvaultAccounts(dbPath);
+  // Surface expired accounts from the inspect stage payload so the UI can
+  // show per-account re-authorize buttons without parsing error strings.
+  const inspectStage = (status as Record<string, any>)?.stages?.inspect || {};
+  const inspectPayload = inspectStage.payload || {};
+  const expiredAccounts = Array.isArray(inspectPayload.expired_accounts) ? inspectPayload.expired_accounts : [];
+  return { ...status, linked_accounts: linkedAccounts, discovered_accounts: discovered.rows, discovered_error: discovered.error || "", expired_accounts: expiredAccounts };
 }
 
 function dryRunOnboardingV2LinkedIn(body: Record<string, any>) {
@@ -2444,21 +2452,18 @@ function startOnboardingV2LinkedIn(body: Record<string, any>): SetupJob {
   const operator = resolveOperator(setupLedger, accounts);
   const existing = runningOnboardingV2VerticalJob(ONBOARDING_V2_LINKEDIN);
   if (existing) return existing;
-  const runId = resolveOnboardingV2RunId(body);
   const command = onboardingV2LinkedInCommand("run", operator.id, {
-    runId,
     csvPath: safeOnboardingV2LinkedInCsvPath(body.csvPath),
     sourceLabel: String(body.sourceLabel || "").trim() || undefined,
     force: body.force === true,
   });
   return startSetupJob(ONBOARDING_V2_LINKEDIN.action, command, 6 * 60 * 60 * 1000, {
-    actionKey: `${ONBOARDING_V2_LINKEDIN.actionKeyPrefix}${runId}`,
     source: ONBOARDING_V2_LINKEDIN.vertical,
     stages: onboardingV2JobStages(ONBOARDING_V2_LINKEDIN),
   });
 }
 
-function onboardingV2GmailCommand(command: "dry-run" | "run", operatorId: string, options: { runId?: string } = {}) {
+function onboardingV2GmailCommand(command: "dry-run" | "run", operatorId: string, options: { approveSpend?: boolean; maxEnrich?: number; continueRun?: boolean } = {}) {
   const args = [
     "uv", "run", "--project", ".", "python",
     "packs/ingestion/primitives/setup_gmail/setup_gmail.py",
@@ -2466,7 +2471,9 @@ function onboardingV2GmailCommand(command: "dry-run" | "run", operatorId: string
     "--operator-id", operatorId,
     "--accounts", ".powerpacks/ingestion/accounts.json",
   ];
-  if (options.runId) args.push("--run-id", options.runId);
+  if (options.approveSpend) args.push("--approve-spend");
+  if (options.maxEnrich && options.maxEnrich > 0) args.push("--max-enrich", String(options.maxEnrich));
+  if (options.continueRun) args.push("--continue");
   return args;
 }
 
@@ -2484,10 +2491,11 @@ function startOnboardingV2Gmail(body: Record<string, any>): SetupJob {
   const operator = resolveOperator(setupLedger, accounts);
   const existing = runningOnboardingV2VerticalJob(ONBOARDING_V2_GMAIL);
   if (existing) return existing;
-  const runId = resolveOnboardingV2RunId(body);
-  const command = onboardingV2GmailCommand("run", operator.id, { runId });
+  const approveSpend = body.approveSpend === true;
+  const maxEnrich = typeof body.maxEnrich === "number" ? body.maxEnrich : 0;
+  const continueRun = body.continueRun === true;
+  const command = onboardingV2GmailCommand("run", operator.id, { approveSpend, maxEnrich: maxEnrich || undefined, continueRun });
   return startSetupJob(ONBOARDING_V2_GMAIL.action, command, 6 * 60 * 60 * 1000, {
-    actionKey: `${ONBOARDING_V2_GMAIL.actionKeyPrefix}${runId}`,
     source: ONBOARDING_V2_GMAIL.vertical,
     stages: onboardingV2JobStages(ONBOARDING_V2_GMAIL),
   });
@@ -2587,7 +2595,50 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   }
 
   if (action === "gmail-account") {
-    return startSetupJob(action, setupCommandArgs(operator.id, "link", ["--gmail-account", requireString(body.email, "email")]));
+    // Directly record a discovered msgvault account in accounts.json.
+    // These accounts are already authorized in msgvault so we just need
+    // to persist them — no browser flow, no onboarding step machinery.
+    const email = requireString(body.email, "email").trim().toLowerCase();
+    const accounts = readJsonSync(accountsPath) || {};
+    const records = accountRecords(accounts);
+    const gmail = records.gmail || {};
+    const config = gmail.config && typeof gmail.config === "object" ? gmail.config : {};
+    const dbPath = configuredMsgvaultDb(accounts);
+    const prev = {
+      account_emails: Array.isArray(config.account_emails) ? config.account_emails as string[] : [],
+      selected_accounts: Array.isArray(config.selected_accounts) ? config.selected_accounts as string[] : [],
+    };
+    const account_emails = uniqueStrings([...prev.account_emails, email]);
+    const selected_accounts = uniqueStrings([...prev.selected_accounts, email]);
+    const now = new Date().toISOString();
+    const next = {
+      ...accounts,
+      accounts: {
+        ...records,
+        gmail: {
+          ...gmail,
+          linked: true,
+          skipped: false,
+          usernames: selected_accounts,
+          artifacts: Array.isArray(gmail.artifacts) ? gmail.artifacts : [],
+          config: { ...config, msgvault_db: dbPath, account_emails, selected_accounts, pending_accounts: [] },
+          last_checked_at: now,
+          last_success_at: now,
+          notes: "Linked from onboarding v2 UI.",
+        },
+      },
+      updated_at: now,
+    };
+    writeJsonSync(accountsPath, next);
+    return startSetupJob(action, ["echo", JSON.stringify({ status: "ok", email, linked: true })], 5000);
+  }
+
+  if (action === "gmail-reauth") {
+    const email = requireString(body.email, "email");
+    const homeArgs = msgvaultHomeArgs();
+    return startSetupJob(action, [
+      "msgvault", "add-account", email, "--force", ...homeArgs,
+    ], 5 * 60 * 1000);
   }
 
   if (action === "gmail-all") {
@@ -2835,6 +2886,21 @@ export function powerpacksLocalApiPlugin(): Plugin {
 
           if (url.pathname === "/local-api/onboarding-v2/gmail/status") {
             return sendJson(res, onboardingV2GmailStatus());
+          }
+
+          if (url.pathname === "/local-api/onboarding-v2/gmail/check-tokens" && req.method === "POST") {
+            const body = await readRequestJson(req);
+            const emails = Array.isArray(body.emails) ? body.emails.map(String).filter(Boolean) : [];
+            if (emails.length === 0) return sendJson(res, { expired: [] });
+            const command = [
+              "uv", "run", "--project", ".", "python", "-c",
+              `import json; from packs.ingestion.primitives.setup_gmail.setup_gmail import _check_gmail_tokens; print(json.dumps({"expired": _check_gmail_tokens(${JSON.stringify(emails)})}))`,
+            ];
+            const result = spawnSync(command[0], command.slice(1), {
+              cwd: powerpacksRepoRoot, env: setupProcessEnv(), encoding: "utf8", timeout: 60000,
+            });
+            const payload = parseJsonFragment(result.stdout || "") || { expired: emails };
+            return sendJson(res, payload);
           }
 
           if (url.pathname === "/local-api/onboarding-v2/gmail/dry-run" && req.method === "POST") {

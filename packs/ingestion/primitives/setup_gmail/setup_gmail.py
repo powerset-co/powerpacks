@@ -37,6 +37,9 @@ from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa
 )
 from packs.indexing.primitives.index_contacts_pipeline import index_contacts_pipeline  # noqa: E402
 
+import shutil
+import subprocess
+
 VERTICAL = "gmail"
 RUN_ROOT = Path(".powerpacks/runs/setup-gmail")
 IMPORT_SOURCE = "gmail"
@@ -50,9 +53,10 @@ DISCOVER_CONTACTS_CSV = DISCOVER_DIR / "contacts.csv"
 # deep_research_contacts). The estimate is simply pending queue rows * per-lookup.
 GMAIL_PARALLEL_PROCESSOR = "core2x"
 GMAIL_PARALLEL_COST_PER_CONTACT_USD = 0.05
+GMAIL_AUTO_APPROVE_SPEND_USD = 50.0
 STAGES = [
     {"id": "inspect", "label": "Check linked Gmail accounts"},
-    {"id": "discover", "label": "Sync and discover Gmail contacts"},
+    {"id": "discover", "label": "Discover Gmail contacts"},
     {"id": "enrich", "label": "Enrich Gmail contacts"},
     {"id": "source_people", "label": "Save Gmail people file"},
     {"id": "merge_network", "label": "Merge contact sources"},
@@ -65,6 +69,32 @@ STAGES = [
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _check_gmail_tokens(emails: list[str]) -> list[str]:
+    """Return emails whose msgvault OAuth token is expired/revoked.
+
+    Uses `msgvault sync-full <email> --limit 1` as a lightweight Gmail API
+    probe — this actually hits the API and triggers a token refresh, unlike
+    list-labels which reads from the local DB cache.
+    If msgvault isn't installed, skip the check (sync will fail later with
+    a clearer error).
+    """
+    if not shutil.which("msgvault"):
+        return []
+    expired: list[str] = []
+    for email in emails:
+        try:
+            result = subprocess.run(
+                ["msgvault", "sync-full", email, "--limit", "1"],
+                capture_output=True, text=True, timeout=30,
+            )
+            output = (result.stdout + result.stderr).lower()
+            if "expired" in output or "revoked" in output or "no valid token" in output or "no such file" in output:
+                expired.append(email)
+        except (subprocess.TimeoutExpired, OSError):
+            pass  # Don't block on flaky checks; sync will surface the real error
+    return expired
 
 
 def emit_json(payload: dict[str, Any]) -> None:
@@ -131,26 +161,36 @@ class RunContext:
         self.update(status=overall_status, current_stage=stage_id, progress=event["progress"], stages=stages)
 
 
-def make_context(run_id: str | None = None) -> RunContext:
+def make_context(run_id: str | None = None, *, resume: bool = False) -> RunContext:
     rid = run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     if not valid_run_id(rid):
         raise ValueError("run_id may only contain letters, numbers, underscore, dash, and colon")
-    status = {
-        "schema_version": 1,
-        "vertical": VERTICAL,
-        "run_id": rid,
-        "status": "running",
-        "started_at": now_iso(),
-        "updated_at": now_iso(),
-        "progress": 0,
-        "stages": {},
-        "stage_order": STAGES,
-    }
-    # Single status/events file per vertical, overwritten when a new run starts.
     state_path = RUN_ROOT / "status.json"
     events_path = RUN_ROOT / "events.jsonl"
     events_path.parent.mkdir(parents=True, exist_ok=True)
-    events_path.write_text("", encoding="utf-8")
+    # When resuming, keep existing stages so we can skip completed ones.
+    if resume and state_path.exists():
+        try:
+            status = json.loads(state_path.read_text(encoding="utf-8"))
+            status["status"] = "running"
+            status["updated_at"] = now_iso()
+        except (json.JSONDecodeError, OSError):
+            status = None
+    else:
+        status = None
+    if status is None:
+        status = {
+            "schema_version": 1,
+            "vertical": VERTICAL,
+            "run_id": rid,
+            "status": "running",
+            "started_at": now_iso(),
+            "updated_at": now_iso(),
+            "progress": 0,
+            "stages": {},
+            "stage_order": STAGES,
+        }
+        events_path.write_text("", encoding="utf-8")
     ctx = RunContext(rid, state_path, events_path, status)
     ctx.update()
     return ctx
@@ -183,20 +223,19 @@ def ready_duckdb_path(index_payload: dict[str, Any]) -> Path:
     return duckdb_path
 
 
-def run_gmail_import(operator_id: str, accounts_path: Path) -> dict[str, Any]:
-    """Run Gmail import/enrichment with Parallel spend auto-approved.
+def run_gmail_import(operator_id: str, accounts_path: Path, *, approve_spend: bool = True) -> dict[str, Any]:
+    """Run Gmail import/enrichment.
 
-    The one-button onboarding-v2 flow completes discovery -> enrichment ->
-    indexing without an approval gate, so we always approve Parallel spend.
-    gmail_import.run() no-ops when its manifest is already current, which keeps
-    repeat button clicks from re-spending on enrichment.
+    When approve_spend is True, Parallel.ai lookups proceed without a gate.
+    When False, the import will return blocked_approval so the caller can
+    surface an approval button.
     """
     IMPORT_DIR.mkdir(parents=True, exist_ok=True)
     ns = argparse.Namespace(
         command="run",
         accounts=accounts_path,
         operator_id=operator_id,
-        approve_parallel_spend=True,
+        approve_parallel_spend=approve_spend,
     )
     return gmail_import.run(ns)
 
@@ -250,25 +289,79 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _completed_stages(ctx: RunContext) -> set[str]:
+    """Return stage ids that already completed in the current status.json."""
+    stages = ctx.status.get("stages") or {}
+    return {sid for sid, detail in stages.items() if isinstance(detail, dict) and detail.get("status") == "completed"}
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    ctx = make_context(args.run_id)
+    continuing = getattr(args, "continue_run", False)
+    ctx = make_context(resume=continuing)
     accounts_path, emails = resolve_inputs(args)
+    done = _completed_stages(ctx) if continuing else set()
     try:
-        ctx.event("inspect", "Checking linked Gmail accounts", payload={"accounts": str(accounts_path), "linked_accounts": emails})
-        if not emails:
-            raise RuntimeError("No Gmail accounts are linked. Connect a Gmail account before running.")
-        ctx.event("inspect", "Linked Gmail accounts are ready", status="completed", payload={"linked_accounts": emails})
+        # --- inspect ---
+        if "inspect" not in done:
+            ctx.event("inspect", "Checking linked Gmail accounts", payload={"accounts": str(accounts_path), "linked_accounts": emails})
+            if not emails:
+                raise RuntimeError("No Gmail accounts are linked. Connect a Gmail account before running.")
+            expired = _check_gmail_tokens(emails)
+            if expired:
+                payload = {"linked_accounts": emails, "expired_accounts": expired}
+                ctx.event("inspect", f"{len(expired)} account(s) need re-authorization", status="failed", payload=payload)
+                ctx.update(status="failed", error="token_expired", completed_at=now_iso())
+                return {"status": "failed", "vertical": VERTICAL, "run_id": ctx.run_id, "error": "token_expired", "expired_accounts": expired}
+            ctx.event("inspect", "Linked Gmail accounts are ready", status="completed", payload={"linked_accounts": emails})
 
-        ctx.event("discover", "Syncing Gmail metadata and discovering contacts", payload={"linked_accounts": emails})
-        discovery_payload = gmail_discovery.discover(accounts_path=accounts_path, selected_accounts=emails)
-        if discovery_payload.get("status") == "skipped":
-            raise RuntimeError(discovery_payload.get("reason") or "Gmail discovery was skipped")
-        if discovery_payload.get("status") != "completed":
-            raise RuntimeError(discovery_payload.get("reason") or discovery_payload.get("error") or "Gmail discovery did not complete")
-        ctx.event("discover", "Gmail contacts are discovered", status="completed", payload={"contacts": discovery_payload.get("contacts"), "selected_accounts": discovery_payload.get("selected_accounts")})
+        # --- discover ---
+        if "discover" not in done:
+            ctx.event("discover", "Discovering Gmail contacts", payload={"linked_accounts": emails})
+            discovery_payload = gmail_discovery.discover(accounts_path=accounts_path, selected_accounts=emails)
+            if discovery_payload.get("status") == "skipped":
+                raise RuntimeError(discovery_payload.get("reason") or "Gmail discovery was skipped")
+            if discovery_payload.get("status") != "completed":
+                raise RuntimeError(discovery_payload.get("reason") or discovery_payload.get("error") or "Gmail discovery did not complete")
+            ctx.event("discover", "Gmail contacts are discovered", status="completed", payload={"contacts": discovery_payload.get("contacts"), "selected_accounts": discovery_payload.get("selected_accounts")})
 
-        ctx.event("enrich", "Importing and enriching Gmail contacts (Parallel spend auto-approved)", payload={"contacts": discovery_payload.get("contacts")})
-        import_payload = run_gmail_import(args.operator_id, accounts_path)
+            max_enrich = getattr(args, "max_enrich", 0) or 0
+            if max_enrich > 0:
+                queue_csv = DISCOVER_DIR / "linkedin_resolution_queue.csv"
+                if queue_csv.exists():
+                    lines = queue_csv.read_text().splitlines()
+                    if len(lines) > max_enrich + 1:
+                        queue_csv.write_text("\n".join(lines[:max_enrich + 1]) + "\n")
+                        ctx.event("discover", f"Truncated resolution queue to {max_enrich} for testing", status="completed")
+        else:
+            discovery_payload = {"contacts": None, "selected_accounts": emails}
+
+        # --- enrich ---
+        spend = estimate_parallel_spend()
+        pending = spend.get("pending_contacts", 0)
+        cost_usd = spend.get("estimated_usd", 0)
+        approve_spend = getattr(args, "approve_spend", False)
+        enrich_msg = f"Enriching Gmail contacts"
+        if pending > 0:
+            if approve_spend:
+                enrich_msg += f" — {pending} need Parallel.ai resolution (~${cost_usd:.2f}, auto-approved)"
+            else:
+                enrich_msg += f" — {pending} need Parallel.ai resolution (~${cost_usd:.2f})"
+        else:
+            enrich_msg += " (no new Parallel.ai lookups needed)"
+        ctx.event("enrich", enrich_msg, payload={"contacts": discovery_payload.get("contacts"), "parallel_spend_estimate": spend})
+
+        if pending > 0 and not approve_spend:
+            payload = {
+                "status": "blocked_approval",
+                "vertical": VERTICAL,
+                "run_id": ctx.run_id,
+                "parallel_spend_estimate": spend,
+            }
+            ctx.event("enrich", f"Approve ~${cost_usd:.2f} Parallel.ai spend for {pending} contacts?", status="blocked_approval", payload=payload)
+            ctx.update(status="blocked_approval", completed_at=now_iso())
+            return payload
+
+        import_payload = run_gmail_import(args.operator_id, accounts_path, approve_spend=approve_spend)
         import_status = import_payload.get("status")
         if import_status == "blocked_approval":
             payload = {"status": "blocked_approval", "vertical": VERTICAL, "run_id": ctx.run_id, "import": import_payload}
@@ -325,9 +418,10 @@ def build_parser() -> argparse.ArgumentParser:
         s = sub.add_parser(cmd)
         s.add_argument("--operator-id", default="local")
         s.add_argument("--accounts", default=str(DEFAULT_ACCOUNTS))
-        s.add_argument("--run-id", default="")
+        s.add_argument("--approve-spend", action="store_true", default=False, help="Auto-approve Parallel.ai spend regardless of cost")
+        s.add_argument("--max-enrich", type=int, default=0, help="Limit resolution queue to N rows for testing")
+        s.add_argument("--continue", dest="continue_run", action="store_true", default=False, help="Resume from last completed stage")
     status = sub.add_parser("status")
-    status.add_argument("--run-id", default="")
     return parser
 
 
@@ -348,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         emit_json(payload)
         return 0
     if args.command == "status":
-        emit_json(status_payload(args.run_id))
+        emit_json(status_payload())
         return 0
     payload = run(args)
     emit_json(payload)
