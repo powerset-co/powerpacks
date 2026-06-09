@@ -16,8 +16,7 @@
     "set_scope",
     "search_scope",
     "traits",
-    "baseline_implied",
-    "screening_gates",
+
     "initial_probes",
     "llm_review_budget",
     "usable_cutoff",
@@ -125,19 +124,7 @@
         }
       }
     },
-    "baseline_implied": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      }
-    },
-    "screening_gates": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/screening_gate"
-      }
-    },
+
     "initial_probes": {
       "type": "array",
       "minItems": 3,
@@ -213,29 +200,7 @@
         }
       }
     },
-    "screening_gate": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "gate",
-        "reason",
-        "key"
-      ],
-      "properties": {
-        "gate": {
-          "type": "string",
-          "minLength": 1
-        },
-        "reason": {
-          "type": "string",
-          "minLength": 1
-        },
-        "key": {
-          "type": "string",
-          "pattern": "^[a-z0-9_]+$"
-        }
-      }
-    },
+
     "probe": {
       "type": "object",
       "additionalProperties": false,
@@ -255,7 +220,7 @@
           "type": "string",
           "minLength": 1,
           "not": {
-            "pattern": "Powerset network|must_have|nice_to_have|targets_traits|screening_gates"
+            "pattern": "Powerset network|must_have|nice_to_have|targets_traits"
           }
         },
         "strategy": {

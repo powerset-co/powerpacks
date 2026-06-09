@@ -467,6 +467,24 @@ class DryRunTests(unittest.TestCase):
             self.assertIn("p1", proc.stderr)
 
 
+class PromptContractTests(unittest.TestCase):
+    def test_prompt_penalizes_over_senior_ic_query_matches(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_prompt", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_prompt"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        prompt = mod.SYSTEM_PROMPT
+        self.assertIn("the hiring target band, not as a loose \"or above\" signal", prompt)
+        self.assertIn("Explicit seniority examples: junior, mid-level, senior, staff, principal", prompt)
+        self.assertIn("Do NOT upgrade CTOs, VPs, founders, directors", prompt)
+        self.assertIn("should score low (normally", prompt)
+        self.assertIn("Staff/principal are not synonyms for \"senior\"", prompt)
+        self.assertIn("Only use broad seniority equivalence when the query omits seniority entirely", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
 

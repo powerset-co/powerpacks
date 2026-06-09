@@ -104,24 +104,6 @@ Examples:
   `specialization: true`; do not silently downgrade it. If the user later says
   to ignore or soften it, record a trait mutation and rerank/expand.
 
-#### screening_gates
-
-Some JD requirements are real but not good search traits because profiles rarely
-prove them. Track these separately as `screening_gates`, not as
-`must_have`/`nice_to_have` traits and not as probe targets.
-
-Examples:
-- Eligibility, authorization, or future-clearance questions when the JD does not
-  require already-held profile-visible evidence
-- Willingness to relocate or commute
-- Work authorization questions
-- Extended hours/weekends unless it is an unusual schedule requirement
-- Compensation, availability, willingness to accept terms, or other close-risk
-  questions
-
-Only turn a gate into a searchable trait when the JD asks for already-held,
-profile-visible evidence.
-
 #### Search scope, not fit
 
 Location can be a search scope when the user wants local candidates, but it is
@@ -149,31 +131,35 @@ must-have trait or a retrieval probe.
 Instead, calibrate the role level:
 
 - Prefer seniority/ownership traits that exclude clearly junior candidates.
+- Treat the JD seniority band as a strict hiring constraint. For JD searches,
+  we are matching analogous hires, not selling to advisors, cofounders,
+  fractional executives, or overqualified network contacts.
 - Treat generic basics as assumed when the candidate has credible mid+ work
   history in the required lane.
 - Keep a basic requirement as a trait only when it is a true differentiator,
   e.g. a named credential, named technical stack, named regulatory framework,
   active clearance, or specific hands-on domain that would not be implied by the
   title alone.
+- A candidate outside the seniority band can be `strong` or `maybe` only when
+  the current role is plausibly analogous after company-size context. Example:
+  a Director of Finance at a tiny startup might map to hands-on FP&A, but a CFO,
+  CEO, Founder, President, Partner, Board Member, or enterprise VP should be
+  `out` unless the JD explicitly asks for that seniority.
 
 #### What to ignore
 
-Do not create traits for generic qualifications that any qualified candidate
-would have:
-- "Strong analytical skills"
-- "Excellent communication skills"
-- "Ability to manage competing priorities in a fast-paced environment"
-- "Comfort operating at both detailed and strategic levels"
-- Broad degree requirements when a stronger profile-visible trait already
-  implies them
-- Generic baseline skills already implied by credible mid+ work history in the
-  target function
-- Vague tool or fundamentals language that does not name a specific
-  profile-visible tool, method, framework, standard, or unusual depth
-- company mission / urgency / accountability / transparency language
-- compensation, benefits, EEO, and application boilerplate
+Do not create traits for:
+- Generic soft skills, communication, analytical ability, organization
+- Broad degree requirements implied by a stronger profile-visible trait
+- Vague tool/fundamentals language without a specific named tool or method
+- Company mission, urgency, accountability, transparency language
+- Compensation, benefits, EEO, application boilerplate
+- Screening/close concerns: clearance eligibility, relocation willingness,
+  work authorization, commute, extended hours, compensation questions
 
-These are assumed if the candidate has the real traits.
+These are either assumed for qualified candidates or are company-side close
+concerns that do not belong in the search plan. Do not generate
+`baseline_implied` or `screening_gates` arrays in `plan.json`.
 
 #### Trait fields
 
@@ -224,7 +210,8 @@ Before writing `plan.json`, check:
 - Operational requirements are not collapsed too far. A credential or role title
   does not automatically cover a separate hands-on operating requirement if the
   JD makes that work central to the role.
-- Non-searchable gates are in `screening_gates`, not probes.
+- Screening/close concerns (clearance eligibility, relocation, authorization)
+  are ignored entirely — do not make them traits or probe targets.
 
 ### 1c. Probe Design
 
@@ -281,9 +268,8 @@ to surface candidates for. Use the exact English `trait` strings, not internal
 slugs, in user-facing plan previews. This enables coverage gap analysis in task
 3 without leaking implementation labels.
 
-Do not target `screening_gates` in probes unless the gate is profile-evaluable
-and already-held. Querying for eligibility or willingness usually produces
-noise.
+Do not target screening/close concerns (eligibility, authorization, relocation,
+commute) in probes. Querying for willingness or eligibility produces noise.
 
 #### Probe fields
 
@@ -313,9 +299,7 @@ Important schema semantics:
   and must not appear in `traits` or `targets_traits`.
 - `traits.must_have` and `traits.nice_to_have` contain English,
   profile-evaluable job-fit traits.
-- `baseline_implied` contains broad or vague requirements that credible
-  seniority/work history already implies.
-- `screening_gates` contains company-side close or application constraints.
+
 - `initial_probes[].query` is the exact English query string to pass to
   `$search-network`.
 - `initial_probes[].targets_traits` must reference actual English trait names
@@ -481,7 +465,7 @@ Append to `lineage.json`:
 - Each probe's `execute_command` already includes `--execute-approved`; do not
   ask for another approval per probe.
 
-## Handoff to Tasks 4-5
+## Task 4 — Merge Candidate Frontier
 
 After tasks 1-3 complete, the run directory contains:
 
@@ -491,33 +475,188 @@ After tasks 1-3 complete, the run directory contains:
 - `lineage.json` — event log
 - `probes/` — per-probe artifacts from `search_network_pipeline`
 
-Task 4 is a deterministic merge primitive. It consumes probe run CSVs and emits:
+Run the merge primitive to dedupe candidates across all probe CSVs:
 
-- `candidate_frontier.json`
-- `candidate_frontier.jsonl`
-- `candidates.debug.csv`
-- `merge_summary.json`
+```bash
+uv run --project . python packs/search/primitives/merge_candidate_frontier/merge_candidate_frontier.py \
+    --run-dir <run_dir>
+```
 
-The candidate frontier should conform to:
-`packs/search/schemas/search-network-jd-candidate-frontier.schema.json`.
+The primitive reads `probe_summaries.json` and `plan.json` from the run
+directory, deduplicates candidates by `person_id` (primary) and `linkedin_url`
+(secondary, normalized), and writes:
 
-Task 5 is harness evaluation plus primitive capture/export:
+| File | Content |
+|------|---------|
+| `candidate_frontier.json` | Full frontier document (schema-conforming) |
+| `candidate_frontier.jsonl` | One JSON object per candidate |
+| `candidates.debug.csv` | Flat CSV for quick inspection |
+| `merge_summary.json` | Counts, overlap stats, per-probe yield |
 
-1. The harness evaluates `candidate_frontier.json` batches against the full
-   `plan.json`, preferably with subagents when available.
-2. The harness writes `candidate_evaluations.raw.jsonl` with candidate ids,
-   scores, requirement evidence, duplicate-signal interpretation, rationale, and
-   caveats.
-3. The `capture_jd_candidate_evaluations` primitive validates and persists:
-   - `candidate_evaluations.json`
-   - `candidate_evaluations.jsonl`
-   - `candidates.reranked.csv`
-   - `candidates.reranked.debug.json`
-4. The `export_candidate_shortlist` primitive formats the sendable
-   `shortlist.csv` from captured evaluations plus source attribution.
+The frontier conforms to:
+`packs/search/schemas/search-network-jd-candidate-frontier.schema.json`
 
-The evaluation artifact should conform to:
-`packs/search/schemas/search-network-jd-candidate-evaluations.schema.json`.
+Key design: candidates carry lightweight refs (person_id, name, current_role,
+linkedin_url, matched_probe_ids, source_rows with CSV path + row number, and a
+`profile_context_ref` pointing back to the hydrated profile run). Full profile
+blobs stay on disk.
+
+The merge summary prints to stdout as JSON. Log the event in `lineage.json`:
+
+```json
+{ "type": "frontier_merged", "candidate_count": N, "multi_probe": M }
+```
+
+---
+
+## Task 5 — Evaluate Candidates and Export Shortlist
+
+Task 5 has three phases: harness evaluation, capture, and export.
+
+### 5a. Harness Evaluation
+
+The harness (this agent or sub-agents) scores each candidate in
+`candidate_frontier.json` against the `plan.json` traits. For each candidate:
+
+1. Load the candidate from the frontier (id, name, matched probes, source_rows)
+2. If a richer profile is needed, read the probe CSV row or hydrated profile
+   via `profile_context_ref`
+3. Score against each `must_have` and `nice_to_have` trait
+4. Assign a verdict, jd_score, seniority_fit, and rationale
+
+Seniority is a hard gate for `strong` and `maybe`. If `seniority_fit` is
+`too_senior`, `too_junior`, or `wrong_track`, set `verdict` to `out`; do not
+keep the candidate as weak fallback in the sendable shortlist. Use `weak` only
+for internal debug pools, not hiring-manager output. Overqualified executives
+with old analyst experience should be excluded, not ranked below true analyst
+profiles.
+
+Write one JSONL line per candidate to `candidate_evaluations.raw.jsonl` in the
+run directory. Each line must match this shape:
+
+```json
+{
+  "candidate_id": "<from frontier>",
+  "rank": 1,
+  "jd_score": 0.82,
+  "verdict": "strong",
+  "seniority_fit": "ideal",
+  "must_have": [
+    { "trait": "Required credential", "status": "strong", "evidence": "..." }
+  ],
+  "nice_to_have": [
+    { "trait": "Industry context", "status": "partial", "evidence": "..." }
+  ],
+  "duplicate_signal": {
+    "matched_probe_count": 3,
+    "matched_probe_ids": ["p1", "p2", "p5"],
+    "interpretation": "Appeared in 3/5 probes — strong multi-angle match"
+  },
+  "rationale": "One-paragraph summary of fit",
+  "caveats": ["No explicit CAS evidence", "Location unconfirmed"]
+}
+```
+
+Allowed values:
+- `verdict`: `strong` | `maybe` | `weak` | `out`
+- `seniority_fit`: `ideal` | `acceptable` | `too_senior` | `too_junior` | `wrong_track` | `unknown`
+- `status` (per-trait): `strong` | `partial` | `weak` | `missing` | `unknown`
+
+Assign `rank` after scoring all candidates (1 = best jd_score).
+
+Prefer sub-agents for batched evaluation when the harness supports workers.
+Otherwise evaluate sequentially.
+
+### 5b. Capture Evaluations
+
+Run the capture primitive to validate the raw JSONL and write canonical
+artifacts:
+
+```bash
+uv run --project . python packs/search/primitives/capture_jd_evaluations/capture_jd_evaluations.py \
+    --run-dir <run_dir> \
+    --evaluator-mode harness_single_agent
+```
+
+`--evaluator-mode` values: `harness_subagents`, `harness_single_agent`,
+`primitive`. Use `harness_subagents` when sub-agents did the eval,
+`harness_single_agent` when the main agent did, `primitive` if a future
+automated evaluator is used.
+
+Optional flags: `--evaluator-model <model>`, `--evaluator-reasoning <effort>`,
+`--force` (continue despite validation errors).
+
+The primitive reads:
+- `candidate_evaluations.raw.jsonl` — raw harness output
+- `candidate_frontier.json` — for enriching display fields
+- `plan.json` — for lineage
+
+And writes:
+
+| File | Content |
+|------|---------|
+| `candidate_evaluations.json` | Full evaluation document (schema-conforming) |
+| `candidate_evaluations.jsonl` | One evaluation per line |
+| `candidates.reranked.csv` | Flat CSV ordered by rank |
+| `candidates.reranked.debug.json` | Evaluations with display fields |
+
+The evaluation document conforms to:
+`packs/search/schemas/search-network-jd-candidate-evaluations.schema.json`
+
+The capture primitive prints a summary to stdout:
+
+```json
+{ "candidate_count": 24, "strong": 5, "maybe": 8, "weak": 7, "out": 4 }
+```
+
+### 5c. Export Shortlist
+
+Run the export primitive to produce the sendable shortlist:
+
+```bash
+uv run --project . python packs/search/primitives/export_candidate_shortlist/export_candidate_shortlist.py \
+    --run-dir <run_dir>
+```
+
+Optional: `--min-verdict maybe` (default) to include strong + maybe candidates.
+Use `--min-verdict strong` for a tighter list.
+Do not use `--min-verdict weak` for sendable hiring-manager shortlists.
+
+The primitive reads `candidate_evaluations.json` and `candidate_frontier.json`
+and writes:
+
+| File | Content |
+|------|---------|
+| `shortlist.csv` | Clean, sendable CSV with rank, name, linkedin, role, score, verdict, trait summaries |
+| `shortlist_manifest.json` | Export metadata and verdict breakdown |
+
+Append to `lineage.json`:
+- `evaluations_captured` — after capture, with verdict breakdown
+- `shortlist_exported` — after export, with shortlisted count
+
+### End-to-end summary
+
+After Tasks 4-5, the run directory contains the full artifact chain:
+
+```
+<run_dir>/
+├── source.txt, source.json          ← Task 1
+├── plan.json                         ← Task 1
+├── probe_summaries.json              ← Task 2
+├── lineage.json                      ← Tasks 1-5
+├── probes/                           ← Task 2 (per-probe artifacts)
+├── candidate_frontier.json           ← Task 4
+├── candidate_frontier.jsonl          ← Task 4
+├── candidates.debug.csv              ← Task 4
+├── merge_summary.json                ← Task 4
+├── candidate_evaluations.raw.jsonl   ← Task 5a (harness output)
+├── candidate_evaluations.json        ← Task 5b
+├── candidate_evaluations.jsonl       ← Task 5b
+├── candidates.reranked.csv           ← Task 5b
+├── candidates.reranked.debug.json    ← Task 5b
+├── shortlist.csv                     ← Task 5c
+└── shortlist_manifest.json           ← Task 5c
+```
 
 This keeps large candidate/profile context in files and lets the main harness
 work with ids, ranks, scores, and concise reasoning instead of loading the full

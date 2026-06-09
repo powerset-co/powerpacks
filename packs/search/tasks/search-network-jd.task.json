@@ -12,7 +12,7 @@
     "clean_export_required": true
   },
   "requirement_policy": {
-    "description": "JD requirements are not all binary. Search/ranking should focus on whether the candidate can do the job well from profile-visible experience, seniority, domain, credential, and technical evidence. Company-side close constraints such as onsite willingness, relocation, compensation, work authorization, and future clearance eligibility belong in screening_gates or recruiter follow-up, not search traits. Vague baseline requirements are not gates unless they name a specific profile-visible tool, method, framework, standard, credential, or unusual depth.",
+    "description": "JD requirements are not all binary. Search/ranking should focus on whether the candidate can do the job well from profile-visible experience, seniority, domain, credential, and technical evidence. Company-side close constraints (onsite willingness, relocation, compensation, work authorization, future clearance eligibility) are ignored entirely — they are recruiter follow-up, not search concerns. Vague baseline requirements are not traits unless they name a specific profile-visible tool, method, framework, standard, credential, or unusual depth. JD seniority is a strict hiring band: the workflow should target analogous roles and exclude clearly overqualified executives, founders, partners, board-heavy profiles, and clearly too-junior profiles unless the JD explicitly asks for that level.",
     "tiers": [
       {
         "id": "hard_disqualifier",
@@ -44,29 +44,6 @@
           "specific tooling, systems, or technical stack",
           "early-stage or high-growth company experience"
         ]
-      },
-      {
-        "id": "baseline_implied_by_seniority",
-        "behavior": "Do not create a trait or gate for this requirement. Treat it as assumed when the candidate has credible mid-level, senior, staff, lead, manager, or executive work history in the target lane.",
-        "examples": [
-          "generic communication, analytical, collaboration, or fundamentals language",
-          "vague tools language such as data analysis tools or systems aptitude",
-          "broad degree requirements that are subsumed by a stronger credential, role track, or work history"
-        ]
-      }
-    ],
-    "screening_gates": [
-      {
-        "id": "clearance_eligible",
-        "behavior": "Track as a gate for recruiter follow-up, not as a probe target, unless the JD requires an active clearance or profile-evidenced cleared work."
-      },
-      {
-        "id": "work_authorization_or_relocation",
-        "behavior": "Track as a gate when present. Do not convert willingness/eligibility questions into search traits."
-      },
-      {
-        "id": "onsite_compensation_or_availability",
-        "behavior": "Track as recruiter follow-up or search scope only. Do not score candidates as unable to do the job because their profile does not prove daily commute willingness, salary acceptance, availability, or willingness to work extended hours."
       }
     ]
   },
@@ -74,15 +51,13 @@
     {
       "id": "prepare_jd_plan",
       "kind": "harness",
-      "description": "Fetch/read the JD, persist source artifacts, extract requirements, classify each requirement as hard_disqualifier / required_but_stackable / preferred_signal / baseline_implied / screening_gate, and create a bounded multi-probe plan conforming to packs/search/schemas/search-network-jd-plan.schema.json.",
+      "description": "Fetch/read the JD, persist source artifacts, extract requirements, classify each as hard_disqualifier / required_but_stackable / preferred_signal, and create a bounded multi-probe plan conforming to packs/search/schemas/search-network-jd-plan.schema.json. Ignore vague basics implied by seniority and company-side close concerns entirely.",
       "includes": [
         "source.txt and source.json",
         "normalized_archetype",
         "set_scope as execution metadata only",
         "search_scope for sourcing scope, not job-fit traits",
         "English must_have and nice_to_have job-fit traits",
-        "baseline_implied for vague basics or requirements implied by seniority",
-        "screening_gates for close/application requirements",
         "English initial probes with limits and targets_traits",
         "review budget and usable cutoff"
       ],
@@ -170,8 +145,7 @@
         "score_basis": "Score against the full JD plan, not the individual probe that found the candidate.",
         "must_have": "Clear misses should cap or lower score; only truly central named requirements should exclude.",
         "nice_to_have": "Use as differentiators and boosts.",
-        "baseline_implied": "Do not penalize credible senior candidates for vague basics implied by work history.",
-        "screening_gates": "Do not score company-side close constraints such as commute willingness, compensation, work authorization, or future clearance eligibility.",
+        "seniority_band": "Treat the JD seniority band as a hard gate for strong/maybe verdicts. Candidates marked too_senior, too_junior, or wrong_track must be out, not weak fallback. Allow an exception only when company-size context makes the current title plausibly analogous to the JD level, e.g. hands-on startup Director of Finance for a senior analyst/FP&A role.",
         "duplicate_signal": "Use repeated appearance across probes as a positive evidence signal only when the matched probes cover meaningful different traits."
       }
     },
@@ -225,10 +199,11 @@
     "The harness-written plan.json conforms to packs/search/schemas/search-network-jd-plan.schema.json before retrieval starts.",
     "set_scope is metadata only and probe query text does not contain set names such as Powerset network.",
     "search_scope may contain location or sourcing scope, but location/onsite/relocation/commute willingness are not job-fit traits and do not appear in targets_traits.",
-    "baseline_implied captures vague basics and requirements implied by credible seniority/work history instead of turning them into hard gates.",
     "The final JD score is based on the full JD, not the individual probe query that found the candidate.",
     "Clear JD requirements are classified into hard_disqualifier, required_but_stackable, or preferred_signal before final rerank.",
-    "Real but non-profile-evaluable requirements are tracked as screening_gates and are not used as probe targets.",
+    "JD seniority is enforced as a strict hiring band: strong/maybe candidates must be analogous to the JD level, and clearly too-senior/too-junior/wrong-track candidates are out.",
+    "Weak candidates are not included in sendable hiring-manager shortlists; they may only appear in debug/reranked pool artifacts.",
+    "Vague basics implied by seniority and company-side close concerns are ignored entirely — not generated in plan.json, not used in scoring.",
     "Candidates missing required_but_stackable criteria remain visible below qualified candidates with a capped score instead of disappearing.",
     "Every final candidate has source attribution when available: source owner, source channel, and interaction count.",
     "The sendable CSV uses exactly these columns in this order: Rank, Name, LinkedIn URL, Current Role, Current Company, Source, Channel, Rationale.",
