@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks.local/schemas/search-network-jd-plan.schema.json",
+  "title": "Search Network JD Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "route",
+    "parse_only",
+    "retrieval_ran",
+    "job_id",
+    "job_title",
+    "normalized_archetype",
+    "source_url",
+    "source_title",
+    "set_scope",
+    "search_scope",
+    "traits",
+    "baseline_implied",
+    "screening_gates",
+    "initial_probes",
+    "llm_review_budget",
+    "usable_cutoff",
+    "cluster_plan",
+    "expansion_strategy",
+    "created_at"
+  ],
+  "properties": {
+    "route": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parse_only": {
+      "type": "boolean"
+    },
+    "retrieval_ran": {
+      "type": "boolean",
+      "const": false
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "job_title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "normalized_archetype": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "set_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "set_id"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "set_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "search_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "note"
+      ],
+      "properties": {
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "traits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "must_have",
+        "nice_to_have"
+      ],
+      "properties": {
+        "must_have": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 6,
+          "items": {
+            "$ref": "#/$defs/trait"
+          }
+        },
+        "nice_to_have": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/trait"
+          }
+        }
+      }
+    },
+    "baseline_implied": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "screening_gates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/screening_gate"
+      }
+    },
+    "initial_probes": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 6,
+      "items": {
+        "$ref": "#/$defs/probe"
+      }
+    },
+    "llm_review_budget": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "usable_cutoff": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cluster_plan": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "expansion_strategy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "trait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trait",
+        "type",
+        "covers",
+        "specialization",
+        "key"
+      ],
+      "properties": {
+        "trait": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^[a-z0-9_]+$"
+          }
+        },
+        "type": {
+          "enum": [
+            "must_have",
+            "nice_to_have"
+          ]
+        },
+        "covers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "specialization": {
+          "type": "boolean"
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$"
+        }
+      }
+    },
+    "screening_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate",
+        "reason",
+        "key"
+      ],
+      "properties": {
+        "gate": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$"
+        }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "query",
+        "strategy",
+        "limit",
+        "targets_traits"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^p[0-9]+_[a-z0-9_]+$"
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "Powerset network|must_have|nice_to_have|targets_traits|screening_gates"
+          }
+        },
+        "strategy": {
+          "enum": [
+            "role_focused",
+            "credential_focused",
+            "career_path",
+            "industry_semantic"
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "targets_traits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "not": {
+              "pattern": "^[a-z0-9_]+$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

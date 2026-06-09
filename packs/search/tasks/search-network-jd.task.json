@@ -1,0 +1,242 @@
+{
+  "task": "search_network_jd",
+  "version": 1,
+  "description": "Run a job-description-driven recruiter search with multi-probe retrieval, final full-pool JD reranking, source attribution, and a clean sendable shortlist.",
+  "default_constraints": {
+    "requires_source_text": true,
+    "requires_set_scope": true,
+    "requires_plan_schema": "packs/search/schemas/search-network-jd-plan.schema.json",
+    "multi_probe": true,
+    "final_rerank_required": true,
+    "source_attribution_required": true,
+    "clean_export_required": true
+  },
+  "requirement_policy": {
+    "description": "JD requirements are not all binary. Search/ranking should focus on whether the candidate can do the job well from profile-visible experience, seniority, domain, credential, and technical evidence. Company-side close constraints such as onsite willingness, relocation, compensation, work authorization, and future clearance eligibility belong in screening_gates or recruiter follow-up, not search traits. Vague baseline requirements are not gates unless they name a specific profile-visible tool, method, framework, standard, credential, or unusual depth.",
+    "tiers": [
+      {
+        "id": "hard_disqualifier",
+        "behavior": "Failing this requirement should score near zero or be excluded unless the user explicitly overrides it.",
+        "examples": [
+          "must have a specific active credential or active clearance when the JD explicitly requires it",
+          "must have a named regulatory, technical, or domain specialization that is central to doing the work"
+        ]
+      },
+      {
+        "id": "required_but_stackable",
+        "behavior": "Failing this requirement should keep the candidate in the pool but cap final score around 0.30-0.45, so strong adjacent profiles are still visible below qualified matches.",
+        "examples": [
+          "required credential, license, or certification",
+          "minimum years in the target function",
+          "required credential or domain exposure that may be missing from profile text",
+          "specific required hands-on work that is not implied by the role title alone"
+        ],
+        "default_score_cap": {
+          "min": 0.3,
+          "max": 0.45
+        }
+      },
+      {
+        "id": "preferred_signal",
+        "behavior": "Use as boost or penalty only; do not cap or exclude solely for missing it.",
+        "examples": [
+          "preferred domain, industry, or customer context",
+          "specific tooling, systems, or technical stack",
+          "early-stage or high-growth company experience"
+        ]
+      },
+      {
+        "id": "baseline_implied_by_seniority",
+        "behavior": "Do not create a trait or gate for this requirement. Treat it as assumed when the candidate has credible mid-level, senior, staff, lead, manager, or executive work history in the target lane.",
+        "examples": [
+          "generic communication, analytical, collaboration, or fundamentals language",
+          "vague tools language such as data analysis tools or systems aptitude",
+          "broad degree requirements that are subsumed by a stronger credential, role track, or work history"
+        ]
+      }
+    ],
+    "screening_gates": [
+      {
+        "id": "clearance_eligible",
+        "behavior": "Track as a gate for recruiter follow-up, not as a probe target, unless the JD requires an active clearance or profile-evidenced cleared work."
+      },
+      {
+        "id": "work_authorization_or_relocation",
+        "behavior": "Track as a gate when present. Do not convert willingness/eligibility questions into search traits."
+      },
+      {
+        "id": "onsite_compensation_or_availability",
+        "behavior": "Track as recruiter follow-up or search scope only. Do not score candidates as unable to do the job because their profile does not prove daily commute willingness, salary acceptance, availability, or willingness to work extended hours."
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "prepare_jd_plan",
+      "kind": "harness",
+      "description": "Fetch/read the JD, persist source artifacts, extract requirements, classify each requirement as hard_disqualifier / required_but_stackable / preferred_signal / baseline_implied / screening_gate, and create a bounded multi-probe plan conforming to packs/search/schemas/search-network-jd-plan.schema.json.",
+      "includes": [
+        "source.txt and source.json",
+        "normalized_archetype",
+        "set_scope as execution metadata only",
+        "search_scope for sourcing scope, not job-fit traits",
+        "English must_have and nice_to_have job-fit traits",
+        "baseline_implied for vague basics or requirements implied by seniority",
+        "screening_gates for close/application requirements",
+        "English initial probes with limits and targets_traits",
+        "review budget and usable cutoff"
+      ],
+      "outputs": [
+        "source.txt",
+        "source.json",
+        "plan.json"
+      ]
+    },
+    {
+      "id": "run_retrieval_probes",
+      "kind": "orchestrator",
+      "primitive": "search_network_pipeline",
+      "description": "Run the approved initial probes against the requested set scope and persist each child run's normal CSV/state artifacts.",
+      "error_handling": {
+        "turbopuffer_permit_overflow": "Retry automatically. If company-domain union or sector filters trigger the permit cap, rerun a role-only fallback where the sector/domain terms move into semantic_query and final JD rerank owns the domain-fit penalty.",
+        "llm_model_parameter_error": "Use model-compatible request parameters, e.g. omit temperature for gpt-5/o-series models."
+      },
+      "outputs": [
+        "probe_runs.initial.json"
+      ]
+    },
+    {
+      "id": "expand_on_coverage_gaps",
+      "kind": "harness",
+      "primitive": "search_network_pipeline",
+      "optional": true,
+      "description": "Assess deduped coverage by JD requirement cluster. If the pool is thin or the user asks for more, run additional focused probes; do not just re-sort the existing CSV.",
+      "delta_metrics": [
+        "initial_probe_rows",
+        "initial_unique_candidates",
+        "expansion_probe_rows",
+        "new_unique_candidates",
+        "new_candidates_score_gte_0_30",
+        "new_candidates_score_gte_0_50",
+        "new_candidates_score_gte_0_70"
+      ],
+      "outputs": [
+        "probe_runs.expansion.json"
+      ]
+    },
+    {
+      "id": "merge_probe_results",
+      "kind": "primitive",
+      "primitive": "merge_jd_probe_results",
+      "description": "Merge and dedupe all child $search-network probe CSVs by person_id, LinkedIn URL, public_identifier, and stable candidate identity. Combine duplicate evidence, preserve every probe/source row, and emit lightweight candidate references for the harness evaluator instead of loading the full pool into chat memory.",
+      "outputs": [
+        "candidate_frontier.json",
+        "candidate_frontier.jsonl",
+        "candidates.debug.csv",
+        "merge_summary.json"
+      ],
+      "schemas": [
+        "packs/search/schemas/search-network-jd-candidate-frontier.schema.json"
+      ],
+      "notes": [
+        "Appearing in multiple probes is a useful positive signal, but not final proof of JD fit.",
+        "profile_context_ref should point to persisted candidate context when large profile text is needed for evaluation.",
+        "The primitive should not call LLMs; it prepares deterministic inputs for harness evaluation."
+      ]
+    },
+    {
+      "id": "evaluate_and_capture_ranked_pool",
+      "kind": "harness_plus_primitive",
+      "primitive": "capture_jd_candidate_evaluations",
+      "description": "The harness evaluates candidate frontier batches against the full JD plan, usually with subagents for parallel qualitative review. The capture primitive validates and persists the resulting scores, requirement evidence, duplicate-signal interpretation, ranking, and concise rationale without requiring the main agent to hold all candidate profiles in memory.",
+      "harness_inputs": [
+        "plan.json",
+        "candidate_frontier.json",
+        "profile_context_ref files"
+      ],
+      "harness_outputs": [
+        "candidate_evaluations.raw.jsonl"
+      ],
+      "primitive_outputs": [
+        "candidate_evaluations.json",
+        "candidate_evaluations.jsonl",
+        "candidates.reranked.csv",
+        "candidates.reranked.debug.json"
+      ],
+      "schemas": [
+        "packs/search/schemas/search-network-jd-candidate-evaluations.schema.json"
+      ],
+      "evaluation_policy": {
+        "score_basis": "Score against the full JD plan, not the individual probe that found the candidate.",
+        "must_have": "Clear misses should cap or lower score; only truly central named requirements should exclude.",
+        "nice_to_have": "Use as differentiators and boosts.",
+        "baseline_implied": "Do not penalize credible senior candidates for vague basics implied by work history.",
+        "screening_gates": "Do not score company-side close constraints such as commute willingness, compensation, work authorization, or future clearance eligibility.",
+        "duplicate_signal": "Use repeated appearance across probes as a positive evidence signal only when the matched probes cover meaningful different traits."
+      }
+    },
+    {
+      "id": "export_sendable_shortlist",
+      "kind": "primitive",
+      "primitive": "export_candidate_shortlist",
+      "description": "Read captured candidate evaluations plus source attribution, write the exact sendable CSV shape, and persist summary/lineage counts. This is a formatting/export primitive, not another rerank.",
+      "csv_columns_exact": [
+        "Rank",
+        "Name",
+        "LinkedIn URL",
+        "Current Role",
+        "Current Company",
+        "Source",
+        "Channel",
+        "Rationale"
+      ],
+      "forbidden_csv_columns": [
+        "Score",
+        "JD Score",
+        "Interactions",
+        "Interaction Count",
+        "Caveats",
+        "Person ID",
+        "Probe",
+        "Matched Probes",
+        "State Path",
+        "Query Results CSV",
+        "Raw Reasoning",
+        "Debug"
+      ],
+      "outputs": [
+        "shortlist.csv",
+        "summary.json",
+        "lineage.json"
+      ]
+    }
+  ],
+  "outputs": {
+    "source": "source.txt",
+    "plan": "plan.json",
+    "probe_runs": "probe_runs.json",
+    "debug_pool": "candidates.debug.csv",
+    "reranked_pool": "candidates.reranked.csv",
+    "sendable_shortlist": "shortlist.csv",
+    "summary": "summary.json",
+    "lineage": "lineage.json"
+  },
+  "acceptance_criteria": [
+    "The harness-written plan.json conforms to packs/search/schemas/search-network-jd-plan.schema.json before retrieval starts.",
+    "set_scope is metadata only and probe query text does not contain set names such as Powerset network.",
+    "search_scope may contain location or sourcing scope, but location/onsite/relocation/commute willingness are not job-fit traits and do not appear in targets_traits.",
+    "baseline_implied captures vague basics and requirements implied by credible seniority/work history instead of turning them into hard gates.",
+    "The final JD score is based on the full JD, not the individual probe query that found the candidate.",
+    "Clear JD requirements are classified into hard_disqualifier, required_but_stackable, or preferred_signal before final rerank.",
+    "Real but non-profile-evaluable requirements are tracked as screening_gates and are not used as probe targets.",
+    "Candidates missing required_but_stackable criteria remain visible below qualified candidates with a capped score instead of disappearing.",
+    "Every final candidate has source attribution when available: source owner, source channel, and interaction count.",
+    "The sendable CSV uses exactly these columns in this order: Rank, Name, LinkedIn URL, Current Role, Current Company, Source, Channel, Rationale.",
+    "The sendable CSV does not include score, interaction count, caveats, person_id, probe internals, raw prompts, raw reasoning, state paths, or noisy JSON fields.",
+    "Non-target sector experience is phrased as a caveat unless the JD explicitly says that sector is desired.",
+    "TurboPuffer permit overflow is handled by automatic split/retry before the workflow fails.",
+    "If company-domain union causes TurboPuffer permit overflow, the workflow retries with role-only semantic probes and records that fallback in lineage.",
+    "If the user asks to ignore or soften a rare requirement, the workflow records a criteria mutation and reranks or expands with that requirement downgraded instead of treating the previous shortlist as final.",
+    "If the user asks for more candidates after an initial shortlist, the workflow runs additional focused probes and reports expansion deltas instead of only reusing the existing candidate CSV."
+  ]
+}
