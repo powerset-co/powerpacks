@@ -86,6 +86,8 @@ ALEPH_COMPANY_FIELDS = [
     "doc2query",
     "semantic_text",
     "confidence_score",
+    "signals_semantic_text",
+    "signals_doc2query",
 ]
 CLASSIFICATION_FIELDS = {
     "entity_types",
@@ -103,12 +105,13 @@ CLASSIFICATION_FIELDS = {
     "funding_stage",
     "accelerators",
     "yc_batches",
+    "signals_semantic_text",
+    "signals_doc2query",
 }
 
-# Minimal checked-in company taxonomies observed in the copied Aleph seed
-# (`.powerpacks/aleph-seed/2026-05-08/pipeline_output/company/companies_corpus_v3.jsonl`).
-# Unknown provider values are preserved by normalizers so future Aleph/provider
-# additions are not silently dropped.
+# Canonical taxonomy IDs — aligned with prod combined_enrichment.py.
+# The SYSTEM_PROMPT below carries the full descriptions; these sets are used
+# only for normalisation / validation bookkeeping.
 OBSERVED_ENTITY_TYPES = {
     "venture_backed_startup",
     "nonprofit",
@@ -123,13 +126,18 @@ OBSERVED_ENTITY_TYPES = {
     "sovereign_wealth_fund",
 }
 OBSERVED_SECTOR_TYPES = {
-    "aerospace", "ai_ml", "bio_synbio", "climate_energy_tech", "commerce_tech",
-    "creator_tools", "crypto", "cybersecurity", "data", "deep_tech", "defense_tech",
-    "devops", "diagnostics", "edtech", "fintech", "gaming_gambling_tech", "hardware",
-    "health_tech", "hr_tech", "infra_devtools", "insurtech", "iot", "legal_tech",
+    "3d_printing", "aerospace", "agriculture_tech", "ai_ml", "ar_vr",
+    "bio_synbio", "climate_energy_tech", "commerce_tech", "construction_tech",
+    "creator_tools", "crypto", "cybersecurity", "data", "dating",
+    "deep_tech", "defense_tech", "devops", "diagnostics", "edtech",
+    "fintech", "gaming_gambling_tech", "govtech", "hardware", "health_tech",
+    "hr_tech", "infra_devtools", "insurtech", "iot", "legal_tech",
     "manufacturing_tech", "marketplaces", "marketing_tech", "material_science",
-    "medical_devices", "real_estate_tech", "robotics_drones", "saas", "sales_tech",
-    "semiconductors", "social_networking", "sports_wellness_tech", "supply_chain_logistics",
+    "medical_devices", "mortgagetech", "networking_hardware",
+    "nonprofit_philanthropy_tech", "oil_gas_tech", "oncology",
+    "physical_compute", "real_estate_tech", "restaurant_hospitality_tech",
+    "robotics_drones", "saas", "sales_tech", "semiconductors",
+    "social_networking", "sports_wellness_tech", "supply_chain_logistics",
     "telco", "therapies", "transportation_mobility", "travel_tech",
 }
 OBSERVED_CUSTOMER_TYPES = {"Business (B2B)", "Consumer (B2C)", "Government (B2G)"}
@@ -146,37 +154,9 @@ OBSERVED_OWNERSHIP_STATUSES = {
 REQUIRED_PROVIDER_OUTPUT_FIELDS = {
     "entity_types",
     "sector_types",
-    "technology_types",
-    "customer_type",
-    "funding_stage",
-    "company_type",
-    "ownership_status",
-    "stage",
-    "accelerators",
-    "yc_batches",
     "confidence_score",
     "doc2query",
-    "d2q_text",
-    "word_text",
     "semantic_text",
-}
-
-COMPANY_CLASSIFICATION_SCHEMA = {
-    "entity_types": {"type": "string[]", "observed_values": sorted(OBSERVED_ENTITY_TYPES)},
-    "sector_types": {"type": "string[]", "observed_values": sorted(OBSERVED_SECTOR_TYPES)},
-    "technology_types": {"type": "string[]", "observed_values": []},
-    "customer_type": {"type": "string", "observed_values": sorted(OBSERVED_CUSTOMER_TYPES)},
-    "funding_stage": {"type": "string", "observed_values": sorted(OBSERVED_FUNDING_STAGES)},
-    "company_type": {"type": "string", "observed_values": sorted(OBSERVED_COMPANY_TYPES)},
-    "ownership_status": {"type": "string", "observed_values": sorted(OBSERVED_OWNERSHIP_STATUSES)},
-    "stage": {"type": "string"},
-    "accelerators": {"type": "string[]"},
-    "yc_batches": {"type": "string[]"},
-    "confidence_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-    "doc2query": {"type": "string[]"},
-    "d2q_text": {"type": "string"},
-    "word_text": {"type": "string"},
-    "semantic_text": {"type": "string"},
 }
 
 
@@ -276,11 +256,11 @@ def normalize_classification_output(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize real provider/artifact output while preserving unknown taxonomy values."""
 
     out = dict(payload)
-    for key in ("entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query"):
+    for key in ("entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query", "signals_doc2query"):
         out[key] = [clean(item) for item in listify(out.get(key)) if clean(item)]
     out["customer_type"] = normalize_customer_type(out.get("customer_type"))
     out["confidence_score"] = normalize_confidence(out.get("confidence_score"))
-    for key in ("word_text", "d2q_text", "semantic_text", "stage", "company_type", "ownership_status"):
+    for key in ("word_text", "d2q_text", "semantic_text", "signals_semantic_text", "stage", "company_type", "ownership_status"):
         if key in out:
             out[key] = clean(out.get(key))
     return out
@@ -328,9 +308,12 @@ def shape_company(row: dict[str, Any]) -> dict[str, Any]:
         "doc2query": doc2query,
         "semantic_text": semantic,
         "confidence_score": row.get("confidence_score") if row.get("confidence_score") not in (None, "") else 0.0,
+        "signals_semantic_text": clean(row.get("signals_semantic_text")),
+        "signals_doc2query": listify(row.get("signals_doc2query")),
     }
     shaped = normalize_classification_output(shaped)
-    return {key: shaped.get(key, [] if key in {"name_aliases", "investor_urns", "entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query"} else "") for key in ALEPH_COMPANY_FIELDS}
+    _LIST_FIELDS = {"name_aliases", "investor_urns", "entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query", "signals_doc2query"}
+    return {key: shaped.get(key, [] if key in _LIST_FIELDS else "") for key in ALEPH_COMPANY_FIELDS}
 
 
 def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
@@ -344,6 +327,14 @@ def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
 
 def merge_enrichment(local: dict[str, Any], enriched: dict[str, Any]) -> dict[str, Any]:
     merged = dict(local)
+    # The combined prompt returns "confidence" not "confidence_score"; normalise.
+    if "confidence" in enriched and "confidence_score" not in enriched:
+        enriched["confidence_score"] = enriched.pop("confidence")
+    # Derive legacy text fields from combined output when absent.
+    if enriched.get("doc2query") and not enriched.get("d2q_text"):
+        enriched["d2q_text"] = " ".join(clean(q) for q in listify(enriched["doc2query"]) if clean(q))
+    if enriched.get("semantic_text") and not enriched.get("word_text"):
+        enriched["word_text"] = enriched["semantic_text"]
     provider_payload = {field: local.get(field) for field in REQUIRED_PROVIDER_OUTPUT_FIELDS}
     provider_payload.update(enriched)
     validate_provider_output(provider_payload)
@@ -367,25 +358,147 @@ def apply_artifact(local: dict[str, Any], artifact: dict[str, dict[str, Any]], m
     raise RuntimeError(f"unsupported artifact missing policy: {missing_policy}")
 
 
+# ---------------------------------------------------------------------------
+# Combined enrichment system prompt — ported from prod combined_enrichment.py.
+# Entity types + sector types + search text fields in a single LLM call.
+# ---------------------------------------------------------------------------
+COMBINED_SYSTEM_PROMPT = """You are a company classifier and search-text generator. Return ONLY JSON.
+
+<rules>
+- Tag ALL that apply. Default to [] if unclear.
+- Don't tag based on portfolio/investments/subsidiaries.
+- Only tag what the company itself builds/operates.
+- IMPORTANT: Use EXACT tag IDs from lists below. Never use group names like TECH/BIZ/FINTECH.
+</rules>
+
+<entity_types>
+venture_backed_startup: VC-funded private co (seed/Series A+), not public/acquired
+vc_firm: Primary mandate is minority VC investments
+pe_firm: Control transactions, often leveraged
+bank: Deposits/lending, includes neobanks
+insurance_carrier: Offers insurance coverage
+nonprofit: 501c3 or explicitly nonprofit/charity/NGO
+government_public_sector: Gov owned/operated (agencies, GSEs, public schools, state universities)
+family_office: Manages wealth for families (only if explicitly self-identifies)
+sovereign_wealth_fund: State-owned, allocates governmental capital
+foundation_endowment: Nonprofit investment entity for long-term mission
+club_association: Membership-based org for social/recreational/cultural/professional activities
+</entity_types>
+
+<sector_types>
+saas: Cloud business software (CRM, HR, finance, collaboration) with web/mobile UI
+infra_devtools: Developer tools, APIs, SDKs, databases, backends, low-code builders
+devops: CI/CD, deployment, monitoring, observability, incident response
+data: Data warehouses, ETL, analytics, BI platforms, data engineering
+ai_ml: AI/ML models, LLMs, agents, ML platforms (core product, not just AI features)
+cybersecurity: Security tools, IAM, threat detection, compliance
+physical_compute: Data centers, colocation, IaaS, GPU cloud
+fintech: Payments, lending, banking software, trading platforms, crypto wallets
+crypto: Blockchain, DeFi, Web3, L1/L2, exchanges, NFTs
+insurtech: Insurance tech (underwriting, claims, digital carriers)
+mortgagetech: Mortgage origination, underwriting, servicing software
+hardware: Physical devices, electronics, wearables, consumer/enterprise hardware
+semiconductors: Chips, processors, memory, fab equipment, EDA
+networking_hardware: Routers, switches, fiber, wireless equipment
+iot: Connected devices, sensors, smart home/industrial
+telco: Telecom carriers, ISPs, mobile operators
+deep_tech: Hard science/engineering R&D (physics, materials, quantum)
+robotics_drones: Robots, drones, automation systems, autonomy
+aerospace: Space, satellites, rockets, aircraft
+3d_printing: Additive manufacturing
+material_science: Advanced materials, composites, nanomaterials
+health_tech: Healthcare software, telehealth, clinical tools, digital therapeutics
+therapies: Drug development, therapeutics, gene/cell therapy
+diagnostics: Medical testing, imaging, biomarkers
+bio_synbio: Synthetic biology, molecular engineering, biomanufacturing
+oncology: Cancer detection, treatment, research
+medical_devices: Regulated medical equipment, implants, surgical robots
+real_estate_tech: PropTech, property management, RE transactions
+construction_tech: Construction software, BIM, project management
+manufacturing_tech: Factory automation, MES, industrial IoT
+supply_chain_logistics: Freight platforms, visibility, warehouse automation
+transportation_mobility: Mobility platforms, EVs, autonomous vehicles, fleet mgmt
+agriculture_tech: AgTech, precision farming, food production tech
+oil_gas_tech: O&G exploration/production software
+climate_energy_tech: Clean energy, batteries, grid software, carbon tech
+defense_tech: Defense, national security, dual-use military tech
+travel_tech: Travel booking, airline ops, trip management
+restaurant_hospitality_tech: Restaurant/hotel software, POS, kitchen automation
+commerce_tech: E-commerce platforms, checkout, merchant tools
+marketplaces: Two-sided platforms matching supply/demand
+gaming_gambling_tech: Games, game engines, esports, online gambling
+ar_vr: AR/VR/XR hardware and software
+sports_wellness_tech: Fitness apps, sports analytics, wellness tech
+social_networking: Social networks, messaging, community platforms
+dating: Dating/relationship platforms
+creator_tools: Content creation, editing, publishing, monetization tools
+hr_tech: HR software, recruiting, payroll, HRIS, workforce mgmt
+sales_tech: CRM, sales automation, prospecting, revenue ops
+marketing_tech: AdTech, marketing automation, attribution, campaigns
+legal_tech: Contract mgmt, compliance, e-discovery, AI legal tools
+edtech: Learning platforms, online schools, tutoring, training
+govtech: Government software, permitting, benefits, public sector
+nonprofit_philanthropy_tech: Fundraising, donor mgmt, grantmaking software
+</sector_types>
+
+<text_fields>
+semantic_text: 2-3 sentence factual description of what the company does, its products, and market. Written for semantic search.
+doc2query: 10-15 search queries someone would type to find this company (include company name, products, competitors, use cases).
+signals_semantic_text: 2-3 sentences describing the types of people who work there, their skills, and expertise. Written for semantic search on people.
+signals_doc2query: 15-20 search queries to find employees at this company (include titles, skills, location, team names).
+</text_fields>
+
+<examples>
+Ramp → entity:venture_backed_startup sector:saas,fintech
+Stripe → entity:venture_backed_startup sector:infra_devtools,fintech,commerce_tech
+Anduril → entity:venture_backed_startup sector:hardware,defense_tech,robotics_drones,deep_tech
+</examples>
+
+<output>
+{
+  "entity_types":["venture_backed_startup"],
+  "sector_types":["saas","ai_ml"],
+  "confidence_score":0.85,
+  "semantic_text":"Company builds X for Y market...",
+  "doc2query":["query1","query2",...],
+  "signals_semantic_text":"People at Company are skilled in...",
+  "signals_doc2query":["title at company","skill at company",...]
+}
+</output>"""
+
+
+def _build_company_context(local: dict[str, Any]) -> str:
+    """Build a compact company context string for the user message."""
+    parts = [f"Company: {clean(local.get('company_name', 'Unknown'))!s}"]
+    desc = clean(local.get("description"))
+    if desc:
+        parts.append(f"Description: {desc}")
+    domain = clean(local.get("website_domain"))
+    if domain:
+        parts.append(f"Website: {domain}")
+    headcount = local.get("headcount")
+    if headcount:
+        parts.append(f"Headcount: {headcount}")
+    funding = local.get("funding_total")
+    if funding:
+        parts.append(f"Funding: ${funding:,.0f}")
+    stage = clean(local.get("funding_stage") or local.get("stage"))
+    if stage and stage != "VENTURE_UNKNOWN":
+        parts.append(f"Stage: {stage}")
+    city = clean(local.get("city"))
+    country = clean(local.get("country"))
+    if city or country:
+        parts.append(f"Location: {', '.join(p for p in [city, clean(local.get('state')), country] if p)}")
+    return "\n".join(parts)
+
+
 def openai_classification_payload(local: dict[str, Any]) -> dict[str, Any]:
     return {
         "model": os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL),
         "response_format": {"type": "json_object"},
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Classify a company for Aleph company search. Return only JSON with keys: "
-                    "entity_types, sector_types, technology_types, customer_type, funding_stage, "
-                    "company_type, ownership_status, stage, accelerators, yc_batches, word_text, "
-                    "d2q_text, doc2query, semantic_text, confidence_score. "
-                    f"Prefer observed entity_types={sorted(OBSERVED_ENTITY_TYPES)} and sector_types={sorted(OBSERVED_SECTOR_TYPES)}. "
-                    f"customer_type must be one of {sorted(OBSERVED_CUSTOMER_TYPES)} when known. "
-                    "Use arrays for *_types, accelerators, yc_batches, and doc2query. "
-                    "Keep JSON compact: doc2query max 6 strings and text fields under 800 characters each."
-                ),
-            },
-            {"role": "user", "content": json.dumps(local, ensure_ascii=False, sort_keys=True)},
+            {"role": "system", "content": COMBINED_SYSTEM_PROMPT},
+            {"role": "user", "content": f"Classify this company:\n\n{_build_company_context(local)}"},
         ],
         "temperature": 0,
         "max_completion_tokens": int(os.getenv("POWERPACKS_COMPANY_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
