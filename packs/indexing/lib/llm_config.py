@@ -8,8 +8,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
-# Default model — matches prod combined_enrichment.py.
+# Default model for company enrichment — matches prod combined_enrichment.py.
 DEFAULT_MODEL = "gpt-5.2"
+# Role enrichment model — gpt-5.2 has structured output bugs with the
+# 180-item role_ids enum (picks random values like investment_banker for
+# Instructor). gpt-5.1 classifies correctly.
+DEFAULT_ROLE_MODEL = "gpt-5.1"
 DEFAULT_MAX_COMPLETION_TOKENS = 2500
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
 DEFAULT_OPENAI_CONCURRENCY = 64

@@ -111,7 +111,7 @@ def extract_company_context(response: dict[str, Any]) -> dict[str, Any]:
                 pass
             break
 
-    for key in ("foundedOn", "founded_on", "foundedYear", "founded_year"):
+    for key in ("founded", "foundedOn", "founded_on", "foundedYear", "founded_year"):
         val = data.get(key)
         if val:
             if isinstance(val, dict):

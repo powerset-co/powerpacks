@@ -30,8 +30,9 @@ from packs.indexing.lib.role_clustering import cluster_title  # noqa: E402
 from packs.indexing.lib.role_prompts import get_system_user_prompts, format_title_with_context  # noqa: E402
 
 from packs.indexing.lib.llm_config import (  # noqa: E402
-    DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_OPENAI_TIMEOUT_SECONDS,
-    DEFAULT_OPENAI_CONCURRENCY, CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
+    DEFAULT_ROLE_MODEL as DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS,
+    DEFAULT_OPENAI_TIMEOUT_SECONDS, DEFAULT_OPENAI_CONCURRENCY,
+    CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
 )
 
 DEFAULT_CHECKPOINT_EVERY = 1000
