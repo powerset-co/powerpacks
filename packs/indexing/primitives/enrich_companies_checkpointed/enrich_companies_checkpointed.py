@@ -159,6 +159,39 @@ REQUIRED_PROVIDER_OUTPUT_FIELDS = {
     "semantic_text",
 }
 
+# Structured output schema for company enrichment.
+COMPANY_RESPONSE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "company_classification",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "entity_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(OBSERVED_ENTITY_TYPES)},
+                },
+                "sector_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(OBSERVED_SECTOR_TYPES)},
+                },
+                "confidence_score": {"type": "number"},
+                "semantic_text": {"type": "string"},
+                "doc2query": {"type": "array", "items": {"type": "string"}},
+                "signals_semantic_text": {"type": "string"},
+                "signals_doc2query": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": [
+                "entity_types", "sector_types", "confidence_score",
+                "semantic_text", "doc2query",
+                "signals_semantic_text", "signals_doc2query",
+            ],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -519,7 +552,7 @@ def _build_company_context(local: dict[str, Any], rapidapi_context: dict[str, An
 def openai_classification_payload(local: dict[str, Any], rapidapi_context: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "model": os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL),
-        "response_format": {"type": "json_object"},
+        "response_format": COMPANY_RESPONSE_SCHEMA,
         "messages": [
             {"role": "system", "content": COMBINED_SYSTEM_PROMPT},
             {"role": "user", "content": f"Classify this company:\n\n{_build_company_context(local, rapidapi_context)}"},

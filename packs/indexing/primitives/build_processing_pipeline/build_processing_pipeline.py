@@ -1100,12 +1100,12 @@ ALEPH_COMPANY_CORPUS_FIELDS = [
     "funding_stage", "last_funding_at", "valuation", "investor_urns",
     "stage", "accelerators", "yc_batches", "customer_type", "ownership_status", "company_type", "entity_types",
     "sector_types", "technology_types", "word_text", "char_text", "d2q_text", "doc2query",
-    "semantic_text", "confidence_score",
+    "semantic_text", "confidence_score", "signals_semantic_text", "signals_doc2query",
 ]
 
 
 def _strip_aleph_company_corpus(row: dict[str, Any]) -> dict[str, Any]:
-    list_fields = {"name_aliases", "investor_urns", "entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query"}
+    list_fields = {"name_aliases", "investor_urns", "entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query", "signals_doc2query"}
     return {field: row.get(field, [] if field in list_fields else "") for field in ALEPH_COMPANY_CORPUS_FIELDS}
 
 def _company_corpus_to_aleph(row: dict[str, Any]) -> dict[str, Any]:
