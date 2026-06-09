@@ -26,6 +26,8 @@ from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
+from packs.indexing.lib.role_clustering import cluster_title  # noqa: E402
+from packs.indexing.lib.role_prompts import get_system_user_prompts, format_title_with_context  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_MODEL = "gpt-5.1"
@@ -153,107 +155,42 @@ def load_input_classifications(path: str | None) -> dict[str, dict[str, Any]]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Role enrichment system prompt — ported from prod roles_impl.py / prompts.py.
-# Uses constrained enums for seniority_band, role_type, and role_track so the
-# LLM cannot invent free-form values.
-# ---------------------------------------------------------------------------
-ROLE_ENRICHMENT_SYSTEM_PROMPT = """You are a job title classification system. Classify the given role into structured components for a people search system. Return ONLY a JSON object.
-
-<seniority_band>
-Use EXACTLY one of these values (lowercase). Pick the single best match:
-  owner           - Standalone founder, business owner
-  partner         - GP, Managing Partner, Partner at a firm
-  c-suite         - Any C-level (CEO, CTO, CFO, CRO, CPO, CMO, CISO, etc.)
-  vice-president  - VP, SVP, EVP
-  director        - Director, Senior Director, Head of
-  principal       - Principal Engineer/PM/Designer, Distinguished Engineer
-  staff           - Staff Engineer/Designer, Staff+ IC
-  manager         - Manager (people manager, eng manager, PM managing PMs)
-  senior          - Senior IC (Senior Engineer, Senior Designer, Senior PM)
-  mid             - Mid-level IC, default for unclear seniority
-  junior          - Junior, SDR, BDR, Associate (early-career)
-  entry           - Entry-level, new grad, coordinator
-  trainee         - Intern, co-op, apprentice
-</seniority_band>
-
-<role_type>
-Use EXACTLY one of: executive, management, ic, investor, board, advisor, academic, founder
-  executive  - VP+ leadership
-  management - People managers (EM, Sales Manager, etc.)
-  ic         - Individual contributor
-  investor   - VC, PE, angel investor
-  board      - Board member, board director
-  advisor    - Advisor, consultant
-  academic   - Professor, researcher, postdoc, student
-  founder    - Founder, co-founder
-</role_type>
-
-<role_track>
-Use EXACTLY one of these when the function is clear, or null if ambiguous:
-  business_dev, communications, consulting, customer_service, data, design,
-  education, engineering, finance, general, health, hospitality, human_resources,
-  legal, marketing, marketplace, media, operations, product, public_relations,
-  real_estate, retail, sales, security, strategy, technology, trades
-</role_track>
-
-<role_ids>
-Return an array of snake_case role identifiers. Examples:
-  software_engineer, backend_engineer, frontend_engineer, full_stack_engineer,
-  ml_engineer, data_engineer, data_scientist, devops_engineer, security_engineer,
-  mobile_engineer, qa_engineer, embedded_engineer, solutions_engineer, architect,
-  research_scientist, product_manager, product_designer, ux_designer,
-  engineering_manager, chief_technology_officer, chief_executive_officer,
-  chief_product_officer, chief_financial_officer, chief_marketing_officer,
-  vice_president, director, founder, account_executive, sdr, recruiter,
-  marketing_manager, financial_analyst, hr_manager, legal_counsel,
-  operations_manager, project_manager, technical_program_manager
-For compound titles (e.g. "Founder & CTO"), include ALL roles: ["founder", "chief_technology_officer"]
-"Founding Engineer" is NOT a founder — they are an early employee: ["software_engineer"]
-</role_ids>
-
-<output_schema>
-{
-  "role_ids": ["software_engineer"],
-  "seniority_band": "senior",
-  "role_type": "ic",
-  "role_track": "engineering",
-  "specialization": "backend" or null,
-  "cluster": "engineering",
-  "doc2query": ["senior software engineer", "senior backend engineer", ...],
-  "inferred_skills": ["Python", "distributed systems", ...],
-  "semantic_text": "30-40 word factual description of what this role does. No hedging."
-}
-</output_schema>
-
-<rules>
-- Use EXACT enum values for seniority_band, role_type, and role_track. Do not invent new values.
-- Expand all acronyms: SWE→Software Engineer, PM→Product Manager, EM→Engineering Manager, MTS→Member of Technical Staff
-- Member of Technical Staff (MTS) = software_engineer, seniority depends on level context (default: mid)
-- "Staff" prefix = staff seniority (Staff SWE, Staff Designer)
-- "Principal" prefix = principal seniority
-- "Senior" prefix = senior seniority
-- VP of X = vice-president seniority, executive role_type
-- Director of X = director seniority, management role_type (or executive if very senior)
-- Head of X = director seniority
-- "Founding Engineer" = senior seniority, ic role_type, NOT a founder
-- doc2query: max 5 search queries. Include title variations, abbreviations, related terms.
-- inferred_skills: max 8 skills. Only include if clearly relevant to the role.
-- semantic_text: 30-40 word factual description. NO hedging (likely, possibly, unclear). State what they do.
-- If company context is provided, use it to infer domain-specific skills and specialization.
-</rules>"""
-
-
 def role_prompt(role: dict[str, Any]) -> list[dict[str, str]]:
+    """Build cluster-aware system/user messages for a single role."""
+    title = clean(role.get("raw_title"))
+    cluster = cluster_title(title) if title else "other"
+    system_prompt, user_template = get_system_user_prompts(cluster)
+
+    # Format role as a title entry with optional context.
+    title_data: dict[str, Any] = {"title": title}
+    company = clean(role.get("company_name"))
+    if company:
+        title_data["company"] = company
+    description = clean(role.get("description"))
+    if description:
+        title_data["description"] = description
+
+    formatted = format_title_with_context(title_data)
+    user_content = user_template.format(num_titles=1, titles=formatted)
+
     return [
-        {"role": "system", "content": ROLE_ENRICHMENT_SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps(role, ensure_ascii=False, sort_keys=True)},
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
     ]
 
 
 def _parse_chat_json(content: str | None, context: str) -> dict[str, Any]:
     raw = (content or "{}").strip()
+    # Strip markdown code fences if present.
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```\s*$", "", raw)
     parsed = json.loads(raw)
+    # Cluster-specific prompts ask for a JSON array; unwrap single-element arrays.
+    if isinstance(parsed, list):
+        if len(parsed) == 0:
+            raise RuntimeError(f"{context} returned empty JSON array")
+        parsed = parsed[0]
     if not isinstance(parsed, dict):
         raise RuntimeError(f"{context} returned non-object JSON")
     return parsed
