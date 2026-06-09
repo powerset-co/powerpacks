@@ -209,7 +209,7 @@ These are typically part-time, oversight, or advisory positions - NOT full-time 
   "canonical_title": "normalized title",
   "role_ids": ["all", "applicable", "role_ids"],
   "role_track": "board",
-  "seniority": "from SENIORITY enum",
+  "seniority_band": "from SENIORITY enum",
   "confidence": 0.0-1.0,
   "reasoning": "required if confidence < 0.7"
 }}
@@ -271,7 +271,7 @@ chairman    = 9   - Board Chairman, Vice Chairman
 ## EXAMPLES
 
 ### Board of Directors
-| raw_title | canonical_title | role_ids | seniority | confidence |
+| raw_title | canonical_title | role_ids | seniority_band | confidence |
 |-----------|-----------------|----------|-----------|------------|
 | Board Member | Board Member | ["board_member"] | director | 0.90 |
 | Board Director | Board Director | ["board_member"] | director | 0.90 |
@@ -286,7 +286,7 @@ chairman    = 9   - Board Chairman, Vice Chairman
 | Observer | Board Observer | ["board_observer"] | director | 0.75 |
 
 ### Advisory
-| raw_title | canonical_title | role_ids | seniority | confidence |
+| raw_title | canonical_title | role_ids | seniority_band | confidence |
 |-----------|-----------------|----------|-----------|------------|
 | Advisor | Advisor | ["advisor"] | senior | 0.85 |
 | Adviser | Advisor | ["advisor"] | senior | 0.85 |
@@ -299,7 +299,7 @@ chairman    = 9   - Board Chairman, Vice Chairman
 | Mentor | Mentor | ["mentor"] | senior | 0.85 |
 
 ### Other governance
-| raw_title | canonical_title | role_ids | seniority | confidence |
+| raw_title | canonical_title | role_ids | seniority_band | confidence |
 |-----------|-----------------|----------|-----------|------------|
 | Trustee | Trustee | ["trustee"] | director | 0.90 |
 | Board of Trustees | Trustee | ["trustee"] | director | 0.85 |
@@ -308,14 +308,14 @@ chairman    = 9   - Board Chairman, Vice Chairman
 | Compensation Committee | Compensation Committee Member | ["committee_member"] | director | 0.85 |
 
 ### Founder compounds
-| raw_title | canonical_title | role_ids | seniority | confidence |
+| raw_title | canonical_title | role_ids | seniority_band | confidence |
 |-----------|-----------------|----------|-----------|------------|
 | Founder & Board Member | Board Member | ["founder", "board_member"] | director | 0.90 |
 | Co-founder & Chairman | Chairman | ["founder", "board_chairman"] | chairman | 0.95 |
 | Founder & Advisor | Advisor | ["founder", "advisor"] | senior | 0.90 |
 
 ### Multi-role compounds
-| raw_title | canonical_title | role_ids | seniority | confidence |
+| raw_title | canonical_title | role_ids | seniority_band | confidence |
 |-----------|-----------------|----------|-----------|------------|
 | Chairman & Board Member | Chairman | ["board_chairman", "board_member"] | chairman | 0.90 |
 | Board Member & Advisor | Board Member | ["board_member", "advisor"] | director | 0.85 |
@@ -648,7 +648,7 @@ These are ambiguous titles that need context to classify. Your job is to infer t
   "canonical_title": "normalized title (expand acronyms)",
   "role_ids": ["all", "applicable", "role_ids"],
   "role_track": "infer from context (see ROLE_TRACK enum)",
-  "seniority": "from SENIORITY enum",
+  "seniority_band": "from SENIORITY enum",
   "confidence": 0.0-1.0,
   "reasoning": "required - explain how you inferred function"
 }}
@@ -740,7 +740,7 @@ founder     = 11  - Owner, Founder
 ## EXAMPLES
 
 ### Analysts
-| raw_title | context | role_ids | role_track | seniority | confidence |
+| raw_title | context | role_ids | role_track | seniority_band | confidence |
 |-----------|---------|----------|------------|-----------|------------|
 | Analyst | "Financial modeling" | ["financial_analyst"] | finance | mid | 0.85 |
 | Analyst | "SQL, dashboards" | ["data_analyst"] | data | mid | 0.85 |
@@ -750,7 +750,7 @@ founder     = 11  - Owner, Founder
 | Senior Analyst | (none) | ["analyst"] | general | senior | 0.50 |
 
 ### Consultants
-| raw_title | context | role_ids | role_track | seniority | confidence |
+| raw_title | context | role_ids | role_track | seniority_band | confidence |
 |-----------|---------|----------|------------|-----------|------------|
 | Consultant | "Management consulting" | ["management_consultant"] | strategy | mid | 0.85 |
 | Consultant | "IT implementation" | ["it_consultant"] | engineering | mid | 0.80 |
@@ -759,7 +759,7 @@ founder     = 11  - Owner, Founder
 | Strategy Consultant | (none) | ["management_consultant"] | strategy | mid | 0.85 |
 
 ### Coordinators / Specialists / Associates
-| raw_title | context | role_ids | role_track | seniority | confidence |
+| raw_title | context | role_ids | role_track | seniority_band | confidence |
 |-----------|---------|----------|------------|-----------|------------|
 | Coordinator | "Project timelines" | ["coordinator"] | operations | junior | 0.75 |
 | Coordinator | (none) | ["coordinator"] | general | junior | 0.50 |
@@ -773,7 +773,7 @@ founder     = 11  - Owner, Founder
 | Associate | (none) | ["associate"] | general | junior | 0.35 |
 
 ### Support / Admin
-| raw_title | context | role_ids | role_track | seniority | confidence |
+| raw_title | context | role_ids | role_track | seniority_band | confidence |
 |-----------|---------|----------|------------|-----------|------------|
 | Executive Assistant | (none) | ["executive_assistant"] | operations | mid | 0.90 |
 | EA | (none) | ["executive_assistant"] | operations | mid | 0.85 |
@@ -785,7 +785,7 @@ founder     = 11  - Owner, Founder
 | Client Success | (none) | ["client_success"] | customer | mid | 0.80 |
 
 ### Content
-| raw_title | context | role_ids | role_track | seniority | confidence |
+| raw_title | context | role_ids | role_track | seniority_band | confidence |
 |-----------|---------|----------|------------|-----------|------------|
 | Writer | (none) | ["writer"] | content | mid | 0.80 |
 | Copywriter | (none) | ["writer"] | content | mid | 0.85 |
@@ -796,7 +796,7 @@ founder     = 11  - Owner, Founder
 | Senior Editor | (none) | ["editor"] | content | senior | 0.85 |
 
 ### Other
-| raw_title | context | role_ids | role_track | seniority | confidence |
+| raw_title | context | role_ids | role_track | seniority_band | confidence |
 |-----------|---------|----------|------------|-----------|------------|
 | Strategist | "Growth strategy" | ["strategist"] | marketing | senior | 0.80 |
 | Strategist | (none) | ["strategist"] | general | mid | 0.55 |
@@ -842,7 +842,7 @@ Your job is to extract whatever signal you can.
   "canonical_title": "normalized English title (translate if needed, expand acronyms)",
   "role_ids": ["all", "applicable", "role_ids"],
   "role_track": "infer from context (see ROLE_TRACK enum)",
-  "seniority": "from SENIORITY enum",
+  "seniority_band": "from SENIORITY enum",
   "confidence": 0.0-1.0,
   "reasoning": "required - explain classification"
 }}
@@ -1051,8 +1051,8 @@ Return a JSON array. Each object:
 {{
   "raw_title": "exact input title",
   "canonical_title": "normalized professional title",
-  "role_id": "from ROLE_IDS enum",
-  "seniority": "from SENIORITY enum",
+  "role_ids": ["from ROLE_IDS enum"],
+  "seniority_band": "from SENIORITY enum",
   "role_track": "engineering",
   "confidence": 0.0-1.0,
   "reasoning": "brief explanation, required if confidence < 0.7"
@@ -1159,7 +1159,7 @@ Data Engineer, Big Data Engineer, Analytics Engineer, ETL Developer, Data Platfo
 ## EXAMPLES
 
 ### Clear mappings (high confidence)
-| title | role_id | seniority | confidence |
+| title | role_ids | seniority_band | confidence |
 |-------|---------|-----------|------------|
 | Senior Software Engineer | software_engineer | senior | 0.95 |
 | Staff ML Engineer | ml_engineer | staff | 0.95 |
@@ -1171,7 +1171,7 @@ Data Engineer, Big Data Engineer, Analytics Engineer, ETL Developer, Data Platfo
 | SWE III @ Google | software_engineer | senior | 0.90 |
 
 ### Ambiguous - resolved by description
-| title | description | role_id | seniority | confidence | reasoning |
+| title | description | role_ids | seniority_band | confidence | reasoning |
 |-------|-------------|---------|-----------|------------|-----------|
 | Tech Lead | "Led technical direction, owned architecture" | software_engineer | staff | 0.85 | IC signals |
 | Tech Lead | "Managed team of 6, hiring, 1:1s" | engineering_manager | manager | 0.90 | Manager signals |
@@ -1180,7 +1180,7 @@ Data Engineer, Big Data Engineer, Analytics Engineer, ETL Developer, Data Platfo
 | Platform Engineer | "Built platform APIs for product teams" | software_engineer | mid | 0.85 | SWE signals |
 
 ### Low confidence - flag for review
-| title | role_id | seniority | confidence | reasoning |
+| title | role_ids | seniority_band | confidence | reasoning |
 |-------|---------|-----------|------------|-----------|
 | Developer Advocate | software_engineer | senior | 0.35 | Hybrid: engineering + community |
 | Technical Writer | software_engineer | mid | 0.25 | Engineering-adjacent |

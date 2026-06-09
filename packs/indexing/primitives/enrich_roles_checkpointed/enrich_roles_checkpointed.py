@@ -50,12 +50,78 @@ DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE = 250
 ROLE_FIELDS = ["title_hash", "raw_title", "description", "cluster", "role_ids", "seniority_band", "role_type", "role_track", "specialization", "doc2query", "inferred_skills", "dense_text", "semantic_text"]
 
 # Canonical seniority bands — must match the system prompt enum exactly.
-VALID_SENIORITY_BANDS = {
+VALID_SENIORITY_BANDS = [
     "owner", "partner", "c-suite", "vice-president", "director",
     "principal", "staff", "manager", "senior", "mid", "junior", "entry", "trainee",
-}
-VALID_ROLE_TYPES = {
+]
+VALID_ROLE_TYPES = [
     "executive", "management", "ic", "investor", "board", "advisor", "academic", "founder",
+]
+
+# Structured output schema — forces the LLM to return exactly these fields
+# with constrained enum values. No parsing gymnastics needed.
+ROLE_RESPONSE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "role_classification",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "role_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Snake_case role identifiers from the taxonomy.",
+                },
+                "seniority_band": {
+                    "type": "string",
+                    "enum": VALID_SENIORITY_BANDS,
+                    "description": "Seniority level.",
+                },
+                "role_type": {
+                    "type": "string",
+                    "enum": VALID_ROLE_TYPES,
+                    "description": "Functional category of the role.",
+                },
+                "role_track": {
+                    "type": ["string", "null"],
+                    "description": "Broad functional area, or null if ambiguous.",
+                },
+                "specialization": {
+                    "type": ["string", "null"],
+                    "description": "Specific focus area in snake_case, or null.",
+                },
+                "cluster": {
+                    "type": "string",
+                    "description": "Title cluster used for classification.",
+                },
+                "doc2query": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "3-5 search query expansions.",
+                },
+                "inferred_skills": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "3-8 relevant skills.",
+                },
+                "semantic_text": {
+                    "type": "string",
+                    "description": "30-40 word factual role description for semantic search.",
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Classification confidence 0.0-1.0.",
+                },
+            },
+            "required": [
+                "role_ids", "seniority_band", "role_type", "role_track",
+                "specialization", "cluster", "doc2query", "inferred_skills",
+                "semantic_text", "confidence",
+            ],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
@@ -181,18 +247,9 @@ def role_prompt(role: dict[str, Any]) -> list[dict[str, str]]:
 
 def _parse_chat_json(content: str | None, context: str) -> dict[str, Any]:
     raw = (content or "{}").strip()
-    # Strip markdown code fences if present.
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```\s*$", "", raw)
     parsed = json.loads(raw)
-    # Cluster-specific prompts ask for a JSON array; unwrap single-element arrays.
-    if isinstance(parsed, list):
-        if len(parsed) == 0:
-            raise RuntimeError(f"{context} returned empty JSON array")
-        parsed = parsed[0]
     if not isinstance(parsed, dict):
-        raise RuntimeError(f"{context} returned non-object JSON")
+        raise RuntimeError(f"{context} returned non-object JSON: {type(parsed).__name__}")
     return parsed
 
 
@@ -211,7 +268,7 @@ async def call_openai_role_enrichment_async(
             try:
                 response = await client.chat.completions.create(
                     model=model,
-                    response_format={"type": "json_object"},
+                    response_format=ROLE_RESPONSE_SCHEMA,
                     messages=role_prompt(role),
                     temperature=0,
                     max_completion_tokens=max_completion_tokens,
@@ -287,14 +344,21 @@ def call_openai_role_enrichment(role: dict[str, Any], *, api_key: str, base_url:
 
 
 def merge_role(base: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, Any]:
+    # Handle field name variants across cluster prompts.
+    seniority = enrichment.get("seniority_band") or enrichment.get("seniority", "")
+    role_ids = enrichment.get("role_ids") or []
+    # Engineering prompt historically used singular "role_id"; normalise.
+    if not role_ids and enrichment.get("role_id"):
+        rid = enrichment["role_id"]
+        role_ids = [rid] if isinstance(rid, str) else list(rid)
     row = {
         "title_hash": base["title_hash"],
         "raw_title": base["raw_title"],
         "description": base.get("description", ""),
         "dense_text": base.get("dense_text", ""),
         "cluster": enrichment.get("cluster", ""),
-        "role_ids": enrichment.get("role_ids") or [],
-        "seniority_band": enrichment.get("seniority_band", ""),
+        "role_ids": role_ids,
+        "seniority_band": seniority,
         "role_type": enrichment.get("role_type", ""),
         "role_track": enrichment.get("role_track", ""),
         "specialization": enrichment.get("specialization", ""),
