@@ -16,8 +16,9 @@ try:
         now_iso,
         read_csv_rows,
         read_json,
+        sha256_file,
         write_csv_rows,
-        write_json,
+        write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
         accounts_path as configured_accounts_path,
@@ -37,8 +38,9 @@ except ModuleNotFoundError:
         now_iso,
         read_csv_rows,
         read_json,
+        sha256_file,
         write_csv_rows,
-        write_json,
+        write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
         accounts_path as configured_accounts_path,
@@ -143,11 +145,18 @@ def merge_contacts(existing: list[dict[str, str]], incoming: list[dict[str, str]
     return [{field: row.get(field, "") for field in LINKEDIN_DISCOVERY_COLUMNS} for _, row in sorted(keyed.items())]
 
 
-def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = None, **_: Any) -> dict[str, Any]:
+def discover(
+    *,
+    accounts_file: Path | None = None,
+    accounts_path: Path | None = None,
+    connections_csv: str | Path | None = None,
+    source_user_label: str | None = None,
+    **_: Any,
+) -> dict[str, Any]:
     accounts_file = accounts_file or accounts_path or configured_accounts_path()
     accounts = read_json(accounts_file, {}) or {}
-    source_csv = csv_path(accounts)
-    user = source_user(accounts)
+    source_csv = Path(str(connections_csv)).expanduser() if connections_csv else csv_path(accounts)
+    user = str(source_user_label or "").strip() or source_user(accounts)
     source_out = output_path("linkedin_csv", "source_csv")
     contacts_csv = output_path("linkedin_csv", "contacts_csv")
     manifest_json = output_path("linkedin_csv", "manifest_json")
@@ -160,11 +169,16 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             "connections_csv": str(source_csv),
             "contacts_csv": str(contacts_csv),
         }
-        write_json(manifest_json, payload)
+        write_stage_manifest(manifest_json, payload)
         return payload
 
     contacts_csv.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source_csv, source_out)
+    if source_csv.resolve() != source_out.resolve():
+        same_content = False
+        if source_out.exists() and source_out.is_file() and source_csv.stat().st_size == source_out.stat().st_size:
+            same_content = sha256_file(source_csv) == sha256_file(source_out)
+        if not same_content:
+            shutil.copyfile(source_csv, source_out)
     incoming, stats = parse_connections_csv(source_out, user)
     existing: list[dict[str, str]] = []
     if contacts_csv.exists():
@@ -186,20 +200,21 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             "upload_ran": False,
         },
     }
-    write_json(manifest_json, payload)
-    return payload
+    return write_stage_manifest(manifest_json, payload)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Discover LinkedIn contacts from Connections.csv")
     parser.add_argument("command", choices=["discover"])
     parser.add_argument("--accounts", type=Path, default=None)
+    parser.add_argument("--csv", default="")
+    parser.add_argument("--source-user", default="")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    emit(discover(accounts_file=args.accounts))
+    emit(discover(accounts_file=args.accounts, connections_csv=args.csv, source_user_label=args.source_user))
     return 0
 
 

@@ -400,7 +400,7 @@ def submit_and_poll(
     *,
     ledger_path: Path,
     ledger: dict[str, Any],
-    batch_size: int = 500,
+    batch_size: int = 1000,
     max_wait: int = 900,
 ) -> list[dict[str, Any]]:
     """Submit contacts to Parallel, poll until done, persist progress, return results."""

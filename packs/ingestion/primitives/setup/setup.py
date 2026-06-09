@@ -733,8 +733,10 @@ def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run_apply(args: argparse.Namespace) -> int:
-    try: payload = apply_bundle(args)
-    except Exception as exc: payload = {'status': 'rejected', 'error': str(exc)}
+    try:
+        payload = apply_bundle(args)
+    except Exception as exc:
+        payload = {'status': 'rejected', 'error': str(exc)}
     emit(payload)
     return 0 if payload.get('status') == 'ok' else 2
 
@@ -746,8 +748,10 @@ def empty_account_summary_channel() -> dict[str, Any]:
 def accounts_summary(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {'exists': False, 'channels': {channel: empty_account_summary_channel() for channel in SETUP_SOURCE_CHANNELS}}
-    try: data = read_json(path)
-    except Exception as exc: return {'exists': True, 'error': str(exc), 'channels': {channel: empty_account_summary_channel() for channel in SETUP_SOURCE_CHANNELS}}
+    try:
+        data = read_json(path)
+    except Exception as exc:
+        return {'exists': True, 'error': str(exc), 'channels': {channel: empty_account_summary_channel() for channel in SETUP_SOURCE_CHANNELS}}
     channels: dict[str, Any] = {}
     for k, v in (data.get('channels') or data.get('accounts') or {}).items():
         if isinstance(v, dict):
@@ -1407,7 +1411,6 @@ def indexing_readiness(operator_id: str) -> dict[str, Any]:
     duck = si / 'local-search.duckdb'
     ledger = si / 'ledger.json'
     manifest = si / 'manifest.json'
-    records = si / 'records'
     people = ROOT / '.powerpacks/network-import/merged/people.csv'
     people_hash = sha256_file(people) if people.exists() else ''
     processing_needed = {
@@ -1608,7 +1611,6 @@ def status_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 def run_status(args: argparse.Namespace) -> int:
     payload = status_payload(args)
-    save_setup_ledger(payload['setup_ledger'], Path(args.setup_ledger))
     emit(payload)
     return 0
 

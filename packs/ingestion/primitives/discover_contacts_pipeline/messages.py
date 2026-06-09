@@ -31,16 +31,13 @@ try:
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_BASE_DIR,
         account_config,
-        account_channel,
         artifact_dir_from_ledger,
         begin_step,
         channel_is_linked,
-        csv_row_count,
         emit,
         emit_progress,
         mark_step,
         now_iso,
-        parse_jsonish,
         py_cmd,
         read_accounts,
         read_csv_rows,
@@ -48,36 +45,27 @@ try:
         run_cmd,
         save_ledger,
         sha,
-        source_slug,
         unique_strings,
         write_csv_rows,
         write_json,
+        write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.directory import (
-        DIRECTORY_COLUMNS,
-        build_directory_checkpoint,
         commit_people_csv_to_directory,
-        commit_directory_rows,
-        directory_row_is_found,
-        directory_rows_from_people_csv,
         materialize_messages_merged_people_csv,
-        normalized_directory_row,
     )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_BASE_DIR,
         account_config,
-        account_channel,
         artifact_dir_from_ledger,
         begin_step,
         channel_is_linked,
-        csv_row_count,
         emit,
         emit_progress,
         mark_step,
         now_iso,
-        parse_jsonish,
         py_cmd,
         read_accounts,
         read_csv_rows,
@@ -85,20 +73,14 @@ except ModuleNotFoundError:
         run_cmd,
         save_ledger,
         sha,
-        source_slug,
         unique_strings,
         write_csv_rows,
         write_json,
+        write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.directory import (
-        DIRECTORY_COLUMNS,
-        build_directory_checkpoint,
         commit_people_csv_to_directory,
-        commit_directory_rows,
-        directory_row_is_found,
-        directory_rows_from_people_csv,
         materialize_messages_merged_people_csv,
-        normalized_directory_row,
     )
 
 MESSAGES_REVIEW_GATE_REASON = (
@@ -483,7 +465,6 @@ def run_messages_enrichment(ledger_path: Path, ledger: dict[str, Any]) -> bool:
 
 def messages_discovery_inputs(accounts_path: Path) -> dict[str, Any]:
     accounts = read_accounts(accounts_path)
-    channel = account_channel(accounts, "messages")
     cfg = account_config(accounts, "messages")
     if not channel_is_linked(accounts, "messages"):
         return {"linked": False, "include_imessage": False, "include_whatsapp": False}
@@ -527,7 +508,7 @@ def discover(
         ledger["status"] = "skipped"
         ledger["payload"] = payload
         payload["updated_at"] = now_iso()
-        write_json(manifest_json, payload)
+        write_stage_manifest(manifest_json, payload)
         write_json(ledger_path, ledger)
         return payload
 
@@ -557,7 +538,7 @@ def discover(
         }
         ledger["status"] = result["status"]
         ledger["payload"] = result
-        write_json(manifest_json, result)
+        write_stage_manifest(manifest_json, result)
         write_json(ledger_path, ledger)
         return result
 
@@ -584,7 +565,7 @@ def discover(
         "child": payload,
         "updated_at": now_iso(),
     }
-    write_json(manifest_json, result)
+    result = write_stage_manifest(manifest_json, result)
     ledger["status"] = "completed"
     ledger["payload"] = result
     write_json(ledger_path, ledger)

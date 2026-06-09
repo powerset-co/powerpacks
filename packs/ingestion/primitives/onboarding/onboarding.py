@@ -354,7 +354,7 @@ def save_gmail_msgvault_accounts(
     db_path = Path(args.gmail_db).expanduser()
     existing = existing_config if isinstance(existing_config, dict) else {}
     available = [row.get("account_email", "") for row in discovered.get("accounts", []) if row.get("account_email")]
-    account_emails = list(dict.fromkeys([*(existing.get("account_emails") or []), *available, *selected]))
+    account_emails = list(dict.fromkeys([*(existing.get("account_emails") or []), *selected]))
     pending = [email for email in (existing.get("pending_accounts") or []) if email not in selected]
     return save_link_config(
         "gmail",

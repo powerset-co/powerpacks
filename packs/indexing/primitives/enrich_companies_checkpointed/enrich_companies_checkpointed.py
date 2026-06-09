@@ -21,6 +21,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,6 +32,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_MODEL = "gpt-5.1"
@@ -182,6 +184,11 @@ COMPANY_CLASSIFICATION_SCHEMA = {
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def add_timing(state: dict[str, Any], name: str, seconds: float) -> None:
+    timings = state.setdefault("timings", {})
+    timings[name] = round(float(timings.get(name, 0.0) or 0.0) + seconds, 3)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -480,7 +487,7 @@ def call_openai_company_classifiers(
         api_key=api_key,
         base_url=(base_url or os.getenv("POWERPACKS_OPENAI_BASE") or "https://api.openai.com/v1"),
         timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
-        concurrency=concurrency or int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY))),
+        concurrency=concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=DEFAULT_OPENAI_CONCURRENCY),
         max_retries=max_retries,
     ))
 
@@ -566,6 +573,7 @@ def estimate_payload(input_path: Path, provider: str, artifact: dict[str, dict[s
 
 
 def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict[str, Any]:
+    finalize_started = time.perf_counter()
     chunks = sorted((output_dir / "chunks").glob("companies.*.jsonl")) if (output_dir / "chunks").exists() else []
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -577,6 +585,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
                 rows.append(row)
     rows.sort(key=lambda row: clean(row.get("company_urn")))
     atomic_write_jsonl(output_path, rows)
+    add_timing(state, "finalize_merge_write_seconds", time.perf_counter() - finalize_started)
     state["status"] = "completed"
     state["completed_at"] = now_iso()
     state["companies_written"] = len(rows)
@@ -597,6 +606,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
             "artifact_misses": state.get("artifact_misses", 0),
             "paid_calls": state.get("paid_calls", 0),
         },
+        "timings": state.get("timings", {}),
         "provider_notes": [
             "artifact replays precomputed real Aleph-shaped companies_corpus_v3 fields without spend",
             "openai/llm is an explicit --allow-paid provider path",
@@ -629,7 +639,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     batch: list[dict[str, Any]] = []
     paid_pending: list[dict[str, Any]] = []
-    paid_concurrency = int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY)))
+    usage_tier = getattr(args, "openai_usage_tier", None)
+    paid_concurrency = int(
+        getattr(args, "concurrency", None)
+        or env_or_profile_int(
+            "POWERPACKS_OPENAI_CONCURRENCY",
+            "openai_concurrency",
+            tier=usage_tier,
+            fallback=DEFAULT_OPENAI_CONCURRENCY,
+        )
+    )
     paid_timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     chunks_this_run = 0
 
@@ -637,10 +656,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         nonlocal batch, chunks_this_run
         if not batch or (not force and len(batch) < int(args.checkpoint_every)):
             return None
+        chunk_started = time.perf_counter()
         chunk_index = int(state.get("chunks_written") or 0) + 1
         written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
         state["chunks_written"] = chunk_index
         state["companies_written"] = int(state.get("companies_written") or 0) + written
+        add_timing(state, "checkpoint_chunk_write_seconds", time.perf_counter() - chunk_started)
+        state_started = time.perf_counter()
+        save_state(output_dir, state)
+        add_timing(state, "checkpoint_state_write_seconds", time.perf_counter() - state_started)
         save_state(output_dir, state)
         batch = []
         chunks_this_run += 1
@@ -651,6 +675,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "chunks_written_total": state["chunks_written"],
                 "input_rows_processed": state["input_rows_processed"],
                 "companies_written": state["companies_written"],
+                "timings": state.get("timings", {}),
             }
         return None
 
@@ -662,6 +687,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         pending = paid_pending
         paid_pending = []
         try:
+            openai_started = time.perf_counter()
             enrichments = call_openai_company_classifiers(
                 pending,
                 model=getattr(args, "model", None),
@@ -670,19 +696,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 timeout=paid_timeout,
                 concurrency=paid_concurrency,
             )
+            add_timing(state, "openai_enrichment_seconds", time.perf_counter() - openai_started)
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
+        merge_started = time.perf_counter()
         for shaped, enrichment in zip(pending, enrichments):
             batch.append(merge_enrichment(shaped, enrichment))
+        add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
         state["paid_calls"] = int(state.get("paid_calls") or 0) + len(pending)
         return flush_output(force=True)
 
+    local_prepare_started = time.perf_counter()
     for idx, row in iter_unprocessed(input_path, int(state.get("input_rows_processed") or 0)):
         shaped = shape_company(row)
         cached = artifact.get(norm_name(shaped.get("company_name"))) if artifact else None
         if cached:
             try:
+                merge_started = time.perf_counter()
                 shaped = merge_enrichment(shaped, cached)
+                add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
             except RuntimeError as exc:
                 raise SystemExit(str(exc)) from exc
             state["artifact_hits"] = int(state.get("artifact_hits") or 0) + 1
@@ -697,7 +729,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if not allow_paid:
                 raise SystemExit("company provider 'openai' requires --allow-paid; no paid API was called")
             paid_pending.append(shaped)
+            add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
             partial = flush_paid()
+            local_prepare_started = time.perf_counter()
             if partial:
                 return partial
             shaped = None
@@ -705,9 +739,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             batch.append(shaped)
         state["input_rows_processed"] = idx
         if len(batch) >= int(args.checkpoint_every):
+            add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
             partial = flush_paid(force=True) or flush_output()
+            local_prepare_started = time.perf_counter()
             if partial:
                 return partial
+    add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
     partial = flush_paid(force=True)
     if partial:
         return partial
@@ -738,6 +775,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--estimate", action="store_true", help="Alias for --dry-run")
     run_p.add_argument("--allow-paid", action="store_true")
     run_p.add_argument("--model", default=None)
+    run_p.add_argument("--concurrency", type=int, default=None)
+    run_p.add_argument("--openai-usage-tier", default=None)
     run_p.add_argument("--api-key")
     run_p.add_argument("--base-url")
     run_p.add_argument("--force", action="store_true")

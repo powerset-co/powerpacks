@@ -285,6 +285,7 @@ def source_worker_group(input_cfg: dict[str, Any]) -> dict[str, Any]:
                 "artifact_root": str(DEFAULT_DISCOVER_DIR / "gmail" / source_slug(email or "all")),
                 "sync_query": gmail_sync_query(input_cfg),
                 "sync_after": gmail_sync_after(input_cfg),
+                "skip_msgvault_sync": bool(input_cfg.get("skip_msgvault_sync")),
                 "excluded_labels": gmail_excluded_labels(input_cfg),
                 "parallelizable": True,
                 "reason": "local msgvault metadata read into a stable discover folder",
@@ -342,8 +343,13 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
 
     if "gmail" in runnable_sources:
         begin_step(ledger_path, ledger, "gmail_msgvault", "Discovering Gmail contacts from existing msgvault metadata.")
+        gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
         payload = gmail.discover(
             accounts_path=accounts_path,
+            selected_accounts=gmail_emails,
+            msgvault_db=str(input_cfg.get("msgvault_db") or ""),
+            sync_query=str(input_cfg.get("gmail_sync_query") or ""),
+            skip_msgvault_sync=bool(input_cfg.get("skip_msgvault_sync")),
             ledger_path=DEFAULT_BASE_DIR / "gmail" / "ledger.json",
             output_dir=DEFAULT_BASE_DIR / "gmail",
             operator_id=str(input_cfg.get("operator_id") or "local"),
@@ -369,6 +375,8 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
         begin_step(ledger_path, ledger, "linkedin", "Discovering LinkedIn Connections.csv contacts.")
         payload = linkedin.discover(
             accounts_path=accounts_path,
+            connections_csv=str(input_cfg.get("linkedin_csv") or ""),
+            source_user_label=str(input_cfg.get("linkedin_source_user") or ""),
             ledger_path=DEFAULT_BASE_DIR / "linkedin" / "ledger.json",
             output_dir=DEFAULT_BASE_DIR / "linkedin",
         )
@@ -670,6 +678,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
         "include_category_mail": bool(getattr(args, "include_category_mail", False)),
         "gmail_sync_query": str(getattr(args, "gmail_sync_query", "") or "").strip(),
         "gmail_sync_after": gmail_sync_after({"gmail_sync_after": getattr(args, "gmail_sync_after", "")}),
+        "skip_msgvault_sync": bool(getattr(args, "skip_msgvault_sync", False)),
         "skip_gmail_estimate": bool(getattr(args, "skip_gmail_estimate", False)),
         "gmail_estimate_max_pages": int(getattr(args, "gmail_estimate_max_pages", DEFAULT_GMAIL_ESTIMATE_MAX_PAGES) or DEFAULT_GMAIL_ESTIMATE_MAX_PAGES),
         "twitter_handle": getattr(args, "twitter_handle", ""),
@@ -835,3 +844,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         emit({"status": "interrupted"})
         return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

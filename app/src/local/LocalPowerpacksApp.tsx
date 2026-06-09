@@ -9,6 +9,7 @@ import { fetchLocalProfile, fetchRunResults, fetchRuns } from "./powerpacksApi";
 import { LocalContactsPage } from "./LocalContactsPage";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
+import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
 import { LocalEnvPage } from "./LocalEnvPage";
 import { LocalResultsTable } from "./LocalResultsTable";
 import { LocalRunSidebar } from "./LocalRunSidebar";
@@ -23,9 +24,10 @@ function taskIdFromPath(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-type LocalView = "contacts" | "setup" | "messagesReview" | "env" | "runs";
+type LocalView = "contacts" | "setup" | "onboardingV2" | "messagesReview" | "env" | "runs";
 
 function viewFromPath(): LocalView {
+  if (window.location.pathname === "/onboarding-v2") return "onboardingV2";
   if (window.location.pathname === "/onboarding") return "setup";
   if (window.location.pathname === "/contacts") return "contacts";
   if (window.location.pathname === "/env") return "env";
@@ -216,6 +218,8 @@ export function LocalPowerpacksApp() {
           <div className="mx-auto max-w-7xl space-y-4 p-6">
             {activeView === "setup" ? (
               <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
+            ) : activeView === "onboardingV2" ? (
+              <LocalOnboardingV2Page />
             ) : activeView === "env" ? (
               <LocalEnvPage />
             ) : activeView === "contacts" ? (
