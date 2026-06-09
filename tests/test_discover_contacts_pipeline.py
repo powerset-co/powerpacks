@@ -292,6 +292,82 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(replay_rows[0]["thread_count"], "2")
             self.assertEqual(replay_rows[0]["last_interaction"], "2026-01-03T00:00:00Z")
 
+    def test_gmail_discovery_manifest_carries_timing_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            accounts = tmp / "accounts.json"
+            accounts.write_text(json.dumps({
+                "accounts": {
+                    "gmail": {
+                        "linked": True,
+                        "config": {
+                            "selected_accounts": ["me@example.com", "work@example.com"],
+                            "msgvault_db": str(tmp / "msgvault.db"),
+                        },
+                    }
+                }
+            }), encoding="utf-8")
+            scratch_queue = tmp / "scratch" / "queue.csv"
+            write_csv(
+                scratch_queue,
+                discover_gmail.GMAIL_DISCOVERY_COLUMNS,
+                [{
+                    "handle": "jane@example.com",
+                    "id": "gmail:jane@example.com",
+                    "account_emails": json.dumps(["me@example.com"]),
+                    "source_ids": json.dumps(["gmail:jane@example.com"]),
+                    "display_name": "Jane Example",
+                    "full_name": "Jane Example",
+                    "primary_email": "jane@example.com",
+                    "source": "gmail_msgvault",
+                    "source_channels": "gmail_msgvault",
+                    "total_messages": "2",
+                    "thread_count": "1",
+                    "last_interaction": "2026-01-02T00:00:00Z",
+                }],
+            )
+
+            paths = {
+                ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
+                ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
+                ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
+            }
+
+            def fake_output_path(source: str, key: str) -> Path:
+                return paths[(source, key)]
+
+            def fake_run_cmd(cmd, timeout=None):
+                return 0, {
+                    "status": "completed",
+                    "artifacts": {"linkedin_resolution_queue_csv": str(scratch_queue)},
+                    "counts": {"contacts_written": 1},
+                }, ""
+
+            def fake_sync(email, db, query):
+                return {"status": "completed", "account_email": email, "messages_added": 3}
+
+            with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
+                with mock.patch.object(discover_gmail, "sync_msgvault_account", side_effect=fake_sync):
+                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                        payload = discover_gmail.discover(accounts_file=accounts)
+
+            self.assertEqual(payload["status"], "completed")
+            manifest = json.loads(paths[("gmail", "manifest_json")].read_text(encoding="utf-8"))
+
+            self.assertIsInstance(manifest["duration_seconds"], float)
+            self.assertGreaterEqual(manifest["duration_seconds"], 0)
+            self.assertTrue(manifest["started_at"])
+            self.assertIsInstance(manifest["started_at"], str)
+
+            timing = manifest["accounts_timing"]
+            self.assertIsInstance(timing, list)
+            self.assertEqual(len(timing), 2)
+            self.assertEqual([entry["email"] for entry in timing], ["me@example.com", "work@example.com"])
+            for entry in timing:
+                self.assertIn("email", entry)
+                self.assertIsInstance(entry["duration_seconds"], (int, float))
+                self.assertGreaterEqual(entry["duration_seconds"], 0)
+
     def test_gmail_incremental_requires_existing_full_recount_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

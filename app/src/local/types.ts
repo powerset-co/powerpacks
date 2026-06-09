@@ -276,6 +276,12 @@ export interface SetupStatusResponse {
     artifactDir?: string;
     linkedSources: string[];
     gmailSyncAfter?: string;
+    gmailTiming?: {
+      discoverySeconds: number | null;
+      enrichmentSeconds: number | null;
+      parallelEnrichmentSeconds: number | null;
+      checkpointEvery: number | null;
+    };
     sources: SetupImportSource[];
   };
   enrichment: {

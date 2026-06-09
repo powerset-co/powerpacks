@@ -681,10 +681,12 @@ function buildLinkRows(status: SetupStatusResponse): LinkTableRow[] {
 function SourcePanel({
   source,
   onRun,
+  actionState,
   embedded = false,
 }: {
   source: SetupSourceStatus;
   onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
   embedded?: boolean;
 }) {
   const [email, setEmail] = useState("");
@@ -774,6 +776,17 @@ function SourcePanel({
               </div>
             )}
           </div>
+          {gmailAccounts.length > 0 && (
+            <ActionButton
+              size="sm"
+              action="gmail-sync-all"
+              actionKey="gmail-sync-all"
+              actionState={actionState}
+              onClick={() => onRun({ action: "gmail-sync-all", emails: gmailAccounts })}
+            >
+              Sync and enrich Gmail
+            </ActionButton>
+          )}
           <div className="flex flex-wrap items-start gap-2">
             <textarea
               value={email}
@@ -977,9 +990,11 @@ function MessagesChannelPanel({
 function AccountLinkingTab({
   status,
   onRun,
+  actionState,
 }: {
   status: SetupStatusResponse;
   onRun: (body: Record<string, unknown>) => void;
+  actionState: ActionState;
 }) {
   const rows = buildLinkRows(status);
   const [expandedRows, setExpandedRows] = useState<LinkRowId[]>(() => {
@@ -1052,7 +1067,7 @@ function AccountLinkingTab({
                     {row.id === "imessage" || row.id === "whatsapp" ? (
                       <MessagesChannelPanel source={source} channel={row.id} onRun={onRun} jobs={status.jobs} />
                     ) : (
-                      <SourcePanel source={source} onRun={onRun} embedded />
+                      <SourcePanel source={source} onRun={onRun} actionState={actionState} embedded />
                     )}
                   </div>
                 )}
@@ -1506,7 +1521,7 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
   );
 }
 
-function JobStageStrip({ job }: { job: SetupJob }) {
+function JobStageStrip({ job, stageDurations }: { job: SetupJob; stageDurations?: Record<string, number> }) {
   const stages = jobStages(job);
   if (stages.length <= 1) return null;
   const reachedStages = loggedJobStages(job);
@@ -1536,6 +1551,9 @@ function JobStageStrip({ job }: { job: SetupJob }) {
             <Icon className={cn("h-3.5 w-3.5", isRunning && "animate-spin")} />
             <span>{stage.label}</span>
             <span className="text-muted-foreground">{stage.index}/{stage.total || stages.length}</span>
+            {isDone && typeof stageDurations?.[stage.label] === "number" && (
+              <span className="text-muted-foreground">· {stageDurations[stage.label].toFixed(1)}s</span>
+            )}
           </div>
         );
       })}
@@ -1546,9 +1564,11 @@ function JobStageStrip({ job }: { job: SetupJob }) {
 function JobPanel({
   job,
   onRunCommand,
+  stageDurations,
 }: {
   job?: SetupJob | null;
   onRunCommand: (command: string) => void;
+  stageDurations?: Record<string, number>;
 }) {
   if (!job) return null;
   const commands = extractCommands(job);
@@ -1564,7 +1584,7 @@ function JobPanel({
           </div>
           <StatusBadge status={job.status} />
       </div>
-      <JobStageStrip job={job} />
+      <JobStageStrip job={job} stageDurations={stageDurations} />
       {commands.length > 0 && (
         <div className="space-y-2 border-b p-4">
           {commands.map((command) => (
@@ -1675,6 +1695,19 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
     if (!status?.jobs.length) return null;
     return status.jobs.find((job) => job.id === activeJobId) || status.jobs[0];
   }, [activeJobId, status?.jobs]);
+  const activeStageDurations = useMemo(() => {
+    if (activeJob?.action !== "gmail-sync-all") return undefined;
+    const timing = status?.import.gmailTiming;
+    if (!timing) return undefined;
+    const map: Record<string, number> = {};
+    if (typeof timing.discoverySeconds === "number") {
+      map[normalizeStageLabel("Discovering Gmail")] = timing.discoverySeconds;
+    }
+    if (typeof timing.enrichmentSeconds === "number") {
+      map[normalizeStageLabel("Enriching Gmail")] = timing.enrichmentSeconds;
+    }
+    return Object.keys(map).length ? map : undefined;
+  }, [activeJob?.action, status?.import.gmailTiming]);
 	  const runningJobs = useMemo(() => (status?.jobs || []).filter((job) => job.status === "running"), [status?.jobs]);
   const missingRequiredEnv = useMemo(() => (envStatus?.keys || []).filter((key) => key.required && !key.satisfied), [envStatus]);
   const pendingAction = pendingActionKey?.split(":")[0] || null;
@@ -1777,7 +1810,7 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
 
       <SetupStepper active={activeTab} status={status} onChange={changeTab} />
 
-      {activeTab === "link" && <AccountLinkingTab status={status} onRun={runAction} />}
+      {activeTab === "link" && <AccountLinkingTab status={status} onRun={runAction} actionState={actionState} />}
 
       {activeTab === "discover" && <ImportTab status={status} onRun={runAction} actionState={actionState} />}
 
@@ -1785,7 +1818,7 @@ export function LocalSetupPage(_props: { onOpenMessagesReview: () => void }) {
 
       {activeTab === "index" && <IndexTab status={status} onRun={runAction} actionState={actionState} />}
 
-      <JobPanel job={activeJob} onRunCommand={runCommand} />
+      <JobPanel job={activeJob} onRunCommand={runCommand} stageDurations={activeStageDurations} />
     </div>
   );
 }

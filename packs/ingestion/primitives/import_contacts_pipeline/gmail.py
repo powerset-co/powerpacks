@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +60,14 @@ except ModuleNotFoundError:
 
 
 GMAIL_PARALLEL_AUTO_APPROVE_UNDER = 25
+
+
+def _paid_checkpoint_every(default: int = 25) -> int:
+    try:
+        value = int(os.environ.get("POWERPACKS_PAID_CHECKPOINT_EVERY", str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 def gmail_artifacts_from_discovery() -> dict[str, Any]:
@@ -184,20 +194,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csvs") and not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csv"):
         return write_manifest("gmail", {"status": "skipped", "reason": "no Gmail discovery queue", "artifact_dir": str(import_dir)})
     write_json(ledger_path, ledger)
+    checkpoint_every = _paid_checkpoint_every()
+    run_started = now_iso()
+    t0 = time.monotonic()
+    parallel_enrichment_seconds = 0.0
     for func_name in ("run_gmail_directory", "run_gmail_linkedin_resolution", "run_gmail_apply_and_enrich"):
-        if func_name == "run_gmail_linkedin_resolution" and not ledger.get("input", {}).get("approve_parallel_spend"):
+        is_resolution = func_name == "run_gmail_linkedin_resolution"
+        if is_resolution and not ledger.get("input", {}).get("approve_parallel_spend"):
             contacts = pending_gmail_parallel_contacts(ledger)
             if 0 < contacts < GMAIL_PARALLEL_AUTO_APPROVE_UNDER:
                 auto_approve_gmail_parallel(ledger, contacts, "gmail_parallel_queue_below_threshold")
                 legacy.save_ledger(ledger_path, ledger)
-        ok = getattr(legacy, func_name)(ledger_path, ledger)
-        if not ok and func_name == "run_gmail_linkedin_resolution" and not ledger.get("input", {}).get("approve_parallel_spend"):
+        if is_resolution:
+            _resolution_t0 = time.monotonic()
+            ok = getattr(legacy, func_name)(ledger_path, ledger)
+            parallel_enrichment_seconds += time.monotonic() - _resolution_t0
+        else:
+            ok = getattr(legacy, func_name)(ledger_path, ledger)
+        if not ok and is_resolution and not ledger.get("input", {}).get("approve_parallel_spend"):
             contacts = blocked_parallel_contacts(ledger)
             if 0 < contacts < GMAIL_PARALLEL_AUTO_APPROVE_UNDER:
                 ledger.pop("blocked", None)
                 auto_approve_gmail_parallel(ledger, contacts, "gmail_parallel_child_count_below_threshold")
                 legacy.save_ledger(ledger_path, ledger)
+                _resolution_t0 = time.monotonic()
                 ok = getattr(legacy, func_name)(ledger_path, ledger)
+                parallel_enrichment_seconds += time.monotonic() - _resolution_t0
         if not ok:
             status = "blocked_approval" if ledger.get("blocked") else "failed"
             return write_manifest("gmail", {
@@ -234,6 +256,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "status": "completed",
         "ledger": str(ledger_path),
         "artifact_dir": str(import_dir),
+        "started_at": run_started,
+        "duration_seconds": round(time.monotonic() - t0, 3),
+        "parallel_enrichment_seconds": round(parallel_enrichment_seconds, 3),
+        "checkpoint_every": checkpoint_every,
         "input": {
             "discovery_manifest": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "manifest.json"),
             "contacts_csv": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "contacts.csv"),

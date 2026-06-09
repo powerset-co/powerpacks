@@ -1386,6 +1386,7 @@ function discoveryManifestState(sourceId: string, fallback: string) {
     status: rawStatus === "selected_steps_completed" ? "completed" : rawStatus,
     updatedAt: manifest.updated_at || manifest.completed_at || summary.updatedAt || null,
     artifactDir: path.dirname(activeRelPath),
+    durationSeconds: typeof manifest.duration_seconds === "number" ? manifest.duration_seconds : null,
   };
 }
 
@@ -2132,6 +2133,15 @@ async function setupStatus(tabInput: unknown = "all") {
   const importLiveRefresh = phases.import?.live_refresh || importRefreshLedger.refresh || importRefreshLedger;
   const messagesCurrentBlock = messagesCurrentBlockForUi(messagesLedger, reviewApi.counts || {});
 
+  const gmailDiscoveryState = discoveryManifestState("gmail", "ready");
+  const gmailEnrichmentManifest = importManifest("gmail");
+  const gmailTiming = {
+    discoverySeconds: gmailDiscoveryState?.durationSeconds ?? null,
+    enrichmentSeconds: typeof gmailEnrichmentManifest.duration_seconds === "number" ? gmailEnrichmentManifest.duration_seconds : null,
+    parallelEnrichmentSeconds: typeof gmailEnrichmentManifest.parallel_enrichment_seconds === "number" ? gmailEnrichmentManifest.parallel_enrichment_seconds : null,
+    checkpointEvery: typeof gmailEnrichmentManifest.checkpoint_every === "number" ? gmailEnrichmentManifest.checkpoint_every : null,
+  };
+
   return {
     operator,
     bootstrap,
@@ -2171,6 +2181,7 @@ async function setupStatus(tabInput: unknown = "all") {
       artifactDir: importLiveRefresh?.artifact_dir || importRefreshLedger.artifact_dir || "",
       linkedSources: Array.isArray(importLiveRefresh?.linked_sources) ? importLiveRefresh.linked_sources : [],
       gmailSyncAfter: importLiveRefresh?.gmail_sync_after || "",
+      gmailTiming,
       sources: publicImportSources(importSources),
     },
     enrichment: {
@@ -2335,6 +2346,23 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
 
   if (action === "gmail-link-emails") {
     return startSetupJob(action, gmailLinkCommand(operator.id, body.emails), 60 * 60 * 1000);
+  }
+
+  if (action === "gmail-sync-all") {
+    const approveSpend = body.approveSpend === true;
+    const source = buildImportSources(accounts, operator.id).find((c) => c.id === "gmail");
+    if (!source) throw new Error(`unsupported import source: gmail`);
+    if (!source.linked) throw new Error(`source is not linked: gmail`);
+    if (source.skipped) throw new Error(`source is skipped: gmail`);
+    const stages = [
+      { label: "Discovering Gmail", command: gmailDiscoveryCommand() },
+      { label: "Enriching Gmail", command: enrichmentNetworkCommand(operator.id, "gmail", { approveSpend }) },
+    ].filter((stage) => stage.command.length > 0);
+    return startSetupJob(action, stagedCommand(stages), 6 * 60 * 60 * 1000, {
+      actionKey: approveSpend ? "gmail-sync-all:approve" : "gmail-sync-all",
+      source: "gmail",
+      stages: setupStageSummaries(stages),
+    });
   }
 
   if (action === "linkedin-csv") {

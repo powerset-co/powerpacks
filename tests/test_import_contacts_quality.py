@@ -10,6 +10,7 @@ from packs.ingestion.primitives.discover_contacts_pipeline.directory import DIRE
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.ingestion.primitives.import_contacts_pipeline import gmail as gmail_import
 from packs.ingestion.primitives.import_contacts_pipeline import linkedin as linkedin_import
+from packs.ingestion.primitives.import_contacts_pipeline import common as import_common
 from packs.ingestion.primitives.import_contacts_pipeline.common import (
     directory_source_account_quality,
     normalize_directory_source_accounts,
@@ -59,6 +60,64 @@ class ImportContactsQualityTests(unittest.TestCase):
                 "people_csv": str(contacts),
                 "slug": "all",
             }])
+
+    def test_gmail_import_manifest_carries_timing_and_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            base = tmp / ".powerpacks/network-import"
+            discover_gmail = base / "discover/gmail"
+            discover_gmail.mkdir(parents=True)
+            import_dir = base / "import"
+            contacts = discover_gmail / "contacts.csv"
+            queue = discover_gmail / "linkedin_resolution_queue.csv"
+            contacts.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
+            queue.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
+            (discover_gmail / "manifest.json").write_text(json.dumps({
+                "contacts_csv": str(contacts),
+                "linkedin_resolution_queue_csv": str(queue),
+                "children": [],
+            }), encoding="utf-8")
+
+            accounts = tmp / "accounts.json"
+            accounts.write_text(json.dumps({
+                "accounts": {
+                    "gmail": {"config": {"selected_accounts": ["jane@example.com"]}}
+                }
+            }), encoding="utf-8")
+
+            people_csv = import_dir / "gmail" / "people.csv"
+            people_csv.parent.mkdir(parents=True, exist_ok=True)
+            people_csv.write_text("id,full_name\nperson-jane,Jane\n", encoding="utf-8")
+
+            legacy = SimpleNamespace(
+                run_gmail_directory=lambda *_a, **_k: True,
+                run_gmail_linkedin_resolution=lambda *_a, **_k: True,
+                run_gmail_apply_and_enrich=lambda *_a, **_k: True,
+                save_ledger=lambda *_a, **_k: None,
+            )
+
+            with mock.patch.object(gmail_import, "DEFAULT_BASE_DIR", base), \
+                mock.patch.object(gmail_import, "DEFAULT_IMPORT_DIR", import_dir), \
+                mock.patch.object(import_common, "DEFAULT_IMPORT_DIR", import_dir), \
+                mock.patch.object(gmail_import, "load_legacy_discover_module", return_value=legacy), \
+                mock.patch.object(gmail_import, "copy_people_csv", return_value=str(people_csv)), \
+                mock.patch.object(gmail_import, "normalize_directory_source_accounts", return_value={"updated_rows": 0}), \
+                mock.patch.object(gmail_import, "directory_source_account_quality", return_value={"status": "ok"}):
+                payload = gmail_import.run(SimpleNamespace(
+                    accounts=accounts,
+                    operator_id="operator-1",
+                    approve_parallel_spend=True,
+                ))
+
+            self.assertEqual(payload["status"], "completed")
+            manifest = json.loads((import_dir / "gmail" / "manifest.json").read_text(encoding="utf-8"))
+            for written in (payload, manifest):
+                self.assertIn("started_at", written)
+                self.assertIsInstance(written["duration_seconds"], float)
+                self.assertGreaterEqual(written["duration_seconds"], 0.0)
+                self.assertIsInstance(written["parallel_enrichment_seconds"], float)
+                self.assertGreaterEqual(written["parallel_enrichment_seconds"], 0.0)
+                self.assertEqual(written["checkpoint_every"], 25)
 
     def test_gmail_directory_rows_require_source_account(self) -> None:
         with tempfile.TemporaryDirectory() as td:

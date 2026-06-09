@@ -9,6 +9,7 @@ import json
 import shutil
 import sqlite3
 import sys
+import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -355,6 +356,8 @@ def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any], _worker: dict[
 
 
 def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = None, **_: Any) -> dict[str, Any]:
+    run_started = now_iso()
+    t0 = time.monotonic()
     cfg = load_config()
     accounts_file = accounts_file or accounts_path or configured_accounts_path()
     account_state = read_json(accounts_file, {}) or {}
@@ -378,10 +381,13 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
     incoming_outputs: list[dict[str, Any]] = []
     children: list[dict[str, Any]] = []
     child_modes: list[str] = []
+    accounts_timing: list[dict[str, Any]] = []
     raw_root = contacts_csv.parent / "raw"
     for email in source_inputs["selected_accounts"]:
         account_raw_dir = raw_root / source_slug(email)
+        sync_t0 = time.monotonic()
         sync = sync_msgvault_account(email, source_inputs["msgvault_db"], source_inputs["sync_query"])
+        sync_elapsed = time.monotonic() - sync_t0
         if sync["status"] == "failed":
             payload = {"status": "failed", "source": "gmail", "account_email": email, "error": sync}
             write_json(manifest_json, payload)
@@ -408,6 +414,12 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             _fields, rows = read_csv_rows(child_queue)
             rows_written = len(rows)
         incremental_input_id = gmail_incremental_input_id(email, rows)
+        added = sync.get("messages_added")
+        accounts_timing.append({
+            "email": email,
+            "duration_seconds": round(sync_elapsed, 3),
+            "messages_added": added if isinstance(added, (int, float)) else rows_written,
+        })
         incoming_outputs.append({
             "account_email": email,
             "calculation_mode": child_mode,
@@ -482,6 +494,9 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
         "contacts": len(merged),
         "selected_accounts": source_inputs["selected_accounts"],
         "msgvault_db": source_inputs["msgvault_db"],
+        "started_at": run_started,
+        "duration_seconds": round(time.monotonic() - t0, 3),
+        "accounts_timing": accounts_timing,
         "updated_at": now_iso(),
         "privacy": {
             "message_bodies_read": False,
