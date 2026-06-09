@@ -58,6 +58,47 @@ VALID_ROLE_TYPES = [
     "executive", "management", "ic", "investor", "board", "advisor", "academic", "founder",
 ]
 
+# Canonical role_ids — loaded from the prod taxonomy.
+_TAXONOMY_PATH = ROOT / "packs" / "search" / "data" / "roles" / "canonical_role_taxonomy.json"
+
+
+def _load_canonical_role_ids() -> list[str]:
+    """Load the 180 canonical role_ids from the taxonomy file."""
+    data = json.loads(_TAXONOMY_PATH.read_text(encoding="utf-8"))
+    ids: set[str] = set()
+    for dept_info in data.get("departments", {}).values():
+        ids.update(dept_info.get("functions", []))
+    return sorted(ids)
+
+
+def _load_dept_map() -> dict[str, str]:
+    """Map each canonical role_id → its department."""
+    data = json.loads(_TAXONOMY_PATH.read_text(encoding="utf-8"))
+    out: dict[str, str] = {}
+    for dept, info in data.get("departments", {}).items():
+        for fn in info.get("functions", []):
+            out[fn] = dept
+    return out
+
+
+CANONICAL_ROLE_IDS = _load_canonical_role_ids()
+ROLE_ID_TO_DEPT = _load_dept_map()
+
+# Canonical role_track values — match prod's role_filter_mappings.
+VALID_ROLE_TRACKS = [
+    "academic_research", "business_dev", "customer_success", "data_ml",
+    "design", "engineering", "finance", "general", "governance",
+    "healthcare", "investing", "legal", "marketing", "media_content",
+    "noise", "operations", "people_hr", "product", "real_estate",
+    "sales", "security", "strategy", "trades",
+]
+
+# Generic leadership role_ids that should be stripped when a domain role exists.
+# Seniority_band already captures the level.
+GENERIC_LEADERSHIP_ROLES = {
+    "vice_president", "director", "head_of", "manager", "president", "principal",
+}
+
 # Structured output schema — forces the LLM to return exactly these fields
 # with constrained enum values. No parsing gymnastics needed.
 ROLE_RESPONSE_SCHEMA = {
@@ -70,8 +111,8 @@ ROLE_RESPONSE_SCHEMA = {
             "properties": {
                 "role_ids": {
                     "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Snake_case role identifiers from the taxonomy.",
+                    "items": {"type": "string", "enum": CANONICAL_ROLE_IDS},
+                    "description": "Canonical role identifiers from the taxonomy.",
                 },
                 "seniority_band": {
                     "type": "string",
@@ -85,7 +126,8 @@ ROLE_RESPONSE_SCHEMA = {
                 },
                 "role_track": {
                     "type": ["string", "null"],
-                    "description": "Broad functional area, or null if ambiguous.",
+                    "enum": VALID_ROLE_TRACKS + [None],
+                    "description": "Canonical department, or null if ambiguous.",
                 },
                 "specialization": {
                     "type": ["string", "null"],
@@ -343,6 +385,29 @@ def call_openai_role_enrichment(role: dict[str, Any], *, api_key: str, base_url:
     return call_openai_role_enrichments([role], api_key=api_key, base_url=base_url, model=model, timeout=timeout, concurrency=1, max_retries=max_retries)[0]
 
 
+def _remap_role_ids(role_ids: list[str], role_track: str) -> tuple[list[str], str]:
+    """Post-process role_ids: strip generic leadership when domain roles exist,
+    resolve role_track to canonical department from taxonomy."""
+    # Resolve department from the first domain role_id that has a taxonomy mapping.
+    department = ""
+    for rid in role_ids:
+        dept = ROLE_ID_TO_DEPT.get(rid)
+        if dept and dept not in ("general", "noise"):
+            department = dept
+            break
+    if not department:
+        department = role_track or "general"
+
+    # Strip generic leadership IDs when a real domain role co-exists.
+    non_generic = [rid for rid in role_ids if rid not in GENERIC_LEADERSHIP_ROLES]
+    if non_generic and len(non_generic) < len(role_ids):
+        # Keep founder even though it's in general — it's always meaningful.
+        kept_generic = [rid for rid in role_ids if rid in GENERIC_LEADERSHIP_ROLES and rid == "founder"]
+        role_ids = non_generic + kept_generic
+
+    return role_ids, department
+
+
 def merge_role(base: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, Any]:
     # Handle field name variants across cluster prompts.
     seniority = enrichment.get("seniority_band") or enrichment.get("seniority", "")
@@ -351,6 +416,10 @@ def merge_role(base: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, An
     if not role_ids and enrichment.get("role_id"):
         rid = enrichment["role_id"]
         role_ids = [rid] if isinstance(rid, str) else list(rid)
+
+    raw_track = enrichment.get("role_track") or ""
+    role_ids, department = _remap_role_ids(role_ids, raw_track)
+
     row = {
         "title_hash": base["title_hash"],
         "raw_title": base["raw_title"],
@@ -360,7 +429,7 @@ def merge_role(base: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, An
         "role_ids": role_ids,
         "seniority_band": seniority,
         "role_type": enrichment.get("role_type", ""),
-        "role_track": enrichment.get("role_track", ""),
+        "role_track": department,
         "specialization": enrichment.get("specialization", ""),
         "doc2query": enrichment.get("doc2query") or [],
         "inferred_skills": enrichment.get("inferred_skills") or [],
