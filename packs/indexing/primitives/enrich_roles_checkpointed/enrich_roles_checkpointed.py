@@ -99,6 +99,31 @@ GENERIC_LEADERSHIP_ROLES = {
     "vice_president", "director", "head_of", "manager", "president", "principal",
 }
 
+# When only generic leadership IDs remain, resolve to a domain-specific role
+# using the role_track / department. Ported from prod remap_roles.py.
+TRACK_TO_DOMAIN_ROLE: dict[str, str] = {
+    "sales": "sales_manager",
+    "marketing": "marketing_manager",
+    "engineering": "engineering_manager",
+    "data_ml": "data_science_manager",
+    "product": "product_manager",
+    "design": "creative_director",
+    "finance": "finance_manager",
+    "operations": "operations_manager",
+    "people_hr": "hr_manager",
+    "legal": "general_counsel",
+    "customer_success": "customer_success_manager",
+    "business_dev": "business_development",
+    "investing": "angel_investor",
+    "security": "security_manager",
+    "academic_research": "researcher",
+    "media_content": "producer",
+    "real_estate": "real_estate_developer",
+    "healthcare": "healthcare_administrator",
+    "strategy": "strategist",
+    "governance": "board_member",
+}
+
 # Structured output schema — forces the LLM to return exactly these fields
 # with constrained enum values. No parsing gymnastics needed.
 ROLE_RESPONSE_SCHEMA = {
@@ -387,6 +412,7 @@ def call_openai_role_enrichment(role: dict[str, Any], *, api_key: str, base_url:
 
 def _remap_role_ids(role_ids: list[str], role_track: str) -> tuple[list[str], str]:
     """Post-process role_ids: strip generic leadership when domain roles exist,
+    resolve to domain-specific role when only generics remain,
     resolve role_track to canonical department from taxonomy."""
     # Resolve department from the first domain role_id that has a taxonomy mapping.
     department = ""
@@ -398,12 +424,20 @@ def _remap_role_ids(role_ids: list[str], role_track: str) -> tuple[list[str], st
     if not department:
         department = role_track or "general"
 
-    # Strip generic leadership IDs when a real domain role co-exists.
+    # Split into generic leadership vs domain-specific.
     non_generic = [rid for rid in role_ids if rid not in GENERIC_LEADERSHIP_ROLES]
-    if non_generic and len(non_generic) < len(role_ids):
-        # Keep founder even though it's in general — it's always meaningful.
-        kept_generic = [rid for rid in role_ids if rid in GENERIC_LEADERSHIP_ROLES and rid == "founder"]
+    generic_only = [rid for rid in role_ids if rid in GENERIC_LEADERSHIP_ROLES]
+
+    if non_generic and generic_only:
+        # Domain roles exist — strip generic leadership, keep founder.
+        kept_generic = [rid for rid in generic_only if rid == "founder"]
         role_ids = non_generic + kept_generic
+    elif generic_only and not non_generic and department not in ("general", ""):
+        # Only generic leadership IDs + we know the department —
+        # resolve to domain-specific role.
+        domain_role = TRACK_TO_DOMAIN_ROLE.get(department)
+        if domain_role:
+            role_ids = [domain_role]
 
     return role_ids, department
 
