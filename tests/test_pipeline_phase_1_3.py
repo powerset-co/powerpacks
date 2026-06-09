@@ -594,6 +594,23 @@ class PipelinePhase13Tests(unittest.TestCase):
             self.assertEqual(payload["linked_accounts"], ["ada@example.com"])
             self.assertFalse(payload["current_import"])
 
+    def test_setup_gmail_dry_run_estimates_parallel_spend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            accounts = tmp_path / "accounts.json"
+            accounts.write_text("{}", encoding="utf-8")
+            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="")
+            with mock.patch.object(setup_gmail, "linked_gmail_accounts", return_value=["ada@example.com"]), \
+                mock.patch.object(setup_gmail, "import_manifest_current", return_value=None), \
+                mock.patch.object(setup_gmail.gmail_import, "gmail_artifacts_from_discovery", return_value={}), \
+                mock.patch.object(setup_gmail.gmail_import, "pending_gmail_parallel_contacts", return_value=12):
+                payload = setup_gmail.dry_run(args)
+            estimate = payload["parallel_spend_estimate"]
+            self.assertEqual(estimate["pending_contacts"], 12)
+            self.assertEqual(estimate["cost_per_contact_usd"], 0.05)
+            self.assertEqual(estimate["estimated_usd"], 0.6)
+            self.assertTrue(estimate["auto_approved"])
+
     def test_setup_gmail_run_completes_and_auto_approves_parallel(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

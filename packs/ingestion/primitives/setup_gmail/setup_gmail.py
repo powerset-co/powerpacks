@@ -43,6 +43,13 @@ IMPORT_SOURCE = "gmail"
 IMPORT_DIR = DEFAULT_IMPORT_DIR / IMPORT_SOURCE
 DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "gmail"
 DISCOVER_CONTACTS_CSV = DISCOVER_DIR / "contacts.csv"
+
+# Gmail enrichment resolves unmatched contacts to LinkedIn via Parallel.ai. The
+# resolution queue uses the core2x processor by default (see resolve_linkedin_queue
+# DEFAULT_PROCESSOR), priced at $0.05 per lookup (see PROCESSOR_PRICING_USD in
+# deep_research_contacts). The estimate is simply pending queue rows * per-lookup.
+GMAIL_PARALLEL_PROCESSOR = "core2x"
+GMAIL_PARALLEL_COST_PER_CONTACT_USD = 0.05
 STAGES = [
     {"id": "inspect", "label": "Check linked Gmail accounts"},
     {"id": "discover", "label": "Sync and discover Gmail contacts"},
@@ -201,6 +208,27 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, list[str]]:
     return accounts_path, emails
 
 
+def estimate_parallel_spend() -> dict[str, Any]:
+    """Estimate Parallel.ai enrichment spend for the next Gmail run.
+
+    Gmail enrichment resolves contacts that are not already matched in the
+    LinkedIn directory through Parallel.ai. The number of pending lookups is the
+    size of the discovered resolution queue, so the cost is simply
+    pending_contacts * per-lookup price. Returns zero contacts/cost when nothing
+    has been discovered yet (the queue is built during the discover stage).
+    """
+    artifacts = gmail_import.gmail_artifacts_from_discovery()
+    pending = gmail_import.pending_gmail_parallel_contacts({"artifacts": artifacts})
+    estimated_usd = round(pending * GMAIL_PARALLEL_COST_PER_CONTACT_USD, 2)
+    return {
+        "pending_contacts": pending,
+        "processor": GMAIL_PARALLEL_PROCESSOR,
+        "cost_per_contact_usd": GMAIL_PARALLEL_COST_PER_CONTACT_USD,
+        "estimated_usd": estimated_usd,
+        "auto_approved": True,
+    }
+
+
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     accounts_path, emails = resolve_inputs(args)
     current = import_manifest_current(IMPORT_SOURCE, import_dir=DEFAULT_IMPORT_DIR)
@@ -212,6 +240,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "stages": STAGES,
         "account_stats": {"linked_accounts": len(emails)},
         "current_import": bool(current),
+        "parallel_spend_estimate": estimate_parallel_spend(),
         "outputs": {
             "discover_contacts_csv": str(DISCOVER_CONTACTS_CSV),
             "source_people_csv": str(IMPORT_DIR / "people.csv"),

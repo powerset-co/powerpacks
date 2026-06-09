@@ -199,6 +199,10 @@ function GmailOnboardingSection() {
   const latestOutput = latestJob?.output || dryRun?.output || null;
   const latestStdout = stringValue(latestJob?.stdout || dryRun?.stdout);
   const latestStderr = stringValue(latestJob?.stderr || dryRun?.stderr);
+  const parallelEstimate = objectValue(dryRunOutput.parallel_spend_estimate);
+  const hasParallelEstimate = Object.keys(parallelEstimate).length > 0;
+  const parallelPendingContacts = numberValue(parallelEstimate.pending_contacts);
+  const parallelEstimatedUsd = numberValue(parallelEstimate.estimated_usd);
 
   async function handleDryRun() {
     setLoading(true);
@@ -258,6 +262,22 @@ function GmailOnboardingSection() {
               <div className="mt-1 font-medium">No Gmail accounts linked yet. Connect a Gmail account, then run.</div>
             )}
           </div>
+          {hasParallelEstimate && (
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+              <div className="text-muted-foreground">Estimated Parallel.ai enrichment spend</div>
+              <div className="mt-1 font-medium">
+                ${parallelEstimatedUsd.toFixed(2)}{" "}
+                <span className="text-muted-foreground">
+                  ({parallelPendingContacts} contact{parallelPendingContacts === 1 ? "" : "s"} to resolve, auto-approved)
+                </span>
+              </div>
+              {parallelPendingContacts === 0 && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Run a dry-run after discovery to see the lookup count; the queue is built during the discover stage.
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" disabled={loading} onClick={handleDryRun}>
               {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null} Dry-run
