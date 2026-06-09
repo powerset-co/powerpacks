@@ -45,7 +45,16 @@ CHAT_MODEL_PRICES_PER_1K_USD = {
     "gpt-4o-mini-2024-07-18": {"input": 0.00015, "output": 0.00060},
 }
 DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE = 250
-ROLE_FIELDS = ["title_hash", "raw_title", "description", "cluster", "role_ids", "seniority_band", "role_type", "role_track", "specialization", "doc2query", "inferred_skills", "dense_text"]
+ROLE_FIELDS = ["title_hash", "raw_title", "description", "cluster", "role_ids", "seniority_band", "role_type", "role_track", "specialization", "doc2query", "inferred_skills", "dense_text", "semantic_text"]
+
+# Canonical seniority bands — must match the system prompt enum exactly.
+VALID_SENIORITY_BANDS = {
+    "owner", "partner", "c-suite", "vice-president", "director",
+    "principal", "staff", "manager", "senior", "mid", "junior", "entry", "trainee",
+}
+VALID_ROLE_TYPES = {
+    "executive", "management", "ic", "investor", "board", "advisor", "academic", "founder",
+}
 
 
 def now_iso() -> str:
@@ -102,8 +111,9 @@ def title_hash(title: str, description: str) -> str:
 
 
 def shape_role(row: dict[str, Any]) -> dict[str, Any]:
-    shaped = {field: row.get(field, [] if field in {"role_ids", "doc2query", "inferred_skills"} else "") for field in ROLE_FIELDS}
-    for field in ["role_ids", "doc2query", "inferred_skills"]:
+    _LIST_FIELDS = {"role_ids", "doc2query", "inferred_skills"}
+    shaped = {field: row.get(field, [] if field in _LIST_FIELDS else "") for field in ROLE_FIELDS}
+    for field in _LIST_FIELDS:
         if not isinstance(shaped[field], list):
             shaped[field] = [shaped[field]] if shaped[field] else []
     return shaped
@@ -143,17 +153,100 @@ def load_input_classifications(path: str | None) -> dict[str, dict[str, Any]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Role enrichment system prompt — ported from prod roles_impl.py / prompts.py.
+# Uses constrained enums for seniority_band, role_type, and role_track so the
+# LLM cannot invent free-form values.
+# ---------------------------------------------------------------------------
+ROLE_ENRICHMENT_SYSTEM_PROMPT = """You are a job title classification system. Classify the given role into structured components for a people search system. Return ONLY a JSON object.
+
+<seniority_band>
+Use EXACTLY one of these values (lowercase). Pick the single best match:
+  owner           - Standalone founder, business owner
+  partner         - GP, Managing Partner, Partner at a firm
+  c-suite         - Any C-level (CEO, CTO, CFO, CRO, CPO, CMO, CISO, etc.)
+  vice-president  - VP, SVP, EVP
+  director        - Director, Senior Director, Head of
+  principal       - Principal Engineer/PM/Designer, Distinguished Engineer
+  staff           - Staff Engineer/Designer, Staff+ IC
+  manager         - Manager (people manager, eng manager, PM managing PMs)
+  senior          - Senior IC (Senior Engineer, Senior Designer, Senior PM)
+  mid             - Mid-level IC, default for unclear seniority
+  junior          - Junior, SDR, BDR, Associate (early-career)
+  entry           - Entry-level, new grad, coordinator
+  trainee         - Intern, co-op, apprentice
+</seniority_band>
+
+<role_type>
+Use EXACTLY one of: executive, management, ic, investor, board, advisor, academic, founder
+  executive  - VP+ leadership
+  management - People managers (EM, Sales Manager, etc.)
+  ic         - Individual contributor
+  investor   - VC, PE, angel investor
+  board      - Board member, board director
+  advisor    - Advisor, consultant
+  academic   - Professor, researcher, postdoc, student
+  founder    - Founder, co-founder
+</role_type>
+
+<role_track>
+Use EXACTLY one of these when the function is clear, or null if ambiguous:
+  business_dev, communications, consulting, customer_service, data, design,
+  education, engineering, finance, general, health, hospitality, human_resources,
+  legal, marketing, marketplace, media, operations, product, public_relations,
+  real_estate, retail, sales, security, strategy, technology, trades
+</role_track>
+
+<role_ids>
+Return an array of snake_case role identifiers. Examples:
+  software_engineer, backend_engineer, frontend_engineer, full_stack_engineer,
+  ml_engineer, data_engineer, data_scientist, devops_engineer, security_engineer,
+  mobile_engineer, qa_engineer, embedded_engineer, solutions_engineer, architect,
+  research_scientist, product_manager, product_designer, ux_designer,
+  engineering_manager, chief_technology_officer, chief_executive_officer,
+  chief_product_officer, chief_financial_officer, chief_marketing_officer,
+  vice_president, director, founder, account_executive, sdr, recruiter,
+  marketing_manager, financial_analyst, hr_manager, legal_counsel,
+  operations_manager, project_manager, technical_program_manager
+For compound titles (e.g. "Founder & CTO"), include ALL roles: ["founder", "chief_technology_officer"]
+"Founding Engineer" is NOT a founder — they are an early employee: ["software_engineer"]
+</role_ids>
+
+<output_schema>
+{
+  "role_ids": ["software_engineer"],
+  "seniority_band": "senior",
+  "role_type": "ic",
+  "role_track": "engineering",
+  "specialization": "backend" or null,
+  "cluster": "engineering",
+  "doc2query": ["senior software engineer", "senior backend engineer", ...],
+  "inferred_skills": ["Python", "distributed systems", ...],
+  "semantic_text": "30-40 word factual description of what this role does. No hedging."
+}
+</output_schema>
+
+<rules>
+- Use EXACT enum values for seniority_band, role_type, and role_track. Do not invent new values.
+- Expand all acronyms: SWE→Software Engineer, PM→Product Manager, EM→Engineering Manager, MTS→Member of Technical Staff
+- Member of Technical Staff (MTS) = software_engineer, seniority depends on level context (default: mid)
+- "Staff" prefix = staff seniority (Staff SWE, Staff Designer)
+- "Principal" prefix = principal seniority
+- "Senior" prefix = senior seniority
+- VP of X = vice-president seniority, executive role_type
+- Director of X = director seniority, management role_type (or executive if very senior)
+- Head of X = director seniority
+- "Founding Engineer" = senior seniority, ic role_type, NOT a founder
+- doc2query: max 5 search queries. Include title variations, abbreviations, related terms.
+- inferred_skills: max 8 skills. Only include if clearly relevant to the role.
+- semantic_text: 30-40 word factual description. NO hedging (likely, possibly, unclear). State what they do.
+- If company context is provided, use it to infer domain-specific skills and specialization.
+</rules>"""
+
+
 def role_prompt(role: dict[str, Any]) -> list[dict[str, str]]:
     return [
-        {
-            "role": "system",
-            "content": (
-                "Enrich a professional role for Aleph people search. Return only JSON with keys: "
-                "role_ids (array of stable snake_case taxonomy IDs), seniority_band, role_track, role_type, "
-                "specialization, cluster, doc2query (array of search expansions), inferred_skills (array). "
-                "Keep JSON compact: doc2query max 5 strings and inferred_skills max 12 strings."
-            ),
-        },
+        {"role": "system", "content": ROLE_ENRICHMENT_SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(role, ensure_ascii=False, sort_keys=True)},
     ]
 
@@ -270,6 +363,7 @@ def merge_role(base: dict[str, Any], enrichment: dict[str, Any]) -> dict[str, An
         "specialization": enrichment.get("specialization", ""),
         "doc2query": enrichment.get("doc2query") or [],
         "inferred_skills": enrichment.get("inferred_skills") or [],
+        "semantic_text": clean(enrichment.get("semantic_text")),
     }
     return shape_role(row)
 
