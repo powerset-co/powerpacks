@@ -780,25 +780,48 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     # Pre-fetch RapidAPI company details for all companies in the input
     # so the LLM has real descriptions, headcounts, and industries.
-    rapidapi_lookup: dict[str, dict[str, Any]] = {}
+    # Build a name→rapidapi_id lookup from the input, then fetch profiles.
+    rapidapi_lookup: dict[str, dict[str, Any]] = {}  # rapidapi_id → response
+    rapidapi_name_to_id: dict[str, str] = {}  # norm_name → rapidapi_id
     if provider == "openai" and allow_paid:
         rapid_key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
         if rapid_key:
             from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import (
                 fetch_company_details_batch,
             )
-            # Collect unique rapidapi_company_ids from input.
-            company_ids: list[str] = []
+            # Collect unique rapidapi_company_ids from the input.
+            # Try the input JSONL first; fall back to the people CSV ledger.
+            unique_ids: dict[str, str] = {}  # rapidapi_id → company_name
             for row in read_jsonl(input_path):
                 rid = clean(row.get("rapidapi_company_id"))
-                if rid and rid not in rapidapi_lookup:
-                    company_ids.append(rid)
-            if company_ids:
-                sys.stderr.write(f"[enrich-companies] fetching {len(company_ids)} company profiles from RapidAPI\n")
+                name = norm_name(row.get("company_name"))
+                if rid and rid not in unique_ids:
+                    unique_ids[rid] = name
+                    rapidapi_name_to_id[name] = rid
+            # If input JSONL had no IDs, scan the people CSV (passed via --rapidapi-people-csv).
+            if not unique_ids:
+                csv_path = getattr(args, "rapidapi_people_csv", None)
+                if csv_path:
+                    candidate_csv = Path(csv_path)
+                    if candidate_csv.exists():
+                        import csv as _csv
+                        with open(candidate_csv, newline="", encoding="utf-8") as fh:
+                            for prow in _csv.DictReader(fh):
+                                for exp in json.loads(prow.get("work_experiences", "[]") or "[]"):
+                                    if not isinstance(exp, dict):
+                                        continue
+                                    rid = clean(exp.get("rapidapi_company_id"))
+                                    name = norm_name(exp.get("company_name"))
+                                    if rid and name and rid not in unique_ids:
+                                        unique_ids[rid] = name
+                                        rapidapi_name_to_id[name] = rid
+            if unique_ids:
+                sys.stderr.write(f"[enrich-companies] fetching {len(unique_ids)} company profiles from RapidAPI\n")
                 rapidapi_lookup = fetch_company_details_batch(
-                    company_ids, api_key=rapid_key, rpm_limit=300,
+                    list(unique_ids.keys()), api_key=rapid_key, rpm_limit=300,
                 )
-                sys.stderr.write(f"[enrich-companies] fetched {sum(1 for v in rapidapi_lookup.values() if not v.get('error'))} company profiles\n")
+                ok = sum(1 for v in rapidapi_lookup.values() if not v.get("error"))
+                sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(unique_ids)} company profiles\n")
 
     def flush_output(force: bool = False) -> dict[str, Any] | None:
         nonlocal batch, chunks_this_run
@@ -828,14 +851,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return None
         pending = paid_pending
         paid_pending = []
-        # Fetch RapidAPI company details for richer LLM context.
+        # Resolve RapidAPI company context for richer LLM input.
         rapidapi_contexts: list[dict[str, Any]] = []
-        if rapidapi_lookup:
+        if rapidapi_lookup and rapidapi_name_to_id:
             from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import (
                 extract_company_context,
             )
             for shaped in pending:
-                rid = shaped.get("_rapidapi_company_id", "")
+                name = norm_name(shaped.get("company_name"))
+                rid = rapidapi_name_to_id.get(name, "")
                 raw_resp = rapidapi_lookup.get(rid)
                 rapidapi_contexts.append(extract_company_context(raw_resp) if raw_resp else {})
         try:
@@ -920,6 +944,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--base-url")
     run_p.add_argument("--force", action="store_true")
     run_p.add_argument("--stop-after-chunks", type=int)
+    run_p.add_argument("--rapidapi-people-csv", default=None, help="People CSV with rapidapi_company_id in work_experiences for company profile fetch")
     run_p.set_defaults(func=run)
     status_p = sub.add_parser("status")
     status_p.add_argument("--output-dir", required=True)

@@ -1228,6 +1228,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
         base_url=ledger.get("company_openai_base_url"),
         force=False,
         stop_after_chunks=None,
+        rapidapi_people_csv=ledger.get("input"),
     ))
     artifacts_out = {
         "companies_raw": str(ps["companies_raw"]),
