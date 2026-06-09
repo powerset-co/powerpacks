@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Callable
@@ -30,7 +31,7 @@ from packs.indexing.lib.contracts import (  # noqa: E402
     validate_jsonl,
 )
 from packs.indexing.lib.io import atomic_write_text, emit_json, read_jsonl, write_json, write_jsonl  # noqa: E402
-from packs.indexing.lib.ledger import load_ledger, mark_step, save_ledger  # noqa: E402
+from packs.indexing.lib.ledger import load_ledger, mark_step, now_iso, save_ledger  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import (  # noqa: E402
     env_or_profile_int,
     openai_usage_tier_profile,
@@ -132,6 +133,34 @@ def stats_path(ledger: dict[str, Any], name: str) -> Path:
 
 def write_stats(ledger: dict[str, Any], name: str, payload: dict[str, Any]) -> None:
     write_json(stats_path(ledger, name), payload)
+
+
+def add_timing_stats(stats: dict[str, Any], *, started_at: str, started_perf: float) -> dict[str, Any]:
+    completed_at = now_iso()
+    elapsed = max(0.0, time.perf_counter() - started_perf)
+    return {
+        **stats,
+        "timing": {
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "duration_seconds": round(elapsed, 3),
+        },
+    }
+
+
+def ledger_timing_summary(ledger: dict[str, Any]) -> dict[str, Any]:
+    stages: dict[str, Any] = {}
+    total = 0.0
+    for step in ledger.get("steps", []) or []:
+        if not isinstance(step, dict):
+            continue
+        timing = step.get("stats", {}).get("timing") if isinstance(step.get("stats"), dict) else None
+        if not isinstance(timing, dict):
+            continue
+        duration = float(timing.get("duration_seconds") or 0.0)
+        stages[str(step.get("id") or "")] = timing
+        total += duration
+    return {"total_duration_seconds": round(total, 3), "stages": stages}
 
 
 def write_json_if_changed(path: str | Path, payload: Any) -> bool:
@@ -1143,6 +1172,8 @@ def step_roles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, s
             "checkpoint_every": checkpoint_every,
             "provider": role_provider,
         }
+        if isinstance(manifest.get("timings"), dict):
+            stats["subtimings"] = manifest["timings"]
         write_stats(ledger, "build_roles", stats)
         raise PipelinePartial("build_roles", artifacts_out, stats)
 
@@ -1168,6 +1199,8 @@ def step_roles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, s
         "checkpointed": True,
         "provider_equivalence": manifest.get("provider_equivalence", "shape_compatible_not_tlm_equivalent"),
     }
+    if isinstance(manifest.get("timings"), dict):
+        stats["subtimings"] = manifest["timings"]
     write_stats(ledger, "build_roles", stats)
     return artifacts_out, stats
 
@@ -1250,7 +1283,7 @@ def _run_embedding_stage(
 
 def _embedding_stats(result: dict[str, Any], ledger: dict[str, Any]) -> dict[str, Any]:
     counts = result.get("counts", {}) if isinstance(result.get("counts"), dict) else {}
-    return {
+    stats = {
         "status": result.get("status", "completed"),
         "provider": result.get("provider") or ledger.get("embedding_provider") or "openai",
         "dimension": 1536,
@@ -1262,6 +1295,9 @@ def _embedding_stats(result: dict[str, Any], ledger: dict[str, Any]) -> dict[str
         "chunks_written": int(counts.get("chunks_written", result.get("chunks_written_total", 0)) or 0),
         "checkpoint_every": int(result.get("checkpoint_every") or ledger.get("checkpoint_every") or 1000),
     }
+    if isinstance(result.get("timings"), dict):
+        stats["subtimings"] = result["timings"]
+    return stats
 
 
 def step_role_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
@@ -1439,8 +1475,10 @@ def _company_corpus_to_record(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    raw_started = time.perf_counter()
     raw_corpus = build_company_corpus(read_jsonl(ps["flattened"]), ledger.get("default_operator_id"))
     write_jsonl(ps["companies_raw"], raw_corpus)
+    raw_seconds = round(time.perf_counter() - raw_started, 3)
     artifact_path = _cache_path(ledger, "company_input_classifications", "company/companies_corpus_v3.jsonl")
     provider = "artifact" if artifact_path else str(ledger.get("company_provider") or "openai")
     if provider not in {"artifact", "openai", "llm"}:
@@ -1448,6 +1486,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
     if provider in {"openai", "llm"} and not ledger.get("allow_paid_company_provider"):
         raise SystemExit(f"company provider '{provider}' requires --allow-paid-company-provider or --company-input-classifications; no paid API was called")
     checkpoint_every = paid_checkpoint_every(ledger) if ledger.get("allow_paid_company_provider") else int(ledger.get("checkpoint_every") or 1000)
+    enrichment_started = time.perf_counter()
     manifest = enrich_companies_checkpointed.run(Namespace(
         input=str(ps["companies_raw"]),
         output=str(ps["companies_corpus_v3"]),
@@ -1466,6 +1505,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
         force=False,
         stop_after_chunks=None,
     ))
+    enrichment_seconds = round(time.perf_counter() - enrichment_started, 3)
     artifacts_out = {
         "companies_raw": str(ps["companies_raw"]),
         "companies_corpus_v3": str(ps["companies_corpus_v3"]),
@@ -1479,10 +1519,16 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
             "checkpoint": manifest.get("checkpoint"),
             "chunks_written": int(manifest.get("chunks_written_total", 0) or 0),
             "input_rows_processed": int(manifest.get("input_rows_processed", 0) or 0),
+            "subtimings": {
+                "raw_corpus_seconds": raw_seconds,
+                "enrichment_stage_seconds": enrichment_seconds,
+                "enrichment_manifest": manifest.get("timings", {}) if isinstance(manifest.get("timings"), dict) else {},
+            },
         }
         write_stats(ledger, "build_company_corpus", stats)
         raise PipelinePartial("build_company_corpus", artifacts_out, stats)
 
+    postprocess_started = time.perf_counter()
     allowed_by_urn = {
         str(row.get("id") or row.get("company_urn")): row.get("allowed_operator_ids") or [ledger.get("default_operator_id") or "local:user"]
         for row in raw_corpus
@@ -1511,6 +1557,12 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
         "artifact_misses": int(counts.get("artifact_misses", 0) or 0),
         "paid_calls": int(counts.get("paid_calls", 0) or 0),
         "defaulted_numeric_fields": {"companies": count_defaulted_numeric(record_inputs, contract)},
+        "subtimings": {
+            "raw_corpus_seconds": raw_seconds,
+            "enrichment_stage_seconds": enrichment_seconds,
+            "postprocess_contract_hash_seconds": round(time.perf_counter() - postprocess_started, 3),
+            "enrichment_manifest": manifest.get("timings", {}) if isinstance(manifest.get("timings"), dict) else {},
+        },
     }
     write_stats(ledger, "build_company_corpus", stats)
     artifacts_out["companies"] = str(ps["companies_records"])
@@ -1922,19 +1974,30 @@ def execute(ledger_path: Path) -> dict[str, Any]:
         current = next(item for item in ledger["steps"] if item["id"] == step)
         if current.get("status") == "completed":
             continue
+        step_started_at = now_iso()
+        step_started_perf = time.perf_counter()
+        current.update({"status": "running", "started_at": step_started_at, "updated_at": step_started_at})
+        ledger["status"] = "running"
+        save_ledger(ledger_path, ledger)
         print(f"[build-processing] start {step}", file=sys.stderr, flush=True)
         try:
             artifacts, stats = STEP_FUNCTIONS[step](ledger, ps)
         except PipelinePartial as partial:
+            partial.stats = add_timing_stats(partial.stats, started_at=step_started_at, started_perf=step_started_perf)
             ledger = mark_step(ledger_path, ledger, partial.step_id, "partial", artifacts=partial.artifacts, stats=partial.stats)
             ledger["status"] = "partial"
+            ledger["timings"] = ledger_timing_summary(ledger)
             save_ledger(ledger_path, ledger)
-            print(f"[build-processing] partial {partial.step_id}", file=sys.stderr, flush=True)
+            print(f"[build-processing] partial {partial.step_id} in {partial.stats['timing']['duration_seconds']:.3f}s", file=sys.stderr, flush=True)
             return ledger
+        stats = add_timing_stats(stats, started_at=step_started_at, started_perf=step_started_perf)
         ledger = mark_step(ledger_path, ledger, step, "completed", artifacts=artifacts, stats=stats)
-        print(f"[build-processing] completed {step}", file=sys.stderr, flush=True)
+        ledger["timings"] = ledger_timing_summary(ledger)
+        save_ledger(ledger_path, ledger)
+        print(f"[build-processing] completed {step} in {stats['timing']['duration_seconds']:.3f}s", file=sys.stderr, flush=True)
     ledger["processed_person_hashes"] = commit_processed_person_hashes(ledger, ps)
     ledger["status"] = "completed"
+    ledger["timings"] = ledger_timing_summary(ledger)
     save_ledger(ledger_path, ledger)
     return ledger
 

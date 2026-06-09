@@ -21,6 +21,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -183,6 +184,11 @@ COMPANY_CLASSIFICATION_SCHEMA = {
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def add_timing(state: dict[str, Any], name: str, seconds: float) -> None:
+    timings = state.setdefault("timings", {})
+    timings[name] = round(float(timings.get(name, 0.0) or 0.0) + seconds, 3)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -567,6 +573,7 @@ def estimate_payload(input_path: Path, provider: str, artifact: dict[str, dict[s
 
 
 def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict[str, Any]:
+    finalize_started = time.perf_counter()
     chunks = sorted((output_dir / "chunks").glob("companies.*.jsonl")) if (output_dir / "chunks").exists() else []
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -578,6 +585,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
                 rows.append(row)
     rows.sort(key=lambda row: clean(row.get("company_urn")))
     atomic_write_jsonl(output_path, rows)
+    add_timing(state, "finalize_merge_write_seconds", time.perf_counter() - finalize_started)
     state["status"] = "completed"
     state["completed_at"] = now_iso()
     state["companies_written"] = len(rows)
@@ -598,6 +606,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
             "artifact_misses": state.get("artifact_misses", 0),
             "paid_calls": state.get("paid_calls", 0),
         },
+        "timings": state.get("timings", {}),
         "provider_notes": [
             "artifact replays precomputed real Aleph-shaped companies_corpus_v3 fields without spend",
             "openai/llm is an explicit --allow-paid provider path",
@@ -647,10 +656,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         nonlocal batch, chunks_this_run
         if not batch or (not force and len(batch) < int(args.checkpoint_every)):
             return None
+        chunk_started = time.perf_counter()
         chunk_index = int(state.get("chunks_written") or 0) + 1
         written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
         state["chunks_written"] = chunk_index
         state["companies_written"] = int(state.get("companies_written") or 0) + written
+        add_timing(state, "checkpoint_chunk_write_seconds", time.perf_counter() - chunk_started)
+        state_started = time.perf_counter()
+        save_state(output_dir, state)
+        add_timing(state, "checkpoint_state_write_seconds", time.perf_counter() - state_started)
         save_state(output_dir, state)
         batch = []
         chunks_this_run += 1
@@ -661,6 +675,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "chunks_written_total": state["chunks_written"],
                 "input_rows_processed": state["input_rows_processed"],
                 "companies_written": state["companies_written"],
+                "timings": state.get("timings", {}),
             }
         return None
 
@@ -672,6 +687,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         pending = paid_pending
         paid_pending = []
         try:
+            openai_started = time.perf_counter()
             enrichments = call_openai_company_classifiers(
                 pending,
                 model=getattr(args, "model", None),
@@ -680,19 +696,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 timeout=paid_timeout,
                 concurrency=paid_concurrency,
             )
+            add_timing(state, "openai_enrichment_seconds", time.perf_counter() - openai_started)
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
+        merge_started = time.perf_counter()
         for shaped, enrichment in zip(pending, enrichments):
             batch.append(merge_enrichment(shaped, enrichment))
+        add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
         state["paid_calls"] = int(state.get("paid_calls") or 0) + len(pending)
         return flush_output(force=True)
 
+    local_prepare_started = time.perf_counter()
     for idx, row in iter_unprocessed(input_path, int(state.get("input_rows_processed") or 0)):
         shaped = shape_company(row)
         cached = artifact.get(norm_name(shaped.get("company_name"))) if artifact else None
         if cached:
             try:
+                merge_started = time.perf_counter()
                 shaped = merge_enrichment(shaped, cached)
+                add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
             except RuntimeError as exc:
                 raise SystemExit(str(exc)) from exc
             state["artifact_hits"] = int(state.get("artifact_hits") or 0) + 1
@@ -707,7 +729,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if not allow_paid:
                 raise SystemExit("company provider 'openai' requires --allow-paid; no paid API was called")
             paid_pending.append(shaped)
+            add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
             partial = flush_paid()
+            local_prepare_started = time.perf_counter()
             if partial:
                 return partial
             shaped = None
@@ -715,9 +739,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             batch.append(shaped)
         state["input_rows_processed"] = idx
         if len(batch) >= int(args.checkpoint_every):
+            add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
             partial = flush_paid(force=True) or flush_output()
+            local_prepare_started = time.perf_counter()
             if partial:
                 return partial
+    add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
     partial = flush_paid(force=True)
     if partial:
         return partial

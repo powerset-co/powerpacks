@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -36,6 +37,11 @@ DEFAULT_OPENAI_CONCURRENCY = 4
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def add_timing(state: dict[str, Any], name: str, seconds: float) -> None:
+    timings = state.setdefault("timings", {})
+    timings[name] = round(float(timings.get(name, 0.0) or 0.0) + seconds, 3)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -263,6 +269,7 @@ def copy_fields(record: dict[str, Any], fields: str) -> dict[str, Any]:
 
 
 def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict[str, Any]:
+    finalize_started = time.perf_counter()
     chunks = sorted((output_dir / "chunks").glob("embeddings.*.jsonl")) if (output_dir / "chunks").exists() else []
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -274,6 +281,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
                 rows.append(row)
     rows.sort(key=lambda row: clean(row.get("id")))
     atomic_write_jsonl(output_path, rows)
+    add_timing(state, "finalize_merge_write_seconds", time.perf_counter() - finalize_started)
     state["status"] = "completed"
     state["completed_at"] = now_iso()
     state["embeddings_written"] = len(rows)
@@ -295,6 +303,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
             "artifact_misses": state.get("artifact_misses", 0),
             "paid_calls": state.get("paid_calls", 0),
         },
+        "timings": state.get("timings", {}),
     }
     write_json(output_dir / "manifest.json", manifest)
     return manifest
@@ -372,8 +381,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         nonlocal pending, chunks_this_run
         if not pending:
             return
+        flush_started = time.perf_counter()
         outputs: list[dict[str, Any]] = []
         if input_embeddings:
+            replay_started = time.perf_counter()
             missing: list[tuple[str, str, dict[str, Any]]] = []
             for rid, text, copied in pending:
                 embedding = input_embeddings.get(rid)
@@ -383,12 +394,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 else:
                     state["artifact_misses"] = int(state.get("artifact_misses") or 0) + 1
                     missing.append((rid, text, copied))
+            add_timing(state, "artifact_replay_seconds", time.perf_counter() - replay_started)
             if missing:
                 if not allow_paid:
                     raise SystemExit(f"missing input embedding for id={missing[0][0]}")
                 if not api_key:
                     raise SystemExit("embedding provider 'openai' requires OPENAI_API_KEY or --api-key; no paid API was called")
                 groups = [missing[start : start + api_batch_size] for start in range(0, len(missing), api_batch_size)]
+                api_started = time.perf_counter()
                 embedding_groups = openai_embedding_batches(
                     [[item[1] for item in group] for group in groups],
                     api_key=api_key,
@@ -397,12 +410,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     dimension=dimension,
                     concurrency=concurrency,
                 )
+                add_timing(state, "openai_embedding_seconds", time.perf_counter() - api_started)
                 for group, embeddings in zip(groups, embedding_groups):
                     state["paid_calls"] = int(state.get("paid_calls") or 0) + len(group)
                     for (rid, text, copied), embedding in zip(group, embeddings):
                         outputs.append({"id": rid, "embedding": embedding, "text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(), **copied})
         else:
             groups = [pending[start : start + api_batch_size] for start in range(0, len(pending), api_batch_size)]
+            api_started = time.perf_counter()
             embedding_groups = openai_embedding_batches(
                 [[item[1] for item in group] for group in groups],
                 api_key=api_key,
@@ -411,18 +426,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 dimension=dimension,
                 concurrency=concurrency,
             )
+            add_timing(state, "openai_embedding_seconds", time.perf_counter() - api_started)
             for group, embeddings in zip(groups, embedding_groups):
                 state["paid_calls"] = int(state.get("paid_calls") or 0) + len(group)
                 for (rid, text, copied), embedding in zip(group, embeddings):
                     outputs.append({"id": rid, "embedding": embedding, "text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(), **copied})
+        chunk_started = time.perf_counter()
         chunk_index = int(state.get("chunks_written") or 0) + 1
         written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), outputs)
         state["chunks_written"] = chunk_index
         state["embeddings_written"] = int(state.get("embeddings_written") or 0) + written
+        add_timing(state, "checkpoint_chunk_write_seconds", time.perf_counter() - chunk_started)
+        add_timing(state, "flush_total_seconds", time.perf_counter() - flush_started)
+        state_started = time.perf_counter()
+        save_state(output_dir, state)
+        add_timing(state, "checkpoint_state_write_seconds", time.perf_counter() - state_started)
         save_state(output_dir, state)
         pending = []
         chunks_this_run += 1
 
+    local_prepare_started = time.perf_counter()
     for idx, record in iter_unprocessed(input_path, int(state.get("input_rows_processed") or 0)):
         rid = clean(record.get(args.id_field))
         if rid:
@@ -430,9 +453,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             pending.append((rid, text, copy_fields(record, str(args.copy_fields or ""))))
         state["input_rows_processed"] = idx
         if len(pending) >= int(args.checkpoint_every):
+            add_timing(state, "local_input_prepare_seconds", time.perf_counter() - local_prepare_started)
             flush()
+            local_prepare_started = time.perf_counter()
             if args.stop_after_chunks and chunks_this_run >= args.stop_after_chunks:
-                return {"status": "partial", "checkpoint": str(checkpoint_path(output_dir)), "chunks_written_total": state["chunks_written"], "input_rows_processed": state["input_rows_processed"], "embeddings_written": state["embeddings_written"]}
+                return {"status": "partial", "checkpoint": str(checkpoint_path(output_dir)), "chunks_written_total": state["chunks_written"], "input_rows_processed": state["input_rows_processed"], "embeddings_written": state["embeddings_written"], "timings": state.get("timings", {})}
+    add_timing(state, "local_input_prepare_seconds", time.perf_counter() - local_prepare_started)
     flush()
     return finalize(output_dir, output_path, state)
 

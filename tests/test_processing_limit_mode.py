@@ -2,8 +2,13 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
-from packs.indexing.lib.io import read_jsonl, write_json, write_jsonl
+from packs.indexing.lib.io import read_json, read_jsonl, write_json, write_jsonl
+from packs.indexing.primitives.build_processing_pipeline import build_processing_pipeline as pipeline
+from packs.indexing.primitives.embed_records_checkpointed import embed_records_checkpointed
+from packs.indexing.primitives.enrich_companies_checkpointed import enrich_companies_checkpointed
+from packs.indexing.primitives.enrich_roles_checkpointed import enrich_roles_checkpointed
 from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import (
     compute_record_diff,
     compute_record_hash,
@@ -21,6 +26,30 @@ from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeli
 
 
 class ProcessingLimitModeTest(unittest.TestCase):
+    def company_artifact_row(self, name: str = "Acme") -> dict:
+        return {
+            "company_urn": "company:acme",
+            "company_name": name,
+            "original_name": name,
+            "name_aliases": [name],
+            "description": "AI tools",
+            "entity_types": ["venture_backed_startup"],
+            "sector_types": ["ai_ml"],
+            "technology_types": ["agents"],
+            "customer_type": "Business (B2B)",
+            "funding_stage": "SEED",
+            "company_type": "STARTUP",
+            "ownership_status": "PRIVATE",
+            "stage": "early",
+            "accelerators": [],
+            "yc_batches": [],
+            "confidence_score": 0.9,
+            "doc2query": [f"{name} AI company"],
+            "d2q_text": f"{name} AI company",
+            "word_text": "AI tools",
+            "semantic_text": f"{name} builds AI tools",
+        }
+
     def test_flatten_output_upserts_and_preserves_stale_rows_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "unified/flattened_people.jsonl"
@@ -372,6 +401,240 @@ class ProcessingLimitModeTest(unittest.TestCase):
                 self.assertTrue(path.exists(), path)
             for path in remove_files:
                 self.assertFalse(path.exists(), path)
+
+    def test_execute_records_per_stage_timing_stats(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger_path = root / "ledger.json"
+            write_json(ledger_path, {"run_dir": str(root), "status": "pending", "steps": [{"id": "timed_step", "status": "pending"}]})
+
+            old_steps = pipeline.STEPS
+            old_functions = pipeline.STEP_FUNCTIONS
+            old_commit = pipeline.commit_processed_person_hashes
+            try:
+                pipeline.STEPS = ["timed_step"]
+                pipeline.STEP_FUNCTIONS = {"timed_step": lambda ledger, ps: ({"artifact": "path"}, {"rows": 1})}
+                pipeline.commit_processed_person_hashes = lambda ledger, ps: {"hashes_written": False}
+
+                ledger = pipeline.execute(ledger_path)
+            finally:
+                pipeline.STEPS = old_steps
+                pipeline.STEP_FUNCTIONS = old_functions
+                pipeline.commit_processed_person_hashes = old_commit
+
+        step = ledger["steps"][0]
+        timing = step["stats"]["timing"]
+        self.assertEqual(ledger["status"], "completed")
+        self.assertEqual(step["status"], "completed")
+        self.assertIn("started_at", timing)
+        self.assertIn("completed_at", timing)
+        self.assertIsInstance(timing["duration_seconds"], float)
+        self.assertIn("timed_step", ledger["timings"]["stages"])
+        self.assertGreaterEqual(ledger["timings"]["total_duration_seconds"], 0.0)
+
+    def test_company_enrichment_manifest_contains_subtimings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "companies.raw.jsonl"
+            output_path = root / "companies_corpus_v3.jsonl"
+            artifact_path = root / "artifact.jsonl"
+            write_jsonl(input_path, [{"company_urn": "company:acme", "company_name": "Acme"}])
+            write_jsonl(artifact_path, [self.company_artifact_row()])
+
+            manifest = enrich_companies_checkpointed.run(SimpleNamespace(
+                input=str(input_path),
+                output=str(output_path),
+                output_dir=str(root / "checkpoints"),
+                checkpoint_every=1,
+                provider="artifact",
+                artifact_path=str(artifact_path),
+                artifact_missing_policy="error",
+                dry_run=False,
+                estimate=False,
+                allow_paid=False,
+                model=None,
+                concurrency=None,
+                api_key=None,
+                base_url=None,
+                force=True,
+                stop_after_chunks=None,
+            ))
+
+        self.assertEqual(manifest["status"], "completed")
+        self.assertIn("timings", manifest)
+        self.assertIn("shape_cache_prepare_seconds", manifest["timings"])
+        self.assertIn("checkpoint_chunk_write_seconds", manifest["timings"])
+        self.assertIn("checkpoint_state_write_seconds", manifest["timings"])
+        self.assertIn("finalize_merge_write_seconds", manifest["timings"])
+        self.assertIn("merge_normalize_seconds", manifest["timings"])
+
+    def test_embedding_manifest_contains_subtimings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "records.jsonl"
+            output_path = root / "embeddings.jsonl"
+            embeddings_path = root / "input_embeddings.jsonl"
+            write_jsonl(input_path, [{"id": "one", "text": "hello world"}])
+            write_jsonl(embeddings_path, [{"id": "one", "embedding": [0.1, 0.2]}])
+
+            manifest = embed_records_checkpointed.run(SimpleNamespace(
+                input=str(input_path),
+                output=str(output_path),
+                output_dir=str(root / "checkpoints"),
+                id_field="id",
+                text_fields="text",
+                copy_fields="id,text",
+                checkpoint_every=1,
+                provider="openai",
+                input_embeddings=str(embeddings_path),
+                input_id_field="id",
+                input_embedding_field="embedding",
+                allow_paid=False,
+                api_key=None,
+                base_url=None,
+                model=None,
+                concurrency=None,
+                dimension=1536,
+                api_batch_size=128,
+                dry_run=False,
+                force=True,
+                stop_after_chunks=None,
+            ))
+
+        self.assertEqual(manifest["status"], "completed")
+        self.assertIn("timings", manifest)
+        self.assertIn("local_input_prepare_seconds", manifest["timings"])
+        self.assertIn("artifact_replay_seconds", manifest["timings"])
+        self.assertIn("checkpoint_chunk_write_seconds", manifest["timings"])
+        self.assertIn("checkpoint_state_write_seconds", manifest["timings"])
+        self.assertIn("finalize_merge_write_seconds", manifest["timings"])
+
+    def test_partial_checkpoints_persist_state_write_subtiming(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            flattened = root / "flattened_people.jsonl"
+            write_jsonl(flattened, [{"id": "person-1", "work_experiences": [{"title_hash": "title:founder", "title": "Founder", "company_name": "Acme"}]}])
+            role_base = enrich_roles_checkpointed.collect_role_inputs(flattened)[0]
+            role_artifact = root / "role_artifact.jsonl"
+            write_jsonl(role_artifact, [{
+                **role_base,
+                "role_ids": ["founder"],
+                "seniority_band": "owner",
+                "role_track": "founder",
+                "role_type": "founder",
+                "cluster": "founder",
+                "doc2query": ["founder"],
+                "inferred_skills": ["fundraising"],
+            }])
+            enrich_roles_checkpointed.run(SimpleNamespace(
+                flattened=str(flattened),
+                output_dir=str(root / "roles"),
+                checkpoint_every=1,
+                provider="openai",
+                input_classifications=str(role_artifact),
+                api_key=None,
+                base_url=None,
+                model=None,
+                concurrency=None,
+                openai_usage_tier=None,
+                allow_paid=False,
+                dry_run=False,
+                force=True,
+                stop_after_chunks=1,
+            ))
+            role_state = read_json(root / "roles/checkpoint.json")
+
+            company_input = root / "companies.raw.jsonl"
+            company_output = root / "companies_corpus_v3.jsonl"
+            company_artifact = root / "company_artifact.jsonl"
+            write_jsonl(company_input, [{"company_urn": "company:acme", "company_name": "Acme"}])
+            write_jsonl(company_artifact, [self.company_artifact_row()])
+            enrich_companies_checkpointed.run(SimpleNamespace(
+                input=str(company_input),
+                output=str(company_output),
+                output_dir=str(root / "company_checkpoints"),
+                checkpoint_every=1,
+                provider="artifact",
+                artifact_path=str(company_artifact),
+                artifact_missing_policy="error",
+                dry_run=False,
+                estimate=False,
+                allow_paid=False,
+                model=None,
+                concurrency=None,
+                openai_usage_tier=None,
+                api_key=None,
+                base_url=None,
+                force=True,
+                stop_after_chunks=1,
+            ))
+            company_state = read_json(root / "company_checkpoints/checkpoint.json")
+
+            embedding_input = root / "records.jsonl"
+            embedding_output = root / "embeddings.jsonl"
+            embedding_artifact = root / "input_embeddings.jsonl"
+            write_jsonl(embedding_input, [{"id": "one", "text": "hello world"}])
+            write_jsonl(embedding_artifact, [{"id": "one", "embedding": [0.1, 0.2]}])
+            embed_records_checkpointed.run(SimpleNamespace(
+                input=str(embedding_input),
+                output=str(embedding_output),
+                output_dir=str(root / "embedding_checkpoints"),
+                id_field="id",
+                text_fields="text",
+                copy_fields="id,text",
+                checkpoint_every=1,
+                provider="openai",
+                input_embeddings=str(embedding_artifact),
+                input_id_field="id",
+                input_embedding_field="embedding",
+                allow_paid=False,
+                api_key=None,
+                base_url=None,
+                model=None,
+                concurrency=None,
+                openai_usage_tier=None,
+                dimension=1536,
+                api_batch_size=128,
+                dry_run=False,
+                force=True,
+                stop_after_chunks=1,
+            ))
+            embedding_state = read_json(root / "embedding_checkpoints/checkpoint.json")
+
+        self.assertIn("checkpoint_state_write_seconds", role_state["timings"])
+        self.assertIn("checkpoint_state_write_seconds", company_state["timings"])
+        self.assertIn("checkpoint_state_write_seconds", embedding_state["timings"])
+
+    def test_processing_company_step_surfaces_primitive_subtimings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ps = paths(root / "out")
+            artifact_path = root / "artifact.jsonl"
+            flattened = {
+                "id": "person-1",
+                "work_experiences": [{"company_name": "Acme", "company": "Acme"}],
+                "allowed_operator_ids": ["op-test"],
+            }
+            write_jsonl(ps["flattened"], [flattened])
+            write_jsonl(artifact_path, [self.company_artifact_row()])
+
+            _artifacts, stats = pipeline.step_company(
+                {
+                    "run_dir": str(root / "out"),
+                    "default_operator_id": "op-test",
+                    "checkpoint_every": 1,
+                    "company_input_classifications": str(artifact_path),
+                },
+                ps,
+            )
+
+        self.assertEqual(stats["status"], "completed")
+        self.assertIn("subtimings", stats)
+        self.assertIn("raw_corpus_seconds", stats["subtimings"])
+        self.assertIn("enrichment_stage_seconds", stats["subtimings"])
+        self.assertIn("postprocess_contract_hash_seconds", stats["subtimings"])
+        self.assertIn("shape_cache_prepare_seconds", stats["subtimings"]["enrichment_manifest"])
 
 
 if __name__ == "__main__":
