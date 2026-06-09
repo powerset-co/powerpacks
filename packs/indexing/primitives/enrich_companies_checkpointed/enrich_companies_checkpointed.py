@@ -313,7 +313,12 @@ def shape_company(row: dict[str, Any]) -> dict[str, Any]:
     }
     shaped = normalize_classification_output(shaped)
     _LIST_FIELDS = {"name_aliases", "investor_urns", "entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query", "signals_doc2query"}
-    return {key: shaped.get(key, [] if key in _LIST_FIELDS else "") for key in ALEPH_COMPANY_FIELDS}
+    out = {key: shaped.get(key, [] if key in _LIST_FIELDS else "") for key in ALEPH_COMPANY_FIELDS}
+    # Carry through rapidapi_company_id for enrichment lookup (not persisted in final output).
+    rid = clean(row.get("rapidapi_company_id"))
+    if rid:
+        out["_rapidapi_company_id"] = rid
+    return out
 
 
 def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
@@ -467,16 +472,22 @@ Anduril → entity:venture_backed_startup sector:hardware,defense_tech,robotics_
 </output>"""
 
 
-def _build_company_context(local: dict[str, Any]) -> str:
-    """Build a compact company context string for the user message."""
+def _build_company_context(local: dict[str, Any], rapidapi_context: dict[str, Any] | None = None) -> str:
+    """Build a compact company context string for the user message.
+
+    If *rapidapi_context* is provided (from ``extract_company_context``),
+    its richer fields override the sparse local record.
+    """
+    rc = rapidapi_context or {}
     parts = [f"Company: {clean(local.get('company_name', 'Unknown'))!s}"]
-    desc = clean(local.get("description"))
+    # Prefer RapidAPI description over position-description junk.
+    desc = clean(rc.get("description") or local.get("description"))
     if desc:
-        parts.append(f"Description: {desc}")
-    domain = clean(local.get("website_domain"))
+        parts.append(f"Description: {desc[:600]}")
+    domain = clean(rc.get("website") or local.get("website_domain"))
     if domain:
         parts.append(f"Website: {domain}")
-    headcount = local.get("headcount")
+    headcount = rc.get("headcount") or local.get("headcount")
     if headcount:
         parts.append(f"Headcount: {headcount}")
     funding = local.get("funding_total")
@@ -485,20 +496,33 @@ def _build_company_context(local: dict[str, Any]) -> str:
     stage = clean(local.get("funding_stage") or local.get("stage"))
     if stage and stage != "VENTURE_UNKNOWN":
         parts.append(f"Stage: {stage}")
-    city = clean(local.get("city"))
-    country = clean(local.get("country"))
+    city = clean(rc.get("city") or local.get("city"))
+    country = clean(rc.get("country") or local.get("country"))
+    state = clean(rc.get("state") or local.get("state"))
     if city or country:
-        parts.append(f"Location: {', '.join(p for p in [city, clean(local.get('state')), country] if p)}")
+        parts.append(f"Location: {', '.join(p for p in [city, state, country] if p)}")
+    founded = rc.get("founded_year") or local.get("founded_year")
+    if founded:
+        parts.append(f"Founded: {founded}")
+    company_type = clean(rc.get("company_type_raw"))
+    if company_type:
+        parts.append(f"Type: {company_type}")
+    industries = rc.get("industries") or []
+    if industries:
+        parts.append(f"Industries: {', '.join(str(i) for i in industries)}")
+    specialties = rc.get("specialties") or []
+    if specialties:
+        parts.append(f"Specialties: {', '.join(str(s) for s in specialties[:10])}")
     return "\n".join(parts)
 
 
-def openai_classification_payload(local: dict[str, Any]) -> dict[str, Any]:
+def openai_classification_payload(local: dict[str, Any], rapidapi_context: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "model": os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL),
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": COMBINED_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Classify this company:\n\n{_build_company_context(local)}"},
+            {"role": "user", "content": f"Classify this company:\n\n{_build_company_context(local, rapidapi_context)}"},
         ],
         "temperature": 0,
         "max_completion_tokens": int(os.getenv("POWERPACKS_COMPANY_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
@@ -520,8 +544,9 @@ async def call_openai_company_classifier_async(
     model: str | None,
     semaphore: asyncio.Semaphore,
     max_retries: int = 3,
+    rapidapi_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload = openai_classification_payload(local)
+    payload = openai_classification_payload(local, rapidapi_context=rapidapi_context)
     if model:
         payload["model"] = model
     async with semaphore:
@@ -560,13 +585,18 @@ async def call_openai_company_classifiers_async(
     timeout: int,
     concurrency: int,
     max_retries: int = 3,
+    rapidapi_contexts: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
     semaphore = asyncio.Semaphore(max(1, concurrency))
+    contexts = rapidapi_contexts or [{}] * len(rows)
     try:
         return await asyncio.gather(*[
-            call_openai_company_classifier_async(client, row, model=model, semaphore=semaphore, max_retries=max_retries)
-            for row in rows
+            call_openai_company_classifier_async(
+                client, row, model=model, semaphore=semaphore,
+                max_retries=max_retries, rapidapi_context=ctx or None,
+            )
+            for row, ctx in zip(rows, contexts)
         ])
     finally:
         await client.close()
@@ -581,6 +611,7 @@ def call_openai_company_classifiers(
     timeout: int | None = None,
     concurrency: int | None = None,
     max_retries: int = 3,
+    rapidapi_contexts: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -595,6 +626,7 @@ def call_openai_company_classifiers(
         timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
         concurrency=concurrency or int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY))),
         max_retries=max_retries,
+        rapidapi_contexts=rapidapi_contexts,
     ))
 
 
@@ -746,6 +778,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     paid_timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     chunks_this_run = 0
 
+    # Pre-fetch RapidAPI company details for all companies in the input
+    # so the LLM has real descriptions, headcounts, and industries.
+    rapidapi_lookup: dict[str, dict[str, Any]] = {}
+    if provider == "openai" and allow_paid:
+        rapid_key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
+        if rapid_key:
+            from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import (
+                fetch_company_details_batch,
+            )
+            # Collect unique rapidapi_company_ids from input.
+            company_ids: list[str] = []
+            for row in read_jsonl(input_path):
+                rid = clean(row.get("rapidapi_company_id"))
+                if rid and rid not in rapidapi_lookup:
+                    company_ids.append(rid)
+            if company_ids:
+                sys.stderr.write(f"[enrich-companies] fetching {len(company_ids)} company profiles from RapidAPI\n")
+                rapidapi_lookup = fetch_company_details_batch(
+                    company_ids, api_key=rapid_key, rpm_limit=300,
+                )
+                sys.stderr.write(f"[enrich-companies] fetched {sum(1 for v in rapidapi_lookup.values() if not v.get('error'))} company profiles\n")
+
     def flush_output(force: bool = False) -> dict[str, Any] | None:
         nonlocal batch, chunks_this_run
         if not batch or (not force and len(batch) < int(args.checkpoint_every)):
@@ -774,6 +828,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return None
         pending = paid_pending
         paid_pending = []
+        # Fetch RapidAPI company details for richer LLM context.
+        rapidapi_contexts: list[dict[str, Any]] = []
+        if rapidapi_lookup:
+            from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import (
+                extract_company_context,
+            )
+            for shaped in pending:
+                rid = shaped.get("_rapidapi_company_id", "")
+                raw_resp = rapidapi_lookup.get(rid)
+                rapidapi_contexts.append(extract_company_context(raw_resp) if raw_resp else {})
         try:
             enrichments = call_openai_company_classifiers(
                 pending,
@@ -782,6 +846,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 base_url=getattr(args, "base_url", None),
                 timeout=paid_timeout,
                 concurrency=paid_concurrency,
+                rapidapi_contexts=rapidapi_contexts or None,
             )
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
