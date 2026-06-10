@@ -28,6 +28,7 @@ try:
         copy_people_csv,
         csv_count,
         directory_source_account_quality,
+        import_manifest_current,
         normalize_directory_source_accounts,
         write_manifest,
     )
@@ -53,6 +54,7 @@ except ModuleNotFoundError:
         copy_people_csv,
         csv_count,
         directory_source_account_quality,
+        import_manifest_current,
         normalize_directory_source_accounts,
         write_manifest,
     )
@@ -90,6 +92,9 @@ def messages_import_diff(review_csv: Path) -> dict:
 
 
 def run(args: argparse.Namespace) -> dict:
+    current = import_manifest_current("messages", import_dir=DEFAULT_IMPORT_DIR)
+    if current:
+        return current
     read_accounts(args.accounts)
     import_dir = DEFAULT_IMPORT_DIR / "messages"
     ledger_path = import_dir / "ledger.json"
@@ -121,7 +126,7 @@ def run(args: argparse.Namespace) -> dict:
             "diff": diff,
             "directory_normalization": directory_normalization,
             "directory_quality": directory_quality,
-        })
+        }, import_dir=DEFAULT_IMPORT_DIR)
     if diff["new_rows"] > 0 and not args.confirm_import:
         return write_manifest("messages", {
             "status": "blocked_approval",
@@ -152,7 +157,7 @@ def run(args: argparse.Namespace) -> dict:
                 "new_directory_rows": diff["new_rows"],
             },
             "diff": diff,
-        })
+        }, import_dir=DEFAULT_IMPORT_DIR)
     ledger = {
         "primitive": "import_contacts_messages",
         "source": "messages",
@@ -170,7 +175,7 @@ def run(args: argparse.Namespace) -> dict:
     write_json(ledger_path, ledger)
     ok = messages_helpers.run_messages_enrichment(ledger_path, ledger)
     status = "completed" if ok else "blocked_approval" if ledger.get("blocked") else "failed"
-    people_csv = copy_people_csv("messages", str(ledger.get("artifacts", {}).get("messages_merged_people_csv") or ledger.get("artifacts", {}).get("messages_people_csv") or ""))
+    people_csv = copy_people_csv("messages", str(ledger.get("artifacts", {}).get("messages_merged_people_csv") or ledger.get("artifacts", {}).get("messages_people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
     directory_normalization = normalize_directory_source_accounts("messages") if ok else {"status": "skipped", "reason": "messages_import_not_completed"}
     directory_quality = directory_source_account_quality("messages") if ok else {"status": "skipped", "reason": "messages_import_not_completed"}
     if ok and directory_quality["status"] != "ok":
@@ -198,7 +203,7 @@ def run(args: argparse.Namespace) -> dict:
         "directory_normalization": directory_normalization,
         "directory_quality": directory_quality,
         "artifacts": ledger.get("artifacts", {}),
-    })
+    }, import_dir=DEFAULT_IMPORT_DIR)
 
 
 def build_parser() -> argparse.ArgumentParser:

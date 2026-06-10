@@ -8,14 +8,29 @@ import sys
 from pathlib import Path
 
 try:
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import emit, now_iso, read_accounts, write_json
+    from packs.ingestion.primitives.discover_contacts_pipeline.common import emit, now_iso, read_accounts, read_json, write_json
     from packs.ingestion.primitives.import_contacts_pipeline import gmail, linkedin, messages
     from packs.ingestion.primitives.import_contacts_pipeline.common import DEFAULT_ACCOUNTS, DEFAULT_IMPORT_DIR
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import emit, now_iso, read_accounts, write_json
+    from packs.ingestion.primitives.discover_contacts_pipeline.common import emit, now_iso, read_accounts, read_json, write_json
     from packs.ingestion.primitives.import_contacts_pipeline import gmail, linkedin, messages
     from packs.ingestion.primitives.import_contacts_pipeline.common import DEFAULT_ACCOUNTS, DEFAULT_IMPORT_DIR
+
+
+def stable_aggregate_signature(payload: dict) -> dict:
+    signature = dict(payload)
+    signature.pop("updated_at", None)
+    return signature
+
+
+def write_aggregate_manifest(payload: dict) -> dict:
+    manifest = DEFAULT_IMPORT_DIR / "manifest.json"
+    existing = read_json(manifest, {}) or {}
+    if isinstance(existing, dict) and stable_aggregate_signature(existing) == stable_aggregate_signature(payload):
+        return existing
+    write_json(manifest, payload)
+    return payload
 
 
 def run_sources(args: argparse.Namespace) -> dict:
@@ -38,7 +53,7 @@ def run_sources(args: argparse.Namespace) -> dict:
             break
     payload = {"status": status, "sources": results, "updated_at": now_iso()}
     if args.source == "all":
-        write_json(DEFAULT_IMPORT_DIR / "manifest.json", payload)
+        write_aggregate_manifest(payload)
     return payload
 
 

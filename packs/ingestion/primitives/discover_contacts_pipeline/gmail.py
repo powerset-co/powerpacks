@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -16,6 +17,7 @@ from typing import Any
 try:
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_MSGVAULT_DB,
+        GMAIL_INTERACTION_CALCULATION_VERSION,
         emit,
         now_iso,
         ordered_unique,
@@ -26,7 +28,7 @@ try:
         run_cmd,
         source_slug,
         write_csv_rows,
-        write_json,
+        write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
         accounts_path as configured_accounts_path,
@@ -39,6 +41,7 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_MSGVAULT_DB,
+        GMAIL_INTERACTION_CALCULATION_VERSION,
         emit,
         now_iso,
         ordered_unique,
@@ -49,7 +52,7 @@ except ModuleNotFoundError:
         run_cmd,
         source_slug,
         write_csv_rows,
-        write_json,
+        write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
         accounts_path as configured_accounts_path,
@@ -76,6 +79,8 @@ GMAIL_DISCOVERY_COLUMNS = [
     "source_channels",
 ]
 DEFAULT_GMAIL_ESTIMATE_MAX_PAGES = 4
+GMAIL_CALCULATION_FULL_RECOUNT = "full_recount"
+GMAIL_CALCULATION_INCREMENTAL_DELTA = "incremental_delta"
 
 
 def _as_list(value: Any) -> list[str]:
@@ -128,6 +133,41 @@ def _merge_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
             ensure_ascii=False,
         )
     return [{field: str(row.get(field) or "") for field in GMAIL_DISCOVERY_COLUMNS} for _, row in sorted(keyed.items())]
+
+
+def gmail_incremental_input_id(account_email: str, rows: list[dict[str, Any]]) -> str:
+    """Return a stable manifest key for an incremental child output.
+
+    Incremental rows are additive, so replaying the same child output must not
+    be merged twice. This key is derived from the account and normalized child
+    CSV rows already produced by the command; it does not create any directories
+    or require a separate batch concept.
+    """
+    normalized_rows = [
+        {field: str(row.get(field) or "") for field in GMAIL_DISCOVERY_COLUMNS}
+        for row in rows
+    ]
+    payload = {
+        "account_email": str(account_email or "").strip().lower(),
+        "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
+        "rows": sorted(normalized_rows, key=lambda row: json.dumps(row, sort_keys=True, ensure_ascii=False)),
+    }
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _same_selected_accounts(left: Any, right: list[str]) -> bool:
+    return sorted(_as_list(left)) == sorted(_as_list(right))
+
+
+def gmail_discovery_merge_plan(existing_manifest: dict[str, Any], selected_accounts: list[str], child_modes: list[str]) -> dict[str, str]:
+    if existing_manifest.get("calculation_version") != GMAIL_INTERACTION_CALCULATION_VERSION:
+        return {"mode": "full_rewrite", "reason": "calculation_version_changed"}
+    if not _same_selected_accounts(existing_manifest.get("selected_accounts"), selected_accounts):
+        return {"mode": "full_rewrite", "reason": "selected_accounts_changed"}
+    if child_modes and all(mode == GMAIL_CALCULATION_INCREMENTAL_DELTA for mode in child_modes):
+        return {"mode": "incremental_update", "reason": "children_returned_incremental_deltas"}
+    return {"mode": "full_rewrite", "reason": "children_returned_full_recounts"}
 
 
 def inputs(accounts: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -308,17 +348,41 @@ def run_gmail_apply_and_enrich(_ledger_path: Path, _ledger: dict[str, Any]) -> b
 
 
 def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any], _worker: dict[str, Any]) -> bool:
-    payload = discover(accounts_file=Path(str((ledger.get("input") or {}).get("from_accounts") or ".powerpacks/ingestion/accounts.json")))
+    input_cfg = ledger.get("input") or {}
+    payload = discover(
+        accounts_file=Path(str(input_cfg.get("from_accounts") or ".powerpacks/ingestion/accounts.json")),
+        selected_accounts=_as_list(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email") or []),
+        msgvault_db=str(input_cfg.get("msgvault_db") or ""),
+        sync_query=str(input_cfg.get("gmail_sync_query") or ""),
+        skip_msgvault_sync=bool(input_cfg.get("skip_msgvault_sync")),
+    )
     ledger.setdefault("artifacts", {})["gmail_contacts_csv"] = payload.get("contacts_csv", "")
     ledger.setdefault("artifacts", {})["gmail_linkedin_resolution_queue_csv"] = payload.get("linkedin_resolution_queue_csv", "")
     return payload.get("status") in {"completed", "skipped"}
 
 
-def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = None, **_: Any) -> dict[str, Any]:
+def discover(
+    *,
+    accounts_file: Path | None = None,
+    accounts_path: Path | None = None,
+    selected_accounts: list[str] | None = None,
+    account_email: str | None = None,
+    msgvault_db: str | None = None,
+    sync_query: str | None = None,
+    skip_msgvault_sync: bool = False,
+    **_: Any,
+) -> dict[str, Any]:
     cfg = load_config()
     accounts_file = accounts_file or accounts_path or configured_accounts_path()
     account_state = read_json(accounts_file, {}) or {}
     source_inputs = inputs(account_state, cfg)
+    explicit_accounts = ordered_unique([*(selected_accounts or []), *([account_email] if account_email else [])])
+    if explicit_accounts:
+        source_inputs["selected_accounts"] = explicit_accounts
+    if msgvault_db:
+        source_inputs["msgvault_db"] = str(Path(str(msgvault_db)).expanduser())
+    if sync_query is not None:
+        source_inputs["sync_query"] = str(sync_query or "").strip()
     contacts_csv = output_path("gmail", "contacts_csv")
     queue_csv = output_path("gmail", "linkedin_resolution_queue_csv")
     manifest_json = output_path("gmail", "manifest_json")
@@ -332,18 +396,27 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             "contacts_csv": str(contacts_csv),
             "linkedin_resolution_queue_csv": str(queue_csv),
         }
-        write_json(manifest_json, payload)
+        write_stage_manifest(manifest_json, payload)
         return payload
 
-    incoming: list[dict[str, Any]] = []
+    incoming_outputs: list[dict[str, Any]] = []
     children: list[dict[str, Any]] = []
+    child_modes: list[str] = []
     raw_root = contacts_csv.parent / "raw"
     for email in source_inputs["selected_accounts"]:
         account_raw_dir = raw_root / source_slug(email)
-        sync = sync_msgvault_account(email, source_inputs["msgvault_db"], source_inputs["sync_query"])
+        if skip_msgvault_sync:
+            sync = {
+                "status": "skipped",
+                "reason": "skip_msgvault_sync",
+                "account_email": email,
+                "query": source_inputs["sync_query"],
+            }
+        else:
+            sync = sync_msgvault_account(email, source_inputs["msgvault_db"], source_inputs["sync_query"])
         if sync["status"] == "failed":
             payload = {"status": "failed", "source": "gmail", "account_email": email, "error": sync}
-            write_json(manifest_json, payload)
+            write_stage_manifest(manifest_json, payload)
             return payload
         cmd = py_cmd(
             "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
@@ -356,37 +429,86 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
             str(account_raw_dir),
         )
         code, child, stderr = run_cmd(cmd)
+        child_mode = str(child.get("calculation_mode") or child.get("counts", {}).get("calculation_mode") or GMAIL_CALCULATION_FULL_RECOUNT) if isinstance(child, dict) else GMAIL_CALCULATION_FULL_RECOUNT
+        child_modes.append(child_mode)
         child_artifacts = child.get("artifacts") if isinstance(child, dict) else {}
         child_queue_text = str((child_artifacts or {}).get("linkedin_resolution_queue_csv") or "").strip()
         child_queue = Path(child_queue_text) if child_queue_text else None
         rows_written = 0
+        rows: list[dict[str, Any]] = []
         if child_queue and child_queue.is_file():
             _fields, rows = read_csv_rows(child_queue)
-            incoming.extend(rows)
             rows_written = len(rows)
+        incremental_input_id = gmail_incremental_input_id(email, rows)
+        incoming_outputs.append({
+            "account_email": email,
+            "calculation_mode": child_mode,
+            "incremental_input_id": incremental_input_id,
+            "rows": rows,
+        })
         children.append({
             "account_email": email,
             "sync": sync,
             "code": code,
             "status": child.get("status") if isinstance(child, dict) else "",
             "contacts": child.get("contacts") or child.get("counts", {}).get("contacts_written", "") if isinstance(child, dict) else "",
+            "calculation_mode": child_mode,
+            "incremental_input_id": incremental_input_id if child_mode == GMAIL_CALCULATION_INCREMENTAL_DELTA else "",
             "rows_read": rows_written,
             "raw_dir": str(account_raw_dir),
         })
         if code != 0:
             payload = {"status": "failed", "source": "gmail", "account_email": email, "error": stderr or child}
-            write_json(manifest_json, payload)
+            write_stage_manifest(manifest_json, payload)
             return payload
 
+    existing_manifest = read_json(manifest_json, {}) or {}
+    merge_plan = gmail_discovery_merge_plan(existing_manifest, source_inputs["selected_accounts"], child_modes)
     existing: list[dict[str, Any]] = []
-    if contacts_csv.exists():
+    incoming: list[dict[str, Any]] = []
+    applied_incremental_inputs = _as_list(existing_manifest.get("applied_incremental_inputs"))
+    applied_incremental_input_set = set(applied_incremental_inputs)
+    skipped_incremental_inputs: list[str] = []
+    incremental_outputs = [output for output in incoming_outputs if output.get("calculation_mode") == GMAIL_CALCULATION_INCREMENTAL_DELTA]
+    if merge_plan["mode"] != "incremental_update" and incremental_outputs:
+        payload = {
+            "status": "failed",
+            "source": "gmail",
+            "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
+            "calculation_mode": merge_plan["mode"],
+            "calculation_reason": "full_rewrite_requires_full_recount_children",
+            "selected_accounts": source_inputs["selected_accounts"],
+            "child_calculation_modes": child_modes,
+            "children": children,
+        }
+        write_json(manifest_json, payload)
+        return payload
+    if merge_plan["mode"] == "incremental_update" and contacts_csv.exists():
         _fields, existing = read_csv_rows(contacts_csv)
+        for output in incoming_outputs:
+            input_id = str(output.get("incremental_input_id") or "")
+            if input_id and input_id in applied_incremental_input_set:
+                skipped_incremental_inputs.append(input_id)
+                continue
+            incoming.extend(output.get("rows") or [])
+            if input_id:
+                applied_incremental_inputs.append(input_id)
+                applied_incremental_input_set.add(input_id)
+    else:
+        for output in incoming_outputs:
+            incoming.extend(output.get("rows") or [])
     merged = _merge_rows([*existing, *incoming])
     write_csv_rows(contacts_csv, GMAIL_DISCOVERY_COLUMNS, merged)
     write_csv_rows(queue_csv, GMAIL_DISCOVERY_COLUMNS, merged)
     payload = {
         "status": "completed",
         "source": "gmail",
+        "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
+        "calculation_mode": merge_plan["mode"],
+        "calculation_reason": merge_plan["reason"],
+        "child_calculation_modes": child_modes,
+        "applied_incremental_inputs": applied_incremental_inputs,
+        "skipped_incremental_inputs": skipped_incremental_inputs,
         "contacts_csv": str(contacts_csv),
         "linkedin_resolution_queue_csv": str(queue_csv),
         "contacts": len(merged),
@@ -395,26 +517,29 @@ def discover(*, accounts_file: Path | None = None, accounts_path: Path | None = 
         "updated_at": now_iso(),
         "privacy": {
             "message_bodies_read": False,
-            "gmail_sync_ran": True,
+            "gmail_sync_ran": not skip_msgvault_sync,
             "parallel_called": False,
             "rapidapi_called": False
         },
         "children": children,
     }
-    write_json(manifest_json, payload)
-    return payload
+    return write_stage_manifest(manifest_json, payload)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Discover Gmail contacts from existing msgvault metadata")
     parser.add_argument("command", choices=["discover"])
     parser.add_argument("--accounts", type=Path, default=None)
+    parser.add_argument("--account-email", default="")
+    parser.add_argument("--msgvault-db", default="")
+    parser.add_argument("--sync-query", default=None)
+    parser.add_argument("--skip-msgvault-sync", action="store_true")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    emit(discover(accounts_file=args.accounts))
+    emit(discover(accounts_file=args.accounts, account_email=args.account_email, msgvault_db=args.msgvault_db, sync_query=args.sync_query, skip_msgvault_sync=args.skip_msgvault_sync))
     return 0
 
 

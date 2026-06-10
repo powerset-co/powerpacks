@@ -26,6 +26,7 @@ try:
         copy_people_csv,
         csv_count,
         directory_source_account_quality,
+        import_manifest_current,
         linked_gmail_accounts,
         load_legacy_discover_module,
         normalize_directory_source_accounts,
@@ -50,6 +51,7 @@ except ModuleNotFoundError:
         copy_people_csv,
         csv_count,
         directory_source_account_quality,
+        import_manifest_current,
         linked_gmail_accounts,
         load_legacy_discover_module,
         normalize_directory_source_accounts,
@@ -157,6 +159,9 @@ def auto_approve_gmail_parallel(ledger: dict[str, Any], contacts: int, reason: s
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    current = import_manifest_current("gmail", import_dir=DEFAULT_IMPORT_DIR)
+    if current:
+        return current
     accounts = read_accounts(args.accounts)
     legacy = load_legacy_discover_module()
     import_dir = DEFAULT_IMPORT_DIR / "gmail"
@@ -182,7 +187,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "artifacts": gmail_artifacts_from_discovery(),
     }
     if not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csvs") and not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csv"):
-        return write_manifest("gmail", {"status": "skipped", "reason": "no Gmail discovery queue", "artifact_dir": str(import_dir)})
+        return write_manifest("gmail", {"status": "skipped", "reason": "no Gmail discovery queue", "artifact_dir": str(import_dir)}, import_dir=DEFAULT_IMPORT_DIR)
     write_json(ledger_path, ledger)
     for func_name in ("run_gmail_directory", "run_gmail_linkedin_resolution", "run_gmail_apply_and_enrich"):
         if func_name == "run_gmail_linkedin_resolution" and not ledger.get("input", {}).get("approve_parallel_spend"):
@@ -207,11 +212,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "blocked": ledger.get("blocked"),
                 "steps": ledger.get("steps", {}),
                 "artifacts": ledger.get("artifacts", {}),
-            })
+            }, import_dir=DEFAULT_IMPORT_DIR)
         legacy.save_ledger(ledger_path, ledger)
     ledger["status"] = "completed"
     legacy.save_ledger(ledger_path, ledger)
-    people_csv = copy_people_csv("gmail", str(ledger.get("artifacts", {}).get("gmail_merged_people_csv") or ledger.get("artifacts", {}).get("gmail_people_csv") or ""))
+    people_csv = copy_people_csv("gmail", str(ledger.get("artifacts", {}).get("gmail_merged_people_csv") or ledger.get("artifacts", {}).get("gmail_people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
     directory_normalization = normalize_directory_source_accounts("gmail")
     directory_quality = directory_source_account_quality("gmail")
     if directory_quality["status"] != "ok":
@@ -229,7 +234,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "steps": ledger.get("steps", {}),
             "auto_approvals": ledger.get("auto_approvals", []),
             "artifacts": ledger.get("artifacts", {}),
-        })
+        }, import_dir=DEFAULT_IMPORT_DIR)
     return write_manifest("gmail", {
         "status": "completed",
         "ledger": str(ledger_path),
@@ -252,7 +257,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "directory_normalization": directory_normalization,
         "directory_quality": directory_quality,
         "artifacts": ledger.get("artifacts", {}),
-    })
+    }, import_dir=DEFAULT_IMPORT_DIR)
 
 
 def build_parser() -> argparse.ArgumentParser:

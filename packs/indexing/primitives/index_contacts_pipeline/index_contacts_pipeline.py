@@ -22,15 +22,20 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT))
 DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
 DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 DEFAULT_ARTIFACT_DIR = Path(".powerpacks/network-import/index/contacts")
 DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
+CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
+ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
+
+from packs.indexing.lib.openai_usage_tiers import openai_usage_tier_profile  # noqa: E402
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -39,6 +44,15 @@ def emit(payload: dict[str, Any]) -> None:
 
 def progress(message: str) -> None:
     print(f"[index-contacts] {message}", file=sys.stderr, flush=True)
+
+
+def notify_progress(progress_callback: ProgressCallback | None, stage_id: str, message: str, *, status: str = "running", payload: dict[str, Any] | None = None) -> None:
+    if progress_callback:
+        progress_callback(stage_id, message, status, payload or {})
+
+
+def selected_openai_usage_tier(args: argparse.Namespace) -> dict[str, Any]:
+    return openai_usage_tier_profile(getattr(args, "openai_usage_tier", None))
 
 
 def now_iso() -> str:
@@ -57,6 +71,32 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def file_fingerprint(path: Path) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return {"path": str(path), "exists": False}
+    stat = path.stat()
+    return {"path": str(path), "exists": True, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "sha256": sha256_file(path)}
+
+
+def input_fingerprints(paths: list[Path]) -> dict[str, Any]:
+    return {str(path): file_fingerprint(ROOT / path if not path.is_absolute() else path) for path in paths}
+
+
+def payload_without_volatile_timestamps(payload: dict[str, Any]) -> dict[str, Any]:
+    stable = dict(payload)
+    stable.pop("updated_at", None)
+    stable.pop("started_at", None)
+    return stable
+
+
+def copy_if_changed(src: Path, dst: Path) -> bool:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() and dst.is_file() and src.stat().st_size == dst.stat().st_size and sha256_file(src) == sha256_file(dst):
+        return False
+    shutil.copy2(src, dst)
+    return True
 
 
 def count_csv_rows(path: str | Path) -> int:
@@ -175,6 +215,8 @@ def processing_args(args: argparse.Namespace, *, dry_run: bool, allow_paid: bool
         "--default-operator-id",
         str(args.operator_id),
     ]
+    usage_tier = selected_openai_usage_tier(args)["tier"]
+    cmd.extend(["--openai-usage-tier", usage_tier])
     if dry_run:
         cmd.append("--dry-run")
     if allow_paid:
@@ -190,8 +232,53 @@ def duckdb_command(args: argparse.Namespace) -> list[str]:
         str(args.output_dir),
         "--operator-id",
         str(args.operator_id),
-        "--force",
+        "--incremental",
     ]
+
+
+def local_search_duckdb_path(args: argparse.Namespace) -> Path:
+    return ROOT / Path(args.output_dir) / "local-search.duckdb"
+
+
+def duckdb_input_paths(args: argparse.Namespace) -> list[Path]:
+    output_dir = ROOT / Path(args.output_dir)
+    candidates = [
+        ROOT / Path(args.people_csv),
+        output_dir / "unified/person_hashes.json",
+        output_dir / "records/person_profiles.records.jsonl",
+        output_dir / "records/people.records.jsonl",
+        output_dir / "records/summaries.records.jsonl",
+        output_dir / "records/companies.records.jsonl",
+        output_dir / "records/education.records.jsonl",
+        output_dir / "records/schools.records.jsonl",
+        output_dir / "records/people.records.hashes.json",
+        output_dir / "records/summaries.records.hashes.json",
+        output_dir / "records/companies.records.hashes.json",
+    ]
+    return [path for path in candidates if path.exists()]
+
+
+def duckdb_current_for_processing_hashes(args: argparse.Namespace) -> bool:
+    duckdb = local_search_duckdb_path(args)
+    if not duckdb.exists() or duckdb.stat().st_size <= 1024:
+        return False
+    duckdb_mtime = duckdb.stat().st_mtime_ns
+    for input_path in duckdb_input_paths(args):
+        if duckdb_mtime < input_path.stat().st_mtime_ns:
+            return False
+    return True
+
+
+def duckdb_freshness_payload(args: argparse.Namespace) -> dict[str, Any]:
+    duckdb = local_search_duckdb_path(args)
+    if not duckdb.exists() or duckdb.stat().st_size <= 1024:
+        return {"current_for_processing_hashes": False, "reason": "missing_or_small_duckdb", "checked_inputs": []}
+    duckdb_mtime = duckdb.stat().st_mtime_ns
+    inputs = duckdb_input_paths(args)
+    stale = [str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path) for path in inputs if duckdb_mtime < path.stat().st_mtime_ns]
+    if stale:
+        return {"current_for_processing_hashes": False, "reason": "stale_duckdb_inputs", "stale_inputs": stale, "checked_inputs": len(inputs)}
+    return {"current_for_processing_hashes": True, "checked_inputs": len(inputs)}
 
 
 def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
@@ -214,7 +301,7 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
             src = source_dir / name
             if src.exists():
                 dst = dest_dir / name
-                shutil.copy2(src, dst)
+                copy_if_changed(src, dst)
                 promoted[f"merged_{name}"] = str(dst.relative_to(ROOT))
 
     duckdb = artifacts.get("duckdb")
@@ -224,7 +311,7 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
             dest_dir = ROOT / ".powerpacks/network-import/duckdb"
             dest_dir.mkdir(parents=True, exist_ok=True)
             dst = dest_dir / "network.duckdb"
-            shutil.copy2(src, dst)
+            copy_if_changed(src, dst)
             promoted["network_duckdb"] = str(dst.relative_to(ROOT))
 
     duckdb_manifest = artifacts.get("duckdb_manifest")
@@ -234,7 +321,7 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
             dest_dir = ROOT / ".powerpacks/network-import/duckdb"
             dest_dir.mkdir(parents=True, exist_ok=True)
             dst = dest_dir / "manifest.json"
-            shutil.copy2(src, dst)
+            copy_if_changed(src, dst)
             promoted["network_duckdb_manifest"] = str(dst.relative_to(ROOT))
     return promoted
 
@@ -257,13 +344,18 @@ def read_manifest_people_csv(path: Path) -> Path | None:
 def fan_in_input_paths(args: argparse.Namespace) -> list[Path]:
     base = ROOT / ".powerpacks/network-import"
     candidates: list[Path] = []
-    if args.include_existing_artifacts:
-        candidates.append(base / "merged" / "people.csv")
+    source_candidates: list[Path] = []
+    expected_source_people = [base / "import" / source / "people.csv" for source in ["gmail", "linkedin", "messages"]]
     for source in ["gmail", "linkedin", "messages"]:
         manifest_people = read_manifest_people_csv(base / "import" / source / "manifest.json")
         if manifest_people:
-            candidates.append(manifest_people)
-        candidates.append(base / "import" / source / "people.csv")
+            source_candidates.append(manifest_people)
+        source_candidates.append(base / "import" / source / "people.csv")
+    source_inputs = [path for path in source_candidates if path.exists()]
+    all_expected_sources_exist = all(path.exists() for path in expected_source_people)
+    candidates.extend(source_inputs)
+    if args.include_existing_artifacts and not all_expected_sources_exist:
+        candidates.append(base / "merged" / "people.csv")
     for path in getattr(args, "input", []) or []:
         candidates.append(ROOT / Path(str(path)))
     out: list[Path] = []
@@ -280,14 +372,51 @@ def fan_in_input_paths(args: argparse.Namespace) -> list[Path]:
     return out
 
 
-def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tuple[dict[str, Any], int]:
+def fan_in_fingerprints_match(existing: Any, current: dict[str, Any]) -> bool:
+    if existing == current:
+        return True
+    if not isinstance(existing, dict):
+        return False
+    existing_keys = set(existing)
+    current_keys = set(current)
+    extra_existing = existing_keys - current_keys
+    if extra_existing and extra_existing != {CANONICAL_MERGED_PEOPLE_CSV}:
+        return False
+    return all(existing.get(key) == value for key, value in current.items())
+
+
+def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progress_callback: ProgressCallback | None = None) -> tuple[dict[str, Any], int]:
     started_at = started_at or now_iso()
     manifest_path = Path(args.manifest)
     inputs = fan_in_input_paths(args)
+    fingerprints = input_fingerprints(inputs)
+    existing = status_payload(argparse.Namespace(manifest=str(manifest_path)))
+    existing_fan_in = existing if existing.get("step") == "fan_in" else existing.get("fan_in") if isinstance(existing.get("fan_in"), dict) else {}
+    existing_artifacts = existing_fan_in.get("artifacts") if isinstance(existing_fan_in.get("artifacts"), dict) else {}
+    existing_promoted = existing_fan_in.get("promoted") if isinstance(existing_fan_in.get("promoted"), dict) else {}
+    if (
+        existing_fan_in.get("status") == "completed"
+        and existing_fan_in.get("step") == "fan_in"
+        and fan_in_fingerprints_match(existing_fan_in.get("input_fingerprints"), fingerprints)
+        and existing_artifacts.get("merged_people_csv")
+        and (ROOT / Path(str(existing_artifacts.get("merged_people_csv")))).exists()
+        and existing_promoted.get("network_duckdb")
+        and (ROOT / Path(str(existing_promoted.get("network_duckdb")))).exists()
+    ):
+        payload = {
+            **existing_fan_in,
+            "openai_usage_tier": selected_openai_usage_tier(args),
+            "noop": True,
+            "reason": "fan_in_inputs_unchanged",
+        }
+        notify_progress(progress_callback, "merge_network", "Source people merge is current", status="completed", payload=payload.get("merge") if isinstance(payload.get("merge"), dict) else payload)
+        notify_progress(progress_callback, "network_duckdb", "Contact lookup database is current", status="completed", payload=payload.get("network_duckdb") if isinstance(payload.get("network_duckdb"), dict) else payload)
+        return payload, 0
     if not inputs:
         payload = {
             "status": "not_ready",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "fan_in",
             "reason": "missing_import_people_csvs",
             "inputs": [],
@@ -300,14 +429,17 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tu
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "merge_network", "No source people CSVs found to merge", status="failed", payload=payload)
         return payload, 0
 
     merge_cmd = merge_command(args, inputs)
+    notify_progress(progress_callback, "merge_network", "Merging source people CSVs", payload={"inputs": [str(path) for path in inputs]})
     merge_code, merge_payload, merge_stderr = run_json_command(merge_cmd, timeout=60 * 60)
     if merge_code != 0:
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "merge_network_sources",
             "command": command_text(merge_cmd),
             "inputs": [str(path) for path in inputs],
@@ -317,14 +449,18 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tu
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "merge_network", "Source people merge failed", status="failed", payload=payload)
         return payload, 1
+    notify_progress(progress_callback, "merge_network", "Source people CSVs are merged", status="completed", payload=merge_payload)
 
     duck_cmd = network_duckdb_command(args)
+    notify_progress(progress_callback, "network_duckdb", "Preparing contact lookup database from merged contacts", payload={"people_csv": merge_payload.get("people_csv")})
     duck_code, duck_payload, duck_stderr = run_json_command(duck_cmd, timeout=60 * 60)
     if duck_code != 0:
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "network_duckdb",
             "command": command_text(duck_cmd),
             "inputs": [str(path) for path in inputs],
@@ -335,7 +471,9 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tu
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "network_duckdb", "Contact lookup database build failed", status="failed", payload=payload)
         return payload, 1
+    notify_progress(progress_callback, "network_duckdb", "Contact lookup database is ready", status="completed", payload=duck_payload)
 
     artifacts = {
         "merged_people_csv": merge_payload.get("people_csv"),
@@ -350,9 +488,11 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None) -> tu
     payload = {
         "status": "completed",
         "stage": "index_contacts_pipeline",
+        "openai_usage_tier": selected_openai_usage_tier(args),
         "step": "fan_in",
         "artifact_dir": str(args.artifact_dir),
         "inputs": [str(path) for path in inputs],
+        "input_fingerprints": fingerprints,
         "artifacts": artifacts,
         "promoted": promoted,
         "merge": merge_payload,
@@ -426,6 +566,19 @@ def compact_run_payload(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if tables:
         summary["duckdb_tables"] = {key: tables[key] for key in standard_tables if key in tables}
+    if local_duckdb.get("duckdb_update_mode"):
+        summary["duckdb_update_mode"] = local_duckdb.get("duckdb_update_mode")
+    table_diffs = local_duckdb.get("table_diffs") if isinstance(local_duckdb.get("table_diffs"), dict) else {}
+    if table_diffs:
+        summary["duckdb_table_diffs"] = {
+            table: {
+                key: diff.get(key)
+                for key in ["mode", "inserted_rows", "updated_rows", "deleted_rows", "unchanged_rows", "old_hashes_present"]
+                if key in diff
+            }
+            for table, diff in table_diffs.items()
+            if isinstance(diff, dict)
+        }
     if payload.get("error"):
         summary["error"] = payload.get("error")
     return summary
@@ -434,6 +587,13 @@ def compact_run_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def write_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     target = ROOT / path
     target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if isinstance(existing, dict) and payload_without_volatile_timestamps(existing) == payload_without_volatile_timestamps(payload):
+            return existing
     target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return payload
 
@@ -452,15 +612,16 @@ def maybe_materialize_existing_records(args: argparse.Namespace) -> dict[str, An
     return {"status": "completed", "payload": payload}
 
 
-def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback | None = None) -> tuple[dict[str, Any], int]:
     started_at = now_iso()
     manifest_path = Path(args.manifest)
 
-    fan_in_payload, fan_in_code = run_fan_in(args, started_at=started_at)
+    fan_in_payload, fan_in_code = run_fan_in(args, started_at=started_at, progress_callback=progress_callback)
     if fan_in_code != 0:
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "fan_in",
             "fan_in": fan_in_payload,
             "error": fan_in_payload.get("error") or fan_in_payload,
@@ -476,6 +637,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         payload = {
             "status": "not_ready",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "reason": "missing_people_csv",
             "fan_in": fan_in_payload,
             "promoted": promoted,
@@ -484,6 +646,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_estimate", "Merged people CSV is missing", status="failed", payload=payload)
         return payload, 0
 
     progress("preflight: checking existing local records")
@@ -492,6 +655,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "local_duckdb_preflight",
             "fan_in": fan_in_payload,
             "promoted": promoted,
@@ -500,14 +664,17 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "search_duckdb", "Existing local search database materialization failed", status="failed", payload=payload)
         return payload, 1
 
     progress("processing: dry-run incremental estimate")
+    notify_progress(progress_callback, "index_estimate", "Estimating local index work", payload={"people_csv": str(args.people_csv)})
     estimate_code, estimate, estimate_stderr = run_json_command(processing_args(args, dry_run=True, allow_paid=False), timeout=60 * 60)
     if estimate_code != 0:
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "processing_dry_run",
             "fan_in": fan_in_payload,
             "promoted": promoted,
@@ -518,12 +685,95 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_estimate", "Local index estimate failed", status="failed", payload=payload)
         return payload, 1
+    notify_progress(progress_callback, "index_estimate", "Local index work is estimated", status="completed", payload=estimate)
 
     paid_calls = estimated_paid_calls(estimate)
     total_cost = estimated_cost_usd(estimate)
+    counts = estimate.get("counts") if isinstance(estimate.get("counts"), dict) else {}
+    pending_people = int(counts.get("pending_people") or counts.get("people") or 0)
+    existing_duckdb = local_search_duckdb_path(args)
+    duckdb_current = duckdb_current_for_processing_hashes(args)
+    if pending_people == 0 and paid_calls == 0 and duckdb_current:
+        payload = {
+            "status": "ready",
+            "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
+            "step": "noop",
+            "reason": "processing_outputs_complete",
+            "people_csv": str(args.people_csv),
+            "people_sha256": sha256_file(people_path),
+            "output_dir": str(args.output_dir),
+            "duckdb": str(existing_duckdb.relative_to(ROOT)),
+            "manifest": str(manifest_path),
+            "estimated_cost_usd": total_cost,
+            "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
+            "processing_estimate": estimate,
+            "fan_in": fan_in_payload,
+            "promoted": promoted,
+            "preflight_duckdb": preflight_duckdb,
+            "duckdb_freshness": duckdb_freshness_payload(args),
+            "started_at": started_at,
+            "updated_at": now_iso(),
+        }
+        write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_records", "Local search records are current", status="completed", payload={"reason": "processing_outputs_complete"})
+        notify_progress(progress_callback, "search_duckdb", "Local search database is current", status="completed", payload={"duckdb": str(existing_duckdb.relative_to(ROOT))})
+        return payload, 0
+    if pending_people == 0 and paid_calls == 0:
+        progress("duckdb: refreshing local search tables from current records")
+        notify_progress(progress_callback, "index_records", "Local search records are current", status="completed", payload={"reason": "processing_outputs_complete"})
+        notify_progress(progress_callback, "search_duckdb", "Refreshing local search database tables", payload={"people_csv": str(args.people_csv)})
+        duckdb_code, duckdb_payload, duckdb_stderr = run_json_command(duckdb_command(args), timeout=60 * 60)
+        if duckdb_code != 0:
+            payload = {
+                "status": "failed",
+                "stage": "index_contacts_pipeline",
+                "openai_usage_tier": selected_openai_usage_tier(args),
+                "step": "local_duckdb_refresh",
+                "people_csv": str(args.people_csv),
+                "processing_estimate": estimate,
+                "fan_in": fan_in_payload,
+                "promoted": promoted,
+                "preflight_duckdb": preflight_duckdb,
+                "local_duckdb": duckdb_payload,
+                "duckdb_freshness": duckdb_freshness_payload(args),
+                "error": tail(duckdb_stderr) or duckdb_payload,
+                "started_at": started_at,
+                "updated_at": now_iso(),
+            }
+            write_manifest(manifest_path, payload)
+            notify_progress(progress_callback, "search_duckdb", "Local search database refresh failed", status="failed", payload=payload)
+            return payload, 1
+        payload = {
+            "status": "ready",
+            "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
+            "step": "local_duckdb_refresh",
+            "reason": "processing_outputs_complete_duckdb_refreshed",
+            "people_csv": str(args.people_csv),
+            "people_sha256": sha256_file(people_path),
+            "output_dir": str(args.output_dir),
+            "duckdb": duckdb_payload.get("duckdb", str(Path(args.output_dir) / "local-search.duckdb")) if isinstance(duckdb_payload, dict) else str(Path(args.output_dir) / "local-search.duckdb"),
+            "manifest": str(manifest_path),
+            "estimated_cost_usd": total_cost,
+            "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
+            "processing_estimate": estimate,
+            "local_duckdb": duckdb_payload,
+            "fan_in": fan_in_payload,
+            "promoted": promoted,
+            "preflight_duckdb": preflight_duckdb,
+            "duckdb_freshness": duckdb_freshness_payload(args),
+            "started_at": started_at,
+            "updated_at": now_iso(),
+        }
+        write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "search_duckdb", "Local search database is ready", status="completed", payload=duckdb_payload if isinstance(duckdb_payload, dict) else {})
+        return payload, 0
     allow_paid = bool(paid_calls > 0 or (total_cost and total_cost > 0))
     progress("processing: running fixed-output incremental pipeline")
+    notify_progress(progress_callback, "index_records", "Building local search records", payload={"pending_people": pending_people, "estimated_paid_calls": estimate.get("estimated_paid_calls", {})})
     process_code, processing, processing_stderr = run_json_command(
         processing_args(args, dry_run=False, allow_paid=allow_paid),
         timeout=6 * 60 * 60,
@@ -533,6 +783,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "index_processing",
             "people_csv": str(args.people_csv),
             "processing_estimate": estimate,
@@ -544,14 +795,36 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_records", "Local search record build failed", status="failed", payload=payload)
         return payload, 1
+    if not isinstance(processing, dict) or processing.get("status") != "completed":
+        payload = {
+            "status": "not_ready",
+            "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
+            "step": "index_processing",
+            "reason": "processing_incomplete",
+            "people_csv": str(args.people_csv),
+            "processing_estimate": estimate,
+            "processing": processing,
+            "fan_in": fan_in_payload,
+            "promoted": promoted,
+            "started_at": started_at,
+            "updated_at": now_iso(),
+        }
+        write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "index_records", "Local search record build is not complete yet", status="running", payload=payload)
+        return payload, 0
+    notify_progress(progress_callback, "index_records", "Local search records are built", status="completed", payload=processing)
 
     progress("duckdb: materializing local search tables")
+    notify_progress(progress_callback, "search_duckdb", "Updating local search database", payload={"people_csv": str(args.people_csv)})
     duckdb_code, duckdb_payload, duckdb_stderr = run_json_command(duckdb_command(args), timeout=60 * 60)
     if duckdb_code != 0:
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
+            "openai_usage_tier": selected_openai_usage_tier(args),
             "step": "local_duckdb",
             "people_csv": str(args.people_csv),
             "processing_estimate": estimate,
@@ -564,11 +837,13 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "updated_at": now_iso(),
         }
         write_manifest(manifest_path, payload)
+        notify_progress(progress_callback, "search_duckdb", "Local search database update failed", status="failed", payload=payload)
         return payload, 1
 
     payload = {
         "status": "ready",
         "stage": "index_contacts_pipeline",
+        "openai_usage_tier": selected_openai_usage_tier(args),
         "people_csv": str(args.people_csv),
         "people_sha256": sha256_file(people_path),
         "output_dir": str(args.output_dir),
@@ -586,6 +861,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "updated_at": now_iso(),
     }
     write_manifest(manifest_path, payload)
+    notify_progress(progress_callback, "search_duckdb", "Local search database is ready", status="completed", payload=duckdb_payload if isinstance(duckdb_payload, dict) else {})
     return payload, 0
 
 
@@ -605,6 +881,7 @@ def plan_payload(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "status": "plan",
         "stage": "index_contacts_pipeline",
+        "openai_usage_tier": selected_openai_usage_tier(args),
         "artifact_dir": str(args.artifact_dir),
         "manifest": str(args.manifest),
         "people_csv": str(args.people_csv),
@@ -631,6 +908,7 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
         s.add_argument("--artifact-dir", default=str(DEFAULT_ARTIFACT_DIR))
         s.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
+        s.add_argument("--openai-usage-tier", default=None)
         s.add_argument("--input", action="append", default=[], help="Additional people.csv input to include in fan-in.")
         s.add_argument("--include-existing-artifacts", action=argparse.BooleanOptionalAction, default=True)
 

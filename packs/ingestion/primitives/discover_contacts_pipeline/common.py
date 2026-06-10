@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import hashlib
 import json
@@ -22,6 +23,12 @@ DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "ledger.json"
 DEFAULT_DIRECTORY_CSV = DEFAULT_BASE_DIR / "directory.csv"
 DEFAULT_MSGVAULT_DB = Path.home() / ".msgvault" / "msgvault.db"
 DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS", str(6 * 60 * 60)))
+GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
+
+try:
+    csv.field_size_limit(sys.maxsize)
+except OverflowError:
+    csv.field_size_limit(2**31 - 1)
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -79,11 +86,21 @@ def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") for field in fieldnames})
+    import io
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({field: row.get(field, "") for field in fieldnames})
+    content = buffer.getvalue().encode("utf-8")
+    if path.exists():
+        try:
+            if path.read_bytes() == content:
+                return
+        except OSError:
+            pass
+    path.write_bytes(content)
 
 
 def csv_key(row: dict[str, Any], fields: list[str]) -> tuple[str, ...] | None:
@@ -204,6 +221,69 @@ def collect_artifact_paths(value: Any) -> list[str]:
         if text.startswith(".powerpacks/") or text.startswith("/"):
             paths.append(text)
     return paths
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    path = Path(str(path_text or ""))
+    if not path_text or not path.exists() or not path.is_file():
+        return {"path": str(path_text or ""), "exists": False}
+    stat = path.stat()
+    existing = existing or {}
+    mtime_ns = stat.st_mtime_ns
+    if (
+        existing.get("path") == str(path)
+        and existing.get("exists") is True
+        and existing.get("size") == stat.st_size
+        and existing.get("mtime_ns") == mtime_ns
+        and existing.get("sha256")
+    ):
+        return dict(existing)
+    return {"path": str(path), "exists": True, "size": stat.st_size, "mtime_ns": mtime_ns, "sha256": sha256_file(path)}
+
+
+def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    existing = existing or {}
+    existing_inputs = existing.get("input_artifacts") if isinstance(existing.get("input_artifacts"), dict) else {}
+    existing_outputs = existing.get("output_artifacts") if isinstance(existing.get("output_artifacts"), dict) else {}
+    input_paths = collect_artifact_paths(payload.get("input") or {})
+    output_paths = collect_artifact_paths({
+        "artifacts": payload.get("artifacts") or {},
+        "contacts_csv": payload.get("contacts_csv"),
+        "linkedin_resolution_queue_csv": payload.get("linkedin_resolution_queue_csv"),
+        "source_csv": payload.get("source_csv"),
+        "review_csv": payload.get("review_csv"),
+    })
+    return {
+        "input_artifacts": {path: artifact_fingerprint(path, existing_inputs.get(path) if isinstance(existing_inputs, dict) else None) for path in input_paths},
+        "output_artifacts": {path: artifact_fingerprint(path, existing_outputs.get(path) if isinstance(existing_outputs, dict) else None) for path in output_paths},
+    }
+
+
+def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the whole manifest payload without volatile timestamp fields."""
+    signature = dict(payload)
+    signature.pop("updated_at", None)
+    signature.pop("created_at", None)
+    return signature
+
+
+def write_stage_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    existing = read_json(path, {}) or {}
+    payload = dict(payload)
+    payload["fingerprints"] = payload.get("fingerprints") or manifest_fingerprints(payload, existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else None)
+    if existing and stable_manifest_signature(existing) == stable_manifest_signature(payload):
+        return existing
+    payload["updated_at"] = payload.get("updated_at") or now_iso()
+    write_json(path, payload)
+    return payload
 
 
 def check_artifact_paths(ledger: dict[str, Any]) -> dict[str, Any]:

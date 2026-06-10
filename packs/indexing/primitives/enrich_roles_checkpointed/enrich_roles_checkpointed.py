@@ -10,7 +10,6 @@ import argparse
 import asyncio
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -25,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
 from packs.indexing.lib.role_clustering import cluster_title  # noqa: E402
 from packs.indexing.lib.role_prompts import get_system_user_prompts, format_title_with_context  # noqa: E402
@@ -184,6 +184,11 @@ ROLE_RESPONSE_SCHEMA = {
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def add_timing(state: dict[str, Any], name: str, seconds: float) -> None:
+    timings = state.setdefault("timings", {})
+    timings[name] = round(float(timings.get(name, 0.0) or 0.0) + seconds, 3)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -389,7 +394,7 @@ def call_openai_role_enrichments(
         base_url=base_url,
         model=model,
         timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
-        concurrency=concurrency or int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY))),
+        concurrency=concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=DEFAULT_OPENAI_CONCURRENCY),
         max_retries=max_retries,
     ))
 
@@ -513,6 +518,7 @@ def iter_unprocessed_rows(flattened: Path, start_index: int) -> Iterable[tuple[i
 
 
 def finalize(output_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+    finalize_started = time.perf_counter()
     chunks = sorted((output_dir / "chunks").glob("roles.*.jsonl")) if (output_dir / "chunks").exists() else []
     roles: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -537,11 +543,12 @@ def finalize(output_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
         for row in roles:
             writer.writerow({key: row.get(key, "") for key in writer.fieldnames or []})
     tmp.replace(mapping_path)
+    add_timing(state, "finalize_merge_write_seconds", time.perf_counter() - finalize_started)
     state["status"] = "completed"
     state["completed_at"] = now_iso()
     state["unique_roles_written"] = len(roles)
     save_state(output_dir, state)
-    manifest = {"status": "completed", "stage": "enrich_roles_checkpointed", "provider": state.get("provider"), "input": state.get("flattened"), "checkpoint": str(state_path(output_dir)), "checkpoint_every": state.get("checkpoint_every"), "chunks": [str(path) for path in chunks], "artifacts": {"roles_with_dense_text_remapped": str(roles_path), "raw_titles": str(raw_titles_path), "role_mapping": str(mapping_path)}, "counts": {"input_rows_processed": state.get("input_rows_processed", 0), "positions_seen": state.get("positions_seen", 0), "unique_roles": len(roles), "chunks_written": len(chunks), "artifact_hits": state.get("artifact_hits", 0), "artifact_misses": state.get("artifact_misses", 0), "paid_calls": state.get("paid_calls", 0)}}
+    manifest = {"status": "completed", "stage": "enrich_roles_checkpointed", "provider": state.get("provider"), "input": state.get("flattened"), "checkpoint": str(state_path(output_dir)), "checkpoint_every": state.get("checkpoint_every"), "chunks": [str(path) for path in chunks], "artifacts": {"roles_with_dense_text_remapped": str(roles_path), "raw_titles": str(raw_titles_path), "role_mapping": str(mapping_path)}, "counts": {"input_rows_processed": state.get("input_rows_processed", 0), "positions_seen": state.get("positions_seen", 0), "unique_roles": len(roles), "chunks_written": len(chunks), "artifact_hits": state.get("artifact_hits", 0), "artifact_misses": state.get("artifact_misses", 0), "paid_calls": state.get("paid_calls", 0)}, "timings": state.get("timings", {})}
     write_json(output_dir / "manifest.json", manifest)
     return manifest
 
@@ -622,7 +629,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     seen_hashes = set(state.get("seen_title_hashes") or [])
     batch: list[dict[str, Any]] = []
     paid_pending: list[dict[str, Any]] = []
-    paid_concurrency = int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY)))
+    usage_tier = getattr(args, "openai_usage_tier", None)
+    paid_concurrency = int(
+        getattr(args, "concurrency", None)
+        or env_or_profile_int(
+            "POWERPACKS_OPENAI_CONCURRENCY",
+            "openai_concurrency",
+            tier=usage_tier,
+            fallback=DEFAULT_OPENAI_CONCURRENCY,
+        )
+    )
     paid_timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     chunks_this_run = 0
     started = time.time()
@@ -631,16 +647,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         nonlocal batch, chunks_this_run
         if not batch or (not force and len(batch) < args.checkpoint_every):
             return None
+        chunk_started = time.perf_counter()
         chunk_index = int(state.get("chunks_written") or 0) + 1
         written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
         state["chunks_written"] = chunk_index
         state["unique_roles_written"] = int(state.get("unique_roles_written") or 0) + written
         state["seen_title_hashes"] = sorted(seen_hashes)
+        add_timing(state, "checkpoint_chunk_write_seconds", time.perf_counter() - chunk_started)
+        state_started = time.perf_counter()
+        save_state(output_dir, state)
+        add_timing(state, "checkpoint_state_write_seconds", time.perf_counter() - state_started)
         save_state(output_dir, state)
         batch = []
         chunks_this_run += 1
         if args.stop_after_chunks and chunks_this_run >= args.stop_after_chunks:
-            return {"status": "partial", "checkpoint": str(state_path(output_dir)), "chunks_written_total": state["chunks_written"], "input_rows_processed": state["input_rows_processed"]}
+            return {"status": "partial", "checkpoint": str(state_path(output_dir)), "chunks_written_total": state["chunks_written"], "input_rows_processed": state["input_rows_processed"], "timings": state.get("timings", {})}
         return None
 
     def flush_paid(force: bool = False) -> dict[str, Any] | None:
@@ -651,6 +672,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         pending = paid_pending
         paid_pending = []
         try:
+            openai_started = time.perf_counter()
             enrichments = call_openai_role_enrichments(
                 pending,
                 api_key=api_key,
@@ -659,6 +681,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 timeout=paid_timeout,
                 concurrency=paid_concurrency,
             )
+            add_timing(state, "openai_enrichment_seconds", time.perf_counter() - openai_started)
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
         for base, enrichment in zip(pending, enrichments):
@@ -666,6 +689,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         state["paid_calls"] = int(state.get("paid_calls") or 0) + len(pending)
         return flush_output(force=True)
 
+    local_prepare_started = time.perf_counter()
     for idx, person in iter_unprocessed_rows(flattened, int(state.get("input_rows_processed") or 0)):
         for position in get_positions(person):
             state["positions_seen"] = int(state.get("positions_seen") or 0) + 1
@@ -687,14 +711,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise SystemExit("role provider requires OPENAI_API_KEY or --api-key; no paid API was called")
                 seen_hashes.add(base["title_hash"])
                 paid_pending.append(base)
+                add_timing(state, "local_input_prepare_seconds", time.perf_counter() - local_prepare_started)
                 partial = flush_paid()
+                local_prepare_started = time.perf_counter()
                 if partial:
                     return partial
         state["input_rows_processed"] = idx
         if len(batch) >= args.checkpoint_every:
+            add_timing(state, "local_input_prepare_seconds", time.perf_counter() - local_prepare_started)
             partial = flush_paid(force=True) or flush_output()
+            local_prepare_started = time.perf_counter()
             if partial:
                 return partial
+    add_timing(state, "local_input_prepare_seconds", time.perf_counter() - local_prepare_started)
     partial = flush_paid(force=True)
     if partial:
         return partial
@@ -727,6 +756,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--api-key")
     run_p.add_argument("--base-url")
     run_p.add_argument("--model", default=None)
+    run_p.add_argument("--concurrency", type=int, default=None)
+    run_p.add_argument("--openai-usage-tier", default=None)
     run_p.add_argument("--allow-paid", action="store_true")
     run_p.add_argument("--dry-run", action="store_true")
     run_p.add_argument("--force", action="store_true")
