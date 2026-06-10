@@ -13,28 +13,30 @@ from pathlib import Path
 from typing import Any
 
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
-sys.path.insert(0, str(LIB_DIR))
+PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+LIB_DIR = PRIMITIVES_DIR / "lib"
+SHARED_DIR = PRIMITIVES_DIR / "shared"
+LOCAL_DIR = PRIMITIVES_DIR / "local"
+TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+    sys.path.insert(0, str(_path))
 
-from turbopuffer_client import (  # noqa: E402
+import search_backend_mode  # noqa: E402
+from search_common import (  # noqa: E402
     ADJACENCY_EXCLUDE_SENIORITY,
     ADJACENCY_LIMIT,
     adjacency_family_for_payload,
     allowed_operator_ids_from_payload,
-    bm25_adjacency_rows,
     comparison,
     company_filter_applies_to_role_search,
     effective_adjacent_role_ids,
     extract_base_ids,
-    filter_only_rows_for_namespace,
     filters_from_role_payload,
     get_adjacency_queries,
     has_role_constraint,
-    is_local_backend,
     is_non_operational_title,
     load_env_file,
     merge_adjacency_queries,
-    namespace_name,
     role_payload_from_state,
     search_mode_for_payload,
     seniority_intent,
@@ -157,7 +159,7 @@ def social_base_ids(payload: dict[str, Any], *, env_file: Path | None, max_ids: 
     active = {key: payload.get(key) for key in keys if payload.get(key) is not None}
     if not active:
         return None
-    if is_local_backend():
+    if search_backend_mode.is_local_backend_configured():
         return None
     ids = fetch_social_filter_person_ids(payload, env_file=env_file)
     return ids[:max_ids], {"stage": "social", "filters": active, "matched": len(ids)}
@@ -230,6 +232,10 @@ def candidate_from_row(row: dict[str, Any], *, source: str, rank: int | None = N
     }
     if rank is not None:
         out["company_union_rank"] = rank
+    if row.get("retrieval_mode"):
+        out["retrieval_mode"] = row.get("retrieval_mode")
+    if row.get("adjacency_query_indexes") is not None:
+        out["adjacency_query_indexes"] = row.get("adjacency_query_indexes")
     return out
 
 
@@ -237,6 +243,48 @@ PEOPLE_ATTRIBUTES = [
     "base_id", "position_title", "city", "state", "country", "macro_region", "metro_areas",
     "role_track", "seniority_band", "company_id", "is_current",
 ]
+
+
+def search_backend() -> Any:
+    if search_backend_mode.is_local_backend_configured():
+        import local_search_backend as local_backend  # type: ignore
+
+        return local_backend
+    import turbopuffer_search_backend as turbopuffer_client  # type: ignore
+
+    return turbopuffer_client
+
+
+async def filter_only_rows_for_namespace(
+    logical_name: str,
+    filters: tuple,
+    include_attributes: list[str],
+    *,
+    page_size: int = 10000,
+    max_results: int = 0,
+) -> list[dict[str, Any]]:
+    return await search_backend().filter_only_rows_for_namespace(
+        logical_name,
+        filters,
+        include_attributes,
+        page_size=page_size,
+        max_results=max_results,
+    )
+
+
+async def bm25_adjacency_rows(
+    queries: list[str],
+    filters: tuple | None,
+    *,
+    top_k: int = ADJACENCY_LIMIT,
+    include_attributes: list[str],
+) -> list[dict[str, Any]]:
+    return await search_backend().bm25_adjacency_rows(
+        queries,
+        filters,
+        top_k=top_k,
+        include_attributes=include_attributes,
+    )
 
 
 async def company_base_ids(
@@ -372,6 +420,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     state_path = Path(args.state) if args.state else None
     state = read_json(state_path) if state_path else {}
     payload = json.loads(args.payload_json) if args.payload_json else role_payload_from_state(state)
+    backend = search_backend()
 
     base_ids: list[str] | None = None
     company_union_ids: list[str] = []
@@ -413,9 +462,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     final_ids = base_ids if base_ids is not None else []
     return {
         "namespaces": {
-            "people": namespace_name("people"),
-            "education": namespace_name("education"),
-            "summaries": namespace_name("summaries"),
+            "people": backend.namespace_name("people"),
+            "education": backend.namespace_name("education"),
+            "summaries": backend.namespace_name("summaries"),
         },
         "stages": stage_outputs,
         "search_mode": search_mode_for_payload(payload),

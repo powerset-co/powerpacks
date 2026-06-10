@@ -69,6 +69,42 @@ export function runSetupAction(body: Record<string, unknown>): Promise<{ job: Se
   return postJson<{ job: SetupJob }>("/local-api/setup/run", body);
 }
 
+export function fetchOnboardingV2LinkedInStatus(): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>("/local-api/onboarding-v2/linkedin/status");
+}
+
+export function dryRunOnboardingV2LinkedIn(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/local-api/onboarding-v2/linkedin/dry-run", body);
+}
+
+export function runOnboardingV2LinkedIn(body: Record<string, unknown>): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/linkedin/run", body);
+}
+
+export function fetchOnboardingV2GmailStatus(): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>("/local-api/onboarding-v2/gmail/status");
+}
+
+export function dryRunOnboardingV2Gmail(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>("/local-api/onboarding-v2/gmail/dry-run", body);
+}
+
+export function runOnboardingV2Gmail(body: Record<string, unknown> = {}): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/gmail/run", body);
+}
+
+export function checkGmailTokens(emails: string[]): Promise<{ expired: string[] }> {
+  return postJson<{ expired: string[] }>("/local-api/onboarding-v2/gmail/check-tokens", { emails });
+}
+
+export function fetchOnboardingV2MessagesStatus(): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>("/local-api/onboarding-v2/messages/status");
+}
+
+export function runOnboardingV2Messages(body: Record<string, unknown> = {}): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/messages/run", body);
+}
+
 export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {
   const content = await file.text();
   return postJson<{ path: string }>("/local-api/setup/linkedin-csv-upload", {

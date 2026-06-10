@@ -91,7 +91,7 @@ uv run --project powerpacks python powerpacks/packs/search/primitives/resolve_in
 ```
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/search/primitives/resolve_companies/resolve_companies.py \
+uv run --project powerpacks python powerpacks/packs/search/primitives/turbopuffer/turbopuffer_resolve_companies.py \
   --payload-json '<json>' \
   --env-file .env
 ```

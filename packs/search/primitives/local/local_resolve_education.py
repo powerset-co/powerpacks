@@ -15,17 +15,23 @@ from pathlib import Path
 from typing import Any
 
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
-sys.path.insert(0, str(LIB_DIR))
+PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+LIB_DIR = PRIMITIVES_DIR / "lib"
+SHARED_DIR = PRIMITIVES_DIR / "shared"
+LOCAL_DIR = PRIMITIVES_DIR / "local"
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
+    sys.path.insert(0, str(_path))
 
-from turbopuffer_client import (  # noqa: E402
-    STRONG_CONSISTENCY,
+import local_search_backend as local_backend  # noqa: E402
+from search_common import (  # noqa: E402
     load_env_file,
-    namespace,
-    namespace_name,
     role_payload_from_state,
     row_attrs,
 )
+
+
+STRONG_CONSISTENCY = {"level": "strong"}
+
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 ROOT_SCHOOL_SUFFIXES = {"university", "college", "institute"}
@@ -77,7 +83,7 @@ def is_affiliated_candidate(root_queries: list[str], school_name: str) -> bool:
 
 async def query_school_rows(query: str, *, limit: int) -> list[dict[str, Any]]:
     filters = ("school_name", "ContainsAllTokens", query, {"last_as_prefix": True})
-    ns = namespace("schools")
+    ns = local_backend.namespace("schools")
 
     def run_query() -> Any:
         return ns.query(
@@ -172,7 +178,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     education_ids = list(dict.fromkeys([*existing_ids, *resolved_ids]))
     return {
-        "namespace": namespace_name("schools"),
+        "namespace": local_backend.namespace_name("schools"),
         "education_names": names,
         "education_ids": education_ids,
         "resolutions": resolutions,

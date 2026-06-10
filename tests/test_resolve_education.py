@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "packs/search/primitives/resolve_education/resolve_education.py"
+PRIMITIVES = ROOT / "packs/search/primitives"
+LIB = PRIMITIVES / "lib"
+SHARED = PRIMITIVES / "shared"
+TURBOPUFFER = PRIMITIVES / "turbopuffer"
+for _path in [LIB, SHARED, TURBOPUFFER]:
+    sys.path.insert(0, str(_path))
+
+SCRIPT = TURBOPUFFER / "turbopuffer_resolve_education.py"
 
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("resolve_education", SCRIPT)
+    spec = importlib.util.spec_from_file_location("turbopuffer_resolve_education", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)

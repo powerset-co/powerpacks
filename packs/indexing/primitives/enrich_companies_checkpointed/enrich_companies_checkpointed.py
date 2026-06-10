@@ -21,6 +21,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,25 +32,15 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
+
+from packs.indexing.lib.llm_config import (  # noqa: E402
+    DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_OPENAI_TIMEOUT_SECONDS,
+    DEFAULT_OPENAI_CONCURRENCY, CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
+)
 
 DEFAULT_CHECKPOINT_EVERY = 1000
-DEFAULT_MODEL = "gpt-5.1"
-DEFAULT_MAX_COMPLETION_TOKENS = 2500
-DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
-DEFAULT_OPENAI_CONCURRENCY = 64
 WORD_RE = re.compile(r"[a-z0-9]+")
-CHAT_MODEL_PRICES_PER_1K_USD = {
-    "gpt-5.2": {"input": 0.00175, "output": 0.01400},
-    "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
-    "gpt-5.1": {"input": 0.00125, "output": 0.01000},
-    "gpt-5.1-chat-latest": {"input": 0.00125, "output": 0.01000},
-    "gpt-5": {"input": 0.00125, "output": 0.01000},
-    "gpt-5-chat-latest": {"input": 0.00125, "output": 0.01000},
-    "gpt-5-mini": {"input": 0.00025, "output": 0.00200},
-    "gpt-5-nano": {"input": 0.00005, "output": 0.00040},
-    "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},
-    "gpt-4o-mini-2024-07-18": {"input": 0.00015, "output": 0.00060},
-}
 ALEPH_COMPANY_FIELDS = [
     "company_urn",
     "company_name",
@@ -86,6 +77,8 @@ ALEPH_COMPANY_FIELDS = [
     "doc2query",
     "semantic_text",
     "confidence_score",
+    "signals_semantic_text",
+    "signals_doc2query",
 ]
 CLASSIFICATION_FIELDS = {
     "entity_types",
@@ -103,12 +96,13 @@ CLASSIFICATION_FIELDS = {
     "funding_stage",
     "accelerators",
     "yc_batches",
+    "signals_semantic_text",
+    "signals_doc2query",
 }
 
-# Minimal checked-in company taxonomies observed in the copied Aleph seed
-# (`.powerpacks/aleph-seed/2026-05-08/pipeline_output/company/companies_corpus_v3.jsonl`).
-# Unknown provider values are preserved by normalizers so future Aleph/provider
-# additions are not silently dropped.
+# Canonical taxonomy IDs — aligned with prod combined_enrichment.py.
+# The SYSTEM_PROMPT below carries the full descriptions; these sets are used
+# only for normalisation / validation bookkeeping.
 OBSERVED_ENTITY_TYPES = {
     "venture_backed_startup",
     "nonprofit",
@@ -123,13 +117,18 @@ OBSERVED_ENTITY_TYPES = {
     "sovereign_wealth_fund",
 }
 OBSERVED_SECTOR_TYPES = {
-    "aerospace", "ai_ml", "bio_synbio", "climate_energy_tech", "commerce_tech",
-    "creator_tools", "crypto", "cybersecurity", "data", "deep_tech", "defense_tech",
-    "devops", "diagnostics", "edtech", "fintech", "gaming_gambling_tech", "hardware",
-    "health_tech", "hr_tech", "infra_devtools", "insurtech", "iot", "legal_tech",
+    "3d_printing", "aerospace", "agriculture_tech", "ai_ml", "ar_vr",
+    "bio_synbio", "climate_energy_tech", "commerce_tech", "construction_tech",
+    "creator_tools", "crypto", "cybersecurity", "data", "dating",
+    "deep_tech", "defense_tech", "devops", "diagnostics", "edtech",
+    "fintech", "gaming_gambling_tech", "govtech", "hardware", "health_tech",
+    "hr_tech", "infra_devtools", "insurtech", "iot", "legal_tech",
     "manufacturing_tech", "marketplaces", "marketing_tech", "material_science",
-    "medical_devices", "real_estate_tech", "robotics_drones", "saas", "sales_tech",
-    "semiconductors", "social_networking", "sports_wellness_tech", "supply_chain_logistics",
+    "medical_devices", "mortgagetech", "networking_hardware",
+    "nonprofit_philanthropy_tech", "oil_gas_tech", "oncology",
+    "physical_compute", "real_estate_tech", "restaurant_hospitality_tech",
+    "robotics_drones", "saas", "sales_tech", "semiconductors",
+    "social_networking", "sports_wellness_tech", "supply_chain_logistics",
     "telco", "therapies", "transportation_mobility", "travel_tech",
 }
 OBSERVED_CUSTOMER_TYPES = {"Business (B2B)", "Consumer (B2C)", "Government (B2G)"}
@@ -146,42 +145,52 @@ OBSERVED_OWNERSHIP_STATUSES = {
 REQUIRED_PROVIDER_OUTPUT_FIELDS = {
     "entity_types",
     "sector_types",
-    "technology_types",
-    "customer_type",
-    "funding_stage",
-    "company_type",
-    "ownership_status",
-    "stage",
-    "accelerators",
-    "yc_batches",
     "confidence_score",
     "doc2query",
-    "d2q_text",
-    "word_text",
     "semantic_text",
 }
 
-COMPANY_CLASSIFICATION_SCHEMA = {
-    "entity_types": {"type": "string[]", "observed_values": sorted(OBSERVED_ENTITY_TYPES)},
-    "sector_types": {"type": "string[]", "observed_values": sorted(OBSERVED_SECTOR_TYPES)},
-    "technology_types": {"type": "string[]", "observed_values": []},
-    "customer_type": {"type": "string", "observed_values": sorted(OBSERVED_CUSTOMER_TYPES)},
-    "funding_stage": {"type": "string", "observed_values": sorted(OBSERVED_FUNDING_STAGES)},
-    "company_type": {"type": "string", "observed_values": sorted(OBSERVED_COMPANY_TYPES)},
-    "ownership_status": {"type": "string", "observed_values": sorted(OBSERVED_OWNERSHIP_STATUSES)},
-    "stage": {"type": "string"},
-    "accelerators": {"type": "string[]"},
-    "yc_batches": {"type": "string[]"},
-    "confidence_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-    "doc2query": {"type": "string[]"},
-    "d2q_text": {"type": "string"},
-    "word_text": {"type": "string"},
-    "semantic_text": {"type": "string"},
+# Structured output schema for company enrichment.
+COMPANY_RESPONSE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "company_classification",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "entity_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(OBSERVED_ENTITY_TYPES)},
+                },
+                "sector_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(OBSERVED_SECTOR_TYPES)},
+                },
+                "confidence_score": {"type": "number"},
+                "semantic_text": {"type": "string"},
+                "doc2query": {"type": "array", "items": {"type": "string"}},
+                "signals_semantic_text": {"type": "string"},
+                "signals_doc2query": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": [
+                "entity_types", "sector_types", "confidence_score",
+                "semantic_text", "doc2query",
+                "signals_semantic_text", "signals_doc2query",
+            ],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def add_timing(state: dict[str, Any], name: str, seconds: float) -> None:
+    timings = state.setdefault("timings", {})
+    timings[name] = round(float(timings.get(name, 0.0) or 0.0) + seconds, 3)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -276,11 +285,11 @@ def normalize_classification_output(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize real provider/artifact output while preserving unknown taxonomy values."""
 
     out = dict(payload)
-    for key in ("entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query"):
+    for key in ("entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query", "signals_doc2query"):
         out[key] = [clean(item) for item in listify(out.get(key)) if clean(item)]
     out["customer_type"] = normalize_customer_type(out.get("customer_type"))
     out["confidence_score"] = normalize_confidence(out.get("confidence_score"))
-    for key in ("word_text", "d2q_text", "semantic_text", "stage", "company_type", "ownership_status"):
+    for key in ("word_text", "d2q_text", "semantic_text", "signals_semantic_text", "stage", "company_type", "ownership_status"):
         if key in out:
             out[key] = clean(out.get(key))
     return out
@@ -328,9 +337,17 @@ def shape_company(row: dict[str, Any]) -> dict[str, Any]:
         "doc2query": doc2query,
         "semantic_text": semantic,
         "confidence_score": row.get("confidence_score") if row.get("confidence_score") not in (None, "") else 0.0,
+        "signals_semantic_text": clean(row.get("signals_semantic_text")),
+        "signals_doc2query": listify(row.get("signals_doc2query")),
     }
     shaped = normalize_classification_output(shaped)
-    return {key: shaped.get(key, [] if key in {"name_aliases", "investor_urns", "entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query"} else "") for key in ALEPH_COMPANY_FIELDS}
+    _LIST_FIELDS = {"name_aliases", "investor_urns", "entity_types", "sector_types", "technology_types", "accelerators", "yc_batches", "doc2query", "signals_doc2query"}
+    out = {key: shaped.get(key, [] if key in _LIST_FIELDS else "") for key in ALEPH_COMPANY_FIELDS}
+    # Carry through rapidapi_company_id for enrichment lookup (not persisted in final output).
+    rid = clean(row.get("rapidapi_company_id"))
+    if rid:
+        out["_rapidapi_company_id"] = rid
+    return out
 
 
 def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
@@ -344,6 +361,14 @@ def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
 
 def merge_enrichment(local: dict[str, Any], enriched: dict[str, Any]) -> dict[str, Any]:
     merged = dict(local)
+    # The combined prompt returns "confidence" not "confidence_score"; normalise.
+    if "confidence" in enriched and "confidence_score" not in enriched:
+        enriched["confidence_score"] = enriched.pop("confidence")
+    # Derive legacy text fields from combined output when absent.
+    if enriched.get("doc2query") and not enriched.get("d2q_text"):
+        enriched["d2q_text"] = " ".join(clean(q) for q in listify(enriched["doc2query"]) if clean(q))
+    if enriched.get("semantic_text") and not enriched.get("word_text"):
+        enriched["word_text"] = enriched["semantic_text"]
     provider_payload = {field: local.get(field) for field in REQUIRED_PROVIDER_OUTPUT_FIELDS}
     provider_payload.update(enriched)
     validate_provider_output(provider_payload)
@@ -367,29 +392,171 @@ def apply_artifact(local: dict[str, Any], artifact: dict[str, dict[str, Any]], m
     raise RuntimeError(f"unsupported artifact missing policy: {missing_policy}")
 
 
-def openai_classification_payload(local: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "model": os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL),
-        "response_format": {"type": "json_object"},
+# ---------------------------------------------------------------------------
+# Combined enrichment system prompt — ported from prod combined_enrichment.py.
+# Entity types + sector types + search text fields in a single LLM call.
+# ---------------------------------------------------------------------------
+COMBINED_SYSTEM_PROMPT = """You are a company classifier and search-text generator. Return ONLY JSON.
+
+<rules>
+- Tag ALL that apply. Default to [] if unclear.
+- Don't tag based on portfolio/investments/subsidiaries.
+- Only tag what the company itself builds/operates.
+- IMPORTANT: Use EXACT tag IDs from lists below. Never use group names like TECH/BIZ/FINTECH.
+</rules>
+
+<entity_types>
+venture_backed_startup: VC-funded private co (seed/Series A+), not public/acquired
+vc_firm: Primary mandate is minority VC investments
+pe_firm: Control transactions, often leveraged
+bank: Deposits/lending, includes neobanks
+insurance_carrier: Offers insurance coverage
+nonprofit: 501c3 or explicitly nonprofit/charity/NGO
+government_public_sector: Gov owned/operated (agencies, GSEs, public schools, state universities)
+family_office: Manages wealth for families (only if explicitly self-identifies)
+sovereign_wealth_fund: State-owned, allocates governmental capital
+foundation_endowment: Nonprofit investment entity for long-term mission
+club_association: Membership-based org for social/recreational/cultural/professional activities
+</entity_types>
+
+<sector_types>
+saas: Cloud business software (CRM, HR, finance, collaboration) with web/mobile UI
+infra_devtools: Developer tools, APIs, SDKs, databases, backends, low-code builders
+devops: CI/CD, deployment, monitoring, observability, incident response
+data: Data warehouses, ETL, analytics, BI platforms, data engineering
+ai_ml: AI/ML models, LLMs, agents, ML platforms (core product, not just AI features)
+cybersecurity: Security tools, IAM, threat detection, compliance
+physical_compute: Data centers, colocation, IaaS, GPU cloud
+fintech: Payments, lending, banking software, trading platforms, crypto wallets
+crypto: Blockchain, DeFi, Web3, L1/L2, exchanges, NFTs
+insurtech: Insurance tech (underwriting, claims, digital carriers)
+mortgagetech: Mortgage origination, underwriting, servicing software
+hardware: Physical devices, electronics, wearables, consumer/enterprise hardware
+semiconductors: Chips, processors, memory, fab equipment, EDA
+networking_hardware: Routers, switches, fiber, wireless equipment
+iot: Connected devices, sensors, smart home/industrial
+telco: Telecom carriers, ISPs, mobile operators
+deep_tech: Hard science/engineering R&D (physics, materials, quantum)
+robotics_drones: Robots, drones, automation systems, autonomy
+aerospace: Space, satellites, rockets, aircraft
+3d_printing: Additive manufacturing
+material_science: Advanced materials, composites, nanomaterials
+health_tech: Healthcare software, telehealth, clinical tools, digital therapeutics
+therapies: Drug development, therapeutics, gene/cell therapy
+diagnostics: Medical testing, imaging, biomarkers
+bio_synbio: Synthetic biology, molecular engineering, biomanufacturing
+oncology: Cancer detection, treatment, research
+medical_devices: Regulated medical equipment, implants, surgical robots
+real_estate_tech: PropTech, property management, RE transactions
+construction_tech: Construction software, BIM, project management
+manufacturing_tech: Factory automation, MES, industrial IoT
+supply_chain_logistics: Freight platforms, visibility, warehouse automation
+transportation_mobility: Mobility platforms, EVs, autonomous vehicles, fleet mgmt
+agriculture_tech: AgTech, precision farming, food production tech
+oil_gas_tech: O&G exploration/production software
+climate_energy_tech: Clean energy, batteries, grid software, carbon tech
+defense_tech: Defense, national security, dual-use military tech
+travel_tech: Travel booking, airline ops, trip management
+restaurant_hospitality_tech: Restaurant/hotel software, POS, kitchen automation
+commerce_tech: E-commerce platforms, checkout, merchant tools
+marketplaces: Two-sided platforms matching supply/demand
+gaming_gambling_tech: Games, game engines, esports, online gambling
+ar_vr: AR/VR/XR hardware and software
+sports_wellness_tech: Fitness apps, sports analytics, wellness tech
+social_networking: Social networks, messaging, community platforms
+dating: Dating/relationship platforms
+creator_tools: Content creation, editing, publishing, monetization tools
+hr_tech: HR software, recruiting, payroll, HRIS, workforce mgmt
+sales_tech: CRM, sales automation, prospecting, revenue ops
+marketing_tech: AdTech, marketing automation, attribution, campaigns
+legal_tech: Contract mgmt, compliance, e-discovery, AI legal tools
+edtech: Learning platforms, online schools, tutoring, training
+govtech: Government software, permitting, benefits, public sector
+nonprofit_philanthropy_tech: Fundraising, donor mgmt, grantmaking software
+</sector_types>
+
+<text_fields>
+semantic_text: 2-3 sentence factual description of what the company does, its products, and market. Written for semantic search.
+doc2query: 10-15 search queries someone would type to find this company (include company name, products, competitors, use cases).
+signals_semantic_text: 2-3 sentences describing the types of people who work there, their skills, and expertise. Written for semantic search on people.
+signals_doc2query: 15-20 search queries to find employees at this company (include titles, skills, location, team names).
+</text_fields>
+
+<examples>
+Ramp → entity:venture_backed_startup sector:saas,fintech
+Stripe → entity:venture_backed_startup sector:infra_devtools,fintech,commerce_tech
+Anduril → entity:venture_backed_startup sector:hardware,defense_tech,robotics_drones,deep_tech
+</examples>
+
+<output>
+{
+  "entity_types":["venture_backed_startup"],
+  "sector_types":["saas","ai_ml"],
+  "confidence_score":0.85,
+  "semantic_text":"Company builds X for Y market...",
+  "doc2query":["query1","query2",...],
+  "signals_semantic_text":"People at Company are skilled in...",
+  "signals_doc2query":["title at company","skill at company",...]
+}
+</output>"""
+
+
+def _build_company_context(local: dict[str, Any], rapidapi_context: dict[str, Any] | None = None) -> str:
+    """Build a compact company context string for the user message.
+
+    If *rapidapi_context* is provided (from ``extract_company_context``),
+    its richer fields override the sparse local record.
+    """
+    rc = rapidapi_context or {}
+    parts = [f"Company: {clean(local.get('company_name', 'Unknown'))!s}"]
+    # Prefer RapidAPI description over position-description junk.
+    desc = clean(rc.get("description") or local.get("description"))
+    if desc:
+        parts.append(f"Description: {desc[:600]}")
+    domain = clean(rc.get("website") or local.get("website_domain"))
+    if domain:
+        parts.append(f"Website: {domain}")
+    headcount = rc.get("headcount") or local.get("headcount")
+    if headcount:
+        parts.append(f"Headcount: {headcount}")
+    funding = local.get("funding_total")
+    if funding:
+        parts.append(f"Funding: ${funding:,.0f}")
+    stage = clean(local.get("funding_stage") or local.get("stage"))
+    if stage and stage != "VENTURE_UNKNOWN":
+        parts.append(f"Stage: {stage}")
+    city = clean(rc.get("city") or local.get("city"))
+    country = clean(rc.get("country") or local.get("country"))
+    state = clean(rc.get("state") or local.get("state"))
+    if city or country:
+        parts.append(f"Location: {', '.join(p for p in [city, state, country] if p)}")
+    founded = rc.get("founded_year") or local.get("founded_year")
+    if founded:
+        parts.append(f"Founded: {founded}")
+    company_type = clean(rc.get("company_type_raw"))
+    if company_type:
+        parts.append(f"Type: {company_type}")
+    industries = rc.get("industries") or []
+    if industries:
+        parts.append(f"Industries: {', '.join(str(i) for i in industries)}")
+    specialties = rc.get("specialties") or []
+    if specialties:
+        parts.append(f"Specialties: {', '.join(str(s) for s in specialties[:10])}")
+    return "\n".join(parts)
+
+
+def openai_classification_payload(local: dict[str, Any], rapidapi_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    model = os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL)
+    payload: dict[str, Any] = {
+        "model": model,
+        "response_format": COMPANY_RESPONSE_SCHEMA,
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Classify a company for Aleph company search. Return only JSON with keys: "
-                    "entity_types, sector_types, technology_types, customer_type, funding_stage, "
-                    "company_type, ownership_status, stage, accelerators, yc_batches, word_text, "
-                    "d2q_text, doc2query, semantic_text, confidence_score. "
-                    f"Prefer observed entity_types={sorted(OBSERVED_ENTITY_TYPES)} and sector_types={sorted(OBSERVED_SECTOR_TYPES)}. "
-                    f"customer_type must be one of {sorted(OBSERVED_CUSTOMER_TYPES)} when known. "
-                    "Use arrays for *_types, accelerators, yc_batches, and doc2query. "
-                    "Keep JSON compact: doc2query max 6 strings and text fields under 800 characters each."
-                ),
-            },
-            {"role": "user", "content": json.dumps(local, ensure_ascii=False, sort_keys=True)},
+            {"role": "system", "content": COMBINED_SYSTEM_PROMPT},
+            {"role": "user", "content": f"Classify this company:\n\n{_build_company_context(local, rapidapi_context)}"},
         ],
-        "temperature": 0,
-        "max_completion_tokens": int(os.getenv("POWERPACKS_COMPANY_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
+        **api_call_kwargs(model),
     }
+    return payload
 
 
 def _parse_chat_json(content: str | None, context: str) -> dict[str, Any]:
@@ -407,8 +574,9 @@ async def call_openai_company_classifier_async(
     model: str | None,
     semaphore: asyncio.Semaphore,
     max_retries: int = 3,
+    rapidapi_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload = openai_classification_payload(local)
+    payload = openai_classification_payload(local, rapidapi_context=rapidapi_context)
     if model:
         payload["model"] = model
     async with semaphore:
@@ -447,13 +615,18 @@ async def call_openai_company_classifiers_async(
     timeout: int,
     concurrency: int,
     max_retries: int = 3,
+    rapidapi_contexts: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
     semaphore = asyncio.Semaphore(max(1, concurrency))
+    contexts = rapidapi_contexts or [{}] * len(rows)
     try:
         return await asyncio.gather(*[
-            call_openai_company_classifier_async(client, row, model=model, semaphore=semaphore, max_retries=max_retries)
-            for row in rows
+            call_openai_company_classifier_async(
+                client, row, model=model, semaphore=semaphore,
+                max_retries=max_retries, rapidapi_context=ctx or None,
+            )
+            for row, ctx in zip(rows, contexts)
         ])
     finally:
         await client.close()
@@ -468,6 +641,7 @@ def call_openai_company_classifiers(
     timeout: int | None = None,
     concurrency: int | None = None,
     max_retries: int = 3,
+    rapidapi_contexts: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -480,8 +654,9 @@ def call_openai_company_classifiers(
         api_key=api_key,
         base_url=(base_url or os.getenv("POWERPACKS_OPENAI_BASE") or "https://api.openai.com/v1"),
         timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
-        concurrency=concurrency or int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY))),
+        concurrency=concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=DEFAULT_OPENAI_CONCURRENCY),
         max_retries=max_retries,
+        rapidapi_contexts=rapidapi_contexts,
     ))
 
 
@@ -566,6 +741,7 @@ def estimate_payload(input_path: Path, provider: str, artifact: dict[str, dict[s
 
 
 def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict[str, Any]:
+    finalize_started = time.perf_counter()
     chunks = sorted((output_dir / "chunks").glob("companies.*.jsonl")) if (output_dir / "chunks").exists() else []
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -577,6 +753,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
                 rows.append(row)
     rows.sort(key=lambda row: clean(row.get("company_urn")))
     atomic_write_jsonl(output_path, rows)
+    add_timing(state, "finalize_merge_write_seconds", time.perf_counter() - finalize_started)
     state["status"] = "completed"
     state["completed_at"] = now_iso()
     state["companies_written"] = len(rows)
@@ -597,6 +774,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
             "artifact_misses": state.get("artifact_misses", 0),
             "paid_calls": state.get("paid_calls", 0),
         },
+        "timings": state.get("timings", {}),
         "provider_notes": [
             "artifact replays precomputed real Aleph-shaped companies_corpus_v3 fields without spend",
             "openai/llm is an explicit --allow-paid provider path",
@@ -629,18 +807,77 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     batch: list[dict[str, Any]] = []
     paid_pending: list[dict[str, Any]] = []
-    paid_concurrency = int(os.getenv("POWERPACKS_OPENAI_CONCURRENCY", str(DEFAULT_OPENAI_CONCURRENCY)))
+    usage_tier = getattr(args, "openai_usage_tier", None)
+    paid_concurrency = int(
+        getattr(args, "concurrency", None)
+        or env_or_profile_int(
+            "POWERPACKS_OPENAI_CONCURRENCY",
+            "openai_concurrency",
+            tier=usage_tier,
+            fallback=DEFAULT_OPENAI_CONCURRENCY,
+        )
+    )
     paid_timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     chunks_this_run = 0
+
+    # Pre-fetch RapidAPI company details for all companies in the input
+    # so the LLM has real descriptions, headcounts, and industries.
+    # Build a name→rapidapi_id lookup from the input, then fetch profiles.
+    rapidapi_lookup: dict[str, dict[str, Any]] = {}  # rapidapi_id → response
+    rapidapi_name_to_id: dict[str, str] = {}  # norm_name → rapidapi_id
+    if provider == "openai" and allow_paid:
+        rapid_key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
+        if rapid_key:
+            from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import (
+                fetch_company_details_batch,
+            )
+            # Collect unique rapidapi_company_ids from the input.
+            # Try the input JSONL first; fall back to the people CSV ledger.
+            unique_ids: dict[str, str] = {}  # rapidapi_id → company_name
+            for row in read_jsonl(input_path):
+                rid = clean(row.get("rapidapi_company_id"))
+                name = norm_name(row.get("company_name"))
+                if rid and rid not in unique_ids:
+                    unique_ids[rid] = name
+                    rapidapi_name_to_id[name] = rid
+            # If input JSONL had no IDs, scan the people CSV (passed via --rapidapi-people-csv).
+            if not unique_ids:
+                csv_path = getattr(args, "rapidapi_people_csv", None)
+                if csv_path:
+                    candidate_csv = Path(csv_path)
+                    if candidate_csv.exists():
+                        import csv as _csv
+                        with open(candidate_csv, newline="", encoding="utf-8") as fh:
+                            for prow in _csv.DictReader(fh):
+                                for exp in json.loads(prow.get("work_experiences", "[]") or "[]"):
+                                    if not isinstance(exp, dict):
+                                        continue
+                                    rid = clean(exp.get("rapidapi_company_id"))
+                                    name = norm_name(exp.get("company_name"))
+                                    if rid and name and rid not in unique_ids:
+                                        unique_ids[rid] = name
+                                        rapidapi_name_to_id[name] = rid
+            if unique_ids:
+                sys.stderr.write(f"[enrich-companies] fetching {len(unique_ids)} company profiles from RapidAPI\n")
+                rapidapi_lookup = fetch_company_details_batch(
+                    list(unique_ids.keys()), api_key=rapid_key,
+                )
+                ok = sum(1 for v in rapidapi_lookup.values() if not v.get("error"))
+                sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(unique_ids)} company profiles\n")
 
     def flush_output(force: bool = False) -> dict[str, Any] | None:
         nonlocal batch, chunks_this_run
         if not batch or (not force and len(batch) < int(args.checkpoint_every)):
             return None
+        chunk_started = time.perf_counter()
         chunk_index = int(state.get("chunks_written") or 0) + 1
         written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), batch)
         state["chunks_written"] = chunk_index
         state["companies_written"] = int(state.get("companies_written") or 0) + written
+        add_timing(state, "checkpoint_chunk_write_seconds", time.perf_counter() - chunk_started)
+        state_started = time.perf_counter()
+        save_state(output_dir, state)
+        add_timing(state, "checkpoint_state_write_seconds", time.perf_counter() - state_started)
         save_state(output_dir, state)
         batch = []
         chunks_this_run += 1
@@ -651,6 +888,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "chunks_written_total": state["chunks_written"],
                 "input_rows_processed": state["input_rows_processed"],
                 "companies_written": state["companies_written"],
+                "timings": state.get("timings", {}),
             }
         return None
 
@@ -661,7 +899,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return None
         pending = paid_pending
         paid_pending = []
+        # Resolve RapidAPI company context for richer LLM input.
+        rapidapi_contexts: list[dict[str, Any]] = []
+        if rapidapi_lookup and rapidapi_name_to_id:
+            from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import (
+                extract_company_context,
+            )
+            for shaped in pending:
+                name = norm_name(shaped.get("company_name"))
+                rid = rapidapi_name_to_id.get(name, "")
+                raw_resp = rapidapi_lookup.get(rid)
+                rapidapi_contexts.append(extract_company_context(raw_resp) if raw_resp else {})
         try:
+            openai_started = time.perf_counter()
             enrichments = call_openai_company_classifiers(
                 pending,
                 model=getattr(args, "model", None),
@@ -669,20 +919,27 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 base_url=getattr(args, "base_url", None),
                 timeout=paid_timeout,
                 concurrency=paid_concurrency,
+                rapidapi_contexts=rapidapi_contexts or None,
             )
+            add_timing(state, "openai_enrichment_seconds", time.perf_counter() - openai_started)
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
+        merge_started = time.perf_counter()
         for shaped, enrichment in zip(pending, enrichments):
             batch.append(merge_enrichment(shaped, enrichment))
+        add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
         state["paid_calls"] = int(state.get("paid_calls") or 0) + len(pending)
         return flush_output(force=True)
 
+    local_prepare_started = time.perf_counter()
     for idx, row in iter_unprocessed(input_path, int(state.get("input_rows_processed") or 0)):
         shaped = shape_company(row)
         cached = artifact.get(norm_name(shaped.get("company_name"))) if artifact else None
         if cached:
             try:
+                merge_started = time.perf_counter()
                 shaped = merge_enrichment(shaped, cached)
+                add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
             except RuntimeError as exc:
                 raise SystemExit(str(exc)) from exc
             state["artifact_hits"] = int(state.get("artifact_hits") or 0) + 1
@@ -697,7 +954,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if not allow_paid:
                 raise SystemExit("company provider 'openai' requires --allow-paid; no paid API was called")
             paid_pending.append(shaped)
+            add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
             partial = flush_paid()
+            local_prepare_started = time.perf_counter()
             if partial:
                 return partial
             shaped = None
@@ -705,9 +964,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             batch.append(shaped)
         state["input_rows_processed"] = idx
         if len(batch) >= int(args.checkpoint_every):
+            add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
             partial = flush_paid(force=True) or flush_output()
+            local_prepare_started = time.perf_counter()
             if partial:
                 return partial
+    add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
     partial = flush_paid(force=True)
     if partial:
         return partial
@@ -738,10 +1000,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--estimate", action="store_true", help="Alias for --dry-run")
     run_p.add_argument("--allow-paid", action="store_true")
     run_p.add_argument("--model", default=None)
+    run_p.add_argument("--concurrency", type=int, default=None)
+    run_p.add_argument("--openai-usage-tier", default=None)
     run_p.add_argument("--api-key")
     run_p.add_argument("--base-url")
     run_p.add_argument("--force", action="store_true")
     run_p.add_argument("--stop-after-chunks", type=int)
+    run_p.add_argument("--rapidapi-people-csv", default=None, help="People CSV with rapidapi_company_id in work_experiences for company profile fetch")
     run_p.set_defaults(func=run)
     status_p = sub.add_parser("status")
     status_p.add_argument("--output-dir", required=True)

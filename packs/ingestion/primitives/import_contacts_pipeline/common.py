@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import csv
+import hashlib
 import shutil
 import sys
 from pathlib import Path
@@ -14,9 +15,7 @@ from packs.ingestion.primitives.discover_contacts_pipeline.common import (
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
     now_iso,
-    read_accounts,
     read_json,
-    source_slug,
     unique_strings,
     write_json,
 )
@@ -28,6 +27,11 @@ from packs.ingestion.primitives.discover_contacts_pipeline.directory import (
 DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
 DEFAULT_IMPORT_DIR = DEFAULT_BASE_DIR / "import"
 DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
+
+try:
+    csv.field_size_limit(sys.maxsize)
+except OverflowError:
+    csv.field_size_limit(2**31 - 1)
 
 
 def load_legacy_discover_module() -> Any:
@@ -64,6 +68,11 @@ def linkedin_csv_path(accounts: dict[str, Any]) -> str:
     value = cfg.get("csv_path") or ""
     if not value and isinstance(channel.get("artifacts"), list) and channel["artifacts"]:
         value = channel["artifacts"][0]
+    if value and Path(str(value)).exists():
+        return str(value)
+    repo_local = DEFAULT_BASE_DIR / "discover" / "linkedin" / "Connections.csv"
+    if repo_local.exists():
+        return str(repo_local)
     return str(value or "")
 
 
@@ -77,35 +86,151 @@ def linkedin_source_user(accounts: dict[str, Any]) -> str:
     return "local"
 
 
-def write_manifest(source: str, payload: dict[str, Any]) -> dict[str, Any]:
-    import_dir = DEFAULT_IMPORT_DIR / source
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    path = Path(str(path_text or ""))
+    if not path_text or not path.exists() or not path.is_file():
+        return {"path": str(path_text or ""), "exists": False}
+    stat = path.stat()
+    existing = existing or {}
+    mtime_ns = stat.st_mtime_ns
+    if (
+        existing.get("path") == str(path)
+        and existing.get("exists") is True
+        and existing.get("size") == stat.st_size
+        and existing.get("mtime_ns") == mtime_ns
+        and existing.get("sha256")
+    ):
+        return dict(existing)
+    return {
+        "path": str(path),
+        "exists": True,
+        "size": stat.st_size,
+        "mtime_ns": mtime_ns,
+        "sha256": sha256_file(path),
+    }
+
+
+def collect_artifact_paths(value: Any) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            paths.extend(collect_artifact_paths(item))
+    elif isinstance(value, list):
+        for item in value:
+            paths.extend(collect_artifact_paths(item))
+    elif isinstance(value, str):
+        text = value.strip()
+        if text.startswith(".powerpacks/") or Path(text).exists():
+            paths.append(text)
+    return list(dict.fromkeys(paths))
+
+
+def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    existing = existing or {}
+    existing_inputs = existing.get("input_artifacts") if isinstance(existing.get("input_artifacts"), dict) else {}
+    existing_outputs = existing.get("output_artifacts") if isinstance(existing.get("output_artifacts"), dict) else {}
+    input_paths = collect_artifact_paths(payload.get("input") or {})
+    output_paths = collect_artifact_paths({"outputs": payload.get("outputs") or {}, "artifacts": payload.get("artifacts") or {}})
+    return {
+        "input_artifacts": {path: artifact_fingerprint(path, existing_inputs.get(path) if isinstance(existing_inputs, dict) else None) for path in input_paths},
+        "output_artifacts": {path: artifact_fingerprint(path, existing_outputs.get(path) if isinstance(existing_outputs, dict) else None) for path in output_paths},
+    }
+
+
+def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the whole manifest payload without volatile timestamp fields."""
+    signature = dict(payload)
+    signature.pop("updated_at", None)
+    signature.pop("created_at", None)
+    return signature
+
+
+def write_manifest(source: str, payload: dict[str, Any], import_dir: Path | None = None) -> dict[str, Any]:
+    import_dir = (import_dir or DEFAULT_IMPORT_DIR) / source
     manifest = import_dir / "manifest.json"
+    existing = read_json(manifest, {}) or {}
     payload = {
         "source": source,
         "status": payload.get("status") or "completed",
-        "updated_at": payload.get("updated_at") or now_iso(),
         **payload,
     }
+    payload["fingerprints"] = payload.get("fingerprints") or manifest_fingerprints(payload, existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else None)
+    if existing and stable_manifest_signature(existing) == stable_manifest_signature(payload):
+        return existing
+    payload["updated_at"] = payload.get("updated_at") or now_iso()
     write_json(manifest, payload)
     return payload
 
 
-def copy_people_csv(source: str, people_csv: str) -> str:
+def fingerprint_matches(path_text: str, fingerprint: dict[str, Any]) -> bool:
+    current = artifact_fingerprint(path_text, fingerprint)
+    return current == fingerprint
+
+
+def is_shared_directory_csv(path_text: str) -> bool:
+    if str(path_text) == str(DEFAULT_DIRECTORY_CSV):
+        return True
+    try:
+        return Path(path_text).resolve() == DEFAULT_DIRECTORY_CSV.resolve()
+    except (OSError, RuntimeError):
+        return False
+
+
+def import_manifest_current(source: str, expected_input: dict[str, Any] | None = None, import_dir: Path | None = None) -> dict[str, Any] | None:
+    manifest = (import_dir or DEFAULT_IMPORT_DIR) / source / "manifest.json"
+    existing = read_json(manifest, {}) or {}
+    if not isinstance(existing, dict) or existing.get("status") != "completed":
+        return None
+    if expected_input:
+        existing_input = existing.get("input") if isinstance(existing.get("input"), dict) else {}
+        for key, expected in expected_input.items():
+            if existing_input.get(key) != expected:
+                return None
+    fingerprints = existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else {}
+    groups = [fingerprints.get("input_artifacts"), fingerprints.get("output_artifacts")]
+    saw_file = False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        for path_text, fingerprint in group.items():
+            if is_shared_directory_csv(str(path_text)):
+                continue
+            if not isinstance(fingerprint, dict) or not fingerprint.get("exists"):
+                continue
+            saw_file = True
+            if not fingerprint_matches(str(path_text), fingerprint):
+                return None
+    if not saw_file:
+        return None
+    return {**existing, "noop": True, "reason": "import_manifest_current"}
+
+
+def copy_people_csv(source: str, people_csv: str, import_dir: Path | None = None) -> str:
     if not people_csv:
         return ""
     src = Path(str(people_csv))
     if not src.exists():
         return ""
-    dest = DEFAULT_IMPORT_DIR / source / "people.csv"
+    dest = (import_dir or DEFAULT_IMPORT_DIR) / source / "people.csv"
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.resolve() != dest.resolve():
+        if dest.exists() and dest.is_file() and src.stat().st_size == dest.stat().st_size and sha256_file(src) == sha256_file(dest):
+            return str(dest)
         shutil.copyfile(src, dest)
     return str(dest)
 
 
 def csv_count(path_text: str) -> int:
     path = Path(str(path_text or ""))
-    if not path.exists():
+    if not path_text or not path.exists() or not path.is_file():
         return 0
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
         return sum(1 for _ in csv.DictReader(handle))

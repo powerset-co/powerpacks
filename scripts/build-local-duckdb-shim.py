@@ -4,7 +4,7 @@
 Sidecar helper for pipe-cleaning the local DuckDB search path while the durable
 processing pipeline is still settling. It wraps the checked-in indexing pipeline
 when given a source CSV, or materializes an existing records directory into the
-table names expected by ``packs/search/primitives/lib/local_duckdb_store.py``.
+table names expected by ``packs/search/primitives/local/local_duckdb_store.py``.
 
 Example:
 
@@ -22,15 +22,16 @@ Then test local search with:
 from __future__ import annotations
 
 import argparse
+import array
 from contextlib import contextmanager
 import csv
+import hashlib
 import fcntl
 import json
 import os
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -56,11 +57,17 @@ DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 LOCAL_TABLES = {
     "local_people_positions": "records/people.records.jsonl",
     "local_summaries": "records/summaries.records.jsonl",
+    "local_company_signals": "records/company_signals.records.jsonl",
     "local_people_education": "records/education.records.jsonl",
     "local_education": "records/schools.records.jsonl",
     "local_companies": "records/companies.records.jsonl",
 }
 PERSON_PROFILE_RECORD = "records/person_profiles.records.jsonl"
+PERSON_SOURCE_SUMMARY_RECORD = "records/person_source_summary.records.jsonl"
+OPTIONAL_LOCAL_TABLES = {
+    "local_person_source_summary": PERSON_SOURCE_SUMMARY_RECORD,
+}
+LOCAL_HASH_TABLE = "_local_record_hashes"
 
 # Local DuckDB contract for the five search namespaces.  These columns mirror
 # the Aleph TurboPuffer upload contracts copied under .powerpacks/aleph-seed:
@@ -202,6 +209,20 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "valuation": "DOUBLE",
         "allowed_operator_ids": "VARCHAR[]",
     },
+    "local_company_signals": {
+        "id": "VARCHAR",
+        "company_id": "VARCHAR",
+        "company_urn": "VARCHAR",
+        "signals_text": "VARCHAR",
+        "summary": "VARCHAR",
+        "doc2query_text": "VARCHAR",
+        "signal_tokens": "VARCHAR[]",
+        "signals_tokens": "VARCHAR[]",
+        "summary_tokens": "VARCHAR[]",
+        "word_tokens": "VARCHAR[]",
+        "vector": "DOUBLE[]",
+        "allowed_operator_ids": "VARCHAR[]",
+    },
     "local_people_education": {
         "id": "VARCHAR",
         "person_id": "VARCHAR",
@@ -226,8 +247,27 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "person_count": "BIGINT",
     },
 }
+OPTIONAL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
+    "local_person_source_summary": {
+        "person_id": "VARCHAR",
+        "operator_id": "VARCHAR",
+        "source_channel": "VARCHAR",
+        "source_account": "VARCHAR",
+        "total_interactions": "INTEGER",
+        "total_messages": "INTEGER",
+        "thread_count": "INTEGER",
+        "total_sent": "INTEGER",
+        "total_received": "INTEGER",
+        "first_interaction": "VARCHAR",
+        "last_interaction": "VARCHAR",
+    },
+}
+ALL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
+    **LOCAL_TABLE_CONTRACT,
+    **OPTIONAL_LOCAL_TABLE_CONTRACT,
+}
 
-VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies"]
+VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies", "local_company_signals"]
 POSITION_PERSON_DUPLICATE_COLUMNS = [
     "city",
     "state",
@@ -318,6 +358,25 @@ def read_jsonl(path: Path, limit: int | None = None):
                 return
 
 
+def compute_record_hash(record: dict[str, Any]) -> str:
+    vector = record.get("vector")
+    if vector is not None:
+        vector_bytes = array.array("d", vector).tobytes()
+    else:
+        vector_bytes = b""
+    other_fields = {key: value for key, value in record.items() if key not in {"vector", "_powerpacks_content_hash"}}
+    json_bytes = json.dumps(other_fields, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(vector_bytes + json_bytes).hexdigest()
+
+
+def duckdb_record_id(record: dict[str, Any], id_fields: tuple[str, ...]) -> str:
+    for field in id_fields:
+        value = str(record.get(field) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def write_jsonl(path: Path, rows) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -326,6 +385,16 @@ def write_jsonl(path: Path, rows) -> int:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
             count += 1
     return count
+
+
+def write_jsonl_if_changed(path: Path, rows) -> int:
+    buffered = [json.dumps(row, sort_keys=True) + "\n" for row in rows]
+    text = "".join(buffered)
+    if path.exists() and path.read_text(encoding="utf-8") == text:
+        return len(buffered)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return len(buffered)
 
 
 def has_records(path: Path) -> bool:
@@ -391,6 +460,12 @@ def materialize_records_dir(records_dir: Path, run_dir: Path, *, force: bool = F
         link_or_copy(src, dst, force=force)
         if dst.exists():
             copied[PERSON_PROFILE_RECORD] = str(dst)
+    src = record_source_path(records_dir, PERSON_SOURCE_SUMMARY_RECORD)
+    if src:
+        dst = run_dir / PERSON_SOURCE_SUMMARY_RECORD
+        link_or_copy(src, dst, force=force)
+        if dst.exists():
+            copied[PERSON_SOURCE_SUMMARY_RECORD] = str(dst)
     for _table, rel in LOCAL_TABLES.items():
         src = record_source_path(records_dir, rel)
         if not src:
@@ -641,11 +716,128 @@ def table_columns(con: Any, table: str) -> set[str]:
     return {str(row[1]) for row in rows}
 
 
+def table_column_types(con: Any, table: str) -> dict[str, str]:
+    rows = con.execute(f"PRAGMA table_info({qident(table)})").fetchall()
+    return {str(row[1]): str(row[2]) for row in rows}
+
+
+def table_exists(con: Any, table: str) -> bool:
+    return bool(con.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'main' AND table_name = ?", [table]).fetchone()[0])
+
+
 def add_missing_columns(con: Any, table: str, columns: dict[str, str]) -> None:
     existing = table_columns(con, table)
     for name, type_name in columns.items():
         if name not in existing:
             con.execute(f"ALTER TABLE {qident(table)} ADD COLUMN {qident(name)} {type_name}")
+
+
+def ensure_local_hash_table(con: Any) -> None:
+    con.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {qident(LOCAL_HASH_TABLE)} (
+            table_name VARCHAR,
+            row_id VARCHAR,
+            record_hash VARCHAR,
+            updated_at VARCHAR,
+            PRIMARY KEY (table_name, row_id)
+        )
+        """
+    )
+
+
+def table_id_fields(table: str) -> tuple[str, ...]:
+    if table == "local_companies":
+        return ("id", "company_urn")
+    if table == "local_summaries":
+        return ("id", "person_id", "base_id")
+    if table == "local_people_positions":
+        return ("id", "position_id", "person_id", "base_id")
+    if table in {"local_person_profiles", "local_people_education", "local_education"}:
+        return ("id", "person_id", "base_id", "canonical_education_id")
+    return ("id",)
+
+
+def row_id_sql(table: str, alias: str = "", available_columns: set[str] | None = None) -> str:
+    prefix = f"{qident(alias)}." if alias else ""
+    fields = tuple(field for field in table_id_fields(table) if available_columns is None or field in available_columns)
+    if not fields:
+        return "NULL"
+    parts = [f"NULLIF(CAST({prefix}{qident(field)} AS VARCHAR), '')" for field in fields]
+    return f"COALESCE({', '.join(parts)})"
+
+
+def current_hashes_from_file(path: Path, table: str) -> tuple[dict[str, str], dict[str, dict[str, Any]], int]:
+    id_fields = table_id_fields(table)
+    hashes: dict[str, str] = {}
+    rows: dict[str, dict[str, Any]] = {}
+    skipped_unkeyed_rows = 0
+    for record in read_jsonl(path):
+        rid = duckdb_record_id(record, id_fields)
+        if not rid:
+            skipped_unkeyed_rows += 1
+            continue
+        hashes[rid] = compute_record_hash(record)
+        rows[rid] = record
+    return hashes, rows, skipped_unkeyed_rows
+
+
+def stored_table_hashes(con: Any, table: str) -> dict[str, str]:
+    if not table_exists(con, LOCAL_HASH_TABLE):
+        return {}
+    return {
+        str(row_id): str(record_hash)
+        for row_id, record_hash in con.execute(
+            f"SELECT row_id, record_hash FROM {qident(LOCAL_HASH_TABLE)} WHERE table_name = ?",
+            [table],
+        ).fetchall()
+    }
+
+
+def table_ids(con: Any, table: str) -> set[str]:
+    if not table_exists(con, table):
+        return set()
+    cols = table_columns(con, table)
+    if not any(field in cols for field in table_id_fields(table)):
+        return set()
+    expr = row_id_sql(table, available_columns=cols)
+    return {
+        str(row[0])
+        for row in con.execute(f"SELECT {expr} AS row_id FROM {qident(table)} WHERE {expr} IS NOT NULL").fetchall()
+    }
+
+
+def save_table_hashes(con: Any, table: str, hashes: dict[str, str]) -> None:
+    ensure_local_hash_table(con)
+    con.execute(f"DELETE FROM {qident(LOCAL_HASH_TABLE)} WHERE table_name = ?", [table])
+    if hashes:
+        updated_at = now_iso()
+        con.executemany(
+            f"INSERT INTO {qident(LOCAL_HASH_TABLE)} (table_name, row_id, record_hash, updated_at) VALUES (?, ?, ?, ?)",
+            [(table, row_id, record_hash, updated_at) for row_id, record_hash in sorted(hashes.items())],
+        )
+
+
+def delete_hash_ids(con: Any, table: str, row_ids: set[str]) -> None:
+    if not row_ids:
+        return
+    con.executemany(
+        f"DELETE FROM {qident(LOCAL_HASH_TABLE)} WHERE table_name = ? AND row_id = ?",
+        [(table, row_id) for row_id in sorted(row_ids)],
+    )
+
+
+def upsert_hash_ids(con: Any, table: str, hashes: dict[str, str]) -> None:
+    if not hashes:
+        return
+    updated_at = now_iso()
+    con.executemany(
+        f"""
+        INSERT OR REPLACE INTO {qident(LOCAL_HASH_TABLE)} (table_name, row_id, record_hash, updated_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        [(table, row_id, record_hash, updated_at) for row_id, record_hash in sorted(hashes.items())],
+    )
 
 
 def _json_value(value: Any, default: Any) -> Any:
@@ -771,7 +963,7 @@ def materialize_person_profiles_from_csv(source: Path, run_dir: Path, operator_i
                 "allowed_operator_ids": [operator_id],
             }
 
-    write_jsonl(out, rows())
+    write_jsonl_if_changed(out, rows())
     return out
 
 
@@ -784,11 +976,114 @@ def load_jsonl_table(con: Any, table: str, path: Path) -> int:
         )
     else:
         con.execute(f"CREATE TABLE {qident(table)} (id VARCHAR)")
+    current_hashes, _rows, _skipped = current_hashes_from_file(path, table)
+    save_table_hashes(con, table, current_hashes)
     return int(con.execute(f"SELECT count(*) FROM {qident(table)}").fetchone()[0])
 
 
+def load_jsonl_table_incremental(con: Any, table: str, path: Path, run_dir: Path, operator_id: str) -> tuple[int, dict[str, Any]]:
+    if not table_exists(con, table):
+        count = load_jsonl_table(con, table, path)
+        return count, {"mode": "create", "inserted_rows": count, "updated_rows": 0, "deleted_rows": 0, "unchanged_rows": 0, "fallback_full_rebuild": True, "reason": "missing_table"}
+
+    current_hashes, rows_by_id, skipped_unkeyed_rows = current_hashes_from_file(path, table)
+    old_hashes = stored_table_hashes(con, table)
+    if skipped_unkeyed_rows:
+        count = load_jsonl_table(con, table, path)
+        return count, {"mode": "full_rebuild", "inserted_rows": count, "updated_rows": 0, "deleted_rows": 0, "unchanged_rows": 0, "skipped_unkeyed_rows": skipped_unkeyed_rows, "fallback_full_rebuild": True, "reason": "unkeyed_rows"}
+
+    existing_ids = table_ids(con, table) if not old_hashes else set()
+    old_ids = set(old_hashes) if old_hashes else existing_ids
+    new_ids = set(current_hashes)
+    inserted_ids = new_ids - old_ids
+    deleted_ids = old_ids - new_ids
+    changed_ids = {rid for rid in new_ids & old_ids if current_hashes[rid] != old_hashes[rid]} if old_hashes else new_ids & old_ids
+    unchanged_ids = new_ids - inserted_ids - changed_ids
+    if not inserted_ids and not changed_ids and not deleted_ids:
+        return int(con.execute(f"SELECT count(*) FROM {qident(table)}").fetchone()[0]), {"mode": "noop", "inserted_rows": 0, "updated_rows": 0, "deleted_rows": 0, "unchanged_rows": len(unchanged_ids), "skipped_unkeyed_rows": 0}
+
+    ids_to_write = inserted_ids | changed_ids
+    ids_to_delete = deleted_ids | changed_ids
+    stage_name = f"_stage_{table}"
+    ids_name = f"_ids_{table}"
+    changed_path = run_dir / ".duckdb-incremental" / f"{table}.changed.jsonl"
+    in_tx = False
+    ids_temp_created = False
+    stage_temp_created = False
+    try:
+        if ids_to_write:
+            write_jsonl(changed_path, [rows_by_id[rid] for rid in sorted(ids_to_write)])
+            con.execute(
+                f"CREATE TEMP TABLE {qident(stage_name)} AS SELECT * FROM read_json_auto(?, format='newline_delimited', union_by_name=true, maximum_object_size=134217728)",
+                [str(changed_path)],
+            )
+            stage_temp_created = True
+            postprocess_table(con, stage_name, operator_id)
+            target_types = table_column_types(con, table)
+            stage_types = table_column_types(con, stage_name)
+            for column, type_name in stage_types.items():
+                if column not in target_types:
+                    con.execute(f"ALTER TABLE {qident(table)} ADD COLUMN {qident(column)} {type_name}")
+                    target_types[column] = type_name
+        if ids_to_delete:
+            con.execute(f"CREATE TEMP TABLE {qident(ids_name)}(row_id VARCHAR)")
+            ids_temp_created = True
+            con.executemany(f"INSERT INTO {qident(ids_name)} VALUES (?)", [(rid,) for rid in sorted(ids_to_delete)])
+
+        ensure_local_hash_table(con)
+        con.execute("BEGIN TRANSACTION")
+        in_tx = True
+        if ids_to_delete:
+            target_id_expr = row_id_sql(table, available_columns=table_columns(con, table))
+            con.execute(f"DELETE FROM {qident(table)} WHERE {target_id_expr} IN (SELECT row_id FROM {qident(ids_name)})")
+            delete_hash_ids(con, table, ids_to_delete)
+        if ids_to_write:
+            target_types = table_column_types(con, table)
+            stage_cols = table_columns(con, stage_name)
+            insert_cols = list(target_types)
+            select_exprs = [f"CAST({qident(column)} AS {target_types[column]})" if column in stage_cols else f"CAST(NULL AS {target_types[column]})" for column in insert_cols]
+            con.execute(
+                f"INSERT INTO {qident(table)} ({', '.join(qident(column) for column in insert_cols)}) "
+                f"SELECT {', '.join(select_exprs)} FROM {qident(stage_name)}"
+            )
+            upsert_hash_ids(con, table, {rid: current_hashes[rid] for rid in ids_to_write})
+        con.execute("COMMIT")
+        in_tx = False
+    except Exception:
+        if in_tx:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+        raise
+    finally:
+        for temp_name, created in [(ids_name, ids_temp_created), (stage_name, stage_temp_created)]:
+            if created:
+                try:
+                    con.execute(f"DROP TABLE IF EXISTS {qident(temp_name)}")
+                except Exception:
+                    pass
+        try:
+            if changed_path.exists():
+                changed_path.unlink()
+        except OSError:
+            pass
+
+    count = int(con.execute(f"SELECT count(*) FROM {qident(table)}").fetchone()[0])
+    return count, {
+        "mode": "incremental" if old_hashes else "bootstrap_replace_missing_hashes",
+        "inserted_rows": len(inserted_ids),
+        "updated_rows": len(changed_ids),
+        "deleted_rows": len(deleted_ids),
+        "unchanged_rows": len(unchanged_ids),
+        "skipped_unkeyed_rows": 0,
+        "hashes": len(current_hashes),
+        "old_hashes_present": bool(old_hashes),
+    }
+
+
 def postprocess_table(con: Any, table: str, operator_id: str) -> None:
-    add_missing_columns(con, table, LOCAL_TABLE_CONTRACT.get(table, {}))
+    add_missing_columns(con, table, ALL_LOCAL_TABLE_CONTRACT.get(table, {}))
     cols = table_columns(con, table)
 
     if table == "local_people_positions":
@@ -823,6 +1118,17 @@ def postprocess_table(con: Any, table: str, operator_id: str) -> None:
                 f"NULLIF(CAST(entity_sector_text AS VARCHAR), ''), "
                 f"NULLIF(CAST(word_text AS VARCHAR), ''))"
             )
+
+    if table == "local_company_signals":
+        if {"company_id", "company_urn", "id"} <= cols:
+            con.execute(
+                f"UPDATE {qident(table)} SET company_id = COALESCE("
+                f"NULLIF(CAST(company_id AS VARCHAR), ''), "
+                f"NULLIF(CAST(company_urn AS VARCHAR), ''), "
+                f"NULLIF(CAST(id AS VARCHAR), ''))"
+            )
+        if {"company_urn", "company_id"} <= cols:
+            con.execute(f"UPDATE {qident(table)} SET company_urn = COALESCE(NULLIF(CAST(company_urn AS VARCHAR), ''), CAST(company_id AS VARCHAR))")
         if {"name_aliases_text", "aliases", "company_name"} <= cols:
             con.execute(
                 f"UPDATE {qident(table)} SET name_aliases_text = COALESCE("
@@ -861,7 +1167,7 @@ def resolve_artifact_path(run_dir: Path, rel: str) -> Path:
     return run_dir / rel
 
 
-def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_profiles_csv: Path | None = None, derive_positions_csv: Path | None = None) -> tuple[Path, dict[str, int]]:
+def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, incremental: bool = False, person_profiles_csv: Path | None = None, derive_positions_csv: Path | None = None) -> tuple[Path, dict[str, int], dict[str, Any]]:
     try:
         import duckdb  # type: ignore
     except ModuleNotFoundError as exc:
@@ -871,28 +1177,43 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_
     if db_path.exists():
         if force:
             remove_duckdb_file_set(db_path)
-        else:
+        elif not incremental:
             raise SystemExit(f"DuckDB already exists: {db_path}. Use --force to replace it.")
     elif force:
         remove_duckdb_file_set(db_path)
 
     con = duckdb.connect(str(db_path))
     counts: dict[str, int] = {}
+    table_diffs: dict[str, Any] = {}
     try:
         if person_profiles_csv:
             profile_record = materialize_person_profiles_from_csv(person_profiles_csv, run_dir, operator_id)
             if profile_record:
-                counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", profile_record)
+                if incremental:
+                    counts["local_person_profiles"], table_diffs["local_person_profiles"] = load_jsonl_table_incremental(con, "local_person_profiles", profile_record, run_dir, operator_id)
+                else:
+                    counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", profile_record)
                 postprocess_table(con, "local_person_profiles", operator_id)
         elif has_records(run_dir / PERSON_PROFILE_RECORD):
-            counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", run_dir / PERSON_PROFILE_RECORD)
+            if incremental:
+                counts["local_person_profiles"], table_diffs["local_person_profiles"] = load_jsonl_table_incremental(con, "local_person_profiles", run_dir / PERSON_PROFILE_RECORD, run_dir, operator_id)
+            else:
+                counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", run_dir / PERSON_PROFILE_RECORD)
             postprocess_table(con, "local_person_profiles", operator_id)
         if derive_positions_csv:
             materialize_positions_from_csv(derive_positions_csv, run_dir, operator_id, force=True)
         for table, rel in LOCAL_TABLES.items():
             path = resolve_artifact_path(run_dir, rel)
-            counts[table] = load_jsonl_table(con, table, path)
+            if incremental:
+                counts[table], table_diffs[table] = load_jsonl_table_incremental(con, table, path, run_dir, operator_id)
+            else:
+                counts[table] = load_jsonl_table(con, table, path)
             postprocess_table(con, table, operator_id)
+        for table, rel in OPTIONAL_LOCAL_TABLES.items():
+            path = resolve_artifact_path(run_dir, rel)
+            if path.exists():
+                counts[table] = load_jsonl_table(con, table, path)
+                postprocess_table(con, table, operator_id)
         postprocess_cross_tables(con)
         counts["local_person_profile_position_overlap"] = profile_position_id_overlap(con)
         counts["local_people_positions_person_columns_dropped"] = int(drop_position_person_duplicates(con))
@@ -900,7 +1221,7 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, person_
         con.execute("CHECKPOINT")
     finally:
         con.close()
-    return db_path, counts
+    return db_path, counts, table_diffs
 
 
 def profile_position_id_overlap(con: Any) -> int:
@@ -946,9 +1267,9 @@ def postprocess_cross_tables(con: Any) -> None:
                 FROM local_companies AS c
                 WHERE p.company_id IS NOT NULL
                   AND CAST(p.company_id AS VARCHAR) = CAST(c.id AS VARCHAR)
-                  AND (p.company_name IS NULL OR CAST(p.company_name AS VARCHAR) = '')
                   AND c.company_name IS NOT NULL
                   AND CAST(c.company_name AS VARCHAR) <> ''
+                  AND (p.company_name IS NULL OR CAST(p.company_name AS VARCHAR) <> CAST(c.company_name AS VARCHAR))
                 """
             )
 
@@ -974,7 +1295,7 @@ def build_pipeline(args: argparse.Namespace, run_dir: Path) -> None:
     run(cmd)
 
 
-def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table_counts: dict[str, int]) -> Path:
+def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table_counts: dict[str, int], table_diffs: dict[str, Any]) -> Path:
     source_value = str(Path(args.aleph_output_dir)) if args.aleph_output_dir else str(Path(args.records_dir)) if args.records_dir else str(Path(args.source))
     manifest = {
         "status": "ok",
@@ -988,7 +1309,10 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table
         "duckdb": str(db_path),
         "powerpacks_local_search_db": str(db_path),
         "tables": table_counts,
+        "table_diffs": table_diffs,
+        "duckdb_update_mode": "incremental" if args.incremental else "rebuild",
         "local_table_contract": LOCAL_TABLE_CONTRACT,
+        "optional_local_table_contract": OPTIONAL_LOCAL_TABLE_CONTRACT,
         "vector_tables": VECTOR_TABLES,
     }
     path = run_dir / "manifest.json"
@@ -1008,6 +1332,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", help="Canonical output directory for records and local-search.duckdb")
     parser.add_argument("--limit", type=int, help="Optional row limit for smoke tests")
     parser.add_argument("--force", action="store_true", help="Replace existing run dir / DuckDB")
+    parser.add_argument("--incremental", action="store_true", help="Update existing DuckDB rows by per-record hashes instead of rebuilding all tables; creates tables when missing")
     parser.add_argument("--skip-pipeline", action="store_true", help="Only load DuckDB from existing records in the run dir")
     return parser
 
@@ -1044,7 +1369,7 @@ def main() -> None:
         if mode == "aleph":
             materialize_aleph_output_dir(aleph_dir, run_dir, args.operator_id, limit=args.limit, force=args.force)
         elif mode == "records":
-            materialize_records_dir(records_dir, run_dir, force=args.force)
+            materialize_records_dir(records_dir, run_dir, force=args.force or args.incremental)
         else:
             build_pipeline(args, run_dir)
         if not run_dir.exists():
@@ -1060,14 +1385,16 @@ def main() -> None:
             person_profiles_csv = source_candidate if source_candidate.exists() else merged_candidate if merged_candidate.exists() else None
         args._resolved_person_profiles_csv = str(person_profiles_csv) if person_profiles_csv else None
         derive_positions_csv = person_profiles_csv if args.derive_positions_from_person_profiles else None
-        db_path, table_counts = load_duckdb(run_dir, args.operator_id, force=args.force, person_profiles_csv=person_profiles_csv, derive_positions_csv=derive_positions_csv)
-        manifest_path = write_manifest(run_dir, args, db_path, table_counts)
+        db_path, table_counts, table_diffs = load_duckdb(run_dir, args.operator_id, force=args.force, incremental=args.incremental, person_profiles_csv=person_profiles_csv, derive_positions_csv=derive_positions_csv)
+        manifest_path = write_manifest(run_dir, args, db_path, table_counts, table_diffs)
         emit({
             "status": "ok",
             "run_dir": str(run_dir),
             "manifest": str(manifest_path),
             "duckdb": str(db_path),
             "tables": table_counts,
+            "table_diffs": table_diffs,
+            "duckdb_update_mode": "incremental" if args.incremental else "rebuild",
             "env": f"POWERPACKS_LOCAL_SEARCH_DB={db_path}",
         })
 

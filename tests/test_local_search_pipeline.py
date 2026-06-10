@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 import os
 import subprocess
@@ -14,8 +15,22 @@ ROOT = Path(__file__).resolve().parents[1]
 PIPELINE = ROOT / "packs/search/primitives/local_search_pipeline/local_search_pipeline.py"
 PERSON_STANFORD = "00000000-0000-0000-0000-000000000001"
 PERSON_OTHER = "00000000-0000-0000-0000-000000000002"
+PERSON_ADJACENT = "00000000-0000-0000-0000-000000000003"
+PERSON_SUMMARY = "00000000-0000-0000-0000-000000000004"
+PERSON_SIGNAL = "00000000-0000-0000-0000-000000000005"
+PERSON_ENTRY_ADJACENT = "00000000-0000-0000-0000-000000000006"
+PERSON_GROWTH_ADJACENT = "00000000-0000-0000-0000-000000000007"
+PERSON_FOUNDER = "00000000-0000-0000-0000-000000000008"
 OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
 STANFORD_ID = "linkedin:school:stanford-university"
+
+
+def load_pipeline_module():
+    spec = importlib.util.spec_from_file_location("local_search_pipeline_test", PIPELINE)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
 
 
 def write_local_search_db(path: Path) -> None:
@@ -38,6 +53,8 @@ def write_local_search_db(path: Path) -> None:
           country VARCHAR,
           metro_areas VARCHAR[],
           role_track VARCHAR,
+          seniority_band VARCHAR,
+          role_ids VARCHAR[],
           is_current BOOLEAN,
           company_id VARCHAR,
           company_name VARCHAR,
@@ -52,7 +69,7 @@ def write_local_search_db(path: Path) -> None:
         """
     )
     conn.executemany(
-        "INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 f"{PERSON_STANFORD}-1",
@@ -65,6 +82,8 @@ def write_local_search_db(path: Path) -> None:
                 "United States",
                 ["San Francisco Bay Area"],
                 "engineering",
+                "senior",
+                ["software_engineer"],
                 True,
                 "linkedin:company:one",
                 "Company One",
@@ -87,6 +106,8 @@ def write_local_search_db(path: Path) -> None:
                 "United States",
                 ["New York City Metropolitan Area"],
                 "engineering",
+                "mid",
+                ["product_manager"],
                 True,
                 "linkedin:company:two",
                 "Company Two",
@@ -97,6 +118,150 @@ def write_local_search_db(path: Path) -> None:
                 1577836800,
                 0,
                 5.0,
+            ),
+            (
+                f"{PERSON_ADJACENT}-1",
+                PERSON_ADJACENT,
+                PERSON_ADJACENT,
+                f"{PERSON_ADJACENT}-1",
+                "Backend Engineer",
+                "San Francisco",
+                "California",
+                "United States",
+                ["San Francisco Bay Area"],
+                "engineering",
+                "mid",
+                ["backend_engineer"],
+                True,
+                "linkedin:company:one",
+                "Company One",
+                [OPERATOR_ID],
+                ["backend engin"],
+                ["backend", "engineer", "backend engineer"],
+                [0.8, 0.2, 0.0],
+                1577836800,
+                0,
+                6.0,
+            ),
+            (
+                f"{PERSON_SUMMARY}-1",
+                PERSON_SUMMARY,
+                PERSON_SUMMARY,
+                f"{PERSON_SUMMARY}-1",
+                "Platform Operations",
+                "Austin",
+                "Texas",
+                "United States",
+                ["Austin Metropolitan Area"],
+                "engineering",
+                "senior",
+                ["software_engineer"],
+                True,
+                "linkedin:company:two",
+                "Company Two",
+                [OPERATOR_ID],
+                ["platform oper"],
+                ["platform", "operations", "platform operations"],
+                [0.1, 0.9, 0.0],
+                1577836800,
+                0,
+                7.0,
+            ),
+            (
+                f"{PERSON_SIGNAL}-1",
+                PERSON_SIGNAL,
+                PERSON_SIGNAL,
+                f"{PERSON_SIGNAL}-1",
+                "Customer Success Specialist",
+                "Denver",
+                "Colorado",
+                "United States",
+                ["Denver Metropolitan Area"],
+                "engineering",
+                "mid",
+                ["software_engineer"],
+                True,
+                "linkedin:company:signals",
+                "Signals Company",
+                [OPERATOR_ID],
+                ["custom success specialist"],
+                ["customer", "success", "specialist", "customer success"],
+                [0.2, 0.8, 0.0],
+                1577836800,
+                0,
+                4.0,
+            ),
+            (
+                f"{PERSON_ENTRY_ADJACENT}-1",
+                PERSON_ENTRY_ADJACENT,
+                PERSON_ENTRY_ADJACENT,
+                f"{PERSON_ENTRY_ADJACENT}-1",
+                "Growth Lead",
+                "San Francisco",
+                "California",
+                "United States",
+                ["San Francisco Bay Area"],
+                "marketing",
+                "entry",
+                ["marketing_manager"],
+                True,
+                "linkedin:company:one",
+                "Company One",
+                [OPERATOR_ID],
+                [],
+                ["growth", "lead", "growth lead"],
+                [0.3, 0.7, 0.0],
+                1577836800,
+                0,
+                1.0,
+            ),
+            (
+                f"{PERSON_GROWTH_ADJACENT}-1",
+                PERSON_GROWTH_ADJACENT,
+                PERSON_GROWTH_ADJACENT,
+                f"{PERSON_GROWTH_ADJACENT}-1",
+                "Growth Lead",
+                "San Francisco",
+                "California",
+                "United States",
+                ["San Francisco Bay Area"],
+                "marketing",
+                "senior",
+                ["marketing_manager"],
+                True,
+                "linkedin:company:one",
+                "Company One",
+                [OPERATOR_ID],
+                [],
+                ["growth", "lead", "growth lead"],
+                [0.4, 0.6, 0.0],
+                1577836800,
+                0,
+                6.0,
+            ),
+            (
+                f"{PERSON_FOUNDER}-1",
+                PERSON_FOUNDER,
+                PERSON_FOUNDER,
+                f"{PERSON_FOUNDER}-1",
+                "Founder",
+                "Palo Alto",
+                "California",
+                "United States",
+                ["San Francisco Bay Area"],
+                "general",
+                "c_suite",
+                ["founder"],
+                True,
+                "linkedin:company:founder",
+                "Founder Co",
+                [OPERATOR_ID],
+                ["founder"],
+                ["founder"],
+                [0.5, 0.5, 0.0],
+                1577836800,
+                0,
+                12.0,
             ),
         ],
     )
@@ -200,12 +365,449 @@ def write_local_search_db(path: Path) -> None:
         [
             (PERSON_STANFORD, PERSON_STANFORD, PERSON_STANFORD, "Builds production software systems.", ["Python"], [OPERATOR_ID]),
             (PERSON_OTHER, PERSON_OTHER, PERSON_OTHER, "Builds backend services.", ["Go"], [OPERATOR_ID]),
+            (PERSON_ADJACENT, PERSON_ADJACENT, PERSON_ADJACENT, "Builds backend systems at Company One.", ["Python"], [OPERATOR_ID]),
+            (PERSON_SUMMARY, PERSON_SUMMARY, PERSON_SUMMARY, "Database architect for distributed storage systems.", ["Postgres"], [OPERATOR_ID]),
+            (PERSON_SIGNAL, PERSON_SIGNAL, PERSON_SIGNAL, "Database architect signal operator.", ["SQL"], [OPERATOR_ID]),
+            (PERSON_ENTRY_ADJACENT, PERSON_ENTRY_ADJACENT, PERSON_ENTRY_ADJACENT, "Entry level growth support.", ["Marketing"], [OPERATOR_ID]),
+            (PERSON_GROWTH_ADJACENT, PERSON_GROWTH_ADJACENT, PERSON_GROWTH_ADJACENT, "Senior growth lead at Company One.", ["Marketing"], [OPERATOR_ID]),
+            (PERSON_FOUNDER, PERSON_FOUNDER, PERSON_FOUNDER, "Founded Founder Co.", ["Leadership"], [OPERATOR_ID]),
+        ],
+    )
+    conn.execute(
+        """
+        CREATE TABLE local_company_signals (
+          id VARCHAR,
+          company_id VARCHAR,
+          company_urn VARCHAR,
+          signals_text VARCHAR,
+          summary VARCHAR,
+          doc2query_text VARCHAR,
+          word_tokens VARCHAR[],
+          signal_tokens VARCHAR[],
+          vector DOUBLE[],
+          allowed_operator_ids VARCHAR[]
+        )
+        """
+    )
+    conn.executemany(
+        "INSERT INTO local_company_signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                "signal-one",
+                "linkedin:company:signals",
+                "linkedin:company:signals",
+                "Database architect platform signal",
+                "Company hires database architects.",
+                "database architect distributed systems",
+                ["database", "architect", "database architect", "platform"],
+                ["database", "architect", "platform"],
+                [0.0, 1.0, 0.0],
+                [OPERATOR_ID],
+            )
         ],
     )
     conn.close()
 
 
 class LocalSearchPipelineTests(unittest.TestCase):
+    def test_normalize_query_expansion_payload_accepts_prod_role_schema(self) -> None:
+        mod = load_pipeline_module()
+        payload = {
+            "original_query": "software engineers in sf that went to stanford",
+            "traits": [{"value": "Software engineer", "temporal": "current", "meaning": "role"}],
+            "filters": {
+                "role_semantic_query": "Software engineers building production services and distributed systems.",
+                "role_bm25_queries": ["software engineer", "backend engineer"],
+                "role_core_patterns": [
+                    {"regex": "software\\s+engineer", "examples": ["Software Engineer", "Backend Engineer"]}
+                ],
+                "education_ids": [{"id": STANFORD_ID, "display_value": "Stanford University"}],
+                "metro_areas": [{"id": "San Francisco Bay Area", "display_value": "San Francisco Bay Area"}],
+                "seniority_bands": [{"id": "senior", "display_value": "Senior"}],
+            },
+        }
+
+        normalized = mod.normalize_query_expansion_payload(payload)
+        filters = normalized["role_search_filters"]
+
+        self.assertEqual(normalized["intent_type"], "role_search")
+        self.assertEqual(normalized["normalized_query"], payload["original_query"])
+        self.assertEqual(filters["semantic_query"], payload["filters"]["role_semantic_query"])
+        self.assertEqual(filters["role_semantic_query"], payload["filters"]["role_semantic_query"])
+        self.assertEqual(filters["education_names"], ["Stanford University"])
+        self.assertEqual(filters["education_ids"], [STANFORD_ID])
+        self.assertEqual(filters["metro_areas"], ["San Francisco Bay Area"])
+        self.assertEqual(filters["seniority_bands"], ["senior"])
+        self.assertEqual(
+            filters["bm25_queries"],
+            ["software engineer", "backend engineer", "Software Engineer", "Backend Engineer"],
+        )
+        self.assertEqual(normalized["traits"], payload["traits"])
+
+    def test_prod_shaped_role_expansion_reaches_local_duckdb_retrieval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_raw:
+            tmp = Path(tmp_raw)
+            db = tmp / "local-search.duckdb"
+            payload_path = tmp / "prod-expand.json"
+            ledger = tmp / "ledger.json"
+            write_local_search_db(db)
+            payload = {
+                "original_query": "software engineers",
+                "filters": {
+                    "role_bm25_queries": ["software engineer"],
+                    "role_ids": [{"id": "software_engineer", "display_value": "Software Engineer"}],
+                    "role_core_patterns": [{"regex": "software\\s+engineer", "examples": ["Software Engineer"]}],
+                },
+            }
+            payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE),
+                    "run",
+                    "--db",
+                    str(db),
+                    "--ledger",
+                    str(ledger),
+                    "--query",
+                    "software engineers",
+                    "--payload-json",
+                    str(payload_path),
+                    "--limit",
+                    "0",
+                    "--top-k",
+                    "50",
+                    "--timeout",
+                    "30",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            out = json.loads(proc.stdout)
+            self.assertEqual(out["summary"]["returned_people"], 1)
+            state = json.loads(Path(out["state"]).read_text())
+            expand = next(step for step in state["steps"] if step["id"] == "expand_search_request")
+            filters = expand["output"]["role_search_filters"]
+            self.assertEqual(filters["role_ids"], ["software_engineer"])
+            self.assertIn("software engineer", filters["bm25_queries"])
+            self.assertIn("Software Engineer", filters["bm25_queries"])
+            self.assertIn("Senior Software Engineer", filters["bm25_queries"])
+            self.assertEqual(filters["local_title_clusters"][0]["stemmed"], "softwar engin")
+            self.assertEqual(filters["local_title_clustering_status"]["status"], "completed")
+            self.assertGreater(filters["local_title_clustering_status"]["selected_count"], 0)
+            self.assertTrue(any(pattern.get("source") == "local_title_cluster" for pattern in filters["role_core_patterns"]))
+            retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
+            candidate = retrieval["output"]["candidates"][0]
+            self.assertIn("hybrid", candidate["vertical_sources"])
+            self.assertTrue(candidate["has_core_regex"])
+            self.assertEqual(candidate["bucket"], "good")
+            with Path(out["artifacts"]["csv"]).open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual([row["person_id"] for row in rows], [PERSON_STANFORD])
+
+    def test_company_union_uses_static_adjacent_role_ids_against_duckdb(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_raw:
+            tmp = Path(tmp_raw)
+            db = tmp / "local-search.duckdb"
+            payload_path = tmp / "prod-expand-company-union.json"
+            ledger = tmp / "ledger.json"
+            write_local_search_db(db)
+            payload = {
+                "original_query": "software engineers at AI companies",
+                "filters": {
+                    "has_domain_intent": True,
+                    "company_ids": [{"id": "linkedin:company:one", "display_value": "Company One"}],
+                    "role_bm25_queries": ["software engineer"],
+                    "role_ids": [{"id": "software_engineer", "display_value": "Software Engineer"}],
+                },
+            }
+            payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE),
+                    "run",
+                    "--db",
+                    str(db),
+                    "--ledger",
+                    str(ledger),
+                    "--query",
+                    "software engineers at AI companies",
+                    "--payload-json",
+                    str(payload_path),
+                    "--limit",
+                    "0",
+                    "--top-k",
+                    "50",
+                    "--timeout",
+                    "30",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            out = json.loads(proc.stdout)
+            self.assertEqual(out["summary"]["search_mode"], "COMPANY_UNION")
+            self.assertEqual(out["summary"]["company_union_candidates"], 1)
+            self.assertEqual(out["summary"]["company_union_added"], 1)
+            state = json.loads(Path(out["state"]).read_text())
+            prefilters = next(step for step in state["steps"] if step["id"] == "apply_prefilters")
+            self.assertEqual(prefilters["output"]["stages"][0]["adjacency_method"], "role_id")
+            self.assertEqual(prefilters["output"]["company_union_candidate_ids"], [PERSON_ADJACENT])
+
+            with Path(out["artifacts"]["csv"]).open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual([row["person_id"] for row in rows], [PERSON_STANFORD, PERSON_ADJACENT])
+
+    def test_execute_runs_summary_and_company_signal_pools_with_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_raw:
+            tmp = Path(tmp_raw)
+            db = tmp / "local-search.duckdb"
+            payload_path = tmp / "prod-expand-verticals.json"
+            ledger = tmp / "ledger.json"
+            write_local_search_db(db)
+            payload = {
+                "original_query": "software engineer database architects",
+                "filters": {
+                    "role_bm25_queries": ["software engineer", "database architect"],
+                    "role_ids": [{"id": "software_engineer", "display_value": "Software Engineer"}],
+                    "role_core_patterns": [{"regex": "software\\s+engineer", "examples": ["Software Engineer"]}],
+                },
+            }
+            payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE),
+                    "run",
+                    "--db",
+                    str(db),
+                    "--ledger",
+                    str(ledger),
+                    "--query",
+                    "software engineer database architects",
+                    "--payload-json",
+                    str(payload_path),
+                    "--limit",
+                    "0",
+                    "--top-k",
+                    "50",
+                    "--timeout",
+                    "30",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            out = json.loads(proc.stdout)
+            state = json.loads(Path(out["state"]).read_text())
+            retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")["output"]
+            self.assertEqual(retrieval["verticals"]["role"]["status"], "completed")
+            self.assertGreaterEqual(retrieval["verticals"]["role"]["row_count"], 1)
+            self.assertEqual(retrieval["verticals"]["summary"]["status"], "completed")
+            self.assertGreaterEqual(retrieval["verticals"]["summary"]["row_count"], 1)
+            self.assertEqual(retrieval["verticals"]["company_signal"]["status"], "completed")
+            self.assertGreaterEqual(retrieval["verticals"]["company_signal"]["row_count"], 1)
+            self.assertGreaterEqual(retrieval["vertical_source_counts"].get("hybrid", 0), 1)
+            self.assertGreaterEqual(retrieval["vertical_source_counts"].get("summary", 0), 1)
+            self.assertGreaterEqual(retrieval["vertical_source_counts"].get("company_signal", 0), 1)
+
+            by_person = {candidate["person_id"]: candidate for candidate in retrieval["candidates"]}
+            self.assertIn("hybrid", by_person[PERSON_STANFORD]["vertical_sources"])
+            self.assertIn("summary", by_person[PERSON_STANFORD]["vertical_sources"])
+            self.assertTrue(by_person[PERSON_STANFORD]["has_core_regex"])
+            self.assertIn("summary", by_person[PERSON_SUMMARY]["vertical_sources"])
+            self.assertIsNone(by_person[PERSON_SUMMARY]["position_id"])
+            self.assertEqual(by_person[PERSON_SUMMARY]["matched_position_ids"], [])
+            self.assertIn("summary", by_person[PERSON_SIGNAL]["vertical_sources"])
+            self.assertIn("company_signal", by_person[PERSON_SIGNAL]["vertical_sources"])
+            self.assertIsNotNone(by_person[PERSON_SIGNAL]["position_id"])
+            self.assertTrue(by_person[PERSON_SIGNAL]["matched_position_ids"])
+
+    def test_company_signal_pool_uses_vector_when_semantic_payload_has_embedding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_raw:
+            tmp = Path(tmp_raw)
+            db = tmp / "local-search.duckdb"
+            payload_path = tmp / "prod-expand-company-signal-vector.json"
+            ledger = tmp / "ledger.json"
+            write_local_search_db(db)
+            payload = {
+                "original_query": "platform companies hiring database architects",
+                "filters": {
+                    "role_semantic_query": "People at companies with database architecture and platform engineering signals.",
+                    "query_embedding": [0.0, 1.0, 0.0],
+                    "role_ids": [{"id": "software_engineer", "display_value": "Software Engineer"}],
+                },
+            }
+            payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE),
+                    "run",
+                    "--db",
+                    str(db),
+                    "--ledger",
+                    str(ledger),
+                    "--query",
+                    "platform companies hiring database architects",
+                    "--payload-json",
+                    str(payload_path),
+                    "--limit",
+                    "0",
+                    "--top-k",
+                    "50",
+                    "--timeout",
+                    "30",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            out = json.loads(proc.stdout)
+            state = json.loads(Path(out["state"]).read_text())
+            retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")["output"]
+            self.assertEqual(retrieval["verticals"]["company_signal"]["status"], "completed")
+            self.assertGreaterEqual(retrieval["verticals"]["company_signal"]["row_count"], 1)
+            by_person = {candidate["person_id"]: candidate for candidate in retrieval["candidates"]}
+            self.assertIn("company_signal", by_person[PERSON_SIGNAL]["vertical_sources"])
+
+    def test_founder_payload_skips_regex_pattern_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_raw:
+            tmp = Path(tmp_raw)
+            db = tmp / "local-search.duckdb"
+            payload_path = tmp / "prod-expand-founder.json"
+            ledger = tmp / "ledger.json"
+            write_local_search_db(db)
+            payload = {
+                "original_query": "founders",
+                "filters": {
+                    "role_function": "founder",
+                    "role_bm25_queries": ["founder"],
+                    "role_ids": [{"id": "founder", "display_value": "Founder"}],
+                    "role_core_patterns": [{"regex": "founder", "examples": ["Founder"]}],
+                },
+            }
+            payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE),
+                    "run",
+                    "--db",
+                    str(db),
+                    "--ledger",
+                    str(ledger),
+                    "--query",
+                    "founders",
+                    "--payload-json",
+                    str(payload_path),
+                    "--limit",
+                    "0",
+                    "--top-k",
+                    "50",
+                    "--timeout",
+                    "30",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            out = json.loads(proc.stdout)
+            state = json.loads(Path(out["state"]).read_text())
+            retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")["output"]
+            candidate = next(candidate for candidate in retrieval["candidates"] if candidate["person_id"] == PERSON_FOUNDER)
+            self.assertIn("hybrid", candidate["vertical_sources"])
+            self.assertNotIn("has_core_regex", candidate)
+            self.assertNotIn("bucket", candidate)
+
+    def test_company_union_bm25_adjacency_uses_word_fallback_and_exclusions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_raw:
+            tmp = Path(tmp_raw)
+            db = tmp / "local-search.duckdb"
+            payload_path = tmp / "prod-expand-bm25-company-union.json"
+            ledger = tmp / "ledger.json"
+            write_local_search_db(db)
+            payload = {
+                "original_query": "growth leaders at AI companies",
+                "filters": {
+                    "has_domain_intent": True,
+                    "company_ids": [{"id": "linkedin:company:one", "display_value": "Company One"}],
+                    "role_bm25_queries": ["growth leader"],
+                    "company_adjacency_queries": ["Growth Lead", "growth lead"],
+                },
+            }
+            payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE),
+                    "run",
+                    "--db",
+                    str(db),
+                    "--ledger",
+                    str(ledger),
+                    "--query",
+                    "growth leaders at AI companies",
+                    "--payload-json",
+                    str(payload_path),
+                    "--limit",
+                    "0",
+                    "--top-k",
+                    "50",
+                    "--timeout",
+                    "30",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            out = json.loads(proc.stdout)
+            self.assertEqual(out["summary"]["search_mode"], "COMPANY_UNION")
+            state = json.loads(Path(out["state"]).read_text())
+            prefilters = next(step for step in state["steps"] if step["id"] == "apply_prefilters")["output"]
+            stage = prefilters["stages"][0]
+            self.assertEqual(stage["adjacency_method"], "bm25")
+            self.assertEqual(stage["adjacency_query_source"], "llm+static")
+            self.assertEqual(stage["adjacency_queries"][:1], ["Growth Lead"])
+            self.assertIn(PERSON_GROWTH_ADJACENT, prefilters["company_union_candidate_ids"])
+            self.assertNotIn(PERSON_ENTRY_ADJACENT, prefilters["company_union_candidate_ids"])
+            growth_candidate = next(
+                candidate
+                for candidate in prefilters["company_union_candidates"]
+                if candidate["person_id"] == PERSON_GROWTH_ADJACENT
+            )
+            self.assertIn(0, growth_candidate["adjacency_query_indexes"])
+            self.assertEqual(growth_candidate["retrieval_mode"], "company_adjacency_bm25")
+            retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")["output"]
+            by_person = {candidate["person_id"]: candidate for candidate in retrieval["candidates"]}
+            self.assertIn("company_filter", by_person[PERSON_GROWTH_ADJACENT]["vertical_sources"])
+
     def test_run_uses_duckdb_scope_without_set_resolution_or_postgres(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_raw:
             tmp = Path(tmp_raw)
@@ -286,6 +888,9 @@ class LocalSearchPipelineTests(unittest.TestCase):
             hydrate = next(step for step in state["steps"] if step["id"] == "hydrate_people")
             self.assertEqual(hydrate["output"]["source"]["backend"], "duckdb")
             self.assertEqual(hydrate["output"]["source"]["type"], "local_duckdb")
+            retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
+            self.assertEqual(retrieval["output"]["candidates"][0]["vertical_sources"], ["filter_only"])
+            self.assertEqual(retrieval["output"]["candidates"][0]["matched_position_ids"], [])
 
             ledger_doc = json.loads(ledger.read_text())
             for step in ["resolve_education", "apply_prefilters", "execute_role_search", "hydrate_people"]:

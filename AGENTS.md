@@ -1,15 +1,10 @@
 # Powerpacks agent guidance
 
-## Vorflux GitHub integration guardrail
+## GitHub PR tooling
 
-For pull-request actions, prefer Vorflux's GitHub integration over raw `gh` commands:
+If you are running on Vorflux (Vorflux PR tools or the `vflux` CLI are available), use them for PR creation, editing, commenting, reviewing, and merging. Prefer the Vorflux GitHub App identity; only use a connected personal account when the user explicitly asks for personal attribution, and confirm the token path via the tool's `used_user_token` indicator.
 
-- Use Vorflux PR tools for PR creation, editing, commenting, reviewing, and merging whenever available.
-- Prefer the Vorflux GitHub App / platform integration identity when available. Do not default to a specific person's connected GitHub account unless the user explicitly asks for personal attribution or the platform reports that a connected-user token is the only available integration for the action.
-- For PR creation, confirm the Vorflux tool reports that an integrated token was used, such as `used_user_token: false` for the app/bot path, `used_user_token: true` for an explicitly requested connected-user path, or an equivalent indicator.
-- Do not use raw GitHub CLI/API calls for mutating PR actions unless unavoidable. If unavoidable, first run `gh api user --jq .login`, verify the active identity is appropriate for the requested action, and include the verified login in your status update.
-
-This keeps PR authorship, merge attribution, and repository permissions aligned with the available Vorflux GitHub integration rather than an incidental shell token.
+Otherwise (local sessions, no Vorflux tooling), use `gh` directly. Before mutating PR actions, run `gh api user --jq .login` to verify the active account is the intended identity, and mention the verified login in your status update.
 
 ## Vorflux PR body checklist guardrail
 
@@ -62,6 +57,51 @@ component choices, spacing, colors, and code structure as close to 1:1 as
 possible unless underlying functionality makes that impossible. For backend
 work, copy the same interface, logic, and behavior as closely as possible unless
 the user explicitly asks not to copy it or asks for a different approach.
+
+---
+
+## Data pipeline simplicity (do not overengineer)
+
+This is a small, local, file-based data pipeline. Keep it that way. Most
+"robustness" features you might reach for are over-engineering here and are
+explicitly unwanted.
+
+Hard rules for any ingestion/discovery/enrichment/indexing change:
+
+- **No ledgers.** Do not add `*-ledger.json`, step ledgers, or per-step
+  state machines. A stage writes its output files plus one `manifest.json`
+  in its own directory. That is the entire state contract. (Existing legacy
+  ledgers are being phased out — do not add more or extend them.)
+- **No run ids or batch ids.** No per-run UUIDs, no batch/job identifiers, no
+  run-scoped subdirectories. Each stage writes to a single, fixed directory
+  (e.g. `.powerpacks/network-import/discover/gmail/`) and overwrites in place.
+  Reruns are idempotent because the output path is stable, not because of an id.
+- **Manifest + outputs only.** The durable artifacts a stage produces are its
+  output CSV/JSONL files and `manifest.json` (use the existing
+  `write_manifest` in `import_contacts_pipeline/common.py`). Counts, status,
+  timestamps, and timing go in the manifest — not a separate state store.
+- **Progress goes in a file, like LinkedIn.** For user-facing progress, write
+  human-readable progress into the stage's manifest/output directory and let the
+  FE render it the same way the LinkedIn flow does. Do not invent a new progress
+  store or a parallel event stream the FE doesn't already read.
+- **Lean on what's already solved; don't rebuild it.** Resumability,
+  incrementality, and dedup mostly already exist. Gmail/msgvault is already
+  resumable: compute the latest synced message, pass `--after`, sync, update —
+  see `infer_msgvault_sync_after` in
+  `discover_contacts_pipeline/gmail.py`. Do not build a new resume mechanism on
+  top of it.
+- **Orchestrate the existing primitives directly; do not route new flows
+  through `setup/setup.py`.** Chain the existing `discover_contacts_pipeline`
+  and `import_contacts_pipeline/<source>.py` commands. `setup.py` is not the
+  orchestration layer for new pipeline flows.
+- **Do not fingerprint the shared `directory.csv`.**
+  `.powerpacks/network-import/directory.csv` is a cross-source aggregate, not a
+  source-owned output. Treating it as a per-source fingerprint makes restored
+  imports look stale and re-runs cached enrichment.
+
+When in doubt, do the smaller thing: fewer files, fewer concepts, one
+directory, one manifest. If you think a change genuinely needs more machinery
+than this, stop and ask the user before building it.
 
 ---
 

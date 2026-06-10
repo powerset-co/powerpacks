@@ -28,7 +28,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 
 try:
     from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
@@ -59,9 +59,11 @@ except ModuleNotFoundError:
 DEFAULT_LEDGER = Path(".powerpacks/network-import/enrichment/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 RAPIDAPI_BASE_URL = "https://professional-network-data.p.rapidapi.com"
-DEFAULT_RAPIDAPI_MAX_WORKERS = int(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MAX_WORKERS", "10"))
+DEFAULT_RAPIDAPI_MAX_WORKERS = int(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MAX_WORKERS", "64"))
 DEFAULT_RAPIDAPI_MAX_RPM = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MAX_RPM", "300"))
 DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_FAILURE_RETRY_HOURS", "24"))
+DEFAULT_RAPIDAPI_RETRY_ATTEMPTS = int(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_RETRY_ATTEMPTS", "3"))
+DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_RETRY_BACKOFF_SECONDS", "1.0"))
 DEFAULT_PROGRESS_INTERVAL_SECONDS = float(os.environ.get("POWERPACKS_RAPIDAPI_PROGRESS_INTERVAL_SECONDS", "60"))
 DEFAULT_PROGRESS_INTERVAL_ROWS = int(os.environ.get("POWERPACKS_RAPIDAPI_PROGRESS_INTERVAL_ROWS", "100"))
 PIPELINE_STEPS = ["prepare_queue", "enrich_linkedin", "merge_people"]
@@ -72,6 +74,8 @@ RECENT_FAILURE_COLUMNS = CACHE_COLUMNS + ["last_checked_at", "retry_after", "rap
 PROVIDER_COLUMNS = QUEUE_COLUMNS + [
     "rapidapi_status_code",
     "rapidapi_error",
+    "rapidapi_attempts",
+    "rapidapi_retry_outcome",
     "rapidapi_response_enriched",
     "rapidapi_from_cache",
     "provider_enriched_at",
@@ -383,6 +387,7 @@ def rapidapi_profile(
     *,
     cache_dir: Path | str | None = None,
     refresh_cache: bool = False,
+    wait_for_attempt: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     cache_path = profile_cache_path(cache_dir, public_identifier)
     if not refresh_cache:
@@ -396,13 +401,24 @@ def rapidapi_profile(
                 "normalized_profile": cached.get("normalized_profile"),
             }
 
-    status, data, error = http_json(
-        "GET",
-        f"{RAPIDAPI_BASE_URL}/get-profile-data-by-url",
-        headers={"x-rapidapi-host": "professional-network-data.p.rapidapi.com", "x-rapidapi-key": api_key},
-        params={"url": linkedin_url or f"https://www.linkedin.com/in/{public_identifier}"},
-        timeout=90,
-    )
+    attempts = max(1, DEFAULT_RAPIDAPI_RETRY_ATTEMPTS)
+    status = 0
+    data: dict[str, Any] | None = None
+    error = ""
+    for attempt in range(1, attempts + 1):
+        if wait_for_attempt:
+            wait_for_attempt()
+        status, data, error = http_json(
+            "GET",
+            f"{RAPIDAPI_BASE_URL}/get-profile-data-by-url",
+            headers={"x-rapidapi-host": "professional-network-data.p.rapidapi.com", "x-rapidapi-key": api_key},
+            params={"url": linkedin_url or f"https://www.linkedin.com/in/{public_identifier}"},
+            timeout=90,
+        )
+        if status not in {0, 429, 500, 502, 503, 504} or attempt == attempts:
+            break
+        sleep_for = DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
+        time.sleep(sleep_for)
     normalized = normalize_linkedin_profile(data if isinstance(data, dict) else {})
     if cache_path and status == 200 and isinstance(data, dict) and normalized.get("success") is True:
         write_json(cache_path, {
@@ -412,6 +428,7 @@ def rapidapi_profile(
             "linkedin_url": linkedin_url,
             "raw_response": data,
             "normalized_profile": normalized,
+            "attempts": attempt,
         })
     elif cache_path:
         checked_at = now_iso()
@@ -424,8 +441,9 @@ def rapidapi_profile(
             "normalized_profile": normalized,
             "status_code": status,
             "error": error or normalized.get("error") or "",
+            "attempts": attempt,
         })
-    return {"status_code": status, "data": data, "error": error, "from_cache": False, "normalized_profile": normalized}
+    return {"status_code": status, "data": data, "error": error, "from_cache": False, "normalized_profile": normalized, "attempts": attempt}
 
 
 def normalize_rapidapi(
@@ -549,14 +567,15 @@ def classify_rapidapi_cache_status(
         return "miss", "refresh requested", cache_path, None
     if cached_profile_from_row(row, public_identifier, row.get("linkedin_url") or "") is not None:
         return "hit", "input rapidapi_response", cache_path, None
-    if cache_index is not None and any(slug in cache_index for slug in cache_slug_candidates(public_identifier)):
-        return "hit", "profile cache", cache_path, None
-    if cache_index is None and cache_path and cache_path.exists():
+    cached_file_exists = bool(cache_path and cache_path.exists())
+    if cache_index is not None:
+        cached_file_exists = any(slug in cache_index for slug in cache_slug_candidates(public_identifier))
+    if cached_file_exists and read_usable_cached_profile(cache_path):
         return "hit", "profile cache", cache_path, None
     recent_failure = recent_cached_failure(cache_path, retry_hours)
     if recent_failure:
         return "recent_failure", "recent provider failure", cache_path, recent_failure
-    if cache_path and cache_path.exists():
+    if cached_file_exists:
         return "miss", "cache entry unusable", cache_path, None
     return "miss", "no usable cache", cache_path, None
 
@@ -715,12 +734,14 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
 
 
 def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
-    hit_path = Path(ledger["artifacts"].get("rapidapi_cache_hits_csv") or "")
-    miss_path = Path(ledger["artifacts"].get("rapidapi_cache_misses_csv") or "")
+    hit_path_text = ledger["artifacts"].get("rapidapi_cache_hits_csv") or ""
+    miss_path_text = ledger["artifacts"].get("rapidapi_cache_misses_csv") or ""
+    hit_path = Path(hit_path_text) if hit_path_text else None
+    miss_path = Path(miss_path_text) if miss_path_text else None
     rows = []
-    if hit_path.exists():
+    if hit_path and hit_path.is_file():
         rows.extend(read_csv(hit_path))
-    if miss_path.exists():
+    if miss_path and miss_path.is_file():
         rows.extend(read_csv(miss_path))
     if not rows:
         out_path = artifact_dir_from_ledger(ledger) / "provider_enriched.csv"
@@ -749,7 +770,7 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
         f"max {max_workers} workers, {max_rpm:g} rpm."
     )
 
-    def enrich_one(row: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    def enrich_one(row: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any], bool, int, str]:
         public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
         linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
         if not public_identifier and linkedin_url:
@@ -759,7 +780,7 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
             cached_payload = cached_profile_from_row(row, public_identifier, linkedin_url)
             normalized = normalize_linkedin_profile(cached_payload) if cached_payload else None
             if cached_payload and normalized and normalized.get("success") is True:
-                rapid = {"status_code": 200, "data": cached_payload, "error": "", "from_cache": True, "normalized_profile": normalized}
+                rapid = {"status_code": 200, "data": cached_payload, "error": "", "from_cache": True, "normalized_profile": normalized, "attempts": 1}
             else:
                 cache_path = Path(row.get("cache_path") or "") if row.get("cache_path") else profile_cache_path(profile_cache_dir, public_identifier)
                 cached = read_usable_cached_profile(cache_path)
@@ -770,6 +791,7 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
                         "error": "",
                         "from_cache": True,
                         "normalized_profile": cached.get("normalized_profile"),
+                        "attempts": 1,
                     }
                 else:
                     rapid = {
@@ -778,40 +800,63 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
                         "error": "cache entry unusable",
                         "from_cache": True,
                         "normalized_profile": {"success": False, "error": "cache entry unusable"},
+                        "attempts": 1,
                     }
         else:
-            rate_limiter.wait()
-            rapid = rapidapi_profile(public_identifier, linkedin_url, rapid_key, cache_dir=profile_cache_dir, refresh_cache=refresh_cache)
+            rapid = rapidapi_profile(
+                public_identifier,
+                linkedin_url,
+                rapid_key,
+                cache_dir=profile_cache_dir,
+                refresh_cache=refresh_cache,
+                wait_for_attempt=rate_limiter.wait,
+            )
+        attempts = max(1, int(rapid.get("attempts") or 1))
+        status_code = int(rapid.get("status_code") or 0)
+        retry_outcome = "none"
+        if attempts > 1:
+            retry_outcome = "success" if status_code == 200 else "failed"
         out = dict(row)
         out.update({
             "public_identifier": public_identifier,
             "linkedin_url": linkedin_url,
             "rapidapi_status_code": rapid.get("status_code", ""),
             "rapidapi_error": rapid.get("error", ""),
+            "rapidapi_attempts": attempts,
+            "rapidapi_retry_outcome": retry_outcome,
             "rapidapi_response_enriched": json.dumps(rapid.get("data")) if rapid.get("data") else "",
             "rapidapi_from_cache": "true" if rapid.get("from_cache") else "false",
             "provider_enriched_at": now_iso(),
         })
         raw_payload = {"input": row, "rapidapi": rapid, "cache_hit": bool(rapid.get("from_cache"))}
-        return out, raw_payload, is_cache_hit
+        return out, raw_payload, is_cache_hit, attempts, retry_outcome
 
     enriched_by_index: dict[int, dict[str, Any]] = {}
     raw_by_index: dict[int, dict[str, Any]] = {}
     cached_count = 0
     fetched_count = 0
+    retried_count = 0
+    retry_success_count = 0
+    retry_failure_count = 0
     processed_count = 0
     last_progress = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_index = {executor.submit(enrich_one, row): index for index, row in enumerate(rows)}
         for future in concurrent.futures.as_completed(future_to_index):
             index = future_to_index[future]
-            out, raw_payload, was_cache_hit = future.result()
+            out, raw_payload, was_cache_hit, attempts, retry_outcome = future.result()
             enriched_by_index[index] = out
             raw_by_index[index] = raw_payload
             if was_cache_hit:
                 cached_count += 1
             else:
                 fetched_count += 1
+                if attempts > 1:
+                    retried_count += 1
+                    if retry_outcome == "success":
+                        retry_success_count += 1
+                    elif retry_outcome == "failed":
+                        retry_failure_count += 1
             processed_count += 1
             now = time.monotonic()
             if (
@@ -844,6 +889,9 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
         "providers": {"rapidapi": True},
         "max_workers": max_workers,
         "max_rpm": max_rpm,
+        "retried": retried_count,
+        "retry_successes": retry_success_count,
+        "retry_failures": retry_failure_count,
     }
 
 

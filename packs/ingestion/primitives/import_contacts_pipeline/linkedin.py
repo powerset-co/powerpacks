@@ -22,6 +22,7 @@ try:
         DEFAULT_IMPORT_DIR,
         copy_people_csv,
         csv_count,
+        import_manifest_current,
         linkedin_csv_path,
         linkedin_source_user,
         write_manifest,
@@ -42,6 +43,7 @@ except ModuleNotFoundError:
         DEFAULT_IMPORT_DIR,
         copy_people_csv,
         csv_count,
+        import_manifest_current,
         linkedin_csv_path,
         linkedin_source_user,
         write_manifest,
@@ -53,9 +55,12 @@ def run(args: argparse.Namespace) -> dict:
     csv_path = linkedin_csv_path(accounts)
     source_user = linkedin_source_user(accounts)
     import_dir = DEFAULT_IMPORT_DIR / "linkedin"
+    current = import_manifest_current("linkedin", {"connections_csv": csv_path, "source_user": source_user}, import_dir=DEFAULT_IMPORT_DIR)
+    if current:
+        return current
     ledger_path = import_dir / "ledger.json"
     if not csv_path:
-        return write_manifest("linkedin", {"status": "skipped", "reason": "no LinkedIn CSV", "artifact_dir": str(import_dir)})
+        return write_manifest("linkedin", {"status": "skipped", "reason": "no LinkedIn CSV", "artifact_dir": str(import_dir)}, import_dir=DEFAULT_IMPORT_DIR)
     cmd = py_cmd(
         "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py",
         "run",
@@ -69,7 +74,7 @@ def run(args: argparse.Namespace) -> dict:
     code, child, stderr = run_cmd(cmd)
     status = "completed" if code == 0 and child.get("status") == "completed" else child.get("status") or "failed"
     artifacts = child.get("artifacts") or {}
-    people_csv = copy_people_csv("linkedin", str(artifacts.get("people_csv") or ""))
+    people_csv = copy_people_csv("linkedin", str(artifacts.get("people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
     directory_checkpoint = {}
     if status == "completed" and people_csv:
         directory_checkpoint = commit_people_csv_to_directory(
@@ -100,7 +105,7 @@ def run(args: argparse.Namespace) -> dict:
         },
         "directory_checkpoint": directory_checkpoint,
         "artifacts": artifacts,
-    })
+    }, import_dir=DEFAULT_IMPORT_DIR)
 
 
 def build_parser() -> argparse.ArgumentParser:

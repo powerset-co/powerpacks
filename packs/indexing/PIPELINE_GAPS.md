@@ -106,7 +106,11 @@ Company semantic/classification search works fine.
 **Aleph**: Separate `signals_semantic_text` + `signals_doc2query` embeddings
 uploaded to `aleph_company_signals_v1`.
 
-**Local**: Not implemented. Only the main company namespace is used.
+**Local**: The DuckDB search contract now supports a `local_company_signals`
+namespace/table and local execution reports the company-signal vertical
+separately when that table is populated. Default local indexing still does not
+produce `records/company_signals.records.jsonl`; empty/unmaterialized DuckDB
+indexes are surfaced as unavailable rather than silently treated as parity.
 
 ### Dedup/merge detection (priority: low)
 
