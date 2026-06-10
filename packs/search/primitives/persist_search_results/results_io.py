@@ -28,6 +28,8 @@ CSV_FIELDS = [
     "location",
     "current_titles",
     "current_companies",
+    "source_operator",
+    "source_channel",
     "linkedin_url",
     "hydrated",
     "source_run",
@@ -144,10 +146,45 @@ def frontier_ids(state: dict[str, Any]) -> list[str]:
     return [p["person_id"] for p in hydrate.get("profiles", []) or [] if p.get("person_id")]
 
 
+def _position_sort_key(position: dict[str, Any]) -> str:
+    """Recency key (higher sorts as more recent):
+    - ended role: rank by end_date
+    - ongoing role (start present, no end): boost above ended roles
+    - no dates at all: rank last (no recency signal), below dated roles
+    """
+    end = position.get("end_date")
+    start = position.get("start_date")
+    if end:
+        return f"5-{end}"
+    if start:
+        # Ongoing/unknown end but we know it started: rank above ended roles.
+        return f"9-{start}"
+    # No dates: lowest priority.
+    return "0-"
+
+
+def _has_dates(position: dict[str, Any]) -> bool:
+    return bool(position.get("start_date") or position.get("end_date"))
+
+
 def compact_positions(profile: dict[str, Any]) -> tuple[str, str]:
+    all_positions = [p for p in (profile.get("positions", []) or []) if isinstance(p, dict)]
     positions = profile.get("current_positions") or []
     if not positions:
-        positions = [p for p in profile.get("positions", []) or [] if p.get("is_current")]
+        # 1. Explicit is_current flag (when the source set it reliably).
+        positions = [p for p in all_positions if p.get("is_current")]
+    if not positions:
+        # 2. Ongoing role: has a start date but no end date. This is the most
+        #    reliable "current" signal in practice — the is_current boolean is
+        #    frequently missing/false even for present roles.
+        positions = [p for p in all_positions if p.get("start_date") and not p.get("end_date")]
+    if not positions and all_positions:
+        # 3. Fallback: most recent position(s) by date so display/merge/shortlist
+        #    show a role instead of going blank. Ignore positions with no dates.
+        dated = [p for p in all_positions if _has_dates(p)] or all_positions
+        ranked = sorted(dated, key=_position_sort_key, reverse=True)
+        top_key = _position_sort_key(ranked[0])
+        positions = [p for p in ranked if _position_sort_key(p) == top_key]
     titles = []
     companies = []
     for position in positions:
@@ -190,6 +227,8 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
             "location": profile.get("location", ""),
             "current_titles": titles,
             "current_companies": companies,
+            "source_operator": "; ".join(profile.get("source_operators", []) or []),
+            "source_channel": "; ".join(profile.get("source_channels", []) or []),
             "linkedin_url": profile.get("linkedin_url", ""),
             "hydrated": bool(profile),
             "source_run": state.get("task_id", ""),

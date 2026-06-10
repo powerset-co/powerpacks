@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks.local/schemas/search-network-jd-candidate-frontier.schema.json",
+  "title": "Search Network JD Candidate Frontier",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_json",
+    "created_at",
+    "input_probe_runs",
+    "candidate_count",
+    "candidates"
+  ],
+  "properties": {
+    "plan_json": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input_probe_runs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "candidate_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "person_id",
+        "name",
+        "linkedin_url",
+        "current_role",
+        "current_company",
+        "location",
+        "matched_probe_ids",
+        "duplicate_signal",
+        "source_rows",
+        "profile_context_ref"
+      ],
+      "properties": {
+        "candidate_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "person_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "public_identifier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "linkedin_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current_role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current_company": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matched_probe_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "duplicate_signal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "matched_probe_count",
+            "matched_probe_ids"
+          ],
+          "properties": {
+            "matched_probe_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "matched_probe_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "source_rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source_row"
+          }
+        },
+        "profile_context_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Path to persisted candidate context used by the harness evaluator; keep large profile text out of this frontier when possible."
+        }
+      }
+    },
+    "source_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "probe_id",
+        "csv",
+        "row_number"
+      ],
+      "properties": {
+        "probe_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "csv": {
+          "type": "string",
+          "minLength": 1
+        },
+        "row_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rank": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

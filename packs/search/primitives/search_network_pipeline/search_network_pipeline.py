@@ -323,7 +323,7 @@ def run_pipeline(args) -> dict[str, Any]:
         payload={
             "state":str(state),
             "model":args.model,
-            "mode":"filter_rerank",
+            "mode":"filter_only" if args.filter_only else "filter_rerank",
             "filter_batch_size":args.filter_batch_size,
             "filter_concurrency":args.filter_concurrency,
             "rerank_concurrency":args.rerank_concurrency,
@@ -339,10 +339,12 @@ def run_pipeline(args) -> dict[str, Any]:
                 payload,
                 "Run LLM filter + rerank for this search? This may spend OpenAI credits and usually takes 2-3 minutes.",
             )
-        for step,cmd in [
+        llm_steps=[
             ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--write-state"]),
-            ("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,"--write-state"]),
-        ]:
+        ]
+        if not args.filter_only:
+            llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,"--write-state"]))
+        for step,cmd in llm_steps:
             if done(l,step) and not args.force: continue
             mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
             out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True),step)
@@ -385,6 +387,8 @@ def cmd_prepare(args):
             return 0
         issues=payload_quality_issues(payload)
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
+        if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
+        if getattr(args,"filter_only",False): extra += " --filter-only"
         emit({
             "primitive":"search_network_pipeline",
             "status":"preview_ready" if not issues else "blocked_user_action",
@@ -412,11 +416,11 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_run(p):
-    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--reasoning-effort",default=DEFAULT_REASONING_EFFORT,help="LLM rerank reasoning effort; default is low"); p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; default is 2"); p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT"); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
+    p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=10000); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--filter-only",action="store_true",help="Run the cheap conservative LLM filter but skip LLM rerank; final ranking is owned by a downstream evaluator"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--reasoning-effort",default=DEFAULT_REASONING_EFFORT,help="LLM rerank reasoning effort; default is low"); p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; default is 2"); p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT"); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
 
 def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
-    p=sub.add_parser("prepare"); p.add_argument("--query",required=True); p.add_argument("--env-file",default=".env"); p.add_argument("--output-dir"); p.add_argument("--model"); p.add_argument("--timeout",type=int,default=60); p.set_defaults(func=cmd_prepare)
+    p=sub.add_parser("prepare"); p.add_argument("--query",required=True); p.add_argument("--env-file",default=".env"); p.add_argument("--output-dir"); p.add_argument("--model"); p.add_argument("--timeout",type=int,default=60); p.add_argument("--limit",type=int,default=0,help="Cap unique people kept after retrieval; threaded into the emitted execute_command"); p.add_argument("--filter-only",action="store_true",help="Emit an execute_command that runs the cheap LLM filter but skips per-run LLM rerank (for multi-profile fan-out)"); p.set_defaults(func=cmd_prepare)
     r=sub.add_parser("run"); add_run(r); r.set_defaults(func=cmd_run)
     c=sub.add_parser("continue"); add_run(c); c.set_defaults(func=cmd_run)
     s=sub.add_parser("status"); s.add_argument("--ledger"); s.add_argument("--state"); s.set_defaults(func=cmd_status)

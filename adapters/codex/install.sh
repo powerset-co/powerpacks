@@ -7,7 +7,7 @@ SKILLS_DIR="${1:-$CODEX_HOME/skills}"
 BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 MANAGED_SKILLS=(
-  search-network search-network-jd search-company search-contacts build-local-search-index
+  search-network search-network-jd search-profile search-company search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
   import-email discover-contacts import-twitter
@@ -97,7 +97,7 @@ install_skill() {
 install_powerpacks_bundle
 
 install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKILL.md"
-install_skill search-network-jd "$REPO_ROOT/packs/search/skills/search-network-jd/SKILL.md"
+install_skill search-profile "$REPO_ROOT/packs/search/skills/search-profile/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
 install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-local-search-index/SKILL.md"
@@ -127,5 +127,5 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-network-jd search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email discover-contacts import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-profile search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email discover-contacts import-twitter"
 echo "restart Codex to pick up the skill list"

@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks.local/schemas/search-network-jd-candidate-evaluations.schema.json",
+  "title": "Search Network JD Candidate Evaluations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_json",
+    "candidate_frontier_json",
+    "created_at",
+    "evaluator",
+    "candidate_count",
+    "evaluations"
+  ],
+  "properties": {
+    "plan_json": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate_frontier_json": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "harness_subagents",
+            "harness_single_agent",
+            "primitive"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoning_effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "candidate_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "evaluations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evaluation"
+      }
+    }
+  },
+  "$defs": {
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "rank",
+        "jd_score",
+        "verdict",
+        "seniority_fit",
+        "must_have",
+        "nice_to_have",
+        "duplicate_signal",
+        "rationale",
+        "caveats"
+      ],
+      "properties": {
+        "candidate_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "person_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "jd_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "verdict": {
+          "enum": [
+            "strong",
+            "maybe",
+            "weak",
+            "out"
+          ]
+        },
+        "seniority_fit": {
+          "enum": [
+            "ideal",
+            "acceptable",
+            "too_senior",
+            "too_junior",
+            "wrong_track",
+            "unknown"
+          ]
+        },
+        "must_have": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/requirement_assessment"
+          }
+        },
+        "nice_to_have": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/requirement_assessment"
+          }
+        },
+        "duplicate_signal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "matched_probe_count",
+            "matched_probe_ids",
+            "interpretation"
+          ],
+          "properties": {
+            "matched_probe_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "matched_probe_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "interpretation": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caveats": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "requirement_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trait",
+        "status",
+        "evidence"
+      ],
+      "properties": {
+        "trait": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "strong",
+            "partial",
+            "weak",
+            "missing",
+            "unknown"
+          ]
+        },
+        "evidence": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

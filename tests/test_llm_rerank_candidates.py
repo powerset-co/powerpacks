@@ -467,6 +467,143 @@ class DryRunTests(unittest.TestCase):
             self.assertIn("p1", proc.stderr)
 
 
+class PromptContractTests(unittest.TestCase):
+    def test_prompt_penalizes_over_senior_ic_query_matches(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_prompt", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_prompt"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        prompt = mod.SYSTEM_PROMPT
+        self.assertIn("the hiring target band, not as a loose \"or above\" signal", prompt)
+        self.assertIn("Explicit seniority examples: junior, mid-level, senior, staff, principal", prompt)
+        self.assertIn("Do NOT upgrade CTOs, VPs, founders, directors", prompt)
+        self.assertIn("should score low (normally", prompt)
+        self.assertIn("Staff/principal are not synonyms for \"senior\"", prompt)
+        self.assertIn("Only use broad seniority equivalence when the query omits seniority entirely", prompt)
+
+
+class OpenAIRequestParamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_gpt5_models_omit_temperature(self) -> None:
+        import importlib.util
+        import types
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_params", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_params"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        captured = {}
+
+        class _Completions:
+            async def create(self, **kwargs):
+                captured.update(kwargs)
+                message = types.SimpleNamespace(content='{"score":0.5,"verdict":"include","reason":"ok"}')
+                choice = types.SimpleNamespace(message=message)
+                return types.SimpleNamespace(choices=[choice])
+
+        class _Chat:
+            completions = _Completions()
+
+        class _Client:
+            chat = _Chat()
+
+        await mod.call_chat_completion(_Client(), "gpt-5.1", "system", "user", "low")
+        self.assertNotIn("temperature", captured)
+        self.assertEqual(captured.get("reasoning_effort"), "low")
+
+    async def test_non_reasoning_models_use_temperature_zero(self) -> None:
+        import importlib.util
+        import types
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_params2", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_params2"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        captured = {}
+
+        class _Completions:
+            async def create(self, **kwargs):
+                captured.update(kwargs)
+                message = types.SimpleNamespace(content='{"score":0.5,"verdict":"include","reason":"ok"}')
+                choice = types.SimpleNamespace(message=message)
+                return types.SimpleNamespace(choices=[choice])
+
+        class _Chat:
+            completions = _Completions()
+
+        class _Client:
+            chat = _Chat()
+
+        await mod.call_chat_completion(_Client(), "gpt-4.1-mini", "system", "user", None)
+        self.assertEqual(captured.get("temperature"), 0)
+        self.assertNotIn("reasoning_effort", captured)
+
+
+class ParseNetworkPromptShapeTests(unittest.TestCase):
+    def test_parse_uses_average_trait_scores_when_score_missing(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_parse", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_parse"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        raw = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({
+                            "trait_scores": {"Financial analyst": 0.8, "FP&A": 0.6},
+                            "reason": "Current FP&A analyst",
+                        })
+                    }
+                }
+            ]
+        }
+        score, verdict, reason, confidence, trait_scores = mod.parse_verdict(
+            raw,
+            [{"value": "Financial analyst"}, {"value": "FP&A"}],
+        )
+        self.assertAlmostEqual(score, 0.7)
+        self.assertEqual(verdict, "include")
+        self.assertEqual(reason, "Current FP&A analyst")
+        self.assertEqual(trait_scores["Financial analyst"], 0.8)
+
+    def test_parse_accepts_list_trait_scores(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_parse2", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_parse2"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        raw = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({
+                            "trait_scores": [
+                                {"trait": "Financial analyst", "score": 0.5},
+                                {"trait": "FP&A", "score": 0.3},
+                            ]
+                        })
+                    }
+                }
+            ]
+        }
+        score, verdict, _reason, _confidence, trait_scores = mod.parse_verdict(
+            raw,
+            [{"value": "Financial analyst"}, {"value": "FP&A"}],
+        )
+        self.assertAlmostEqual(score, 0.4)
+        self.assertEqual(verdict, "exclude")
+        self.assertEqual(trait_scores["FP&A"], 0.3)
+
+
 if __name__ == "__main__":
     unittest.main()
 
