@@ -19,15 +19,17 @@ Use this for any people search request:
 Apply these rules in order:
 
 1. **Profile mode** — if the input is a URL pointing to a job posting, a
-   pasted multi-paragraph job description, or a broad multi-trait role brief
-   that needs multiple distinct candidate profiles, load and follow the
-   **`search-profile`** skill entirely. Read its instructions from the
-   installed skill directory at `../search-profile/SKILL.md` (relative to
-   this skill) or from the repo at
-   `packs/search/skills/search-profile/SKILL.md`. Do not run
+   pasted multi-paragraph job description, a broad multi-trait role brief
+   that needs multiple distinct candidate profiles, **or a similar-person
+   request** ("find me more people like <linkedin url>", "people similar to
+   X" with a LinkedIn profile URL), load and follow the **`search-profile`**
+   skill entirely. Read its instructions from the installed skill directory
+   at `../search-profile/SKILL.md` (relative to this skill) or from the repo
+   at `packs/search/skills/search-profile/SKILL.md`. Do not run
    `search_network_pipeline.py` directly for these inputs — the profile skill
-   owns the orchestration and delegates individual profile searches back here
-   (TurboPuffer mode) with a per-search `limit` and filter-only flag.
+   owns the orchestration (including resolving the person's profile for
+   similar-person requests) and delegates individual profile searches back
+   here (TurboPuffer mode) with a per-search `limit` and filter-only flag.
 
 2. **Local mode** — if any of these are true:
    - The user says "local", "local search", "offline", or "my imported
