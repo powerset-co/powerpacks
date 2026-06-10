@@ -10,9 +10,11 @@ Usage:
 """
 from __future__ import annotations
 
+import concurrent.futures
 import http.client
 import json
 import os
+import random
 import time
 from pathlib import Path
 from typing import Any
@@ -60,11 +62,18 @@ def fetch_company_details(
     host: str = DEFAULT_HOST,
     timeout: int = DEFAULT_TIMEOUT,
     cache_dir: str | Path | None = None,
+    max_attempts: int = 3,
 ) -> dict[str, Any]:
     """Fetch company details by RapidAPI LinkedIn company ID.
 
     Returns the parsed JSON response or {"error": "..."} on failure.
-    Successful responses are cached to disk.
+    Successful responses are cached to disk; error results are never cached.
+
+    Transient failures (HTTP 429, HTTP 5xx, connection/timeout exceptions)
+    are retried up to *max_attempts* times with exponential backoff plus
+    jitter. For 429 responses with a numeric ``Retry-After`` header, that
+    value (capped at 10s) is used instead of the computed backoff. Other
+    4xx responses (e.g. 400, 404) are permanent and returned immediately.
     """
     cached = _read_cache(company_id, cache_dir)
     if cached is not None:
@@ -74,25 +83,45 @@ def fetch_company_details(
     if not key:
         return {"error": "no RAPIDAPI_LINKEDIN_KEY or RAPIDAPI_KEY set"}
 
-    conn = http.client.HTTPSConnection(host, timeout=timeout)
     headers = {
         "x-rapidapi-key": key,
         "x-rapidapi-host": host,
         "Content-Type": "application/json",
     }
-    try:
-        conn.request("GET", f"/get-company-details-by-id?id={company_id}", headers=headers)
-        res = conn.getresponse()
-        raw = res.read().decode("utf-8")
-        if res.status != 200:
-            return {"error": f"HTTP {res.status}", "body": raw[:500]}
-        result = json.loads(raw)
-        _write_cache(company_id, result, cache_dir)
-        return result
-    except Exception as exc:
-        return {"error": str(exc)}
-    finally:
-        conn.close()
+    last_error: dict[str, Any] = {"error": "no fetch attempts made"}
+    for attempt in range(max_attempts):
+        conn = http.client.HTTPSConnection(host, timeout=timeout)
+        retry_after: float | None = None
+        try:
+            conn.request("GET", f"/get-company-details-by-id?id={company_id}", headers=headers)
+            res = conn.getresponse()
+            raw = res.read().decode("utf-8")
+            if res.status == 200:
+                result = json.loads(raw)
+                _write_cache(company_id, result, cache_dir)
+                return result
+            last_error = {"error": f"HTTP {res.status}", "body": raw[:500]}
+            if res.status != 429 and not 500 <= res.status < 600:
+                # Other 4xx are permanent for this company ID; do not retry.
+                return last_error
+            if res.status == 429:
+                header_val = res.getheader("Retry-After")
+                if header_val is not None:
+                    try:
+                        retry_after = min(float(header_val), 10.0)
+                    except (TypeError, ValueError):
+                        retry_after = None
+        except Exception as exc:
+            last_error = {"error": str(exc)}
+        finally:
+            conn.close()
+        if attempt < max_attempts - 1:
+            if retry_after is not None:
+                delay = retry_after
+            else:
+                delay = 1.0 * (2 ** attempt) + random.uniform(0, 0.5)
+            time.sleep(delay)
+    return last_error
 
 
 def fetch_company_details_batch(
@@ -111,9 +140,6 @@ def fetch_company_details_batch(
 
     Returns {company_id: response_dict}.
     """
-    import concurrent.futures
-    import threading
-
     key = api_key or _api_key()
     if not key:
         return {cid: {"error": "no API key"} for cid in company_ids}
