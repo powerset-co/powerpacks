@@ -417,9 +417,10 @@ async def call_chat_completion(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0,
         "response_format": {"type": "json_object"},
     }
+    if supports_custom_temperature(model):
+        kwargs["temperature"] = 0
     if reasoning_effort and supports_reasoning_effort(model):
         kwargs["reasoning_effort"] = reasoning_effort
     response = await client.chat.completions.create(**kwargs)
@@ -446,13 +447,37 @@ def parse_verdict(raw_response: dict[str, Any], traits: list[dict[str, str]]) ->
         match = re.search(r"\{.*\}", content, re.DOTALL)
         content = match.group(0) if match else content
     parsed = json.loads(content)
-    score_raw = parsed.get("score", 0.0)
+    trait_scores_raw = parsed.get("trait_scores") or parsed.get("traits") or {}
+    trait_scores: dict[str, float] = {}
+    if isinstance(trait_scores_raw, dict):
+        for key, value in trait_scores_raw.items():
+            if isinstance(value, dict):
+                value = value.get("score")
+            try:
+                trait_scores[str(key)] = max(0.0, min(1.0, float(value)))
+            except (TypeError, ValueError):
+                continue
+    elif isinstance(trait_scores_raw, list):
+        for item in trait_scores_raw:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("trait") or item.get("name") or item.get("key")
+            if not key:
+                continue
+            try:
+                trait_scores[str(key)] = max(0.0, min(1.0, float(item.get("score"))))
+            except (TypeError, ValueError):
+                continue
+    score_raw = parsed.get("score", parsed.get("final_score", parsed.get("overall_trait_score")))
+    if score_raw is None and trait_scores:
+        score_raw = sum(trait_scores.values()) / len(trait_scores)
     try:
         score = float(score_raw)
     except (TypeError, ValueError):
         score = 0.0
     score = max(0.0, min(1.0, score))
-    verdict = str(parsed.get("verdict", "exclude")).lower()
+    verdict_raw = parsed.get("verdict")
+    verdict = str(verdict_raw).lower() if verdict_raw is not None else ""
     if verdict not in ("include", "exclude"):
         verdict = "include" if score >= 0.5 else "exclude"
     reason = str(parsed.get("reason", "")).strip()
@@ -461,14 +486,6 @@ def parse_verdict(raw_response: dict[str, Any], traits: list[dict[str, str]]) ->
     except (TypeError, ValueError):
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
-    trait_scores_raw = parsed.get("trait_scores") or {}
-    trait_scores: dict[str, float] = {}
-    if isinstance(trait_scores_raw, dict):
-        for key, value in trait_scores_raw.items():
-            try:
-                trait_scores[str(key)] = max(0.0, min(1.0, float(value)))
-            except (TypeError, ValueError):
-                continue
     for trait in traits:
         trait_scores.setdefault(trait["value"], score)
     return score, verdict, reason, confidence, trait_scores
@@ -477,6 +494,11 @@ def parse_verdict(raw_response: dict[str, Any], traits: list[dict[str, str]]) ->
 def supports_reasoning_effort(model: str) -> bool:
     normalized = str(model or "").lower().split("/")[-1]
     return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def supports_custom_temperature(model: str) -> bool:
+    normalized = str(model or "").lower().split("/")[-1]
+    return not normalized.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
 # ---------------------------------------------------------------------------

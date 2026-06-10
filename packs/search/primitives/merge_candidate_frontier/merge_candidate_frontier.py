@@ -98,6 +98,8 @@ def read_probe_csv(csv_path: Path, probe_id: str) -> list[dict[str, Any]]:
                 "location": (row.get("location") or "").strip() or None,
                 "current_titles": (row.get("current_titles") or "").strip() or None,
                 "current_companies": (row.get("current_companies") or "").strip() or None,
+                "source_operator": (row.get("source_operator") or "").strip() or None,
+                "source_channel": (row.get("source_channel") or "").strip() or None,
                 "overall_reasoning": (row.get("overall_reasoning") or "").strip() or None,
                 "hydrated": row.get("hydrated", "").strip().lower() == "true",
                 "source_run": (row.get("source_run") or "").strip() or None,
@@ -199,6 +201,10 @@ def _build_candidate(rows: list[dict[str, Any]], person_id: str | None) -> dict[
 
     probe_ids = sorted(set(r["probe_id"] for r in rows))
     linkedin_url = normalize_linkedin_url(best.get("linkedin_url"))
+    # Source attribution is the same person across probes; take the first
+    # non-empty operator/channel seen.
+    source_operator = next((r.get("source_operator") for r in rows if r.get("source_operator")), None)
+    source_channel = next((r.get("source_channel") for r in rows if r.get("source_channel")), None)
 
     source_rows = []
     for r in rows:
@@ -232,6 +238,8 @@ def _build_candidate(rows: list[dict[str, Any]], person_id: str | None) -> dict[
         "current_role": best.get("current_titles"),
         "current_company": best.get("current_companies"),
         "location": best.get("location"),
+        "source_operator": source_operator,
+        "source_channel": source_channel,
         "matched_probe_ids": probe_ids,
         "duplicate_signal": {
             "matched_probe_count": len(probe_ids),
@@ -257,6 +265,8 @@ DEBUG_CSV_FIELDS = [
     "linkedin_url",
     "matched_probe_count",
     "matched_probe_ids",
+    "source_operator",
+    "source_channel",
     "best_score",
     "source_row_count",
     "profile_context_ref",
@@ -281,6 +291,8 @@ def write_debug_csv(path: Path, candidates: list[dict[str, Any]]) -> None:
                 "current_company": c.get("current_company") or "",
                 "location": c.get("location") or "",
                 "linkedin_url": c.get("linkedin_url") or "",
+                "source_operator": c.get("source_operator") or "",
+                "source_channel": c.get("source_channel") or "",
                 "matched_probe_count": c["duplicate_signal"]["matched_probe_count"],
                 "matched_probe_ids": "; ".join(c["matched_probe_ids"]),
                 "best_score": f"{best_score:.2f}" if best_score else "",

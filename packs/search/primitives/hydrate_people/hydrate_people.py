@@ -19,7 +19,7 @@ from uuid import UUID
 LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 sys.path.insert(0, str(LIB_DIR))
 
-from postgres_client import fetch_interaction_counts, fetch_person_rows, load_env_file  # noqa: E402
+from postgres_client import fetch_interaction_counts, fetch_person_rows, fetch_source_attribution, load_env_file  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 
 
@@ -679,6 +679,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
     if rows is None:
         rows = fetch_person_rows(requested, env_file=env_file)
         interaction_counts = fetch_interaction_counts(requested, env_file=env_file)
+        source_attribution = fetch_source_attribution(requested, env_file=env_file)
         source = {
             "type": "postgres_contract",
             "backend": "postgres_supabase",
@@ -686,6 +687,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         }
     else:
         interaction_counts = {}
+        source_attribution = {}
         source = {
             "type": "local_duckdb",
             "backend": "duckdb",
@@ -699,6 +701,12 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         if interaction_counts.get(str(row.get("id"))):
             row["total_interactions"] = interaction_counts[str(row.get("id"))]
         profile = normalize_hydrated_context(row)
+        attribution = source_attribution.get(str(profile.get("person_id")))
+        if attribution:
+            profile["source_operators"] = attribution.get("operators", [])
+            profile["source_channels"] = attribution.get("channels", [])
+            profile["primary_source_operator"] = attribution.get("primary_operator")
+            profile["primary_source_channel"] = attribution.get("primary_channel")
         profiles.append(apply_candidate_metadata(profile, metadata.get(str(profile.get("person_id")))))
     order = {pid: idx for idx, pid in enumerate(requested)}
     profiles.sort(key=lambda profile: order.get(str(profile.get("person_id")), len(order)))

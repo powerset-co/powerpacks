@@ -378,6 +378,93 @@ def fetch_interaction_counts(person_ids: list[str], env_file: Path | None = None
         return {}
 
 
+def fetch_source_attribution(person_ids: list[str], env_file: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Per-person source attribution for the sendable shortlist.
+
+    Returns {person_id: {
+        "operators": [names by interaction desc],
+        "channels": [channels with >0 interactions by interaction desc],
+        "primary_operator": str | None,   # strongest connection
+        "primary_channel": str | None,
+    }}.
+
+    Source = operator name (whose network the person is in). Channel =
+    source_channel (linkedin, gmail, imessage, ...). Missing table/rows or any
+    error degrades gracefully to an empty mapping.
+    """
+    if not person_ids:
+        return {}
+    load_env_file(env_file)
+
+    def _build(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        wanted = {str(pid) for pid in person_ids}
+        # person -> operator_name -> interactions ; person -> channel -> interactions
+        op_by_person: dict[str, dict[str, int]] = {}
+        ch_by_person: dict[str, dict[str, int]] = {}
+        for row in rows:
+            pid = str(row.get("person_id") or "")
+            if pid not in wanted:
+                continue
+            interactions = int(row.get("total_interactions") or 0)
+            op = (row.get("operator_name") or "").strip()
+            ch = (row.get("source_channel") or "").strip()
+            if op:
+                op_by_person.setdefault(pid, {})[op] = op_by_person.setdefault(pid, {}).get(op, 0) + interactions
+            if ch:
+                ch_by_person.setdefault(pid, {})[ch] = ch_by_person.setdefault(pid, {}).get(ch, 0) + interactions
+        out: dict[str, dict[str, Any]] = {}
+        for pid in wanted:
+            ops = op_by_person.get(pid, {})
+            chs = ch_by_person.get(pid, {})
+            # operators ranked by interactions desc, then name
+            operators = [name for name, _ in sorted(ops.items(), key=lambda kv: (-kv[1], kv[0]))]
+            # channels: only those with >0 interactions ranked desc; if all zero,
+            # still expose the channel names so we are not silently blank.
+            nonzero = {c: n for c, n in chs.items() if n > 0}
+            ranked = nonzero if nonzero else chs
+            channels = [name for name, _ in sorted(ranked.items(), key=lambda kv: (-kv[1], kv[0]))]
+            if not operators and not channels:
+                continue
+            out[pid] = {
+                "operators": operators,
+                "channels": channels,
+                "primary_operator": operators[0] if operators else None,
+                "primary_channel": channels[0] if channels else None,
+            }
+        return out
+
+    fixture = fixture_rows("person_source_summary")
+    if fixture is not None:
+        users_fixture = fixture_rows("users") or []
+        name_by_op = {str(u.get("id") or ""): (u.get("name") or u.get("email") or "") for u in users_fixture}
+        rows = []
+        for row in fixture:
+            enriched = dict(row)
+            enriched["operator_name"] = name_by_op.get(str(row.get("operator_id") or ""), "")
+            rows.append(enriched)
+        return _build(rows)
+
+    assert_columns_in_contract("person_source_summary", ["person_id", "operator_id", "total_interactions"])
+    psycopg2 = ensure_psycopg2()
+    query = """
+        SELECT pss.person_id::text AS person_id,
+               COALESCE(u.name, u.email, '') AS operator_name,
+               pss.source_channel AS source_channel,
+               pss.total_interactions AS total_interactions
+        FROM person_source_summary pss
+        LEFT JOIN users u ON u.id::text = pss.operator_id::text
+        WHERE pss.person_id = ANY(%s::uuid[])
+    """
+    try:
+        with psycopg2.connect(database_url()) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(query, (person_ids,))
+                rows = [dict(r) for r in cur.fetchall()]
+        return _build(rows)
+    except Exception:
+        return {}
+
+
 def _threshold_conditions(prefix: str, min_value: Any, max_value: Any, column: str = "total_interactions") -> tuple[list[str], dict[str, Any]]:
     conditions: list[str] = []
     params: dict[str, Any] = {}

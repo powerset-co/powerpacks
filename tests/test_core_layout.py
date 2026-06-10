@@ -22,7 +22,7 @@ class CoreLayoutTests(unittest.TestCase):
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(search_pack, ["search-company", "search-network", "search-network-jd"])
+        self.assertEqual(search_pack, ["search-company", "search-network", "search-profile"])
         messages_pack = sorted(
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
         )
@@ -93,7 +93,7 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "search-network" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "search-network-jd" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "search-profile" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-email" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "discover-contacts" / "SKILL.md").exists())
@@ -133,7 +133,7 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((bundle / "scripts" / "run-powerpacks-console.sh").exists())
             self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "search-network-jd" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "search-profile" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
@@ -223,10 +223,10 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("skill", expand_step)
 
         text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
-        self.assertIn("## Happy Path", text)
+        self.assertIn("Happy Path", text)
         self.assertIn("search_network_pipeline.py prepare", text)
         self.assertIn("company_directory_fast_path", text)
-        self.assertIn("search-network-jd", text)
+        self.assertIn("search-profile", text)
         self.assertIn("Do not inspect repo docs, source, memory", text)
 
     def test_json_contracts_and_schemas_parse(self) -> None:

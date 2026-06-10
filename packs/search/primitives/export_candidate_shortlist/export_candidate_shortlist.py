@@ -27,21 +27,19 @@ from pathlib import Path
 from typing import Any
 
 
+# Exact sendable-shortlist contract (packs/search/tasks/search-network-jd.task.json
+# -> export_sendable_shortlist.csv_columns_exact). Do not add forbidden columns
+# (JD Score, Verdict, Caveats, Matched Probes, Person ID, ...); those live only
+# in the debug/reranked pools.
 SHORTLIST_FIELDS = [
-    "rank",
-    "name",
-    "linkedin_url",
-    "current_role",
-    "current_company",
-    "location",
-    "jd_score",
-    "verdict",
-    "seniority_fit",
-    "rationale",
-    "must_have_summary",
-    "nice_to_have_summary",
-    "matched_probes",
-    "caveats",
+    "Rank",
+    "Name",
+    "LinkedIn URL",
+    "Current Role",
+    "Current Company",
+    "Source",
+    "Channel",
+    "Rationale",
 ]
 
 
@@ -123,22 +121,15 @@ def run(args: argparse.Namespace) -> None:
         for ev in filtered:
             cid = ev.get("candidate_id", "")
             cand = frontier_map.get(cid, {})
-            ds = ev.get("duplicate_signal", {})
             writer.writerow({
-                "rank": ev.get("rank", ""),
-                "name": cand.get("name") or "",
-                "linkedin_url": cand.get("linkedin_url") or "",
-                "current_role": cand.get("current_role") or "",
-                "current_company": cand.get("current_company") or "",
-                "location": cand.get("location") or "",
-                "jd_score": ev.get("jd_score", ""),
-                "verdict": ev.get("verdict", ""),
-                "seniority_fit": ev.get("seniority_fit", ""),
-                "rationale": ev.get("rationale", ""),
-                "must_have_summary": req_summary(ev.get("must_have", [])),
-                "nice_to_have_summary": req_summary(ev.get("nice_to_have", [])),
-                "matched_probes": "; ".join(ds.get("matched_probe_ids", [])),
-                "caveats": "; ".join(ev.get("caveats", [])),
+                "Rank": ev.get("rank", ""),
+                "Name": cand.get("name") or "",
+                "LinkedIn URL": cand.get("linkedin_url") or "",
+                "Current Role": cand.get("current_role") or "",
+                "Current Company": cand.get("current_company") or "",
+                "Source": cand.get("source_operator") or "",
+                "Channel": cand.get("source_channel") or "",
+                "Rationale": ev.get("rationale", ""),
             })
 
     # Write shortlist manifest
