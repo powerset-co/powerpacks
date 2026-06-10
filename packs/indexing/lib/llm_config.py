@@ -2,11 +2,19 @@
 
 All enrichment primitives (roles, companies) should use these defaults
 so model, reasoning, and pricing stay consistent with prod.
+
+Concurrency and checkpoint sizes come from the OpenAI usage-tier
+profile in ``openai_usage_tiers.py`` (default: tier_5 = 256 concurrency).
 """
 from __future__ import annotations
 
 import os
 from typing import Any
+
+from packs.indexing.lib.openai_usage_tiers import (
+    env_or_profile_int,
+    openai_usage_tier_profile,
+)
 
 # Default model for company enrichment — matches prod combined_enrichment.py.
 DEFAULT_MODEL = "gpt-5.2"
@@ -16,7 +24,11 @@ DEFAULT_MODEL = "gpt-5.2"
 DEFAULT_ROLE_MODEL = "gpt-5.1"
 DEFAULT_MAX_COMPLETION_TOKENS = 2500
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
-DEFAULT_OPENAI_CONCURRENCY = 256
+
+# Pull concurrency from tier profile (tier_5 default = 256).
+_profile = openai_usage_tier_profile()
+DEFAULT_OPENAI_CONCURRENCY = int(_profile.get("openai_concurrency", 256))
+DEFAULT_CHECKPOINT_EVERY = int(_profile.get("paid_checkpoint_every", 512))
 
 # Known pricing per 1K tokens (USD).
 CHAT_MODEL_PRICES_PER_1K_USD: dict[str, dict[str, float]] = {

@@ -1,5 +1,8 @@
 """Fetch company details from RapidAPI LinkedIn endpoint.
 
+Results are cached to disk under a configurable directory so repeated
+pipeline runs don't re-fetch.
+
 Usage:
     from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import fetch_company_details
 
@@ -11,11 +14,13 @@ import http.client
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 
 DEFAULT_HOST = "professional-network-data.p.rapidapi.com"
 DEFAULT_TIMEOUT = 30
+DEFAULT_CACHE_DIR = ".powerpacks/rapidapi-company-cache"
 
 
 def _api_key() -> str:
@@ -25,17 +30,46 @@ def _api_key() -> str:
     )
 
 
+def _cache_path(company_id: str, cache_dir: str | Path | None = None) -> Path:
+    d = Path(cache_dir or os.getenv("POWERPACKS_RAPIDAPI_COMPANY_CACHE", DEFAULT_CACHE_DIR))
+    return d / f"{company_id}.json"
+
+
+def _read_cache(company_id: str, cache_dir: str | Path | None = None) -> dict[str, Any] | None:
+    p = _cache_path(company_id, cache_dir)
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and not data.get("error"):
+                return data
+        except (json.JSONDecodeError, OSError):
+            pass
+    return None
+
+
+def _write_cache(company_id: str, data: dict[str, Any], cache_dir: str | Path | None = None) -> None:
+    p = _cache_path(company_id, cache_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+
+
 def fetch_company_details(
     company_id: str,
     *,
     api_key: str | None = None,
     host: str = DEFAULT_HOST,
     timeout: int = DEFAULT_TIMEOUT,
+    cache_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Fetch company details by RapidAPI LinkedIn company ID.
 
     Returns the parsed JSON response or {"error": "..."} on failure.
+    Successful responses are cached to disk.
     """
+    cached = _read_cache(company_id, cache_dir)
+    if cached is not None:
+        return cached
+
     key = api_key or _api_key()
     if not key:
         return {"error": "no RAPIDAPI_LINKEDIN_KEY or RAPIDAPI_KEY set"}
@@ -52,7 +86,9 @@ def fetch_company_details(
         raw = res.read().decode("utf-8")
         if res.status != 200:
             return {"error": f"HTTP {res.status}", "body": raw[:500]}
-        return json.loads(raw)
+        result = json.loads(raw)
+        _write_cache(company_id, result, cache_dir)
+        return result
     except Exception as exc:
         return {"error": str(exc)}
     finally:
