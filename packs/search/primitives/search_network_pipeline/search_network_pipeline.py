@@ -305,9 +305,9 @@ def run_pipeline(args) -> dict[str, Any]:
     if f.get("investor_names"):
         steps.append(("resolve_investors",[sys.executable,str(ROOT/"packs/search/primitives/resolve_investors/resolve_investors.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
     if f.get("company_names") or f.get("company_ids") or f.get("current_company_names") or f.get("company_semantic_queries") or f.get("sector_types") or f.get("investor_names"):
-        steps.append(("resolve_companies",[sys.executable,str(ROOT/"packs/search/primitives/resolve_companies/resolve_companies.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
+        steps.append(("resolve_companies",[sys.executable,str(ROOT/"packs/search/primitives/turbopuffer/turbopuffer_resolve_companies.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
     if f.get("education_names"):
-        steps.append(("resolve_education",[sys.executable,str(ROOT/"packs/search/primitives/resolve_education/resolve_education.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
+        steps.append(("resolve_education",[sys.executable,str(ROOT/"packs/search/primitives/turbopuffer/turbopuffer_resolve_education.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
     steps += [
         ("apply_prefilters",[sys.executable,str(ROOT/"packs/search/primitives/apply_prefilters/apply_prefilters.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]),
         ("execute_role_search",[sys.executable,str(ROOT/"packs/search/primitives/execute_role_search/execute_role_search.py"),"--state",str(state),"--env-file",args.env_file,"--write-state","--limit",str(args.limit),"--top-k",str(args.top_k)]),

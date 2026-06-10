@@ -4,7 +4,7 @@
 Sidecar helper for pipe-cleaning the local DuckDB search path while the durable
 processing pipeline is still settling. It wraps the checked-in indexing pipeline
 when given a source CSV, or materializes an existing records directory into the
-table names expected by ``packs/search/primitives/lib/local_duckdb_store.py``.
+table names expected by ``packs/search/primitives/local/local_duckdb_store.py``.
 
 Example:
 
@@ -57,11 +57,16 @@ DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 LOCAL_TABLES = {
     "local_people_positions": "records/people.records.jsonl",
     "local_summaries": "records/summaries.records.jsonl",
+    "local_company_signals": "records/company_signals.records.jsonl",
     "local_people_education": "records/education.records.jsonl",
     "local_education": "records/schools.records.jsonl",
     "local_companies": "records/companies.records.jsonl",
 }
 PERSON_PROFILE_RECORD = "records/person_profiles.records.jsonl"
+PERSON_SOURCE_SUMMARY_RECORD = "records/person_source_summary.records.jsonl"
+OPTIONAL_LOCAL_TABLES = {
+    "local_person_source_summary": PERSON_SOURCE_SUMMARY_RECORD,
+}
 LOCAL_HASH_TABLE = "_local_record_hashes"
 
 # Local DuckDB contract for the five search namespaces.  These columns mirror
@@ -204,6 +209,20 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "valuation": "DOUBLE",
         "allowed_operator_ids": "VARCHAR[]",
     },
+    "local_company_signals": {
+        "id": "VARCHAR",
+        "company_id": "VARCHAR",
+        "company_urn": "VARCHAR",
+        "signals_text": "VARCHAR",
+        "summary": "VARCHAR",
+        "doc2query_text": "VARCHAR",
+        "signal_tokens": "VARCHAR[]",
+        "signals_tokens": "VARCHAR[]",
+        "summary_tokens": "VARCHAR[]",
+        "word_tokens": "VARCHAR[]",
+        "vector": "DOUBLE[]",
+        "allowed_operator_ids": "VARCHAR[]",
+    },
     "local_people_education": {
         "id": "VARCHAR",
         "person_id": "VARCHAR",
@@ -228,8 +247,27 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "person_count": "BIGINT",
     },
 }
+OPTIONAL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
+    "local_person_source_summary": {
+        "person_id": "VARCHAR",
+        "operator_id": "VARCHAR",
+        "source_channel": "VARCHAR",
+        "source_account": "VARCHAR",
+        "total_interactions": "INTEGER",
+        "total_messages": "INTEGER",
+        "thread_count": "INTEGER",
+        "total_sent": "INTEGER",
+        "total_received": "INTEGER",
+        "first_interaction": "VARCHAR",
+        "last_interaction": "VARCHAR",
+    },
+}
+ALL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
+    **LOCAL_TABLE_CONTRACT,
+    **OPTIONAL_LOCAL_TABLE_CONTRACT,
+}
 
-VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies"]
+VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies", "local_company_signals"]
 POSITION_PERSON_DUPLICATE_COLUMNS = [
     "city",
     "state",
@@ -422,6 +460,12 @@ def materialize_records_dir(records_dir: Path, run_dir: Path, *, force: bool = F
         link_or_copy(src, dst, force=force)
         if dst.exists():
             copied[PERSON_PROFILE_RECORD] = str(dst)
+    src = record_source_path(records_dir, PERSON_SOURCE_SUMMARY_RECORD)
+    if src:
+        dst = run_dir / PERSON_SOURCE_SUMMARY_RECORD
+        link_or_copy(src, dst, force=force)
+        if dst.exists():
+            copied[PERSON_SOURCE_SUMMARY_RECORD] = str(dst)
     for _table, rel in LOCAL_TABLES.items():
         src = record_source_path(records_dir, rel)
         if not src:
@@ -1039,7 +1083,7 @@ def load_jsonl_table_incremental(con: Any, table: str, path: Path, run_dir: Path
 
 
 def postprocess_table(con: Any, table: str, operator_id: str) -> None:
-    add_missing_columns(con, table, LOCAL_TABLE_CONTRACT.get(table, {}))
+    add_missing_columns(con, table, ALL_LOCAL_TABLE_CONTRACT.get(table, {}))
     cols = table_columns(con, table)
 
     if table == "local_people_positions":
@@ -1074,6 +1118,17 @@ def postprocess_table(con: Any, table: str, operator_id: str) -> None:
                 f"NULLIF(CAST(entity_sector_text AS VARCHAR), ''), "
                 f"NULLIF(CAST(word_text AS VARCHAR), ''))"
             )
+
+    if table == "local_company_signals":
+        if {"company_id", "company_urn", "id"} <= cols:
+            con.execute(
+                f"UPDATE {qident(table)} SET company_id = COALESCE("
+                f"NULLIF(CAST(company_id AS VARCHAR), ''), "
+                f"NULLIF(CAST(company_urn AS VARCHAR), ''), "
+                f"NULLIF(CAST(id AS VARCHAR), ''))"
+            )
+        if {"company_urn", "company_id"} <= cols:
+            con.execute(f"UPDATE {qident(table)} SET company_urn = COALESCE(NULLIF(CAST(company_urn AS VARCHAR), ''), CAST(company_id AS VARCHAR))")
         if {"name_aliases_text", "aliases", "company_name"} <= cols:
             con.execute(
                 f"UPDATE {qident(table)} SET name_aliases_text = COALESCE("
@@ -1154,6 +1209,11 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, increme
             else:
                 counts[table] = load_jsonl_table(con, table, path)
             postprocess_table(con, table, operator_id)
+        for table, rel in OPTIONAL_LOCAL_TABLES.items():
+            path = resolve_artifact_path(run_dir, rel)
+            if path.exists():
+                counts[table] = load_jsonl_table(con, table, path)
+                postprocess_table(con, table, operator_id)
         postprocess_cross_tables(con)
         counts["local_person_profile_position_overlap"] = profile_position_id_overlap(con)
         counts["local_people_positions_person_columns_dropped"] = int(drop_position_person_duplicates(con))
@@ -1252,6 +1312,7 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table
         "table_diffs": table_diffs,
         "duckdb_update_mode": "incremental" if args.incremental else "rebuild",
         "local_table_contract": LOCAL_TABLE_CONTRACT,
+        "optional_local_table_contract": OPTIONAL_LOCAL_TABLE_CONTRACT,
         "vector_tables": VECTOR_TABLES,
     }
     path = run_dir / "manifest.json"

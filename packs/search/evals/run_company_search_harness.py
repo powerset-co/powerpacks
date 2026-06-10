@@ -29,8 +29,9 @@ DEFAULT_APP_DIR = Path("/Users/arthur/workspace/aleph-mvp")
 REPORT_PATH = ROOT / "evals" / "company_search.md"
 
 sys.path.insert(0, str(PRIMITIVES / "lib"))
-sys.path.insert(0, str(PRIMITIVES / "resolve_companies"))
-import resolve_companies  # noqa: E402
+sys.path.insert(0, str(PRIMITIVES / "shared"))
+sys.path.insert(0, str(PRIMITIVES / "turbopuffer"))
+import turbopuffer_resolve_companies as resolve_companies  # noqa: E402
 
 
 @dataclass
@@ -207,7 +208,7 @@ def live_case(
     company = sh(
         [
             sys.executable,
-            str(PRIMITIVES / "resolve_companies" / "resolve_companies.py"),
+            str(PRIMITIVES / "turbopuffer" / "turbopuffer_resolve_companies.py"),
             "--state",
             str(state_path),
             "--payload-json",

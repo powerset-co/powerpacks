@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 
@@ -105,6 +106,57 @@ class LocalProdParityTests(unittest.TestCase):
         self.assertEqual(comparison["local_recall_vs_prod"], 0.5)
         self.assertEqual(comparison["prod_missing_local"], ["d", "e"])
         self.assertEqual(comparison["local_extra"], ["a"])
+
+    def test_local_prod_parity_tracker_is_structured(self) -> None:
+        tracker_path = ROOT / "packs/search/tasks/local-prod-parity.task.json"
+        tracker = json.loads(tracker_path.read_text(encoding="utf-8"))
+        valid_statuses = {"parity", "partial", "gap", "needs_runtime_data", "accepted_non_parity"}
+        valid_priorities = {"P0", "P1", "P2"}
+        sibling_repos = {
+            "powerpacks": ROOT,
+            "network-search-api": ROOT.parent / "network-search-api",
+        }
+
+        self.assertEqual(tracker["task"], "local_prod_parity")
+        self.assertEqual(set(tracker["tracks"]), {"data_pipeline", "local_search"})
+        for track_name, rows in tracker["tracks"].items():
+            self.assertGreater(len(rows), 0, track_name)
+            for row in rows:
+                self.assertEqual(row["track"], track_name)
+                self.assertIn(row["status"], valid_statuses)
+                self.assertIn(row["priority"], valid_priorities)
+                self.assertIn("target_behavior", row)
+                self.assertIsInstance(row.get("acceptance"), dict)
+                self.assertTrue(row["acceptance"].get("type"))
+                acceptance = row["acceptance"]
+                self.assertTrue(
+                    acceptance.get("required_checks") or acceptance.get("required_metrics") or acceptance.get("commands"),
+                    f"{row['id']} acceptance must be machine-checkable",
+                )
+                dimension_payloads = {
+                    "field": lambda source: bool(source.get("fields") or source.get("tables")),
+                    "algorithm": lambda source: bool(source.get("algorithm")),
+                    "prompt": lambda source: bool(source.get("algorithm") or source.get("model") or source.get("prompt_ids")),
+                    "model": lambda source: bool(source.get("model")),
+                    "pipeline_stage": lambda source: bool(source.get("algorithm") or source.get("symbols") or source.get("tables")),
+                    "artifact": lambda source: bool(source.get("artifacts") or source.get("fields") or source.get("tables")),
+                    "contract": lambda source: bool(source.get("fields") or source.get("tables") or source.get("symbols")),
+                    "validation": lambda source: True,
+                }
+                dimension = row["parity_dimension"]
+                self.assertIn(dimension, dimension_payloads)
+                self.assertTrue(
+                    dimension_payloads[dimension](row["prod"]) or dimension_payloads[dimension](row["local"]),
+                    f"{row['id']} missing machine-readable parity payload for {dimension}",
+                )
+                for side in ["prod", "local"]:
+                    source = row[side]
+                    self.assertIn(source["repo"], sibling_repos)
+                    self.assertIsInstance(source.get("paths"), list)
+                    for rel_path in source.get("paths", []):
+                        repo_root = sibling_repos[source["repo"]]
+                        if repo_root.exists():
+                            self.assertTrue((repo_root / rel_path).exists(), f"{row['id']} {side} path missing: {rel_path}")
 
 
 if __name__ == "__main__":

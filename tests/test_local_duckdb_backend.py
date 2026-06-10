@@ -11,8 +11,13 @@ from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LIB = ROOT / "packs/search/primitives/lib"
-sys.path.insert(0, str(LIB))
+PRIMITIVES = ROOT / "packs/search/primitives"
+LIB = PRIMITIVES / "lib"
+SHARED = PRIMITIVES / "shared"
+LOCAL = PRIMITIVES / "local"
+TURBOPUFFER = PRIMITIVES / "turbopuffer"
+for _path in [LIB, SHARED, LOCAL, TURBOPUFFER]:
+    sys.path.insert(0, str(_path))
 
 
 def load_module(name: str, path: Path):
@@ -24,12 +29,14 @@ def load_module(name: str, path: Path):
     return module
 
 
-turbopuffer_client = load_module("turbopuffer_client", LIB / "turbopuffer_client.py")
-local_filter_eval = load_module("local_filter_eval", LIB / "local_filter_eval.py")
+local_backend = load_module("local_search_backend", LOCAL / "local_search_backend.py")
+search_common = load_module("search_common", SHARED / "search_common.py")
+turbopuffer_client = load_module("turbopuffer_search_backend", TURBOPUFFER / "turbopuffer_search_backend.py")
+local_filter_eval = load_module("local_filter_eval", LOCAL / "local_filter_eval.py")
 apply_prefilters = load_module("apply_prefilters", ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py")
-resolve_education = load_module("resolve_education", ROOT / "packs/search/primitives/resolve_education" / "resolve_education.py")
+resolve_education = load_module("local_resolve_education", LOCAL / "local_resolve_education.py")
 execute_role_search = load_module("execute_role_search", ROOT / "packs/search/primitives/execute_role_search" / "execute_role_search.py")
-resolve_companies = load_module("resolve_companies", ROOT / "packs/search/primitives/resolve_companies" / "resolve_companies.py")
+resolve_companies = load_module("local_resolve_companies", LOCAL / "local_resolve_companies.py")
 hydrate_people = load_module("hydrate_people", ROOT / "packs/search/primitives/hydrate_people" / "hydrate_people.py")
 build_local_duckdb_shim = load_module("build_local_duckdb_shim", ROOT / "scripts" / "build-local-duckdb-shim.py")
 
@@ -90,12 +97,12 @@ class LocalDuckDBFixtureMixin:
         os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
         os.environ.pop("POWERPACKS_ENABLE_LEGACY_LOCAL_SEARCH_ENV", None)
         os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
-        turbopuffer_client.configure_local_backend(self.db_path)
-        turbopuffer_client._local_store_for_path.cache_clear()
+        local_backend.configure_local_backend(self.db_path)
+        local_backend._local_store_for_path.cache_clear()
 
     def tearDown(self) -> None:
-        turbopuffer_client.configure_local_backend(None)
-        turbopuffer_client._local_store_for_path.cache_clear()
+        local_backend.configure_local_backend(None)
+        local_backend._local_store_for_path.cache_clear()
         for key, value in self._old_env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -433,6 +440,41 @@ class LocalDuckDBFixtureMixin:
                     ),
                 ],
             )
+            con.execute(
+                """
+                create table local_company_signals (
+                    id varchar,
+                    company_id varchar,
+                    company_urn varchar,
+                    signals_text varchar,
+                    summary varchar,
+                    doc2query_text varchar,
+                    signal_tokens varchar[],
+                    signals_tokens varchar[],
+                    summary_tokens varchar[],
+                    word_tokens varchar[],
+                    vector double[],
+                    allowed_operator_ids varchar[]
+                )
+                """
+            )
+            con.executemany(
+                "insert into local_company_signals values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        "signal-infra", "company-infra", "company-infra",
+                        "database infrastructure backend engineering hiring signal",
+                        "InfraDB is hiring backend infrastructure engineers.",
+                        "backend database infrastructure engineering",
+                        ["database", "infrastructure", "backend"],
+                        ["database", "infrastructure", "backend"],
+                        ["backend", "engineers"],
+                        ["backend", "engineer", "database", "infrastructure", "backend engineer"],
+                        [0.0, 1.0, 0.0],
+                        ["op1"],
+                    )
+                ],
+            )
         finally:
             con.close()
 
@@ -449,16 +491,16 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         finally:
             con.close()
 
-        self.assertTrue(turbopuffer_client.local_namespace_has_vectors("people"))
-        self.assertTrue(turbopuffer_client.local_namespace_has_vectors("summaries"))
-        self.assertTrue(turbopuffer_client.local_namespace_has_vectors("companies"))
+        self.assertTrue(local_backend.local_namespace_has_vectors("people"))
+        self.assertTrue(local_backend.local_namespace_has_vectors("summaries"))
+        self.assertTrue(local_backend.local_namespace_has_vectors("companies"))
 
     def test_local_rich_fields_are_filterable_and_projectable(self) -> None:
-        store = turbopuffer_client.local_store()
+        store = local_backend.local_store()
         original_rows_for_namespace = store._rows_for_namespace
         store._rows_for_namespace = lambda _logical_name: (_ for _ in ()).throw(AssertionError("filter path must query DuckDB SQL directly"))
         try:
-            people = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+            people = asyncio.run(local_backend.filter_only_rows_for_namespace(
                 "people",
                 ("role_ids", "ContainsAny", ["backend_engineer"]),
                 ["base_id", "role_ids", "position_title"],
@@ -470,7 +512,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual([row["base_id"] for row in people], ["person-engineer"])
         self.assertIn("backend_engineer", people[0]["role_ids"])
 
-        summaries = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+        summaries = asyncio.run(local_backend.filter_only_rows_for_namespace(
             "summaries",
             ("tech_skills", "ContainsAny", ["DuckDB"]),
             ["base_id", "tech_skills"],
@@ -480,7 +522,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual([row["base_id"] for row in summaries], ["person-engineer"])
         self.assertIn("DuckDB", summaries[0]["tech_skills"])
 
-        companies = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+        companies = asyncio.run(local_backend.filter_only_rows_for_namespace(
             "companies",
             ("And", [
                 ("entity_types", "ContainsAny", ["developer_tool"]),
@@ -496,7 +538,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(companies[0]["customer_type"], ["B2B"])
 
     def test_classified_company_fields_filter_bm25_and_vector_search(self) -> None:
-        rich = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+        rich = asyncio.run(local_backend.filter_only_rows_for_namespace(
             "companies",
             ("And", [
                 ("entity_types", "ContainsAny", ["developer_tool"]),
@@ -534,7 +576,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             ("doc2query_text", "developer database tools"),
             ("entity_sector_text", "data infrastructure"),
         ]:
-            response = turbopuffer_client.namespace("companies").query(
+            response = local_backend.namespace("companies").query(
                 rank_by=(field, "BM25", query),
                 top_k=5,
                 include_attributes=["company_name", field],
@@ -544,7 +586,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             self.assertEqual(response.rows[0].company_name, "InfraDB", field)
             self.assertGreater(response.rows[0].score, 0.0, field)
 
-        vector_response = turbopuffer_client.namespace("companies").query(
+        vector_response = local_backend.namespace("companies").query(
             rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
             top_k=2,
             include_attributes=["company_name", "entity_types", "sector_types", "technology_types"],
@@ -743,9 +785,9 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             self.assertEqual(payload["tables"]["local_people_positions"], 1)
 
             os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
-            previous_db = turbopuffer_client.explicit_local_backend_path()
-            turbopuffer_client.configure_local_backend(payload["duckdb"])
-            turbopuffer_client._local_store_for_path.cache_clear()
+            previous_db = local_backend.explicit_local_backend_path()
+            local_backend.configure_local_backend(payload["duckdb"])
+            local_backend._local_store_for_path.cache_clear()
             original_embedding = resolve_companies.embedding
 
             async def fail_embedding(text: str):
@@ -753,12 +795,12 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
 
             resolve_companies.embedding = fail_embedding
             try:
-                people_knn = turbopuffer_client.namespace("people").query(
+                people_knn = local_backend.namespace("people").query(
                     rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
                     top_k=1,
                     include_attributes=["base_id", "position_title", "role_ids"],
                 )
-                company_knn = turbopuffer_client.namespace("companies").query(
+                company_knn = local_backend.namespace("companies").query(
                     rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
                     top_k=1,
                     include_attributes=["company_name", "entity_types", "sector_types"],
@@ -788,8 +830,8 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                 )))
             finally:
                 resolve_companies.embedding = original_embedding
-                turbopuffer_client.configure_local_backend(previous_db)
-                turbopuffer_client._local_store_for_path.cache_clear()
+                local_backend.configure_local_backend(previous_db)
+                local_backend._local_store_for_path.cache_clear()
 
             self.assertEqual(people_knn.rows[0].id, "pos-artifact-engineer")
             self.assertEqual(people_knn.rows[0].position_title, "Backend Engineer")
@@ -808,18 +850,18 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             "is_current_company": True,
             "operator_ids": ["op-founder"],
         }
-        filters = turbopuffer_client.filters_from_role_payload(founder_payload)
-        rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace("people", filters, ["base_id", "position_title", "role_track"]))
+        filters = search_common.filters_from_role_payload(founder_payload)
+        rows = asyncio.run(local_backend.filter_only_rows_for_namespace("people", filters, ["base_id", "position_title", "role_track"]))
         self.assertEqual([row["base_id"] for row in rows], ["person-founder"])
         self.assertEqual(rows[0]["position_title"], "Founder and CEO")
 
-        engineer_filters = turbopuffer_client.filters_from_role_payload({
+        engineer_filters = search_common.filters_from_role_payload({
             "cities": ["New York"],
             "role_tracks": ["engineering"],
             "is_current_role": True,
             "operator_ids": ["op-eng"],
         })
-        engineer_rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace("people", engineer_filters, ["base_id", "position_title"]))
+        engineer_rows = asyncio.run(local_backend.filter_only_rows_for_namespace("people", engineer_filters, ["base_id", "position_title"]))
         self.assertEqual([row["base_id"] for row in engineer_rows], ["person-engineer"])
 
     def test_person_location_fields_are_or_grouped(self) -> None:
@@ -828,14 +870,14 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             "metro_areas": ["New York City Metropolitan Area"],
             "is_current_role": True,
         }
-        filters = turbopuffer_client.filters_from_role_payload(payload)
+        filters = search_common.filters_from_role_payload(payload)
 
         self.assertEqual(filters[0], "And")
         location = next(clause for clause in filters[1] if clause[0] == "Or")
         self.assertIn(("city", "In", ["San Francisco"]), location[1])
         self.assertIn(("metro_areas", "ContainsAny", ["New York City Metropolitan Area"]), location[1])
 
-        rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+        rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
             "people",
             filters,
             ["base_id", "position_title"],
@@ -843,26 +885,26 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual({row["base_id"] for row in rows}, {"person-founder", "person-engineer"})
 
     def test_social_filters_are_duckdb_sql_and_combine_with_base_ids(self) -> None:
-        store = turbopuffer_client.local_store()
+        store = local_backend.local_store()
         original_rows_for_namespace = store._rows_for_namespace
         store._rows_for_namespace = lambda _logical_name: (_ for _ in ()).throw(AssertionError("social filters must query DuckDB SQL directly"))
         try:
-            high_linkedin_filters = turbopuffer_client.filters_from_role_payload({
+            high_linkedin_filters = search_common.filters_from_role_payload({
                 "base_candidate_ids": ["person-founder", "person-engineer"],
                 "li_followers_min": 4000,
                 "is_current_role": True,
             })
-            high_rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+            high_rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
                 "people",
                 high_linkedin_filters,
                 ["base_id", "position_title", "linkedin_followers"],
             ))
-            low_x_filters = turbopuffer_client.filters_from_role_payload({
+            low_x_filters = search_common.filters_from_role_payload({
                 "base_candidate_ids": ["person-founder", "person-engineer"],
                 "x_followers_max": 200,
                 "is_current_role": True,
             })
-            low_rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+            low_rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
                 "people",
                 low_x_filters,
                 ["base_id", "position_title", "x_twitter_followers"],
@@ -882,9 +924,9 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(meta["stage"], "education")
 
         role_payload = {"base_candidate_ids": base_ids, "role_ids": ["founder"], "is_current_role": True}
-        rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
+        rows = asyncio.run(local_backend.hybrid_role_rows(
             role_payload,
-            turbopuffer_client.filters_from_role_payload(role_payload),
+            search_common.filters_from_role_payload(role_payload),
             top_k=10,
             include_attributes=["base_id", "position_title"],
         ))
@@ -893,9 +935,9 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
 
     def test_filter_only_role_search_respects_top_k_before_dedupe(self) -> None:
         payload = {"countries": ["United States"], "is_current_role": True}
-        rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
+        rows = asyncio.run(local_backend.hybrid_role_rows(
             payload,
-            turbopuffer_client.filters_from_role_payload(payload),
+            search_common.filters_from_role_payload(payload),
             top_k=1,
             include_attributes=["base_id", "position_title"],
         ))
@@ -908,7 +950,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(meta["matched"], 1)
 
     def test_school_resolver_and_namespace_prefix_tokens(self) -> None:
-        response = turbopuffer_client.namespace("schools").query(
+        response = local_backend.namespace("schools").query(
             filters=("school_name", "ContainsAllTokens", "Stan", {"last_as_prefix": True}),
             top_k=10,
             include_attributes=["school_name", "person_count"],
@@ -925,7 +967,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(out["education_ids"], ["school-stanford"])
 
     def test_local_company_namespace_and_resolver_use_duckdb(self) -> None:
-        response = turbopuffer_client.namespace("companies").query(
+        response = local_backend.namespace("companies").query(
             rank_by=("name_aliases_text", "BM25", "InfraDB"),
             top_k=5,
             include_attributes=["company_name", "headcount", "sector_types"],
@@ -1037,7 +1079,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(calls, ["database infrastructure developer tools"])
 
     def test_namespace_rank_by_includes_score(self) -> None:
-        response = turbopuffer_client.namespace("people").query(
+        response = local_backend.namespace("people").query(
             rank_by=("vector", "kNN", [1.0, 0.0, 0.0]),
             filters=("is_current", "Eq", True),
             top_k=1,
@@ -1047,7 +1089,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertGreater(response.rows[0].score, 0.0)
 
     def test_vector_rank_pushes_filters_and_cosine_into_duckdb(self) -> None:
-        store = turbopuffer_client.local_store()
+        store = local_backend.local_store()
         original_filtered_rows = store._filtered_rows
 
         def fail_filtered_rows(*_args, **_kwargs):
@@ -1073,7 +1115,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertGreater(response.rows[0].score, 0.99)
 
     def test_vector_only_hybrid_role_search_uses_duckdb_sql(self) -> None:
-        store = turbopuffer_client.local_store()
+        store = local_backend.local_store()
         original_filtered_rows = store._filtered_rows
 
         def fail_filtered_rows(*_args, **_kwargs):
@@ -1099,15 +1141,15 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
 
     def test_local_semantic_role_search_requires_query_embedding(self) -> None:
         with self.assertRaisesRegex(Exception, "requires query_embedding"):
-            asyncio.run(turbopuffer_client.local_store().hybrid_role_rows(
+            asyncio.run(local_backend.local_store().hybrid_role_rows(
                 {"semantic_query": LONG_BACKEND_QUERY, "bm25_queries": ["backend engin"], "is_current_role": True},
-                turbopuffer_client.filters_from_role_payload({"is_current_role": True}),
+                search_common.filters_from_role_payload({"is_current_role": True}),
                 top_k=5,
                 include_attributes=["base_id", "position_title"],
             ))
 
     def test_explicit_query_embedding_does_not_force_filter_only_for_short_query(self) -> None:
-        rows = asyncio.run(turbopuffer_client._hybrid_role_rows_single(
+        rows = asyncio.run(local_backend._hybrid_role_rows_single(
             {"semantic_query": "backend", "bm25_queries": ["backend engin"]},
             ("is_current", "Eq", True),
             top_k=5,
@@ -1118,7 +1160,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(rows[0]["retrieval_mode"], "hybrid")
 
     def test_bm25_adjacency_path(self) -> None:
-        rows = asyncio.run(turbopuffer_client.bm25_adjacency_rows(
+        rows = asyncio.run(local_backend.bm25_adjacency_rows(
             ["backend engin"],
             ("is_current", "Eq", True),
             top_k=5,
@@ -1129,14 +1171,14 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(rows[0]["adjacency_query_indexes"], [0])
 
     def test_execute_role_search_local_payload_candidate_shape(self) -> None:
-        original_embedding = execute_role_search.hybrid_role_rows
+        original_hybrid_role_rows = local_backend.hybrid_role_rows
 
         async def fake_hybrid_role_rows(payload, filters, *, top_k, include_attributes):
             local_payload = dict(payload)
             local_payload["query_embedding"] = [0.0, 1.0, 0.0]
-            return await turbopuffer_client.local_store().hybrid_role_rows(local_payload, filters, top_k, include_attributes)
+            return await local_backend.local_store().hybrid_role_rows(local_payload, filters, top_k, include_attributes)
 
-        execute_role_search.hybrid_role_rows = fake_hybrid_role_rows
+        local_backend.hybrid_role_rows = fake_hybrid_role_rows
         try:
             out = asyncio.run(execute_role_search.run(SimpleNamespace(
                 state=None,
@@ -1148,7 +1190,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                 write_artifact=False,
             )))
         finally:
-            execute_role_search.hybrid_role_rows = original_embedding
+            local_backend.hybrid_role_rows = original_hybrid_role_rows
 
         self.assertEqual(out["candidate_ids"][0], "person-engineer")
         candidate = out["candidates"][0]
@@ -1208,10 +1250,10 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         with self.assertRaisesRegex(local_duckdb_store.LocalDuckDBError, "local_people_positions"):
             local_duckdb_store.LocalDuckDBSearchStore(missing_path).namespace("people")
         with self.assertRaisesRegex(local_duckdb_store.LocalDuckDBError, "unknown local DuckDB namespace"):
-            turbopuffer_client.local_store().namespace("unsupported")
+            local_backend.local_store().namespace("unsupported")
 
     def test_filter_only_respects_max_results_and_projects_id(self) -> None:
-        rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+        rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
             "people",
             None,
             ["base_id"],
@@ -1223,12 +1265,12 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
 
     def test_default_mode_safety(self) -> None:
         os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-        turbopuffer_client.configure_local_backend(None)
-        turbopuffer_client._local_store_for_path.cache_clear()
-        self.assertFalse(turbopuffer_client.is_local_backend())
-        self.assertIsInstance(turbopuffer_client.namespace_name("people"), str)
+        local_backend.configure_local_backend(None)
+        local_backend._local_store_for_path.cache_clear()
+        self.assertFalse(local_backend.is_local_backend())
+        self.assertIsInstance(local_backend.namespace_name("people"), str)
         with self.assertRaises(RuntimeError):
-            turbopuffer_client.local_store()
+            local_backend.local_store()
 
 
 class LocalFilterEvalTests(unittest.TestCase):
@@ -1424,6 +1466,92 @@ class LocalPersonProfilesShimTest(unittest.TestCase):
             self.assertEqual(rows[0]["public_profile_url"], "https://www.linkedin.com/in/profile-only")
             self.assertEqual(rows[0]["hydrated_context"]["positions"][0]["title"], "Founder")
 
+
+class LocalDuckDBHydrationInteractionCountsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        try:
+            import duckdb  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("duckdb is not installed")
+
+    def _build_records_duckdb(self, tmp: Path, *, include_source_summary: bool) -> str:
+        records = tmp / "records"
+        write_jsonl(records / "person_profiles.records.jsonl", [
+            {
+                "id": "person-interaction",
+                "person_id": "person-interaction",
+                "base_id": "person-interaction",
+                "full_name": "Interaction Person",
+                "headline": "Founder",
+                "location_raw": "San Francisco, California, United States",
+                "hydrated_context": {
+                    "person_id": "person-interaction",
+                    "name": "Interaction Person",
+                    "headline": "Founder",
+                    "positions": [],
+                    "education": [],
+                },
+            }
+        ])
+        write_jsonl(records / "people.records.jsonl", [])
+        if include_source_summary:
+            write_jsonl(records / "person_source_summary.records.jsonl", [
+                {
+                    "person_id": "person-interaction",
+                    "operator_id": "operator-a",
+                    "source_channel": "gmail",
+                    "source_account": "arthur@example.com",
+                    "total_interactions": 7,
+                },
+                {
+                    "person_id": "person-interaction",
+                    "operator_id": "operator-a",
+                    "source_channel": "imessage",
+                    "source_account": "arthur@example.com",
+                    "total_interactions": 5,
+                },
+                {
+                    "person_id": "other-person",
+                    "operator_id": "operator-a",
+                    "source_channel": "gmail",
+                    "source_account": "arthur@example.com",
+                    "total_interactions": 99,
+                },
+            ])
+
+        payload = run_shim_json(
+            "--records-dir",
+            str(records),
+            "--output-dir",
+            str(tmp / "search-index"),
+            "--force",
+        )
+        return str(payload["duckdb"])
+
+    def test_local_hydration_sums_duckdb_person_source_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            db_path = self._build_records_duckdb(Path(tmp_name), include_source_summary=True)
+
+            rows = hydrate_people.fetch_local_person_rows(["person-interaction"], db_path=db_path, workers=1, batch_size=1)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["total_interactions"], 12)
+            self.assertEqual(rows[0]["hydrated_context"]["total_interactions"], 12)
+            profile = hydrate_people.normalize_hydrated_context(rows[0])
+            self.assertEqual(profile["total_interactions"], 12)
+            self.assertEqual(hydrate_people.llm_profile_view(profile)["total_interactions"], 12)
+
+    def test_local_hydration_without_source_summary_does_not_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            db_path = self._build_records_duckdb(Path(tmp_name), include_source_summary=False)
+
+            rows = hydrate_people.fetch_local_person_rows(["person-interaction"], db_path=db_path, workers=1, batch_size=1)
+
+            self.assertEqual(len(rows), 1)
+            self.assertIsNone(rows[0]["total_interactions"])
+            self.assertIsNone(rows[0]["hydrated_context"]["total_interactions"])
+
+
 class LocalPersonProfilePrefilterTest(unittest.TestCase):
     def test_profile_filter_constrains_position_search_without_duplicate_position_columns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -1477,15 +1605,15 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_people_positions"], 2)
             self.assertEqual(payload["tables"]["local_people_positions_person_columns_dropped"], 1)
 
-            previous_db = turbopuffer_client.explicit_local_backend_path()
-            turbopuffer_client.configure_local_backend(payload["duckdb"])
-            turbopuffer_client._local_store_for_path.cache_clear()
+            previous_db = local_backend.explicit_local_backend_path()
+            local_backend.configure_local_backend(payload["duckdb"])
+            local_backend._local_store_for_path.cache_clear()
             try:
-                store = turbopuffer_client.namespace("people")
+                store = local_backend.namespace("people")
                 rows = store.query(filters=["city", "IGlob", "*san francisco*"], top_k=10, include_attributes=["person_id", "position_title"]).rows
             finally:
-                turbopuffer_client.configure_local_backend(previous_db)
-                turbopuffer_client._local_store_for_path.cache_clear()
+                local_backend.configure_local_backend(previous_db)
+                local_backend._local_store_for_path.cache_clear()
             self.assertEqual(len(rows), 1)
             self.assertNotEqual(rows[0].model_extra["person_id"], "person-sf")
             self.assertRegex(rows[0].model_extra["person_id"], r"^[0-9a-f-]{36}$")
@@ -1546,22 +1674,22 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
                 columns = {row[1] for row in conn.execute("pragma table_info('local_people_positions')").fetchall()}
             self.assertIn("inferred_birth_year", columns)
 
-            previous_db = turbopuffer_client.explicit_local_backend_path()
-            turbopuffer_client.configure_local_backend(payload["duckdb"])
-            turbopuffer_client._local_store_for_path.cache_clear()
+            previous_db = local_backend.explicit_local_backend_path()
+            local_backend.configure_local_backend(payload["duckdb"])
+            local_backend._local_store_for_path.cache_clear()
             try:
-                filters = turbopuffer_client.filters_from_role_payload({
+                filters = search_common.filters_from_role_payload({
                     "role_ids": ["founder"],
                     "age_max": 35,
                     "is_current_role": True,
                 })
-                rows = asyncio.run(turbopuffer_client.filter_only_rows_for_namespace(
+                rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
                     "people",
                     filters,
                     ["base_id", "position_title", "inferred_birth_year"],
                 ))
             finally:
-                turbopuffer_client.configure_local_backend(previous_db)
-                turbopuffer_client._local_store_for_path.cache_clear()
+                local_backend.configure_local_backend(previous_db)
+                local_backend._local_store_for_path.cache_clear()
             self.assertEqual([row["base_id"] for row in rows], ["person-young"])
             self.assertEqual(rows[0]["inferred_birth_year"], 1998)

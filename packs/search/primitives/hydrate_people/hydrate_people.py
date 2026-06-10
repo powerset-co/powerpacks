@@ -16,8 +16,13 @@ from typing import Any
 from uuid import UUID
 
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
-sys.path.insert(0, str(LIB_DIR))
+PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+LIB_DIR = PRIMITIVES_DIR / "lib"
+SHARED_DIR = PRIMITIVES_DIR / "shared"
+LOCAL_DIR = PRIMITIVES_DIR / "local"
+TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+    sys.path.insert(0, str(_path))
 
 from postgres_client import fetch_interaction_counts, fetch_person_rows, load_env_file  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
@@ -52,6 +57,7 @@ LOCAL_PROFILE_HYDRATE_COLUMNS = [
     "all_phones",
     "source_channels",
     "source_artifacts",
+    "total_interactions",
     "twitter_handle",
     "x_twitter_handle",
     "x_twitter_followers",
@@ -63,6 +69,7 @@ LOCAL_PROFILE_HYDRATE_COLUMNS = [
     "education",
     "hydrated_context",
 ]
+LOCAL_INTERACTION_SUMMARY_TABLES = ("local_person_source_summary", "person_source_summary")
 LOCAL_POSITION_HYDRATE_COLUMNS = [
     "id",
     "position_id",
@@ -344,6 +351,32 @@ def local_rows(conn: Any, table: str, person_ids: list[str] | None = None, selec
     ]
 
 
+def local_interaction_counts(conn: Any, person_ids: list[str]) -> dict[str, int]:
+    """Aggregate local DuckDB interaction counts using the prod person_source_summary contract."""
+    if not person_ids:
+        return {}
+    prepare_requested_ids(conn, person_ids)
+    counts: dict[str, int] = {}
+    for table in LOCAL_INTERACTION_SUMMARY_TABLES:
+        columns = set(table_columns(conn, table))
+        if {"person_id", "total_interactions"} - columns:
+            continue
+        rows = conn.execute(
+            f"""
+            select cast(t.person_id as varchar) as person_id,
+                   sum(coalesce(try_cast(t.total_interactions as bigint), 0)) as total
+            from {quote_ident(table)} t
+            join _hydrate_requested_ids r on cast(t.person_id as varchar) = r.id
+            group by 1
+            """
+        ).fetchall()
+        for person_id, total in rows:
+            # Prefer the explicit local table when both local and restored prod-shaped
+            # tables coexist, but let later tables fill IDs that were absent upstream.
+            counts.setdefault(str(person_id), int(total or 0))
+    return counts
+
+
 def epoch_date(value: Any) -> str | None:
     try:
         ts = int(value or 0)
@@ -450,7 +483,9 @@ def build_local_person_rows(
     position_rows: list[dict[str, Any]],
     summary_rows: list[dict[str, Any]],
     education_rows: list[dict[str, Any]],
+    interaction_counts: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
+    interaction_counts = interaction_counts or {}
     profiles_by_person = {
         str(row.get("person_id") or row.get("base_id") or row.get("id")): row
         for row in profile_rows
@@ -497,6 +532,11 @@ def build_local_person_rows(
         headline = profile.get("headline") or " at ".join(str(part) for part in [title, company] if part) or title
         location = profile.get("location_raw") or profile_context.get("location") or (compact_location(current) if current else None)
         years = first_present(position_source, "total_years_experience") or profile_context.get("years_of_experience")
+        total_interactions = interaction_counts.get(pid)
+        if total_interactions is None:
+            total_interactions = profile.get("total_interactions")
+        if total_interactions is None:
+            total_interactions = profile_context.get("total_interactions")
 
         context = {
             "person_id": pid,
@@ -510,6 +550,7 @@ def build_local_person_rows(
             "education": education,
             "tech_skills": summary.get("tech_skills") or profile_context.get("tech_skills") or [],
             "years_of_experience": years,
+            "total_interactions": total_interactions,
         }
         rows.append({
             "id": pid,
@@ -529,6 +570,7 @@ def build_local_person_rows(
             "linkedin_connections": profile.get("linkedin_connections") or first_present(position_source, "linkedin_connections"),
             "ig_followers": profile.get("ig_followers") or first_present(position_source, "ig_followers"),
             "inferred_birth_year": profile.get("inferred_birth_year") or first_present(position_source, "inferred_birth_year"),
+            "total_interactions": total_interactions,
         })
     return rows
 
@@ -543,7 +585,8 @@ def fetch_local_person_batch(db_path: str, person_ids: list[str]) -> list[dict[s
         position_rows = local_rows(conn, "local_people_positions", select_columns=LOCAL_POSITION_HYDRATE_COLUMNS)
         summary_rows = local_rows(conn, "local_summaries", select_columns=LOCAL_SUMMARY_HYDRATE_COLUMNS)
         education_rows = local_rows(conn, "local_people_education", select_columns=LOCAL_EDUCATION_HYDRATE_COLUMNS)
-    return build_local_person_rows(person_ids, profile_rows, position_rows, summary_rows, education_rows)
+        interaction_counts = local_interaction_counts(conn, person_ids)
+    return build_local_person_rows(person_ids, profile_rows, position_rows, summary_rows, education_rows, interaction_counts)
 
 
 def chunked(values: list[str], size: int) -> list[list[str]]:

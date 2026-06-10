@@ -22,11 +22,76 @@ from typing import Any
 import openai
 
 logger = logging.getLogger(__name__)
+ROOT = Path(__file__).resolve().parents[4]
+ROLE_TAXONOMY_PATH = ROOT / "packs/search/data/roles/canonical_role_taxonomy.json"
 
 CITY_ALIASES = {
     "sf": "San Francisco",
     "s.f.": "San Francisco",
     "nyc": "New York City",
+}
+
+FOUNDER_BM25_QUERIES = ["founder", "co-founder", "cofounder", "founding", "CEO", "Chief Executive Officer"]
+FOUNDER_SEMANTIC_QUERY = (
+    "founder who started, founded, or built a company from scratch, took entrepreneurial risk, founding team "
+    "member, owns equity as a founder, made early strategic decisions, hired initial team, raised funding or "
+    "bootstrapped"
+)
+CSUITE_EXPANSION = {
+    "ceo": {
+        "display": "Chief Executive Officer",
+        "role_id": "chief_executive_officer",
+        "bm25": ["CEO", "Chief Executive Officer", "president", "managing director"],
+    },
+    "cto": {
+        "display": "Chief Technology Officer",
+        "role_id": "chief_technology_officer",
+        "bm25": ["CTO", "Chief Technology Officer", "SVP Engineering"],
+    },
+    "cfo": {
+        "display": "Chief Financial Officer",
+        "role_id": "chief_financial_officer",
+        "bm25": ["CFO", "Chief Financial Officer", "head of finance"],
+    },
+    "cmo": {
+        "display": "Chief Marketing Officer",
+        "role_id": "chief_marketing_officer",
+        "bm25": ["CMO", "Chief Marketing Officer", "VP Marketing"],
+    },
+    "coo": {
+        "display": "Chief Operating Officer",
+        "role_id": "chief_operating_officer",
+        "bm25": ["COO", "Chief Operating Officer", "head of operations"],
+    },
+    "cpo": {
+        "display": "Chief Product Officer",
+        "role_id": "chief_product_officer",
+        "bm25": ["CPO", "Chief Product Officer", "VP Product"],
+    },
+    "cro": {
+        "display": "Chief Revenue Officer",
+        "role_id": "chief_revenue_officer",
+        "bm25": ["CRO", "Chief Revenue Officer", "head of revenue"],
+    },
+    "ciso": {
+        "display": "Chief Information Security Officer",
+        "role_id": "chief_information_security_officer",
+        "bm25": ["CISO", "Chief Information Security Officer"],
+    },
+}
+ROLE_ID_TITLE_INJECTIONS = {
+    "ai_engineer": ["Member of Technical Staff"],
+    "ml_engineer": ["Member of Technical Staff"],
+    "software_engineer": ["Member of Technical Staff"],
+    "researcher": ["Research Fellow", "Postdoctoral Fellow"],
+    "ai_researcher": ["Research Scientist", "Research Fellow"],
+    "chief_revenue_officer": ["CRO"],
+    "chief_marketing_officer": ["CMO"],
+    "chief_operating_officer": ["COO"],
+    "chief_financial_officer": ["CFO"],
+    "chief_product_officer": ["CPO"],
+    "chief_technology_officer": ["CTO"],
+    "chief_executive_officer": ["CEO"],
 }
 
 PERSON_LOCATION_PREFIXES = (
@@ -78,52 +143,88 @@ EXTRACTOR_MODELS = {
 
 
 # ---------------------------------------------------------------------------
-# Role extractor prompt (inline — the app uses a complex agent, we simplify)
+# Role extractor prompt.
+#
+# This mirrors network-search-api's active RoleSearchAgentV2 path rather than the
+# older role_extraction_v3 prompt. Prod runs RoleSearchAgentV2 to emit
+# semantic_query, bm25_queries, role_ids, departments, and seniority, then applies
+# deterministic founder/C-suite short-circuits and optional title clustering.
+# Local DuckDB cannot run prod title clustering without a live title index, but it
+# can use the same role-agent prompt/model and the same deterministic shortcuts.
 # ---------------------------------------------------------------------------
 
-ROLE_EXTRACTION_PROMPT = """You are an expert at extracting role/title information from people search queries.
+ROLE_AGENT_SYSTEM_PROMPT = """You are a role search specialist. Given a search query, select the MOST PRECISE role_ids to retrieve matching people.
 
-Extract ONLY role-related information. Return JSON with:
+## ROLE TAXONOMY (175 functions across 22 departments)
+{taxonomy}
 
-### semantic_query
-Dense retrieval prose (2-3 sentences) describing what the target person does,
-their responsibilities, skills, and profile evidence. NOT a title phrase.
-Omit only for pure hard-filter searches with no role intent.
+## GENERIC ROLES (in "general" department)
+The "general" department contains: analyst, associate, chief_executive_officer, consultant, coordinator, director, founder, head_of, manager, officer, owner, president, principal, specialist, vice_president
+These are cross-departmental. IMPORTANT: director, vice_president, head_of, partner are SENIORITY LEVELS, not role functions. Do NOT put them in role_ids — use them in seniority instead.
+C-suite role_ids (chief_executive_officer, chief_technology_officer, chief_financial_officer, etc.) ARE valid role functions — use them when the query specifically asks for C-level executives.
 
-### bm25_queries
-Title/keyword aliases for BM25 matching. ALWAYS populate when there is role intent.
-Examples: ["software engineer", "SWE", "backend engineer"] or
-["founder", "co-founder", "cofounder", "founding CEO"].
+## SENIORITY BANDS (13 levels)
+trainee, entry, junior, mid, senior, staff, principal, manager, director, vice_president, c_suite, partner, owner
 
-### role_ids
-Only for well-known canonical roles:
-- "founder" for founder/cofounder queries
-- Do NOT use for general roles
+## YOUR TASK
+Select the best combination of:
+- **role_ids**: Pick ONLY the role_ids that DIRECTLY match the query. Be PRECISE, not expansive. Typically 1-4 role_ids. The downstream title clustering module discovers adjacent roles automatically — your job is to hit the bullseye, not cast a wide net. ONLY use IDs from the taxonomy above.
+- **departments**: Pick the relevant departments.
+- **seniority**: Pick seniority bands if the query implies a level. Empty = all levels.
+- **semantic_query**: 2-4 sentences describing what this role DOES. Rich, descriptive, covers responsibilities/skills/tools.
+- **bm25_queries**: 5-15 diverse phrase keywords. Use stemmed phrases — "software engineer" matches all seniority variants. Focus on SYNONYMS and ADJACENT terms, not seniority prefixes.
 
-### is_current_role / is_current_company
-- Set true when "current", "currently", "now at" is explicit
-- Set false ONLY when "previously", "formerly", "ex-", "past", "used to" WITHOUT a date range
-- Leave null when ambiguous
-- Leave null when there is an explicit date range (position_after_date / position_before_date)
-  because the date window already constrains the time period
-- For "ROLE at COMPANY" recruiting queries with no date range, default both to true
-- "who worked at X between 2020 and 2022" → null (date range handles it)
-- "who worked at X" with no dates → null (ambiguous)
+## PRECISION RULES
+- Return ONLY roles that someone searching for the query would actually want to see in results.
+- "devops engineers" → devops_engineer, sre, maybe platform_engineer. NOT backend_engineer, qa_engineer, software_engineer — those are different jobs.
+- "data scientists" → data_scientist, maybe ml_engineer. NOT data_engineer, data_analyst — those are different jobs.
+- "ai engineers" → ai_engineer, ml_engineer. NOT data_engineer, data_analyst, data_architect — those are different jobs.
+- "product managers" → product_manager. NOT program_manager, product_designer — those are different jobs.
+- "software engineers" → software_engineer, backend_engineer, frontend_engineer, full_stack_engineer, mobile_engineer. These are SUBTYPES of the same job, so they belong.
+- "founders" → role_ids=["founder"], seniority=[] (EMPTY — founders exist at all levels)
+- "X leaders" → role_ids = DOMAIN functions + relevant C-suite (e.g., "data science leaders" → data_scientist, data_science_manager). seniority = [director, vice_president, c_suite]. Do NOT put director/VP/head_of in role_ids — those are seniority, not roles.
+- "engineering leadership" → role_ids=[software_engineer, engineering_manager, chief_technology_officer], seniority=[director, vice_president, c_suite]
+- "gtm leaders" → role_ids=[sales_manager, account_executive, marketing_manager, business_development, chief_revenue_officer, chief_marketing_officer], seniority=[director, vice_president, c_suite]
+- "CTOs" or "chief technology officers" → role_ids=[chief_technology_officer], seniority=[] (the role IS the C-suite level)
+- "CFOs at banks" → role_ids=[chief_financial_officer], seniority=[]
+- NEVER output bare "partner" as a role_id. Resolve it from context.
+- "partners at law firms" or "law firm partners" → role_ids=[attorney], seniority=[partner]
+- "venture partners" → role_ids=[venture_partner]
+- "general partners" or "managing partners" at VC/PE/investment firms → role_ids=[general_partner]
+- "limited partners" or "LPs" → role_ids=[limited_partner]
+- "investment partners" or "investor partners" → role_ids=[general_partner]
 
-Return JSON:
-{
-  "semantic_query": null,
-  "bm25_queries": [],
-  "role_ids": [],
-  "is_current_role": null,
-  "is_current_company": null
-}
+## KEY PRINCIPLE
+Ask yourself: "Would someone searching for this query be surprised to see a [candidate_role] in their results?" If yes, do NOT include that role_id. Adjacent roles that happen to share a department are NOT the same job.
 
-IMPORTANT:
-- semantic_query must be 2-3 sentences of dense prose, NOT a title
-- bm25_queries must include common title variations
-- Do NOT include seniority, location, company, education — those are extracted separately
+## OTHER RULES
+- Company/location/industry filters are handled ELSEWHERE — only output role-related fields
+- If query has NO role intent (just company/location/school) → return ALL fields empty. Do NOT explain why — just return empty strings and empty lists. No "this query is about people" or "no role detected" in semantic_query.
+- NEVER invent role_ids — only use ones from the taxonomy above
+
+Return JSON with exactly these keys: semantic_query, bm25_queries, role_ids, departments, seniority.
 """
+
+
+def get_role_taxonomy_prompt() -> str:
+    data = json.loads(ROLE_TAXONOMY_PATH.read_text())
+    departments = data.get("departments", {})
+    lines: list[str] = []
+    for dept_name in sorted(departments):
+        if dept_name == "noise":
+            continue
+        functions = departments[dept_name].get("functions") or []
+        if functions:
+            lines.append(f"  {dept_name}: {', '.join(functions)}")
+    return "\n".join(lines)
+
+
+def role_agent_system_prompt() -> str:
+    return ROLE_AGENT_SYSTEM_PROMPT.format(taxonomy=get_role_taxonomy_prompt())
+
+
+def role_agent_user_content(query: str) -> str:
+    return f'Query: "{query}"'
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +243,8 @@ async def _extract(
     # Trait generation uses a specific user prompt format
     if name == "trait_generation":
         user_content = f'Generate traits for this query:\n\n"{query}"\n\nReturn JSON with: {{"traits": [{{"value": "...", "temporal": "current|past|all", "meaning": "role|experience|location|education|company|investor|general"}}], "has_domain_intent": true/false}}'
+    elif name == "role":
+        user_content = role_agent_user_content(query)
     else:
         user_content = query
     try:
@@ -186,6 +289,13 @@ def _merge(
         filters["bm25_queries"] = role["bm25_queries"]
     if role.get("role_ids"):
         filters["role_ids"] = role["role_ids"]
+    if role.get("departments"):
+        # Preserve the RoleSearchAgentV2 department decision for parity/debugging.
+        # Prod uses it to derive role_function, but does not currently expose it
+        # as a hard role_track filter in ExtractedEntities.
+        filters["role_departments"] = _dedupe_strings(role["departments"])
+    if role.get("seniority"):
+        filters["seniority_bands"] = _normalize_seniority_bands(role["seniority"])
     if role.get("is_current_role") is not None:
         filters["is_current_role"] = role["is_current_role"]
     if role.get("is_current_company") is not None:
@@ -283,12 +393,15 @@ def _merge(
         filters["years_experience_min"] = int(temporal["years_experience_min"])
     if temporal.get("years_experience_max") is not None:
         filters["years_experience_max"] = int(temporal["years_experience_max"])
+    if temporal.get("is_current") is not None:
+        current = bool(temporal["is_current"])
+        filters.setdefault("is_current_role", current)
+        filters.setdefault("is_current_company", current)
 
     # Seniority
     if seniority.get("seniority_bands"):
-        # Normalize: "vice-president" → "vice_president"
-        bands = [b.replace("-", "_") for b in seniority["seniority_bands"]]
-        filters["seniority_bands"] = bands
+        # Normalize: "vice-president"/"c-suite" → local filter values.
+        filters["seniority_bands"] = _normalize_seniority_bands(seniority["seniority_bands"])
 
     # Social
     for key in ("x_followers_min", "x_followers_max", "li_followers_min", "li_followers_max",
@@ -304,12 +417,128 @@ def _merge(
         filters.pop("is_current_role", None)
         filters.pop("is_current_company", None)
 
+    _apply_role_expansion_parity(filters, query)
     _apply_location_alias_fallback(filters, query)
 
     # Strip empty/null values
     filters = {k: v for k, v in filters.items() if v is not None and v != [] and v != ""}
 
     return filters
+
+
+def _dedupe_strings(items: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        value = str(item).strip()
+        if not value:
+            continue
+        key = value.lower()
+        if key not in seen:
+            out.append(value)
+            seen.add(key)
+    return out
+
+
+def _normalize_seniority_bands(items: list[Any]) -> list[str]:
+    """Normalize prod/local seniority spellings to Powerpacks filter values."""
+    return _dedupe_strings([
+        str(item).strip().lower().replace("-", "_").replace(" ", "_")
+        for item in items or []
+        if item not in (None, "")
+    ])
+
+
+def _detect_csuite_expansions(query: str) -> list[dict[str, Any]]:
+    q_lower = query.lower().strip()
+    words: set[str] = set()
+    for word in re.findall(r"[a-z]+", q_lower):
+        words.add(word)
+        if word.endswith("s") and len(word) > 3:
+            words.add(word[:-1])
+    return [spec for abbrev, spec in CSUITE_EXPANSION.items() if abbrev in words or spec["display"].lower() in q_lower]
+
+
+def _has_explicit_founder_term(query: str) -> bool:
+    return bool(re.search(r"\b(co[-\s]?founders?|founders?|founding)\b", query, re.IGNORECASE))
+
+
+def _role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
+    seniority_prefixes = re.compile(
+        r"^(senior|staff|lead|principal|junior|founding|head of|director of|"
+        r"vp of|chief|associate|intern|executive|managing|group)\s+",
+        re.IGNORECASE,
+    )
+    examples: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        phrase = seniority_prefixes.sub("", str(query)).strip()
+        phrase = re.split(r"[|,]", phrase)[0].strip()
+        if len(phrase) < 3:
+            continue
+        key = phrase.lower()
+        if key not in seen:
+            examples.append(phrase)
+            seen.add(key)
+
+    if len(examples) > 1:
+        lowered = [phrase.lower() for phrase in examples]
+        keep = []
+        for idx, phrase in enumerate(examples):
+            candidate = lowered[idx]
+            covered = any(other != candidate and " " in other and other in candidate for other in lowered)
+            if not covered:
+                keep.append(phrase)
+        examples = keep or examples
+
+    if not examples:
+        return []
+    escaped = [re.escape(phrase.lower()) for phrase in examples]
+    return [{"regex": "\\b(" + "|".join(escaped) + ")\\b", "examples": examples[:15]}]
+
+
+def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
+    """Apply prod-compatible deterministic role expansion to local query output.
+
+    This covers the parts of prod role expansion that can be unit-tested without
+    live TurboPuffer/title-clustering access: founder and C-suite short-circuits,
+    canonical role_ids, BM25 aliases, role function, and regex preview patterns.
+    """
+    csuite_expansions = _detect_csuite_expansions(query)
+    role_ids = _dedupe_strings(filters.get("role_ids") or [])
+    role_ids_lower = {role_id.lower() for role_id in role_ids}
+
+    is_founder = _has_explicit_founder_term(query) or bool(role_ids_lower & {"founder", "cofounder", "co-founder"})
+    if is_founder:
+        csuite_bm25 = [bm25 for spec in csuite_expansions for bm25 in spec["bm25"]]
+        filters["role_ids"] = ["founder"]
+        filters["bm25_queries"] = _dedupe_strings([*(filters.get("bm25_queries") or []), *FOUNDER_BM25_QUERIES, *csuite_bm25])
+        if len(str(filters.get("semantic_query") or "")) < 80:
+            filters["semantic_query"] = FOUNDER_SEMANTIC_QUERY
+        filters["role_function"] = "founder"
+        filters.pop("seniority_bands", None)
+    elif csuite_expansions:
+        display_values = [spec["display"] for spec in csuite_expansions]
+        filters["role_ids"] = _dedupe_strings([*role_ids, *[spec["role_id"] for spec in csuite_expansions]])
+        filters["bm25_queries"] = _dedupe_strings([
+            *(filters.get("bm25_queries") or []),
+            *[bm25 for spec in csuite_expansions for bm25 in spec["bm25"]],
+        ])
+        filters.setdefault("seniority_bands", ["c_suite"])
+        if len(str(filters.get("semantic_query") or "")) < 80:
+            filters["semantic_query"] = (
+                f"Executive leader serving as {', '.join(display_values)}, responsible for strategic direction, "
+                "organizational leadership, senior decision-making, cross-functional execution, and accountability "
+                "for company or department outcomes. Profile evidence should include a current or past C-suite title."
+            )
+        filters["role_function"] = "leader"
+
+    injected_titles = [title for role_id in filters.get("role_ids") or [] for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])]
+    if injected_titles:
+        filters["bm25_queries"] = _dedupe_strings([*(filters.get("bm25_queries") or []), *sorted(set(injected_titles))])
+
+    if filters.get("bm25_queries") and not filters.get("role_core_patterns"):
+        filters["role_core_patterns"] = _role_core_patterns_from_bm25(filters["bm25_queries"])
 
 
 def _add_unique(filters: dict[str, Any], key: str, value: str) -> None:
@@ -379,7 +608,7 @@ async def expand_query_parallel(
         "education": _load_prompt("education"),
         "seniority": _load_prompt("seniority"),
         "social": _load_prompt("social"),
-        "role": ROLE_EXTRACTION_PROMPT,
+        "role": role_agent_system_prompt(),
         "trait_generation": _load_prompt("trait_generation"),
     }
 

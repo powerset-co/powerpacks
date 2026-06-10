@@ -18,8 +18,13 @@ from typing import Any
 from openai import AsyncOpenAI
 
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
-sys.path.insert(0, str(LIB_DIR))
+PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+LIB_DIR = PRIMITIVES_DIR / "lib"
+SHARED_DIR = PRIMITIVES_DIR / "shared"
+LOCAL_DIR = PRIMITIVES_DIR / "local"
+TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+    sys.path.insert(0, str(_path))
 
 from powerpacks_contracts import validate_hydrated_profile  # noqa: E402
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402

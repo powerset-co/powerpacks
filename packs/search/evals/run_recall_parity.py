@@ -757,7 +757,7 @@ def run_case(
         sh(
             [
                 sys.executable,
-                str(PRIMITIVES / "resolve_companies" / "resolve_companies.py"),
+                str(PRIMITIVES / "turbopuffer" / "turbopuffer_resolve_companies.py"),
                 "--state",
                 str(state_path),
                 "--env-file",
@@ -772,7 +772,7 @@ def run_case(
         sh(
             [
                 sys.executable,
-                str(PRIMITIVES / "resolve_education" / "resolve_education.py"),
+                str(PRIMITIVES / "turbopuffer" / "turbopuffer_resolve_education.py"),
                 "--state",
                 str(state_path),
                 "--env-file",

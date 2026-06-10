@@ -12,10 +12,15 @@ from pathlib import Path
 from typing import Any
 
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
-sys.path.insert(0, str(LIB_DIR))
+PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+LIB_DIR = PRIMITIVES_DIR / "lib"
+SHARED_DIR = PRIMITIVES_DIR / "shared"
+LOCAL_DIR = PRIMITIVES_DIR / "local"
+TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+    sys.path.insert(0, str(_path))
 
-from turbopuffer_client import load_env_file, namespace, namespace_name  # noqa: E402
+from turbopuffer_search_backend import load_env_file, namespace, namespace_name  # noqa: E402
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")

@@ -64,18 +64,20 @@ POWERPACKS_LOCAL_SEARCH_DB="$OUT/local-search.duckdb" uv run --project . python 
 import asyncio, json, os, sys
 from pathlib import Path
 ROOT = Path.cwd()
-sys.path.insert(0, str(ROOT / 'packs/search/primitives/lib'))
-import turbopuffer_client  # type: ignore
+PRIMITIVES = ROOT / 'packs/search/primitives'
+for path in ['lib', 'shared', 'local', 'turbopuffer']:
+    sys.path.insert(0, str(PRIMITIVES / path))
+import local_search_backend as local_backend  # type: ignore
 
 db = os.environ['POWERPACKS_LOCAL_SEARCH_DB']
-turbopuffer_client._local_store_for_path.cache_clear()
-people = turbopuffer_client.namespace('people').query(top_k=5, include_attributes=['base_id', 'position_title', 'vector']).rows
-companies = turbopuffer_client.namespace('companies').query(top_k=5, include_attributes=['company_name', 'vector']).rows
+local_backend._local_store_for_path.cache_clear()
+people = local_backend.namespace('people').query(top_k=5, include_attributes=['base_id', 'position_title', 'vector']).rows
+companies = local_backend.namespace('companies').query(top_k=5, include_attributes=['company_name', 'vector']).rows
 if not people:
     raise SystemExit('no local people rows')
 query_vector = people[0].vector
-knn = turbopuffer_client.namespace('people').query(rank_by=('vector', 'kNN', query_vector), top_k=3, include_attributes=['base_id', 'position_title']).rows
-role_rows = asyncio.run(turbopuffer_client.hybrid_role_rows(
+knn = local_backend.namespace('people').query(rank_by=('vector', 'kNN', query_vector), top_k=3, include_attributes=['base_id', 'position_title']).rows
+role_rows = asyncio.run(local_backend.hybrid_role_rows(
     {'semantic_query': 'local canary role search with deterministic vector over processed people positions, long enough to force hybrid vector retrieval without paid embeddings', 'query_embedding': query_vector, 'bm25_queries': [people[0].position_title or '']},
     None,
     top_k=3,

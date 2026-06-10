@@ -12,7 +12,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PEOPLE = ROOT / "tests/fixtures/indexing/people.csv"
 DUCKDB_SHIM = ROOT / "scripts/build-local-duckdb-shim.py"
-SEARCH_LIB = ROOT / "packs/search/primitives/lib"
+SEARCH_PRIMITIVES = ROOT / "packs/search/primitives"
+SEARCH_LIB = SEARCH_PRIMITIVES / "lib"
+SEARCH_SHARED = SEARCH_PRIMITIVES / "shared"
+SEARCH_LOCAL = SEARCH_PRIMITIVES / "local"
+SEARCH_TURBOPUFFER = SEARCH_PRIMITIVES / "turbopuffer"
 
 from packs.indexing.primitives.build_processing_pipeline import build_processing_pipeline as pipeline
 from packs.indexing.primitives.embed_records_checkpointed import embed_records_checkpointed
@@ -494,14 +498,15 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 db_payload = parse_last_json(proc.stdout)
-                sys.path.insert(0, str(SEARCH_LIB))
-                import turbopuffer_client  # type: ignore
+                for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+                    sys.path.insert(0, str(_path))
+                import local_search_backend as local_backend  # type: ignore
 
                 old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
                 os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = db_payload["duckdb"]
-                turbopuffer_client._local_store_for_path.cache_clear()
+                local_backend._local_store_for_path.cache_clear()
                 try:
-                    rows = turbopuffer_client.namespace("companies").query(
+                    rows = local_backend.namespace("companies").query(
                         filters=("sector_types", "ContainsAny", ["saas"]),
                         top_k=5,
                         include_attributes=["company_name", "sector_types", "entity_types", "customer_type"],
@@ -509,7 +514,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                     self.assertTrue(rows)
                     self.assertTrue(all("saas" in row.sector_types for row in rows))
                 finally:
-                    turbopuffer_client._local_store_for_path.cache_clear()
+                    local_backend._local_store_for_path.cache_clear()
                     if old_db is None:
                         os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
                     else:

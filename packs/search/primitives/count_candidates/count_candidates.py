@@ -13,18 +13,32 @@ from pathlib import Path
 from typing import Any
 
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
-sys.path.insert(0, str(LIB_DIR))
+PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+LIB_DIR = PRIMITIVES_DIR / "lib"
+SHARED_DIR = PRIMITIVES_DIR / "shared"
+LOCAL_DIR = PRIMITIVES_DIR / "local"
+TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+    sys.path.insert(0, str(_path))
 
-from turbopuffer_client import (  # noqa: E402
-    base_person_id,
-    filter_only_rows,
+import search_backend_mode  # noqa: E402
+from search_common import (  # noqa: E402
     filters_from_role_payload,
     load_env_file,
-    namespace_name,
     role_payload_from_state,
     summarize_filter,
 )
+from search_result_merge import base_person_id  # noqa: E402
+
+
+def search_backend() -> Any:
+    if search_backend_mode.is_local_backend_configured():
+        import local_search_backend as local_backend  # type: ignore
+
+        return local_backend
+    import turbopuffer_search_backend as turbopuffer_client  # type: ignore
+
+    return turbopuffer_client
 
 
 def now_iso() -> str:
@@ -76,13 +90,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     state_path = Path(args.state) if args.state else None
     state = read_json(state_path) if state_path else {}
     payload = json.loads(args.payload_json) if args.payload_json else role_payload_from_state(state)
+    backend = search_backend()
     filters = filters_from_role_payload(payload)
     if filters is None:
         raise RuntimeError("count_candidates requires at least one filter")
-    rows = await filter_only_rows(filters, ["base_id", "position_title"], page_size=args.page_size, max_results=args.max_position_rows)
+    rows = await backend.filter_only_rows(filters, ["base_id", "position_title"], page_size=args.page_size, max_results=args.max_position_rows)
     unique_people = {str(row.get("base_id") or base_person_id(str(row["id"]))) for row in rows}
     return {
-        "namespace": namespace_name("people"),
+        "namespace": backend.namespace_name("people"),
         "filters": payload.get("hard_filters") or {},
         "applied_filter": summarize_filter(filters),
         "position_rows": len(rows),
