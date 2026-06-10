@@ -1,12 +1,15 @@
 ---
 name: search-profile
-description: Run the recruiter profile-search loop for Powerpacks when the user provides a job posting URL, pasted job description, or broad multi-trait role brief. Fetch/read job URLs, extract differentiating traits, design 2-3 recruiter-style candidate profiles, execute one capped search per profile, merge and dedupe the pool, then run the automated evaluation primitive with seniority hard-gating and export a shortlist.
+description: Run the recruiter profile-search loop for Powerpacks when the user provides a job posting URL, pasted job description, broad multi-trait role brief, or a LinkedIn profile URL to find more people like. Fetch/read job URLs or resolve the person's profile (local cache, local index, Postgres, then RapidAPI with approval), extract differentiating traits, design recruiter-style candidate profiles, execute one capped search per profile, merge and dedupe the pool, then run the automated evaluation primitive with seniority hard-gating and export a shortlist.
 ---
 
 # Search Profile
 
 Use this for job posting URLs, pasted job descriptions, or broad role briefs
-where one search would likely be too noisy or miss distinct candidate patterns.
+where one search would likely be too noisy or miss distinct candidate
+patterns — and for **similar-person requests** ("find me more people like
+<linkedin url>"), which run the same loop seeded from a person's profile
+instead of a JD.
 
 ## The recruiter mindset
 
@@ -38,6 +41,69 @@ never "probe".
 Reference task spec: `packs/search/tasks/search-network-jd.task.json`
 Plan schema contract:
 `packs/search/schemas/search-network-jd-plan.schema.json`
+
+---
+
+## Similar-Person Mode ("find me more people like <linkedin url>")
+
+When the input is a LinkedIn profile URL (or the user names a person plus
+their LinkedIn), seed the loop from that person's profile instead of a JD.
+Everything after Task 1a is the same pipeline.
+
+### S1. Resolve the person's profile
+
+Run the profile-resolution primitive. It checks the cheapest sources first
+and only hits RapidAPI with explicit approval:
+
+```bash
+uv run --env-file .env --project . python packs/search/primitives/fetch_person_profile/fetch_person_profile.py \
+  --linkedin-url "<url>"
+```
+
+Lookup order: local RapidAPI profile cache → local DuckDB index → Postgres
+`hydrated_context` → RapidAPI. The RapidAPI fallback runs automatically — no
+approval needed — and seeds the shared profile cache. If the primitive
+returns `status: not_found` or `failed`, tell the user the profile could not
+be resolved and stop.
+
+Write the result into the run directory as `source.json` /
+`seed_profile.json`; the profile summary replaces `source.txt` as the trait
+source.
+
+### S2. Trait extraction from a person (not a JD)
+
+Apply the same trait rules as Task 1b with these adjustments:
+
+- Traits describe **what makes this person distinctive and replaceable-in-kind**:
+  current role/function track, seniority band, domain/industry context,
+  specific named skills or stacks visible in positions, and ownership level.
+- Use the person's **current role** as the seniority anchor. "More people
+  like X" means peers at X's level doing X's kind of work — not X's juniors,
+  not executives above X (unless X is an executive; then peers are too).
+- Do not turn employer names into traits ("worked at Stripe" is evidence,
+  not a requirement) unless the user asks for company-alike candidates.
+  Prefer the *kind* of company (stage, domain) when it is clearly part of
+  the pattern.
+- Location: use the person's metro as the default search scope; widen on
+  user request. It is scope, not a trait.
+- Set `usable_cutoff` from the person's current band, same wording rules as
+  a JD run.
+
+### S3. Candidate profile design
+
+Usually **one** candidate profile is enough — the person *is* the archetype.
+Design a single capped search (limit 100) describing the person's role,
+level, skills, and domain in plain English. Add a second profile only when
+the seed person genuinely spans two distinct patterns (e.g. operator +
+investor) and say which pattern each search targets.
+
+The plan preview shows the seed person (name, current role/company, the
+resolved source tier), the derived traits, the seniority-target line, and
+the search query. Exclude the seed person themselves from the final
+shortlist (match by person_id / LinkedIn URL at merge or evaluation time).
+
+Then continue with Task 2 (run profile searches), Task 4 (merge), and
+Task 5 (evaluate + export) exactly as for a JD run.
 
 ---
 
