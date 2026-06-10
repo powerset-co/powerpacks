@@ -99,12 +99,15 @@ def fetch_company_details_batch(
     company_ids: list[str],
     *,
     api_key: str | None = None,
-    rpm_limit: float = 300,
     host: str = DEFAULT_HOST,
     timeout: int = DEFAULT_TIMEOUT,
-    max_workers: int = 20,
+    max_workers: int = 50,
+    cache_dir: str | Path | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Fetch multiple company details concurrently with rate limiting.
+    """Fetch multiple company details concurrently.
+
+    Cached results are returned instantly. Only cache misses hit the network.
+    Concurrency is bounded by *max_workers* (default 50).
 
     Returns {company_id: response_dict}.
     """
@@ -115,22 +118,24 @@ def fetch_company_details_batch(
     if not key:
         return {cid: {"error": "no API key"} for cid in company_ids}
 
-    min_interval = 60.0 / rpm_limit if rpm_limit > 0 else 0
-    lock = threading.Lock()
-    last_request_time = [0.0]
+    # Serve cache hits immediately, collect misses for network fetch.
+    results: dict[str, dict[str, Any]] = {}
+    need_fetch: list[str] = []
+    for cid in company_ids:
+        cached = _read_cache(cid, cache_dir)
+        if cached is not None:
+            results[cid] = cached
+        else:
+            need_fetch.append(cid)
+
+    if not need_fetch:
+        return results
 
     def _fetch_one(cid: str) -> tuple[str, dict[str, Any]]:
-        with lock:
-            now = time.monotonic()
-            wait = max(0, min_interval - (now - last_request_time[0]))
-            if wait > 0:
-                time.sleep(wait)
-            last_request_time[0] = time.monotonic()
-        return cid, fetch_company_details(cid, api_key=key, host=host, timeout=timeout)
+        return cid, fetch_company_details(cid, api_key=key, host=host, timeout=timeout, cache_dir=cache_dir)
 
-    results: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_fetch_one, cid): cid for cid in company_ids}
+        futures = {pool.submit(_fetch_one, cid): cid for cid in need_fetch}
         for future in concurrent.futures.as_completed(futures):
             cid, resp = future.result()
             results[cid] = resp

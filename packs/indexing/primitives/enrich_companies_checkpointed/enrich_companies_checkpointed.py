@@ -860,7 +860,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if unique_ids:
                 sys.stderr.write(f"[enrich-companies] fetching {len(unique_ids)} company profiles from RapidAPI\n")
                 rapidapi_lookup = fetch_company_details_batch(
-                    list(unique_ids.keys()), api_key=rapid_key, rpm_limit=300,
+                    list(unique_ids.keys()), api_key=rapid_key,
                 )
                 ok = sum(1 for v in rapidapi_lookup.values() if not v.get("error"))
                 sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(unique_ids)} company profiles\n")
