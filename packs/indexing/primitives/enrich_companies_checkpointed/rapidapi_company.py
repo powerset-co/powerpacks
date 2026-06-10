@@ -168,6 +168,23 @@ def fetch_company_details_batch(
     return results
 
 
+def load_cached_company_details(
+    company_ids: list[str],
+    *,
+    cache_dir: str | Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return cached company responses only; never hits the network.
+
+    Cache misses are simply omitted from the result.
+    """
+    results: dict[str, dict[str, Any]] = {}
+    for cid in company_ids:
+        cached = _read_cache(cid, cache_dir)
+        if cached is not None:
+            results[cid] = cached
+    return results
+
+
 def extract_company_context(response: dict[str, Any]) -> dict[str, Any]:
     """Extract useful fields from RapidAPI company response for enrichment context."""
     if response.get("error"):

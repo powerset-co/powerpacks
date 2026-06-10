@@ -129,15 +129,51 @@ class IndexingContractTest(unittest.TestCase):
         self.assertIn("id", result["education"][0])
         self.assertEqual(result["education"][0]["person_id"], result["education"][0]["base_id"])
 
+    def test_education_field_of_study_reads_camelcase_linkedin_key(self):
+        people = [
+            {
+                "public_identifier": "ada-example",
+                "full_name": "Ada Example",
+                "education": [
+                    {
+                        "schoolName": "Cornell University",
+                        "school": "Cornell University",
+                        "degree": "Doctor of Philosophy - Ph.D.",
+                        "fieldOfStudy": "Psychology",
+                        "ends_at": {"year": 2028, "month": 5, "day": 0},
+                    }
+                ],
+            }
+        ]
+        record = build_education_corpus(people)["education"][0]
+        self.assertEqual(record["field_of_study"], "Psychology")
+        self.assertEqual(record["school_name"], "Cornell University")
+        self.assertEqual(record["end_year"], 2028)
+
     def test_summary_contract_records_are_pre_embedding_upload_shape(self):
         result = build_summary_records(self.people)
         self.assert_contract_subset(result["summaries"][0], "summaries")
-        self.assertEqual(set(result["summaries"][0]), {"id", "summary", "summary_tokens", "tech_skills", "allowed_operator_ids"})
+        self.assertEqual(set(result["summaries"][0]), {"id", "person_id", "base_id", "summary", "summary_tokens", "word_tokens", "phrase_tokens", "tech_skills", "allowed_operator_ids"})
         self.assertEqual(result["summaries"][0]["id"], stable_person_uuid(self.people[0]))
         self.assertIn("Python", result["summaries"][0]["summary"])
         self.assertIn("python", result["summaries"][0]["summary_tokens"])
         self.assertIn("python security", result["summaries"][0]["summary_tokens"])
         self.assertIn("text", result["internal_text"][0])
+
+    def test_summary_records_carry_bootstrap_alias_and_token_fields(self):
+        record = build_summary_records(self.people)["summaries"][0]
+        # person_id and base_id alias the base person id (bootstrap parity).
+        self.assertEqual(record["person_id"], record["id"])
+        self.assertEqual(record["base_id"], record["id"])
+        # word_tokens match the bootstrap shape: raw unigrams + bigrams of the summary.
+        self.assertEqual(record["word_tokens"], record["summary_tokens"])
+        self.assertIn("python", record["word_tokens"])
+        self.assertIn("python security", record["word_tokens"])
+        # phrase_tokens are deduped stemmed 1- to 4-grams of the summary.
+        self.assertIn("secur", record["phrase_tokens"])  # "security"/"Security" stems to "secur", deduped
+        self.assertEqual(record["phrase_tokens"].count("secur"), 1)
+        self.assertIn("python secur infrastructur", record["phrase_tokens"])
+        self.assertTrue(any(len(phrase.split()) == 4 for phrase in record["phrase_tokens"]))
 
     def test_location_records_are_local_artifacts_not_turbopuffer_contract_uploads(self):
         record = build_location_corpus(self.people)[0]

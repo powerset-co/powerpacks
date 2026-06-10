@@ -31,6 +31,7 @@ from search_common import (  # noqa: E402
     load_env_file,
     role_payload_from_state,
     search_mode_for_payload,
+    strip_is_current_filter,
     summarize_filter,
 )
 
@@ -176,7 +177,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     else:
         role_rows = await backend.hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
         verticals["role"].update(status="completed", row_count=len(role_rows))
-        summary_rows = await local_summary_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
+        # Prod's summary vertical is person-level: its eligibility prefilter is
+        # built with is_current=None so past positions can qualify a person.
+        summary_rows = await local_summary_rows(payload, strip_is_current_filter(filters), top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
         verticals["summary"].update(status="completed" if summary_rows or local_namespace_exists("summaries") else "skipped_missing_namespace", row_count=len(summary_rows))
         signal_rows = await local_company_signal_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
         signal_row_count = local_namespace_row_count("company_signals") if search_backend_mode.is_local_backend_configured() else 0

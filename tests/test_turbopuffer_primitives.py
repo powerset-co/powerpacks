@@ -146,7 +146,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             "query": "founders at fintech startups",
             "steps": [{
                 "id": "expand_search_request",
-                "output": {"role_search_filters": {"company_ids": ["c1"], "bm25_queries": ["founders"]}},
+                "output": {"role_search_filters": {"company_ids": ["c1"], "bm25_queries": ["founders"], "role_ids": ["founder"]}},
             }],
         }
 
@@ -158,6 +158,77 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["search_mode"], "COMPANY_INTERSECTION")
         self.assertIn(("role_ids", "ContainsAny", ["founder"]), filters[1])
         self.assertIn(("company_id", "In", ["c1"]), filters[1])
+
+    def test_local_title_cluster_keywords_do_not_trigger_role_shortcuts(self) -> None:
+        # Regression: the local pipeline merges DuckDB title-cluster keywords
+        # into bm25_queries before retrieval. A corpus title like
+        # "Founder & CEO (...)" must not flip a software-engineer query into a
+        # hard founder/c-suite role_ids filter (prod detects shortcuts from the
+        # raw query before title clustering, so clustered titles never feed
+        # shortcut detection there).
+        payload = turbopuffer_client.apply_role_shortcuts(
+            {
+                "bm25_queries": [
+                    "software engineer",
+                    "backend engineer",
+                    "Software Engineer",
+                    "Founder & CEO (hiring AI & robotics engineers!)",
+                ],
+                "local_title_cluster_keywords": [
+                    "Software Engineer",
+                    "Founder & CEO (hiring AI & robotics engineers!)",
+                ],
+                "role_tracks": ["engineering"],
+            },
+            "software engineers in sf that went to stanford",
+        )
+
+        self.assertNotIn("role_ids", payload)
+        self.assertNotIn("seniority_bands", payload)
+        filters = turbopuffer_client.filters_from_role_payload(payload)
+        self.assertNotIn("role_ids", json.dumps(filters))
+
+    def test_strip_is_current_filter_removes_only_currentness_clause(self) -> None:
+        filters = (
+            "And",
+            [
+                ("metro_areas", "ContainsAny", ["San Francisco Bay Area"]),
+                ("is_current", "Eq", True),
+                ("role_track", "In", ["engineering"]),
+            ],
+        )
+        stripped = turbopuffer_client._search_common.strip_is_current_filter(filters)
+        self.assertEqual(
+            stripped,
+            (
+                "And",
+                [
+                    ("metro_areas", "ContainsAny", ["San Francisco Bay Area"]),
+                    ("role_track", "In", ["engineering"]),
+                ],
+            ),
+        )
+        self.assertIsNone(turbopuffer_client._search_common.strip_is_current_filter(("is_current", "Eq", True)))
+        self.assertIsNone(turbopuffer_client._search_common.strip_is_current_filter(None))
+
+    def test_founder_text_never_triggers_shortcut_without_extracted_role_ids(self) -> None:
+        # Role intent is owned by query extraction (mirrors network-search-api,
+        # where role_ids come only from LLM extraction). Founder-ish words in
+        # bm25_queries or the raw query never flip the shortcut on their own.
+        payload = turbopuffer_client.apply_role_shortcuts(
+            {
+                "bm25_queries": ["founder", "co-founder", "Software Engineer"],
+                "local_title_cluster_keywords": ["Software Engineer"],
+            },
+            "startup founders",
+        )
+        self.assertNotIn("role_ids", payload)
+
+        extracted = turbopuffer_client.apply_role_shortcuts(
+            {"role_ids": ["founder"], "bm25_queries": ["founder"]},
+            "startup founders",
+        )
+        self.assertIn("founder", extracted["role_ids"])
 
     def test_founders_fund_investor_query_does_not_trigger_founder_shortcut(self) -> None:
         payload = turbopuffer_client.apply_role_shortcuts({"investor_names": ["Founders Fund"]}, "people backed by Founders Fund")

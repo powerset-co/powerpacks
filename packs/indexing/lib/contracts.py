@@ -40,11 +40,45 @@ def load_search_contract(relative_path: str | Path) -> dict[str, Any]:
 
 
 def _attrs(contract: dict[str, Any]) -> list[dict[str, Any]]:
-    return list(contract.get("attributes") or [])
+    # TurboPuffer namespace contracts declare "attributes"; Postgres table
+    # contracts declare "columns".  Both use {name, type, ...} entries.
+    return list(contract.get("attributes") or contract.get("columns") or [])
 
 
 def attribute_names(contract: dict[str, Any]) -> set[str]:
     return {str(attr.get("name")) for attr in _attrs(contract) if attr.get("name")}
+
+
+def contract_attribute_names(contract: dict[str, Any]) -> list[str]:
+    """Attribute names in contract declaration order (the canonical column order)."""
+    return [str(attr["name"]) for attr in _attrs(contract) if attr.get("name")]
+
+
+DUCKDB_TYPE_BY_CONTRACT_TYPE = {
+    "string": "VARCHAR",
+    "string[]": "VARCHAR[]",
+    "integer": "BIGINT",
+    "number": "DOUBLE",
+    "boolean": "BOOLEAN",
+    "vector": "DOUBLE[]",
+}
+
+
+def contract_duckdb_columns(contract: dict[str, Any]) -> dict[str, str]:
+    """Derive the local DuckDB column/type mapping for a contract.
+
+    Always includes ``id`` (every local table is keyed by it, mirroring
+    allowed_record_names) and a ``vector`` column when the contract carries
+    vector metadata. Unknown contract types fall back to VARCHAR.
+    """
+    columns: dict[str, str] = {"id": "VARCHAR"}
+    for attr in _attrs(contract):
+        name = str(attr.get("name") or "")
+        if name:
+            columns[name] = DUCKDB_TYPE_BY_CONTRACT_TYPE.get(str(attr.get("type", "string")), "VARCHAR")
+    if vector_metadata(contract) is not None:
+        columns["vector"] = "DOUBLE[]"
+    return columns
 
 
 def required_attribute_names(contract: dict[str, Any]) -> set[str]:
@@ -93,6 +127,19 @@ def _coerce(value: Any, type_name: str) -> Any:
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "y"}
     return str(value) if not isinstance(value, (dict, list)) else value
+
+
+def dropped_fields(record: dict[str, Any], contract: dict[str, Any]) -> set[str]:
+    """Field names present on the record that normalize_record_for_contract would silently drop."""
+    return set(record) - allowed_record_names(contract)
+
+
+def dropped_fields_for_records(records: list[dict[str, Any]], contract: dict[str, Any]) -> set[str]:
+    """Union of fields dropped by the contract across all records."""
+    dropped: set[str] = set()
+    for record in records:
+        dropped |= dropped_fields(record, contract)
+    return dropped
 
 
 def normalize_record_for_contract(record: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:

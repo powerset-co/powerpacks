@@ -392,7 +392,22 @@ def _payload_text(payload: dict[str, Any], query: str | None = None) -> str:
     for key in ["semantic_query", "role_semantic_query"]:
         if payload.get(key):
             parts.append(str(payload[key]))
-    parts.extend(str(value) for value in payload.get("bm25_queries") or [])
+    # Local title-cluster keywords are corpus-derived position titles, not
+    # operator role intent. network-search-api detects founder/c-suite
+    # shortcuts from the raw query before title clustering, so clustered
+    # titles never feed shortcut detection there. Mirror that: a clustered
+    # title like "Founder & CEO (...)" in bm25_queries must not flip a
+    # software-engineer query into a hard founder/c-suite role_ids filter.
+    cluster_keywords = {
+        str(value).strip().lower()
+        for value in payload.get("local_title_cluster_keywords") or []
+        if str(value).strip()
+    }
+    for value in payload.get("bm25_queries") or []:
+        text = str(value)
+        if text.strip().lower() in cluster_keywords:
+            continue
+        parts.append(text)
     parts.extend(str(value) for value in payload.get("role_ids") or [])
     return " ".join(parts)
 
@@ -408,17 +423,13 @@ def _query_without_named_entities(payload: dict[str, Any], query: str | None) ->
 
 
 def detects_founder_shortcut(payload: dict[str, Any], query: str | None = None) -> bool:
-    # Powerpacks uses canonical role_ids as the founder signal.
+    # Role intent is owned by query extraction: network-search-api takes
+    # role_ids only from LLM extraction and never re-detects roles from
+    # keyword text, so a free-text fallback here can misread corpus-derived
+    # keywords (e.g. a clustered "Founder & CEO (...)" title) as operator
+    # intent. Canonical role_ids are the only founder signal.
     role_ids = {str(value).lower() for value in payload.get("role_ids") or []}
-    if role_ids & {"founder", "cofounder", "co-founder"}:
-        return True
-
-    # Fallback for Powerpacks agents that have not emitted role_ids yet: inspect
-    # only role-ish fields plus query text with explicit company/investor names
-    # removed, so an investor like "Founders Fund" does not become founder role.
-    role_text = _payload_text({k: v for k, v in payload.items() if k not in {"investor_names", "company_names"}})
-    query_text = _query_without_named_entities(payload, query)
-    return bool(FOUNDER_PATTERN.search(f"{role_text} {query_text}"))
+    return bool(role_ids & {"founder", "cofounder", "co-founder"})
 
 
 def detect_csuite_shortcut(payload: dict[str, Any], query: str | None = None) -> dict[str, Any] | None:
@@ -878,12 +889,7 @@ def should_batch_base_ids(payload: dict[str, Any]) -> bool:
     return len(ids) >= BASE_ID_BATCH_MIN
 
 
-def strip_base_candidate_filter(expr: Any) -> Any:
-    """Remove base_id filters from a TurboPuffer filter tuple.
-
-    Batched retrieval injects a per-batch base_id filter. This removes the large
-    original base_id clause so each query only carries one small batch filter.
-    """
+def _strip_field_filter(expr: Any, field: str) -> Any:
     if expr is None:
         return None
     if isinstance(expr, tuple):
@@ -891,14 +897,35 @@ def strip_base_candidate_filter(expr: Any) -> Any:
     if not isinstance(expr, list) or not expr:
         return expr
     if expr[0] in {"And", "Or"}:
-        clauses = [strip_base_candidate_filter(clause) for clause in (expr[1] or [])]
+        clauses = [_strip_field_filter(clause, field) for clause in (expr[1] or [])]
         clauses = [clause for clause in clauses if clause is not None]
         if not clauses:
             return None
         return clauses[0] if len(clauses) == 1 else (expr[0], clauses)
-    if len(expr) >= 3 and expr[0] == "base_id":
+    if len(expr) >= 3 and expr[0] == field:
         return None
     return tuple(expr)
+
+
+def strip_base_candidate_filter(expr: Any) -> Any:
+    """Remove base_id filters from a TurboPuffer filter tuple.
+
+    Batched retrieval injects a per-batch base_id filter. This removes the large
+    original base_id clause so each query only carries one small batch filter.
+    """
+    return _strip_field_filter(expr, "base_id")
+
+
+def strip_is_current_filter(expr: Any) -> Any:
+    """Remove position-currentness clauses from a filter tuple.
+
+    network-search-api's summary vertical is person-level (bio text), not
+    position-level: its eligibility prefilter is built with is_current=None so
+    a past position can qualify a person whose current role does not match
+    (e.g. a co-founder with prior software-engineering positions). Mirror that
+    contract for the local summary vertical.
+    """
+    return _strip_field_filter(expr, "is_current")
 
 
 def and_filters(*clauses: Any) -> tuple | None:

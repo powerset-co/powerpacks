@@ -747,6 +747,93 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertNotIn("has_core_regex", candidate)
             self.assertNotIn("bucket", candidate)
 
+    def test_summary_vertical_recovers_person_whose_role_match_is_past_position(self) -> None:
+        # Parity regression: prod's summary vertical builds its eligibility
+        # prefilter with is_current=None (person-level bio search), so a
+        # current co-founder whose only engineering positions are PAST still
+        # qualifies when the query asks for current software engineers. Local
+        # must not forward the role vertical's is_current clause to the
+        # summary vertical.
+        person_past_eng = "00000000-0000-0000-0000-000000000009"
+        with tempfile.TemporaryDirectory() as tmp_raw:
+            tmp = Path(tmp_raw)
+            db = tmp / "local-search.duckdb"
+            payload_path = tmp / "payload.json"
+            ledger = tmp / "ledger.json"
+            write_local_search_db(db)
+            import duckdb  # type: ignore
+
+            conn = duckdb.connect(str(db))
+            conn.execute(
+                "INSERT INTO local_people_positions (id, base_id, person_id, position_id, position_title, city, state, country, metro_areas, role_track, seniority_band, role_ids, is_current, company_id, company_name, allowed_operator_ids, phrase_tokens, word_tokens, vector, start_date_epoch, end_date_epoch, total_years_experience) VALUES "
+                "(?, ?, ?, ?, 'Co-Founder', 'San Francisco', 'California', 'United States', ['San Francisco Bay Area'], 'general', 'owner', ['founder'], TRUE, 'linkedin:company:newco', 'NewCo', ?, ['founder'], ['founder'], [0.5, 0.5, 0.0], 1672531200, 0, 10.0), "
+                "(?, ?, ?, ?, 'Software Engineer', 'San Francisco', 'California', 'United States', ['San Francisco Bay Area'], 'engineering', 'mid', ['software_engineer'], FALSE, 'linkedin:company:one', 'Company One', ?, ['softwar engin'], ['software', 'engineer', 'software engineer'], [0.9, 0.0, 0.1], 1577836800, 1672531199, 10.0)",
+                [
+                    f"{person_past_eng}-1", person_past_eng, person_past_eng, f"{person_past_eng}-1", [OPERATOR_ID],
+                    f"{person_past_eng}-2", person_past_eng, person_past_eng, f"{person_past_eng}-2", [OPERATOR_ID],
+                ],
+            )
+            conn.execute(
+                "INSERT INTO local_summaries VALUES (?, ?, ?, 'Co-founder who previously built production software systems as a software engineer.', ['Python'], ?)",
+                [person_past_eng, person_past_eng, person_past_eng, [OPERATOR_ID]],
+            )
+            conn.close()
+
+            payload = {
+                "intent_type": "role_search",
+                "normalized_query": "software engineers in SF",
+                "vertical": "people",
+                "role_search_filters": {
+                    "bm25_queries": ["software engineer"],
+                    "role_tracks": ["engineering"],
+                    "metro_areas": ["San Francisco Bay Area"],
+                },
+                "traits": [
+                    {"value": "Software engineer", "temporal": "current", "meaning": "role"},
+                ],
+            }
+            payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE),
+                    "run",
+                    "--db",
+                    str(db),
+                    "--ledger",
+                    str(ledger),
+                    "--query",
+                    "software engineers in sf",
+                    "--payload-json",
+                    str(payload_path),
+                    "--limit",
+                    "0",
+                    "--top-k",
+                    "50",
+                    "--timeout",
+                    "30",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            out = json.loads(proc.stdout)
+            state = json.loads(Path(out["state"]).read_text())
+            retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")["output"]
+            # The role vertical keeps is_current=true so the past engineering
+            # position cannot create a fake current-role hit.
+            self.assertIn(["is_current", "Eq", True], json.loads(json.dumps(retrieval["applied_filter"]))[1])
+            by_person = {candidate["person_id"]: candidate for candidate in retrieval["candidates"]}
+            self.assertIn(person_past_eng, by_person, f"summary vertical should recover {person_past_eng}")
+            self.assertEqual(by_person[person_past_eng]["vertical_sources"], ["summary"])
+            self.assertIsNone(by_person[person_past_eng]["position_id"])
+            # Current-position engineer still arrives through the role vertical.
+            self.assertIn("hybrid", by_person[PERSON_STANFORD]["vertical_sources"])
+
     def test_company_union_bm25_adjacency_uses_word_fallback_and_exclusions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_raw:
             tmp = Path(tmp_raw)

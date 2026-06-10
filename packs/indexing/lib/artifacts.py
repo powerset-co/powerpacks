@@ -7,6 +7,8 @@ import re
 from collections import Counter
 from typing import Any
 
+import snowballstemmer
+
 from packs.ingestion.schemas.company_identity import resolve_company_identity
 from packs.ingestion.schemas.people_schema import parse_jsonish
 from packs.indexing.lib.identity import (
@@ -36,6 +38,16 @@ def _json_list(value: Any) -> list[Any]:
 def _word_tokenize(text: str) -> list[str]:
     tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
     return tokens + [f"{tokens[idx]} {tokens[idx + 1]}" for idx in range(len(tokens) - 1)]
+
+
+_STEMMER = snowballstemmer.stemmer("english")
+
+
+def _phrase_tokens(text: str) -> list[str]:
+    # Match the operator-bootstrap summaries shape: deduped stemmed 1- to 4-grams.
+    stems = _STEMMER.stemWords(re.findall(r"[a-z0-9]+", (text or "").lower()))
+    grams = [" ".join(stems[idx : idx + size]) for size in range(1, 5) for idx in range(len(stems) - size + 1)]
+    return list(dict.fromkeys(grams))
 
 
 def _first(mapping: dict[str, Any], *fields: str) -> str:
@@ -271,7 +283,7 @@ def _education_record(row: dict[str, Any], edu: dict[str, Any], default_operator
     school_payload = {**edu, "school_name": school_name}
     school_uuid = stable_school_uuid(school_payload)
     degree = _first(edu, "degree", "degree_name")
-    field = _first(edu, "field_of_study", "field", "major")
+    field = _first(edu, "field_of_study", "fieldOfStudy", "field", "major")
     start_year = _year(edu, "start_year", "starts_at", "start_date")
     end_year = _year(edu, "end_year", "ends_at", "end_date")
     graduation_year = _year(edu, "graduation_year", "graduated_at") or end_year
@@ -372,10 +384,15 @@ def build_summary_records(people_rows: list[dict[str, Any]], default_operator_id
         pid = _first(row, "base_id", "person_id", "id") or stable_person_uuid(row)
         text = _summary_text(row)
         internal.append({"id": stable_summary_uuid(pid), "person_id": pid, "base_id": pid, "text": text})
+        word_tokens = _word_tokenize(text)
         summaries.append({
             "id": pid,
+            "person_id": pid,
+            "base_id": pid,
             "summary": text,
-            "summary_tokens": _word_tokenize(text),
+            "summary_tokens": list(word_tokens),
+            "word_tokens": word_tokens,
+            "phrase_tokens": _phrase_tokens(text),
             "tech_skills": _tech_skills(row, text),
             "allowed_operator_ids": _allowed_operator_ids(row, default_operator_id),
         })

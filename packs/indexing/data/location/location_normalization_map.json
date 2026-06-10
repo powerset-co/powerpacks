@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-16",
+  "updated_at": "2026-06-10",
   "city_overrides": {
     "York|New York": "New York",
     "Angeles|California": "Los Angeles",
@@ -793,7 +793,240 @@
       "city": "Amarillo",
       "state": "Texas",
       "country": "United States"
+    },
+    "mexico city metropolitan area": {
+      "city": "Mexico City",
+      "state": "Ciudad de México",
+      "country": "Mexico"
     }
+  },
+  "city_to_metro": {
+    "alto|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "amsterdam|noord-holland|netherlands": [
+      "Amsterdam Metropolitan Area"
+    ],
+    "arlington|texas|united states": [
+      "Dallas-Fort Worth Metropolitan Area"
+    ],
+    "atherton|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "atlanta|georgia|united states": [
+      "Atlanta Metropolitan Area"
+    ],
+    "austin|texas|united states": [
+      "Austin Metropolitan Area"
+    ],
+    "azusa|california|united states": [
+      "Los Angeles Metropolitan Area"
+    ],
+    "belmont|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "berkeley|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "boise|idaho|united states": [
+      "Boise Metropolitan Area"
+    ],
+    "bologna|emilia-romagna|italy": [
+      "Bologna Metropolitan Area"
+    ],
+    "boston|massachusetts|united states": [
+      "Boston Metropolitan Area"
+    ],
+    "boulder|colorado|united states": [
+      "Boulder Metropolitan Area"
+    ],
+    "brooklyn|new york|united states": [
+      "New York Metropolitan Area"
+    ],
+    "campbell|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "chicago|illinois|united states": [
+      "Chicago Metropolitan Area"
+    ],
+    "columbus|ohio|united states": [
+      "Columbus Metropolitan Area"
+    ],
+    "coppell|texas|united states": [
+      "Dallas-Fort Worth Metropolitan Area"
+    ],
+    "cupertino|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "dallas|texas|united states": [
+      "Dallas-Fort Worth Metropolitan Area"
+    ],
+    "danville|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "davis|california|united states": [
+      "Sacramento Metropolitan Area"
+    ],
+    "denver|colorado|united states": [
+      "Denver Metropolitan Area"
+    ],
+    "encinitas|california|united states": [
+      "San Diego Metropolitan Area"
+    ],
+    "fort lauderdale|florida|united states": [
+      "Miami Metropolitan Area"
+    ],
+    "hyderābād|telangāna|india": [
+      "Hyderabad Metropolitan Area"
+    ],
+    "irvine|california|united states": [
+      "Los Angeles Metropolitan Area"
+    ],
+    "las vegas|nevada|united states": [
+      "Las Vegas Metropolitan Area"
+    ],
+    "lewes|delaware|united states": [
+      "Philadelphia Metropolitan Area"
+    ],
+    "london|london, city of|united kingdom": [
+      "London Metropolitan Area"
+    ],
+    "los altos|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "los angeles|california|united states": [
+      "Los Angeles Metropolitan Area"
+    ],
+    "los gatos|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "malibu|california|united states": [
+      "Los Angeles Metropolitan Area"
+    ],
+    "manila|manila|philippines": [
+      "Manila Metropolitan Area"
+    ],
+    "menlo park|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "mexico city|ciudad de méxico|mexico": [
+      "Mexico City Metropolitan Area"
+    ],
+    "milan|lombardy|italy": [
+      "Milan Metropolitan Area"
+    ],
+    "millbrae|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "mountain view|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "new york|new york|united states": [
+      "New York Metropolitan Area"
+    ],
+    "newark|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "newport beach|california|united states": [
+      "Los Angeles Metropolitan Area"
+    ],
+    "northbrook|illinois|united states": [
+      "Chicago Metropolitan Area"
+    ],
+    "oakland|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "orlando|florida|united states": [
+      "Orlando Metropolitan Area"
+    ],
+    "pacific grove|california|united states": [
+      "Monterey Metropolitan Area"
+    ],
+    "pacifica|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "palo alto|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "phoenix|arizona|united states": [
+      "Phoenix Metropolitan Area"
+    ],
+    "portland|oregon|united states": [
+      "Portland Metropolitan Area"
+    ],
+    "raleigh|north carolina|united states": [
+      "Raleigh-Durham Metropolitan Area",
+      "Raleigh Metropolitan Area"
+    ],
+    "redmond|washington|united states": [
+      "Seattle Metropolitan Area"
+    ],
+    "redwood city|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "ross|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "san diego|california|united states": [
+      "San Diego Metropolitan Area"
+    ],
+    "san francisco|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "san jose|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "san juan|puerto rico|puerto rico": [
+      "San Juan Metropolitan Area"
+    ],
+    "san mateo|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "santa clara|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "santa clarita|california|united states": [
+      "Los Angeles Metropolitan Area"
+    ],
+    "santa monica|california|united states": [
+      "Los Angeles Metropolitan Area"
+    ],
+    "saratoga|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "seattle|washington|united states": [
+      "Seattle Metropolitan Area"
+    ],
+    "shenzhen|guangdong|china": [
+      "Shenzhen Metropolitan Area"
+    ],
+    "stanford|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "sunnyvale|california|united states": [
+      "San Francisco Bay Area"
+    ],
+    "são paulo|são paulo|brazil": [
+      "São Paulo Metropolitan Area"
+    ],
+    "torrance|california|united states": [
+      "Los Angeles Metropolitan Area"
+    ],
+    "tustin|california|united states": [
+      "Los Angeles Metropolitan Area"
+    ],
+    "vancouver|british columbia|canada": [
+      "Vancouver Metropolitan Area"
+    ],
+    "washington|district of columbia|united states": [
+      "Washington D.C. Metropolitan Area"
+    ],
+    "westford|massachusetts|united states": [
+      "Boston Metropolitan Area"
+    ],
+    "zürich|zürich|switzerland": [
+      "Zurich Metropolitan Area"
+    ]
   },
   "location_raw_overrides": {
     "russian hill, san francisco, california": {

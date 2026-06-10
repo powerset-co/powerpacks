@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import json
 import os
 import re
@@ -38,6 +39,7 @@ from packs.indexing.lib.llm_config import (  # noqa: E402
     DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_OPENAI_TIMEOUT_SECONDS,
     DEFAULT_OPENAI_CONCURRENCY, CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
 )
+from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 WORD_RE = re.compile(r"[a-z0-9]+")
@@ -203,6 +205,51 @@ def clean(value: Any) -> str:
 
 def norm_name(value: Any) -> str:
     return re.sub(r"\s+", " ", clean(value).lower()).strip()
+
+
+def normalize_website_domain(value: Any) -> str:
+    """Reduce a website URL to a bare domain, e.g. 'https://www.acme.com/about' -> 'acme.com'."""
+    text = clean(value).lower()
+    if not text:
+        return ""
+    text = re.sub(r"^[a-z][a-z0-9+.-]*://", "", text)
+    text = re.split(r"[/?#]", text, maxsplit=1)[0]
+    text = text.split("@")[-1].split(":", 1)[0]
+    if text.startswith("www."):
+        text = text[len("www."):]
+    return text
+
+
+def apply_rapidapi_context(record: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Backfill RapidAPI company facts onto the output record.
+
+    Only fills fields that are empty/zero on the record; never overwrites
+    non-empty existing values.
+    """
+    if not context:
+        return record
+    if not record.get("headcount") and context.get("headcount"):
+        record["headcount"] = context["headcount"]
+    if not record.get("founded_year") and context.get("founded_year"):
+        record["founded_year"] = context["founded_year"]
+    if not clean(record.get("website_domain")) and context.get("website"):
+        domain = normalize_website_domain(context["website"])
+        if domain:
+            record["website_domain"] = domain
+    return record
+
+
+def resolve_rapidapi_context(
+    company_name: Any,
+    rapidapi_lookup: dict[str, dict[str, Any]],
+    rapidapi_name_to_id: dict[str, str],
+) -> dict[str, Any]:
+    """Resolve the RapidAPI company context for a company name, if known."""
+    if not rapidapi_lookup or not rapidapi_name_to_id:
+        return {}
+    rid = rapidapi_name_to_id.get(norm_name(company_name), "")
+    raw_resp = rapidapi_lookup.get(rid)
+    return rapidapi_company.extract_company_context(raw_resp) if raw_resp else {}
 
 
 def atomic_write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
@@ -820,50 +867,52 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     paid_timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     chunks_this_run = 0
 
-    # Pre-fetch RapidAPI company details for all companies in the input
-    # so the LLM has real descriptions, headcounts, and industries.
-    # Build a name→rapidapi_id lookup from the input, then fetch profiles.
+    # Resolve RapidAPI company details for all companies in the input so the
+    # LLM has real descriptions, headcounts, and industries, and so every
+    # finalized record (paid or artifact/cached) can backfill headcount,
+    # website_domain, and founded_year. Paid runs fetch cache misses from the
+    # network; all other runs only read the local disk cache (free) and skip
+    # misses.
     rapidapi_lookup: dict[str, dict[str, Any]] = {}  # rapidapi_id → response
     rapidapi_name_to_id: dict[str, str] = {}  # norm_name → rapidapi_id
-    if provider == "openai" and allow_paid:
-        rapid_key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
-        if rapid_key:
-            from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import (
-                fetch_company_details_batch,
+    rapid_key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
+    if rapid_key:
+        # Collect unique rapidapi_company_ids from the input.
+        # Try the input JSONL first; fall back to the people CSV ledger.
+        unique_ids: dict[str, str] = {}  # rapidapi_id → company_name
+        for row in read_jsonl(input_path):
+            rid = clean(row.get("rapidapi_company_id"))
+            name = norm_name(row.get("company_name"))
+            if rid and rid not in unique_ids:
+                unique_ids[rid] = name
+                rapidapi_name_to_id[name] = rid
+        # If input JSONL had no IDs, scan the people CSV (passed via --rapidapi-people-csv).
+        if not unique_ids:
+            csv_path = getattr(args, "rapidapi_people_csv", None)
+            if csv_path:
+                candidate_csv = Path(csv_path)
+                if candidate_csv.exists():
+                    with open(candidate_csv, newline="", encoding="utf-8") as fh:
+                        for prow in csv.DictReader(fh):
+                            for exp in json.loads(prow.get("work_experiences", "[]") or "[]"):
+                                if not isinstance(exp, dict):
+                                    continue
+                                rid = clean(exp.get("rapidapi_company_id"))
+                                name = norm_name(exp.get("company_name"))
+                                if rid and name and rid not in unique_ids:
+                                    unique_ids[rid] = name
+                                    rapidapi_name_to_id[name] = rid
+        if unique_ids and allow_paid:
+            sys.stderr.write(f"[enrich-companies] fetching {len(unique_ids)} company profiles from RapidAPI\n")
+            rapidapi_lookup = rapidapi_company.fetch_company_details_batch(
+                list(unique_ids.keys()), api_key=rapid_key,
             )
-            # Collect unique rapidapi_company_ids from the input.
-            # Try the input JSONL first; fall back to the people CSV ledger.
-            unique_ids: dict[str, str] = {}  # rapidapi_id → company_name
-            for row in read_jsonl(input_path):
-                rid = clean(row.get("rapidapi_company_id"))
-                name = norm_name(row.get("company_name"))
-                if rid and rid not in unique_ids:
-                    unique_ids[rid] = name
-                    rapidapi_name_to_id[name] = rid
-            # If input JSONL had no IDs, scan the people CSV (passed via --rapidapi-people-csv).
-            if not unique_ids:
-                csv_path = getattr(args, "rapidapi_people_csv", None)
-                if csv_path:
-                    candidate_csv = Path(csv_path)
-                    if candidate_csv.exists():
-                        import csv as _csv
-                        with open(candidate_csv, newline="", encoding="utf-8") as fh:
-                            for prow in _csv.DictReader(fh):
-                                for exp in json.loads(prow.get("work_experiences", "[]") or "[]"):
-                                    if not isinstance(exp, dict):
-                                        continue
-                                    rid = clean(exp.get("rapidapi_company_id"))
-                                    name = norm_name(exp.get("company_name"))
-                                    if rid and name and rid not in unique_ids:
-                                        unique_ids[rid] = name
-                                        rapidapi_name_to_id[name] = rid
-            if unique_ids:
-                sys.stderr.write(f"[enrich-companies] fetching {len(unique_ids)} company profiles from RapidAPI\n")
-                rapidapi_lookup = fetch_company_details_batch(
-                    list(unique_ids.keys()), api_key=rapid_key,
-                )
-                ok = sum(1 for v in rapidapi_lookup.values() if not v.get("error"))
-                sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(unique_ids)} company profiles\n")
+            ok = sum(1 for v in rapidapi_lookup.values() if not v.get("error"))
+            sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(unique_ids)} company profiles\n")
+        elif unique_ids:
+            rapidapi_lookup = rapidapi_company.load_cached_company_details(list(unique_ids.keys()))
+            if rapidapi_lookup:
+                sys.stderr.write(f"[enrich-companies] loaded {len(rapidapi_lookup)}/{len(unique_ids)} cached company profiles\n")
 
     def flush_output(force: bool = False) -> dict[str, Any] | None:
         nonlocal batch, chunks_this_run
@@ -902,14 +951,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         # Resolve RapidAPI company context for richer LLM input.
         rapidapi_contexts: list[dict[str, Any]] = []
         if rapidapi_lookup and rapidapi_name_to_id:
-            from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import (
-                extract_company_context,
-            )
             for shaped in pending:
-                name = norm_name(shaped.get("company_name"))
-                rid = rapidapi_name_to_id.get(name, "")
-                raw_resp = rapidapi_lookup.get(rid)
-                rapidapi_contexts.append(extract_company_context(raw_resp) if raw_resp else {})
+                rapidapi_contexts.append(resolve_rapidapi_context(shaped.get("company_name"), rapidapi_lookup, rapidapi_name_to_id))
         try:
             openai_started = time.perf_counter()
             enrichments = call_openai_company_classifiers(
@@ -925,8 +968,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
         merge_started = time.perf_counter()
-        for shaped, enrichment in zip(pending, enrichments):
-            batch.append(merge_enrichment(shaped, enrichment))
+        contexts = rapidapi_contexts or [{} for _ in pending]
+        for shaped, enrichment, context in zip(pending, enrichments, contexts):
+            batch.append(apply_rapidapi_context(merge_enrichment(shaped, enrichment), context))
         add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
         state["paid_calls"] = int(state.get("paid_calls") or 0) + len(pending)
         return flush_output(force=True)
@@ -939,6 +983,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             try:
                 merge_started = time.perf_counter()
                 shaped = merge_enrichment(shaped, cached)
+                shaped = apply_rapidapi_context(shaped, resolve_rapidapi_context(shaped.get("company_name"), rapidapi_lookup, rapidapi_name_to_id))
                 add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
             except RuntimeError as exc:
                 raise SystemExit(str(exc)) from exc

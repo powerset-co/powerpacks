@@ -137,6 +137,13 @@ COUNTRY_ALIASES = {
 _mapping_cache: dict[str, Any] | None = None
 _country_cache: dict[str, tuple[str, str]] | None = None
 _metro_inverse_cache: dict[tuple[str, str, str], str] | None = None
+_city_metro_cache: (
+    tuple[
+        dict[tuple[str, str, str], list[str]],
+        dict[str, list[tuple[str, str, list[str]]]],
+    ]
+    | None
+) = None
 
 
 def _clean(value: Any) -> str:
@@ -157,6 +164,7 @@ def _load_mapping() -> dict[str, Any]:
         _mapping_cache = {
             "city_overrides": {},
             "metro_to_city": {},
+            "city_to_metro": {},
             "location_raw_overrides": {},
             "state_expansions": {},
         }
@@ -305,6 +313,69 @@ def _infer_metro_from_city(city: str, state: str, country: str) -> str:
     return inverse.get(loose_key, "")
 
 
+def _city_metro_index() -> tuple[
+    dict[tuple[str, str, str], list[str]],
+    dict[str, list[tuple[str, str, list[str]]]],
+]:
+    """Index the `city_to_metro` map section.
+
+    Returns `(exact, by_city)` where `exact` keys are normalized
+    `(city, state, country)` triples and `by_city` groups entries per city for
+    ambiguity-aware partial matching.
+    """
+    global _city_metro_cache
+    if _city_metro_cache is not None:
+        return _city_metro_cache
+    exact: dict[tuple[str, str, str], list[str]] = {}
+    by_city: dict[str, list[tuple[str, str, list[str]]]] = {}
+    for key, metros in (_load_mapping().get("city_to_metro", {}) or {}).items():
+        parts = [part.strip() for part in str(key).split("|")]
+        if len(parts) != 3:
+            continue
+        city_key, state_key, country_key = (_norm_key(part) for part in parts)
+        metro_list = _as_list(metros)
+        if not city_key or not metro_list:
+            continue
+        exact[(city_key, state_key, country_key)] = metro_list
+        by_city.setdefault(city_key, []).append((state_key, country_key, metro_list))
+    _city_metro_cache = (exact, by_city)
+    return _city_metro_cache
+
+
+def _metros_for_city(city: str, state: str, country: str) -> list[str]:
+    """Derive metro areas from a city via the `city_to_metro` map.
+
+    Matching is conservative: an exact (city, state, country) hit always wins;
+    a partial city+state or city+country hit is only used when the missing
+    component is empty on the input AND the map has exactly one candidate for
+    that city, so an ambiguous city name never picks a metro on its own.
+    """
+    if not city:
+        return []
+    city_key = _norm_key(city)
+    state_key = _norm_key(state)
+    country_key = _norm_key(normalize_country(country))
+    exact, by_city = _city_metro_index()
+    hit = exact.get((city_key, state_key, country_key))
+    if hit:
+        return list(hit)
+    entries = by_city.get(city_key, [])
+    if not entries:
+        return []
+    if state_key and not country_key:
+        matches = [entry for entry in entries if entry[0] == state_key]
+        if len(matches) == 1:
+            return list(matches[0][2])
+        return []
+    if country_key and not state_key:
+        matches = [entry for entry in entries if entry[1] == country_key]
+        if len(matches) == 1:
+            return list(matches[0][2])
+        return []
+    # City alone, or a state/country combination not in the map: never guess.
+    return []
+
+
 def normalize_location_fields(
     *,
     city: Any = "",
@@ -352,6 +423,8 @@ def normalize_location_fields(
     inferred_metro = _infer_metro_from_city(city_text, state_text, country_text)
     if inferred_metro:
         _append_unique(metros, inferred_metro)
+    for mapped_metro in _metros_for_city(city_text, state_text, country_text):
+        _append_unique(metros, mapped_metro)
 
     macro_text = _clean(macro_region) or get_macro_region(country_text)
     return {

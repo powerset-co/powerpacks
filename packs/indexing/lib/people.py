@@ -16,6 +16,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from packs.indexing.lib.contracts import contract_attribute_names, load_search_contract
 from packs.indexing.lib.io import write_csv as _write_csv, write_jsonl as _write_jsonl
 from packs.ingestion.schemas.company_identity import extract_company_public_identifier
 
@@ -77,21 +78,11 @@ except Exception:  # pragma: no cover - fallback for copied primitive bundles
             return default
 
 
-CONTRACT_PERSON_COLUMNS = [
-    "id", "public_identifier", "public_profile_url", "provider_entity_urn", "full_name", "headline",
-    "summary", "profile_picture_url", "location_raw", "city", "state", "country", "hydrated_context",
-    "x_twitter_handle", "x_twitter_followers", "linkedin_followers", "linkedin_connections", "ig_handle",
-    "ig_followers", "inferred_birth_year",
-]
+# Both column lists are derived from the canonical search contracts so the
+# contract JSONs stay the single source of truth for record schemas.
+CONTRACT_PERSON_COLUMNS = contract_attribute_names(load_search_contract("postgres/persons.table.json"))
 
-PEOPLE_NAMESPACE_COLUMNS = [
-    "id", "base_id", "person_id", "position_id", "title_hash", "raw_title", "role_type_category", "position_title", "word_tokens", "char_tokens", "d2q_tokens", "phrase_tokens", "city",
-    "state", "country", "macro_region", "metro_areas", "seniority_band", "company_id", "is_current",
-    "total_years_experience", "start_date_epoch", "end_date_epoch", "tenure_years", "role_track", "allowed_operator_ids",
-    "role_ids", "inferred_birth_year", "description", "dense_text", "company_domain", "company_linkedin_url",
-    "company_description", "company_sector_types", "company_entity_types", "company_headcount", "company_funding_total",
-    "company_stage", "investor_names", "x_twitter_followers", "linkedin_followers", "linkedin_connections", "ig_followers",
-]
+PEOPLE_NAMESPACE_COLUMNS = contract_attribute_names(load_search_contract("turbopuffer/people.namespace.json"))
 
 _ZERO_EPOCH = 0
 _DATE_RE = re.compile(r"^(\d{4})(?:[-/](\d{1,2}))?(?:[-/](\d{1,2}))?")
@@ -442,12 +433,14 @@ def _education_to_profile(item: Any) -> dict[str, Any]:
         return {}
     starts_at = item.get("starts_at") if isinstance(item.get("starts_at"), dict) else {}
     ends_at = item.get("ends_at") if isinstance(item.get("ends_at"), dict) else {}
+    start = item.get("start") if isinstance(item.get("start"), dict) else {}
+    end = item.get("end") if isinstance(item.get("end"), dict) else {}
     return {
-        "school_name": _first(item, ("school_name", "school", "name")) or None,
-        "degree": _first(item, ("degree", "degree_name")) or None,
-        "field_of_study": _first(item, ("field_of_study", "field", "major")) or None,
-        "start_year": item.get("start_year") or starts_at.get("year"),
-        "end_year": item.get("end_year") or ends_at.get("year"),
+        "school_name": _first(item, ("school_name", "schoolName", "school", "name")) or None,
+        "degree": _first(item, ("degree", "degree_name", "degreeName")) or None,
+        "field_of_study": _first(item, ("field_of_study", "fieldOfStudy", "field", "major")) or None,
+        "start_year": item.get("start_year") or starts_at.get("year") or start.get("year") or None,
+        "end_year": item.get("end_year") or ends_at.get("year") or end.get("year") or None,
     }
 
 
