@@ -159,6 +159,63 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(queue_rows[0]["handle"], "jane@example.com")
             self.assertEqual(queue_rows[0]["source"], "gmail_msgvault")
 
+    def test_msgvault_dedupes_rfc822_copies_across_conversations(self):
+        """The same RFC822 message stored under multiple msgvault
+        conversation_ids/rows must count once, not once per copy.
+        Repro shape: contact counts inflated (e.g. 23 raw rows vs 13 real
+        messages) because msgvault keeps thread copies of identical emails."""
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript("""
+            CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+            CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                source_id INTEGER,
+                conversation_id INTEGER,
+                rfc822_message_id TEXT,
+                source_message_id TEXT,
+                message_type TEXT,
+                sent_at TEXT,
+                received_at TEXT,
+                internal_date TEXT,
+                deleted_at TEXT,
+                deleted_from_source_at TEXT
+            );
+            CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
+            INSERT INTO sources (id, source_type, identifier, display_name) VALUES (1, 'gmail', 'me@gmail.com', 'Me');
+            INSERT INTO participants (id, email_address, display_name, domain) VALUES
+                (1, 'me@gmail.com', 'Me', 'gmail.com'),
+                (2, 'pat@example.com', 'Pat', 'example.com');
+            -- Same RFC822 message duplicated under two conversation_ids (100, 200)
+            INSERT INTO messages (id, source_id, conversation_id, rfc822_message_id, message_type, sent_at) VALUES
+                (10, 1, 100, '<intro-1@mail.example>', 'email', '2026-01-01T00:00:00Z'),
+                (11, 1, 200, '<intro-1@mail.example>', 'email', '2026-01-01T00:00:00Z');
+            -- A second real message, only in conversation 100
+            INSERT INTO messages (id, source_id, conversation_id, rfc822_message_id, message_type, sent_at) VALUES
+                (12, 1, 100, '<intro-2@mail.example>', 'email', '2026-01-02T00:00:00Z');
+            -- Dup copy without rfc822 id but with the same source_message_id
+            INSERT INTO messages (id, source_id, conversation_id, rfc822_message_id, source_message_id, message_type, sent_at) VALUES
+                (13, 1, 100, NULL, 'gmail-msg-3', 'email', '2026-01-03T00:00:00Z'),
+                (14, 1, 300, NULL, 'gmail-msg-3', 'email', '2026-01-03T00:00:00Z');
+            INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
+                (10, 2, 'from', 'Pat'), (10, 1, 'to', 'Me'),
+                (11, 2, 'from', 'Pat'), (11, 1, 'to', 'Me'),
+                (12, 1, 'from', 'Me'), (12, 2, 'to', 'Pat'),
+                (13, 2, 'from', 'Pat'), (13, 1, 'to', 'Me'),
+                (14, 2, 'from', 'Pat'), (14, 1, 'to', 'Me');
+        """)
+
+        rows = gmail_network_import.aggregate_msgvault_contacts(con, "me@gmail.com")
+        by_email = {row["email"]: row for row in rows}
+        pat = by_email["pat@example.com"]
+
+        # 5 msgvault rows but only 3 real messages (2 received + 1 sent)
+        self.assertEqual(pat["total_messages"], 3)
+        self.assertEqual(pat["total_received"], 2)
+        self.assertEqual(pat["total_sent"], 1)
+        con.close()
+
     def test_msgvault_group_email_counts_direction_at_message_level(self):
         con = sqlite3.connect(":memory:")
         con.row_factory = sqlite3.Row
