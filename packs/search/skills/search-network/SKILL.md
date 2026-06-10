@@ -113,7 +113,11 @@ files on the happy path. Start a fresh run for every search request.
 
 3. If `prepare` returns `status: company_directory_fast_path`, follow the
    returned tool request and skip semantic retrieval.
-4. If `prepare` returns a preview, show it compactly and ask exactly:
+4. If `prepare` returns a preview, show it compactly. When the extracted
+   filters include `seniority_bands` (or the query names a band), include one
+   compact line such as `Targeting: senior/staff ICs` so the user can correct
+   the band before executing. If there is no seniority target, omit the line
+   — do not invent one. Then ask exactly:
 
    `Execute this search or modify it?`
 

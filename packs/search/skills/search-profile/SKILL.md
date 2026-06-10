@@ -291,10 +291,17 @@ archetype description and its query — and ask exactly:
 
 `Execute this search plan or modify it?`
 
-Do not echo the seniority policy / `usable_cutoff` in the plan preview. It is
-a given: in-band ICs match, executives/founders/advisors are gated at
-evaluation. Mention seniority only if the user asks, or if the JD's band is
-genuinely ambiguous and you need a decision (e.g. "director-level OK?").
+Seniority in the preview: when the plan targets a specific seniority band,
+include exactly one compact line, e.g.:
+
+`Targeting: senior/staff hands-on ICs`
+
+This gives the user a chance to correct the band before searching. Do not
+recite the full `usable_cutoff` policy or explain the gating mechanics —
+enforcement is a given (in-band ICs match; executives/founders/advisors are
+gated at evaluation). If the JD/query has no seniority target, omit the line
+entirely. Ask a question only if the band is genuinely ambiguous and changes
+the search (e.g. "director-level OK?").
 
 ---
 
