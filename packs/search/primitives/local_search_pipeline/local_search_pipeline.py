@@ -95,6 +95,10 @@ COUNT_KEYS = {
     "row_count",
     "frontier_count",
     "hydrated_count",
+    "passed_count",
+    "filtered_count",
+    "scored_count",
+    "ranked_count",
 }
 MODE_KEYS = {"search_mode", "retrieval_mode", "prefilter_short_circuit", "base_id_batch_count", "base_id_batch_size", "company_union_added", "limit", "top_k", "profiles_compressed"}
 
@@ -289,6 +293,8 @@ def pipeline_summary(ledger: dict[str, Any]) -> dict[str, Any]:
     prefilters = step_summary("apply_prefilters")
     retrieval = step_summary("execute_role_search")
     hydrate = step_summary("hydrate_people")
+    llm_filter = step_summary("llm_filter_candidates")
+    llm_rerank = step_summary("llm_rerank_candidates")
     persist = step_summary("persist_search_results")
     return {
         key: value
@@ -301,6 +307,9 @@ def pipeline_summary(ledger: dict[str, Any]) -> dict[str, Any]:
             "company_union_added": retrieval.get("company_union_added"),
             "returned_people": retrieval.get("returned_people"),
             "hydrated": hydrate.get("hydrated"),
+            "llm_passed": llm_filter.get("passed_count"),
+            "llm_filtered": llm_filter.get("filtered_count"),
+            "ranked": llm_rerank.get("ranked_count"),
             "rows": persist.get("row_count"),
         }.items()
         if value is not None
@@ -615,11 +624,11 @@ def init_state(args: argparse.Namespace, ledger_path: Path, ledger: dict[str, An
     return state
 
 
-def run_step(ledger_path: Path, ledger: dict[str, Any], step: str, cmd: list[str], args: argparse.Namespace) -> dict[str, Any]:
+def run_step(ledger_path: Path, ledger: dict[str, Any], step: str, cmd: list[str], args: argparse.Namespace, *, timeout: int | None = None) -> dict[str, Any]:
     if done(ledger, step) and not args.force:
         return (ledger.get("steps", {}).get(step, {}) or {}).get("summary", {}) or {}
     mark(ledger_path, ledger, step, "running", command=" ".join(shlex.quote(item) for item in cmd))
-    output = require_ok(run_command(cmd, db_path=args.db_path, timeout=args.timeout, env_file=getattr(args, "env_file", None)), step)
+    output = require_ok(run_command(cmd, db_path=args.db_path, timeout=timeout or args.timeout, env_file=getattr(args, "env_file", None)), step)
     ledger.setdefault("artifacts", {}).update(collect_artifacts(output))
     mark(ledger_path, ledger, step, "completed", summary=compact_summary(output), command=" ".join(shlex.quote(item) for item in cmd))
     return output
@@ -698,14 +707,36 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "hydrate_people",
             [sys.executable, str(local_primitive_dir / "hydrate_people.py"), "--db", str(args.db_path), "--state", str(state), "--env-file", child_env_file, "--write-state"],
         ),
-        (
-            "persist_search_results",
-            [sys.executable, str(ROOT / "packs/search/primitives/persist_search_results/results_io.py"), "export", "--state", str(state)],
-        ),
     ])
 
     for step, cmd in steps:
         run_step(ledger_path, ledger, step, cmd, args)
+
+    # LLM filter/rerank mirror the remote pipeline and are backend-agnostic:
+    # they read hydrated profiles from task state and call OpenAI only (the
+    # data path stays fully local). Skip them when retrieval came back empty
+    # or when the caller asked for search-only.
+    hydrated_count = int((ledger.get("steps", {}).get("hydrate_people", {}) or {}).get("summary", {}).get("hydrated") or 0)
+    llm_steps: list[tuple[str, list[str]]] = []
+    if not args.search_only and hydrated_count > 0:
+        llm_steps.append((
+            "llm_filter_candidates",
+            [sys.executable, str(ROOT / "packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"), "--state", str(state), "--profile-scope", "auto", "--write-state"],
+        ))
+        if not args.filter_only:
+            llm_steps.append((
+                "llm_rerank_candidates",
+                [sys.executable, str(ROOT / "packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"), "--state", str(state), "--write-state"],
+            ))
+    for step, cmd in llm_steps:
+        run_step(ledger_path, ledger, step, cmd, args, timeout=args.llm_timeout)
+        # If the conservative filter rejected everyone, there is nothing to rank.
+        if step == "llm_filter_candidates":
+            passed = int((ledger.get("steps", {}).get(step, {}) or {}).get("summary", {}).get("passed_count") or 0)
+            if passed == 0:
+                break
+
+    run_step(ledger_path, ledger, "persist_search_results", [sys.executable, str(ROOT / "packs/search/primitives/persist_search_results/results_io.py"), "export", "--state", str(state)], args)
 
     ledger["current_block"] = None
     save_ledger(ledger_path, ledger)
@@ -810,8 +841,10 @@ def main() -> None:
     run.add_argument("--limit", type=int, default=0)
     run.add_argument("--top-k", type=int, default=1000)
     run.add_argument("--timeout", type=int, default=600)
+    run.add_argument("--llm-timeout", type=int, default=3600, help="Timeout for LLM filter/rerank steps")
     run.add_argument("--force", action="store_true")
-    run.add_argument("--search-only", action="store_true", help="Accepted for command compatibility; local pipeline is search-only by design")
+    run.add_argument("--search-only", action="store_true", help="Skip LLM filter/rerank after retrieval + hydration (data path stays fully local either way)")
+    run.add_argument("--filter-only", action="store_true", help="Run the cheap conservative LLM filter but skip LLM rerank")
     run.set_defaults(func=cmd_run)
 
     args = parser.parse_args()

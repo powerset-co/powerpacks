@@ -56,8 +56,10 @@ Disambiguation:
 
 ## Local Happy Path
 
-Uses the local DuckDB search index — no TurboPuffer, Postgres, set resolution,
-or LLM rerank calls.
+Uses the local DuckDB search index — no TurboPuffer, Postgres, or set
+resolution. LLM filtering/reranking runs by default after local retrieval
+(OpenAI only; the data path stays fully local). Use `--search-only` to skip
+LLM stages entirely.
 
 1. Determine the DuckDB path:
    - `$POWERPACKS_LOCAL_SEARCH_DB` if set
@@ -92,10 +94,11 @@ or LLM rerank calls.
 
 ### Local Constraints
 
-- No LLM filtering or reranking (local pipeline is search-only by design)
+- LLM filter/rerank run by default and need `OPENAI_API_KEY`; if it is
+  missing, rerun with `--search-only` instead of failing the search
 - No set/operator resolution
 - No TurboPuffer or Postgres calls
-- Investor filters, interaction metrics are not supported locally
+- Investor filters are not supported locally
 
 ---
 
