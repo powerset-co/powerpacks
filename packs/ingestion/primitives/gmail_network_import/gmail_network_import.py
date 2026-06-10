@@ -635,6 +635,8 @@ def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "", exc
     if "sender_id" in message_columns:
         sender_join = "LEFT JOIN participants sender_p ON sender_p.id = m.sender_id"
         sender_select = "sender_p.email_address AS sender_email, sender_p.display_name AS sender_display_name,"
+    rfc822_select = "m.rfc822_message_id AS rfc822_message_id," if "rfc822_message_id" in message_columns else "NULL AS rfc822_message_id,"
+    source_msg_select = "m.source_message_id AS source_message_id," if "source_message_id" in message_columns else "NULL AS source_message_id,"
     label_select = "'' AS label_names"
     has_label_tables_select = "0 AS has_label_tables"
     if has_label_tables:
@@ -660,6 +662,8 @@ def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "", exc
             mr.display_name AS recipient_display_name,
             LOWER(mr.recipient_type) AS recipient_type,
             m.id AS message_id,
+            {rfc822_select}
+            {source_msg_select}
             m.conversation_id AS conversation_id,
             COALESCE(m.sent_at, m.received_at, m.internal_date) AS message_at
         FROM message_recipients mr
@@ -679,6 +683,8 @@ def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "", exc
         sender_select=sender_select,
         label_select=label_select,
         has_label_tables_select=has_label_tables_select,
+        rfc822_select=rfc822_select,
+        source_msg_select=source_msg_select,
         sender_join=sender_join,
         label_filter=label_filter,
     )
@@ -698,11 +704,29 @@ def best_display_name(email: str, names: dict[str, int]) -> str:
     return default_name_for_email(email)
 
 
+def canonical_message_id(row: Any) -> str:
+    """Stable identity for one real email message.
+
+    msgvault can store the same RFC822 message under multiple conversation_ids
+    (and across accounts), each with its own msgvault row id. Counting by row
+    id double-counts those copies. Prefer rfc822_message_id, then
+    source_message_id, then fall back to the msgvault row id.
+    """
+    for key in ("rfc822_message_id", "source_message_id"):
+        try:
+            value = str(row[key] or "").strip()
+        except (KeyError, IndexError):
+            value = ""
+        if value:
+            return f"{key}:{value}"
+    return f"row:{row['message_id']}"
+
+
 def aggregate_msgvault_contacts(con: sqlite3.Connection, account_email: str = "", exclude_labels: Iterable[str] | None = None) -> list[dict[str, Any]]:
     messages: dict[str, dict[str, Any]] = {}
     account_filter = account_email.strip().lower()
     for row in iter_msgvault_metadata(con, account_filter, exclude_labels):
-        msg_id = str(row["message_id"])
+        msg_id = canonical_message_id(row)
         message = messages.setdefault(msg_id, {
             "message_id": msg_id,
             "conversation_id": row["conversation_id"],

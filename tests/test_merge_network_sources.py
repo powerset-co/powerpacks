@@ -213,6 +213,58 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_same_linkedin_rows_union_email_aliases(self):
+        """Two source rows with the same LinkedIn identity but different emails
+        (personal alias vs work address) must union both into all_emails, not
+        first-wins. Repro shape: dropped work aliases caused interaction-count
+        undercounts because the count join only sees merged all_emails."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                gmail_alias = Path(".powerpacks/network-import/gmail/run-a/people.csv")
+                work_email = Path(".powerpacks/network-import/gmail/run-b/people.csv")
+                base = {
+                    "public_identifier": "alex-doe",
+                    "linkedin_url": "https://www.linkedin.com/in/alex-doe",
+                    "full_name": "Alex Doe",
+                }
+                self.write_people_row(gmail_alias, {
+                    **base,
+                    "id": "gmail:alias",
+                    "primary_email": "alexdoe@example.com",
+                    "all_emails": json.dumps(["alexdoe@example.com"]),
+                    "source_channels": "gmail_msgvault",
+                })
+                self.write_people_row(work_email, {
+                    **base,
+                    "id": "gmail:work",
+                    "primary_email": "alex@work-firm.example",
+                    "all_emails": json.dumps(["alex@work-firm.example"]),
+                    "source_channels": "gmail_msgvault",
+                })
+
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke([
+                    "run",
+                    "--output-dir", str(out_dir),
+                    "--input", str(gmail_alias),
+                    "--input", str(work_email),
+                ])
+
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["input_rows"], 2)
+                self.assertEqual(payload["unfiltered_merged_rows"], 1)
+                self.assertEqual(payload["merged_rows"], 1)
+                with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                    rows = list(csv.DictReader(handle))
+                self.assertEqual(len(rows), 1)
+                emails = set(json.loads(rows[0]["all_emails"]))
+                self.assertEqual(emails, {"alexdoe@example.com", "alex@work-firm.example"})
+                self.assertIn(rows[0]["primary_email"].lower(), emails)
+            finally:
+                os.chdir(old_cwd)
+
     def test_non_linkedin_email_identity_ignores_run_specific_artifact_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()

@@ -26,6 +26,7 @@ csv.field_size_limit(sys.maxsize)
 
 try:
     from packs.ingestion.schemas.people_schema import (
+        LIST_VALUE_COLUMNS,
         PEOPLE_SCHEMA_COLUMNS,
         normalize_people_row,
         stable_linkedin_key,
@@ -35,6 +36,7 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.people_schema import (
+        LIST_VALUE_COLUMNS,
         PEOPLE_SCHEMA_COLUMNS,
         normalize_people_row,
         stable_linkedin_key,
@@ -407,18 +409,49 @@ def source_fact_rows(contact: dict[str, Any], source_rows: list[dict[str, str]])
     return facts
 
 
+def union_list_column(rows: list[dict[str, str]], col: str) -> str:
+    """Set-union a LIST_VALUE_COLUMNS column across all rows in a merge group.
+
+    Preserves first-seen order, normalizes emails/phones via listish_values,
+    and emits a JSON string list (the canonical storage shape).
+    """
+    primary_col = "primary_email" if col == "all_emails" else "primary_phone"
+    seen: list[str] = []
+    for row in rows:
+        for value in [row.get(primary_col, ""), *listish_values(row.get(col, ""))]:
+            value = (value or "").strip()
+            if col == "all_emails":
+                value = normalize_email(value)
+            elif col == "all_phones":
+                value = normalize_phone(value)
+            if value and value not in seen:
+                seen.append(value)
+    return json.dumps(seen, ensure_ascii=False) if seen else ""
+
+
 def merge_group(key: str, rows: list[dict[str, str]]) -> dict[str, Any]:
     merged = {col: "" for col in PEOPLE_SCHEMA_COLUMNS}
     sources: set[str] = set()
     artifacts: set[str] = set()
     for row in rows:
         for col in PEOPLE_SCHEMA_COLUMNS:
+            if col in LIST_VALUE_COLUMNS:
+                continue
             merged[col] = choose(merged.get(col, ""), row.get(col, ""))
         for src in (row.get("source_channels") or "").split(","):
             if src.strip():
                 sources.add(src.strip())
         for artifact in source_artifact_values(row.get("source_artifacts")):
             artifacts.add(artifact)
+    for col in LIST_VALUE_COLUMNS:
+        merged[col] = union_list_column(rows, col)
+        # Keep the primary value consistent: if primary_email/primary_phone is
+        # empty but aliases exist, promote the first alias.
+        primary_col = "primary_email" if col == "all_emails" else "primary_phone"
+        if not merged.get(primary_col):
+            aliases = listish_values(merged[col])
+            if aliases:
+                merged[primary_col] = aliases[0]
     merged["source_channels"] = ",".join(sorted(sources))
     merged["source_artifacts"] = compact_source_artifacts(sorted(artifacts))
     merged["merge_key"] = key
