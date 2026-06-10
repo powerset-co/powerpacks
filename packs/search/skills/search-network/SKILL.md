@@ -30,7 +30,9 @@ Apply these rules in order:
    (TurboPuffer mode) with a per-search `limit` and filter-only flag.
 
 2. **Local mode** — if any of these are true:
-   - The user says "local", "my network", "local search", or "offline"
+   - The user says "local", "local search", "offline", or "my imported
+     network" / "my network" **without** mentioning Powerset, a set name, or
+     the team network
    - `POWERPACKS_LOCAL_SEARCH_DB` is set in the environment or `.env`
    - `.powerpacks/search-index/local-search.duckdb` exists and no TurboPuffer
      credentials are configured
@@ -40,8 +42,15 @@ Apply these rules in order:
    against a Powerset set, team network, or any remote-backed search.
    Use the **TurboPuffer Happy Path** below.
 
-When both local DB and TurboPuffer creds exist and the user didn't specify,
-prefer TurboPuffer. If the user explicitly asks for local, use local.
+Disambiguation:
+
+- Any mention of "Powerset", a set name/ID, or the team/shared network always
+  means **TurboPuffer**, even if the user also says "my network" (e.g.
+  "search my Powerset network" is TurboPuffer, not local).
+- "Local", "offline", or "my imported contacts" always means **Local**, even
+  if remote credentials exist.
+- When both local DB and TurboPuffer creds exist and the user didn't specify
+  either way, prefer TurboPuffer.
 
 ---
 
