@@ -9,12 +9,14 @@ from pathlib import Path
 
 from packs.indexing.lib.people import (
     PEOPLE_CSV_COLUMNS,
+    _education_to_profile,
     build_people_records,
     build_roles,
     build_unified_profiles,
     epoch_seconds,
     flatten_people,
 )
+from packs.indexing.lib import location_normalization
 from packs.indexing.lib.location_normalization import normalize_location_fields
 
 
@@ -121,6 +123,87 @@ class IndexingTransformTests(unittest.TestCase):
         self.assertEqual(raw_override["country"], "Canada")
         self.assertEqual(raw_override["macro_region"], "Americas")
 
+    def test_city_to_metro_assigns_bay_area_metros_like_prod(self) -> None:
+        # Prod bootstrap reference maps these Bay Area cities to the metro even
+        # though the raw RapidAPI string never names a metro area.
+        for city in ["Palo Alto", "Oakland", "San Jose", "Stanford", "Los Altos", "Redwood City"]:
+            location = normalize_location_fields(
+                city=city, state="California", country="United States"
+            )
+            self.assertEqual(
+                location["metro_areas"], ["San Francisco Bay Area"], msg=city
+            )
+
+        # State abbreviations are expanded before the metro lookup.
+        abbreviated = normalize_location_fields(city="Oakland", state="CA", country="US")
+        self.assertEqual(abbreviated["metro_areas"], ["San Francisco Bay Area"])
+
+        # San Francisco itself keeps its existing single-metro behavior.
+        sf = normalize_location_fields(
+            city="San Francisco", state="California", country="United States"
+        )
+        self.assertEqual(sf["city"], "San Francisco")
+        self.assertEqual(sf["metro_areas"], ["San Francisco Bay Area"])
+
+    def test_city_to_metro_is_conservative_for_ambiguous_cities(self) -> None:
+        ln = location_normalization
+
+        # Country-scoped: Vancouver only maps inside Canada, so a US Vancouver
+        # (Vancouver, WA) never inherits the Canadian metro.
+        usa = normalize_location_fields(city="Vancouver", country="United States")
+        self.assertEqual(usa["metro_areas"], [])
+        canada = normalize_location_fields(city="Vancouver", country="Canada")
+        self.assertEqual(canada["metro_areas"], ["Vancouver Metropolitan Area"])
+
+        # When the map has the same city in multiple states, a city without a
+        # state must not pick either metro.
+        original_mapping = ln._mapping_cache
+        original_index = ln._city_metro_cache
+        try:
+            ln._mapping_cache = {
+                "city_overrides": {},
+                "metro_to_city": {},
+                "city_to_metro": {
+                    "springfield|illinois|united states": ["Springfield Metropolitan Area"],
+                    "springfield|massachusetts|united states": ["Greater Springfield"],
+                },
+                "location_raw_overrides": {},
+                "state_expansions": {},
+            }
+            ln._city_metro_cache = None
+            ambiguous = normalize_location_fields(
+                city="Springfield", country="United States"
+            )
+            self.assertEqual(ambiguous["metro_areas"], [])
+            exact = normalize_location_fields(
+                city="Springfield", state="Illinois", country="United States"
+            )
+            self.assertEqual(exact["metro_areas"], ["Springfield Metropolitan Area"])
+        finally:
+            ln._mapping_cache = original_mapping
+            ln._city_metro_cache = original_index
+
+    def test_city_to_metro_handles_non_us_cities(self) -> None:
+        amsterdam = normalize_location_fields(
+            city="Amsterdam", state="Noord-Holland", country="Netherlands"
+        )
+        self.assertEqual(amsterdam["city"], "Amsterdam")
+        self.assertEqual(amsterdam["country"], "Netherlands")
+        self.assertIn("Amsterdam Metropolitan Area", amsterdam["metro_areas"])
+        self.assertEqual(amsterdam["macro_region"], "Western Europe")
+
+    def test_raw_string_metro_detection_still_works(self) -> None:
+        raw = normalize_location_fields(location_raw="San Francisco Bay Area")
+        self.assertEqual(raw["city"], "San Francisco")
+        self.assertEqual(raw["state"], "California")
+        self.assertEqual(raw["metro_areas"], ["San Francisco Bay Area"])
+
+        city_pattern = normalize_location_fields(
+            city="New York City Metropolitan Area", country="United States"
+        )
+        self.assertEqual(city_pattern["city"], "New York")
+        self.assertIn("New York Metropolitan Area", city_pattern["metro_areas"])
+
     def test_build_roles_emits_position_records_with_epoch_seconds_and_role_ids(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             people = flatten_people(self._people_csv(Path(td)))
@@ -158,6 +241,48 @@ class IndexingTransformTests(unittest.TestCase):
         self.assertNotIn("is_profile_only", record)
         self.assertEqual(record["position_title"], "Founder and CTO")
         self.assertEqual(record["base_id"], people[0]["id"])
+
+    def test_education_to_profile_reads_camelcase_linkedin_keys(self) -> None:
+        # Shape observed in .powerpacks/network-import/merged/people.csv education JSON.
+        profile = _education_to_profile({
+            "schoolName": "Cornell University",
+            "school": "Cornell University",
+            "degree": "Doctor of Philosophy - Ph.D.",
+            "fieldOfStudy": "Psychology • Minor, Cognitive Science",
+            "start": {"day": 0, "month": 8, "year": 2023},
+            "end": {"day": 0, "month": 5, "year": 2028},
+            "starts_at": {"year": 2023, "month": 8, "day": 0},
+            "ends_at": {"year": 2028, "month": 5, "day": 0},
+        })
+        self.assertEqual(profile["school_name"], "Cornell University")
+        self.assertEqual(profile["degree"], "Doctor of Philosophy - Ph.D.")
+        self.assertEqual(profile["field_of_study"], "Psychology • Minor, Cognitive Science")
+        self.assertEqual(profile["start_year"], 2023)
+        self.assertEqual(profile["end_year"], 2028)
+
+        # camelCase-only variant without starts_at/ends_at falls back to start/end.
+        camel_only = _education_to_profile({
+            "schoolName": "Duke University",
+            "degreeName": "Bachelor of Science - B.S.",
+            "fieldOfStudy": "Psychology",
+            "start": {"day": 0, "month": 8, "year": 2017},
+            "end": {"day": 0, "month": 12, "year": 2020},
+        })
+        self.assertEqual(camel_only["school_name"], "Duke University")
+        self.assertEqual(camel_only["degree"], "Bachelor of Science - B.S.")
+        self.assertEqual(camel_only["field_of_study"], "Psychology")
+        self.assertEqual(camel_only["start_year"], 2017)
+        self.assertEqual(camel_only["end_year"], 2020)
+
+        # Zero years (LinkedIn "no date") normalize to None instead of 0.
+        no_dates = _education_to_profile({
+            "schoolName": "University of Konstanz",
+            "fieldOfStudy": "Computational Science",
+            "ends_at": {"year": 0, "month": 0, "day": 0},
+            "end": {"day": 0, "month": 0, "year": 0},
+        })
+        self.assertIsNone(no_dates["start_year"])
+        self.assertIsNone(no_dates["end_year"])
 
     def test_build_unified_profiles_hydrates_contract_profile_shape(self) -> None:
         with tempfile.TemporaryDirectory() as td:
