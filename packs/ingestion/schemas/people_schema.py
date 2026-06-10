@@ -53,6 +53,12 @@ PEOPLE_SCHEMA_COLUMNS = [
 
 JSON_LIST_COLUMNS = {"work_experiences", "education"}
 JSON_OBJECT_COLUMNS = {"harmonic_response", "harmonic_location", "rapidapi_response", "twitter_response"}
+# Multi-value identity columns. Stored as a JSON string list (legacy rows may
+# be comma/semicolon separated). When merging rows for the same person, these
+# are set-unioned across all source rows — never first-value-wins — so every
+# directory-resolved alias (e.g. work + personal email) survives into the
+# merged profile and downstream interaction-count joins.
+LIST_VALUE_COLUMNS = {"all_emails", "all_phones"}
 PERSON_ID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 
