@@ -61,9 +61,10 @@ uv run --env-file .env --project . python packs/search/primitives/fetch_person_p
 ```
 
 Lookup order: local RapidAPI profile cache → local DuckDB index → Postgres
-`hydrated_context` → RapidAPI (spend-bearing). If the primitive returns
-`status: blocked_approval`, ask the user to approve the paid fetch, then
-re-run with `--allow-fetch`. A paid fetch seeds the shared profile cache.
+`hydrated_context` → RapidAPI. The RapidAPI fallback runs automatically — no
+approval needed — and seeds the shared profile cache. If the primitive
+returns `status: not_found` or `failed`, tell the user the profile could not
+be resolved and stop.
 
 Write the result into the run directory as `source.json` /
 `seed_profile.json`; the profile summary replaces `source.txt` as the trait

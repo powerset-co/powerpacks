@@ -5,7 +5,7 @@ Lookup order (cheapest first):
 1. Local RapidAPI profile cache (.powerpacks/network-import/profile_cache_v2)
 2. Local DuckDB search index (local_person_profiles + positions)
 3. Postgres persons.hydrated_context (when remote creds are available)
-4. RapidAPI get-profile-data-by-url (spend-bearing; requires --allow-fetch)
+4. RapidAPI get-profile-data-by-url (runs by default; disable with --no-fetch)
 
 Output is a compact, source-agnostic profile summary the search-profile skill
 uses to derive traits and build one similar-person candidate search. The
@@ -255,9 +255,12 @@ def lookup_postgres(public_identifier: str) -> dict[str, Any] | None:
 def fetch_rapidapi(public_identifier: str, linkedin_url: str, cache_dir: Path) -> tuple[dict[str, Any] | None, str]:
     import enrich_people  # noqa: PLC0415
 
-    api_key = os.environ.get("RAPIDAPI_KEY") or os.environ.get("RAPID_API_KEY") or ""
+    api_key = (
+        os.environ.get("RAPIDAPI_LINKEDIN_KEY", "").strip()
+        or os.environ.get("RAPIDAPI_KEY", "").strip()
+    )
     if not api_key:
-        return None, "RAPIDAPI_KEY not set"
+        return None, "RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set"
     result = enrich_people.rapidapi_profile(
         public_identifier,
         linkedin_url,
@@ -310,18 +313,15 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
                 "profile": summary,
             }
 
-    if not args.allow_fetch:
+    if args.no_fetch:
         return {
             "primitive": "fetch_person_profile",
-            "status": "blocked_approval",
+            "status": "not_found",
             "created_at": now_iso(),
             "linkedin_url": linkedin_url,
             "public_identifier": public_identifier,
             "attempted_sources": attempted,
-            "message": (
-                "Profile not found in the local cache, local index, or Postgres. "
-                "Fetching from RapidAPI costs money. Re-run with --allow-fetch after user approval."
-            ),
+            "message": "Profile not found in the local cache, local index, or Postgres; RapidAPI fetch disabled by --no-fetch.",
         }
 
     attempted.append("rapidapi")
@@ -353,7 +353,8 @@ def main() -> None:
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
     parser.add_argument("--local-db", default=str(DEFAULT_LOCAL_DB))
     parser.add_argument("--env-file", default=".env")
-    parser.add_argument("--allow-fetch", action="store_true", help="Permit a spend-bearing RapidAPI fetch when no local/remote copy exists")
+    parser.add_argument("--no-fetch", action="store_true", help="Disable the RapidAPI fallback (local/remote lookups only)")
+    parser.add_argument("--allow-fetch", action="store_true", help=argparse.SUPPRESS)  # legacy no-op; RapidAPI runs by default
     parser.add_argument("--out", help="Optional path to also write the result JSON")
     args = parser.parse_args()
     load_env_file(args.env_file)
@@ -363,7 +364,7 @@ def main() -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     emit(result)
-    raise SystemExit(0 if result.get("status") in {"completed", "blocked_approval"} else 1)
+    raise SystemExit(0 if result.get("status") in {"completed", "not_found"} else 1)
 
 
 if __name__ == "__main__":
