@@ -291,6 +291,11 @@ archetype description and its query — and ask exactly:
 
 `Execute this search plan or modify it?`
 
+Do not echo the seniority policy / `usable_cutoff` in the plan preview. It is
+a given: in-band ICs match, executives/founders/advisors are gated at
+evaluation. Mention seniority only if the user asks, or if the JD's band is
+genuinely ambiguous and you need a decision (e.g. "director-level OK?").
+
 ---
 
 ## Task 2 — Run Profile Searches
