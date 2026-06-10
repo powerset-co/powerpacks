@@ -26,6 +26,7 @@ from packs.indexing.lib.artifacts import (  # noqa: E402
 )
 from packs.indexing.lib.contracts import (  # noqa: E402
     count_defaulted_numeric,
+    dropped_fields_for_records,
     load_search_contract,
     normalize_record_for_contract,
     validate_jsonl,
@@ -1350,19 +1351,54 @@ def _role_hashes_for_flattened(people: list[dict[str, Any]]) -> list[str]:
     return hashes
 
 
+FUNDING_STAGE_INT_BY_LABEL = {
+    "PRE_SEED": 1, "SEED": 2, "SERIES_A": 3, "SERIES_B": 4, "SERIES_C": 5,
+    "SERIES_D": 6, "SERIES_E": 7, "SERIES_F": 8, "SERIES_G": 9, "SERIES_H": 10,
+    "SERIES_I": 11, "LATE_STAGE": 50, "IPO": 90, "PUBLIC": 91, "EXITED": 99,
+    "VENTURE_UNKNOWN": 0,
+}
+FUNDING_STAGE_LABEL_BY_INT = {value: label for label, value in FUNDING_STAGE_INT_BY_LABEL.items()}
+
+
 def _funding_stage_to_int(value: Any) -> int:
-    mapping = {
-        "PRE_SEED": 1, "SEED": 2, "SERIES_A": 3, "SERIES_B": 4, "SERIES_C": 5,
-        "SERIES_D": 6, "SERIES_E": 7, "SERIES_F": 8, "SERIES_G": 9, "SERIES_H": 10,
-        "SERIES_I": 11, "LATE_STAGE": 50, "IPO": 90, "PUBLIC": 91, "EXITED": 99,
-        "VENTURE_UNKNOWN": 0,
-    }
     if value in (None, ""):
         return 0
     try:
         return int(value)
     except (TypeError, ValueError):
-        return mapping.get(str(value).strip().upper(), 0)
+        return FUNDING_STAGE_INT_BY_LABEL.get(str(value).strip().upper(), 0)
+
+
+def _funding_stage_label(value: Any) -> str:
+    """Map a funding stage (label or int code) back to its canonical label."""
+    text = str(value or "").strip().upper()
+    if text in FUNDING_STAGE_INT_BY_LABEL:
+        return text
+    return FUNDING_STAGE_LABEL_BY_INT.get(_funding_stage_to_int(value), "")
+
+
+def _denormalize_company_onto_position(record: dict[str, Any], company: dict[str, Any]) -> None:
+    """Backfill company enrichment fields from the companies record onto a position record.
+
+    Only fills fields that are empty/zero on the position record; never
+    overwrites non-empty values that came from the raw work experience.
+    """
+    if not record.get("company_description") and company.get("description"):
+        record["company_description"] = str(company["description"])
+    if not record.get("company_domain") and company.get("website_domain"):
+        record["company_domain"] = str(company["website_domain"])
+    if not record.get("company_headcount") and company.get("headcount"):
+        record["company_headcount"] = int(company["headcount"])
+    if not record.get("company_funding_total") and company.get("funding_total"):
+        record["company_funding_total"] = float(company["funding_total"])
+    if not record.get("company_stage"):
+        stage = str(company.get("stage") or "").strip() or _funding_stage_label(company.get("funding_stage"))
+        if stage:
+            record["company_stage"] = stage
+    if not record.get("company_sector_types") and company.get("sector_types"):
+        record["company_sector_types"] = list(company["sector_types"])
+    if not record.get("company_entity_types") and company.get("entity_types"):
+        record["company_entity_types"] = list(company["entity_types"])
 
 
 ALEPH_COMPANY_CORPUS_FIELDS = [
@@ -1383,7 +1419,8 @@ def _strip_aleph_company_corpus(row: dict[str, Any]) -> dict[str, Any]:
 def _company_corpus_to_aleph(row: dict[str, Any]) -> dict[str, Any]:
     name = str(row.get("company_name") or "")
     semantic = str(row.get("semantic_text") or row.get("description") or name)
-    aliases = row.get("name_aliases") if isinstance(row.get("name_aliases"), list) else ([name] if name else [])
+    raw_aliases = row.get("name_aliases") if isinstance(row.get("name_aliases"), list) else row.get("aliases")
+    aliases = raw_aliases if isinstance(raw_aliases, list) else ([name] if name else [])
     return {
         "company_urn": str(row.get("id") or row.get("company_urn") or ""),
         "company_name": name,
@@ -1442,11 +1479,15 @@ def _customer_type_codes(value: Any) -> list[str]:
 def _company_corpus_to_record(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row["company_urn"],
+        "company_urn": str(row.get("company_urn") or ""),
         "company_name": row.get("company_name", ""),
+        "aliases": row.get("name_aliases") or [],
         "name_aliases_text": " ".join(row.get("name_aliases") or []),
         "semantic_text": row.get("semantic_text", ""),
         "entity_sector_text": row.get("word_text", ""),
+        "word_text": row.get("word_text", ""),
         "doc2query_text": row.get("d2q_text", ""),
+        "doc2query": row.get("doc2query") or [],
         "website_domain": row.get("website_domain", ""),
         "linkedin_url": row.get("linkedin_url", ""),
         "description": row.get("description", ""),
@@ -1709,6 +1750,7 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
     records = build_people_records(people, default_operator_id=ledger.get("default_operator_id"))
     role_data = _load_by_id(ps["roles_dense"], "title_hash")
     role_embeddings = _load_by_id(ps["roles_embeddings"], "title_hash")
+    company_data = _load_by_id(ps["companies_records"]) if ps["companies_records"].exists() else {}
     hashes = _role_hashes_for_flattened(people)
     # Load founder enrichment
     founder_position_ids: set[str] = set()
@@ -1754,6 +1796,10 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
         vector = embedding_row.get("dense_embedding") or embedding_row.get("embedding")
         if vector:
             record["vector"] = vector
+        # Company enrichment denormalization (local join on the companies corpus)
+        company = company_data.get(str(record.get("company_id") or ""))
+        if company:
+            _denormalize_company_onto_position(record, company)
         # Founder injection
         record_id = str(record.get("id") or "")
         person_id = str(record.get("base_id") or record.get("person_id") or "")
@@ -1770,6 +1816,9 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
             record["inferred_birth_year"] = age_lookup[person_id]
         enriched.append(record)
     contract = load_search_contract("turbopuffer/people.namespace.json")
+    dropped = sorted(dropped_fields_for_records(enriched, contract))
+    if dropped:
+        print(f"[build_people_records] contract dropped fields: {', '.join(dropped)}", file=sys.stderr)
     normalized = [normalize_record_for_contract(row, contract) for row in enriched]
     for out, src in zip(normalized, enriched):
         if isinstance(src.get("vector"), list):
@@ -1779,6 +1828,7 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
         "people_records": len(normalized),
         "record_diff": record_diff,
         "with_vectors": sum(1 for row in normalized if row.get("vector")),
+        "contract_dropped_fields": {"people": dropped},
         "defaulted_numeric_fields": {"people": count_defaulted_numeric(enriched, contract)},
         "allowed_operator_ids_default": ledger.get("default_operator_id") or "local:user",
     }
