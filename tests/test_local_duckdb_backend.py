@@ -339,15 +339,16 @@ class LocalDuckDBFixtureMixin:
                     start_year integer,
                     end_year integer,
                     graduation_year integer,
+                    school_canonical_key varchar,
                     allowed_operator_ids varchar[]
                 )
                 """
             )
             con.executemany(
-                "insert into local_people_education values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "insert into local_people_education values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ("edu-founder-stanford", "person-founder", "person-founder", "edu-stanford", "school-stanford", "Stanford University", "BS", "Bachelors", "Computer Science", 2006, 2010, 2010, ["op1"]),
-                    ("edu-engineer-mit", "person-engineer", "person-engineer", "edu-mit", "school-mit", "Massachusetts Institute of Technology", "MS", "Masters", "Electrical Engineering and Computer Science", 2012, 2014, 2014, ["op1"]),
+                    ("edu-founder-stanford", "person-founder", "person-founder", "edu-stanford", "school-stanford", "Stanford University", "BS", "Bachelors", "Computer Science", 2006, 2010, 2010, "stanford university", ["op1"]),
+                    ("edu-engineer-mit", "person-engineer", "person-engineer", "edu-mit", "school-mit", "Massachusetts Institute of Technology", "MS", "Masters", "Electrical Engineering and Computer Science", 2012, 2014, 2014, "massachusetts institute of technology", ["op1"]),
                 ],
             )
 
@@ -359,15 +360,16 @@ class LocalDuckDBFixtureMixin:
                     school_name_tokens varchar[],
                     school_name varchar,
                     display_value varchar,
+                    canonical_key varchar,
                     person_count integer
                 )
                 """
             )
             con.executemany(
-                "insert into local_education values (?, ?, ?, ?, ?, ?)",
+                "insert into local_education values (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ("school-stanford", "school-stanford", ["stanford", "university"], "Stanford University", "Stanford University", 200000),
-                    ("school-mit", "school-mit", ["massachusetts", "institute", "of", "technology", "mit"], "Massachusetts Institute of Technology", "MIT", 150000),
+                    ("school-stanford", "school-stanford", ["stanford", "university"], "Stanford University", "Stanford University", "stanford university", 200000),
+                    ("school-mit", "school-mit", ["massachusetts", "institute", "of", "technology", "mit"], "Massachusetts Institute of Technology", "MIT", "massachusetts institute of technology", 150000),
                 ],
             )
 

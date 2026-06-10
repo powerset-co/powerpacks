@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -71,6 +72,29 @@ TITLE_CLUSTER_SENIORITY_PREFIXES = {
     "founder", "co", "owner",
 }
 TITLE_CLUSTER_NOISE_WORDS = {"at", "the", "and", "of", "for", "in", "on", "to", "a", "an", "with", "ii", "iii", "iv", "i"}
+_MISSING_FILTER_COLUMN_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_missing_filter_column(field: str, operator: str) -> None:
+    """Warn loudly (once per field/operator) when a filter silently degrades.
+
+    A filter on a column that does not exist in the local table compiles to a
+    constant clause (no-match for positive operators, match-all for NotEq /
+    NotIn).  That silent degradation caused real parity failures (for example
+    a missing metro_areas column turning an Or(city, metro_areas) location
+    filter into exact city matching), so surface it on stderr.
+    """
+    key = (field, operator)
+    if key in _MISSING_FILTER_COLUMN_WARNED:
+        return
+    _MISSING_FILTER_COLUMN_WARNED.add(key)
+    effect = "matches all rows" if operator in {"NotEq", "NotIn"} else "matches no rows"
+    print(
+        f"[local-duckdb] WARNING: filter field {field!r} has no backing column in the local table; "
+        f"{operator} clause {effect}. Rebuild the local DuckDB index so the column exists.",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 class LocalDuckDBError(RuntimeError):
@@ -429,6 +453,7 @@ class LocalDuckDBSearchStore:
 
         sql_field = self._sql_field(field, columns)
         if sql_field is None:
+            _warn_missing_filter_column(field, operator)
             return ("true", []) if operator in {"NotEq", "NotIn"} else ("false", [])
         column = self._quote_ident(sql_field)
         array_field = self._is_array_sql_field(sql_field, columns)

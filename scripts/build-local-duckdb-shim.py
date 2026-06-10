@@ -40,6 +40,7 @@ sys.path.insert(0, str(ROOT))
 
 DUCKDB_LOCK_NAME = ".local-search-duckdb.lock"
 
+from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract  # noqa: E402
 from packs.indexing.lib.people import build_people_records, flatten_people  # noqa: E402
 _limit = sys.maxsize
 while True:
@@ -69,11 +70,35 @@ OPTIONAL_LOCAL_TABLES = {
 }
 LOCAL_HASH_TABLE = "_local_record_hashes"
 
-# Local DuckDB contract for the five search namespaces.  These columns mirror
-# the Aleph TurboPuffer upload contracts copied under .powerpacks/aleph-seed:
-# people/summaries/companies carry embeddings; education/schools are lookup and
-# prefilter tables and intentionally do not require vectors in Aleph.
-LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
+# Local DuckDB contract for the five search namespaces.  The per-table
+# column/type dicts are derived from the canonical TurboPuffer namespace
+# contracts under packs/search/contracts/turbopuffer (the single source of
+# truth for record schemas): people/summaries/companies carry embeddings;
+# education/schools are lookup and prefilter tables and intentionally do not
+# require vectors in Aleph.
+LOCAL_TABLE_CONTRACT_SOURCES: dict[str, str] = {
+    "local_people_positions": "turbopuffer/people.namespace.json",
+    "local_summaries": "turbopuffer/summaries.namespace.json",
+    "local_companies": "turbopuffer/companies.namespace.json",
+    "local_people_education": "turbopuffer/education.namespace.json",
+    "local_education": "turbopuffer/schools.namespace.json",
+}
+# Local-only bookkeeping columns layered on top of the contract-derived base.
+# These do not exist in the TurboPuffer contracts.
+LOCAL_ONLY_TABLE_COLUMNS: dict[str, dict[str, str]] = {
+    # Denormalized from local_companies for local display/filtering.
+    "local_people_positions": {"company_name": "VARCHAR"},
+    # Legacy Aleph corpus alias kept for doc2query_text backfill.
+    "local_companies": {"d2q_text": "VARCHAR"},
+    # Local schools lookup keeps Aleph-era id/display/token helper columns.
+    "local_education": {
+        "canonical_education_id": "VARCHAR",
+        "display_value": "VARCHAR",
+        "school_name_tokens": "VARCHAR[]",
+    },
+}
+# Tables with no TurboPuffer contract (local-only profile/signal surfaces).
+LOCAL_ONLY_TABLE_CONTRACT: dict[str, dict[str, str]] = {
     "local_person_profiles": {
         "id": "VARCHAR",
         "person_id": "VARCHAR",
@@ -112,103 +137,6 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "hydrated_context": "JSON",
         "allowed_operator_ids": "VARCHAR[]",
     },
-    "local_people_positions": {
-        "id": "VARCHAR",
-        "position_id": "VARCHAR",
-        "person_id": "VARCHAR",
-        "base_id": "VARCHAR",
-        "title_hash": "VARCHAR",
-        "raw_title": "VARCHAR",
-        "role_type_category": "VARCHAR",
-        "vector": "DOUBLE[]",
-        "word_tokens": "VARCHAR[]",
-        "char_tokens": "VARCHAR[]",
-        "d2q_tokens": "VARCHAR[]",
-        "phrase_tokens": "VARCHAR[]",
-        "position_title": "VARCHAR",
-        "description": "VARCHAR",
-        "dense_text": "VARCHAR",
-        "seniority_band": "VARCHAR",
-        "company_id": "VARCHAR",
-        "company_name": "VARCHAR",
-        "company_domain": "VARCHAR",
-        "company_linkedin_url": "VARCHAR",
-        "company_description": "VARCHAR",
-        "company_sector_types": "VARCHAR[]",
-        "company_entity_types": "VARCHAR[]",
-        "company_headcount": "BIGINT",
-        "company_funding_total": "DOUBLE",
-        "company_stage": "VARCHAR",
-        "investor_names": "VARCHAR[]",
-        "city": "VARCHAR",
-        "state": "VARCHAR",
-        "country": "VARCHAR",
-        "macro_region": "VARCHAR",
-        "is_current": "BOOLEAN",
-        "total_years_experience": "DOUBLE",
-        "start_date_epoch": "BIGINT",
-        "end_date_epoch": "BIGINT",
-        "tenure_years": "DOUBLE",
-        "role_track": "VARCHAR",
-        "metro_areas": "VARCHAR[]",
-        "allowed_operator_ids": "VARCHAR[]",
-        "role_ids": "VARCHAR[]",
-        "inferred_birth_year": "BIGINT",
-        "x_twitter_followers": "BIGINT",
-        "linkedin_followers": "BIGINT",
-        "linkedin_connections": "BIGINT",
-        "ig_followers": "BIGINT",
-    },
-    "local_summaries": {
-        "id": "VARCHAR",
-        "person_id": "VARCHAR",
-        "base_id": "VARCHAR",
-        "summary": "VARCHAR",
-        "summary_tokens": "VARCHAR[]",
-        "tech_skills": "VARCHAR[]",
-        "allowed_operator_ids": "VARCHAR[]",
-        "phrase_tokens": "VARCHAR[]",
-        "word_tokens": "VARCHAR[]",
-        "vector": "DOUBLE[]",
-    },
-    "local_companies": {
-        "id": "VARCHAR",
-        "company_urn": "VARCHAR",
-        "vector": "DOUBLE[]",
-        "company_name": "VARCHAR",
-        "aliases": "VARCHAR",
-        "name_aliases_text": "VARCHAR",
-        "semantic_text": "VARCHAR",
-        "doc2query": "VARCHAR",
-        "d2q_text": "VARCHAR",
-        "doc2query_text": "VARCHAR",
-        "entity_sector_text": "VARCHAR",
-        "word_text": "VARCHAR",
-        "website_domain": "VARCHAR",
-        "linkedin_url": "VARCHAR",
-        "logo_url": "VARCHAR",
-        "description": "VARCHAR",
-        "headcount": "BIGINT",
-        "funding_stage": "BIGINT",
-        "funding_total": "DOUBLE",
-        "city": "VARCHAR",
-        "state": "VARCHAR",
-        "country": "VARCHAR",
-        "metro_area": "VARCHAR",
-        "macro_region": "VARCHAR",
-        "entity_types": "VARCHAR[]",
-        "sector_types": "VARCHAR[]",
-        "technology_types": "VARCHAR[]",
-        "customer_type": "VARCHAR[]",
-        "investor_urns": "VARCHAR[]",
-        "accelerators": "VARCHAR[]",
-        "yc_batches": "VARCHAR[]",
-        "stage": "VARCHAR",
-        "founded_year": "BIGINT",
-        "last_funding_at": "BIGINT",
-        "valuation": "DOUBLE",
-        "allowed_operator_ids": "VARCHAR[]",
-    },
     "local_company_signals": {
         "id": "VARCHAR",
         "company_id": "VARCHAR",
@@ -223,30 +151,13 @@ LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "vector": "DOUBLE[]",
         "allowed_operator_ids": "VARCHAR[]",
     },
-    "local_people_education": {
-        "id": "VARCHAR",
-        "person_id": "VARCHAR",
-        "base_id": "VARCHAR",
-        "education_id": "VARCHAR",
-        "canonical_education_id": "VARCHAR",
-        "school_name": "VARCHAR",
-        "degree": "VARCHAR",
-        "degree_normalized": "VARCHAR",
-        "field_of_study": "VARCHAR",
-        "start_year": "BIGINT",
-        "end_year": "BIGINT",
-        "graduation_year": "BIGINT",
-        "allowed_operator_ids": "VARCHAR[]",
-    },
-    "local_education": {
-        "id": "VARCHAR",
-        "canonical_education_id": "VARCHAR",
-        "school_name": "VARCHAR",
-        "display_value": "VARCHAR",
-        "school_name_tokens": "VARCHAR[]",
-        "person_count": "BIGINT",
-    },
 }
+LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = dict(LOCAL_ONLY_TABLE_CONTRACT)
+for _table, _contract_rel in LOCAL_TABLE_CONTRACT_SOURCES.items():
+    LOCAL_TABLE_CONTRACT[_table] = {
+        **contract_duckdb_columns(load_search_contract(_contract_rel)),
+        **LOCAL_ONLY_TABLE_COLUMNS.get(_table, {}),
+    }
 OPTIONAL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
     "local_person_source_summary": {
         "person_id": "VARCHAR",
@@ -268,10 +179,17 @@ ALL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
 }
 
 VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies", "local_company_signals"]
+# Person-level columns deduplicated off local_people_positions when
+# local_person_profiles covers the same people.  Every column listed here must
+# genuinely exist on local_person_profiles AND be resolved through the profile
+# join by local search (PERSON_PROFILE_FILTER_FIELDS in
+# packs/search/primitives/local/local_duckdb_store.py).  Contract location
+# attributes (city, state, country, macro_region, metro_areas) must NEVER be
+# listed: the people namespace contract filters them on positions, profiles
+# only carry city/state/country (no metro_areas/macro_region), and mixed
+# location Or-clauses are evaluated wholly on the positions table, so dropping
+# them silently turns location filters into no-match clauses.
 POSITION_PERSON_DUPLICATE_COLUMNS = [
-    "city",
-    "state",
-    "country",
     "x_twitter_followers",
     "linkedin_followers",
     "linkedin_connections",
