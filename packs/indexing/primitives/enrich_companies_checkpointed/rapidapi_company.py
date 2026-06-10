@@ -66,21 +66,38 @@ def fetch_company_details_batch(
     rpm_limit: float = 300,
     host: str = DEFAULT_HOST,
     timeout: int = DEFAULT_TIMEOUT,
+    max_workers: int = 20,
 ) -> dict[str, dict[str, Any]]:
-    """Fetch multiple company details with rate limiting.
+    """Fetch multiple company details concurrently with rate limiting.
 
     Returns {company_id: response_dict}.
     """
+    import concurrent.futures
+    import threading
+
     key = api_key or _api_key()
     if not key:
         return {cid: {"error": "no API key"} for cid in company_ids}
 
     min_interval = 60.0 / rpm_limit if rpm_limit > 0 else 0
+    lock = threading.Lock()
+    last_request_time = [0.0]
+
+    def _fetch_one(cid: str) -> tuple[str, dict[str, Any]]:
+        with lock:
+            now = time.monotonic()
+            wait = max(0, min_interval - (now - last_request_time[0]))
+            if wait > 0:
+                time.sleep(wait)
+            last_request_time[0] = time.monotonic()
+        return cid, fetch_company_details(cid, api_key=key, host=host, timeout=timeout)
+
     results: dict[str, dict[str, Any]] = {}
-    for i, cid in enumerate(company_ids):
-        if i > 0 and min_interval > 0:
-            time.sleep(min_interval)
-        results[cid] = fetch_company_details(cid, api_key=key, host=host, timeout=timeout)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_fetch_one, cid): cid for cid in company_ids}
+        for future in concurrent.futures.as_completed(futures):
+            cid, resp = future.result()
+            results[cid] = resp
     return results
 
 
