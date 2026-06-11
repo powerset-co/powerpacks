@@ -451,6 +451,16 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     payload = json.loads(args.payload_json) if args.payload_json else role_payload_from_state(state)
 
     existing = [str(cid) for cid in payload.get("company_ids") or [] if cid]
+    # Local company ids are UUIDs. Remote-id-space values (e.g. prod harmonic
+    # URNs) can never match the local index, so passing them through would
+    # silently zero downstream company intersections. Fail loudly instead.
+    foreign = [cid for cid in existing if cid.startswith("urn:")]
+    if foreign:
+        raise SystemExit(
+            "local company resolution received non-local company_ids "
+            f"({', '.join(foreign[:3])}{'…' if len(foreign) > 3 else ''}); "
+            "pass company_names so they resolve against the local index"
+        )
     names = expanded_company_names([str(name) for name in payload.get("company_names") or [] if name])
     semantic_queries = [str(query).strip() for query in payload.get("company_semantic_queries") or [] if str(query).strip()]
     query_vector = vector_from_payload(payload)

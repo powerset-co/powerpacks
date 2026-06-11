@@ -350,6 +350,17 @@ def prod_expansion_to_local_payload(expanded: dict[str, Any], *, fallback_payloa
             names = fallback_names or [compact_school_name(name) for name in entity_display_values(value)]
             if names:
                 local["education_names"] = list(dict.fromkeys(names))
+        elif key == "company_ids":
+            # Prod company ids are harmonic URNs that do not exist in the
+            # local index. Hand local the display names so the local pipeline
+            # resolves them against local_companies itself.
+            names = entity_display_values(value)
+            if names:
+                local["company_names"] = list(dict.fromkeys(names))
+        elif key == "investors":
+            names = entity_display_values(value)
+            if names:
+                local["investor_names"] = list(dict.fromkeys(names))
         elif isinstance(value, list) and value and isinstance(value[0], dict):
             local[key] = entity_ids(value)
         else:

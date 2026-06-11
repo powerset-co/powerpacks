@@ -98,6 +98,35 @@ class LocalProdParityTests(unittest.TestCase):
         self.assertNotIn("is_current_role", filters)
         self.assertNotIn("role_core_patterns", filters)
 
+    def test_prod_expansion_translates_company_and_investor_ids_to_names(self) -> None:
+        expanded = {
+            "original_query": "engineers at twitter backed by sequoia",
+            "filters": {
+                "role_semantic_query": "Software engineers build production systems.",
+                "company_ids": [
+                    {"id": "urn:harmonic:company:2142491", "display_value": "Twitter"},
+                    {"id": "urn:harmonic:company:36724186", "display_value": "X"},
+                ],
+                "investors": [
+                    {"id": "urn:harmonic:company:744310", "display_value": "Sequoia Capital"},
+                ],
+            },
+        }
+
+        payload = parity.prod_expansion_to_local_payload(
+            expanded,
+            fallback_payload={"role_search_filters": {}},
+            query="engineers at twitter backed by sequoia",
+        )
+        filters = payload["role_search_filters"]
+
+        # Prod harmonic URNs never exist in the local index — local must
+        # receive names and resolve them against local_companies itself.
+        self.assertNotIn("company_ids", filters)
+        self.assertNotIn("investors", filters)
+        self.assertEqual(filters["company_names"], ["Twitter", "X"])
+        self.assertEqual(filters["investor_names"], ["Sequoia Capital"])
+
     def test_compare_ids_reports_precision_and_recall(self) -> None:
         comparison = parity.compare_ids(["a", "b", "c"], ["b", "c", "d", "e"])
 
