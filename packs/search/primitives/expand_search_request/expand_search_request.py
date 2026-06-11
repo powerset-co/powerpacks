@@ -54,17 +54,39 @@ def validate_output(value: dict[str, Any]) -> list[str]:
     if sq and (not bm25 or len(bm25) == 0):
         warnings.append("semantic_query present but bm25_queries empty")
 
-    # Validate entity_types
-    valid_entity = {"venture_backed_startup", "public_company", "private_company", "non_profit",
-                    "vc_firm", "pe_firm", "bank", "family_office", "government_public_sector",
-                    "insurance_carrier", "nonprofit"}
+    # Validate entity_types / sector_types — must match the index's canonical
+    # OBSERVED_ENTITY_TYPES / OBSERVED_SECTOR_TYPES in
+    # packs/indexing/primitives/enrich_companies_checkpointed.
+    valid_entity = {"venture_backed_startup", "nonprofit", "government_public_sector",
+                    "vc_firm", "club_association", "bank", "insurance_carrier", "pe_firm",
+                    "foundation_endowment", "family_office", "sovereign_wealth_fund"}
     for et in filters.get("entity_types") or []:
         if et not in valid_entity:
             warnings.append(f"invalid entity_type: {et}")
 
-    # Validate seniority_bands
-    valid_seniority = {"entry", "junior", "mid", "senior", "staff", "principal",
-                       "manager", "director", "vice_president", "c_suite", "partner", "owner"}
+    valid_sector = {
+        "3d_printing", "aerospace", "agriculture_tech", "ai_ml", "ar_vr",
+        "bio_synbio", "climate_energy_tech", "commerce_tech", "construction_tech",
+        "creator_tools", "crypto", "cybersecurity", "data", "dating",
+        "deep_tech", "defense_tech", "devops", "diagnostics", "edtech",
+        "fintech", "gaming_gambling_tech", "govtech", "hardware", "health_tech",
+        "hr_tech", "infra_devtools", "insurtech", "iot", "legal_tech",
+        "manufacturing_tech", "marketplaces", "marketing_tech", "material_science",
+        "medical_devices", "mortgagetech", "networking_hardware",
+        "nonprofit_philanthropy_tech", "oil_gas_tech", "oncology",
+        "physical_compute", "real_estate_tech", "restaurant_hospitality_tech",
+        "robotics_drones", "saas", "sales_tech", "semiconductors",
+        "social_networking", "sports_wellness_tech", "supply_chain_logistics",
+        "telco", "therapies", "transportation_mobility", "travel_tech",
+    }
+    for st in filters.get("sector_types") or []:
+        if st not in valid_sector:
+            warnings.append(f"invalid sector_type: {st}")
+
+    # Validate seniority_bands — hyphenated spellings match the index's canonical
+    # VALID_SENIORITY_BANDS in packs/indexing/primitives/enrich_roles_checkpointed.
+    valid_seniority = {"trainee", "entry", "junior", "mid", "senior", "staff", "principal",
+                       "manager", "director", "vice-president", "c-suite", "partner", "owner"}
     for sb in filters.get("seniority_bands") or []:
         if sb not in valid_seniority:
             warnings.append(f"invalid seniority_band: {sb}")

@@ -119,7 +119,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         self.assertIn("chief_technology_officer", filters["role_ids"])
         self.assertIn("CTO", filters["bm25_queries"])
         self.assertIn("Chief Technology Officer", filters["bm25_queries"])
-        self.assertEqual(filters["seniority_bands"], ["c_suite"])
+        self.assertEqual(filters["seniority_bands"], ["c-suite"])
         self.assertEqual(filters["role_function"], "leader")
         self.assertIn("role_core_patterns", filters)
 
@@ -161,7 +161,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(filters["role_departments"], ["engineering"])
-        self.assertEqual(filters["seniority_bands"], ["director", "vice_president"])
+        self.assertEqual(filters["seniority_bands"], ["director", "vice-president"])
 
     def test_seniority_extractor_overrides_role_agent_seniority_when_present(self):
         mod = load_module()
@@ -181,7 +181,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
             "vp software engineers",
         )
 
-        self.assertEqual(filters["seniority_bands"], ["vice_president"])
+        self.assertEqual(filters["seniority_bands"], ["vice-president"])
 
     def test_role_id_title_injections_add_generic_bm25_aliases(self):
         mod = load_module()
@@ -233,6 +233,109 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
         self.assertFalse(filters["is_current_role"])
         self.assertFalse(filters["is_current_company"])
+
+    def test_city_filters_expand_to_prod_alias_lists(self):
+        mod = load_module()
+        filters = mod._merge(
+            {"semantic_query": "blockchain engineering work", "bm25_queries": ["blockchain engineer"]},
+            {},
+            {"cities": ["New York City"]},
+            {},
+            {},
+            {},
+            {},
+            "blockchain engineers in new york",
+        )
+
+        self.assertEqual(
+            filters["cities"],
+            ["New York City", "New York City, New York", "New York"],
+        )
+
+        unmapped = mod._expand_city_filter_aliases(["Austin", "  ", "Austin"])
+        self.assertEqual(unmapped, ["Austin"])
+
+    def test_seniority_bands_normalize_to_canonical_index_values(self):
+        mod = load_module()
+
+        self.assertEqual(
+            mod._normalize_seniority_bands(
+                ["c_suite", "C-Suite", "vice_president", "Vice President", "senior", "Senior_IC"]
+            ),
+            ["c-suite", "vice-president", "senior", "senior_ic"],
+        )
+        self.assertEqual(mod._normalize_seniority_bands([]), [])
+        self.assertEqual(mod._normalize_seniority_bands([None, ""]), [])
+
+    def test_entity_and_sector_vocab_stay_in_sync_with_indexing_enum(self):
+        # The extraction prompt and validator must only offer entity/sector tags
+        # that exist in the index. enrich_companies_checkpointed owns the enums.
+        spec = importlib.util.spec_from_file_location(
+            "enrich_companies_checkpointed_test",
+            ROOT / "packs/indexing/primitives/enrich_companies_checkpointed/enrich_companies_checkpointed.py",
+        )
+        enrich = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(enrich)  # type: ignore[union-attr]
+
+        expand_spec = importlib.util.spec_from_file_location(
+            "expand_search_request_vocab_test",
+            ROOT / "packs/search/primitives/expand_search_request/expand_search_request.py",
+        )
+        expand = importlib.util.module_from_spec(expand_spec)
+        expand_spec.loader.exec_module(expand)  # type: ignore[union-attr]
+
+        warnings = expand.validate_output(
+            {"role_search_filters": {
+                "entity_types": sorted(enrich.OBSERVED_ENTITY_TYPES),
+                "sector_types": sorted(enrich.OBSERVED_SECTOR_TYPES),
+            }}
+        )
+        self.assertEqual(
+            [w for w in warnings if "entity" in w or "sector" in w], []
+        )
+        self.assertEqual(
+            expand.validate_output({"role_search_filters": {"entity_types": ["public_company"]}}),
+            ["invalid entity_type: public_company"],
+        )
+        self.assertEqual(
+            expand.validate_output({"role_search_filters": {"sector_types": ["mobility_av"]}}),
+            ["invalid sector_type: mobility_av"],
+        )
+
+        prompt = (
+            ROOT / "packs/search/primitives/expand_search_request/prompts/company.txt"
+        ).read_text(encoding="utf-8")
+        for tag in sorted(enrich.OBSERVED_ENTITY_TYPES | enrich.OBSERVED_SECTOR_TYPES):
+            self.assertIn(tag, prompt, f"prompt missing canonical tag: {tag}")
+        for stale in ("public_company", "private_company", "non_profit,", "mobility_av", "food_ag_tech"):
+            self.assertNotIn(stale, prompt, f"prompt still offers nonexistent tag: {stale}")
+
+    def test_seniority_values_stay_in_sync_with_indexing_enum(self):
+        # The extraction layer must only emit seniority_band values that exist in
+        # the index. enrich_roles_checkpointed owns the canonical enum.
+        spec = importlib.util.spec_from_file_location(
+            "enrich_roles_checkpointed_test",
+            ROOT / "packs/indexing/primitives/enrich_roles_checkpointed/enrich_roles_checkpointed.py",
+        )
+        enrich = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(enrich)  # type: ignore[union-attr]
+        canonical = set(enrich.VALID_SENIORITY_BANDS)
+
+        mod = load_module()
+        self.assertLessEqual(set(mod._SENIORITY_CANONICAL.values()), canonical)
+        normalized = set(mod._normalize_seniority_bands(sorted(canonical)))
+        self.assertEqual(normalized, canonical)
+
+        expand_spec = importlib.util.spec_from_file_location(
+            "expand_search_request_test",
+            ROOT / "packs/search/primitives/expand_search_request/expand_search_request.py",
+        )
+        expand = importlib.util.module_from_spec(expand_spec)
+        expand_spec.loader.exec_module(expand)  # type: ignore[union-attr]
+        warnings = expand.validate_output(
+            {"role_search_filters": {"seniority_bands": sorted(canonical)}}
+        )
+        self.assertEqual([w for w in warnings if "seniority" in w], [])
 
 
 if __name__ == "__main__":

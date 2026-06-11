@@ -137,7 +137,7 @@ ROLE_SPECS: dict[str, dict[str, Any]] = {
             "profiles should show executive, C-level, VP, head of, director, general manager, or leadership scope."
         ),
         "bm25": ["executive", "CEO", "COO", "CTO", "VP", "head of", "director"],
-        "seniority_bands": ["director", "vice_president", "c_suite", "partner", "owner"],
+        "seniority_bands": ["director", "vice-president", "c-suite", "partner", "owner"],
     },
     "generic": {
         "semantic": (
@@ -538,7 +538,7 @@ def apply_yaml_overrides(meta: CaseMeta, payload: dict[str, Any]) -> None:
         if key in data:
             payload[key] = data[key]
     if data.get("use_expand_seniority") and not payload.get("seniority_bands"):
-        payload["seniority_bands"] = ["director", "vice_president", "c_suite", "partner", "owner"]
+        payload["seniority_bands"] = ["director", "vice-president", "c-suite", "partner", "owner"]
 
 
 def decompose_case(meta: CaseMeta) -> dict[str, Any]:
