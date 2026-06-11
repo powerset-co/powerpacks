@@ -159,6 +159,44 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIn(("role_ids", "ContainsAny", ["founder"]), filters[1])
         self.assertIn(("company_id", "In", ["c1"]), filters[1])
 
+    def test_non_shortcut_role_ids_do_not_become_hard_filters(self) -> None:
+        # Deployed network-search-api expand rarely emits role_ids, so the hard
+        # role_ids filter is reserved for founder/c-suite shortcut roles.
+        # Precise extraction role_ids must not gate retrieval.
+        filters = turbopuffer_client.filters_from_role_payload({
+            "semantic_query": "AI engineers building and deploying machine learning systems in production.",
+            "role_ids": ["ai_engineer", "ml_engineer"],
+            "seniority_bands": ["senior"],
+        })
+        clauses = filters[1] if filters and filters[0] == "And" else [filters]
+        self.assertFalse(any(clause[0] == "role_ids" for clause in clauses))
+
+        mixed = turbopuffer_client.filters_from_role_payload({
+            "semantic_query": "Founders and AI engineers building machine learning products end to end.",
+            "role_ids": ["founder", "ai_engineer"],
+            "company_ids": ["c1"],
+        })
+        self.assertIn(("role_ids", "ContainsAny", ["founder"]), mixed[1])
+
+        # Extraction-emitted c-suite ids without an explicit query mention
+        # (e.g. "sales leaders" -> chief_revenue_officer) must NOT gate.
+        leaders = turbopuffer_client.filters_from_role_payload({
+            "semantic_query": "Sales leaders owning revenue strategy, pipeline, and go-to-market teams.",
+            "role_ids": ["chief_revenue_officer"],
+            "seniority_bands": ["c-suite", "vice-president", "director"],
+        })
+        clauses = leaders[1] if leaders and leaders[0] == "And" else [leaders]
+        self.assertFalse(any(clause[0] == "role_ids" for clause in clauses))
+
+        # When the query names the role, apply_role_shortcuts flags it and the
+        # hard filter applies.
+        payload = turbopuffer_client.apply_role_shortcuts(
+            {"role_ids": ["chief_technology_officer"], "company_ids": ["c1"]},
+            "CTOs at AI companies",
+        )
+        csuite = turbopuffer_client.filters_from_role_payload(payload)
+        self.assertIn(("role_ids", "ContainsAny", ["chief_technology_officer"]), csuite[1])
+
     def test_local_title_cluster_keywords_do_not_trigger_role_shortcuts(self) -> None:
         # Regression: the local pipeline merges DuckDB title-cluster keywords
         # into bm25_queries before retrieval. A corpus title like
@@ -240,7 +278,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         filters = turbopuffer_client.filters_from_role_payload(payload)
 
         self.assertIn("chief_technology_officer", payload["role_ids"])
-        self.assertEqual(payload["seniority_bands"], ["c_suite"])
+        self.assertEqual(payload["seniority_bands"], ["c-suite"])
         self.assertIn(("role_ids", "ContainsAny", ["chief_technology_officer"]), filters[1])
 
     def test_search_mode_matches_company_domain_parity(self) -> None:

@@ -490,7 +490,10 @@ class LocalSearchPipelineTests(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
             out = json.loads(proc.stdout)
-            self.assertEqual(out["summary"]["returned_people"], 1)
+            # Non-shortcut role_ids no longer hard-gate retrieval (deployed
+            # network-search-api parity), so the bm25/semantic frontier is
+            # wider than the single tagged software engineer.
+            self.assertGreaterEqual(out["summary"]["returned_people"], 1)
             state = json.loads(Path(out["state"]).read_text())
             expand = next(step for step in state["steps"] if step["id"] == "expand_search_request")
             filters = expand["output"]["role_search_filters"]
@@ -509,7 +512,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(candidate["bucket"], "good")
             with Path(out["artifacts"]["csv"]).open(newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual([row["person_id"] for row in rows], [PERSON_STANFORD])
+            self.assertIn(PERSON_STANFORD, [row["person_id"] for row in rows])
 
     def test_company_union_uses_static_adjacent_role_ids_against_duckdb(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_raw:
@@ -568,7 +571,11 @@ class LocalSearchPipelineTests(unittest.TestCase):
 
             with Path(out["artifacts"]["csv"]).open(newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual([row["person_id"] for row in rows], [PERSON_STANFORD, PERSON_ADJACENT])
+            person_ids = [row["person_id"] for row in rows]
+            # Base retrieval is no longer hard-gated by non-shortcut role_ids;
+            # assert the adjacency union still contributes the adjacent person.
+            self.assertIn(PERSON_STANFORD, person_ids)
+            self.assertIn(PERSON_ADJACENT, person_ids)
 
     def test_execute_runs_summary_and_company_signal_pools_with_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_raw:
