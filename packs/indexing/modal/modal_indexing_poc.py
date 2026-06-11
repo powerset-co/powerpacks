@@ -24,20 +24,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 import modal
 
-APP_NAME = "powerpacks-indexing-poc"
-VOLUME_NAME = "powerpacks-indexing-poc"
-DEFAULT_OPERATOR_ID = "e33a648a-ae5f-432e-83ce-b90d75546ada"
+APP_NAME = os.environ.get("POWERPACKS_MODAL_APP", "powerset-indexing")
+# Modal Volumes are workspace-scoped: anyone with a powerset-co token shares
+# this default volume; outsiders cannot reach it. Set POWERPACKS_MODAL_VOLUME
+# for an isolated volume (recommended once multiple operators run concurrently,
+# since input/ and runs/ paths are not yet per-operator prefixed).
+VOLUME_NAME = os.environ.get("POWERPACKS_MODAL_VOLUME", "powerset-indexing")
+DEFAULT_OPERATOR_ID = os.environ.get("POWERPACKS_OPERATOR_ID", "e33a648a-ae5f-432e-83ce-b90d75546ada")
 
 REPO = Path(__file__).resolve().parents[3]
-# .powerpacks lives at the main checkout root; walk up when running from a worktree
+# .powerpacks lives at the main checkout root; walk up when running from a
+# worktree, and require the merged people.csv so a stray sibling .powerpacks
+# (e.g. created by local test runs) is not mistaken for the real one.
 LOCAL_POWERPACKS = next(
-    (p / ".powerpacks" for p in [REPO, *REPO.parents] if (p / ".powerpacks").is_dir()),
+    (
+        p / ".powerpacks"
+        for p in [REPO, *REPO.parents]
+        if (p / ".powerpacks/network-import/merged/people.csv").is_file()
+    ),
     REPO / ".powerpacks",
 )
 PIPELINE = "/repo/packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
