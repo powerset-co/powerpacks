@@ -173,6 +173,22 @@ class LocalDuckDBSearchStore:
         self.read_only = read_only
         self.conn = duckdb.connect(self.db_path, read_only=read_only)
 
+    def fork(self) -> "LocalDuckDBSearchStore":
+        """Return a store sharing this store's database instance via a cursor.
+
+        Concurrent ``duckdb.connect()`` calls to the same file race DuckDB's
+        per-file instance cache while sibling connections are being closed,
+        which can transiently surface an empty catalog (missing tables /
+        empty PRAGMA table_info). A ``.cursor()`` duplicates the connection
+        on the SAME instance and is the sanctioned per-thread pattern, so
+        threaded fan-out must fork one root store instead of reconnecting.
+        """
+        clone = object.__new__(LocalDuckDBSearchStore)
+        clone.db_path = self.db_path
+        clone.read_only = self.read_only
+        clone.conn = self.conn.cursor()
+        return clone
+
     def namespace(self, logical_name: str) -> LocalDuckDBNamespace:
         self._table_for_namespace(logical_name)
         return LocalDuckDBNamespace(self, logical_name)
