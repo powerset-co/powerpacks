@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.3.0...powerpacks-v0.3.1) (2026-06-11)
+
+
+### Bug Fixes
+
+* align extraction value spaces with canonical index taxonomies ([b4f474b](https://github.com/powerset-co/powerpacks/commit/b4f474b67cf47a069be5a135215d359a70650c82))
+* align local extraction with index taxonomies and deployed prod retrieval semantics ([dd310bc](https://github.com/powerset-co/powerpacks/commit/dd310bc01b0790441d4a45af6b0559d6dbac4b77))
+* keep local parity execution fully local ([b4ccb00](https://github.com/powerset-co/powerpacks/commit/b4ccb003ade598a5ac673320f1ca6dc390c3b7f6))
+* reserve hard role_ids filters for query-named shortcut roles ([25264f0](https://github.com/powerset-co/powerpacks/commit/25264f03507c2be47ee775f67a94686a954d92f0))
+
 ## [0.3.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.2.0...powerpacks-v0.3.0) (2026-06-10)
 
 
