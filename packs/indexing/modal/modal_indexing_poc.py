@@ -10,8 +10,11 @@ Run with the modal CLI's python (has the modal SDK):
 Commands:
   upload    push local people.csv + precomputed artifacts to the Volume
   amplify   build the synthetic Jake-scale dataset in-sandbox (no paid calls)
-  run       run the full pipeline + DuckDB build in a sandbox and report
-            wall time / peak RSS / per-step durations
+  run       client-driven benchmark run (streams per-phase, exec per step)
+  process   fully automatic: server-side run (survives disconnects) + watch
+            + auto-download; refreshes enrichment caches on the volume
+  download  pull local-search.duckdb + manifest.json for a run label
+            (--wait polls status.json until the run finishes)
 
 Nothing here makes OpenAI calls: every paid stage is covered by precomputed
 artifacts or pre-seeded checkpoints, and no OPENAI_API_KEY is set in the
@@ -135,6 +138,68 @@ def cmd_upload(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_process(args: argparse.Namespace) -> int:
+    """Fully automatic: dispatch a server-side run, watch it, download results.
+
+    The sandbox entrypoint (run_in_sandbox.py) owns seed -> pipeline -> duckdb
+    -> persist -> status.json, so the cloud run completes and persists even if
+    this driver disconnects; re-attach later with `download --wait`.
+    """
+    label = args.label or f"{args.dataset}-process"
+    input_root = f"/data/input/{args.dataset}"
+    run_vol = f"/data/runs/{label}"
+    app = modal.App.lookup(APP_NAME, create_if_missing=True)
+    entrypoint = [
+        "python", "/repo/packs/indexing/modal/run_in_sandbox.py",
+        "--input-root", input_root,
+        "--run-vol", run_vol,
+        "--operator-id", DEFAULT_OPERATOR_ID,
+    ]
+    if args.persist_artifacts:
+        entrypoint.append("--persist-artifacts")
+    started = time.time()
+    sb = modal.Sandbox.create(
+        *entrypoint,
+        app=app,
+        image=build_image(),
+        volumes={"/data": get_volume()},
+        cpu=args.cpu,
+        memory=args.memory_mib,
+        timeout=args.timeout,
+    )
+    print(f"dispatched sandbox {sb.object_id} (cpu={args.cpu} mem={args.memory_mib}MiB) run={label}")
+    print("safe to disconnect: the run persists server-side; re-attach with "
+          f"`download --wait --label {label}`")
+    for line in sb.stdout:
+        print(line, end="", flush=True)
+    sb.wait()
+    print(f"sandbox finished after {time.time() - started:.0f}s")
+    # The server-side status.json is the source of truth for run outcome
+    # (sb.wait() returns None on success in modal 1.x); download --wait
+    # verifies it says completed before pulling artifacts.
+    args.label = label
+    args.dest = getattr(args, "dest", None)
+    args.wait = True
+    return cmd_download(args)
+
+
+def wait_for_status(label: str, timeout_s: int = 7200) -> dict | None:
+    vol = get_volume()
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            data = b"".join(vol.read_file(f"runs/{label}/status.json"))
+            payload = json.loads(data)
+        except (FileNotFoundError, json.JSONDecodeError):
+            payload = None
+        if payload and payload.get("status") in ("completed", "failed"):
+            return payload
+        if payload:
+            print(f"  status={payload.get('status')} phase={payload.get('phase')} ({payload.get('updated_at')})")
+        time.sleep(30)
+    return None
+
+
 def cmd_download(args: argparse.Namespace) -> int:
     """Pull the search artifacts a local machine actually consumes.
 
@@ -142,9 +207,19 @@ def cmd_download(args: argparse.Namespace) -> int:
     (resume + incremental state); local search only needs local-search.duckdb
     plus manifest.json.
     """
+    if getattr(args, "wait", False):
+        print(f"waiting for runs/{args.label}/status.json ...")
+        payload = wait_for_status(args.label)
+        if not payload:
+            print("timed out waiting for run status")
+            return 1
+        if payload.get("status") != "completed":
+            print(f"run finished with status={payload.get('status')} phase={payload.get('phase')}")
+            return 1
     vol = get_volume()
     dest = Path(args.dest) if args.dest else LOCAL_POWERPACKS / "search-index"
     dest.mkdir(parents=True, exist_ok=True)
+    started = time.time()
     for name in ("local-search.duckdb", "manifest.json"):
         remote = f"runs/{args.label}/{name}"
         target = dest / name
@@ -164,7 +239,9 @@ def cmd_download(args: argparse.Namespace) -> int:
             print(f"missing on volume (was the run made with --persist-artifacts?): {remote}")
             return 1
         tmp.replace(target)
-        print(f"downloaded {remote} -> {target} ({written / 1e6:.0f} MB)")
+        elapsed = max(time.time() - started, 0.001)
+        print(f"downloaded {remote} -> {target} ({written / 1e6:.0f} MB, {written / 1e6 / elapsed:.0f} MB/s)")
+        started = time.time()
     return 0
 
 
@@ -303,12 +380,22 @@ def main() -> int:
     run.add_argument("--label")
     run.add_argument("--persist-artifacts", action="store_true")
 
+    proc = sub.add_parser("process", help="dispatch server-side run, watch, auto-download")
+    proc.add_argument("--dataset", choices=["real", "synthetic"], required=True)
+    proc.add_argument("--cpu", type=float, default=4)
+    proc.add_argument("--memory-mib", type=int, default=16384)
+    proc.add_argument("--timeout", type=int, default=7200)
+    proc.add_argument("--label")
+    proc.add_argument("--persist-artifacts", action="store_true")
+    proc.add_argument("--dest", help="download destination; defaults to .powerpacks/search-index")
+
     dl = sub.add_parser("download")
     dl.add_argument("--label", required=True, help="run label to pull, e.g. real-1x")
     dl.add_argument("--dest", help="destination dir; defaults to .powerpacks/search-index")
+    dl.add_argument("--wait", action="store_true", help="poll runs/<label>/status.json until the run finishes")
 
     args = ap.parse_args()
-    return {"upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download}[args.cmd](args)
+    return {"upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 
 
 if __name__ == "__main__":
