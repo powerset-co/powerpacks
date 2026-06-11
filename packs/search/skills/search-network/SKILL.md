@@ -102,15 +102,23 @@ Give the sub-agent the user query verbatim plus any already-resolved person
 or company ids, and have it follow `search-sql`'s output contract. Do not
 fan out for plain row-level searches — the main retrieval stages own those.
 
-Fan-in, after the main pipeline finishes:
+Fan-in goes through the pipeline, not around it:
 
-- Union the sub-agent's `people` into the final candidate list. People found
-  by both sources rank above single-source people; people found only by SQL
-  are appended with their `evidence` line and tagged `(sql)` in the summary.
-- The SQL vertical is additive evidence. If the sub-agent fails, returns an
-  empty list, or is still running long after the main pipeline finished,
-  present the main results alone and note the vertical was skipped — never
-  block or fail the search on it.
+1. Run `prepare` and fan out the sub-agent while the user reviews the
+   preview.
+2. Write the sub-agent's output JSON to `agentic-sql-candidates.json` inside
+   the run's output directory.
+3. Append `--extra-candidates-json <that path>` to the returned
+   `execute_command` before running it. The pipeline unions the SQL people
+   into retrieval (tagged `agentic_sql` in `vertical_sources`), so they flow
+   through the **same** `hydrate_people`, `llm_filter_candidates`, and
+   `llm_rerank_candidates` steps as every other candidate — no separate
+   ranking path.
+4. If the sub-agent has not finished by the time the user approves
+   execution, wait briefly for it; if it fails or returns an empty `people`
+   list, run the `execute_command` without the flag and note the vertical
+   was skipped. The SQL vertical is additive evidence — never block or fail
+   the search on it.
 
 ### Local Summary
 
@@ -118,8 +126,10 @@ Fan-in, after the main pipeline finishes:
 - Say `Run artifacts: <artifact-dir>`.
 - Show top 10 candidates from the CSV: rank, name, current title/company,
   location, LinkedIn URL when present.
-- If the SQL fan-out ran, add SQL-only people below the main list with their
-  evidence lines, and say `<M> additional via sql vertical`.
+- If the SQL fan-out ran, say `<M> sql-vertical candidates merged` (read
+  `agentic_sql_tagged` from the execute_role_search step summary). SQL-only
+  people appear in the main ranked CSV like everyone else; their rows carry
+  `agentic_sql` in `vertical_sources`.
 
 ### Local Constraints
 

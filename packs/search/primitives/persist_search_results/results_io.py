@@ -221,7 +221,7 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
             "matched_position_indexes": rerank.get("matched_position_indexes", ""),
             "pre_rerank_score": rerank.get("pre_rerank_score", ""),
             "tags": rerank.get("tags", ""),
-            "vertical_sources": rerank.get("vertical_sources", ""),
+            "vertical_sources": rerank.get("vertical_sources") or "; ".join(profile.get("vertical_sources") or []),
             "name": profile.get("name", ""),
             "headline": profile.get("headline", ""),
             "location": profile.get("location", ""),

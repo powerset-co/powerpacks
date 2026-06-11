@@ -214,7 +214,7 @@ def candidate_metadata(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
             for pos_id in [raw.get("position_id"), *(raw.get("matched_position_ids") or [])]:
                 if pos_id and pos_id not in existing["matched_position_ids"]:
                     existing["matched_position_ids"].append(pos_id)
-            for key in ["position_title", "company_id"]:
+            for key in ["position_title", "company_id", "agentic_sql_evidence"]:
                 if raw.get(key) and not existing.get(key):
                     existing[key] = raw.get(key)
     return out
@@ -268,6 +268,8 @@ def apply_candidate_metadata(profile: dict[str, Any], meta: dict[str, Any] | Non
         if source not in sources:
             sources.append(source)
     profile["vertical_sources"] = sources
+    if meta.get("agentic_sql_evidence") and not profile.get("agentic_sql_evidence"):
+        profile["agentic_sql_evidence"] = meta.get("agentic_sql_evidence")
     existing = list(profile.get("matched_position_indexes") or [])
     for idx in matched_indexes(profile, meta):
         if idx not in existing:
@@ -672,6 +674,7 @@ def llm_profile_view(profile: dict[str, Any]) -> dict[str, Any]:
         "score": profile.get("score"),
         "tags": profile.get("tags"),
         "vertical_sources": profile.get("vertical_sources"),
+        "agentic_sql_evidence": profile.get("agentic_sql_evidence"),
     }
 
 

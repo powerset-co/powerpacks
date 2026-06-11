@@ -198,6 +198,12 @@ Return ONLY this JSON object as the final message — no prose around it:
 ```
 
 - Cap `people` at 100; order by strength of evidence.
+- This object is consumed verbatim: the parent writes it to a file and
+  passes it to the local pipeline as `--extra-candidates-json`, which unions
+  `people` into retrieval so they go through the same hydration and LLM
+  filter/rerank as every other candidate. Optional extra keys per person
+  (`position_title`, `company_name`, `city`, `seniority_band`, ...) are
+  carried onto the candidate when present.
 - `evidence` must come from queried columns (titles, companies, dates,
   counts) — never inferred.
 - If the question has no relational/aggregate component or the data cannot

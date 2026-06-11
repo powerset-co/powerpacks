@@ -22,7 +22,7 @@ for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
     sys.path.insert(0, str(_path))
 
 import search_backend_mode  # noqa: E402
-from search_result_merge import dedupe_people, merge_company_union_candidates  # noqa: E402
+from search_result_merge import dedupe_people, merge_agentic_sql_candidates, merge_company_union_candidates  # noqa: E402
 from search_common import (  # noqa: E402
     filters_from_role_payload,
     has_role_constraint,
@@ -196,9 +196,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     candidates = dedupe_people(rows, limit=args.limit)
     company_union_candidates = prefilters.get("company_union_candidates") or prefilters.get("company_union_candidate_ids") or []
     candidates = merge_company_union_candidates(candidates, company_union_candidates, limit=args.limit)
+    extra_sql_candidates: list[Any] = []
+    if getattr(args, "extra_candidates_json", None):
+        extra_payload = read_json(Path(args.extra_candidates_json))
+        extra_sql_candidates = extra_payload.get("people") if isinstance(extra_payload, dict) else extra_payload
+        candidates = merge_agentic_sql_candidates(candidates, extra_sql_candidates or [], limit=args.limit)
     retrieval_mode = "filter_only" if is_filter_only_payload(payload) else "hybrid"
     batched_base_ids = any(row.get("retrieval_batched_base_ids") for row in rows)
     union_added = sum(1 for candidate in candidates if "company_filter" in (candidate.get("vertical_sources") or []))
+    agentic_sql_tagged = sum(1 for candidate in candidates if "agentic_sql" in (candidate.get("vertical_sources") or []))
     vertical_source_counts = _source_counts(candidates)
 
     retrieval_artifact = None
@@ -222,6 +228,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "prefilter_short_circuit": prefilter_short_circuit,
             "company_union_candidate_count": prefilters.get("company_union_candidate_count") or len(company_union_candidates),
             "company_union_added": union_added,
+            "agentic_sql_candidate_count": len(extra_sql_candidates or []),
+            "agentic_sql_tagged": agentic_sql_tagged,
             "candidates": candidates,
         })
         retrieval_artifact = str(path)
@@ -241,6 +249,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "prefilter_short_circuit": prefilter_short_circuit,
         "company_union_candidate_count": prefilters.get("company_union_candidate_count") or len(company_union_candidates),
         "company_union_added": union_added,
+        "agentic_sql_candidate_count": len(extra_sql_candidates or []),
+        "agentic_sql_tagged": agentic_sql_tagged,
         "returned_people": len(candidates),
         "candidate_ids": [candidate["person_id"] for candidate in candidates],
         "candidates": candidates,
@@ -257,6 +267,10 @@ def main() -> None:
     parser.add_argument("--write-artifact", action="store_true")
     parser.add_argument("--limit", type=int, default=0, help="Max unique people to keep after retrieval; 0 means keep full retrieved frontier")
     parser.add_argument("--top-k", type=int, default=1000)
+    parser.add_argument(
+        "--extra-candidates-json",
+        help="JSON file with agentic SQL vertical people ({'people': [{person_id, evidence, ...}]} or a bare list); unioned into candidates so they flow through the same hydration and LLM filter/rerank steps",
+    )
     args = parser.parse_args()
 
     started = time.time()

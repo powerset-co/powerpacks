@@ -701,6 +701,11 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 str(args.limit),
                 "--top-k",
                 str(args.top_k),
+                *(
+                    ["--extra-candidates-json", str(Path(args.extra_candidates_json).expanduser().resolve())]
+                    if getattr(args, "extra_candidates_json", None)
+                    else []
+                ),
             ],
         ),
         (
@@ -845,6 +850,10 @@ def main() -> None:
     run.add_argument("--force", action="store_true")
     run.add_argument("--search-only", action="store_true", help="Skip LLM filter/rerank after retrieval + hydration (data path stays fully local either way)")
     run.add_argument("--filter-only", action="store_true", help="Run the cheap conservative LLM filter but skip LLM rerank")
+    run.add_argument(
+        "--extra-candidates-json",
+        help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate",
+    )
     run.set_defaults(func=cmd_run)
 
     args = parser.parse_args()

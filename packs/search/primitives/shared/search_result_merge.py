@@ -96,6 +96,68 @@ def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, A
     return candidates[:limit] if limit and limit > 0 else candidates
 
 
+def merge_agentic_sql_candidates(
+    candidates: list[dict[str, Any]],
+    sql_candidates: list[Any],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Union agent-authored SQL vertical people into the candidate pool.
+
+    Mirrors merge_company_union_candidates: people already retrieved gain the
+    `agentic_sql` provenance tag (a cross-vertical confidence signal); people
+    found only by SQL are appended so they flow through the same hydration and
+    LLM filter/rerank steps as every other candidate.
+    """
+    if not sql_candidates:
+        return candidates
+    merged = [dict(candidate) for candidate in candidates]
+    by_person = {str(candidate.get("person_id")): candidate for candidate in merged if candidate.get("person_id")}
+    for rank, raw in enumerate(sql_candidates, start=1):
+        item = raw if isinstance(raw, dict) else {"person_id": raw}
+        person_id = base_person_id(str(item.get("person_id") or item.get("base_id") or item.get("id") or ""))
+        if not person_id:
+            continue
+        evidence = item.get("evidence")
+        existing = by_person.get(person_id)
+        if existing is not None:
+            sources = list(existing.get("vertical_sources") or [])
+            if "agentic_sql" not in sources:
+                sources.append("agentic_sql")
+            existing["vertical_sources"] = sources
+            existing.setdefault("agentic_sql_rank", rank)
+            if evidence and not existing.get("agentic_sql_evidence"):
+                existing["agentic_sql_evidence"] = evidence
+            continue
+        candidate = {
+            "person_id": person_id,
+            "position_id": item.get("position_id"),
+            "score": item.get("score"),
+            "position_title": item.get("position_title"),
+            "city": item.get("city"),
+            "state": item.get("state"),
+            "country": item.get("country"),
+            "macro_region": item.get("macro_region"),
+            "metro_areas": item.get("metro_areas"),
+            "role_track": item.get("role_track"),
+            "seniority_band": item.get("seniority_band"),
+            "company_name": item.get("company_name"),
+            "company_id": item.get("company_id"),
+            "is_current": item.get("is_current"),
+            "vertical_sources": ["agentic_sql"],
+            "agentic_sql_rank": rank,
+        }
+        if evidence:
+            candidate["agentic_sql_evidence"] = evidence
+        if candidate.get("position_id"):
+            candidate["matched_position_ids"] = [candidate["position_id"]]
+        merged.append(candidate)
+        by_person[person_id] = candidate
+        if limit and limit > 0 and len(merged) >= limit:
+            break
+    return merged[:limit] if limit and limit > 0 else merged
+
+
 def merge_company_union_candidates(
     candidates: list[dict[str, Any]],
     union_candidates: list[Any],
