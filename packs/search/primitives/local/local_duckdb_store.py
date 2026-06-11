@@ -277,9 +277,12 @@ class LocalDuckDBSearchStore:
                 value = value.tolist()
             except Exception:
                 pass
-        if isinstance(value, tuple):
-            return [self._normalize_value(item) for item in value]
-        if isinstance(value, list):
+        if isinstance(value, (list, tuple)):
+            # Fast path for flat numeric arrays (embedding vectors are 1536
+            # floats per row); per-element recursion here dominated filtered
+            # fetches at ~76M isinstance calls per resolve.
+            if all(type(item) is float or type(item) is int for item in value):
+                return list(value)
             return [self._normalize_value(item) for item in value]
         if isinstance(value, dict):
             return {str(key): self._normalize_value(item) for key, item in value.items()}

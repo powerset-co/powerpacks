@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = os.environ.get("CE_RERANK_MODEL", "gpt-4.1-nano")
 DEFAULT_BATCH_SIZE = 20
-DEFAULT_CONCURRENCY = 10
+# Nano-model scoring calls; 10 made large company pools take minutes
+# (3,000 companies = 150 batches = 15 sequential waves). Sibling LLM stages
+# run at concurrency 400-1000.
+DEFAULT_CONCURRENCY = 64
 DEFAULT_TOP_N = 500
 
 CE_SYSTEM_PROMPT = """You are a company relevance scorer for a people search engine.
@@ -140,6 +143,18 @@ async def ce_rerank_companies(
 
     model = model or DEFAULT_MODEL
     key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    if not key:
+        # Without a key every batch would burn a failing HTTP round trip and
+        # fall back to neutral scores anyway; skip the network entirely.
+        logger.warning("CE rerank skipped: no OpenAI API key available; passing companies through unscored")
+        return {
+            "scored_companies": companies,
+            "total_scored": 0,
+            "kept": len(companies),
+            "ce_model": model,
+            "elapsed_ms": 0,
+            "skipped_no_api_key": True,
+        }
     base = api_base or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
     if not base.endswith("/v1"):
         base = base.rstrip("/") + "/v1"

@@ -623,7 +623,7 @@ def main() -> None:
     parser.add_argument("--ce-top-n", type=int, default=0, help="Hard cap after CE (0 = use adaptive threshold only)")
     parser.add_argument("--ce-model", default=None, help="Model for CE scoring (default: gpt-4.1-nano)")
     parser.add_argument("--ce-batch-size", type=int, default=20, help="Companies per CE API call")
-    parser.add_argument("--ce-concurrency", type=int, default=10, help="Max parallel CE API calls")
+    parser.add_argument("--ce-concurrency", type=int, default=64, help="Max parallel CE API calls")
     args = parser.parse_args()
 
     started = time.time()
