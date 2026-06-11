@@ -87,12 +87,39 @@ LLM stages entirely.
 
 6. Keep execution quiet until the command finishes.
 
+### Agentic SQL fan-out (local mode only)
+
+In parallel with steps 3–6, fan out to the `search-sql` skill
+(`packs/search/skills/search-sql/SKILL.md`) via a sub-agent when either:
+
+- the query has a relational or aggregate component the filter DSL cannot
+  express — per-person aggregates ("2+ stints at startups"), career ordering
+  ("engineer before PM"), person-to-person overlap ("worked with X at Y",
+  "schoolmates of X"), or interaction history ("people I've messaged"); or
+- the user explicitly asks for it ("also run the sql vertical", "sql:").
+
+Give the sub-agent the user query verbatim plus any already-resolved person
+or company ids, and have it follow `search-sql`'s output contract. Do not
+fan out for plain row-level searches — the main retrieval stages own those.
+
+Fan-in, after the main pipeline finishes:
+
+- Union the sub-agent's `people` into the final candidate list. People found
+  by both sources rank above single-source people; people found only by SQL
+  are appended with their `evidence` line and tagged `(sql)` in the summary.
+- The SQL vertical is additive evidence. If the sub-agent fails, returns an
+  empty list, or is still running long after the main pipeline finished,
+  present the main results alone and note the vertical was skipped — never
+  block or fail the search on it.
+
 ### Local Summary
 
 - Say `<N> found (local)`.
 - Say `Run artifacts: <artifact-dir>`.
 - Show top 10 candidates from the CSV: rank, name, current title/company,
   location, LinkedIn URL when present.
+- If the SQL fan-out ran, add SQL-only people below the main list with their
+  evidence lines, and say `<M> additional via sql vertical`.
 
 ### Local Constraints
 
@@ -156,7 +183,9 @@ files on the happy path. Start a fresh run for every search request.
 
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
-- Do not use sub-agents for ordinary single-query searches.
+- Do not use sub-agents for ordinary single-query searches. (Exception: the
+  local-mode agentic SQL fan-out above, only when its trigger conditions are
+  met.)
 - Do not write new retrieval scripts during a search run.
 - Do not filter or reuse prior artifacts for refinements; create a new search
   with the updated query or constraints.

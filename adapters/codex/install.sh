@@ -99,6 +99,7 @@ install_powerpacks_bundle
 install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKILL.md"
 install_skill search-profile "$REPO_ROOT/packs/search/skills/search-profile/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
+install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
 install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
 install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-local-search-index/SKILL.md"
 install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
