@@ -135,6 +135,13 @@ Fan out only when the query needs one of:
   at Y", "schoolmates of X", "people similar to X's career path"
 - **set algebra over two sub-populations** — "ex-Stripe folks now at infra
   startups"
+- **cross-trait evidence living on different rows or tables** — "designers
+  who can code" (the design role is one position row; the coding evidence
+  is a different engineering row or `local_summaries.tech_skills`),
+  "recruiters with a technical background", "founders who were previously
+  sales". One position row cannot satisfy both traits, so per-row filters
+  cannot express the conjunction — still run hybrid in parallel, since
+  profile prose sometimes carries both signals.
 - **interaction history** — "people I've actually messaged" (requires
   `local_person_source_summary`; skip if the table is absent)
 - **explicit user request** — "also run the sql vertical", "sql:"
