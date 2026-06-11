@@ -620,7 +620,7 @@ def main() -> None:
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--name-top-k", type=int, default=20)
-    parser.add_argument("--semantic-top-k", type=int, default=2500)
+    parser.add_argument("--semantic-top-k", type=int, default=1000, help="Per-subquery VSS/BM25 top_k for company semantic lookup; CE adaptively prunes the fused pool")
     parser.add_argument("--company-sector-strategy", choices=sorted(SECTOR_STRATEGIES), default="soft_union")
     parser.add_argument("--company-sector-min-results", type=int, default=500)
     parser.add_argument("--max-soft-companies", type=int, default=0, help="Max soft filter companies (0 = paginate all)")
