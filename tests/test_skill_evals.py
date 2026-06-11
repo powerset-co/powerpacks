@@ -68,16 +68,23 @@ class SkillEvalCaseShapeTests(unittest.TestCase):
                     self.assertIsInstance(entry, dict, f"{cases_path}[{i}]")
                     self.assertIn("id", entry, f"{cases_path}[{i}]: missing 'id'")
                     self.assertIn("query", entry, f"{cases_path}[{i}]: missing 'query'")
-                    # Optional keys
-                    for key in ("must_include", "must_not_include", "expected_tools"):
-                        if key in entry:
-                            self.assertIsInstance(
-                                entry[key], list, f"{cases_path}[{i}].{key} must be a list"
-                            )
-                            for s in entry[key]:
-                                self.assertIsInstance(
-                                    s, str, f"{cases_path}[{i}].{key}: items must be strings"
-                                )
+                    # The LLM judge grades against this rubric; keyword lists
+                    # (must_include / must_not_include) are intentionally not
+                    # supported — they grade vocabulary, not behavior.
+                    self.assertIsInstance(
+                        entry.get("expected_behavior"), str,
+                        f"{cases_path}[{i}]: missing 'expected_behavior' rubric",
+                    )
+                    self.assertGreater(
+                        len(entry["expected_behavior"].strip()), 40,
+                        f"{cases_path}[{i}]: expected_behavior rubric is too thin to judge against",
+                    )
+                    self.assertNotIn("must_include", entry, f"{cases_path}[{i}]: keyword lists are not supported; use expected_behavior")
+                    self.assertNotIn("must_not_include", entry, f"{cases_path}[{i}]: keyword lists are not supported; use expected_behavior")
+                    if "expected_tools" in entry:
+                        self.assertIsInstance(
+                            entry["expected_tools"], list, f"{cases_path}[{i}].expected_tools must be a list"
+                        )
 
     def test_case_ids_are_unique_within_a_skill(self) -> None:
         for skill_name, cases_path in discover_skill_eval_cases():
