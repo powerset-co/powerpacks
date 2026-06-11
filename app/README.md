@@ -37,3 +37,26 @@ From a Codex session outside the repo, use the installed bundle:
 Open the URL printed by the script, usually `http://localhost:5177/`.
 
 The console is read-only and currently supports network search/rerank artifacts.
+
+## Run as a daemon (macOS launchd)
+
+Install a per-clone LaunchAgent so the console starts at login and restarts if
+it dies (label `co.powerset.powerpacks-console.<repo-dir-name>`, so multiple
+clones can each run their own daemon on different ports):
+
+```bash
+PORT=5178 bash scripts/run-powerpacks-console.sh daemon-install
+```
+
+`HOST`/`PORT` are baked into the plist at install time (defaults `0.0.0.0` /
+`5177`); re-run `daemon-install` to change them. Manage it with:
+
+```bash
+bash scripts/run-powerpacks-console.sh daemon-status     # launchctl state, pid, port, log tail
+bash scripts/run-powerpacks-console.sh daemon-uninstall  # bootout + remove the plist
+```
+
+The daemon runs `scripts/run-powerpacks-console.sh run` (foreground vite with
+`--strictPort`) and logs to `.powerpacks/servers/powerpacks-console.launchd.log`.
+The plist lives in `~/Library/LaunchAgents/`. The `start`/`stop` background mode
+above still works, but don't mix it with the daemon on the same port.

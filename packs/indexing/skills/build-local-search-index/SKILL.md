@@ -68,6 +68,18 @@ uv run --project . python packs/indexing/primitives/index_contacts_pipeline/inde
 Artifacts are written under `.powerpacks/search-index/`. The local DuckDB is
 `.powerpacks/search-index/local-search.duckdb`.
 
+## Company HQ locations
+
+Local companies are derived from people's work experiences and carry no HQ
+location. The company step always backfills the empty
+`city`/`state`/`country`/`metro_area`/`macro_region` fields from the local
+RapidAPI company payload cache (`.powerpacks/rapidapi-company-cache/`),
+joining each company to its RapidAPI company id from work experiences. Raw
+LinkedIn codes are normalized through the same path as people locations
+("US" → "United States", "CA" → "California", metro/macro derived). This is a
+cache-only disk read — no network calls; companies without a cached payload
+are left untouched.
+
 ## Constraints
 
 - local files only

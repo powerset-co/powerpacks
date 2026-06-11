@@ -217,7 +217,10 @@ export function PersonSourceBadges({ sources, className, compact = false, setId,
           );
         }
 
-        if (isMessagesChannel) {
+        // Without setId/personId the messages HoverCard has nothing to load and
+        // would conflict with outer hover surfaces (e.g. the Sources email
+        // tooltip on the local contacts table) — use the simple badge instead.
+        if (isMessagesChannel && canLazyLoad) {
           return (
             <MessagesSourceBadge
               key={source.source_channel}

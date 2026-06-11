@@ -58,6 +58,11 @@ const HIDDEN_KEYS = new Set([
   "set_id",
   "role_core_patterns",
   "role_adjacent_patterns",
+  // Internal local-index title clustering metadata; role keywords (bm25_queries)
+  // are surfaced in the dedicated "Role Keywords" chip section instead.
+  "local_title_clusters",
+  "local_title_cluster_keywords",
+  "local_title_clustering_status",
 ]);
 
 function formatKey(key: string) {

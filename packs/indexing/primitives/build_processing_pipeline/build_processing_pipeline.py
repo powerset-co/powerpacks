@@ -24,6 +24,7 @@ from packs.indexing.lib.artifacts import (  # noqa: E402
     build_location_corpus,
     build_summary_records,
 )
+from packs.indexing.lib.company_locations import backfill_company_locations_from_rapidapi  # noqa: E402
 from packs.indexing.lib.contracts import (  # noqa: E402
     count_defaulted_numeric,
     dropped_fields_for_records,
@@ -1575,12 +1576,18 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
         str(row.get("id") or row.get("company_urn")): row.get("allowed_operator_ids") or [ledger.get("default_operator_id") or "local:user"]
         for row in raw_corpus
     }
+    corpus_rows = list(read_jsonl(ps["companies_corpus_v3"]))
+    urn_to_rapidapi_id = {
+        str(row.get("id") or row.get("company_urn") or ""): str(row.get("rapidapi_company_id") or "")
+        for row in raw_corpus
+    }
+    location_stats = backfill_company_locations_from_rapidapi(corpus_rows, urn_to_rapidapi_id)
     record_inputs = []
-    for aleph in read_jsonl(ps["companies_corpus_v3"]):
+    for aleph in corpus_rows:
         record = _company_corpus_to_record(aleph)
         record["allowed_operator_ids"] = allowed_by_urn.get(str(record.get("id")), [ledger.get("default_operator_id") or "local:user"])
         record_inputs.append(record)
-    aleph_corpus_output = [_strip_aleph_company_corpus(row) for row in read_jsonl(ps["companies_corpus_v3"])]
+    aleph_corpus_output = [_strip_aleph_company_corpus(row) for row in corpus_rows]
     write_jsonl(ps["companies_corpus_v3"], aleph_corpus_output)
     contract = load_search_contract("turbopuffer/companies.namespace.json")
     records = [normalize_record_for_contract(row, contract) for row in record_inputs]
@@ -1598,6 +1605,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
         "artifact_hits": int(counts.get("artifact_hits", 0) or 0),
         "artifact_misses": int(counts.get("artifact_misses", 0) or 0),
         "paid_calls": int(counts.get("paid_calls", 0) or 0),
+        "company_locations": {"source": "rapidapi_company_cache", **location_stats},
         "defaulted_numeric_fields": {"companies": count_defaulted_numeric(record_inputs, contract)},
         "subtimings": {
             "raw_corpus_seconds": raw_seconds,

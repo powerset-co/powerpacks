@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
-import { Loader2, RefreshCcw } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,6 +11,10 @@ import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
 import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
 import { LocalEnvPage } from "./LocalEnvPage";
+import { LocalPersonDetailsPage } from "./LocalPersonDetailsPage";
+import { LocalCompaniesPage } from "./LocalCompaniesPage";
+import { LocalCompanyDetailsPage } from "./LocalCompanyDetailsPage";
+import { LocalSearchLauncher } from "./LocalSearchLauncher";
 import { LocalResultsTable } from "./LocalResultsTable";
 import { LocalRunSidebar } from "./LocalRunSidebar";
 import { LocalSetupPage } from "./LocalSetupPage";
@@ -24,12 +28,34 @@ function taskIdFromPath(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-type LocalView = "contacts" | "setup" | "onboardingV2" | "messagesReview" | "env" | "runs";
+type LocalView =
+  | "contacts"
+  | "personDetails"
+  | "companies"
+  | "companyDetails"
+  | "setup"
+  | "onboardingV2"
+  | "messagesReview"
+  | "env"
+  | "runs";
+
+function companyIdFromPath(): string | null {
+  const match = window.location.pathname.match(/^\/companies\/([^/]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function personIdFromPath(): string | null {
+  const match = window.location.pathname.match(/^\/contacts\/([^/]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 function viewFromPath(): LocalView {
   if (window.location.pathname === "/onboarding-v2") return "onboardingV2";
   if (window.location.pathname === "/onboarding") return "setup";
+  if (personIdFromPath()) return "personDetails";
   if (window.location.pathname === "/contacts") return "contacts";
+  if (companyIdFromPath()) return "companyDetails";
+  if (window.location.pathname === "/companies") return "companies";
   if (window.location.pathname === "/env") return "env";
   if (window.location.pathname === "/setup/imessage/review") return "messagesReview";
   if (window.location.pathname === "/setup") return "setup";
@@ -73,6 +99,7 @@ export function LocalPowerpacksApp() {
   const [resultsLoading, setResultsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [newSearchToken, setNewSearchToken] = useState(0);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   const navigate = useCallback((nextPath: string) => {
@@ -82,6 +109,16 @@ export function LocalPowerpacksApp() {
     setActiveView(viewFromPath());
     setSelectedTaskId(taskIdFromPath());
   }, []);
+
+  const handleNewSearch = useCallback(() => {
+    // New Search should always land on the bare runs route with no lingering
+    // selected run/conversation state, mirroring network-search-app's New Chat.
+    setSelectedTaskId(null);
+    setResultResponse(null);
+    setError(null);
+    navigate("/");
+    setNewSearchToken((token) => token + 1);
+  }, [navigate]);
 
   const refreshRuns = async () => {
     setRunsLoading(true);
@@ -176,7 +213,7 @@ export function LocalPowerpacksApp() {
   const loadedCount = resultResponse?.rows.length ?? 0;
 
   return (
-    <TooltipProvider>
+    <TooltipProvider delayDuration={100} skipDelayDuration={300}>
       <div className="flex min-h-dvh bg-background text-foreground">
         <LocalRunSidebar
           activeView={
@@ -184,9 +221,11 @@ export function LocalPowerpacksApp() {
               ? "runs"
               : activeView === "env"
                 ? "env"
-                : activeView === "contacts"
+                : activeView === "contacts" || activeView === "personDetails"
                   ? "contacts"
-                  : "setup"
+                  : activeView === "companies" || activeView === "companyDetails"
+                    ? "companies"
+                    : "setup"
           }
           runs={filteredRuns}
           operatorEmail={profile?.operator.email || profile?.operator.label}
@@ -195,8 +234,12 @@ export function LocalPowerpacksApp() {
           isLoading={runsLoading}
           search={search}
           onSearchChange={setSearch}
+          onNewSearch={handleNewSearch}
           onSelectContacts={() => {
             navigate("/contacts");
+          }}
+          onSelectCompanies={() => {
+            navigate("/companies");
           }}
           onSelectSetup={() => {
             navigate("/setup");
@@ -224,22 +267,24 @@ export function LocalPowerpacksApp() {
               <LocalEnvPage />
             ) : activeView === "contacts" ? (
               <LocalContactsPage />
+            ) : activeView === "personDetails" ? (
+              <LocalPersonDetailsPage personId={personIdFromPath() || ""} />
+            ) : activeView === "companies" ? (
+              <LocalCompaniesPage />
+            ) : activeView === "companyDetails" ? (
+              <LocalCompanyDetailsPage companyId={companyIdFromPath() || ""} />
             ) : activeView === "messagesReview" ? (
               <LocalMessagesReviewPage onBackToSetup={() => navigate("/setup?tab=enrichment")} />
             ) : (
               <>
-                <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h2 className="truncate text-2xl font-semibold">{selectedRun?.query || "Select a search run"}</h2>
-                {selectedRun?.updatedAt && (
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Updated {format(new Date(selectedRun.updatedAt), "MMM d, yyyy h:mm a")}
-                  </p>
-                )}
-              </div>
-              <Button variant="outline" size="sm" onClick={refreshRuns} disabled={runsLoading}>
-                <RefreshCcw className="mr-2 h-4 w-4" /> Refresh runs
-              </Button>
+                <LocalSearchLauncher focusToken={newSearchToken} />
+                <div className="min-w-0">
+              <h2 className="truncate text-2xl font-semibold">{selectedRun?.query || "Select a search run"}</h2>
+              {selectedRun?.updatedAt && (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Updated {format(new Date(selectedRun.updatedAt), "MMM d, yyyy h:mm a")}
+                </p>
+              )}
             </div>
 
             {error && (

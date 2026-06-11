@@ -218,7 +218,7 @@ def _company_from_experience(exp: dict[str, Any]) -> dict[str, Any]:
         "company_type": _first(exp, "company_type"),
         "confidence_score": _number_or_none(exp.get("confidence_score")) or 0.0,
         "allowed_operator_ids": [],
-        "rapidapi_company_id": identity.get("rapidapi_company_id", ""),
+        "rapidapi_company_id": identity.get("rapidapi_company_id") or _clean(exp.get("rapidapi_company_id")),
         "company_public_identifier": identity.get("company_public_identifier", ""),
         "company_key": identity.get("company_key", ""),
         "canonical_key": company_canonical_key(key_data),

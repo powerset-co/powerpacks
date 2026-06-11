@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_PATH="$ROOT_DIR/scripts/$(basename "${BASH_SOURCE[0]}")"
 APP_DIR="$ROOT_DIR/app"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-5177}"
@@ -68,15 +69,21 @@ STATE_DIR="$POWERPACKS_REPO_ROOT/.powerpacks/servers"
 PID_FILE="$STATE_DIR/powerpacks-console.pid"
 LOG_FILE="$STATE_DIR/powerpacks-console.log"
 
+REPO_SLUG="$(basename "$POWERPACKS_REPO_ROOT" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+LAUNCHD_LABEL="co.powerset.powerpacks-console.$REPO_SLUG"
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+LAUNCHD_LOG="$STATE_DIR/powerpacks-console.launchd.log"
+LAUNCHD_DOMAIN="gui/$(id -u)"
+
 mkdir -p "$STATE_DIR"
 
 usage() {
-  echo "Usage: $0 [start|stop|status|restart] [--path /route] [--open|--no-open]" >&2
+  echo "Usage: $0 [start|stop|status|restart|run|daemon-install|daemon-uninstall|daemon-status] [--path /route] [--open|--no-open]" >&2
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    start|stop|status|restart)
+    start|stop|status|restart|run|daemon-install|daemon-uninstall|daemon-status)
       ACTION="$1"
       shift
       ;;
@@ -220,6 +227,96 @@ PY
     else
       "$0" start --path "$APP_PATH"
     fi
+    ;;
+  run)
+    # Foreground mode for launchd supervision: no backgrounding, no pid file.
+    echo "Running Powerpacks Console in foreground on http://$HOST:$PORT"
+    echo "Repo: $POWERPACKS_REPO_ROOT"
+    export POWERPACKS_REPO_ROOT
+    cd "$APP_DIR"
+    exec npm run dev -- --host "$HOST" --port "$PORT" --strictPort
+    ;;
+  daemon-install)
+    NPM_BIN="$(command -v npm || true)"
+    if [[ -z "$NPM_BIN" ]]; then
+      echo "npm is required to install the console daemon." >&2
+      exit 1
+    fi
+    LAUNCHD_PATH="$(dirname "$NPM_BIN"):/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    mkdir -p "$HOME/Library/LaunchAgents"
+    cat > "$LAUNCHD_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$LAUNCHD_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$SCRIPT_PATH</string>
+    <string>run</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$POWERPACKS_REPO_ROOT</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>POWERPACKS_REPO_ROOT</key>
+    <string>$POWERPACKS_REPO_ROOT</string>
+    <key>HOST</key>
+    <string>$HOST</string>
+    <key>PORT</key>
+    <string>$PORT</string>
+    <key>PATH</key>
+    <string>$LAUNCHD_PATH</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$LAUNCHD_LOG</string>
+  <key>StandardErrorPath</key>
+  <string>$LAUNCHD_LOG</string>
+</dict>
+</plist>
+PLIST
+    if launchctl print "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL" >/dev/null 2>&1; then
+      launchctl bootout "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL"
+    fi
+    launchctl bootstrap "$LAUNCHD_DOMAIN" "$LAUNCHD_PLIST"
+    echo "Installed LaunchAgent $LAUNCHD_LABEL"
+    echo "Plist: $LAUNCHD_PLIST"
+    echo "Serving: http://$HOST:$PORT"
+    echo "Log: $LAUNCHD_LOG"
+    ;;
+  daemon-uninstall)
+    if launchctl print "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL" >/dev/null 2>&1; then
+      launchctl bootout "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL"
+      echo "Booted out $LAUNCHD_LABEL."
+    else
+      echo "$LAUNCHD_LABEL is not loaded."
+    fi
+    rm -f "$LAUNCHD_PLIST"
+    echo "Removed $LAUNCHD_PLIST"
+    ;;
+  daemon-status)
+    PLIST_PORT="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:PORT' "$LAUNCHD_PLIST" 2>/dev/null || true)"
+    if [[ -n "$PLIST_PORT" ]]; then
+      PORT="$PLIST_PORT"
+    fi
+    echo "Label: $LAUNCHD_LABEL"
+    echo "Plist: $LAUNCHD_PLIST"
+    if launchctl print "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL" >/dev/null 2>&1; then
+      launchctl print "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL" | grep -E "^\s*(state|pid) = " || true
+    else
+      echo "Not loaded in $LAUNCHD_DOMAIN."
+      exit 1
+    fi
+    echo "Port $PORT listeners:"
+    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN || echo "  (nothing listening on $PORT)"
+    echo "Recent log ($LAUNCHD_LOG):"
+    tail -20 "$LAUNCHD_LOG" 2>/dev/null || echo "  (no log yet)"
     ;;
   *)
     usage
