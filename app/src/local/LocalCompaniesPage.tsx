@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Info, Mail, MessageCircle, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Building2, Info, Search } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { LinkedinLink, XLink } from "@/components/ui/social-link";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { fetchLocalContacts, LocalContactRow, LocalContactsResponse } from "./contactsApi";
+import {
+  fetchLocalCompanies,
+  sectorLabel,
+  LocalCompaniesResponse,
+  LocalCompanyRow,
+} from "./companiesApi";
 
 // ============================================================================
 // Constants & Types
@@ -16,23 +21,22 @@ import { fetchLocalContacts, LocalContactRow, LocalContactsResponse } from "./co
 
 const PAGE_SIZE = 50;
 
-type SortField = "total_interactions" | "first_name" | "last_name" | "headline" | "current_company" | "city";
+type SortField = "current_people" | "total_people" | "company_name" | "headcount" | "founded_year";
 type SortDir = "asc" | "desc";
 
 const VALID_SORT_FIELDS: SortField[] = [
-  "total_interactions",
-  "first_name",
-  "last_name",
-  "headline",
-  "current_company",
-  "city",
+  "current_people",
+  "total_people",
+  "company_name",
+  "headcount",
+  "founded_year",
 ];
 
-// Mirrors prod ContactsV2: default sort is total interactions descending.
-const DEFAULT_SORT: SortField = "total_interactions";
+// Default sort is people-in-network descending (most relevant companies first).
+const DEFAULT_SORT: SortField = "current_people";
 
 function defaultDirFor(field: SortField): SortDir {
-  return field === "total_interactions" ? "desc" : "asc";
+  return field === "company_name" ? "asc" : "desc";
 }
 
 interface UrlState {
@@ -60,35 +64,23 @@ function navigateLocal(path: string) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-const getInitials = (contact: LocalContactRow) => {
-  const first = contact.first_name?.[0] || contact.full_name?.[0] || "";
-  const last = contact.last_name?.[0] || "";
-  return (first + last).toUpperCase() || "?";
-};
-
-const getDisplayName = (contact: LocalContactRow) => {
-  if (contact.full_name?.trim()) return contact.full_name.trim();
-  const parts = [contact.first_name, contact.last_name].filter(Boolean);
-  return parts.join(" ") || "Unknown";
-};
-
 // ============================================================================
 // Component
 // ============================================================================
 
-export function LocalContactsPage() {
+export function LocalCompaniesPage() {
   // ── URL-derived state (single source of truth — survives back-navigation) ──
   const [urlState, setUrlState] = useState<UrlState>(() => readUrlState());
   const { q: debouncedSearch, sort: sortField, dir: sortDir, page } = urlState;
   // Local state only for things that need debouncing
   const [search, setSearch] = useState(debouncedSearch);
 
-  const [result, setResult] = useState<LocalContactsResponse | null>(null);
+  const [result, setResult] = useState<LocalCompaniesResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ── URL param helpers (same pattern as ContactsV2) ──
+  // ── URL param helpers (same pattern as LocalContactsPage) ──
   const updateParams = useCallback((updates: Record<string, string | null>) => {
     const params = new URLSearchParams(window.location.search);
     for (const [key, val] of Object.entries(updates)) {
@@ -131,19 +123,19 @@ export function LocalContactsPage() {
     return () => clearTimeout(timer);
   }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Fetch contacts (placeholder-keep previous page while fetching) ──
+  // ── Fetch companies (keep previous page while fetching) ──
   useEffect(() => {
     let cancelled = false;
     setIsFetching(true);
     setError(null);
-    fetchLocalContacts({ q: debouncedSearch || undefined, sort: sortField, dir: sortDir, page, pageSize: PAGE_SIZE })
+    fetchLocalCompanies({ q: debouncedSearch || undefined, sort: sortField, dir: sortDir, page, pageSize: PAGE_SIZE })
       .then((response) => {
         if (cancelled) return;
         setResult(response);
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Failed to load contacts");
+        setError(err instanceof Error ? err.message : "Failed to load companies");
       })
       .finally(() => {
         if (cancelled) return;
@@ -155,15 +147,13 @@ export function LocalContactsPage() {
     };
   }, [debouncedSearch, sortField, sortDir, page]);
 
-  const contacts = result?.rows || [];
+  const companies = result?.rows || [];
   const totalCount = result?.total || 0;
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
   const indexMissing = !!result?.index_missing;
-  // Only hide the column once the backend has told us msgvault is unavailable.
-  const showInteractions = result?.interactions_available !== false;
-  const columnCount = showInteractions ? 5 : 4;
+  const columnCount = 6;
 
-  // Sort toggle — same semantics as ContactsV2's handleSort
+  // Sort toggle — same semantics as LocalContactsPage's handleSort
   const handleSort = useCallback(
     (field: SortField) => {
       if (sortField === field) {
@@ -187,16 +177,15 @@ export function LocalContactsPage() {
       <TableRow key={i} className="h-10">
         <TableCell className="py-1.5">
           <div className="flex items-center gap-2">
-            <div className="h-6 w-6 shrink-0 animate-pulse rounded-full bg-muted" />
-            <div className="h-4 w-20 animate-pulse rounded-md bg-muted" />
+            <div className="h-6 w-6 shrink-0 animate-pulse rounded-md bg-muted" />
+            <div className="h-4 w-24 animate-pulse rounded-md bg-muted" />
           </div>
         </TableCell>
-        <TableCell className="py-1.5 hidden md:table-cell"><div className="h-4 w-32 animate-pulse rounded-md bg-muted" /></TableCell>
-        <TableCell className="py-1.5 hidden lg:table-cell"><div className="h-4 w-20 animate-pulse rounded-md bg-muted" /></TableCell>
-        <TableCell className="py-1.5"><div className="h-4 w-8 animate-pulse rounded-md bg-muted" /></TableCell>
-        {showInteractions && (
-          <TableCell className="py-1.5"><div className="mx-auto h-4 w-8 animate-pulse rounded-md bg-muted" /></TableCell>
-        )}
+        <TableCell className="py-1.5 hidden md:table-cell"><div className="h-4 w-40 animate-pulse rounded-md bg-muted" /></TableCell>
+        <TableCell className="py-1.5 hidden lg:table-cell"><div className="h-4 w-28 animate-pulse rounded-md bg-muted" /></TableCell>
+        <TableCell className="py-1.5 hidden lg:table-cell"><div className="h-4 w-24 animate-pulse rounded-md bg-muted" /></TableCell>
+        <TableCell className="py-1.5 hidden lg:table-cell"><div className="ml-auto h-4 w-12 animate-pulse rounded-md bg-muted" /></TableCell>
+        <TableCell className="py-1.5"><div className="mx-auto h-4 w-8 animate-pulse rounded-md bg-muted" /></TableCell>
       </TableRow>
     ));
 
@@ -224,8 +213,8 @@ export function LocalContactsPage() {
   return (
     <div className="overflow-x-hidden">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold">Contacts</h1>
-        <p className="text-muted-foreground">Browse and manage your enriched contacts</p>
+        <h1 className="text-2xl font-bold">Companies</h1>
+        <p className="text-muted-foreground">Browse companies and the people who work there</p>
       </div>
 
       <Card>
@@ -245,13 +234,9 @@ export function LocalContactsPage() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs space-y-1 max-w-[220px]">
                   <p className="font-medium">Search prefixes</p>
-                  <p className="text-muted-foreground">Default (no prefix) searches by name</p>
-                  <p><code className="text-[11px]">headline:</code> title/role</p>
-                  <p><code className="text-[11px]">email:</code> email address</p>
-                  <p><code className="text-[11px]">company:</code> company name</p>
-                  <p><code className="text-[11px]">phone:</code> any phone or partial digits (e.g. <code className="text-[11px]">phone:408</code>)</p>
-                  <p><code className="text-[11px]">twitter:</code> any X handle or partial handle</p>
-                  <p><code className="text-[11px]">city:</code> city/location</p>
+                  <p className="text-muted-foreground">Default (no prefix) searches name, aliases, and domain</p>
+                  <p><code className="text-[11px]">sector:</code> sector (e.g. <code className="text-[11px]">sector:fintech</code>)</p>
+                  <p><code className="text-[11px]">city:</code> HQ city (e.g. <code className="text-[11px]">city:san mateo</code>)</p>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -259,8 +244,8 @@ export function LocalContactsPage() {
               <p className="pl-0.5 text-xs text-muted-foreground tabular-nums">
                 <span className="font-semibold text-foreground">{totalCount.toLocaleString()}</span>{" "}
                 {debouncedSearch
-                  ? `matching ${totalCount === 1 ? "contact" : "contacts"}`
-                  : "contacts"}
+                  ? `matching ${totalCount === 1 ? "company" : "companies"}`
+                  : "companies"}
               </p>
             )}
           </div>
@@ -294,36 +279,31 @@ export function LocalContactsPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="text-xs">
-                    <TableHead className="w-[140px] cursor-pointer select-none whitespace-nowrap" onClick={() => handleSort("first_name")}>
-                      <span className="flex items-center">Name <SortIcon field="first_name" /></span>
+                    <TableHead className="w-[200px] cursor-pointer select-none whitespace-nowrap" onClick={() => handleSort("company_name")}>
+                      <span className="flex items-center">Company <SortIcon field="company_name" /></span>
                     </TableHead>
-                    <TableHead className="cursor-pointer select-none whitespace-nowrap hidden md:table-cell" onClick={() => handleSort("headline")}>
-                      <span className="flex items-center">Headline <SortIcon field="headline" /></span>
+                    <TableHead className="whitespace-nowrap hidden md:table-cell">Description</TableHead>
+                    <TableHead className="w-[160px] whitespace-nowrap hidden lg:table-cell">Location</TableHead>
+                    <TableHead className="whitespace-nowrap hidden lg:table-cell">Sector</TableHead>
+                    <TableHead className="w-[110px] cursor-pointer select-none whitespace-nowrap hidden lg:table-cell" onClick={() => handleSort("headcount")}>
+                      <span className="flex items-center justify-end">Headcount <SortIcon field="headcount" /></span>
                     </TableHead>
-                    <TableHead className="w-[160px] cursor-pointer select-none whitespace-nowrap hidden lg:table-cell" onClick={() => handleSort("city")}>
-                      <span className="flex items-center">Location <SortIcon field="city" /></span>
+                    <TableHead className="w-[70px] text-center cursor-pointer select-none" onClick={() => handleSort("current_people")}>
+                      <span className="flex items-center justify-center">People <SortIcon field="current_people" /></span>
                     </TableHead>
-                    <TableHead className="w-[80px]">Social</TableHead>
-                    {showInteractions && (
-                      <TableHead className="w-[60px] text-center cursor-pointer select-none" onClick={() => handleSort("total_interactions")}>
-                        <span className="flex items-center justify-center">Msgs <SortIcon field="total_interactions" /></span>
-                      </TableHead>
-                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading || isFetching ? (
                     renderSkeletons()
-                  ) : contacts.length === 0 ? (
+                  ) : companies.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={columnCount} className="text-center text-muted-foreground py-12 text-sm">
-                        {debouncedSearch ? `No contacts matching "${debouncedSearch}"` : "No contacts found"}
+                        {debouncedSearch ? `No companies matching "${debouncedSearch}"` : "No companies found"}
                       </TableCell>
                     </TableRow>
                   ) : (
-                    contacts.map((contact) => (
-                      <ContactRow key={contact.person_id} contact={contact} showInteractions={showInteractions} />
-                    ))
+                    companies.map((company) => <CompanyRow key={company.id} company={company} />)
                   )}
                 </TableBody>
               </Table>
@@ -338,121 +318,107 @@ export function LocalContactsPage() {
 }
 
 // ============================================================================
-// Contact Row
+// Company Row
 // ============================================================================
 
-const ContactRow = ({ contact, showInteractions }: { contact: LocalContactRow; showInteractions: boolean }) => {
-  const profileHref = `/contacts/${encodeURIComponent(contact.person_id)}`;
-  const linkedinUrl = contact.linkedin_url?.trim() || contact.public_profile_url?.trim() ||
-    (contact.public_identifier ? `https://linkedin.com/in/${contact.public_identifier}` : null);
-  const xHandle = contact.x_twitter_handle?.trim() || contact.twitter_handle?.trim() || "";
-  const headline = contact.headline || contact.current_title || null;
-  const location =
-    [contact.city, contact.state].filter(Boolean).join(", ") || contact.location_raw || null;
+const CompanyRow = ({ company }: { company: LocalCompanyRow }) => {
+  const companyHref = `/companies/${encodeURIComponent(company.id)}`;
+  const locationText = [company.city, company.state].filter(Boolean).join(", ") || company.metro_area || "";
+  const sectors = company.sector_types.slice(0, 2);
+  const hiddenSectorCount = Math.max(0, company.sector_types.length - sectors.length);
+  const domainHref = company.website_domain
+    ? company.website_domain.startsWith("http")
+      ? company.website_domain
+      : `https://${company.website_domain}`
+    : null;
 
-  const allEmails = (contact.all_emails || []).filter(Boolean);
-  const primaryEmail = contact.primary_email?.trim() || null;
-  const emailList = allEmails.length > 0 ? allEmails : primaryEmail ? [primaryEmail] : [];
-  const allPhones = (contact.all_phones || []).filter(Boolean);
-  const primaryPhone = contact.primary_phone?.trim() || null;
-  const phoneList = allPhones.length > 0 ? allPhones : primaryPhone ? [primaryPhone] : [];
-
-  const openProfile = () => navigateLocal(profileHref);
+  const openCompany = () => navigateLocal(companyHref);
 
   return (
-    <TableRow className="cursor-pointer hover:bg-muted/50 text-xs h-10" onClick={openProfile}>
+    <TableRow className="cursor-pointer hover:bg-muted/50 text-xs h-10" onClick={openCompany}>
       <TableCell className="py-1.5">
         <div className="flex items-center gap-2 min-w-0">
-          <Avatar className="h-6 w-6 shrink-0">
-            <AvatarImage src={contact.profile_picture_url || undefined} />
-            <AvatarFallback className="text-[10px]">{getInitials(contact)}</AvatarFallback>
+          <Avatar className="h-6 w-6 shrink-0 rounded-md">
+            <AvatarImage src={company.logo_url || undefined} className="object-contain" />
+            <AvatarFallback className="rounded-md text-[10px]">
+              <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+            </AvatarFallback>
           </Avatar>
           <a
-            href={profileHref}
-            className="truncate font-medium max-w-[120px] block hover:text-primary hover:underline"
+            href={companyHref}
+            className="truncate font-medium max-w-[160px] block hover:text-primary hover:underline"
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              openProfile();
+              openCompany();
             }}
           >
-            {getDisplayName(contact)}
+            {company.company_name || "Unknown"}
           </a>
         </div>
       </TableCell>
       <TableCell className="py-1.5 hidden md:table-cell">
-        <div className="max-w-[400px]">
-          {headline ? (
-            <span className="text-muted-foreground truncate block">{headline}</span>
+        <div className="max-w-[400px] min-w-0">
+          {company.description ? (
+            <span className="text-muted-foreground truncate block">{company.description}</span>
           ) : (
             <span className="text-muted-foreground/40">—</span>
+          )}
+          {domainHref && (
+            <a
+              href={domainHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-muted-foreground/70 hover:text-primary hover:underline truncate block"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {company.website_domain}
+            </a>
           )}
         </div>
       </TableCell>
       <TableCell className="py-1.5 hidden lg:table-cell">
-        {location ? (
-          <span className="text-muted-foreground truncate block max-w-[160px]">{location}</span>
+        {locationText ? (
+          <span className="text-muted-foreground truncate block max-w-[160px]">{locationText}</span>
         ) : (
           <span className="text-muted-foreground/40">—</span>
         )}
       </TableCell>
-      <TableCell className="py-1.5">
-        {!linkedinUrl && !xHandle && phoneList.length === 0 && emailList.length === 0 ? (
-          <span className="text-muted-foreground/30">—</span>
+      <TableCell className="py-1.5 hidden lg:table-cell">
+        {sectors.length === 0 ? (
+          <span className="text-muted-foreground/40">—</span>
         ) : (
-          <div className="inline-flex items-center gap-1.5">
-            {linkedinUrl && <LinkedinLink href={linkedinUrl} />}
-            {xHandle && <XLink href={`https://x.com/${xHandle.replace(/^@/, "")}`} size={12} />}
-            {emailList.length > 0 && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    className="inline-flex items-center text-muted-foreground/70 hover:text-foreground transition-colors cursor-default"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Mail className="h-3.5 w-3.5" />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs text-xs">
-                  <div className="space-y-0.5">
-                    {emailList.map((email) => (
-                      <p key={email}>{email}</p>
-                    ))}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            )}
-            {phoneList.length > 0 && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    className="inline-flex items-center text-muted-foreground/70 hover:text-foreground transition-colors cursor-default"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <MessageCircle className="h-3.5 w-3.5" />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs text-xs">
-                  <div className="space-y-0.5">
-                    {phoneList.map((phone) => (
-                      <p key={phone}>{phone}</p>
-                    ))}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
+          <div className="flex flex-wrap items-center gap-1">
+            {sectors.map((sector) => (
+              <Badge key={sector} variant="secondary" className="max-w-[140px] text-[10px] font-normal">
+                <span className="truncate">{sectorLabel(sector)}</span>
+              </Badge>
+            ))}
+            {hiddenSectorCount > 0 && (
+              <span
+                className="text-[10px] text-muted-foreground cursor-default"
+                title={company.sector_types.slice(2).map(sectorLabel).join(", ")}
+              >
+                +{hiddenSectorCount}
+              </span>
             )}
           </div>
         )}
       </TableCell>
-      {showInteractions && (
-        <TableCell className="py-1.5 text-center tabular-nums">
-          {contact.total_interactions ? (
-            <span>{contact.total_interactions.toLocaleString()}</span>
-          ) : (
-            <span className="text-muted-foreground/30">—</span>
-          )}
-        </TableCell>
-      )}
+      <TableCell className="py-1.5 hidden lg:table-cell text-right tabular-nums">
+        {company.headcount ? (
+          <span className="text-muted-foreground">{company.headcount.toLocaleString()}</span>
+        ) : (
+          <span className="text-muted-foreground/40">—</span>
+        )}
+      </TableCell>
+      <TableCell className="py-1.5 text-center tabular-nums">
+        {company.current_people ? (
+          <span>{company.current_people.toLocaleString()}</span>
+        ) : (
+          <span className="text-muted-foreground/30">—</span>
+        )}
+      </TableCell>
     </TableRow>
   );
 };

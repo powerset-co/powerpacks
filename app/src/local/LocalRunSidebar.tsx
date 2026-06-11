@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { format, isSameMonth, isSameWeek, isSameYear, isToday, isYesterday } from "date-fns";
-import { ContactRound, KeyRound, Loader2, Mail, MessageCircle, Search, Settings2 } from "lucide-react";
+import { Building2, ContactRound, KeyRound, Loader2, Mail, MessageCircle, Plus, Search, Settings2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import type { LocalProfileResponse, LocalRunSummary } from "./types";
 
 interface LocalRunSidebarProps {
-  activeView: "contacts" | "setup" | "env" | "runs";
+  activeView: "contacts" | "companies" | "setup" | "env" | "runs";
   runs: LocalRunSummary[];
   operatorEmail?: string;
   accountSources?: LocalProfileResponse["accounts"]["sources"];
@@ -24,7 +24,9 @@ interface LocalRunSidebarProps {
   isLoading?: boolean;
   search: string;
   onSearchChange: (value: string) => void;
+  onNewSearch: () => void;
   onSelectContacts: () => void;
+  onSelectCompanies: () => void;
   onSelectSetup: () => void;
   onSelectEnv: () => void;
   onSelectLinkSetup: () => void;
@@ -90,7 +92,9 @@ export function LocalRunSidebar({
   isLoading,
   search,
   onSearchChange,
+  onNewSearch,
   onSelectContacts,
+  onSelectCompanies,
   onSelectSetup,
   onSelectEnv,
   onSelectLinkSetup,
@@ -130,7 +134,7 @@ export function LocalRunSidebar({
 
   return (
     <aside className="flex h-dvh w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground min-w-0">
-      <div className="p-3">
+      <div className="flex flex-col gap-2 p-2">
         <div className="flex items-center justify-between px-2">
           <button
             type="button"
@@ -167,7 +171,17 @@ export function LocalRunSidebar({
           ))}
         </div>
 
-        <Separator className="my-1" />
+        <Separator className="mx-2 my-1 w-auto bg-sidebar-border" />
+
+        <button
+          type="button"
+          data-testid="local-new-search"
+          onClick={onNewSearch}
+          className="flex w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+        >
+          <Plus size={16} />
+          <span>New Search</span>
+        </button>
 
         <div className="relative mt-1.5">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -182,7 +196,7 @@ export function LocalRunSidebar({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         <div className="mb-2">
-          <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">Data</div>
+          <div className="flex h-8 shrink-0 items-center px-2 text-xs font-medium text-muted-foreground">Data</div>
           <button
             type="button"
             onClick={onSelectContacts}
@@ -193,6 +207,17 @@ export function LocalRunSidebar({
           >
             <ContactRound className="h-4 w-4" />
             My Contacts
+          </button>
+          <button
+            type="button"
+            onClick={onSelectCompanies}
+            className={cn(
+              "flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm font-medium transition-colors",
+              activeView === "companies" ? "bg-accent text-accent-foreground" : "hover:bg-accent hover:text-accent-foreground"
+            )}
+          >
+            <Building2 className="h-4 w-4" />
+            Companies
           </button>
         </div>
 
@@ -206,7 +231,7 @@ export function LocalRunSidebar({
           <>
             {orderedGroups.map(([label, group]) => (
               <div key={label} className="mb-3">
-                <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+                <div className="flex h-8 shrink-0 items-center px-2 text-xs font-medium text-muted-foreground">
                   {label}
                 </div>
                 <div className="space-y-1">
