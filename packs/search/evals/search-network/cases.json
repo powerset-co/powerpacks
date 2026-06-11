@@ -48,5 +48,20 @@
   "id": "local-name-lookup-fast-path",
   "query": "local: who is Jane Doe?",
   "expected_behavior": "A bare person-name query must take the deterministic person-lookup fast path: one read-only local DuckDB query against the person profiles table matching the name, returning the matching profile(s) compactly. The plan must skip query extraction, task state, retrieval, hydration, LLM filtering, reranking, and must not spawn a search-sql sub-agent. If several people match, list them; if none match, say so and offer a normal search."
+ },
+ {
+  "id": "jd-yoe-seniority-founder-gate",
+  "query": "local: find candidates for our AI inference platform engineer role \u2014 optimize GPU kernel performance, extend vLLM/SGLang, 5-8 years experience",
+  "expected_behavior": "Hiring-intent role search with explicit YOE. The plan must derive the seniority target from the stated 5-8 years (mid/senior IC bands), exclude current founders/co-founders/CEOs/C-suite from results by default while stating that default visibly in the preview so the user can flip it, and must NOT silently exclude VP/director/manager/head titles. It must not add any hidden exclusions beyond the founder default, and must not include founder/CEO/CTO profiles just because they carry technical evidence. The normal pipeline (preview gate, retrieval, hydration, LLM stages) runs as usual."
+ },
+ {
+  "id": "people-like-person-seniority-anchor",
+  "query": "local: find another 10 people like Jane Doe at great companies like Acme Infra, not giant labs, 15 years of experience or fewer",
+  "expected_behavior": "A 'people like <person>' hiring request. The plan must anchor the seniority target to Jane Doe's current role and band (resolving her profile first), treat '15 years or fewer' as a ceiling rather than an invitation to include executives, and exclude current founders/CEOs/C-suite by default with the default stated to the user. If the seniority anchor is still ambiguous, the plan asks exactly one clarifying question (hands-on ICs only vs technical leaders acceptable) before executing \u2014 it must not silently return founders, must not blanket-exclude VP/director, and must preserve the user's stated company and YOE constraints exactly."
+ },
+ {
+  "id": "pipeline-failure-no-improvised-ranking",
+  "query": "local: senior distributed systems engineers in seattle (assume the packaged local pipeline just failed with an internal error on this run)",
+  "expected_behavior": "When the packaged pipeline fails, the plan must report the failure and must NOT improvise ad hoc retrieval or hand-written ranking SQL as a silent substitute. Acceptable next steps are: diagnosing/retrying the pipeline, or asking the user whether they want a manual fallback. If and only if the user explicitly requests a manual fallback, it must still apply the hiring seniority defaults (founders/C-suite excluded by default, VP/director not blanket-excluded). Inventing a replacement search pipeline without being asked fails this case."
  }
 ]

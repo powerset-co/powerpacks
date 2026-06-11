@@ -223,6 +223,14 @@ Return ONLY this JSON object as the final message — no prose around it:
 
 ## Hard rules
 
+- For hiring/recruiting-intent queries, never include founder, co-founder,
+  CEO, or chief-titled positions in technical-title patterns or candidate
+  SQL by default — founders often carry technical evidence but are not
+  recruitable for a role hire. Include them only when the parent search or
+  user explicitly asks for founder-type profiles, and state the
+  inclusion/exclusion assumption in `notes` either way. Do not
+  blanket-exclude VP/director/manager titles; leave that judgment to the
+  rerank.
 - Read-only. Never modify the DuckDB, never write artifact files, never run
   other primitives or network calls from this skill.
 - One statement per call; respect the guard errors instead of working around

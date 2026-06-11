@@ -56,6 +56,45 @@ Disambiguation:
 
 ---
 
+## Hiring seniority & recruitability defaults
+
+These apply to every hiring-intent search (a JD, a role brief, "find
+candidates", "people like X for this role") in both local and TurboPuffer
+modes, and they bind any fallback behavior too:
+
+- **Derive the seniority target from explicit signals first.** JDs and role
+  briefs almost always state YOE or a level ("5-8 years", "senior",
+  "staff+"); map that to seniority bands. A ceiling like "15 years or
+  fewer" is a ceiling — it does not imply executives are wanted. Preserve
+  extractor-inferred bands unless they contradict the query.
+- **Exclude current founders / co-founders / CEOs / C-suite by default**
+  for role searches. They are rarely recruitable for an IC or leadership
+  hire. State the default in the preview (one line such as
+  `Excluding current founders/C-suite — say "include founders" to keep
+  them`) so the user can flip it. Include them only when the user
+  explicitly asks for founder-type profiles or "builders regardless of
+  current title".
+- **Never silently exclude VP / director / manager / head.** Some are
+  hands-on and appropriate depending on company stage. Keep them unless
+  the user excludes them; the rerank judges hands-on fit.
+- **"People like <person>"** anchors seniority to that person's current
+  role and band (same rule as `search-profile`). If the anchor is still
+  ambiguous, ask exactly one question before executing: "Hands-on IC
+  engineers only, or are technical leaders (VP/director/CTO) acceptable
+  if still hands-on?"
+- **Preserve the user's stated constraints exactly; never add hidden
+  exclusions beyond the founder default above without asking.** When the
+  user corrects a seniority interpretation, that correction binds every
+  subsequent search in the session — repeating a corrected mistake is the
+  worst outcome.
+- **On pipeline failure, do not improvise retrieval.** Report the failure
+  (the "do not write new retrieval scripts" rule still holds). If the
+  user explicitly asks for a manual fallback over the local index, the
+  fallback must apply these same seniority defaults — in particular,
+  never put founder/CEO/CTO into a technical-title pattern by default.
+
+---
+
 ## Local Happy Path
 
 Uses the local DuckDB search index — no TurboPuffer, Postgres, or set
