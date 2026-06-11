@@ -135,6 +135,39 @@ def cmd_upload(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_download(args: argparse.Namespace) -> int:
+    """Pull the search artifacts a local machine actually consumes.
+
+    The volume stays the durable home for ledger/records/enrichment caches
+    (resume + incremental state); local search only needs local-search.duckdb
+    plus manifest.json.
+    """
+    vol = get_volume()
+    dest = Path(args.dest) if args.dest else LOCAL_POWERPACKS / "search-index"
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("local-search.duckdb", "manifest.json"):
+        remote = f"runs/{args.label}/{name}"
+        target = dest / name
+        if target.exists():
+            backup = target.with_name(target.name + ".bkup")
+            target.replace(backup)
+            print(f"existing {target.name} renamed to {backup.name}")
+        tmp = target.with_name(target.name + ".tmp")
+        written = 0
+        try:
+            with tmp.open("wb") as handle:
+                for chunk in vol.read_file(remote):
+                    handle.write(chunk)
+                    written += len(chunk)
+        except FileNotFoundError:
+            tmp.unlink(missing_ok=True)
+            print(f"missing on volume (was the run made with --persist-artifacts?): {remote}")
+            return 1
+        tmp.replace(target)
+        print(f"downloaded {remote} -> {target} ({written / 1e6:.0f} MB)")
+    return 0
+
+
 def cmd_amplify(args: argparse.Namespace) -> int:
     sb = make_sandbox(cpu=args.cpu, memory_mib=args.memory_mib, timeout=args.timeout)
     print(f"sandbox {sb.object_id} (cpu={args.cpu} mem={args.memory_mib}MiB)")
@@ -270,8 +303,12 @@ def main() -> int:
     run.add_argument("--label")
     run.add_argument("--persist-artifacts", action="store_true")
 
+    dl = sub.add_parser("download")
+    dl.add_argument("--label", required=True, help="run label to pull, e.g. real-1x")
+    dl.add_argument("--dest", help="destination dir; defaults to .powerpacks/search-index")
+
     args = ap.parse_args()
-    return {"upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run}[args.cmd](args)
+    return {"upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download}[args.cmd](args)
 
 
 if __name__ == "__main__":
