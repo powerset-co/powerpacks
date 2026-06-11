@@ -552,6 +552,30 @@ def payload_quality_issues(payload: dict[str, Any]) -> list[str]:
     return issues
 
 
+BROAD_POOL_RATIO = 0.6
+
+
+def local_pool_estimate(payload: dict[str, Any], db_path: Path) -> dict[str, Any]:
+    """Cheap filter-eligibility count so breadth is visible before LLM spend."""
+    if not db_path.exists():
+        return {"status": "skipped_no_db"}
+    try:
+        for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+            if str(_path) not in sys.path:
+                sys.path.insert(0, str(_path))
+        from local_duckdb_store import LocalDuckDBSearchStore  # type: ignore
+        from search_common import filters_from_role_payload  # type: ignore
+
+        store = LocalDuckDBSearchStore(str(db_path))
+        try:
+            counts = store.filtered_people_count(filters_from_role_payload(payload_filters(payload)))
+        finally:
+            store.conn.close()
+        return {"status": "completed", **counts}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)[:200]}
+
+
 def compact_preview(payload: dict[str, Any], payload_json: Path, db_path: Path, removed_scope_keys: list[str]) -> dict[str, Any]:
     filters = payload_filters(payload)
     visible_filters = {}
@@ -560,6 +584,18 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, db_path: Path, 
         if is_present(value):
             visible_filters[key] = value
     role = {key: filters.get(key) for key in ["semantic_query", "bm25_queries", "role_ids", "role_tracks"] if is_present(filters.get(key))}
+    runtime_notes = payload_quality_issues(payload)
+    pool = local_pool_estimate(payload, db_path)
+    matched = pool.get("matched_people")
+    total = pool.get("total_people")
+    if matched is not None and total:
+        if matched == 0:
+            runtime_notes.append("hard filters match 0 people in the local index; modify the search or expect the zero-result SQL fallback")
+        elif matched / total > BROAD_POOL_RATIO:
+            runtime_notes.append(
+                f"broad search: hard filters match {matched} of {total} people in the local index; "
+                "consider narrowing or an agentic SQL prefilter before running LLM stages over most of the index"
+            )
     return {
         "normalized_query": payload.get("normalized_query"),
         "payload_json": str(payload_json),
@@ -568,7 +604,8 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, db_path: Path, 
         "ignored_remote_scope_keys": removed_scope_keys,
         "role_title_intent": role or None,
         "filters": visible_filters,
-        "runtime_notes": payload_quality_issues(payload),
+        "pool_estimate": pool,
+        "runtime_notes": runtime_notes,
     }
 
 
@@ -701,6 +738,11 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 str(args.limit),
                 "--top-k",
                 str(args.top_k),
+                *(
+                    ["--extra-candidates-json", str(Path(args.extra_candidates_json).expanduser().resolve())]
+                    if getattr(args, "extra_candidates_json", None)
+                    else []
+                ),
             ],
         ),
         (
@@ -845,6 +887,10 @@ def main() -> None:
     run.add_argument("--force", action="store_true")
     run.add_argument("--search-only", action="store_true", help="Skip LLM filter/rerank after retrieval + hydration (data path stays fully local either way)")
     run.add_argument("--filter-only", action="store_true", help="Run the cheap conservative LLM filter but skip LLM rerank")
+    run.add_argument(
+        "--extra-candidates-json",
+        help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate",
+    )
     run.set_defaults(func=cmd_run)
 
     args = parser.parse_args()

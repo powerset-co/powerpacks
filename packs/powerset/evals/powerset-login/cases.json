@@ -1,71 +1,22 @@
 [
-  {
-    "id": "explicit-login-fresh-machine-backcompat",
-    "query": "I explicitly want to run $powerset login on a fresh MacBook with my @powerset.co Google account. Refresh my credentials and local config.",
-    "must_include": [
-      "gcloud",
-      "auth.py",
-      "provision_runtime_env",
-      "mcp_install",
-      "doctor",
-      "@powerset.co"
-    ],
-    "must_not_include": [
-      "skip the consent",
-      "fake credentials",
-      "paste your password"
-    ],
-    "expected_tools": [
-      "auth.py login",
-      "provision_runtime_env plan",
-      "provision_runtime_env pull",
-      "mcp_install install",
-      "doctor run"
-    ],
-    "notes": "Backcompat explicit-login path. For generic first-run setup, use the powerset skill eval for $powerset setup; this alias should still walk through gcloud auth check, Auth0 PKCE login, GCP secret provisioning, MCP install, and a final doctor check when the user explicitly asks for login."
-  },
-  {
-    "id": "non-powerset-google-account",
-    "query": "I have a personal @gmail.com account, no @powerset.co. What can I still set up?",
-    "must_include": [
-      "auth",
-      "OPENROUTER_API_KEY",
-      "per-user"
-    ],
-    "must_not_include": [
-      "fake credentials",
-      "paste your password"
-    ],
-    "notes": "Non-Powerset users can use OSS-friendly skills with their own keys, or use per-user GCP Secret Manager env pull when a maintainer has explicitly provisioned that email."
-  },
-  {
-    "id": "already-logged-in-verify",
-    "query": "I think I already ran powerset-login a while back. Can you verify everything is still healthy?",
-    "must_include": [
-      "doctor",
-      "auth.py",
-      "mcp",
-      "whoami"
-    ],
-    "must_not_include": [
-      "auth.py login",
-      "provision_runtime_env pull"
-    ],
-    "notes": "Verification path: should run doctor, auth whoami, mcp_install status. Should NOT proactively re-run login or re-pull secrets."
-  },
-  {
-    "id": "expired-token-refresh",
-    "query": "My MCP suddenly stopped working. claude mcp list says powerset-search failed to connect.",
-    "must_include": [
-      "auth.py",
-      "token",
-      "mcp_install",
-      "POWERPACKS_POWERSET_TOKEN"
-    ],
-    "must_not_include": [
-      "delete the credentials",
-      "uninstall"
-    ],
-    "notes": "Diagnosis path: most likely token expiry (Auth0 access tokens are 24h). Fix is `auth.py token --bearer-only` (auto-refreshes via stored refresh_token) plus reinstall MCP. Should NOT nuke credentials."
-  }
+ {
+  "id": "explicit-login-fresh-machine-backcompat",
+  "query": "I explicitly want to run $powerset login on a fresh MacBook with my @powerset.co Google account. Refresh everything.",
+  "expected_behavior": "The legacy explicit-login alias still walks the full first-run sequence: gcloud auth check for the @powerset.co account, Auth0 PKCE login via the auth primitive, GCP secret provisioning/env pull, MCP install, and a final doctor check. It must never offer to skip consent, fabricate credentials, or ask for a password in chat."
+ },
+ {
+  "id": "non-powerset-google-account",
+  "query": "I have a personal @gmail.com account, no @powerset.co. What can I still set up?",
+  "expected_behavior": "The plan explains the non-Powerset path honestly: OSS-friendly skills work with the user's own API keys (e.g. their own OpenRouter/OpenAI key), and per-user GCP Secret Manager env pull only works if a maintainer has explicitly provisioned that email. It must not fabricate credentials or ask the user to paste passwords."
+ },
+ {
+  "id": "already-logged-in-verify",
+  "query": "I think I already ran powerset-login a while back. Can you verify everything is still healthy?",
+  "expected_behavior": "Verification only: run the doctor health check, auth whoami, and MCP status. The plan must NOT proactively re-run a fresh login or re-pull secrets when the existing state is healthy \u2014 verification and re-provisioning are different operations."
+ },
+ {
+  "id": "expired-token-refresh",
+  "query": "My MCP suddenly stopped working. claude mcp list says powerset-search failed to connect.",
+  "expected_behavior": "Diagnose before destroying: the most likely cause is Auth0 access-token expiry (~24h), so the plan refreshes the bearer token via the auth primitive's token path (which auto-refreshes from the stored refresh token) and reinstalls/refreshes the MCP registration. It must not delete credentials, uninstall things, or restart from a full login as the first move."
+ }
 ]

@@ -2,9 +2,11 @@
 """Generic skill-eval harness.
 
 Drives any installed Powerpacks skill through a host agent (Codex, Claude
-Code, or any shell-invokable model command) and validates the output
-against `must_include` / `must_not_include` expectations declared in a
-case file. Generalisation of `packs/search/evals/run_agent_extraction_harness.py`.
+Code, or any shell-invokable model command) and grades the agent's output
+with an LLM judge against each case's `expected_behavior` rubric. Keyword
+counting is intentionally not supported: it grades vocabulary, not
+behavior, and rewards plans that parrot the right tokens while doing the
+wrong thing.
 
 Usage:
     scripts/run-skill-eval --skill powerset-login --mode dry-run
@@ -13,22 +15,30 @@ Usage:
 
 Modes:
     dry-run  (default)  Build the prompt, validate case structure, do NOT
-                        invoke the model. Cheap, deterministic, CI-safe.
-    live                Actually invoke the host agent. Costs model spend.
+                        invoke the agent or the judge. Cheap, CI-safe.
+    live                Invoke the host agent per case, then grade each
+                        output with the judge model. Costs model spend
+                        (agent + one cheap judge call per case).
 
 Hosts:
-    codex     Default. Runs `codex exec --skill <name> < <prompt_file>`.
-    claude    Runs `claude --print --skill <name> < <prompt_file>`.
+    codex     Default. Runs `codex exec < <prompt_file>`.
+    claude    Runs `claude --print < <prompt_file>`.
     custom    Pass `--agent-command "<template>"` with placeholders
               {prompt_file}, {skill}, {skill_path}, {case_id}, {query}.
+
+Judge:
+    OpenAI chat completions via OPENAI_API_KEY (read from env or .env).
+    Model: --judge-model, else $POWERPACKS_EVAL_JUDGE_MODEL, else a cheap
+    default. The judge returns strict JSON {pass, violations, reasoning}.
 
 Case file format (JSON array):
     [
       {
         "id": "fresh-machine",
         "query": "Set me up to use Powerpacks for the first time.",
-        "must_include": ["gcloud auth", "auth.py login"],
-        "must_not_include": ["skip the consent"]
+        "expected_behavior": "The plan must start with browser-based
+            gcloud auth and must never offer to skip the consent step.
+            ...plain-language rubric of required and forbidden behavior."
       },
       ...
     ]
@@ -75,8 +85,7 @@ DEFAULT_AGENT_COMMANDS = {
 class Case:
     id: str
     query: str
-    must_include: list[str] = field(default_factory=list)
-    must_not_include: list[str] = field(default_factory=list)
+    expected_behavior: str = ""
     expected_tools: list[str] = field(default_factory=list)
     notes: str = ""
 
@@ -126,8 +135,7 @@ def load_cases(cases_path: Path) -> list[Case]:
             Case(
                 id=str(entry["id"]),
                 query=str(entry["query"]),
-                must_include=list(entry.get("must_include", [])),
-                must_not_include=list(entry.get("must_not_include", [])),
+                expected_behavior=str(entry.get("expected_behavior", "")).strip(),
                 expected_tools=list(entry.get("expected_tools", [])),
                 notes=str(entry.get("notes", "")),
             )
@@ -156,11 +164,15 @@ def build_prompt(skill_md: Path, case: Case) -> str:
     return (
         f"Use the Powerpacks `{skill_md.parent.name}` skill to handle the "
         f"following user request.\n\n"
-        f"Skill file: {skill_md}\n\n"
+        f"First READ the skill file at {skill_md} and treat that file as the "
+        f"authoritative version of the skill. If a copy of this skill is "
+        f"installed in your environment, ignore it — the repo file may be "
+        f"newer.\n\n"
         f"User request:\n{case.query}\n\n"
-        f"Walk through the skill's workflow. Reference the exact "
-        f"primitive / tool names from the skill body. If a step requires "
-        f"approval, surface the approval prompt instead of executing it."
+        f"Walk through the skill's workflow as it applies to this request. "
+        f"Reference the exact primitive / tool names from the skill body. "
+        f"If a step requires approval, surface the approval prompt instead "
+        f"of executing it."
     )
 
 
@@ -199,14 +211,65 @@ def invoke_agent(
 # ---------------------------------------------------------------------------
 
 
-def validate_output(case: Case, output: str) -> dict[str, Any]:
-    """Return {'ok': bool, 'missing': [...], 'forbidden_present': [...]}."""
-    missing = [s for s in case.must_include if s.lower() not in output.lower()]
-    forbidden_present = [s for s in case.must_not_include if s.lower() in output.lower()]
+DEFAULT_JUDGE_MODEL = "gpt-5-mini"
+JUDGE_SYSTEM_PROMPT = (
+    "You are a strict grader of AI agent plans. You receive a user request, "
+    "a rubric describing the expected behavior, and the agent's output. "
+    "Grade whether the agent's plan satisfies the rubric in substance — "
+    "judge what the plan would actually do, not whether it uses particular "
+    "words. A plan that names the right tools but sequences them wrongly "
+    "fails; a plan that describes the right behavior in different words "
+    "passes. Return ONLY a JSON object: "
+    '{"pass": true|false, "violations": ["..."], "reasoning": "<one short paragraph>"}'
+)
+
+
+def load_dotenv_key(name: str) -> str | None:
+    if os.environ.get(name):
+        return os.environ[name]
+    env_file = ROOT / ".env"
+    if not env_file.exists():
+        return None
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line.startswith(f"{name}="):
+            return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return None
+
+
+def judge_output(case: Case, output: str, *, model: str, api_key: str) -> dict[str, Any]:
+    """Grade agent output against the case rubric with an LLM judge."""
+    import urllib.request
+
+    user_prompt = (
+        f"User request:\n{case.query}\n\n"
+        f"Expected behavior rubric:\n{case.expected_behavior}\n\n"
+        f"Agent output to grade:\n{output[:30000]}"
+    )
+    body = json.dumps({
+        "model": model,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        verdict = json.loads(payload["choices"][0]["message"]["content"])
+    except Exception as exc:
+        return {"ok": False, "violations": [], "reasoning": f"judge call failed: {exc}", "judge_error": True}
     return {
-        "ok": not missing and not forbidden_present,
-        "missing": missing,
-        "forbidden_present": forbidden_present,
+        "ok": bool(verdict.get("pass")),
+        "violations": [str(v) for v in verdict.get("violations") or []],
+        "reasoning": str(verdict.get("reasoning") or ""),
+        "judge_model": model,
     }
 
 
@@ -230,15 +293,15 @@ def write_report(out_dir: Path, skill: str, mode: str, results: list[dict[str, A
         f"- generated: `{now_iso()}`",
         f"- cases: {passed}/{total} passed",
         "",
-        "| case | ok | missing | forbidden present |",
+        "| case | ok | violations | judge reasoning |",
         "| --- | --- | --- | --- |",
     ]
     for r in results:
         v = r["validation"]
         ok = "✅" if v["ok"] else "❌"
-        miss = ", ".join(f"`{m}`" for m in v["missing"]) or "—"
-        forb = ", ".join(f"`{m}`" for m in v["forbidden_present"]) or "—"
-        lines.append(f"| `{r['id']}` | {ok} | {miss} | {forb} |")
+        violations = "; ".join(v.get("violations") or []) or "—"
+        reasoning = (v.get("reasoning") or "—").replace("|", "/").replace("\n", " ")[:300]
+        lines.append(f"| `{r['id']}` | {ok} | {violations} | {reasoning} |")
     report_path.write_text("\n".join(lines) + "\n")
     return report_path
 
@@ -260,6 +323,11 @@ def main() -> int:
     parser.add_argument("--timeout-sec", type=int, default=300)
     parser.add_argument("--cases-file", type=Path, help="Override cases.json path")
     parser.add_argument("--json", action="store_true", help="Print summary as JSON")
+    parser.add_argument(
+        "--judge-model",
+        default=os.environ.get("POWERPACKS_EVAL_JUDGE_MODEL") or DEFAULT_JUDGE_MODEL,
+        help="OpenAI model used to grade agent output in live mode",
+    )
     args = parser.parse_args()
 
     try:
@@ -301,16 +369,40 @@ def main() -> int:
         prompt_file.write_text(prompt)
 
         if args.mode == "dry-run":
-            # Dry-run: skip invocation, mark validation as N/A.
+            # Dry-run: skip invocation; a case is structurally valid only if
+            # it carries a judge rubric.
+            ok = bool(case.expected_behavior)
             result = {
                 "id": case.id,
                 "query": case.query,
                 "prompt_file": str(prompt_file),
                 "mode": "dry-run",
-                "validation": {"ok": True, "missing": [], "forbidden_present": []},
+                "validation": {
+                    "ok": ok,
+                    "violations": [] if ok else ["case is missing expected_behavior (judge rubric)"],
+                    "reasoning": "dry-run structural check only",
+                },
                 "skipped": True,
             }
         else:
+            if not case.expected_behavior:
+                result = {
+                    "id": case.id,
+                    "query": case.query,
+                    "mode": "live",
+                    "validation": {
+                        "ok": False,
+                        "violations": ["case is missing expected_behavior (judge rubric)"],
+                        "reasoning": "live grading requires an expected_behavior rubric",
+                    },
+                }
+                (case_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+                results.append(result)
+                continue
+            api_key = load_dotenv_key("OPENAI_API_KEY")
+            if not api_key:
+                print("error: live mode needs OPENAI_API_KEY (env or .env) for the judge", file=sys.stderr)
+                return 2
             try:
                 rc, stdout, stderr = invoke_agent(
                     command_template, prompt_file, skill_md, case, args.timeout_sec
@@ -323,7 +415,7 @@ def main() -> int:
             (case_dir / "stderr.txt").write_text(stderr)
             (case_dir / "exit-code.txt").write_text(str(rc) + "\n")
 
-            validation = validate_output(case, stdout)
+            validation = judge_output(case, stdout, model=args.judge_model, api_key=api_key)
             result = {
                 "id": case.id,
                 "query": case.query,

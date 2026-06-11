@@ -273,6 +273,10 @@ Routes:
   `packs/search/skills/search-profile/SKILL.md`
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
+- `$search-sql`, relational/aggregate local people queries ("who overlapped
+  with X at a company", "2+ startup stints", career-shape predicates),
+  read-only SQL over the local search DuckDB →
+  `packs/search/skills/search-sql/SKILL.md`
 - `$search-contacts`, my contacts, set contacts, contact field filtering →
   `packs/contacts/skills/search-contacts/SKILL.md`
 - `$build-local-search-index`, local indexing, build local search index,

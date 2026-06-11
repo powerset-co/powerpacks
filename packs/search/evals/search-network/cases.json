@@ -1,128 +1,67 @@
 [
-  {
-    "id": "company-directory-openai",
-    "query": "people who work at OpenAI",
-    "must_include": [
-      "list_company_people",
-      "company_name",
-      "OpenAI",
-      "page",
-      "page_size",
-      "deterministic",
-      "company-directory"
-    ],
-    "must_not_include": [
-      "resolve_companies",
-      "count_candidates",
-      "execute_role_search",
-      "hydrate_people",
-      "semantic people search",
-      "rerank"
-    ],
-    "expected_tools": [
-      "list_company_people"
-    ],
-    "notes": "Company-only query with no role/title/seniority/domain constraints should route to the MCP company-directory fast path, not semantic people search."
-  },
-  {
-    "id": "software-engineers-sf",
-    "query": "who are software engineers in sf",
-    "must_include": [
-      "task_state",
-      "expand_search_request",
-      "decide_search_strategy",
-      "count_candidates",
-      "hydrate_people",
-      "persist_search_results",
-      "query_results_v2",
-      "metro_areas",
-      "is_current",
-      "top_k"
-    ],
-    "must_not_include": [
-      "llm enrichment",
-      "company signal",
-      "expensive scoring",
-      "current_role_category",
-      "employment_status",
-      "company_size",
-      "profile updated"
-    ]
-  },
-  {
-    "id": "stanford-swe-3-5-yoe-nyc",
-    "query": "stanford software engineers with 3-5 yoe in new york",
-    "must_include": [
-      "education",
-      "prefilter",
-      "years_experience",
-      "base_id",
-      "hydrate_people"
-    ],
-    "must_not_include": [
-      "expensive scoring",
-      "current_role_category",
-      "employment_status"
-    ]
-  },
-  {
-    "id": "box-tenure-window",
-    "query": "people who worked at Box between 2019 and 2022",
-    "must_include": [
-      "tenure",
-      "company",
-      "start_date_epoch",
-      "end_date_epoch",
-      "overlap"
-    ],
-    "must_not_include": [
-      "company signal",
-      "summary generation",
-      "current_role_category",
-      "employment_status"
-    ]
-  },
-  {
-    "id": "adjacent-infra-engineers",
-    "query": "find adjacent infra engineers, including people from infra companies even if their title is broader",
-    "must_include": [
-      "plan_adjacency_search",
-      "adjacency",
-      "company",
-      "slice",
-      "role"
-    ],
-    "must_not_include": [
-      "company signal",
-      "current_role_category",
-      "employment_status"
-    ]
-  },
-  {
-    "id": "complex-jd-recruiter-loop",
-    "query": "$search-network pasted JD: CTO/technical co-founder, software product builders on top of cloud and AI infrastructure, not active cofounders, examples Databricks/Snowflake/Roblox/Meta, skills include multi-cloud usage data, Kafka/Kinesis telemetry, spend orchestration or recommendation engines, SQL/Python/TypeScript. This is complex, so plan and do the searches rather than one broad query.",
-    "must_include": [
-      "complex-JD recruiter loop",
-      "Execute this search plan or modify it?",
-      "llm_review_budget",
-      "100",
-      "planned_review_count",
-      "remaining_review_budget",
-      "score >= 0.3",
-      "initial probes",
-      "cluster",
-      "fan-out",
-      "candidate_feedback",
-      "criteria_mutation",
-      "search_plan_revision",
-      "run_lineage",
-      "append-lineage",
-      "execute_command",
-      "--execute-approved"
-    ],
-    "must_not_include": [
-      "Stop after planning"
-    ],
-    "notes": "A complex JD passed to search-network should plan internally, then execute probes/review/fan-out after one search-plan approval. The review budget limits LLM-reviewed profiles, not retrieval counts or final result count."
-  }
+ {
+  "id": "company-directory-openai",
+  "query": "people who work at OpenAI",
+  "expected_behavior": "A company-only query with no role/title/seniority/domain constraints must route to the deterministic company-directory fast path: one list_company_people MCP call by company name with pagination. The plan must NOT run query extraction, company resolution, candidate counting, semantic/role retrieval, hydration, LLM filtering, or reranking, and must not create task state. If multiple companies plausibly match the name, the plan asks the user to choose rather than guessing."
+ },
+ {
+  "id": "software-engineers-sf",
+  "query": "who are software engineers in sf",
+  "expected_behavior": "A normal role+location search. The plan runs the standard pipeline: query extraction (expand_search_request via the prepare fast-path), a compact preview shown to the user with exactly one execute/modify decision, then retrieval, hydration of the candidate frontier, conservative LLM filtering, and LLM reranking, ending with persisted results. Location should be treated as a metro-area-style filter and the search scoped to current roles. The plan must not invent extra enrichment stages, must not use the company-directory fast path, and must not skip the user approval gate."
+ },
+ {
+  "id": "stanford-swe-3-5-yoe-nyc",
+  "query": "stanford software engineers with 3-5 yoe in new york",
+  "expected_behavior": "Education plus years-of-experience constraints must become prefilters before role retrieval: the plan resolves the school to canonical education ids, applies an education/yoe prefilter producing base candidate ids, and only then runs role retrieval constrained to those ids, followed by hydration and the standard LLM stages. The plan must not treat school or yoe as post-hoc filters applied after retrieval, and must not skip resolution by string-matching school names in retrieval."
+ },
+ {
+  "id": "box-tenure-window",
+  "query": "people who worked at Box between 2019 and 2022",
+  "expected_behavior": "A tenure-window query must be planned as an overlapping-position filter: a position at the company whose date range overlaps 2019-2022 (using the position start/end date fields), not merely positions that started in the window and not only current employees. The plan resolves the company to an id before filtering. It must not add company-signal or summary-generation stages."
+ },
+ {
+  "id": "adjacent-infra-engineers",
+  "query": "find adjacent infra engineers, including people from infra companies even if their title is broader",
+  "expected_behavior": "The user explicitly asked for adjacency, so the plan must run adjacency planning and record an adjacency decision rather than staying strict or silently broadening. Broader-title candidates from infra companies should come in through an explicit adjacent/exploratory slice with provenance kept separate from the strict slice, and the slice knobs (title strictness, company strictness, adjacency mode) should be stated. The plan must not conflate the strict and adjacent pools into one undifferentiated search."
+ },
+ {
+  "id": "complex-jd-recruiter-loop",
+  "query": "$search-network pasted JD: CTO/technical co-founder, software product builders on top of cloud and AI infrastructure, no pure ML researchers. Find ~100 strong candidates.",
+  "expected_behavior": "A pasted JD must enter the complex-JD recruiter loop: the plan decomposes the JD, plans initial probes and clusters with fan-out, sets an explicit LLM review budget (around 100 reviewed profiles) that limits reviewed profiles rather than retrieval counts, and asks for exactly one search-plan approval before executing probes, review, and fan-out. After approval it executes without further approval gates, records candidate feedback, criteria mutations, search plan revisions, and run lineage into task state as it iterates, and applies a score threshold for keeping candidates. The plan must not stop after planning and must not re-ask for approval at every step."
+ },
+ {
+  "id": "sql-fanout-career-ordering",
+  "query": "local: find engineers who became product managers in my network",
+  "expected_behavior": "A career-ordering query (first engineering role strictly before first product role) cannot be expressed as one-position-row-at-a-time filters, so the plan must BOTH run the normal local hybrid pipeline AND fan out a search-sql sub-agent in parallel, then fan the SQL people back in through the pipeline's extra-candidates mechanism so they flow through the same hydration and LLM filter/rerank as hybrid candidates. The plan must not replace hybrid search with SQL, must not merge SQL results after reranking as a separate list, and must not use the company-directory fast path. If the sub-agent fails or returns nothing, the search proceeds on hybrid results alone."
+ },
+ {
+  "id": "sql-fanout-cross-trait-designers",
+  "query": "local: find me designers who can code in san francisco",
+  "expected_behavior": "Cross-trait query where the design evidence and the coding evidence live on different position rows or tables, so per-row filters cannot express the conjunction. The plan must run the normal local hybrid pipeline AND fan out the search-sql sub-agent in parallel (intersecting a designers population with a coding-evidence population in SQL), fanning results back into the shared pipeline before LLM stages. Hybrid must still run because profile prose sometimes carries both signals in one place. SQL must be additive evidence, not a replacement."
+ },
+ {
+  "id": "no-fanout-stacked-filters",
+  "query": "local: senior stanford engineers at series a fintech companies in nyc",
+  "expected_behavior": "Heavily stacked filters that are still all expressible one position row at a time (role, seniority, education, company stage, location). The plan must run the normal local pipeline (prepare, preview with execute/modify gate, retrieval, hydration, LLM stages) and must NOT fan out the search-sql sub-agent or any other sub-agent \u2014 the agentic SQL vertical is reserved for relational/aggregate queries that per-row filters cannot express."
+ },
+ {
+  "id": "local-name-lookup-fast-path",
+  "query": "local: who is Jane Doe?",
+  "expected_behavior": "A bare person-name query must take the deterministic person-lookup fast path: one read-only local DuckDB query against the person profiles table matching the name, returning the matching profile(s) compactly. The plan must skip query extraction, task state, retrieval, hydration, LLM filtering, reranking, and must not spawn a search-sql sub-agent. If several people match, list them; if none match, say so and offer a normal search."
+ },
+ {
+  "id": "jd-yoe-seniority-founder-gate",
+  "query": "local: find candidates for our AI inference platform engineer role \u2014 optimize GPU kernel performance, extend vLLM/SGLang, 5-8 years experience",
+  "expected_behavior": "Hiring-intent role search with explicit YOE. The plan must derive the seniority target from the stated 5-8 years (mid/senior IC bands), exclude current founders/co-founders/CEOs/C-suite from results by default while stating that default visibly in the preview so the user can flip it, and must NOT silently exclude VP/director/manager/head titles. It must not add any hidden exclusions beyond the founder default, and must not include founder/CEO/CTO profiles just because they carry technical evidence. The normal pipeline (preview gate, retrieval, hydration, LLM stages) runs as usual."
+ },
+ {
+  "id": "people-like-person-seniority-anchor",
+  "query": "local: find another 10 people like Jane Doe at great companies like Acme Infra, not giant labs, 15 years of experience or fewer",
+  "expected_behavior": "A 'people like <person>' hiring request. The plan must anchor the seniority target to Jane Doe's current role and band (resolving her profile first), treat '15 years or fewer' as a ceiling rather than an invitation to include executives, and exclude current founders/CEOs/C-suite by default with the default stated to the user. If the seniority anchor is still ambiguous, the plan asks exactly one clarifying question (hands-on ICs only vs technical leaders acceptable) before executing \u2014 it must not silently return founders, must not blanket-exclude VP/director, and must preserve the user's stated company and YOE constraints exactly."
+ },
+ {
+  "id": "pipeline-failure-no-improvised-ranking",
+  "query": "local: senior distributed systems engineers in seattle (assume the packaged local pipeline just failed with an internal error on this run)",
+  "expected_behavior": "When the packaged pipeline fails, the plan must report the failure and must NOT improvise ad hoc retrieval or hand-written ranking SQL as a silent substitute. Acceptable next steps are: diagnosing/retrying the pipeline, or asking the user whether they want a manual fallback. If and only if the user explicitly requests a manual fallback, it must still apply the hiring seniority defaults (founders/C-suite excluded by default, VP/director not blanket-excluded). Inventing a replacement search pipeline without being asked fails this case."
+ }
 ]

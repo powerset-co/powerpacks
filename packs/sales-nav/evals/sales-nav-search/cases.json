@@ -1,128 +1,37 @@
 [
-  {
-    "id": "vps-at-stripe",
-    "query": "Find VPs of engineering at Stripe.",
-    "must_include": [
-      "sales_nav_resolve",
-      "sales_nav_search",
-      "set_id",
-      "persist_artifact",
-      "conversation_id",
-      "sales_nav_artifacts",
-      "ingest-page"
-    ],
-    "must_not_include": [
-      "sales_nav_search without persist_artifact",
-      "skip the set"
-    ],
-    "expected_tools": [
-      "sales_nav_resolve",
-      "sales_nav_search"
-    ],
-    "notes": "Happy path. Must call sales_nav_resolve to translate 'Stripe' -> org_id, then sales_nav_search with persist_artifact:true and a conversation_id. Default count: 25."
-  },
-  {
-    "id": "narrow-by-geography-after-search",
-    "query": "I just ran a sales nav search for 'staff engineers at Anthropic' and got back 187 leads. Narrow it to NYC only.",
-    "must_include": [
-      "geography_ids",
-      "sales_nav_search",
-      "new artifact_id"
-    ],
-    "must_not_include": [
-      "get_artifact",
-      "filter the existing"
-    ],
-    "notes": "Refinement = NEW search, not a get_artifact filter. The skill body explicitly says refining filters produces a new artifact_id."
-  },
-  {
-    "id": "page-back-through-existing",
-    "query": "Show me the next 25 leads from artifact_id art_abc123.",
-    "must_include": [
-      "get_artifact",
-      "art_abc123",
-      "offset",
-      "limit"
-    ],
-    "must_not_include": [
-      "sales_nav_search",
-      "sales_nav_resolve"
-    ],
-    "expected_tools": [
-      "get_artifact"
-    ],
-    "notes": "Pagination of an existing result set goes through get_artifact, not a new sales_nav_search."
-  },
-  {
-    "id": "missing-mcp",
-    "query": "Find VPs at Stripe. (Note: my powerset-search MCP is not installed yet.)",
-    "must_include": [
-      "$powerset setup",
-      "mcp_install"
-    ],
-    "must_not_include": [
-      "sales_nav_search"
-    ],
-    "notes": "If the MCP is missing, the skill must route the user through $powerset setup first. It must NOT pretend to call sales_nav_search."
-  },
-  {
-    "id": "qualitative-refinement-existing-run",
-    "query": "For the Brookfield Sales Nav run we just loaded, show me people with real estate exposure.",
-    "must_include": [
-      "score_sales_nav_leads",
-      "leads.jsonl",
-      "real estate exposure",
-      "matches.csv"
-    ],
-    "must_not_include": [
-      "sales_nav_search",
-      "new artifact_id"
-    ],
-    "notes": "Qualitative refinement over an existing Sales Nav run should score local leads, not run a fresh upstream Sales Nav search."
-  },
-  {
-    "id": "endowment-multi-query-orchestrator",
-    "query": "Who is on the investment team or an investor in Dartmouth endowment?",
-    "must_include": [
-      "sales_nav_pipeline",
-      "search_plan.json",
-      "multiple queries",
-      "function_ids",
-      "company-only",
-      "past_company_ids",
-      "enrich_extended_profiles",
-      "sales_nav_resolve_member_ids",
-      "score_sales_nav_leads"
-    ],
-    "must_not_include": [
-      "single Sales Nav query only",
-      "manual MCP chain without the orchestrator"
-    ],
-    "expected_tools": [
-      "sales_nav_search",
-      "get_artifact",
-      "enrich_extended_profiles",
-      "sales_nav_resolve_member_ids"
-    ],
-    "notes": "Robust recall path. Resolve Dartmouth to the parent company, run finance/investment, company-only, and past-company search plan items through the orchestrator before any keyword-only fallback, enrich lead artifacts, resolve mutual URLs locally, then score locally against the investment/endowment criteria."
-  },
-  {
-    "id": "resolve-mutuals-to-urls",
-    "query": "Lead 12345 has mutual_member_ids [67890, 11111, 22222] from a previous search. Show me their LinkedIn URLs.",
-    "must_include": [
-      "sales_nav_resolve_member_ids",
-      "67890",
-      "linkedin",
-      "pending-mutual-ids",
-      "ingest-member-urls"
-    ],
-    "must_not_include": [
-      "enrich_extended_profiles",
-      "RapidAPI"
-    ],
-    "expected_tools": [
-      "sales_nav_resolve_member_ids"
-    ],
-    "notes": "Cheap URL resolution path. Must NOT use enrich_extended_profiles (which costs paid API calls per id) for a simple URL lookup."
-  }
+ {
+  "id": "vps-at-stripe",
+  "query": "Find VPs of engineering at Stripe.",
+  "expected_behavior": "Happy path: resolve 'Stripe' to an org id via sales_nav_resolve first, then run sales_nav_search with server-side artifact persistence enabled and a conversation id, default lead count around 25, scoped to the resolved set. It must not run the search without artifact persistence and must not skip company resolution by passing the raw name."
+ },
+ {
+  "id": "narrow-by-geography-after-search",
+  "query": "I just ran a sales nav search for 'staff engineers at Anthropic' and got back 187 leads. Narrow it to just the Bay Area.",
+  "expected_behavior": "Refining filters means a NEW sales_nav_search with geography filters added, producing a new artifact id. It must not try to filter the existing artifact via get_artifact \u2014 pagination and filtering are different operations."
+ },
+ {
+  "id": "page-back-through-existing",
+  "query": "Show me the next 25 leads from artifact_id art_abc123.",
+  "expected_behavior": "Pagination of an existing result set goes through get_artifact with the given artifact id and offset/limit. It must not run a new sales_nav_search or re-resolve companies just to page."
+ },
+ {
+  "id": "missing-mcp",
+  "query": "Find VPs at Stripe. (Note: my powerset-search MCP is not installed yet.)",
+  "expected_behavior": "With the MCP missing, the plan routes the user through Powerset setup / MCP install first and stops there. It must not pretend to call sales_nav_search or fabricate results without the tool."
+ },
+ {
+  "id": "qualitative-refinement-existing-run",
+  "query": "For the Brookfield Sales Nav run we just loaded, show me people with real estate exposure.",
+  "expected_behavior": "Qualitative refinement over an already-loaded run scores the local leads artifact (lead scoring over the persisted leads file, producing a matches output) \u2014 it must not launch a fresh upstream Sales Nav search or create a new artifact for what is a local re-ranking question."
+ },
+ {
+  "id": "endowment-multi-query-orchestrator",
+  "query": "Who is on the investment team or an investor in Dartmouth endowment?",
+  "expected_behavior": "Robust-recall path through the orchestrator: resolve Dartmouth to the parent organization, build a multi-query search plan (finance/investment function filters, company-only, and past-company variants) executed via the sales-nav pipeline orchestrator, then enrich lead artifacts and resolve member ids, with lead scoring at the end. A single keyword-only Sales Nav query, or a hand-rolled MCP call chain that bypasses the orchestrator, fails this case."
+ },
+ {
+  "id": "resolve-mutuals-to-urls",
+  "query": "Lead 12345 has mutual_member_ids [67890, 11111, 22222] from a previous search. Show me their LinkedIn URLs.",
+  "expected_behavior": "Cheap URL resolution: resolve the member ids to LinkedIn URLs via the member-id resolution tool and ingest the resulting URLs. It must NOT use the extended-profile enrichment path (paid per-id API calls) for a simple URL lookup."
+ }
 ]

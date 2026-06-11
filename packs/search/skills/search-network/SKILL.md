@@ -56,12 +56,75 @@ Disambiguation:
 
 ---
 
+## Hiring seniority & recruitability defaults
+
+These apply to every hiring-intent search (a JD, a role brief, "find
+candidates", "people like X for this role") in both local and TurboPuffer
+modes, and they bind any fallback behavior too:
+
+- **Derive the seniority target from explicit signals first.** JDs and role
+  briefs almost always state YOE or a level ("5-8 years", "senior",
+  "staff+"); map that to seniority bands. A ceiling like "15 years or
+  fewer" is a ceiling — it does not imply executives are wanted. Preserve
+  extractor-inferred bands unless they contradict the query.
+- **Exclude current founders / co-founders / CEOs / C-suite by default**
+  for role searches. They are rarely recruitable for an IC or leadership
+  hire. State the default in the preview (one line such as
+  `Excluding current founders/C-suite — say "include founders" to keep
+  them`) so the user can flip it. Include them only when the user
+  explicitly asks for founder-type profiles or "builders regardless of
+  current title".
+- **Never silently exclude VP / director / manager / head.** Some are
+  hands-on and appropriate depending on company stage. Keep them unless
+  the user excludes them; the rerank judges hands-on fit.
+- **"People like <person>"** anchors seniority to that person's current
+  role and band (same rule as `search-profile`). If the anchor is still
+  ambiguous, ask exactly one question before executing: "Hands-on IC
+  engineers only, or are technical leaders (VP/director/CTO) acceptable
+  if still hands-on?"
+- **Preserve the user's stated constraints exactly; never add hidden
+  exclusions beyond the founder default above without asking.** When the
+  user corrects a seniority interpretation, that correction binds every
+  subsequent search in the session — repeating a corrected mistake is the
+  worst outcome.
+- **On pipeline failure, do not improvise retrieval.** Report the failure
+  (the "do not write new retrieval scripts" rule still holds). If the
+  user explicitly asks for a manual fallback over the local index, the
+  fallback must apply these same seniority defaults — in particular,
+  never put founder/CEO/CTO into a technical-title pattern by default.
+
+---
+
 ## Local Happy Path
 
 Uses the local DuckDB search index — no TurboPuffer, Postgres, or set
 resolution. LLM filtering/reranking runs by default after local retrieval
 (OpenAI only; the data path stays fully local). Use `--search-only` to skip
 LLM stages entirely.
+
+### Local person lookup fast path
+
+If the query is a bare person identifier with no role/filter intent — a
+name ("John Doe", "who is John Doe"), an email, a phone number, a Twitter/X
+handle, or a LinkedIn profile URL — do **not** run the pipeline. Names and
+identifiers are not indexed by any retrieval stage; run one direct lookup
+instead:
+
+```bash
+uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py query \
+  --sql "SELECT person_id, full_name, headline, current_title, current_company, city, linkedin_url FROM local_person_profiles WHERE full_name ILIKE '%john doe%'"
+```
+
+Match emails against `primary_email`/`all_emails`, phones against
+`primary_phone`/`all_phones`, handles against
+`twitter_handle`/`x_twitter_handle`, LinkedIn URLs against
+`linkedin_url`/`public_identifier` (normalize to the slug). Show the
+matches compactly; if several people match, list them all. If zero match,
+say so and offer a normal search. Skip extraction, task state, retrieval,
+hydration, and all LLM stages — this is a deterministic lookup, not a
+search. If the query combines a person with anything else ("engineers who
+worked with John Doe"), it is not this fast path — use the normal flow and
+the agentic SQL fan-out gate.
 
 1. Determine the DuckDB path:
    - `$POWERPACKS_LOCAL_SEARCH_DB` if set
@@ -78,8 +141,14 @@ LLM stages entirely.
      --db "<db-path>"
    ```
 
-4. Show the preview compactly (it will include `scope: local_duckdb`). Ask
-   exactly:
+4. Show the preview compactly (it will include `scope: local_duckdb` and a
+   `pool_estimate` with `matched_people` / `total_people`). Include one line
+   like `Pool: 150 of 500 people`. If `runtime_notes` flags a broad search
+   (hard filters match more than ~60% of the index), surface that note and
+   recommend narrowing before executing — running LLM stages over most of
+   the index is usually a query problem, not a retrieval problem. If it
+   flags 0 matches, recommend `modify` (or expect the zero-result fallback
+   below). Then ask exactly:
 
    `Execute this local search or modify it?`
 
@@ -87,12 +156,90 @@ LLM stages entirely.
 
 6. Keep execution quiet until the command finishes.
 
+### Agentic SQL fan-out (local mode only)
+
+In parallel with steps 3–6, fan out to the `search-sql` skill
+(`packs/search/skills/search-sql/SKILL.md`) via a sub-agent — but only when
+the gate below passes. Default is OFF; most searches must not fan out.
+
+Decision test: **could the need be expressed as filters over one position
+row at a time?** If yes, do not fan out — the main retrieval stages own it.
+Fan out only when the query needs one of:
+
+- **counting/aggregation across a person's rows** — "2+ stints at
+  startups", "average tenure under 2 years", "worked at 3+ FAANG companies"
+- **ordering/sequence between a person's roles** — "engineers who became
+  product managers", "promoted internally", "IC before manager"
+- **a join against another person** — "worked with X", "overlapped with X
+  at Y", "schoolmates of X", "people similar to X's career path"
+- **set algebra over two sub-populations** — "ex-Stripe folks now at infra
+  startups"
+- **cross-trait evidence living on different rows or tables** — "designers
+  who can code" (the design role is one position row; the coding evidence
+  is a different engineering row or `local_summaries.tech_skills`),
+  "recruiters with a technical background", "founders who were previously
+  sales". One position row cannot satisfy both traits, so per-row filters
+  cannot express the conjunction — still run hybrid in parallel, since
+  profile prose sometimes carries both signals.
+- **interaction history** — "people I've actually messaged" (requires
+  `local_person_source_summary`; skip if the table is absent)
+- **explicit user request** — "also run the sql vertical", "sql:"
+
+Never fan out for role/title/seniority/location/company/education/date
+filters, however many are combined — "senior Stanford engineers at series A
+fintechs in NYC since 2020" is still one-row-at-a-time and stays in the
+main path. When unsure, do not fan out; the user can ask for `sql:` on a
+follow-up.
+
+Give the sub-agent the user query verbatim plus any already-resolved person
+or company ids, and have it follow `search-sql`'s output contract. Do not
+fan out for plain row-level searches — the main retrieval stages own those.
+
+Fan-in goes through the pipeline, not around it:
+
+1. Run `prepare` and fan out the sub-agent while the user reviews the
+   preview.
+2. Write the sub-agent's output JSON to `agentic-sql-candidates.json` inside
+   the run's output directory.
+3. Append `--extra-candidates-json <that path>` to the returned
+   `execute_command` before running it. The pipeline unions the SQL people
+   into retrieval (tagged `agentic_sql` in `vertical_sources`), so they flow
+   through the **same** `hydrate_people`, `llm_filter_candidates`, and
+   `llm_rerank_candidates` steps as every other candidate — no separate
+   ranking path.
+4. If the sub-agent has not finished by the time the user approves
+   execution, wait briefly for it; if it fails or returns an empty `people`
+   list, run the `execute_command` without the flag and note the vertical
+   was skipped. The SQL vertical is additive evidence — never block or fail
+   the search on it.
+
+### Zero-result SQL fallback (local mode only)
+
+If the pipeline completes with 0 found (or the preview's `pool_estimate`
+already shows 0 matched), fan out one `search-sql` sub-agent with the user
+query **and** the payload's `role_search_filters`, asking it to:
+
+1. probe the actual value spaces of each hard-filtered column,
+2. identify which constraint zeroed the pool (e.g. a filter value that does
+   not exist in the index taxonomy),
+3. return candidates matching the user's intent with corrected values, in
+   the standard output contract.
+
+Present the diagnosis in one line ("`seniority_bands: [manager]` matched 0
+because this index uses ..."), plus the recovered candidates if any. Offer
+to re-run the proper pipeline with corrected filters; do not silently
+substitute SQL results for a full search.
+
 ### Local Summary
 
 - Say `<N> found (local)`.
 - Say `Run artifacts: <artifact-dir>`.
 - Show top 10 candidates from the CSV: rank, name, current title/company,
   location, LinkedIn URL when present.
+- If the SQL fan-out ran, say `<M> sql-vertical candidates merged` (read
+  `agentic_sql_tagged` from the execute_role_search step summary). SQL-only
+  people appear in the main ranked CSV like everyone else; their rows carry
+  `agentic_sql` in `vertical_sources`.
 
 ### Local Constraints
 
@@ -156,7 +303,9 @@ files on the happy path. Start a fresh run for every search request.
 
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
-- Do not use sub-agents for ordinary single-query searches.
+- Do not use sub-agents for ordinary single-query searches. (Exception: the
+  local-mode agentic SQL fan-out above, only when its trigger conditions are
+  met.)
 - Do not write new retrieval scripts during a search run.
 - Do not filter or reuse prior artifacts for refinements; create a new search
   with the updated query or constraints.

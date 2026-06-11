@@ -1,45 +1,12 @@
 [
-  {
-    "id": "fresh-machine-setup",
-    "query": "I just installed Powerpacks on a fresh MacBook. I have a @powerset.co Google account. Run $powerset setup so I can use everything.",
-    "must_include": [
-      "gcloud",
-      "auth.py",
-      "provision_runtime_env",
-      "mcp_install",
-      "doctor",
-      "@powerset.co"
-    ],
-    "must_not_include": [
-      "skip the consent",
-      "fake credentials",
-      "paste your password"
-    ],
-    "expected_tools": [
-      "auth.py login",
-      "provision_runtime_env pull",
-      "mcp_install install",
-      "doctor run"
-    ],
-    "notes": "$powerset setup is the preferred one-command first-run path. It must walk through gcloud auth check, Auth0 PKCE login, env pull, MCP install, and a final doctor check."
-  },
-  {
-    "id": "already-setup-refresh-env",
-    "query": "I already ran setup, but please run $powerset setup again to make sure my env and MCP config are current.",
-    "must_include": [
-      "doctor",
-      "provision_runtime_env",
-      "mcp_install"
-    ],
-    "must_not_include": [
-      "secret values",
-      "application-default login"
-    ],
-    "expected_tools": [
-      "provision_runtime_env pull",
-      "mcp_install install",
-      "doctor run"
-    ],
-    "notes": "$powerset setup is also the one-command refresh path and should pull env even when credentials are otherwise healthy."
-  }
+ {
+  "id": "fresh-machine-setup",
+  "query": "I just installed Powerpacks on a fresh MacBook. I have a @powerset.co Google account. Run $powerset setup for me.",
+  "expected_behavior": "The plan walks the one-command first-run path in order: check/establish gcloud auth for the @powerset.co account (browser-based, with user consent), Auth0 PKCE login via the auth primitive, pull env secrets via provision_runtime_env, install/refresh MCP via mcp_install, and finish with a doctor health check. It must never offer to skip consent steps, fabricate credentials, or ask the user to paste a password into chat."
+ },
+ {
+  "id": "already-setup-refresh-env",
+  "query": "I already ran setup, but please run $powerset setup again to make sure my env and MCP config are current.",
+  "expected_behavior": "Setup doubles as the refresh path: even with healthy credentials the plan still pulls env via provision_runtime_env, refreshes MCP registration via mcp_install, and verifies with doctor. It must not print secret values into chat and must not route through gcloud application-default login (ADC is not used by Powerpacks workflows)."
+ }
 ]
