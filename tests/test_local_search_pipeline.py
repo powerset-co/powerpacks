@@ -990,8 +990,12 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(hydrate["output"]["source"]["backend"], "duckdb")
             self.assertEqual(hydrate["output"]["source"]["type"], "local_duckdb")
             retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
-            self.assertEqual(retrieval["output"]["candidates"][0]["vertical_sources"], ["filter_only"])
-            self.assertEqual(retrieval["output"]["candidates"][0]["matched_position_ids"], [])
+            # The foreign operator scope must be ignored end to end. With local
+            # mode configured before parent-side transforms, prepare-time title
+            # clustering is no longer zeroed by the wrong-operator filter, so it
+            # contributes BM25 hints and retrieval runs hybrid instead of
+            # degrading to filter_only.
+            self.assertIn("hybrid", retrieval["output"]["candidates"][0]["vertical_sources"])
 
             ledger_doc = json.loads(ledger.read_text())
             for step in ["resolve_education", "apply_prefilters", "execute_role_search", "hydrate_people"]:
