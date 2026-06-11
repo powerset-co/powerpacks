@@ -9,6 +9,7 @@ This primitive has no fake/mock provider. It either:
 from __future__ import annotations
 
 import argparse
+import array
 import asyncio
 import hashlib
 import json
@@ -56,18 +57,31 @@ def estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
-def load_input_embeddings(path: str | None, id_field: str, embedding_field: str) -> dict[str, list[float]]:
+def iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
+    """Stream newline-delimited JSON objects without materializing the file."""
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                yield json.loads(line)
+
+
+def load_input_embeddings(path: str | None, id_field: str, embedding_field: str) -> dict[str, array.array]:
     if not path:
         return {}
     input_path = Path(path)
     if not input_path.exists():
         raise SystemExit(f"missing input embeddings: {input_path}")
-    out: dict[str, list[float]] = {}
-    for row in read_jsonl(input_path):
+    # Stream rows and keep vectors as float64 arrays: ~12KB instead of ~49KB of
+    # boxed floats per 1536-dim vector, with bit-identical values on rewrite.
+    out: dict[str, array.array] = {}
+    for row in iter_jsonl(input_path):
         rid = clean(row.get(id_field))
         embedding = row.get(embedding_field)
         if rid and isinstance(embedding, list):
-            out[rid] = [float(v) for v in embedding]
+            out[rid] = array.array("d", (float(v) for v in embedding))
     return out
 
 
@@ -196,6 +210,12 @@ def openai_embedding_batches(
     ))
 
 
+def _json_default(value: Any) -> Any:
+    if isinstance(value, array.array):
+        return list(value)
+    return str(value)
+
+
 def atomic_write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
@@ -203,7 +223,7 @@ def atomic_write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> int:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             for record in records:
-                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True, default=_json_default) + "\n")
                 count += 1
         os.replace(tmp, path)
     finally:
@@ -254,7 +274,7 @@ def save_state(output_dir: Path, state: dict[str, Any]) -> None:
 
 
 def iter_unprocessed(input_path: Path, start_index: int) -> Iterable[tuple[int, dict[str, Any]]]:
-    for idx, row in enumerate(read_jsonl(input_path), start=1):
+    for idx, row in enumerate(iter_jsonl(input_path), start=1):
         if idx <= start_index:
             continue
         yield idx, row
@@ -271,20 +291,22 @@ def copy_fields(record: dict[str, Any], fields: str) -> dict[str, Any]:
 def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict[str, Any]:
     finalize_started = time.perf_counter()
     chunks = sorted((output_dir / "chunks").glob("embeddings.*.jsonl")) if (output_dir / "chunks").exists() else []
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    # Dedup (first occurrence wins) and sort by id with vectors held as compact
+    # float64 arrays so the merge does not balloon to GBs of boxed floats.
+    rows_by_id: dict[str, dict[str, Any]] = {}
     for chunk in chunks:
-        for row in read_jsonl(chunk):
+        for row in iter_jsonl(chunk):
             rid = clean(row.get("id"))
-            if rid and rid not in seen:
-                seen.add(rid)
-                rows.append(row)
-    rows.sort(key=lambda row: clean(row.get("id")))
-    atomic_write_jsonl(output_path, rows)
+            if rid and rid not in rows_by_id:
+                embedding = row.get("embedding")
+                if isinstance(embedding, list):
+                    row["embedding"] = array.array("d", embedding)
+                rows_by_id[rid] = row
+    atomic_write_jsonl(output_path, (rows_by_id[rid] for rid in sorted(rows_by_id)))
     add_timing(state, "finalize_merge_write_seconds", time.perf_counter() - finalize_started)
     state["status"] = "completed"
     state["completed_at"] = now_iso()
-    state["embeddings_written"] = len(rows)
+    state["embeddings_written"] = len(rows_by_id)
     save_state(output_dir, state)
     manifest = {
         "status": "completed",
@@ -297,7 +319,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
         "output": str(output_path),
         "counts": {
             "input_rows_processed": state.get("input_rows_processed", 0),
-            "embeddings": len(rows),
+            "embeddings": len(rows_by_id),
             "chunks_written": len(chunks),
             "artifact_hits": state.get("artifact_hits", 0),
             "artifact_misses": state.get("artifact_misses", 0),
