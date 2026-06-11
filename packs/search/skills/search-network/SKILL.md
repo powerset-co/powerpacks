@@ -90,13 +90,30 @@ LLM stages entirely.
 ### Agentic SQL fan-out (local mode only)
 
 In parallel with steps 3–6, fan out to the `search-sql` skill
-(`packs/search/skills/search-sql/SKILL.md`) via a sub-agent when either:
+(`packs/search/skills/search-sql/SKILL.md`) via a sub-agent — but only when
+the gate below passes. Default is OFF; most searches must not fan out.
 
-- the query has a relational or aggregate component the filter DSL cannot
-  express — per-person aggregates ("2+ stints at startups"), career ordering
-  ("engineer before PM"), person-to-person overlap ("worked with X at Y",
-  "schoolmates of X"), or interaction history ("people I've messaged"); or
-- the user explicitly asks for it ("also run the sql vertical", "sql:").
+Decision test: **could the need be expressed as filters over one position
+row at a time?** If yes, do not fan out — the main retrieval stages own it.
+Fan out only when the query needs one of:
+
+- **counting/aggregation across a person's rows** — "2+ stints at
+  startups", "average tenure under 2 years", "worked at 3+ FAANG companies"
+- **ordering/sequence between a person's roles** — "engineers who became
+  product managers", "promoted internally", "IC before manager"
+- **a join against another person** — "worked with X", "overlapped with X
+  at Y", "schoolmates of X", "people similar to X's career path"
+- **set algebra over two sub-populations** — "ex-Stripe folks now at infra
+  startups"
+- **interaction history** — "people I've actually messaged" (requires
+  `local_person_source_summary`; skip if the table is absent)
+- **explicit user request** — "also run the sql vertical", "sql:"
+
+Never fan out for role/title/seniority/location/company/education/date
+filters, however many are combined — "senior Stanford engineers at series A
+fintechs in NYC since 2020" is still one-row-at-a-time and stays in the
+main path. When unsure, do not fan out; the user can ask for `sql:` on a
+follow-up.
 
 Give the sub-agent the user query verbatim plus any already-resolved person
 or company ids, and have it follow `search-sql`'s output contract. Do not
