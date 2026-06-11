@@ -63,6 +63,30 @@ resolution. LLM filtering/reranking runs by default after local retrieval
 (OpenAI only; the data path stays fully local). Use `--search-only` to skip
 LLM stages entirely.
 
+### Local person lookup fast path
+
+If the query is a bare person identifier with no role/filter intent — a
+name ("John Doe", "who is John Doe"), an email, a phone number, a Twitter/X
+handle, or a LinkedIn profile URL — do **not** run the pipeline. Names and
+identifiers are not indexed by any retrieval stage; run one direct lookup
+instead:
+
+```bash
+uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py query \
+  --sql "SELECT person_id, full_name, headline, current_title, current_company, city, linkedin_url FROM local_person_profiles WHERE full_name ILIKE '%john doe%'"
+```
+
+Match emails against `primary_email`/`all_emails`, phones against
+`primary_phone`/`all_phones`, handles against
+`twitter_handle`/`x_twitter_handle`, LinkedIn URLs against
+`linkedin_url`/`public_identifier` (normalize to the slug). Show the
+matches compactly; if several people match, list them all. If zero match,
+say so and offer a normal search. Skip extraction, task state, retrieval,
+hydration, and all LLM stages — this is a deterministic lookup, not a
+search. If the query combines a person with anything else ("engineers who
+worked with John Doe"), it is not this fast path — use the normal flow and
+the agentic SQL fan-out gate.
+
 1. Determine the DuckDB path:
    - `$POWERPACKS_LOCAL_SEARCH_DB` if set
    - Otherwise `.powerpacks/search-index/local-search.duckdb`
@@ -78,8 +102,14 @@ LLM stages entirely.
      --db "<db-path>"
    ```
 
-4. Show the preview compactly (it will include `scope: local_duckdb`). Ask
-   exactly:
+4. Show the preview compactly (it will include `scope: local_duckdb` and a
+   `pool_estimate` with `matched_people` / `total_people`). Include one line
+   like `Pool: 150 of 500 people`. If `runtime_notes` flags a broad search
+   (hard filters match more than ~60% of the index), surface that note and
+   recommend narrowing before executing — running LLM stages over most of
+   the index is usually a query problem, not a retrieval problem. If it
+   flags 0 matches, recommend `modify` (or expect the zero-result fallback
+   below). Then ask exactly:
 
    `Execute this local search or modify it?`
 
@@ -136,6 +166,23 @@ Fan-in goes through the pipeline, not around it:
    list, run the `execute_command` without the flag and note the vertical
    was skipped. The SQL vertical is additive evidence — never block or fail
    the search on it.
+
+### Zero-result SQL fallback (local mode only)
+
+If the pipeline completes with 0 found (or the preview's `pool_estimate`
+already shows 0 matched), fan out one `search-sql` sub-agent with the user
+query **and** the payload's `role_search_filters`, asking it to:
+
+1. probe the actual value spaces of each hard-filtered column,
+2. identify which constraint zeroed the pool (e.g. a filter value that does
+   not exist in the index taxonomy),
+3. return candidates matching the user's intent with corrected values, in
+   the standard output contract.
+
+Present the diagnosis in one line ("`seniority_bands: [manager]` matched 0
+because this index uses ..."), plus the recovered candidates if any. Offer
+to re-run the proper pipeline with corrected filters; do not silently
+substitute SQL results for a full search.
 
 ### Local Summary
 

@@ -30,7 +30,18 @@ express. This skill is used two ways:
   "schoolmates of X", set algebra across two sub-populations.
 - **Safety net / diagnostics**: re-derive a population from raw columns when
   the main pipeline's extraction/filters may have missed (only when asked to
-  debug or when fan-out is requested).
+  debug, on the zero-result fallback, or when fan-out is requested).
+- **Network analytics**: aggregate questions about the network itself, not a
+  people list — "which companies do I know the most people at", "how many of
+  my contacts changed jobs in the last 6 months", "what share of my network
+  is in SF". Answer with the aggregate table, not candidates.
+- **Cohort/event queries**: "everyone who left Acme Corp in 2023"
+  (`end_date_epoch` windows per company), "YC founders in my network"
+  (`local_companies.yc_batches` joined to founder-titled positions).
+- **Intro pathfinding (experimental)**: "who can intro me to John Doe" —
+  resolve John Doe's companies and date ranges, then overlap self-join to
+  find shared-tenure colleagues. Flag clearly that this is overlap-based
+  inference, not a verified relationship graph.
 
 Plain row-level searches ("senior PMs in SF") do NOT need this vertical —
 the main retrieval stages own those.

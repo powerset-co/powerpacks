@@ -204,6 +204,30 @@ class LocalDuckDBSearchStore:
         row = self.conn.execute(f"select count(*) from {self._quote_ident(table)}").fetchone()
         return int(row[0] or 0) if row else 0
 
+    def filtered_people_count(self, filters: Any) -> dict[str, int]:
+        """Distinct-person pool size for the people namespace under hard filters.
+
+        Used by the prepare preview's breadth gate: hybrid ranking only orders
+        the filter-eligible pool, so this count is the upper bound on how many
+        people downstream hydration/LLM stages could touch.
+        """
+        table = self._table_for_namespace("people")
+        columns = self._table_columns(table)
+        person_col = "person_id" if "person_id" in columns else "base_id"
+        where_sql, params = self._compile_people_where_sql(filters, columns)
+        matched = self.conn.execute(
+            f"select count(distinct _pp_role.{self._quote_ident(person_col)}), count(*) from {self._quote_ident(table)} as _pp_role where {where_sql}",
+            params,
+        ).fetchone()
+        total = self.conn.execute(
+            f"select count(distinct {self._quote_ident(person_col)}) from {self._quote_ident(table)}"
+        ).fetchone()
+        return {
+            "matched_people": int(matched[0] or 0),
+            "matched_positions": int(matched[1] or 0),
+            "total_people": int(total[0] or 0),
+        }
+
     def _person_profile_table(self) -> str | None:
         for table in PERSON_PROFILE_TABLES:
             if self._table_exists(table):

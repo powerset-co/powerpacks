@@ -4,6 +4,22 @@
 >
 > Change log:
 > - 2026-06-11: Initial file; added relationship-strength search feature TODO.
+> - 2026-06-11: Added index-hygiene skill TODO.
+
+## Index hygiene skill 🧹
+
+Build a dedicated skill (separate from search) for local index data quality,
+powered by `local_duckdb_query`:
+
+- [ ] duplicate-person detection (same name/linkedin slug, different ids)
+- [ ] positions with missing/zero dates, impossible tenures
+- [ ] company-resolution noise (one company_id absorbing unrelated people —
+      e.g. the shared-`company_id` overlap blob found during agentic-SQL
+      validation)
+- [ ] coverage report: profiles vs positions vs summaries row alignment,
+      empty enrichment columns (e.g. `company_stage` empty in current index)
+
+Deliberately out of scope for `search-sql` / `search-network`.
 
 ## Relationship strength as a first-class search signal 🤝
 

@@ -26,6 +26,28 @@ def load_module(name: str, path: Path):
 execute_role_search = load_module(
     "execute_role_search_fanin", PRIMITIVES / "execute_role_search" / "execute_role_search.py"
 )
+local_pipeline = load_module(
+    "local_search_pipeline_fanin", PRIMITIVES / "local_search_pipeline" / "local_search_pipeline.py"
+)
+
+
+def write_positions_db(path: Path) -> None:
+    import duckdb
+
+    conn = duckdb.connect(str(path))
+    conn.execute(
+        "CREATE TABLE local_people_positions (id VARCHAR, person_id VARCHAR, base_id VARCHAR, "
+        "position_title VARCHAR, seniority_band VARCHAR, is_current BOOLEAN)"
+    )
+    rows = [
+        [f"p{i}-pos", f"p{i}", f"p{i}", title, band, True]
+        for i, (title, band) in enumerate(
+            [("Engineer", "senior"), ("Engineer", "senior"), ("PM", "manager"), ("Designer", "mid"), ("Analyst", "mid")]
+        )
+    ]
+    rows.append(["p0-pos2", "p0", "p0", "Staff Engineer", "staff", False])
+    conn.executemany("INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?)", rows)
+    conn.close()
 
 
 class MergeAgenticSqlCandidatesTests(unittest.TestCase):
@@ -69,6 +91,68 @@ class MergeAgenticSqlCandidatesTests(unittest.TestCase):
             limit=2,
         )
         self.assertEqual([c["person_id"] for c in merged], ["p-main", "p-a"])
+
+
+class FilteredPeopleCountTests(unittest.TestCase):
+    def setUp(self):
+        from local_duckdb_store import LocalDuckDBSearchStore
+        from search_common import filters_from_role_payload
+
+        self.filters_from_role_payload = filters_from_role_payload
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "pool.duckdb"
+        write_positions_db(self.db_path)
+        self.store = LocalDuckDBSearchStore(str(self.db_path))
+
+    def tearDown(self):
+        self.store.conn.close()
+        self.tmp.cleanup()
+
+    def test_counts_distinct_people_under_filters(self):
+        filters = self.filters_from_role_payload({"seniority_bands": ["senior"]})
+        counts = self.store.filtered_people_count(filters)
+        self.assertEqual(counts["matched_people"], 2)
+        self.assertEqual(counts["total_people"], 5)
+
+    def test_no_filters_counts_whole_index(self):
+        counts = self.store.filtered_people_count(self.filters_from_role_payload({}))
+        self.assertEqual(counts["matched_people"], 5)
+        self.assertEqual(counts["total_people"], 5)
+
+
+class CompactPreviewPoolEstimateTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "pool.duckdb"
+        write_positions_db(self.db_path)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def preview(self, filters: dict) -> dict:
+        payload = {"normalized_query": "q", "role_search_filters": filters}
+        return local_pipeline.compact_preview(payload, Path(self.tmp.name) / "payload.json", self.db_path, [])
+
+    def test_narrow_search_reports_pool_without_breadth_note(self):
+        preview = self.preview({"seniority_bands": ["senior"]})
+        self.assertEqual(preview["pool_estimate"]["matched_people"], 2)
+        self.assertEqual(preview["pool_estimate"]["total_people"], 5)
+        self.assertFalse(any("broad search" in note for note in preview["runtime_notes"]))
+
+    def test_broad_search_adds_breadth_note(self):
+        preview = self.preview({})
+        self.assertEqual(preview["pool_estimate"]["matched_people"], 5)
+        self.assertTrue(any("broad search" in note for note in preview["runtime_notes"]))
+
+    def test_zero_match_adds_zero_note(self):
+        preview = self.preview({"seniority_bands": ["nonexistent_band"]})
+        self.assertEqual(preview["pool_estimate"]["matched_people"], 0)
+        self.assertTrue(any("match 0 people" in note for note in preview["runtime_notes"]))
+
+    def test_missing_db_skips_estimate(self):
+        payload = {"normalized_query": "q", "role_search_filters": {}}
+        preview = local_pipeline.compact_preview(payload, Path(self.tmp.name) / "p.json", Path(self.tmp.name) / "absent.duckdb", [])
+        self.assertEqual(preview["pool_estimate"]["status"], "skipped_no_db")
 
 
 class StubBackend:
