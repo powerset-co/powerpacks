@@ -31,6 +31,14 @@ CITY_ALIASES = {
     "nyc": "New York City",
 }
 
+# Prod expand emits city alias lists (e.g. NYC -> three spellings) so the In
+# filter matches whichever variant the index stores. Mirror that for cities
+# whose common name differs from the indexed value.
+CITY_FILTER_ALIASES = {
+    "new york city": ["New York City", "New York City, New York", "New York"],
+    "new york": ["New York", "New York City"],
+}
+
 FOUNDER_BM25_QUERIES = ["founder", "co-founder", "cofounder", "founding", "CEO", "Chief Executive Officer"]
 FOUNDER_SEMANTIC_QUERY = (
     "founder who started, founded, or built a company from scratch, took entrepreneurial risk, founding team "
@@ -363,6 +371,9 @@ def _merge(
         vals = location.get(key)
         if vals:
             filters[key] = vals
+    for key in ("cities", "company_cities"):
+        if filters.get(key):
+            filters[key] = _expand_city_filter_aliases(filters[key])
 
     # Education
     if education.get("schools"):
@@ -440,13 +451,22 @@ def _dedupe_strings(items: list[Any]) -> list[str]:
     return out
 
 
+# Index seniority_band values use hyphens for these two bands — must match
+# VALID_SENIORITY_BANDS in packs/indexing/primitives/enrich_roles_checkpointed.
+_SENIORITY_CANONICAL = {
+    "c_suite": "c-suite",
+    "vice_president": "vice-president",
+}
+
+
 def _normalize_seniority_bands(items: list[Any]) -> list[str]:
-    """Normalize prod/local seniority spellings to Powerpacks filter values."""
-    return _dedupe_strings([
+    """Normalize prod/local seniority spellings to the index's canonical band values."""
+    collapsed = [
         str(item).strip().lower().replace("-", "_").replace(" ", "_")
         for item in items or []
         if item not in (None, "")
-    ])
+    ]
+    return _dedupe_strings([_SENIORITY_CANONICAL.get(item, item) for item in collapsed])
 
 
 def _detect_csuite_expansions(query: str) -> list[dict[str, Any]]:
@@ -524,7 +544,7 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
             *(filters.get("bm25_queries") or []),
             *[bm25 for spec in csuite_expansions for bm25 in spec["bm25"]],
         ])
-        filters.setdefault("seniority_bands", ["c_suite"])
+        filters.setdefault("seniority_bands", ["c-suite"])
         if len(str(filters.get("semantic_query") or "")) < 80:
             filters["semantic_query"] = (
                 f"Executive leader serving as {', '.join(display_values)}, responsible for strategic direction, "
@@ -546,6 +566,19 @@ def _add_unique(filters: dict[str, Any], key: str, value: str) -> None:
     if value not in values:
         values.append(value)
     filters[key] = values
+
+
+def _expand_city_filter_aliases(cities: list[Any]) -> list[str]:
+    expanded: list[str] = []
+    for city in cities:
+        name = str(city).strip()
+        if not name:
+            continue
+        aliases = CITY_FILTER_ALIASES.get(name.lower())
+        for value in aliases or [name]:
+            if value not in expanded:
+                expanded.append(value)
+    return expanded
 
 
 def _alias_token_pattern(alias: str) -> str:

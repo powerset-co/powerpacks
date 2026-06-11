@@ -433,16 +433,40 @@ def detects_founder_shortcut(payload: dict[str, Any], query: str | None = None) 
 
 
 def detect_csuite_shortcut(payload: dict[str, Any], query: str | None = None) -> dict[str, Any] | None:
-    text = _payload_text(payload, query).lower()
+    # Like the founder shortcut, c-suite intent is owned by the user's query:
+    # scanning payload text (bm25 aliases, clustered titles) or
+    # extraction-emitted role_ids misreads leaders-style queries (e.g. "sales
+    # leaders" bm25 contains CRO aliases) as explicit c-suite asks. Deployed
+    # network-search-api only role-gates when the query names the role.
+    text = str(query or "").lower()
+    if not text:
+        return None
     words = set(TOKEN_RE.findall(text))
     for abbrev, spec in CSUITE_SHORTCUTS.items():
         if abbrev in words or f"{abbrev}s" in words or str(spec["display"]).lower() in text:
             return spec
-    role_ids = {str(value).lower() for value in payload.get("role_ids") or []}
-    for spec in CSUITE_SHORTCUTS.values():
-        if str(spec["role_id"]).lower() in role_ids:
-            return spec
     return None
+
+
+def shortcut_role_id_filter(payload: dict[str, Any]) -> list[str]:
+    # Deployed network-search-api expand rarely emits role_ids, so prod's hard
+    # role_ids filter effectively only ever carries founder/c-suite shortcut
+    # roles. Precise role_ids from role_agent_v2-style extraction stay in the
+    # payload for shortcut detection and title clustering, but only shortcut
+    # roles become a hard retrieval filter. The company-union adjacency stage
+    # deliberately filters by adjacent role_ids and opts back in via
+    # role_ids_hard_filter.
+    role_ids = payload.get("role_ids") or []
+    if payload.get("role_ids_hard_filter"):
+        return list(role_ids)
+    shortcut_ids = {"founder", "cofounder", "co-founder"}
+    # C-suite roles only gate retrieval when the user's query explicitly named
+    # the role (apply_role_shortcuts sets the flag); extraction freely adds
+    # c-suite role_ids to leaders-style queries where a hard gate is wrong.
+    csuite_id = str(payload.get("csuite_shortcut_role_id") or "").lower()
+    if csuite_id:
+        shortcut_ids.add(csuite_id)
+    return [rid for rid in role_ids if str(rid).lower() in shortcut_ids]
 
 
 def apply_role_shortcuts(payload: dict[str, Any], query: str | None = None) -> dict[str, Any]:
@@ -459,9 +483,10 @@ def apply_role_shortcuts(payload: dict[str, Any], query: str | None = None) -> d
     csuite = detect_csuite_shortcut(payload, query)
     if csuite:
         payload["role_ids"] = _dedupe_strings([*(payload.get("role_ids") or []), csuite["role_id"]])
+        payload["csuite_shortcut_role_id"] = csuite["role_id"]
         payload["bm25_queries"] = _dedupe_strings([*(payload.get("bm25_queries") or []), *csuite["bm25"]])
         if not payload.get("seniority_bands"):
-            payload["seniority_bands"] = ["c_suite"]
+            payload["seniority_bands"] = ["c-suite"]
         if len(str(payload.get("semantic_query") or "")) < 80:
             payload["semantic_query"] = (
                 f"Executive leader serving as {csuite['display']}, responsible for strategic direction, "
@@ -518,8 +543,9 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
         filters.append(comparison("total_years_experience", "Lte", payload["years_experience_max"]))
     if payload.get("role_tracks"):
         filters.append(comparison("role_track", "In", payload["role_tracks"]))
-    if payload.get("role_ids"):
-        filters.append(comparison("role_ids", "ContainsAny", payload["role_ids"]))
+    shortcut_role_ids = shortcut_role_id_filter(payload)
+    if shortcut_role_ids:
+        filters.append(comparison("role_ids", "ContainsAny", shortcut_role_ids))
     if payload.get("base_candidate_ids"):
         filters.append(comparison("base_id", "In", payload["base_candidate_ids"]))
     operator_ids = allowed_operator_ids_from_payload(payload)
@@ -749,7 +775,8 @@ def company_filter_applies_to_role_search(payload: dict[str, Any]) -> bool:
 
 
 def seniority_intent(payload: dict[str, Any]) -> str | None:
-    bands = {str(value).lower() for value in payload.get("seniority_bands") or []}
+    # Accept both hyphen (canonical index/prod) and underscore (legacy) spellings.
+    bands = {str(value).lower().replace("-", "_") for value in payload.get("seniority_bands") or []}
     if bands & {"manager", "director", "vice_president", "c_suite"}:
         return "leader"
     if bands & {"entry", "junior", "mid", "senior", "staff", "principal"}:

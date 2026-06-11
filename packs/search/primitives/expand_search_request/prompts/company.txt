@@ -113,7 +113,7 @@ The user wants to find candidates FOR that company, not people who work AT that 
 - "I want to help Google look for product managers" → company_names: [] (Google is the client)
 - "recruiting for Anthropic — need senior backend engineers" → company_names: [] (Anthropic is the client)
 - "Acme Corp is looking for sales leaders at fintech companies" → company_names: [], company_semantic_queries: ["financial technology fintech digital payments banking"], sector_types: ["fintech"] (Acme is client; fintech IS a search filter)
-- "on behalf of Tesla, find battery engineers at automotive startups" → company_names: [], company_semantic_queries: ["automotive electric vehicle EV battery technology"], sector_types: ["mobility_av"], entity_types: ["venture_backed_startup"] (Tesla is client; automotive startups IS a search filter)
+- "on behalf of Tesla, find battery engineers at automotive startups" → company_names: [], company_semantic_queries: ["automotive electric vehicle EV battery technology"], sector_types: ["transportation_mobility"], entity_types: ["venture_backed_startup"] (Tesla is client; automotive startups IS a search filter)
 
 **Contrast — NO client language → company IS a filter:**
 - "ML engineers at Stripe" → company_names: ["Stripe"] (employees AT Stripe)
@@ -160,7 +160,7 @@ If the query mentions an industry type, company category, or business descriptor
 - "funds or HNWIs in crypto" → company_names: [], company_semantic_queries: ["crypto cryptocurrency blockchain digital assets web3"], sector_types: ["crypto"]
 - "engineers at Google" → company_names: ["Google"], company_semantic_queries: [], sector_types: []
 - "mid-size DSOs" → company_names: [], company_semantic_queries: ["DSO dental service organization dental practice"], sector_types: ["health_tech"]
-- "Restaurant Chains" → company_names: [], company_semantic_queries: ["restaurant chains food service dining hospitality"], sector_types: ["food_ag_tech"]
+- "Restaurant Chains" → company_names: [], company_semantic_queries: ["restaurant chains food service dining hospitality"], sector_types: ["restaurant_hospitality_tech"]
 - "marketing agencies" → company_names: [], company_semantic_queries: ["marketing agency advertising digital marketing agency"], sector_types: []
 - "CTOs at Stripe or fintech startups" → company_names: ["Stripe"], company_semantic_queries: ["financial technology fintech digital payments banking"], sector_types: ["fintech"], entity_types: ["venture_backed_startup"]
 - "tech companies with coding agent strategy" → company_names: [], company_semantic_queries: ["technology companies software AI coding agent developer tools"], sector_types: ["ai_ml", "infra_devtools"]
@@ -297,7 +297,8 @@ Do NOT extract entity_types based on the person's role, skills, or job function.
 
 - entity_types: List of organization types
 - **Valid values (11 total):**
-  venture_backed_startup, public_company, private_company, non_profit, vc_firm, pe_firm, bank, family_office, government_public_sector, insurance_carrier, nonprofit
+  venture_backed_startup, nonprofit, government_public_sector, vc_firm, club_association, bank, insurance_carrier, pe_firm, foundation_endowment, family_office, sovereign_wealth_fund
+- **If the query asks for an organization type outside this list (e.g. "public companies", "private companies"), leave entity_types empty** — there is no matching tag in the index, and an unmatchable value returns zero results.
 - **Mapping examples:**
   - "VC firms" / "venture capitalists" / "VCs" → entity_types: ["vc_firm"]
   - "PE firms" / "private equity" → entity_types: ["pe_firm"]
@@ -333,8 +334,9 @@ This applies to ALL of these patterns:
 - Any domain-specific role (e.g., "ML engineers", "cybersecurity professionals")
 
 - sector_types: List of industry sectors
-- **Valid values (26 total):**
-  saas, fintech, ai_ml, health_tech, therapies, diagnostics, oncology, medical_devices, cybersecurity, commerce_tech, edtech, crypto, bio_synbio, real_estate_tech, hr_tech, infra_devtools, data, marketplaces, gaming_gambling_tech, robotics_drones, climate_energy_tech, defense_tech, insurtech, food_ag_tech, semiconductors, mobility_av
+- **Valid values (53 total):**
+  3d_printing, aerospace, agriculture_tech, ai_ml, ar_vr, bio_synbio, climate_energy_tech, commerce_tech, construction_tech, creator_tools, crypto, cybersecurity, data, dating, deep_tech, defense_tech, devops, diagnostics, edtech, fintech, gaming_gambling_tech, govtech, hardware, health_tech, hr_tech, infra_devtools, insurtech, iot, legal_tech, manufacturing_tech, marketplaces, marketing_tech, material_science, medical_devices, mortgagetech, networking_hardware, nonprofit_philanthropy_tech, oil_gas_tech, oncology, physical_compute, real_estate_tech, restaurant_hospitality_tech, robotics_drones, saas, sales_tech, semiconductors, social_networking, sports_wellness_tech, supply_chain_logistics, telco, therapies, transportation_mobility, travel_tech
+- **If the industry has no matching tag in this list, leave sector_types empty and rely on company_semantic_queries** — an unmatchable value returns zero results.
 - **Mapping examples:**
   - "SaaS companies" / "software as a service" → sector_types: ["saas"]
   - "fintech companies" / "companies in fintech" → sector_types: ["fintech"]

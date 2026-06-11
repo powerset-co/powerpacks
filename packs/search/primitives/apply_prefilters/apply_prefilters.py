@@ -195,6 +195,7 @@ def company_people_payload(
     if adjacent_role_filter:
         people_payload.pop("role_tracks", None)
         people_payload["role_ids"] = effective_adjacent_role_ids(payload)
+        people_payload["role_ids_hard_filter"] = True
         if payload.get("adjacent_departments"):
             people_payload["role_tracks"] = [str(value) for value in payload.get("adjacent_departments") or [] if value]
         if payload.get("adjacent_seniority"):
