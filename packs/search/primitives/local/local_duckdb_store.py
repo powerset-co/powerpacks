@@ -173,6 +173,22 @@ class LocalDuckDBSearchStore:
         self.read_only = read_only
         self.conn = duckdb.connect(self.db_path, read_only=read_only)
 
+    def fork(self) -> "LocalDuckDBSearchStore":
+        """Return a store sharing this store's database instance via a cursor.
+
+        Concurrent ``duckdb.connect()`` calls to the same file race DuckDB's
+        per-file instance cache while sibling connections are being closed,
+        which can transiently surface an empty catalog (missing tables /
+        empty PRAGMA table_info). A ``.cursor()`` duplicates the connection
+        on the SAME instance and is the sanctioned per-thread pattern, so
+        threaded fan-out must fork one root store instead of reconnecting.
+        """
+        clone = object.__new__(LocalDuckDBSearchStore)
+        clone.db_path = self.db_path
+        clone.read_only = self.read_only
+        clone.conn = self.conn.cursor()
+        return clone
+
     def namespace(self, logical_name: str) -> LocalDuckDBNamespace:
         self._table_for_namespace(logical_name)
         return LocalDuckDBNamespace(self, logical_name)
@@ -261,9 +277,12 @@ class LocalDuckDBSearchStore:
                 value = value.tolist()
             except Exception:
                 pass
-        if isinstance(value, tuple):
-            return [self._normalize_value(item) for item in value]
-        if isinstance(value, list):
+        if isinstance(value, (list, tuple)):
+            # Fast path for flat numeric arrays (embedding vectors are 1536
+            # floats per row); per-element recursion here dominated filtered
+            # fetches at ~76M isinstance calls per resolve.
+            if all(type(item) is float or type(item) is int for item in value):
+                return list(value)
             return [self._normalize_value(item) for item in value]
         if isinstance(value, dict):
             return {str(key): self._normalize_value(item) for key, item in value.items()}

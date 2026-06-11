@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,9 @@ def is_local_backend() -> bool:
     return bool(explicit_local_backend_path())
 
 
+_STORE_LOCK = threading.Lock()
+
+
 @functools.lru_cache(maxsize=None)
 def _local_store_for_path(path: str) -> Any:
     from local_duckdb_store import LocalDuckDBSearchStore
@@ -51,10 +55,20 @@ def _local_store_for_path(path: str) -> Any:
 
 
 def local_store() -> Any:
+    """Return a per-call store forked from one shared root connection.
+
+    A DuckDB connection must not execute queries concurrently from multiple
+    threads. The chunked prefilter paths fan out via asyncio.to_thread, and
+    handing every caller the same cached connection corrupted catalog reads
+    under load (PRAGMA table_info coming back empty, _table_exists reporting
+    existing tables as missing). Each call therefore gets a cursor fork of
+    the cached root, which is DuckDB's sanctioned per-thread pattern.
+    """
     db_path = explicit_local_backend_path()
     if not db_path:
         raise RuntimeError("configure_local_backend(db_path) is required for local DuckDB search")
-    return _local_store_for_path(db_path)
+    with _STORE_LOCK:
+        return _local_store_for_path(db_path).fork()
 
 
 def local_namespace_has_vectors(logical_name: str, field: str = "vector") -> bool:
