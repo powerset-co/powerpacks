@@ -178,7 +178,10 @@ class MergeGroupTests(unittest.TestCase):
             json.loads(second["interaction_counts"]), json.loads(first["interaction_counts"])
         )
 
-    def test_message_row_to_people_carries_counts(self):
+    def test_message_row_to_people_carries_no_counts_without_approval_state(self):
+        """Raw contacts.csv has no approval concept, so the direct merge path
+        must not attribute interaction data; counts only enter through the
+        user-approved review rows."""
         person = merge_mod.message_row_to_people(
             {
                 "phone": "+14155550123",
@@ -188,13 +191,11 @@ class MergeGroupTests(unittest.TestCase):
                 "imessage_message_count": "87",
                 "whatsapp_message_count": "9",
                 "last_message": "2026-06-01T05:44:31.758167+00:00",
-                "imessage_last_message": "2026-06-01T05:44:31.758167+00:00",
-                "whatsapp_last_message": "2026-05-01T00:00:00+00:00",
             },
             Path("contacts.csv"),
         )
-        self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 87, "whatsapp": 9})
-        self.assertEqual(person["last_interaction"], "2026-06-01T05:44:31+00:00")
+        self.assertEqual(person["interaction_counts"], "")
+        self.assertEqual(person["last_interaction"], "")
 
 
 class IndexProfileTests(unittest.TestCase):
@@ -260,18 +261,34 @@ class TierZeroMatchingTests(unittest.TestCase):
         row.update({"phone": phone, "name": name})
         return row
 
-    def test_phone_exact_matches_nameless_contact(self):
+    def test_phone_exact_matches_approved_nameless_contact(self):
         candidates = [match_mod.Candidate(id="c1", name="Jane Doe", phones=["+1 (415) 555-0123"])]
         rows = [self.contact("4155550123")]
-        stats = match_mod.apply_matching(rows, candidates)
+        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550123": True})
         self.assertEqual(stats["matched"], 1)
         self.assertEqual(rows[0]["match_method"], "phone_exact")
         self.assertEqual(rows[0]["matched_person_id"], "c1")
 
-    def test_email_handle_matches_candidate_email(self):
+    def test_unreviewed_identifier_match_is_only_suggested(self):
+        candidates = [match_mod.Candidate(id="c1", name="Jane Doe", phones=["+14155550123"])]
+        for approvals in (None, {}):
+            rows = [self.contact("4155550123")]
+            stats = match_mod.apply_matching(rows, candidates, approvals=approvals)
+            self.assertEqual(stats["suggested"], 1, approvals)
+            self.assertEqual(rows[0]["match_status"], "suggested")
+            self.assertIn("awaiting approval", rows[0]["match_reason"])
+
+    def test_reviewed_unapproved_contact_is_never_identifier_matched(self):
+        candidates = [match_mod.Candidate(id="c1", name="Jane Doe", phones=["+14155550123"])]
+        rows = [self.contact("4155550123")]
+        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550123": False})
+        self.assertEqual(stats["unmatched"], 1)
+        self.assertEqual(rows[0]["match_status"], "unmatched")
+
+    def test_email_handle_matches_approved_candidate_email(self):
         candidates = [match_mod.Candidate(id="c2", name="Jane Doe", emails=["jane@example.com"])]
         rows = [self.contact("Jane@Example.com")]
-        stats = match_mod.apply_matching(rows, candidates)
+        stats = match_mod.apply_matching(rows, candidates, approvals={"jane@example.com": True})
         self.assertEqual(stats["matched"], 1)
         self.assertEqual(rows[0]["match_method"], "email_exact")
 
@@ -281,7 +298,7 @@ class TierZeroMatchingTests(unittest.TestCase):
             match_mod.Candidate(id="c2", name="June Doe", phones=["4155550123"]),
         ]
         rows = [self.contact("+14155550123", name="J Doe")]
-        stats = match_mod.apply_matching(rows, candidates)
+        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550123": True})
         self.assertEqual(stats["suggested"], 1)
         self.assertEqual(rows[0]["match_method"], "phone_exact_ambiguous")
 
@@ -291,7 +308,7 @@ class TierZeroMatchingTests(unittest.TestCase):
             match_mod.Candidate(id="by-name", name="Jane Doe"),
         ]
         rows = [self.contact("+14155550123", name="Jane Doe")]
-        match_mod.apply_matching(rows, candidates)
+        match_mod.apply_matching(rows, candidates, approvals={"4155550123": True})
         self.assertEqual(rows[0]["matched_person_id"], "by-phone")
 
     def test_short_or_junk_phone_never_keys(self):
@@ -323,6 +340,45 @@ class TierZeroMatchingTests(unittest.TestCase):
         self.assertEqual([c.id for c in loaded], ["local-1"])
         self.assertEqual(loaded[0].phones, ["+14155559999"])
         self.assertEqual(loaded[0].emails, ["local@example.com"])
+
+    def test_name_tier_match_demotes_to_suggested_without_approval(self):
+        """With a review present, even name-exact matches outside the approved
+        set must not carry `matched` (matched auto-derives in_network=true
+        downstream, which would silently expand the user's approved set)."""
+        candidates = [match_mod.Candidate(id="c1", name="Jane Doe")]
+        rows = [self.contact("+14155550199", name="Jane Doe")]
+        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550100": True})
+        self.assertEqual(stats["matched"], 0)
+        self.assertEqual(stats["suggested"], 1)
+        self.assertEqual(rows[0]["match_method"], "name_exact_linkedin")
+        self.assertIn("awaiting approval", rows[0]["match_reason"])
+
+    def test_name_tier_match_stays_matched_for_approved_contact(self):
+        candidates = [match_mod.Candidate(id="c1", name="Jane Doe")]
+        rows = [self.contact("+14155550123", name="Jane Doe")]
+        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550123": True})
+        self.assertEqual(stats["matched"], 1)
+        self.assertEqual(rows[0]["match_status"], "matched")
+
+    def test_no_review_keeps_first_run_name_matching_intact(self):
+        candidates = [match_mod.Candidate(id="c1", name="Jane Doe")]
+        rows = [self.contact("+14155550199", name="Jane Doe")]
+        stats = match_mod.apply_matching(rows, candidates, approvals=None)
+        self.assertEqual(stats["matched"], 1)
+
+    def test_load_review_approvals_maps_identifier_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            review_csv = Path(tmp) / "research_review.csv"
+            with review_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["handle", "phone_e164", "in_network"])
+                writer.writeheader()
+                writer.writerows([
+                    {"handle": "+14155550123", "phone_e164": "+14155550123", "in_network": "true"},
+                    {"handle": "jane@example.com", "phone_e164": "", "in_network": "false"},
+                ])
+            approvals = match_mod.load_review_approvals(review_csv)
+        self.assertEqual(approvals, {"4155550123": True, "jane@example.com": False})
+        self.assertIsNone(match_mod.load_review_approvals(Path("/nonexistent/review.csv")))
 
 
 if __name__ == "__main__":

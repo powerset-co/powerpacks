@@ -260,14 +260,6 @@ def message_row_to_people(row: dict[str, str], path: Path) -> dict[str, str]:
     linkedin = row.get("matched_linkedin_url", "")
     full_name = row.get("matched_name") or row.get("name") or ""
     parts = full_name.split(" ", 1)
-    interaction_counts: dict[str, int] = {}
-    for count_key, channel in (("imessage_message_count", "imessage"), ("whatsapp_message_count", "whatsapp")):
-        try:
-            count = int(float(row.get(count_key) or 0))
-        except (TypeError, ValueError):
-            count = 0
-        if count > 0:
-            interaction_counts[channel] = count
     people = {
         "id": row.get("matched_person_id") or f"message:{sha((row.get('phone') or '') + full_name)}",
         "linkedin_url": linkedin,
@@ -281,10 +273,9 @@ def message_row_to_people(row: dict[str, str], path: Path) -> dict[str, str]:
         "source_artifacts": str(path),
         "summary": f"message_count={row.get('message_count','')}; last_message={row.get('last_message','')}",
         "enrichment_provider": row.get("match_method") or "messages_contact_match",
-        "interaction_counts": json.dumps(interaction_counts, ensure_ascii=False) if interaction_counts else "",
-        "last_interaction": latest_interaction(
-            row.get("imessage_last_message"), row.get("whatsapp_last_message"), row.get("last_message")
-        ),
+        # interaction_counts/last_interaction stay empty on this path: raw
+        # contacts.csv has no approval state, and counts must only enter the
+        # network through user-approved review rows (review_row_to_messages_people).
     }
     return normalize_people_row(people)
 

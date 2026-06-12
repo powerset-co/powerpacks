@@ -20,6 +20,13 @@ Tiers (highest precedence first):
 Candidates come from the Powerset candidate CSV plus, when present, the local
 merged people CSV (`--local-people`), so local-only people are matchable too.
 
+Approval gate: identifier matches never expand the user's approved set on
+their own. `matched` from tier 0 is only emitted for contacts the user
+already approved in the research review (`in_network=true`); contacts the
+user reviewed without approving are left untouched by tier 0; contacts that
+were never reviewed get at most `suggested`, which requires human approval
+before import.
+
 Updates the message-contacts CSV in place with the
 `match_status / matched_person_id / matched_name / matched_linkedin_url /
 match_confidence / match_method / match_reason` columns.
@@ -62,6 +69,7 @@ CSV_HEADERS = [
 ]
 REQUIRED_INPUT_HEADERS = {"phone", "name"}
 DEFAULT_LOCAL_PEOPLE = Path(".powerpacks/network-import/merged/people.csv")
+DEFAULT_REVIEW_CSV = Path(".powerpacks/messages/research_review.csv")
 SCHEMA_DOC = "packs/messages/schemas/contacts-csv.md"
 SCHEMA_JSON = "packs/messages/schemas/contacts-csv.schema.json"
 
@@ -162,6 +170,23 @@ def load_candidates(path: Path) -> list[Candidate]:
     return out
 
 
+def load_review_approvals(path: Path) -> dict[str, bool] | None:
+    """Map contact identifier keys (phone/email) -> approved (in_network) from
+    the research review. None when no review exists (nothing reviewed yet)."""
+    if not path.exists():
+        return None
+    approvals: dict[str, bool] = {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            approved = (row.get("in_network") or "").strip().lower() in {"true", "yes", "1"}
+            for raw in [row.get("phone_e164"), row.get("handle")]:
+                key = email_match_key(raw) or phone_match_key(raw)
+                if key:
+                    # Any approved row wins over an unapproved duplicate.
+                    approvals[key] = approvals.get(key, False) or approved
+    return approvals
+
+
 def load_people_candidates(path: Path, known_ids: set[str], known_identifiers: set[str]) -> list[Candidate]:
     """Local merged people.csv as additional candidates, skipping people the
     Powerset catalog already covers (by id or LinkedIn public identifier)."""
@@ -245,7 +270,11 @@ def _set_match(
 # Matcher
 # ---------------------------------------------------------------------------
 
-def apply_matching(rows: list[dict[str, str]], candidates: list[Candidate]) -> dict[str, int]:
+def apply_matching(
+    rows: list[dict[str, str]],
+    candidates: list[Candidate],
+    approvals: dict[str, bool] | None = None,
+) -> dict[str, int]:
     if not rows:
         return {"total": 0, "matched": 0, "suggested": 0, "unmatched": 0}
     if not candidates:
@@ -284,14 +313,27 @@ def apply_matching(rows: list[dict[str, str]], candidates: list[Candidate]) -> d
     for row in rows:
         # Tier 0: identifier matches run before name tiers and work for
         # contacts with no usable name (the largest unmatched bucket).
+        # Approval gate: identifier matches never expand the approved set.
+        # approved=True -> matched allowed; approved=False (user reviewed and
+        # did not approve) -> tier 0 skips entirely; not reviewed yet -> at
+        # most suggested, which requires human approval before import.
         handle = (row.get("phone") or "").strip()
         email_key = email_match_key(handle)
-        identifier_pool = email_index.get(email_key, []) if email_key else phone_index.get(phone_match_key(handle), [])
+        identifier_key = email_key or phone_match_key(handle)
+        approved = approvals.get(identifier_key) if approvals is not None else None
+        identifier_pool = [] if (approvals is not None and approved is False) else (
+            email_index.get(email_key, []) if email_key else phone_index.get(phone_match_key(handle), [])
+        )
         if len(identifier_pool) == 1:
-            matched += 1
             method = "email_exact" if email_key else "phone_exact"
-            _set_match(row, status="matched", candidate=identifier_pool[0], confidence=1.0,
-                       method=method, reason="unique exact identifier match")
+            if approved:
+                matched += 1
+                _set_match(row, status="matched", candidate=identifier_pool[0], confidence=1.0,
+                           method=method, reason="unique exact identifier match (approved contact)")
+            else:
+                suggested += 1
+                _set_match(row, status="suggested", candidate=identifier_pool[0], confidence=0.95,
+                           method=method, reason="unique exact identifier match awaiting approval")
             continue
         if len(identifier_pool) > 1:
             suggested += 1
@@ -406,6 +448,24 @@ def apply_matching(rows: list[dict[str, str]], candidates: list[Candidate]) -> d
         unmatched += 1
         _set_unmatched(row, "low-confidence fuzzy candidate")
 
+    # Approval gate, applied to every tier: once the user has reviewed
+    # (a research review exists), a match may only carry `matched` status for
+    # contacts the user approved. Anything else — including name-tier matches
+    # against newly added local candidates — demotes to `suggested` so it goes
+    # back through review instead of silently expanding the approved set.
+    if approvals is not None:
+        for row in rows:
+            if row.get("match_status") != "matched":
+                continue
+            handle = (row.get("phone") or "").strip()
+            key = email_match_key(handle) or phone_match_key(handle)
+            if not approvals.get(key):
+                row["match_status"] = "suggested"
+                row["match_reason"] = (row.get("match_reason") or "").rstrip() + " (awaiting approval)"
+        matched = sum(1 for row in rows if row.get("match_status") == "matched")
+        suggested = sum(1 for row in rows if row.get("match_status") == "suggested")
+        unmatched = sum(1 for row in rows if row.get("match_status") == "unmatched")
+
     return {
         "total": len(rows),
         "matched": matched,
@@ -460,7 +520,9 @@ def cmd_match(args: argparse.Namespace) -> int:
         known_ids = {c.id for c in candidates}
         known_identifiers = {(c.public_identifier or "").lower() for c in candidates if c.public_identifier}
         local_candidates = load_people_candidates(local_people_path, known_ids, known_identifiers)
-    stats = apply_matching(rows, candidates + local_candidates)
+    review_path = Path(args.review) if args.review else DEFAULT_REVIEW_CSV
+    approvals = load_review_approvals(review_path)
+    stats = apply_matching(rows, candidates + local_candidates, approvals=approvals)
     written = write_contacts(contacts_path, rows)
 
     manifest = {
@@ -474,6 +536,8 @@ def cmd_match(args: argparse.Namespace) -> int:
         "powerset_candidates": len(candidates),
         "local_people_candidates": len(local_candidates),
         "local_people_path": str(local_people_path) if local_candidates else "",
+        "review_path": str(review_path) if approvals is not None else "",
+        "approved_contacts": sum(1 for value in (approvals or {}).values() if value),
         "rows_written": written,
         "manifest_path": str(manifest_path),
         "stats": stats,
@@ -493,6 +557,8 @@ def main() -> None:
     match.add_argument("--local-people", help="Local merged people CSV to union into the candidate catalog "
                        f"(default: {DEFAULT_LOCAL_PEOPLE} when present)")
     match.add_argument("--no-local-people", action="store_true", help="Match against the Powerset catalog only")
+    match.add_argument("--review", help="Research review CSV holding the user's in_network approvals "
+                       f"(default: {DEFAULT_REVIEW_CSV} when present)")
     match.add_argument("--manifest", help="Path to write the run manifest JSON")
     match.set_defaults(func=cmd_match)
     args = parser.parse_args()
