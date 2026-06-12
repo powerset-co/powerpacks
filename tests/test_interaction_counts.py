@@ -42,6 +42,9 @@ gmail_mod = load_module(
 match_mod = load_module(
     "match_local_candidates_interactions", "packs/messages/primitives/match_local_candidates/match_local_candidates.py"
 )
+messages_import_mod = load_module(
+    "import_messages_interactions", "packs/ingestion/primitives/import_contacts_pipeline/messages.py"
+)
 
 
 class SchemaHelperTests(unittest.TestCase):
@@ -116,6 +119,21 @@ class MessagesWriterTests(unittest.TestCase):
         merged = messages_mod.merge_messages_people_candidate(left, right)
         self.assertEqual(json.loads(merged["interaction_counts"]), {"imessage": 87, "whatsapp": 9})
         self.assertEqual(merged["last_interaction"], "2026-06-05T00:00:00+00:00")
+
+
+class ImportSchemaStalenessTests(unittest.TestCase):
+    def test_pre_interaction_people_csv_invalidates_import(self):
+        """A people.csv written before the interaction columns existed must be
+        treated as stale even though its input fingerprints still match —
+        otherwise the import no-ops forever and counts never materialize."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old = Path(tmp) / "old.csv"
+            old.write_text("id,full_name\nx,y\n")
+            new = Path(tmp) / "new.csv"
+            new.write_text("id,interaction_counts,last_interaction\nx,,\n")
+            self.assertTrue(messages_import_mod.people_csv_schema_stale(old))
+            self.assertFalse(messages_import_mod.people_csv_schema_stale(new))
+            self.assertFalse(messages_import_mod.people_csv_schema_stale(Path(tmp) / "absent.csv"))
 
 
 class GmailWriterTests(unittest.TestCase):

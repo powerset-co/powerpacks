@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 
@@ -91,16 +92,28 @@ def messages_import_diff(review_csv: Path) -> dict:
     }
 
 
+def people_csv_schema_stale(path: Path) -> bool:
+    """True when an existing people.csv predates the interaction-count
+    columns. Input fingerprints can't catch this (the code changed, not the
+    data), so the import self-invalidates instead of trusting its manifest."""
+    if not path.exists():
+        return False
+    with path.open(newline="", encoding="utf-8") as handle:
+        header = next(csv.reader(handle), [])
+    return bool(header) and "interaction_counts" not in header
+
+
 def run(args: argparse.Namespace) -> dict:
-    current = import_manifest_current("messages", import_dir=DEFAULT_IMPORT_DIR)
+    import_dir = DEFAULT_IMPORT_DIR / "messages"
+    schema_stale = people_csv_schema_stale(import_dir / "people.csv")
+    current = None if schema_stale else import_manifest_current("messages", import_dir=DEFAULT_IMPORT_DIR)
     if current:
         return current
     read_accounts(args.accounts)
-    import_dir = DEFAULT_IMPORT_DIR / "messages"
     ledger_path = import_dir / "ledger.json"
     review_csv = Path(".powerpacks/messages/research_review.csv")
     diff = messages_import_diff(review_csv)
-    if diff["candidate_rows"] > 0 and diff["new_rows"] == 0:
+    if diff["candidate_rows"] > 0 and diff["new_rows"] == 0 and not schema_stale:
         directory_normalization = normalize_directory_source_accounts("messages")
         directory_quality = directory_source_account_quality("messages")
         return write_manifest("messages", {
