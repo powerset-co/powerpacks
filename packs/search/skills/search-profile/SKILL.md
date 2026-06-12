@@ -432,9 +432,17 @@ include exactly one compact line, e.g.:
 This gives the user a chance to correct the band before searching. Do not
 recite the full `usable_cutoff` policy or explain the gating mechanics —
 enforcement is a given (in-band ICs match; executives/founders/advisors are
-gated at evaluation). If the JD/query has no seniority target, omit the line
-entirely. Ask a question only if the band is genuinely ambiguous and changes
-the search (e.g. "director-level OK?").
+gated at evaluation). Ask a question only if the band is genuinely ambiguous
+and changes the search (e.g. "director-level OK?").
+
+When the JD yielded NO explicit level language and `seniority_bands` is empty,
+do not stay silent — say so in one line so the user can pin a band before
+spend, e.g.:
+
+`Targeting: all levels (JD states no explicit seniority) — pin a band?`
+
+(Example: "Member of Technical Staff" is a level-less IC title, not the
+`staff` band — such JDs derive empty bands and must surface this line.)
 
 **If the user modifies the plan at this checkpoint** (corrects the seniority
 band, adds/removes a trait, changes scope): apply the change, re-validate

@@ -62,10 +62,13 @@ These apply to every hiring-intent search (a JD, a role brief, "find
 candidates", "people like X for this role") in both local and TurboPuffer
 modes, and they bind any fallback behavior too:
 
-- **Derive the seniority target from explicit signals first.** JDs and role
-  briefs almost always state YOE or a level ("5-8 years", "senior",
-  "staff+"); map that to seniority bands. A ceiling like "15 years or
-  fewer" is a ceiling — it does not imply executives are wanted. Preserve
+- **Derive the seniority target from explicit level language only.** Map
+  stated levels ("senior", "staff+", "director and above") to seniority
+  bands. Never derive bands from years of experience, team size, scope, or
+  impact language — YOE is unreliable ("8+ years" does not mean senior), and
+  level-less IC titles like "Member of Technical Staff" derive NO band. If
+  the query/JD has no explicit level, leave bands empty and surface it in
+  the preview (`Targeting: all levels — pin a band?`). Preserve
   extractor-inferred bands unless they contradict the query.
 - **Exclude current founders / co-founders / CEOs / C-suite by default**
   for role searches. They are rarely recruitable for an IC or leadership
