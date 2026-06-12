@@ -389,7 +389,15 @@ kept after retrieval, which caps the entire downstream pipeline cost.
 ### 1d. Plan Preview
 
 Write `plan.json` to the run directory conforming to
-`packs/search/schemas/search-network-jd-plan.schema.json`.
+`packs/search/schemas/search-network-jd-plan.schema.json`, then validate it:
+
+```bash
+uv run --project . python packs/search/primitives/validate_artifact/validate_artifact.py \
+    --schema search-network-jd-plan --file <run_dir>/plan.json
+```
+
+Fix any reported violations before proceeding. This is the only supported
+validation path — do not import `jsonschema` in ad-hoc scripts.
 
 Important schema semantics:
 
