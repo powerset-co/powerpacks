@@ -526,6 +526,13 @@ def prepare_local_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list
         }
     )
 
+    # There is no concept of a set/operator locally — scope is the DuckDB
+    # file itself. Remove the keys outright rather than relying on every
+    # downstream consumer to ignore them.
+    for key in REMOTE_SCOPE_KEYS:
+        sanitized.pop(key, None)
+        filters.pop(key, None)
+
     unsupported = sorted(key for key in UNSUPPORTED_LOCAL_FILTERS if is_present(filters.get(key)))
     if unsupported:
         raise PipelineError(f"local_search_pipeline does not support these remote-only filters yet: {', '.join(unsupported)}")
@@ -555,14 +562,30 @@ def payload_quality_issues(payload: dict[str, Any]) -> list[str]:
 BROAD_POOL_RATIO = 0.6
 
 
+def configure_local_backend_mode(db_path: Path) -> None:
+    """Mark this process as local-backend before any filter construction.
+
+    Shared filter helpers branch on backend mode: in remote mode an env
+    POWERPACKS_DEFAULT_SET_ID resolves through Postgres into an
+    allowed_operator_ids filter. Local search scope is the DuckDB file, so
+    in-process payload transforms (pool estimate, title clustering) must run
+    with local mode configured or a foreign set id silently zeroes the pool
+    and prepare makes a network call.
+    """
+    for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+        if str(_path) not in sys.path:
+            sys.path.insert(0, str(_path))
+    import search_backend_mode  # type: ignore
+
+    search_backend_mode.configure_local_backend(db_path)
+
+
 def local_pool_estimate(payload: dict[str, Any], db_path: Path) -> dict[str, Any]:
     """Cheap filter-eligibility count so breadth is visible before LLM spend."""
     if not db_path.exists():
         return {"status": "skipped_no_db"}
     try:
-        for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
-            if str(_path) not in sys.path:
-                sys.path.insert(0, str(_path))
+        configure_local_backend_mode(db_path)
         from local_duckdb_store import LocalDuckDBSearchStore  # type: ignore
         from search_common import filters_from_role_payload  # type: ignore
 
@@ -675,6 +698,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     args.db_path = Path(args.db).expanduser().resolve()
     if not args.db_path.exists():
         raise PipelineError(f"local DuckDB does not exist: {args.db_path}")
+    configure_local_backend_mode(args.db_path)
 
     ledger_path = ledger_path_for(args)
     ledger = load_ledger(ledger_path)
@@ -692,8 +716,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
         raise PipelineError("Need --payload-json, or --state with an expand_search_request step")
     payload = normalize_query_expansion_payload(payload, query=args.query)
-    payload = apply_local_title_clustering(payload, args.db_path)
     payload, ignored_scope_keys = prepare_local_payload(payload)
+    payload = apply_local_title_clustering(payload, args.db_path)
     if args.payload_json:
         sanitized_path = ledger_path.parent / f"{ledger_path.stem}.local-payload.json"
         write_json(sanitized_path, payload)
@@ -809,6 +833,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         db_path = Path(args.db).expanduser().resolve()
         if not db_path.exists():
             raise PipelineError(f"local DuckDB does not exist: {db_path}")
+        configure_local_backend_mode(db_path)
         out_dir = output_dir_for(args.query, args.output_dir)
         payload_json = out_dir / "expand_search_request.local.json"
         full_json = out_dir / "expand_search_request.full.json"
@@ -832,8 +857,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             raise PipelineError(f"expand_search_request failed rc={proc.returncode}: {((proc.stderr or proc.stdout or '').strip())[-1200:]}")
         expanded = parsed[-1] if parsed else {}
         payload = normalize_query_expansion_payload(payload_from_expand_output(expanded), query=args.query)
-        payload = apply_local_title_clustering(payload, db_path)
         payload, removed_scope_keys = prepare_local_payload(payload)
+        payload = apply_local_title_clustering(payload, db_path)
         write_json(full_json, expanded)
         write_json(payload_json, payload)
         execute_command = (

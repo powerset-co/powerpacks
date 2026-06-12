@@ -154,6 +154,29 @@ class CompactPreviewPoolEstimateTests(unittest.TestCase):
         preview = local_pipeline.compact_preview(payload, Path(self.tmp.name) / "p.json", Path(self.tmp.name) / "absent.duckdb", [])
         self.assertEqual(preview["pool_estimate"]["status"], "skipped_no_db")
 
+    def test_env_default_set_id_does_not_scope_local_pool_estimate(self):
+        """Regression: prepare built filters in remote mode, so an env
+        POWERPACKS_DEFAULT_SET_ID resolved through Postgres into an
+        allowed_operator_ids clause that matched no rows in a local index
+        built for a different operator (pool estimate 0 of N plus a network
+        call from inside local prepare)."""
+        import os
+
+        import search_backend_mode
+
+        original = os.environ.get("POWERPACKS_DEFAULT_SET_ID")
+        os.environ["POWERPACKS_DEFAULT_SET_ID"] = "00000000-0000-0000-0000-00000000beef"
+        try:
+            preview = self.preview({"seniority_bands": ["senior"]})
+        finally:
+            if original is None:
+                os.environ.pop("POWERPACKS_DEFAULT_SET_ID", None)
+            else:
+                os.environ["POWERPACKS_DEFAULT_SET_ID"] = original
+            search_backend_mode.configure_local_backend(None)
+        self.assertEqual(preview["pool_estimate"].get("status"), "completed", preview["pool_estimate"])
+        self.assertEqual(preview["pool_estimate"]["matched_people"], 2)
+
 
 class StubBackend:
     async def hybrid_role_rows(self, payload, filters, *, top_k, include_attributes):
