@@ -82,6 +82,13 @@ def main() -> int:
     # context for new companies (teammates seed it with
     # `modal volume put <vol> .powerpacks/rapidapi-company-cache cache/rapidapi-company-cache`).
     os.environ.setdefault("POWERPACKS_RAPIDAPI_COMPANY_CACHE", str(cache_root / "rapidapi-company-cache"))
+    # Measured: gpt-5.1/5.2 enrichment calls average ~3 minutes each (reasoning
+    # models + structured output), so the 60s default timeout mass-fails them.
+    # A 256-way sweep showed the sandbox network handles full tier-5
+    # concurrency fine at 4 vCPU; keep concurrency high and the timeout above
+    # the slow-call tail.
+    os.environ.setdefault("POWERPACKS_OPENAI_CONCURRENCY", "256")
+    os.environ.setdefault("POWERPACKS_OPENAI_TIMEOUT_SECONDS", "300")
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
     write_status(run_vol, status)
 

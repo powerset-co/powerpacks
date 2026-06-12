@@ -41,7 +41,9 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -593,6 +595,60 @@ def cmd_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preload(args: argparse.Namespace) -> int:
+    """Union-merge local cache payloads into the shared volume cache.
+
+    Only the LLM-classification artifacts are worth shipping (embeddings are
+    re-computable for pennies). Profile caches upload as one tarball (one
+    sequential transfer instead of tens of thousands of small file ops) and
+    are merged copy-if-absent server-side.
+    """
+    vol = get_volume()
+    uploads: list[tuple[Path, str]] = []
+    for flag, name in (
+        ("role_classifications", "roles_with_dense_text.jsonl"),
+        ("role_embeddings", "roles_with_embeddings.jsonl"),
+        ("company_classifications", "companies_corpus_v3.jsonl"),
+        ("company_embeddings", "company_embeddings_v3.jsonl"),
+        ("summary_embeddings", "summary_embeddings.jsonl"),
+    ):
+        value = getattr(args, flag, None)
+        if value:
+            src = Path(value).expanduser()
+            if not src.exists():
+                raise SystemExit(f"missing: {src}")
+            uploads.append((src, f"incoming/{name}"))
+
+    tarball: Path | None = None
+    if args.profile_cache:
+        cache_dir = Path(args.profile_cache).expanduser()
+        if not cache_dir.is_dir():
+            raise SystemExit(f"missing profile cache dir: {cache_dir}")
+        tarball = Path(tempfile.mkdtemp()) / "profile_cache_v2.tar.gz"
+        print(f"packing {cache_dir} ...")
+        subprocess.run(["tar", "-czf", str(tarball), "-C", str(cache_dir), "."], check=True)
+        uploads.append((tarball, "incoming/profile_cache_v2.tar.gz"))
+
+    if not uploads:
+        raise SystemExit("nothing to preload; pass at least one payload flag")
+    total_mb = sum(src.stat().st_size for src, _ in uploads) / 1e6
+    print(f"uploading {len(uploads)} payloads ({total_mb:.0f} MB) ...")
+    started = time.time()
+    with vol.batch_upload(force=True) as batch:
+        for src, remote in uploads:
+            batch.put_file(src, remote)
+    print(f"uploaded in {time.time() - started:.0f}s; merging server-side ...")
+    if tarball:
+        tarball.unlink(missing_ok=True)
+
+    sb = make_sandbox(cpu=2, memory_mib=4096, timeout=1800)
+    try:
+        code, _ = sb_exec(sb, "python", "/repo/packs/indexing/modal/merge_incoming.py")
+        return code
+    finally:
+        sb.terminate()
+
+
 def cmd_amplify(args: argparse.Namespace) -> int:
     sb = make_sandbox(cpu=args.cpu, memory_mib=args.memory_mib, timeout=args.timeout)
     print(f"sandbox {sb.object_id} (cpu={args.cpu} mem={args.memory_mib}MiB)")
@@ -718,6 +774,14 @@ def main() -> int:
                       help="0 (default) = uncapped, no estimate pass (internal team default); >0 adds a dry-run estimate gate")
     pipe.add_argument("--force", action="store_true", help="reprocess even if the csv is unchanged")
 
+    pre = sub.add_parser("preload", help="union-merge local cache payloads into the shared volume cache")
+    pre.add_argument("--role-classifications")
+    pre.add_argument("--role-embeddings")
+    pre.add_argument("--company-classifications")
+    pre.add_argument("--company-embeddings")
+    pre.add_argument("--summary-embeddings")
+    pre.add_argument("--profile-cache", help="directory of slug.json profiles (uploaded as one tarball)")
+
     up = sub.add_parser("upload")
     up.add_argument("--seed-cache", action="store_true",
                     help="bootstrap the shared /data/cache from local artifacts (overwrite; new/empty volumes only)")
@@ -757,7 +821,7 @@ def main() -> int:
 
     args = ap.parse_args()
     require_modal_credentials()
-    return {"pipeline": cmd_pipeline, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
+    return {"pipeline": cmd_pipeline, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 
 
 if __name__ == "__main__":
