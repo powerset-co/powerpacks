@@ -416,6 +416,14 @@ archetype description and its query — and ask exactly:
 
 `Execute this search plan or modify it?`
 
+**This checkpoint is a hard stop.** It applies even when the user's input
+reads as an execution command (a pasted URL, a `$search-network ... in local`
+invocation, "run this JD"). General harness autonomy rules like "don't stop at
+a proposal — implement" do NOT apply here: searches spend money and the plan
+preview is the user's only chance to correct traits and seniority before
+spend. The only bypass is the user explicitly waiving the preview in this
+session (e.g. "skip the preview", "don't ask, just run it").
+
 Seniority in the preview: when the plan targets a specific seniority band,
 include exactly one compact line, e.g.:
 
@@ -427,6 +435,14 @@ enforcement is a given (in-band ICs match; executives/founders/advisors are
 gated at evaluation). If the JD/query has no seniority target, omit the line
 entirely. Ask a question only if the band is genuinely ambiguous and changes
 the search (e.g. "director-level OK?").
+
+**If the user modifies the plan at this checkpoint** (corrects the seniority
+band, adds/removes a trait, changes scope): apply the change, re-validate
+plan.json, then re-show the changed lines — including the updated
+`Targeting: ...` line when seniority changed — and ask the same
+`Execute this search plan or modify it?` question again. Never proceed to
+Task 2 directly from a plan mutation; the user confirms the corrected plan,
+not the original one.
 
 ---
 
