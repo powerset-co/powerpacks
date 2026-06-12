@@ -54,6 +54,16 @@ without LLM filtering/reranking. If `--execute-approved` is omitted and
 `--search-only` is not set, the runner preserves the older explicit
 `blocked_approval` gate for compatibility/tests.
 
+`--seniority-bands senior,staff` (on `prepare` and `run`) pins canonical
+seniority bands as a hard retrieval filter: the pinned bands REPLACE any
+expansion-derived `role_search_filters.seniority_bands`, survive role
+shortcuts (founder queries normally drop bands), and unknown band values fail
+loudly. `prepare` applies the pin to the prepared payload and threads the flag
+into the emitted `execute_command`; on `run` it requires a fresh
+`--query`/`--payload-json` start (it cannot retroactively apply to an existing
+`--state`). The `$search-profile` JD flow uses this to enforce the JD's
+seniority band at retrieval on both the TurboPuffer and local DuckDB paths.
+
 The orchestrator is intentionally Sales-Nav-like: it runs sub-primitives
 quietly, stores compact step summaries in the ledger, records artifact paths,
 and emits one compact JSON object on completion/block/status. Use

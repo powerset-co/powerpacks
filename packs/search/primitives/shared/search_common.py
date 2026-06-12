@@ -477,7 +477,10 @@ def apply_role_shortcuts(payload: dict[str, Any], query: str | None = None) -> d
         if len(str(payload.get("semantic_query") or "")) < 80:
             payload["semantic_query"] = FOUNDER_SEMANTIC_QUERY
         # Founder exists at all seniority levels; copying c-suite/owner bands hurts recall.
-        payload.pop("seniority_bands", None)
+        # Exception: bands pinned via --seniority-bands are an explicit JD-level
+        # hard constraint and must survive role shortcuts.
+        if not payload.get("seniority_bands_pinned"):
+            payload.pop("seniority_bands", None)
         return payload
 
     csuite = detect_csuite_shortcut(payload, query)

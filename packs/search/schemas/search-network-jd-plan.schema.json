@@ -141,6 +141,27 @@
       "type": "string",
       "minLength": 1
     },
+    "seniority_bands": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "owner",
+          "partner",
+          "c-suite",
+          "vice-president",
+          "director",
+          "principal",
+          "staff",
+          "manager",
+          "senior",
+          "mid",
+          "junior",
+          "entry",
+          "trainee"
+        ]
+      }
+    },
     "cluster_plan": {
       "type": "array",
       "minItems": 1,

@@ -87,7 +87,9 @@ Apply the same trait rules as Task 1b with these adjustments:
 - Location: use the person's metro as the default search scope; widen on
   user request. It is scope, not a trait.
 - Set `usable_cutoff` from the person's current band, same wording rules as
-  a JD run.
+  a JD run, and derive `seniority_bands` from the current role's explicit
+  level the same way as Task 1b (one band up within the same track; never
+  from years of experience).
 
 ### S3. Candidate profile design
 
@@ -220,6 +222,50 @@ Instead, calibrate the role level:
 Record the seniority policy in `plan.json` as `usable_cutoff` — the automated
 evaluation primitive reads it and enforces it as a hard gate.
 
+#### Seniority bands (hard retrieval filter)
+
+Alongside `usable_cutoff`, derive canonical `seniority_bands` deterministically
+from the JD's **explicit level language only** and record them in `plan.json`
+as `seniority_bands` (next to `usable_cutoff`). Task 2 pins these bands on
+every profile search via `--seniority-bands`, so retrieval itself only returns
+in-band candidates instead of paying hydration and evaluation cost on
+out-of-band people.
+
+Derivation rules:
+
+1. **Explicit level language only.** Map level words in the JD title and
+   requirements to canonical bands:
+   - title modifiers: "Senior" → `senior`; "Staff" → `staff`; "Principal" →
+     `principal`; "Lead" → `senior`; "Junior" → `junior`;
+     "Intern"/"Internship" → `trainee`; "Entry-level"/"New grad" → `entry`
+   - leadership titles: "Manager" → `manager`; "Director" → `director`;
+     "VP"/"Vice President" → `vice-president`; "Head of X" → `director` +
+     `vice-president`; "Chief X Officer"/"C-level"/"executive" (standalone) →
+     `c-suite`; "Partner" → `partner`; "Owner" → `owner`
+   - beware titles where "executive" is not a level: Account Executive,
+     Executive Assistant, Executive Producer are not c-suite
+
+   Canonical values (hyphenated, must match the index):
+   `owner`, `partner`, `c-suite`, `vice-president`, `director`, `principal`,
+   `staff`, `manager`, `senior`, `mid`, `junior`, `entry`, `trainee`.
+2. **Adjacent-band tolerance: include one band up within the same track.**
+   People one band above the JD's level still plausibly apply. Widen each
+   derived band with its next band up — IC track: `entry` < `junior` < `mid` <
+   `senior` < `staff` < `principal`; management track: `manager` < `director`
+   < `vice-president` < `c-suite`. Examples: "Senior Data Engineer" →
+   `["senior", "staff"]`; "Director of Engineering" → `["director",
+   "vice-president"]`. Top-of-track bands (`principal`, `c-suite`) and
+   `partner`/`owner` get no extra band. Explicit ranges override adjacency:
+   "senior or above"/"senior+" → `["senior", "staff", "principal"]`;
+   "director and above" → `["director", "vice-president", "c-suite"]`.
+3. **Never derive bands from years of experience**, team size, scope, or
+   impact language. "8+ years" does not mean senior; "owns the roadmap end to
+   end" does not mean director. YOE is unreliable — only explicit level words
+   count.
+4. **No explicit level language → empty list.** Write `"seniority_bands": []`,
+   run profile searches without the flag (retrieval stays unfiltered), and let
+   the `usable_cutoff` evaluation gate be the only seniority enforcement.
+
 #### What to ignore
 
 Do not create traits for:
@@ -258,6 +304,9 @@ Before writing `plan.json`, check:
   already implies them.
 - The plan explicitly calibrates seniority (`usable_cutoff`) so junior profiles
   are not retrieved for senior roles and executives are gated for IC roles.
+- `seniority_bands` contains only canonical band values derived from explicit
+  level language plus one-band-up adjacency — never from years of experience —
+  and is an empty list when the JD names no level.
 - Screening/close concerns are ignored entirely.
 
 ### 1c. Candidate Profile Design
@@ -347,6 +396,8 @@ Important schema semantics:
 - `set_scope` is execution metadata only.
 - `search_scope` captures location or sourcing scope; it is not a job-fit trait.
 - `usable_cutoff` is the seniority policy the evaluation primitive enforces.
+- `seniority_bands` is the canonical retrieval filter derived in Task 1b;
+  Task 2 pins it on every profile search. Empty list = no retrieval filter.
 - `initial_probes[]` holds the candidate profiles (legacy field name).
 - `initial_probes[].query` is the exact English query passed to
   `$search-network`; `targets_traits` must reference actual English trait
@@ -385,16 +436,31 @@ the `$search-network` skill by passing:
    keeps the cheap conservative LLM filter (reject clear junk, pass anything
    uncertain) but skips the expensive per-search LLM rerank. Final ranking is
    owned by the evaluation primitive in Task 5, which sees the full JD context.
+4. **pinned seniority bands** — when `plan.json` has a non-empty
+   `seniority_bands`, append `--seniority-bands` with the comma-joined plan
+   bands to the pipeline `execute_command`, e.g.:
+
+   ```
+   ... search_network_pipeline.py run ... --limit 100 --filter-only --seniority-bands senior,staff
+   ```
+
+   The flag works identically on `local_search_pipeline.py run` commands. It
+   REPLACES whatever `seniority_bands` query expansion inferred from that one
+   profile query — the plan's JD-derived bands are the hard constraint — and
+   retrieval then only returns positions whose `seniority_band` is in the
+   pinned set. If the plan's `seniority_bands` is empty, omit the flag
+   entirely; never invent bands at search time.
 
 Do not call `search_network_pipeline.py` directly from this skill except to
-append the `--limit` and `--filter-only` flags to the `execute_command` that
-`$search-network` produced.
+append the `--limit`, `--filter-only`, and `--seniority-bands` flags to the
+`execute_command` that `$search-network` produced.
 
 The delegated input must be only the profile's English `query` value. Do not
 send a JSON object or internal labels.
 
 For each profile search:
-1. Run `$search-network` with the profile's `query`, limit, and filter-only mode
+1. Run `$search-network` with the profile's `query`, limit, filter-only mode,
+   and the plan's pinned seniority bands (when non-empty)
 2. Skip the user approval gate — the plan approval covers all profile searches
 3. Collect the result: artifact_dir, csv path, found_count
 

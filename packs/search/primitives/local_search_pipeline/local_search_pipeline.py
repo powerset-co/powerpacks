@@ -28,6 +28,9 @@ LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
 LOCAL_DIR = PRIMITIVES_DIR / "local"
 TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands  # noqa: E402
 PAYLOAD_KEYS = {"intent_type", "source_type", "normalized_query", "vertical", "role_search_filters", "traits", "notes"}
 REMOTE_SCOPE_KEYS = {"set_id", "operator_ids", "allowed_operator_ids", "searcher_operator_id"}
 UNSUPPORTED_LOCAL_FILTERS = {
@@ -694,11 +697,27 @@ def run_step(ledger_path: Path, ledger: dict[str, Any], step: str, cmd: list[str
     return output
 
 
+def pinned_bands_from_args(args: argparse.Namespace) -> list[str]:
+    raw = getattr(args, "seniority_bands", None)
+    if not raw:
+        return []
+    try:
+        return parse_pinned_seniority_bands(raw)
+    except ValueError as exc:
+        raise PipelineError(str(exc)) from exc
+
+
 def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     args.db_path = Path(args.db).expanduser().resolve()
     if not args.db_path.exists():
         raise PipelineError(f"local DuckDB does not exist: {args.db_path}")
     configure_local_backend_mode(args.db_path)
+    pinned_bands = pinned_bands_from_args(args)
+    if pinned_bands and args.state and not args.payload_json:
+        raise PipelineError(
+            "--seniority-bands only applies when the run starts from --payload-json; "
+            "an existing --state already recorded its expand_search_request filters"
+        )
 
     ledger_path = ledger_path_for(args)
     ledger = load_ledger(ledger_path)
@@ -716,6 +735,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
         raise PipelineError("Need --payload-json, or --state with an expand_search_request step")
     payload = normalize_query_expansion_payload(payload, query=args.query)
+    if pinned_bands:
+        payload = pin_payload_seniority_bands(payload, pinned_bands)
     payload, ignored_scope_keys = prepare_local_payload(payload)
     payload = apply_local_title_clustering(payload, args.db_path)
     if args.payload_json:
@@ -856,7 +877,10 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         if proc.returncode != 0:
             raise PipelineError(f"expand_search_request failed rc={proc.returncode}: {((proc.stderr or proc.stdout or '').strip())[-1200:]}")
         expanded = parsed[-1] if parsed else {}
+        pinned_bands = pinned_bands_from_args(args)
         payload = normalize_query_expansion_payload(payload_from_expand_output(expanded), query=args.query)
+        if pinned_bands:
+            payload = pin_payload_seniority_bands(payload, pinned_bands)
         payload, removed_scope_keys = prepare_local_payload(payload)
         payload = apply_local_title_clustering(payload, db_path)
         write_json(full_json, expanded)
@@ -867,6 +891,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             f"--ledger {shlex.quote(relative_or_absolute(ledger))} "
             f"--query {shlex.quote(args.query)} "
             f"--payload-json {shlex.quote(relative_or_absolute(payload_json))}"
+            + (f" --seniority-bands {shlex.quote(','.join(pinned_bands))}" if pinned_bands else "")
         )
         emit({
             "primitive": "local_search_pipeline",
@@ -896,6 +921,10 @@ def main() -> None:
     prepare.add_argument("--output-dir")
     prepare.add_argument("--model")
     prepare.add_argument("--timeout", type=int, default=120)
+    prepare.add_argument(
+        "--seniority-bands",
+        help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES expansion-derived seniority_bands and is threaded into the emitted execute_command",
+    )
     prepare.set_defaults(func=cmd_prepare)
 
     run = sub.add_parser("run", help="Run local search from a prepared payload")
@@ -910,6 +939,10 @@ def main() -> None:
     run.add_argument("--timeout", type=int, default=600)
     run.add_argument("--llm-timeout", type=int, default=3600, help="Timeout for LLM filter/rerank steps")
     run.add_argument("--force", action="store_true")
+    run.add_argument(
+        "--seniority-bands",
+        help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands in the payload",
+    )
     run.add_argument("--search-only", action="store_true", help="Skip LLM filter/rerank after retrieval + hydration (data path stays fully local either way)")
     run.add_argument("--filter-only", action="store_true", help="Run the cheap conservative LLM filter but skip LLM rerank")
     run.add_argument(
