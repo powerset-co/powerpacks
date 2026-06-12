@@ -40,6 +40,7 @@ from packs.indexing.lib.llm_config import (  # noqa: E402
     DEFAULT_OPENAI_CONCURRENCY, CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
     openai_price_multiplier,
 )
+from packs.indexing.lib.openai_stream import StopStreaming, drain_pool  # noqa: E402
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
@@ -680,6 +681,69 @@ async def call_openai_company_classifiers_async(
         await client.close()
 
 
+async def stream_openai_company_classifiers_async(
+    rows: list[dict[str, Any]],
+    *,
+    model: str | None,
+    api_key: str,
+    base_url: str,
+    timeout: int,
+    concurrency: int,
+    max_retries: int = 3,
+    rapidapi_contexts: list[dict[str, Any]] | None = None,
+    on_result: Any,
+) -> Any | None:
+    """Stream (index, enrichment) pairs to on_result as each call completes."""
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    contexts = rapidapi_contexts or [{}] * len(rows)
+
+    async def one(i: int) -> tuple[int, dict[str, Any]]:
+        enrichment = await call_openai_company_classifier_async(
+            client, rows[i], model=model, semaphore=semaphore,
+            max_retries=max_retries, rapidapi_context=contexts[i] or None,
+        )
+        return i, enrichment
+
+    def handle(pair: tuple[int, dict[str, Any]]) -> None:
+        on_result(pair[0], pair[1])
+
+    try:
+        return await drain_pool([one(i) for i in range(len(rows))], handle)
+    finally:
+        await client.close()
+
+
+def stream_openai_company_classifiers(
+    rows: list[dict[str, Any]],
+    *,
+    model: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    timeout: int | None = None,
+    concurrency: int | None = None,
+    max_retries: int = 3,
+    rapidapi_contexts: list[dict[str, Any]] | None = None,
+    on_result: Any,
+) -> Any | None:
+    api_key = api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY or --api-key is required for --provider openai; no API call was made")
+    if not rows:
+        return None
+    return asyncio.run(stream_openai_company_classifiers_async(
+        rows,
+        model=model,
+        api_key=api_key,
+        base_url=(base_url or os.getenv("POWERPACKS_OPENAI_BASE") or "https://api.openai.com/v1"),
+        timeout=timeout or int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS))),
+        concurrency=concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=DEFAULT_OPENAI_CONCURRENCY),
+        max_retries=max_retries,
+        rapidapi_contexts=rapidapi_contexts,
+        on_result=on_result,
+    ))
+
+
 def call_openai_company_classifiers(
     rows: list[dict[str, Any]],
     *,
@@ -854,7 +918,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return read_json(manifest) if manifest.exists() else {"status": "completed", "output": str(output_path)}
 
     batch: list[dict[str, Any]] = []
-    paid_pending: list[dict[str, Any]] = []
+    paid_pending: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
     usage_tier = getattr(args, "openai_usage_tier", None)
     paid_concurrency = int(
         getattr(args, "concurrency", None)
@@ -942,39 +1006,56 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             }
         return None
 
-    def flush_paid(force: bool = False) -> dict[str, Any] | None:
+    # Paid misses stream through one pool after the scan instead of blocking
+    # per-wave gathers; `queued` holds back the persisted resume watermark so
+    # a crash mid-pool re-queues misses past the watermark instead of losing
+    # them (out-of-order completions past it may re-pay on resume, same
+    # exposure as the old per-wave loss).
+    queued: set[int] = set()
+    last_scan_idx = int(state.get("input_rows_processed") or 0)
+
+    def effective_progress() -> int:
+        if queued:
+            return min(last_scan_idx, min(queued) - 1)
+        return last_scan_idx
+
+    def run_paid_streaming() -> dict[str, Any] | None:
         nonlocal paid_pending
-        paid_flush_size = max(1, min(paid_concurrency, int(args.checkpoint_every)))
-        if not paid_pending or (not force and len(paid_pending) < paid_flush_size):
+        if not paid_pending:
             return None
         pending = paid_pending
         paid_pending = []
-        # Resolve RapidAPI company context for richer LLM input.
-        rapidapi_contexts: list[dict[str, Any]] = []
-        if rapidapi_lookup and rapidapi_name_to_id:
-            for shaped in pending:
-                rapidapi_contexts.append(resolve_rapidapi_context(shaped.get("company_name"), rapidapi_lookup, rapidapi_name_to_id))
+        rows = [shaped for _, shaped, _ in pending]
+        contexts = [context for _, _, context in pending]
+        source_idxs = [i for i, _, _ in pending]
+
+        def on_company_result(pos: int, enrichment: dict[str, Any]) -> None:
+            merge_started = time.perf_counter()
+            batch.append(apply_rapidapi_context(merge_enrichment(rows[pos], enrichment), contexts[pos]))
+            add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
+            queued.discard(source_idxs[pos])
+            state["paid_calls"] = int(state.get("paid_calls") or 0) + 1
+            state["input_rows_processed"] = effective_progress()
+            partial = flush_output()
+            if partial:
+                raise StopStreaming(partial)
+
         try:
             openai_started = time.perf_counter()
-            enrichments = call_openai_company_classifiers(
-                pending,
+            partial = stream_openai_company_classifiers(
+                rows,
                 model=getattr(args, "model", None),
                 api_key=getattr(args, "api_key", None),
                 base_url=getattr(args, "base_url", None),
                 timeout=paid_timeout,
                 concurrency=paid_concurrency,
-                rapidapi_contexts=rapidapi_contexts or None,
+                rapidapi_contexts=contexts,
+                on_result=on_company_result,
             )
             add_timing(state, "openai_enrichment_seconds", time.perf_counter() - openai_started)
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
-        merge_started = time.perf_counter()
-        contexts = rapidapi_contexts or [{} for _ in pending]
-        for shaped, enrichment, context in zip(pending, enrichments, contexts):
-            batch.append(apply_rapidapi_context(merge_enrichment(shaped, enrichment), context))
-        add_timing(state, "merge_normalize_seconds", time.perf_counter() - merge_started)
-        state["paid_calls"] = int(state.get("paid_calls") or 0) + len(pending)
-        return flush_output(force=True)
+        return partial
 
     local_prepare_started = time.perf_counter()
     for idx, row in iter_unprocessed(input_path, int(state.get("input_rows_processed") or 0)):
@@ -999,26 +1080,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise SystemExit(f"missing precomputed company artifact for company_name={shaped.get('company_name')!r}")
             if not allow_paid:
                 raise SystemExit("company provider 'openai' requires --allow-paid; no paid API was called")
-            paid_pending.append(shaped)
-            add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
-            partial = flush_paid()
-            local_prepare_started = time.perf_counter()
-            if partial:
-                return partial
+            queued.add(idx)
+            context = resolve_rapidapi_context(shaped.get("company_name"), rapidapi_lookup, rapidapi_name_to_id) if (rapidapi_lookup and rapidapi_name_to_id) else {}
+            paid_pending.append((idx, shaped, context))
             shaped = None
         if shaped is not None:
             batch.append(shaped)
-        state["input_rows_processed"] = idx
+        last_scan_idx = idx
+        state["input_rows_processed"] = effective_progress()
         if len(batch) >= int(args.checkpoint_every):
             add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
-            partial = flush_paid(force=True) or flush_output()
+            partial = flush_output()
             local_prepare_started = time.perf_counter()
             if partial:
                 return partial
     add_timing(state, "shape_cache_prepare_seconds", time.perf_counter() - local_prepare_started)
-    partial = flush_paid(force=True)
+    partial = run_paid_streaming()
     if partial:
         return partial
+    state["input_rows_processed"] = last_scan_idx
     if batch:
         partial = flush_output(force=True)
         if partial:

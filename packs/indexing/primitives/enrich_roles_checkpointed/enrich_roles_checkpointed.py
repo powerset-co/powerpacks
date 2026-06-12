@@ -34,6 +34,7 @@ from packs.indexing.lib.llm_config import (  # noqa: E402
     DEFAULT_OPENAI_TIMEOUT_SECONDS, DEFAULT_OPENAI_CONCURRENCY,
     CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs, openai_price_multiplier,
 )
+from packs.indexing.lib.openai_stream import StopStreaming, drain_pool  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE = 250
@@ -462,6 +463,104 @@ async def call_openai_role_batch_async(
                 raise RuntimeError(f"OpenAI role batch enrichment returned invalid JSON: {exc}") from exc
 
 
+def _role_batch_units(
+    roles: list[dict[str, Any]],
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    timeout: int,
+    semaphore: asyncio.Semaphore,
+    max_retries: int,
+    batch_size: int,
+) -> list[Any]:
+    """Build per-batch coroutines; each resolves its own dropped-idx fallbacks."""
+    groups: dict[str, list[int]] = {}
+    for i, role in enumerate(roles):
+        groups.setdefault(role_cluster(role), []).append(i)
+
+    async def run_batch(cluster: str, idxs: list[int]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        sub = [roles[i] for i in idxs]
+        out: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        remaining = list(range(len(sub)))
+        if len(sub) > 1:
+            parsed = await call_openai_role_batch_async(
+                client, cluster, sub, model=model, timeout=timeout, semaphore=semaphore, max_retries=max_retries,
+            )
+            got: dict[int, dict[str, Any]] = {}
+            for item in parsed.get("classifications") or []:
+                if not isinstance(item, dict):
+                    continue
+                j = item.get("idx")
+                if isinstance(j, int) and 0 <= j < len(sub) and j not in got:
+                    got[j] = {k: v for k, v in item.items() if k != "idx"}
+            out.extend((sub[j], enrichment) for j, enrichment in got.items())
+            remaining = [j for j in range(len(sub)) if j not in got]
+        if remaining:
+            singles = await asyncio.gather(*[
+                call_openai_role_enrichment_async(client, sub[j], model=model, semaphore=semaphore, max_retries=max_retries)
+                for j in remaining
+            ])
+            out.extend((sub[j], enrichment) for j, enrichment in zip(remaining, singles))
+        return out
+
+    return [
+        run_batch(cluster, idxs[start:start + batch_size])
+        for cluster, idxs in groups.items()
+        for start in range(0, len(idxs), batch_size)
+    ]
+
+
+async def stream_role_enrichments_async(
+    roles: list[dict[str, Any]],
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout: int,
+    concurrency: int,
+    max_retries: int = 3,
+    batch_size: int | None = None,
+    on_result: Any,
+) -> Any | None:
+    """Stream (base, enrichment) pairs to on_result as each batch completes."""
+    batch_size = batch_size if batch_size is not None else role_batch_size()
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    units = _role_batch_units(
+        roles, client=client, model=model, timeout=timeout,
+        semaphore=semaphore, max_retries=max_retries, batch_size=batch_size,
+    )
+
+    def handle(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
+        for base, enrichment in pairs:
+            on_result(base, enrichment)
+
+    try:
+        return await drain_pool(units, handle)
+    finally:
+        await client.close()
+
+
+def stream_role_enrichments(
+    roles: list[dict[str, Any]],
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout: int,
+    concurrency: int,
+    max_retries: int = 3,
+    batch_size: int | None = None,
+    on_result: Any,
+) -> Any | None:
+    if not roles:
+        return None
+    return asyncio.run(stream_role_enrichments_async(
+        roles, api_key=api_key, base_url=base_url, model=model, timeout=timeout,
+        concurrency=concurrency, max_retries=max_retries, batch_size=batch_size, on_result=on_result,
+    ))
+
+
 async def call_openai_role_enrichments_async(
     roles: list[dict[str, Any]],
     *,
@@ -473,44 +572,17 @@ async def call_openai_role_enrichments_async(
     max_retries: int = 3,
     batch_size: int | None = None,
 ) -> list[dict[str, Any]]:
-    batch_size = batch_size if batch_size is not None else role_batch_size()
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
-    semaphore = asyncio.Semaphore(max(1, concurrency))
+    index_of = {id(role): i for i, role in enumerate(roles)}
     results: list[dict[str, Any] | None] = [None] * len(roles)
-    try:
-        if batch_size > 1:
-            groups: dict[str, list[int]] = {}
-            for i, role in enumerate(roles):
-                groups.setdefault(role_cluster(role), []).append(i)
 
-            async def run_batch(cluster: str, idxs: list[int]) -> None:
-                sub = [roles[i] for i in idxs]
-                parsed = await call_openai_role_batch_async(
-                    client, cluster, sub, model=model, timeout=timeout, semaphore=semaphore, max_retries=max_retries,
-                )
-                for item in parsed.get("classifications") or []:
-                    if not isinstance(item, dict):
-                        continue
-                    j = item.get("idx")
-                    if isinstance(j, int) and 0 <= j < len(idxs) and results[idxs[j]] is None:
-                        results[idxs[j]] = {k: v for k, v in item.items() if k != "idx"}
+    def on_result(base: dict[str, Any], enrichment: dict[str, Any]) -> None:
+        results[index_of[id(base)]] = enrichment
 
-            await asyncio.gather(*[
-                run_batch(cluster, idxs[start:start + batch_size])
-                for cluster, idxs in groups.items()
-                for start in range(0, len(idxs), batch_size)
-            ])
-        missing = [i for i, result in enumerate(results) if result is None]
-        if missing:
-            singles = await asyncio.gather(*[
-                call_openai_role_enrichment_async(client, roles[i], model=model, semaphore=semaphore, max_retries=max_retries)
-                for i in missing
-            ])
-            for i, enrichment in zip(missing, singles):
-                results[i] = enrichment
-        return results
-    finally:
-        await client.close()
+    await stream_role_enrichments_async(
+        roles, api_key=api_key, base_url=base_url, model=model, timeout=timeout,
+        concurrency=concurrency, max_retries=max_retries, batch_size=batch_size, on_result=on_result,
+    )
+    return results
 
 
 def call_openai_role_enrichments(
@@ -820,37 +892,57 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return {"status": "partial", "checkpoint": str(state_path(output_dir)), "chunks_written_total": state["chunks_written"], "input_rows_processed": state["input_rows_processed"], "timings": state.get("timings", {})}
         return None
 
-    def flush_paid(force: bool = False) -> dict[str, Any] | None:
+    # Paid misses stream through one pool after the scan instead of blocking
+    # per-wave gathers; `queued` holds back the persisted resume watermark so
+    # a crash mid-pool re-queues unwritten misses (written ones are skipped by
+    # seen_title_hashes, which only ever records durably written rows).
+    queued: dict[str, int] = {}
+    last_scan_idx = int(state.get("input_rows_processed") or 0)
+
+    def effective_progress() -> int:
+        if queued:
+            return min(last_scan_idx, min(queued.values()) - 1)
+        return last_scan_idx
+
+    def run_paid_streaming() -> dict[str, Any] | None:
         nonlocal paid_pending
-        paid_flush_size = max(1, min(paid_concurrency, int(args.checkpoint_every)))
-        if not paid_pending or (not force and len(paid_pending) < paid_flush_size):
+        if not paid_pending:
             return None
         pending = paid_pending
         paid_pending = []
+
+        def on_role_result(base: dict[str, Any], enrichment: dict[str, Any]) -> None:
+            batch.append(merge_role(base, enrichment))
+            seen_hashes.add(base["title_hash"])
+            queued.pop(base["title_hash"], None)
+            state["paid_calls"] = int(state.get("paid_calls") or 0) + 1
+            state["input_rows_processed"] = effective_progress()
+            partial = flush_output()
+            if partial:
+                raise StopStreaming(partial)
+
         try:
             openai_started = time.perf_counter()
-            enrichments = call_openai_role_enrichments(
+            partial = stream_role_enrichments(
                 pending,
                 api_key=api_key,
                 base_url=base_url,
                 model=model,
                 timeout=paid_timeout,
                 concurrency=paid_concurrency,
+                on_result=on_role_result,
             )
             add_timing(state, "openai_enrichment_seconds", time.perf_counter() - openai_started)
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
-        for base, enrichment in zip(pending, enrichments):
-            batch.append(merge_role(base, enrichment))
-        state["paid_calls"] = int(state.get("paid_calls") or 0) + len(pending)
-        return flush_output(force=True)
+        return partial
 
     local_prepare_started = time.perf_counter()
     for idx, person in iter_unprocessed_rows(flattened, int(state.get("input_rows_processed") or 0)):
         for position in get_positions(person):
             state["positions_seen"] = int(state.get("positions_seen") or 0) + 1
             base = role_input(person, position)
-            if not base or base["title_hash"] in seen_hashes:
+            if not base or base["title_hash"] in seen_hashes or base["title_hash"] in queued:
                 continue
             cached = input_classifications.get(base["title_hash"]) if input_classifications else None
             if cached is not None:
@@ -865,24 +957,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise SystemExit(f"missing input role classification for title_hash={base['title_hash']}")
                 if not api_key:
                     raise SystemExit("role provider requires OPENAI_API_KEY or --api-key; no paid API was called")
-                seen_hashes.add(base["title_hash"])
+                queued[base["title_hash"]] = idx
                 paid_pending.append(base)
-                add_timing(state, "local_input_prepare_seconds", time.perf_counter() - local_prepare_started)
-                partial = flush_paid()
-                local_prepare_started = time.perf_counter()
-                if partial:
-                    return partial
-        state["input_rows_processed"] = idx
+        last_scan_idx = idx
+        state["input_rows_processed"] = effective_progress()
         if len(batch) >= args.checkpoint_every:
             add_timing(state, "local_input_prepare_seconds", time.perf_counter() - local_prepare_started)
-            partial = flush_paid(force=True) or flush_output()
+            partial = flush_output()
             local_prepare_started = time.perf_counter()
             if partial:
                 return partial
     add_timing(state, "local_input_prepare_seconds", time.perf_counter() - local_prepare_started)
-    partial = flush_paid(force=True)
+    partial = run_paid_streaming()
     if partial:
         return partial
+    state["input_rows_processed"] = last_scan_idx
     if batch:
         partial = flush_output(force=True)
         if partial:
