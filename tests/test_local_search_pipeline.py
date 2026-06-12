@@ -982,9 +982,13 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertNotIn("resolve_set_operators", step_ids)
             expand = next(step for step in state["steps"] if step["id"] == "expand_search_request")
             filters = expand["output"]["role_search_filters"]
-            self.assertEqual(filters["set_id"], "wrong-set")
-            self.assertEqual(filters["operator_ids"], ["wrong-operator"])
-            self.assertEqual(filters["allowed_operator_ids"], ["wrong-operator"])
+            # There is no concept of a set/operator locally: the scope keys are
+            # stripped from the executable payload outright (reported via
+            # ignored_remote_scope_keys above), not carried along and ignored.
+            self.assertNotIn("set_id", filters)
+            self.assertNotIn("operator_ids", filters)
+            self.assertNotIn("allowed_operator_ids", filters)
+            self.assertNotIn("wrong-operator", json.dumps(state))
 
             hydrate = next(step for step in state["steps"] if step["id"] == "hydrate_people")
             self.assertEqual(hydrate["output"]["source"]["backend"], "duckdb")

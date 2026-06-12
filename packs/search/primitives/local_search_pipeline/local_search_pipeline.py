@@ -526,6 +526,13 @@ def prepare_local_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list
         }
     )
 
+    # There is no concept of a set/operator locally — scope is the DuckDB
+    # file itself. Remove the keys outright rather than relying on every
+    # downstream consumer to ignore them.
+    for key in REMOTE_SCOPE_KEYS:
+        sanitized.pop(key, None)
+        filters.pop(key, None)
+
     unsupported = sorted(key for key in UNSUPPORTED_LOCAL_FILTERS if is_present(filters.get(key)))
     if unsupported:
         raise PipelineError(f"local_search_pipeline does not support these remote-only filters yet: {', '.join(unsupported)}")
@@ -709,8 +716,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
         raise PipelineError("Need --payload-json, or --state with an expand_search_request step")
     payload = normalize_query_expansion_payload(payload, query=args.query)
-    payload = apply_local_title_clustering(payload, args.db_path)
     payload, ignored_scope_keys = prepare_local_payload(payload)
+    payload = apply_local_title_clustering(payload, args.db_path)
     if args.payload_json:
         sanitized_path = ledger_path.parent / f"{ledger_path.stem}.local-payload.json"
         write_json(sanitized_path, payload)
@@ -850,8 +857,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             raise PipelineError(f"expand_search_request failed rc={proc.returncode}: {((proc.stderr or proc.stdout or '').strip())[-1200:]}")
         expanded = parsed[-1] if parsed else {}
         payload = normalize_query_expansion_payload(payload_from_expand_output(expanded), query=args.query)
-        payload = apply_local_title_clustering(payload, db_path)
         payload, removed_scope_keys = prepare_local_payload(payload)
+        payload = apply_local_title_clustering(payload, db_path)
         write_json(full_json, expanded)
         write_json(payload_json, payload)
         execute_command = (
