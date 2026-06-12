@@ -28,6 +28,8 @@ try:
     from packs.ingestion.schemas.people_schema import (
         LIST_VALUE_COLUMNS,
         PEOPLE_SCHEMA_COLUMNS,
+        latest_interaction,
+        merge_interaction_counts,
         normalize_people_row,
         stable_linkedin_key,
         extract_public_identifier,
@@ -38,6 +40,8 @@ except ModuleNotFoundError:
     from packs.ingestion.schemas.people_schema import (
         LIST_VALUE_COLUMNS,
         PEOPLE_SCHEMA_COLUMNS,
+        latest_interaction,
+        merge_interaction_counts,
         normalize_people_row,
         stable_linkedin_key,
         extract_public_identifier,
@@ -46,6 +50,8 @@ except ModuleNotFoundError:
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
 MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources", "merged_row_count", "needs_review"]
+# Merged channel-wise (max) / by recency instead of first-non-empty choose().
+INTERACTION_MERGE_COLUMNS = {"interaction_counts", "last_interaction"}
 REVIEW_COLUMNS = ["left_id", "right_id", "left_name", "right_name", "similarity", "left_sources", "right_sources", "reason"]
 NETWORK_CONTACT_COLUMNS = [
     "contact_id",
@@ -254,6 +260,14 @@ def message_row_to_people(row: dict[str, str], path: Path) -> dict[str, str]:
     linkedin = row.get("matched_linkedin_url", "")
     full_name = row.get("matched_name") or row.get("name") or ""
     parts = full_name.split(" ", 1)
+    interaction_counts: dict[str, int] = {}
+    for count_key, channel in (("imessage_message_count", "imessage"), ("whatsapp_message_count", "whatsapp")):
+        try:
+            count = int(float(row.get(count_key) or 0))
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            interaction_counts[channel] = count
     people = {
         "id": row.get("matched_person_id") or f"message:{sha((row.get('phone') or '') + full_name)}",
         "linkedin_url": linkedin,
@@ -267,6 +281,10 @@ def message_row_to_people(row: dict[str, str], path: Path) -> dict[str, str]:
         "source_artifacts": str(path),
         "summary": f"message_count={row.get('message_count','')}; last_message={row.get('last_message','')}",
         "enrichment_provider": row.get("match_method") or "messages_contact_match",
+        "interaction_counts": json.dumps(interaction_counts, ensure_ascii=False) if interaction_counts else "",
+        "last_interaction": latest_interaction(
+            row.get("imessage_last_message"), row.get("whatsapp_last_message"), row.get("last_message")
+        ),
     }
     return normalize_people_row(people)
 
@@ -435,7 +453,7 @@ def merge_group(key: str, rows: list[dict[str, str]]) -> dict[str, Any]:
     artifacts: set[str] = set()
     for row in rows:
         for col in PEOPLE_SCHEMA_COLUMNS:
-            if col in LIST_VALUE_COLUMNS:
+            if col in LIST_VALUE_COLUMNS or col in INTERACTION_MERGE_COLUMNS:
                 continue
             merged[col] = choose(merged.get(col, ""), row.get(col, ""))
         for src in (row.get("source_channels") or "").split(","):
@@ -452,6 +470,9 @@ def merge_group(key: str, rows: list[dict[str, str]]) -> dict[str, Any]:
             aliases = listish_values(merged[col])
             if aliases:
                 merged[primary_col] = aliases[0]
+    counts = merge_interaction_counts(*[row.get("interaction_counts", "") for row in rows])
+    merged["interaction_counts"] = json.dumps(counts, ensure_ascii=False) if counts else ""
+    merged["last_interaction"] = latest_interaction(*[row.get("last_interaction", "") for row in rows])
     merged["source_channels"] = ",".join(sorted(sources))
     merged["source_artifacts"] = compact_source_artifacts(sorted(artifacts))
     merged["merge_key"] = key

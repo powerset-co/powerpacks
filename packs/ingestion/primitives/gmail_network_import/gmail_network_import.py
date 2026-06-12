@@ -26,10 +26,18 @@ from pathlib import Path
 from typing import Any, Iterable
 
 try:
-    from packs.ingestion.schemas.people_schema import generate_person_id as generate_linkedin_person_id
+    from packs.ingestion.schemas.people_schema import (
+        PEOPLE_SCHEMA_COLUMNS,
+        generate_person_id as generate_linkedin_person_id,
+        normalize_interaction_timestamp,
+    )
 except ModuleNotFoundError:  # pragma: no cover - direct script fallback
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import generate_person_id as generate_linkedin_person_id
+    from packs.ingestion.schemas.people_schema import (
+        PEOPLE_SCHEMA_COLUMNS,
+        generate_person_id as generate_linkedin_person_id,
+        normalize_interaction_timestamp,
+    )
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/discover/gmail-one/ledger.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
@@ -190,40 +198,7 @@ LINKEDIN_RESOLUTION_QUEUE_COLUMNS = [
 ]
 LINKEDIN_RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
 ACCOUNT_COLUMNS = ["account_id", "account_email", "provider", "source", "added_at"]
-PEOPLE_COLUMNS = [
-    "id",
-    "public_identifier",
-    "linkedin_url",
-    "first_name",
-    "last_name",
-    "full_name",
-    "headline",
-    "summary",
-    "city",
-    "state",
-    "country",
-    "location_raw",
-    "profile_picture_url",
-    "work_experiences",
-    "education",
-    "current_title",
-    "current_company",
-    "current_company_urn",
-    "entity_urn",
-    "enrichment_provider",
-    "enriched_at",
-    "harmonic_response",
-    "harmonic_location",
-    "rapidapi_response",
-    "twitter_handle",
-    "twitter_response",
-    "primary_email",
-    "all_emails",
-    "primary_phone",
-    "all_phones",
-    "source_channels",
-    "source_artifacts",
-]
+PEOPLE_COLUMNS = list(PEOPLE_SCHEMA_COLUMNS)
 PIPELINE_STEPS = ["seed_one", "prepare_local_workspace", "write_next_steps"]
 
 
@@ -882,6 +857,10 @@ def people_rows_from_msgvault(rows: list[dict[str, Any]], source_artifacts: list
     for row in rows:
         first_name, last_name = split_name(row.get("display_name") or "")
         person = {col: "" for col in PEOPLE_COLUMNS}
+        try:
+            total_messages = int(float(row.get("total_messages") or 0))
+        except (TypeError, ValueError):
+            total_messages = 0
         person.update({
             "id": f"gmail:{short_hash(row['email'], 16)}",
             "first_name": first_name,
@@ -893,6 +872,8 @@ def people_rows_from_msgvault(rows: list[dict[str, Any]], source_artifacts: list
             "all_emails": json.dumps([row["email"]]),
             "source_channels": "gmail_msgvault",
             "source_artifacts": json.dumps(source_artifacts, ensure_ascii=False),
+            "interaction_counts": json.dumps({"gmail": total_messages}) if total_messages > 0 else "",
+            "last_interaction": normalize_interaction_timestamp(row.get("last_interaction")),
         })
         people.append(person)
     return people

@@ -12,6 +12,8 @@ try:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
+        latest_interaction,
+        merge_interaction_counts,
         normalize_linkedin_url,
         normalize_people_row,
     )
@@ -22,6 +24,8 @@ except ModuleNotFoundError:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
+        latest_interaction,
+        merge_interaction_counts,
         normalize_linkedin_url,
         normalize_people_row,
     )
@@ -738,6 +742,11 @@ def materialize_source_merged_people_csv(input_csvs: list[str], output_csv: Path
                     current[col] = ",".join(unique_strings((current.get(col, "").split(",") if current.get(col) else []) + (row.get(col, "").split(",") if row.get(col) else [])))
                 elif col == "source_artifacts":
                     current[col] = merge_jsonish_lists(current.get(col, ""), row.get(col, ""))
+                elif col == "interaction_counts":
+                    counts = merge_interaction_counts(current.get(col, ""), row.get(col, ""))
+                    current[col] = json.dumps(counts, ensure_ascii=False) if counts else ""
+                elif col == "last_interaction":
+                    current[col] = latest_interaction(current.get(col, ""), row.get(col, ""))
                 else:
                     current[col] = merge_people_values(current.get(col, ""), row.get(col, ""))
     rows = [merged[key] for key in sorted(merged)]

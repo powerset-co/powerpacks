@@ -69,7 +69,10 @@ LOCAL_PROFILE_HYDRATE_COLUMNS = [
     "education",
     "hydrated_context",
 ]
-LOCAL_INTERACTION_SUMMARY_TABLES = ("local_person_source_summary", "person_source_summary")
+# Ordered by preference: dedicated summary tables win (setdefault below);
+# local_person_profiles carries denormalized total_interactions on the normal
+# local index build and fills anyone the summary tables miss.
+LOCAL_INTERACTION_SUMMARY_TABLES = ("local_person_source_summary", "person_source_summary", "local_person_profiles")
 LOCAL_POSITION_HYDRATE_COLUMNS = [
     "id",
     "position_id",
@@ -375,7 +378,10 @@ def local_interaction_counts(conn: Any, person_ids: list[str]) -> dict[str, int]
         for person_id, total in rows:
             # Prefer the explicit local table when both local and restored prod-shaped
             # tables coexist, but let later tables fill IDs that were absent upstream.
-            counts.setdefault(str(person_id), int(total or 0))
+            # Zero totals mean "no interaction data recorded" (e.g. the denormalized
+            # profile column on a person with no message sources), not a real count.
+            if int(total or 0) > 0:
+                counts.setdefault(str(person_id), int(total or 0))
     return counts
 
 

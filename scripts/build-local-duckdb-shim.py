@@ -42,6 +42,7 @@ DUCKDB_LOCK_NAME = ".local-search-duckdb.lock"
 
 from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract  # noqa: E402
 from packs.indexing.lib.people import build_people_records, flatten_people  # noqa: E402
+from packs.ingestion.schemas.people_schema import parse_interaction_counts  # noqa: E402
 _limit = sys.maxsize
 while True:
     try:
@@ -135,6 +136,9 @@ LOCAL_ONLY_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "work_experiences": "JSON",
         "education": "JSON",
         "hydrated_context": "JSON",
+        "interaction_counts": "JSON",
+        "total_interactions": "BIGINT",
+        "last_interaction": "VARCHAR",
         "allowed_operator_ids": "VARCHAR[]",
     },
     "local_company_signals": {
@@ -878,6 +882,9 @@ def materialize_person_profiles_from_csv(source: Path, run_dir: Path, operator_i
                 "work_experiences": work,
                 "education": edu,
                 "hydrated_context": context,
+                "interaction_counts": parse_interaction_counts(row.get("interaction_counts")),
+                "total_interactions": sum(parse_interaction_counts(row.get("interaction_counts")).values()),
+                "last_interaction": str(row.get("last_interaction") or ""),
                 "allowed_operator_ids": [operator_id],
             }
 
