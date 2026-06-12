@@ -78,8 +78,8 @@ def messages_import_diff(review_csv: Path) -> dict:
     input_people = preview_dir / "people.input.csv"
     manifest_path = preview_dir / "people_manifest.json"
     materialized = messages_helpers.materialize_messages_review_people(review_csv, input_people, manifest_path)
-    people_csv = Path(str(materialized.get("people_csv") or ""))
-    candidate_rows = directory_rows_from_people_csv(people_csv, source="messages") if people_csv.exists() else []
+    people_csv = Path(str(materialized.get("people_csv") or "")) if materialized.get("people_csv") else None
+    candidate_rows = directory_rows_from_people_csv(people_csv, source="messages") if people_csv and people_csv.is_file() else []
     existing_keys = directory_source_keys(DEFAULT_DIRECTORY_CSV)
     new_rows = [row for row in candidate_rows if row.get("source_key") and row["source_key"] not in existing_keys]
     return {
@@ -87,7 +87,7 @@ def messages_import_diff(review_csv: Path) -> dict:
         "candidate_rows": len(candidate_rows),
         "new_rows": len(new_rows),
         "existing_directory_rows": len(existing_keys),
-        "people_input_csv": str(people_csv) if people_csv.exists() else "",
+        "people_input_csv": str(people_csv) if people_csv and people_csv.is_file() else "",
         "people_input_manifest": str(manifest_path),
     }
 
