@@ -10,6 +10,7 @@ import { LocalContactsPage } from "./LocalContactsPage";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
 import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
+import { LocalOnboardingV3Page } from "./LocalOnboardingV3Page";
 import { LocalEnvPage } from "./LocalEnvPage";
 import { LocalPersonDetailsPage } from "./LocalPersonDetailsPage";
 import { LocalCompaniesPage } from "./LocalCompaniesPage";
@@ -35,6 +36,7 @@ type LocalView =
   | "companyDetails"
   | "setup"
   | "onboardingV2"
+  | "onboardingV3"
   | "messagesReview"
   | "env"
   | "runs";
@@ -51,6 +53,7 @@ function personIdFromPath(): string | null {
 
 function viewFromPath(): LocalView {
   if (window.location.pathname === "/onboarding-v2") return "onboardingV2";
+  if (window.location.pathname === "/onboarding-v3") return "onboardingV3";
   if (window.location.pathname === "/onboarding") return "setup";
   if (personIdFromPath()) return "personDetails";
   if (window.location.pathname === "/contacts") return "contacts";
@@ -263,6 +266,8 @@ export function LocalPowerpacksApp() {
               <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
             ) : activeView === "onboardingV2" ? (
               <LocalOnboardingV2Page />
+            ) : activeView === "onboardingV3" ? (
+              <LocalOnboardingV3Page />
             ) : activeView === "env" ? (
               <LocalEnvPage />
             ) : activeView === "contacts" ? (

@@ -11,6 +11,7 @@ export const runsDir = path.join(powerpacksStateRoot, "runs");
 export const onboardingV2LinkedInRunsDir = path.join(powerpacksStateRoot, "runs", "setup-linkedin-csv");
 export const onboardingV2GmailRunsDir = path.join(powerpacksStateRoot, "runs", "setup-gmail");
 export const onboardingV2MessagesRunsDir = path.join(powerpacksStateRoot, "runs", "setup-messages");
+export const onboardingV3LinkedInRunsDir = path.join(powerpacksStateRoot, "runs", "setup-linkedin-modal");
 export const setupLedgerPath = path.join(powerpacksStateRoot, "setup", "setup-run.json");
 export const accountsPath = path.join(powerpacksStateRoot, "ingestion", "accounts.json");
 export const importRefreshLedgerPath = path.join(powerpacksRepoRoot, discoverContactsSetupLedger);

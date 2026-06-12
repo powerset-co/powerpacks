@@ -42,6 +42,18 @@ export function onboardingV2LinkedInCommand(command: "dry-run" | "run", operator
   return args;
 }
 
+export function onboardingV3PipelineCommand(options: { csvPath: string; sourceLabel?: string; force?: boolean }) {
+  const args = [
+    "uv", "run", "--project", ".", "python",
+    "packs/indexing/modal/linkedin_modal_pipeline.py",
+    "pipeline",
+    "--csv", options.csvPath,
+  ];
+  if (options.sourceLabel) args.push("--source-user", options.sourceLabel);
+  if (options.force) args.push("--force");
+  return args;
+}
+
 export function normalizeEmailList(value: unknown): string[] {
   const values = Array.isArray(value)
     ? value.flatMap((item) => String(item).split(/[,\n\s]+/))

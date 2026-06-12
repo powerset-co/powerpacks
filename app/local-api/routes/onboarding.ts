@@ -8,6 +8,7 @@ import {
   onboardingV2GmailRunsDir,
   onboardingV2LinkedInRunsDir,
   onboardingV2MessagesRunsDir,
+  onboardingV3LinkedInRunsDir,
   powerpacksRepoRoot,
   powerpacksStateRoot,
   setupLedgerPath,
@@ -23,7 +24,7 @@ import {
   resolveOperator,
 } from "../lib/accounts";
 import { messagesLinkStatus, sourceSlug } from "../lib/sources";
-import { onboardingV2LinkedInCommand } from "../lib/commands";
+import { onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
 import { readRequestJson, sendJson } from "../lib/http";
 import { setupJobsList, startSetupJob } from "../jobs";
 import type { SetupJob, SetupJobStage } from "../lib/types";
@@ -242,6 +243,34 @@ function resolveOnboardingV2RunId(body: Record<string, any>): string {
   return runId;
 }
 
+// Onboarding v3: LinkedIn csv -> Modal sandboxes (Importing -> Indexing). The
+// Python driver mirrors sandbox progress into the same status.json/events.jsonl
+// shape, so the generic v2 status reader works unchanged.
+const ONBOARDING_V3_LINKEDIN: OnboardingV2Vertical = {
+  vertical: "linkedin_modal",
+  action: "onboarding-v3-linkedin",
+  actionKeyPrefix: "onboarding-v3:linkedin:",
+  runsDir: onboardingV3LinkedInRunsDir,
+  defaultStages: [
+    { id: "importing", label: "Importing contacts" },
+    { id: "indexing", label: "Building search index" },
+  ],
+};
+
+function startOnboardingV3LinkedIn(body: Record<string, any>): SetupJob {
+  const existing = runningOnboardingV2VerticalJob(ONBOARDING_V3_LINKEDIN);
+  if (existing) return existing;
+  const command = onboardingV3PipelineCommand({
+    csvPath: safeOnboardingV2LinkedInCsvPath(body.csvPath) || "",
+    sourceLabel: String(body.sourceLabel || "").trim() || undefined,
+    force: body.force === true,
+  });
+  return startSetupJob(ONBOARDING_V3_LINKEDIN.action, command, 6 * 60 * 60 * 1000, {
+    source: ONBOARDING_V3_LINKEDIN.vertical,
+    stages: onboardingV2JobStages(ONBOARDING_V3_LINKEDIN),
+  });
+}
+
 function onboardingV2JobStages(config: OnboardingV2Vertical): SetupJobStage[] {
   return config.defaultStages.map((stage, index) => ({ label: stage.label, index: index + 1, total: config.defaultStages.length }));
 }
@@ -341,6 +370,17 @@ function startOnboardingV2Messages(body: Record<string, any>): SetupJob {
 }
 
 export async function handleOnboardingV2Routes(req: any, res: any, url: URL): Promise<boolean> {
+  if (url.pathname === "/local-api/onboarding-v3/linkedin/status") {
+    sendJson(res, onboardingV2Status(ONBOARDING_V3_LINKEDIN));
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding-v3/linkedin/run" && req.method === "POST") {
+    const job = startOnboardingV3LinkedIn(await readRequestJson(req));
+    sendJson(res, { job, status: onboardingV2Status(ONBOARDING_V3_LINKEDIN) });
+    return true;
+  }
+
   if (url.pathname === "/local-api/onboarding-v2/linkedin/status") {
     sendJson(res, onboardingV2LinkedInStatus());
     return true;
