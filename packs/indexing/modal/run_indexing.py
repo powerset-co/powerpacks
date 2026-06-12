@@ -23,10 +23,12 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path("/repo")
+sys.path.insert(0, str(REPO))
+
+from packs.indexing.modal.sandbox_common import merge_cache_file, now_iso, write_status  # noqa: E402
 PIPELINE = REPO / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
 DUCKDB_SHIM = REPO / "scripts/build-local-duckdb-shim.py"
 BENCH = REPO / "packs/indexing/modal/bench_wrapper.py"
@@ -55,63 +57,8 @@ WORK_TO_CACHE = {
 }
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def write_status(run_vol: Path, payload: dict) -> None:
-    run_vol.mkdir(parents=True, exist_ok=True)
-    tmp = run_vol / "status.json.tmp"
-    tmp.write_text(json.dumps(payload | {"updated_at": now_iso()}, indent=2))
-    tmp.replace(run_vol / "status.json")
-
-
-def row_key(row: dict, key_fields: tuple[str, ...]) -> str:
-    for field in key_fields:
-        value = str(row.get(field) or "").strip()
-        if value:
-            return f"{field}={value}"
-    return ""
-
-
-def merge_cache_file(new_rows_path: Path, cache_path: Path, key_fields: tuple[str, ...]) -> tuple[int, int]:
-    """Union-merge: new rows win for shared keys, existing cache rows for keys
-    the run did not touch are preserved. Streaming with a seen-key set; atomic
-    tmp+rename so concurrent runs cannot corrupt the file (a lost race only
-    delays a row until the next run re-adds it)."""
-    seen: set[str] = set()
-    tmp = cache_path.parent / (cache_path.name + f".tmp-{new_rows_path.stat().st_ino}")
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    new_count = 0
-    kept_count = 0
-    with tmp.open("w", encoding="utf-8") as out:
-        with new_rows_path.open(encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                key = row_key(json.loads(line), key_fields)
-                if key and key in seen:
-                    continue
-                if key:
-                    seen.add(key)
-                out.write(line + "\n")
-                new_count += 1
-        if cache_path.exists():
-            with cache_path.open(encoding="utf-8") as handle:
-                for line in handle:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    key = row_key(json.loads(line), key_fields)
-                    if key and key in seen:
-                        continue
-                    if key:
-                        seen.add(key)
-                    out.write(line + "\n")
-                    kept_count += 1
-    tmp.replace(cache_path)
-    return new_count, kept_count
 
 
 def main() -> int:
