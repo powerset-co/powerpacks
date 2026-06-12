@@ -87,7 +87,9 @@ Apply the same trait rules as Task 1b with these adjustments:
 - Location: use the person's metro as the default search scope; widen on
   user request. It is scope, not a trait.
 - Set `usable_cutoff` from the person's current band, same wording rules as
-  a JD run.
+  a JD run, and derive `seniority_bands` from the current role's explicit
+  level the same way as Task 1b (one band up within the same track; never
+  from years of experience).
 
 ### S3. Candidate profile design
 
@@ -220,6 +222,50 @@ Instead, calibrate the role level:
 Record the seniority policy in `plan.json` as `usable_cutoff` — the automated
 evaluation primitive reads it and enforces it as a hard gate.
 
+#### Seniority bands (hard retrieval filter)
+
+Alongside `usable_cutoff`, derive canonical `seniority_bands` deterministically
+from the JD's **explicit level language only** and record them in `plan.json`
+as `seniority_bands` (next to `usable_cutoff`). Task 2 pins these bands on
+every profile search via `--seniority-bands`, so retrieval itself only returns
+in-band candidates instead of paying hydration and evaluation cost on
+out-of-band people.
+
+Derivation rules:
+
+1. **Explicit level language only.** Map level words in the JD title and
+   requirements to canonical bands:
+   - title modifiers: "Senior" → `senior`; "Staff" → `staff`; "Principal" →
+     `principal`; "Lead" → `senior`; "Junior" → `junior`;
+     "Intern"/"Internship" → `trainee`; "Entry-level"/"New grad" → `entry`
+   - leadership titles: "Manager" → `manager`; "Director" → `director`;
+     "VP"/"Vice President" → `vice-president`; "Head of X" → `director` +
+     `vice-president`; "Chief X Officer"/"C-level"/"executive" (standalone) →
+     `c-suite`; "Partner" → `partner`; "Owner" → `owner`
+   - beware titles where "executive" is not a level: Account Executive,
+     Executive Assistant, Executive Producer are not c-suite
+
+   Canonical values (hyphenated, must match the index):
+   `owner`, `partner`, `c-suite`, `vice-president`, `director`, `principal`,
+   `staff`, `manager`, `senior`, `mid`, `junior`, `entry`, `trainee`.
+2. **Adjacent-band tolerance: include one band up within the same track.**
+   People one band above the JD's level still plausibly apply. Widen each
+   derived band with its next band up — IC track: `entry` < `junior` < `mid` <
+   `senior` < `staff` < `principal`; management track: `manager` < `director`
+   < `vice-president` < `c-suite`. Examples: "Senior Data Engineer" →
+   `["senior", "staff"]`; "Director of Engineering" → `["director",
+   "vice-president"]`. Top-of-track bands (`principal`, `c-suite`) and
+   `partner`/`owner` get no extra band. Explicit ranges override adjacency:
+   "senior or above"/"senior+" → `["senior", "staff", "principal"]`;
+   "director and above" → `["director", "vice-president", "c-suite"]`.
+3. **Never derive bands from years of experience**, team size, scope, or
+   impact language. "8+ years" does not mean senior; "owns the roadmap end to
+   end" does not mean director. YOE is unreliable — only explicit level words
+   count.
+4. **No explicit level language → empty list.** Write `"seniority_bands": []`,
+   run profile searches without the flag (retrieval stays unfiltered), and let
+   the `usable_cutoff` evaluation gate be the only seniority enforcement.
+
 #### What to ignore
 
 Do not create traits for:
@@ -258,6 +304,9 @@ Before writing `plan.json`, check:
   already implies them.
 - The plan explicitly calibrates seniority (`usable_cutoff`) so junior profiles
   are not retrieved for senior roles and executives are gated for IC roles.
+- `seniority_bands` contains only canonical band values derived from explicit
+  level language plus one-band-up adjacency — never from years of experience —
+  and is an empty list when the JD names no level.
 - Screening/close concerns are ignored entirely.
 
 ### 1c. Candidate Profile Design
@@ -340,13 +389,23 @@ kept after retrieval, which caps the entire downstream pipeline cost.
 ### 1d. Plan Preview
 
 Write `plan.json` to the run directory conforming to
-`packs/search/schemas/search-network-jd-plan.schema.json`.
+`packs/search/schemas/search-network-jd-plan.schema.json`, then validate it:
+
+```bash
+uv run --project . python packs/search/primitives/validate_artifact/validate_artifact.py \
+    --schema search-network-jd-plan --file <run_dir>/plan.json
+```
+
+Fix any reported violations before proceeding. This is the only supported
+validation path — do not import `jsonschema` in ad-hoc scripts.
 
 Important schema semantics:
 
 - `set_scope` is execution metadata only.
 - `search_scope` captures location or sourcing scope; it is not a job-fit trait.
 - `usable_cutoff` is the seniority policy the evaluation primitive enforces.
+- `seniority_bands` is the canonical retrieval filter derived in Task 1b;
+  Task 2 pins it on every profile search. Empty list = no retrieval filter.
 - `initial_probes[]` holds the candidate profiles (legacy field name).
 - `initial_probes[].query` is the exact English query passed to
   `$search-network`; `targets_traits` must reference actual English trait
@@ -385,18 +444,34 @@ the `$search-network` skill by passing:
    keeps the cheap conservative LLM filter (reject clear junk, pass anything
    uncertain) but skips the expensive per-search LLM rerank. Final ranking is
    owned by the evaluation primitive in Task 5, which sees the full JD context.
+4. **pinned seniority bands** — when `plan.json` has a non-empty
+   `seniority_bands`, append `--seniority-bands` with the comma-joined plan
+   bands to the pipeline `execute_command`, e.g.:
+
+   ```
+   ... search_network_pipeline.py run ... --limit 100 --filter-only --seniority-bands senior,staff
+   ```
+
+   The flag works identically on `local_search_pipeline.py run` commands. It
+   REPLACES whatever `seniority_bands` query expansion inferred from that one
+   profile query — the plan's JD-derived bands are the hard constraint — and
+   retrieval then only returns positions whose `seniority_band` is in the
+   pinned set. If the plan's `seniority_bands` is empty, omit the flag
+   entirely; never invent bands at search time.
 
 Do not call `search_network_pipeline.py` directly from this skill except to
-append the `--limit` and `--filter-only` flags to the `execute_command` that
-`$search-network` produced.
+append the `--limit`, `--filter-only`, and `--seniority-bands` flags to the
+`execute_command` that `$search-network` produced.
 
 The delegated input must be only the profile's English `query` value. Do not
 send a JSON object or internal labels.
 
 For each profile search:
-1. Run `$search-network` with the profile's `query`, limit, and filter-only mode
+1. Run `$search-network` with the profile's `query`, limit, filter-only mode,
+   and the plan's pinned seniority bands (when non-empty)
 2. Skip the user approval gate — the plan approval covers all profile searches
-3. Collect the result: artifact_dir, csv path, found_count
+3. Capture the `state` path from the pipeline's JSON output — it is the only
+   thing Result Collection needs per search
 
 Prefer sub-agents (one per profile) when the harness supports workers.
 Otherwise run sequentially.
@@ -410,13 +485,40 @@ budget`:
 2. **Rewrite as a role-only semantic query.** Strip industry/sector/company
    qualifier terms; move them into the role description so they land in
    `semantic_query` instead of company filters.
-3. Record the fallback in `probe_summaries.json` with the original id +
-   `_role_only` suffix and `fallback_reason: "turbopuffer_permit_overflow"`.
+3. In Result Collection, pass the fallback run's state with
+   `--probe-id <original_id>_role_only` and
+   `--fallback-reason <original_id>_role_only=turbopuffer_permit_overflow`.
 
 ### Result Collection
 
-For each completed profile search, record in `probe_summaries.json`
-(legacy filename):
+After the profile searches finish, GENERATE `probe_summaries.json` (legacy
+filename) by running the collector — do not hand-write the file:
+
+```bash
+uv run --project . python packs/search/primitives/merge_candidate_frontier/merge_candidate_frontier.py \
+    collect-probes \
+    --run-dir <run_dir> \
+    --probe-id <profile_id_1> --state <state_json_1> \
+    --probe-id <profile_id_2> --state <state_json_2>
+```
+
+- One `--probe-id`/`--state` pair per profile search, in plan order. The Nth
+  `--probe-id` labels the Nth `--state`; use the plan's profile ids. Each
+  `--state` is the task state JSON path the pipeline printed
+  (`.powerpacks/runs/<task_id>-<slug>.json`).
+- Add `--fallback-reason <probe_id>=<reason>` for permit-overflow fallback
+  runs (see above).
+- The command reads each state's `query` and persisted `artifacts`
+  (artifact_dir, csv, row_count) and overwrites
+  `<run_dir>/probe_summaries.json` deterministically; re-running with the same
+  states produces the same file.
+
+The canonical shape is a **bare JSON list** of probe objects
+(`packs/search/schemas/probe-summaries.schema.json`). Hand-authoring or
+wrapping the list in an object (`{"probes": [...]}`) is forbidden; downstream
+primitives only tolerate the legacy wrapper for old runs.
+
+Field reference (all produced by the command):
 
 | Field | Value |
 |-------|-------|
@@ -486,8 +588,9 @@ uv run --project . python packs/search/primitives/merge_candidate_frontier/merge
     --run-dir <run_dir>
 ```
 
-It reads `probe_summaries.json` and `plan.json`, dedupes by `person_id` and
-normalized `linkedin_url`, and writes:
+It reads `probe_summaries.json` (the bare list written by `collect-probes`;
+the legacy object wrapper from old runs is tolerated) and `plan.json`, dedupes
+by `person_id` and normalized `linkedin_url`, and writes:
 
 | File | Content |
 |------|---------|
@@ -591,7 +694,7 @@ Append lineage events: `evaluations_captured`, `shortlist_exported`.
 <run_dir>/
 ├── source.txt, source.json           ← Task 1
 ├── plan.json                          ← Task 1 (profiles under initial_probes)
-├── probe_summaries.json               ← Task 2 (legacy filename)
+├── probe_summaries.json               ← Task 2 (collect-probes; bare list, legacy filename)
 ├── lineage.json                       ← Tasks 1-5
 ├── candidate_frontier.json/.jsonl     ← Task 4
 ├── candidates.debug.csv               ← Task 4

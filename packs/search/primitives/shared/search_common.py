@@ -299,6 +299,28 @@ def _derive_company_current_from_traits(traits: list[Any]) -> bool | None:
     return None
 
 
+def apply_trait_currentness(filters: dict[str, Any], traits: Any) -> dict[str, Any]:
+    """Derive is_current_role / is_current_company from trait temporals.
+
+    Trait temporals are the extractor's source of truth for currentness: when
+    traits exist they replace any extractor-emitted is_current_* flags (the
+    same semantics role_payload_from_state has always applied on the state
+    path). Returns a new dict; *filters* is not mutated.
+    """
+    out = dict(filters)
+    if not isinstance(traits, list) or not traits:
+        return out
+    out.pop("is_current_role", None)
+    out.pop("is_current_company", None)
+    role_current = _derive_role_current_from_traits(traits)
+    company_current = _derive_company_current_from_traits(traits)
+    if role_current is not None:
+        out["is_current_role"] = role_current
+    if company_current is not None:
+        out["is_current_company"] = company_current
+    return out
+
+
 def row_attrs(row: Any, include_attributes: list[str]) -> dict[str, Any]:
     attrs: dict[str, Any] = {"id": str(row.id)}
     extra = getattr(row, "model_extra", {}) or {}
@@ -477,7 +499,10 @@ def apply_role_shortcuts(payload: dict[str, Any], query: str | None = None) -> d
         if len(str(payload.get("semantic_query") or "")) < 80:
             payload["semantic_query"] = FOUNDER_SEMANTIC_QUERY
         # Founder exists at all seniority levels; copying c-suite/owner bands hurts recall.
-        payload.pop("seniority_bands", None)
+        # Exception: bands pinned via --seniority-bands are an explicit JD-level
+        # hard constraint and must survive role shortcuts.
+        if not payload.get("seniority_bands_pinned"):
+            payload.pop("seniority_bands", None)
         return payload
 
     csuite = detect_csuite_shortcut(payload, query)
@@ -634,17 +659,8 @@ def role_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
     payload = expansion.get("role_search_filters") if isinstance(expansion, dict) else None
     if not isinstance(payload, dict):
         raise RuntimeError("state does not contain expand_search_request.output.role_search_filters")
-    payload = dict(payload)
     traits = expansion.get("traits") if isinstance(expansion, dict) else []
-    if isinstance(traits, list) and traits:
-        payload.pop("is_current_role", None)
-        payload.pop("is_current_company", None)
-        role_current = _derive_role_current_from_traits(traits)
-        company_current = _derive_company_current_from_traits(traits)
-        if role_current is not None:
-            payload["is_current_role"] = role_current
-        if company_current is not None:
-            payload["is_current_company"] = company_current
+    payload = apply_trait_currentness(payload, traits)
 
     resolved_companies = latest_step_output(state, "resolve_companies")
     if isinstance(resolved_companies, dict) and resolved_companies.get("company_ids"):

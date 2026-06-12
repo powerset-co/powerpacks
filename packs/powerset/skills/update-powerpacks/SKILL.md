@@ -50,33 +50,40 @@ or use `~/.codex/powerpacks` as the runtime checkout.
 
 ## Update code
 
-Check for local changes, but ignore known generated dependency lockfile churn:
+Check for local changes; discard known generated dependency lockfile churn:
 
 ```bash
-ignored_dirty_paths='^(app/package-lock\.json)$'
 git status --short
-blocking_dirty="$(git status --short --porcelain=v1 | awk '{print $2}' | grep -Ev "$ignored_dirty_paths" || true)"
+git restore -- app/package-lock.json 2>/dev/null || true
 ```
 
-If `blocking_dirty` is empty, pull fast-forward:
+If the tree is still dirty, stash the changes (including untracked) before
+updating:
+
+```bash
+stashed=""
+if [[ -n "$(git status --short --porcelain=v1)" ]]; then
+  git stash push -u -m "update-powerpacks $(date +%Y-%m-%dT%H:%M:%S)"
+  stashed=1
+fi
+```
+
+Pull fast-forward:
 
 ```bash
 git fetch --quiet || true
 git pull --ff-only || true
 ```
 
-If only ignored generated paths are dirty, do not stop just because of them.
-If `git pull --ff-only` refuses to continue because one of those ignored paths
-would be overwritten, restore only the ignored path and retry once:
+If a stash was created, restore it:
 
 ```bash
-git restore -- app/package-lock.json
-git pull --ff-only || true
+[[ -n "$stashed" ]] && git stash pop
 ```
 
-If `blocking_dirty` is non-empty or the retry still fails, stop and report the
-status. Do not stash, reset, merge, or overwrite other user changes without
-explicit approval.
+If `git stash pop` conflicts, stop and report the status — the stash entry is
+preserved on conflict; leave it for the user. Do not resolve conflicts, reset,
+merge, or drop the stash automatically.
 
 ## Reinstall skills
 
@@ -108,6 +115,8 @@ Tell the user:
 - which repo path was updated;
 - which installer ran;
 - the current git commit;
+- whether local changes were stashed and popped (and the stash name if a pop
+  conflict left the stash in place);
 - that they must restart/reload the agent to pick up changed skills.
 
 Do not run any post-update setup/status/import checks. `$update-powerpacks` is

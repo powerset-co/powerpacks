@@ -21,3 +21,11 @@ uv run --project . python packs/search/primitives/local_search_pipeline/local_se
   --query "software engineers in sf that went to stanford" \
   --payload-json .powerpacks/search/query/expand_search_request.local.json
 ```
+
+`--seniority-bands senior,staff` (on `prepare` and `run`) pins canonical
+seniority bands as a hard retrieval filter: the pinned bands REPLACE any
+expansion-derived `role_search_filters.seniority_bands`, survive role
+shortcuts, and unknown band values fail loudly. The `$search-profile` JD flow
+uses this to enforce the JD's seniority band at retrieval. Pinning requires a
+fresh `--payload-json` run; it cannot retroactively apply to an existing
+`--state`.

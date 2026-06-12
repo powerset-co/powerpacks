@@ -25,6 +25,10 @@ from typing import Any
 from openai import AsyncOpenAI
 
 ROOT = Path(__file__).resolve().parents[4]
+SHARED_DIR = ROOT / "packs/search/primitives/shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+from probe_artifacts import load_probe_summaries  # noqa: E402
 DEFAULT_MODEL = os.environ.get("PROFILE_EVAL_MODEL", os.environ.get("JD_EVAL_MODEL", "gpt-5.1"))
 DEFAULT_REASONING_EFFORT = os.environ.get("PROFILE_EVAL_REASONING_EFFORT", os.environ.get("JD_EVAL_REASONING_EFFORT", "low"))
 DEFAULT_CONCURRENCY = 100
@@ -106,7 +110,7 @@ def collect_profiles(candidates: list[dict[str, Any]], run_dir: Path) -> dict[st
     profile_dirs: list[Path] = []
     summaries = run_dir / "probe_summaries.json"
     if summaries.exists():
-        for probe in read_json(summaries):
+        for probe in load_probe_summaries(summaries):
             artifact_dir = probe.get("artifact_dir")
             if artifact_dir:
                 p = Path(artifact_dir)

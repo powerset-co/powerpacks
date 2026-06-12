@@ -443,6 +443,50 @@ class LocalSearchPipelineTests(unittest.TestCase):
             ["software engineer", "backend engineer", "Software Engineer", "Backend Engineer"],
         )
         self.assertEqual(normalized["traits"], payload["traits"])
+        self.assertTrue(filters["is_current_role"])
+
+    def test_normalize_query_expansion_payload_derives_currentness_from_traits(self) -> None:
+        # Regression: a temporal=current role trait must become
+        # is_current_role=true at the prepare boundary, otherwise past
+        # senior/staff positions admit people who have since moved on.
+        mod = load_pipeline_module()
+        payload = {
+            "original_query": "senior or staff backend infrastructure engineers",
+            "traits": [
+                {
+                    "meaning": "role",
+                    "temporal": "current",
+                    "value": "Senior or staff backend infrastructure engineer",
+                }
+            ],
+            "role_search_filters": {
+                "semantic_query": "Senior backend infrastructure engineers.",
+                "bm25_queries": ["backend engineer"],
+                "seniority_bands": ["senior", "staff"],
+            },
+        }
+
+        filters = mod.normalize_query_expansion_payload(payload)["role_search_filters"]
+        self.assertTrue(filters["is_current_role"])
+        self.assertEqual(filters["seniority_bands"], ["senior", "staff"])
+
+        past = mod.normalize_query_expansion_payload(
+            {
+                "original_query": "ex-Stripe engineers",
+                "traits": [{"meaning": "company", "temporal": "past", "value": "Stripe"}],
+                "role_search_filters": {"bm25_queries": ["engineer"], "company_names": ["Stripe"]},
+            }
+        )["role_search_filters"]
+        self.assertFalse(past["is_current_company"])
+
+        untouched = mod.normalize_query_expansion_payload(
+            {
+                "original_query": "backend engineers",
+                "role_search_filters": {"bm25_queries": ["backend engineer"]},
+            }
+        )["role_search_filters"]
+        self.assertNotIn("is_current_role", untouched)
+        self.assertNotIn("is_current_company", untouched)
 
     def test_prod_shaped_role_expansion_reaches_local_duckdb_retrieval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_raw:
@@ -982,16 +1026,24 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertNotIn("resolve_set_operators", step_ids)
             expand = next(step for step in state["steps"] if step["id"] == "expand_search_request")
             filters = expand["output"]["role_search_filters"]
-            self.assertEqual(filters["set_id"], "wrong-set")
-            self.assertEqual(filters["operator_ids"], ["wrong-operator"])
-            self.assertEqual(filters["allowed_operator_ids"], ["wrong-operator"])
+            # There is no concept of a set/operator locally: the scope keys are
+            # stripped from the executable payload outright (reported via
+            # ignored_remote_scope_keys above), not carried along and ignored.
+            self.assertNotIn("set_id", filters)
+            self.assertNotIn("operator_ids", filters)
+            self.assertNotIn("allowed_operator_ids", filters)
+            self.assertNotIn("wrong-operator", json.dumps(state))
 
             hydrate = next(step for step in state["steps"] if step["id"] == "hydrate_people")
             self.assertEqual(hydrate["output"]["source"]["backend"], "duckdb")
             self.assertEqual(hydrate["output"]["source"]["type"], "local_duckdb")
             retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
-            self.assertEqual(retrieval["output"]["candidates"][0]["vertical_sources"], ["filter_only"])
-            self.assertEqual(retrieval["output"]["candidates"][0]["matched_position_ids"], [])
+            # The foreign operator scope must be ignored end to end. With local
+            # mode configured before parent-side transforms, prepare-time title
+            # clustering is no longer zeroed by the wrong-operator filter, so it
+            # contributes BM25 hints and retrieval runs hybrid instead of
+            # degrading to filter_only.
+            self.assertIn("hybrid", retrieval["output"]["candidates"][0]["vertical_sources"])
 
             ledger_doc = json.loads(ledger.read_text())
             for step in ["resolve_education", "apply_prefilters", "execute_role_search", "hydrate_people"]:

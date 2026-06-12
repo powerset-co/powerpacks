@@ -19,6 +19,14 @@ Or specify probe_summaries.json explicitly:
 
     ... --probe-summaries .powerpacks/search-network-jd/<slug>/probe_summaries.json \
         --plan-json .powerpacks/search-network-jd/<slug>/plan.json
+
+Generate the canonical probe_summaries.json (a bare JSON list, see
+packs/search/schemas/probe-summaries.schema.json) from pipeline task state
+JSONs instead of hand-authoring it:
+
+    ... collect-probes --run-dir .powerpacks/search-network-jd/<slug>/ \
+        --probe-id profile_1 --state .powerpacks/runs/<task-id>-<slug>.json \
+        --probe-id profile_2 --state .powerpacks/runs/<task-id>-<slug>.json
 """
 from __future__ import annotations
 
@@ -31,6 +39,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+ROOT = Path(__file__).resolve().parents[4]
+SHARED_DIR = ROOT / "packs/search/primitives/shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+from probe_artifacts import load_probe_summaries  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -337,14 +351,11 @@ def run(args: argparse.Namespace) -> None:
     # Output dir
     out_dir = Path(args.out_dir) if args.out_dir else (run_dir or summaries_path.parent)
 
-    # Load probe summaries
-    summaries = json.loads(summaries_path.read_text())
-    if isinstance(summaries, dict):
-        probe_list = summaries.get("probes") or summaries.get("probe_summaries") or []
-    elif isinstance(summaries, list):
-        probe_list = summaries
-    else:
-        print("error: probe_summaries must be a list or object with probes key", file=sys.stderr)
+    # Load probe summaries (shared loader tolerates the legacy object wrapper)
+    try:
+        probe_list = load_probe_summaries(summaries_path)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Collect all rows from completed probe CSVs
@@ -430,6 +441,86 @@ def run(args: argparse.Namespace) -> None:
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
+# ---------------------------------------------------------------------------
+# collect-probes — generate probe_summaries.json from pipeline task states
+# ---------------------------------------------------------------------------
+
+def _count_csv_rows(csv_path: Path) -> int:
+    with csv_path.open(newline="") as fh:
+        return sum(1 for _ in csv.DictReader(fh))
+
+
+def build_probe_summary(probe_id: str | None, state_path: Path) -> dict[str, Any]:
+    """Build one canonical probe summary entry from a pipeline task state JSON."""
+    state = json.loads(state_path.read_text())
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    csv_path_str = artifacts.get("csv")
+    found_count = artifacts.get("row_count")
+    if found_count is None and csv_path_str and Path(csv_path_str).exists():
+        found_count = _count_csv_rows(Path(csv_path_str))
+    return {
+        "id": probe_id or state.get("task_id") or state_path.stem,
+        "status": "completed" if csv_path_str else "failed",
+        "query": state.get("query"),
+        "artifact_dir": artifacts.get("artifact_dir"),
+        "csv": csv_path_str,
+        "state": str(state_path),
+        "found_count": found_count,
+        "fallback_reason": None,
+    }
+
+
+def run_collect_probes(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir)
+    state_paths = [Path(s) for s in (args.state or [])]
+    if not state_paths:
+        print("error: at least one --state is required", file=sys.stderr)
+        sys.exit(1)
+
+    probe_ids: list[str | None]
+    if args.probe_id:
+        if len(args.probe_id) != len(state_paths):
+            print(
+                f"error: --probe-id count ({len(args.probe_id)}) must match --state count ({len(state_paths)})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        probe_ids = list(args.probe_id)
+    else:
+        probe_ids = [None] * len(state_paths)
+
+    fallback_reasons: dict[str, str] = {}
+    for item in args.fallback_reason or []:
+        if "=" not in item:
+            print(f"error: --fallback-reason must be <probe_id>=<reason>, got: {item}", file=sys.stderr)
+            sys.exit(1)
+        key, _, reason = item.partition("=")
+        fallback_reasons[key] = reason
+
+    probes: list[dict[str, Any]] = []
+    for probe_id, state_path in zip(probe_ids, state_paths):
+        if not state_path.exists():
+            print(f"error: state not found: {state_path}", file=sys.stderr)
+            sys.exit(1)
+        probe = build_probe_summary(probe_id, state_path)
+        probe["fallback_reason"] = fallback_reasons.pop(probe["id"], None)
+        probes.append(probe)
+
+    if fallback_reasons:
+        unknown = ", ".join(sorted(fallback_reasons))
+        print(f"error: --fallback-reason references unknown probe id(s): {unknown}", file=sys.stderr)
+        sys.exit(1)
+
+    out_path = run_dir / "probe_summaries.json"
+    write_json(out_path, probes)
+    print(json.dumps({
+        "probe_summaries": str(out_path),
+        "probe_count": len(probes),
+        "completed": sum(1 for p in probes if p["status"] == "completed"),
+        "failed": sum(1 for p in probes if p["status"] == "failed"),
+    }, indent=2, sort_keys=True))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Merge and dedupe probe CSVs into a candidate frontier"
@@ -439,8 +530,21 @@ def main() -> None:
     parser.add_argument("--plan-json", help="Explicit path to plan.json")
     parser.add_argument("--out-dir", help="Output directory (defaults to run-dir)")
 
+    sub = parser.add_subparsers(dest="command")
+    collect = sub.add_parser(
+        "collect-probes",
+        help="Generate the canonical probe_summaries.json (bare list) from pipeline task state JSONs",
+    )
+    collect.add_argument("--run-dir", required=True, help="JD run directory to write probe_summaries.json into")
+    collect.add_argument("--state", action="append", help="Path to a pipeline task state JSON (repeatable, ordered)")
+    collect.add_argument("--probe-id", action="append", help="Probe id for the Nth --state (repeatable; defaults to the state's task_id)")
+    collect.add_argument("--fallback-reason", action="append", help="<probe_id>=<reason> fallback annotation (repeatable)")
+
     args = parser.parse_args()
-    run(args)
+    if args.command == "collect-probes":
+        run_collect_probes(args)
+    else:
+        run(args)
 
 
 if __name__ == "__main__":
