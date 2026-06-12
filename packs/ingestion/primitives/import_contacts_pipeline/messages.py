@@ -103,6 +103,32 @@ def people_csv_schema_stale(path: Path) -> bool:
     return bool(header) and "interaction_counts" not in header
 
 
+def interaction_columns(path: Path) -> dict[str, tuple[str, str]]:
+    out: dict[str, tuple[str, str]] = {}
+    if not path.exists():
+        return out
+    with path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            key = (row.get("public_identifier") or row.get("id") or "").strip().lower()
+            if key:
+                out[key] = (row.get("interaction_counts") or "", row.get("last_interaction") or "")
+    return out
+
+
+def interaction_counts_stale(input_csv: Path, people_csv: Path) -> bool:
+    """True when an approved contact's counts in the freshly materialized
+    review input differ from what the imported people.csv carries — new
+    messages to already-approved contacts change counts without adding rows,
+    which the new-rows diff alone can never see."""
+    if not input_csv.exists() or not people_csv.exists():
+        return False
+    current = interaction_columns(people_csv)
+    for key, values in interaction_columns(input_csv).items():
+        if key in current and current[key] != values:
+            return True
+    return False
+
+
 def run(args: argparse.Namespace) -> dict:
     import_dir = DEFAULT_IMPORT_DIR / "messages"
     schema_stale = people_csv_schema_stale(import_dir / "people.csv")
@@ -113,7 +139,8 @@ def run(args: argparse.Namespace) -> dict:
     ledger_path = import_dir / "ledger.json"
     review_csv = Path(".powerpacks/messages/research_review.csv")
     diff = messages_import_diff(review_csv)
-    if diff["candidate_rows"] > 0 and diff["new_rows"] == 0 and not schema_stale:
+    counts_stale = interaction_counts_stale(Path(str(diff.get("people_input_csv") or "")), import_dir / "people.csv")
+    if diff["candidate_rows"] > 0 and diff["new_rows"] == 0 and not schema_stale and not counts_stale:
         directory_normalization = normalize_directory_source_accounts("messages")
         directory_quality = directory_source_account_quality("messages")
         return write_manifest("messages", {

@@ -135,6 +135,21 @@ class ImportSchemaStalenessTests(unittest.TestCase):
             self.assertFalse(messages_import_mod.people_csv_schema_stale(new))
             self.assertFalse(messages_import_mod.people_csv_schema_stale(Path(tmp) / "absent.csv"))
 
+    def test_changed_counts_for_approved_contact_invalidate_import(self):
+        """New messages to already-approved contacts change counts without
+        adding rows; the import must refresh people.csv anyway."""
+        header = "id,public_identifier,interaction_counts,last_interaction\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            people.write_text(header + 'p1,janedoe,"{""imessage"": 87}",2026-06-01T00:00:00+00:00\n')
+            same = Path(tmp) / "input_same.csv"
+            same.write_text(header + 'p1,janedoe,"{""imessage"": 87}",2026-06-01T00:00:00+00:00\n')
+            changed = Path(tmp) / "input_changed.csv"
+            changed.write_text(header + 'p1,janedoe,"{""imessage"": 120}",2026-06-10T00:00:00+00:00\n')
+            self.assertFalse(messages_import_mod.interaction_counts_stale(same, people))
+            self.assertTrue(messages_import_mod.interaction_counts_stale(changed, people))
+            self.assertFalse(messages_import_mod.interaction_counts_stale(Path(tmp) / "absent.csv", people))
+
 
 class GmailWriterTests(unittest.TestCase):
     def test_msgvault_rows_carry_gmail_counts(self):
