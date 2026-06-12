@@ -842,19 +842,11 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
     role_available = _jsonl_id_set(role_input, "title_hash") | _records_role_ids(output_dir)
     role_coverage = _coverage(role_required, role_available, role_input)
     role_missing = [role for role in role_inputs if str(role.get("title_hash") or "").strip() not in role_available]
-    role_input_tokens = 0
-    for role in role_missing:
-        payload = {
-            "model": role_model,
-            "response_format": {"type": "json_object"},
-            "messages": enrich_roles_checkpointed.role_prompt(role),
-            "temperature": 0,
-        }
-        role_input_tokens += _estimated_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    role_calls, role_input_tokens = enrich_roles_checkpointed.estimate_role_call_shape(role_missing, role_model)
     role_stage = _chat_cost_stage(
         provider=role_provider,
         model=role_model,
-        calls=len(role_missing),
+        calls=role_calls,
         input_tokens=role_input_tokens,
         output_tokens=len(role_missing) * DEFAULT_ROLE_OUTPUT_TOKENS,
         precomputed=not role_missing,

@@ -181,6 +181,40 @@ ROLE_RESPONSE_SCHEMA = {
     },
 }
 
+# Prod parity (aleph roles_impl.py): titles are classified in batches of ~100
+# per call, grouped by cluster so each batch shares one cluster prompt. The
+# batch response carries an idx per item to map results back; any title the
+# model drops falls back to a single-title call.
+DEFAULT_ROLE_BATCH_SIZE = 100
+_BATCH_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "idx": {"type": "integer", "description": "Index of the title in the input array."},
+        **ROLE_RESPONSE_SCHEMA["json_schema"]["schema"]["properties"],
+    },
+    "required": ["idx"] + ROLE_RESPONSE_SCHEMA["json_schema"]["schema"]["required"],
+    "additionalProperties": False,
+}
+BATCH_ROLE_RESPONSE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "role_classification_batch",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "classifications": {"type": "array", "items": _BATCH_ITEM_SCHEMA},
+            },
+            "required": ["classifications"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def role_batch_size() -> int:
+    return max(1, int(os.getenv("POWERPACKS_ROLE_BATCH_SIZE", str(DEFAULT_ROLE_BATCH_SIZE))))
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -283,6 +317,31 @@ def load_input_classifications(path: str | None) -> dict[str, dict[str, Any]]:
     return out
 
 
+def role_cluster(role: dict[str, Any]) -> str:
+    title = clean(role.get("raw_title"))
+    return cluster_title(title) if title else "other"
+
+
+def batch_role_prompt(cluster: str, roles: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Build cluster system/user messages classifying a batch of titles at once."""
+    system_prompt, user_template = get_system_user_prompts(cluster)
+    titles_json = []
+    for i, role in enumerate(roles):
+        entry: dict[str, Any] = {"idx": i, "title": clean(role.get("raw_title"))}
+        company = clean(role.get("company_name"))
+        if company:
+            entry["company"] = company
+        description = clean(role.get("description"))
+        if description:
+            entry["description"] = description[:200] + ("..." if len(description) > 200 else "")
+        titles_json.append(entry)
+    user_content = user_template.format(num_titles=len(roles), titles=json.dumps(titles_json, indent=2))
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+
 def role_prompt(role: dict[str, Any]) -> list[dict[str, str]]:
     """Build cluster-aware system/user messages for a single role."""
     title = clean(role.get("raw_title"))
@@ -355,6 +414,54 @@ async def call_openai_role_enrichment_async(
                 raise RuntimeError(f"OpenAI role enrichment returned invalid JSON: {exc}") from exc
 
 
+async def call_openai_role_batch_async(
+    client: AsyncOpenAI,
+    cluster: str,
+    roles: list[dict[str, Any]],
+    *,
+    model: str,
+    timeout: int,
+    semaphore: asyncio.Semaphore,
+    max_retries: int = 3,
+) -> dict[str, Any]:
+    messages = batch_role_prompt(cluster, roles)
+    kwargs = api_call_kwargs(model)
+    # Output scales with batch size; the single-call cap would truncate the
+    # batch JSON mid-array and fail parsing.
+    kwargs["max_completion_tokens"] = max(int(kwargs.get("max_completion_tokens") or 0), 400 * len(roles))
+    async with semaphore:
+        attempt = 0
+        while True:
+            try:
+                response = await client.chat.completions.create(
+                    model=model,
+                    response_format=BATCH_ROLE_RESPONSE_SCHEMA,
+                    messages=messages,
+                    timeout=max(timeout, 300),
+                    **kwargs,
+                )
+                return _parse_chat_json(response.choices[0].message.content, "OpenAI role batch enrichment")
+            except APIStatusError as exc:
+                status = int(getattr(exc, "status_code", 0) or 0)
+                if status in {408, 409, 429, 500, 502, 503, 504} and attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"OpenAI role batch enrichment failed: HTTP {status}: {getattr(exc, 'message', str(exc))}") from exc
+            except (APIConnectionError, APITimeoutError, TimeoutError, asyncio.TimeoutError) as exc:
+                if attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"OpenAI role batch enrichment failed: network: {exc}") from exc
+            except json.JSONDecodeError as exc:
+                if attempt < max_retries:
+                    await asyncio.sleep(min(8.0, 0.5 * (2**attempt)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"OpenAI role batch enrichment returned invalid JSON: {exc}") from exc
+
+
 async def call_openai_role_enrichments_async(
     roles: list[dict[str, Any]],
     *,
@@ -364,14 +471,44 @@ async def call_openai_role_enrichments_async(
     timeout: int,
     concurrency: int,
     max_retries: int = 3,
+    batch_size: int | None = None,
 ) -> list[dict[str, Any]]:
+    batch_size = batch_size if batch_size is not None else role_batch_size()
     client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
     semaphore = asyncio.Semaphore(max(1, concurrency))
+    results: list[dict[str, Any] | None] = [None] * len(roles)
     try:
-        return await asyncio.gather(*[
-            call_openai_role_enrichment_async(client, role, model=model, semaphore=semaphore, max_retries=max_retries)
-            for role in roles
-        ])
+        if batch_size > 1:
+            groups: dict[str, list[int]] = {}
+            for i, role in enumerate(roles):
+                groups.setdefault(role_cluster(role), []).append(i)
+
+            async def run_batch(cluster: str, idxs: list[int]) -> None:
+                sub = [roles[i] for i in idxs]
+                parsed = await call_openai_role_batch_async(
+                    client, cluster, sub, model=model, timeout=timeout, semaphore=semaphore, max_retries=max_retries,
+                )
+                for item in parsed.get("classifications") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    j = item.get("idx")
+                    if isinstance(j, int) and 0 <= j < len(idxs) and results[idxs[j]] is None:
+                        results[idxs[j]] = {k: v for k, v in item.items() if k != "idx"}
+
+            await asyncio.gather(*[
+                run_batch(cluster, idxs[start:start + batch_size])
+                for cluster, idxs in groups.items()
+                for start in range(0, len(idxs), batch_size)
+            ])
+        missing = [i for i, result in enumerate(results) if result is None]
+        if missing:
+            singles = await asyncio.gather(*[
+                call_openai_role_enrichment_async(client, roles[i], model=model, semaphore=semaphore, max_retries=max_retries)
+                for i in missing
+            ])
+            for i, enrichment in zip(missing, singles):
+                results[i] = enrichment
+        return results
     finally:
         await client.close()
 
@@ -565,19 +702,38 @@ def collect_role_inputs(flattened: Path) -> list[dict[str, Any]]:
     return out
 
 
+def estimate_role_call_shape(roles: list[dict[str, Any]], model: str, batch_size: int | None = None) -> tuple[int, int]:
+    """Return (calls, input_tokens) matching the batched call shape."""
+    batch_size = batch_size if batch_size is not None else role_batch_size()
+    calls = 0
+    input_tokens = 0
+    if batch_size <= 1:
+        for role in roles:
+            payload = {
+                "model": model,
+                "response_format": ROLE_RESPONSE_SCHEMA,
+                "messages": role_prompt(role),
+                **api_call_kwargs(model),
+            }
+            input_tokens += estimate_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            calls += 1
+        return calls, input_tokens
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for role in roles:
+        groups.setdefault(role_cluster(role), []).append(role)
+    for cluster, group in groups.items():
+        for start in range(0, len(group), batch_size):
+            messages = batch_role_prompt(cluster, group[start:start + batch_size])
+            input_tokens += estimate_tokens(json.dumps(messages, ensure_ascii=False, sort_keys=True))
+            calls += 1
+    return calls, input_tokens
+
+
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     roles = collect_role_inputs(Path(args.flattened))
     provider = "input-classifications" if getattr(args, "input_classifications", None) else args.provider
     model = getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", DEFAULT_MODEL)
-    input_tokens = 0
-    for role in roles:
-        payload = {
-            "model": model,
-            "response_format": ROLE_RESPONSE_SCHEMA,
-            "messages": role_prompt(role),
-            **api_call_kwargs(model),
-        }
-        input_tokens += estimate_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    estimated_calls, input_tokens = estimate_role_call_shape(roles, model)
     output_tokens = 0 if provider == "input-classifications" else len(roles) * DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE
     prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
     estimated_cost = 0.0 if provider != "openai" else None
@@ -592,7 +748,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "estimated_tokens": input_tokens,
         "estimated_input_tokens": input_tokens,
         "estimated_output_tokens": output_tokens,
-        "estimated_calls": 0 if getattr(args, "input_classifications", None) else len(roles),
+        "estimated_calls": 0 if getattr(args, "input_classifications", None) else estimated_calls,
         "estimated_openai_cost_usd": estimated_cost,
         "known_pricing": bool(prices) or provider != "openai",
         "pricing_assumption": f"{model} known OpenAI pricing; output tokens estimated" if prices else f"{model} pricing unknown; output tokens estimated",

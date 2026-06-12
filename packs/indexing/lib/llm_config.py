@@ -22,7 +22,8 @@ DEFAULT_MODEL = "gpt-5.2"
 # 180-item role_ids enum (picks random values like investment_banker for
 # Instructor). gpt-5.1 classifies correctly.
 DEFAULT_ROLE_MODEL = "gpt-5.1"
-DEFAULT_MAX_COMPLETION_TOKENS = 2500
+# Prod parity (combined_enrichment.py): reasoning calls cap at 2000.
+DEFAULT_MAX_COMPLETION_TOKENS = 2000
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
 # "flex" bills gpt-5.x chat tokens at ~50% but is a server-side queue: calls
 # routinely take minutes regardless of client concurrency. Interactive paths
