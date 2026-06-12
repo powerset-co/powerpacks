@@ -9,7 +9,7 @@ from typing import Any
 
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.indexing.lib.identity import canonical_person_key
-from packs.indexing.lib.io import csv_header, read_csv, read_jsonl
+from packs.indexing.lib.io import csv_header, iter_jsonl, read_csv, read_jsonl
 
 ROOT = Path(__file__).resolve().parents[3]
 CONTRACT_ROOT = ROOT / "packs/search/contracts"
@@ -190,7 +190,7 @@ def validate_jsonl(path: str | Path, contract_path: str | Path) -> dict[str, Any
     contract = load_search_contract(contract_path)
     errors: list[dict[str, Any]] = []
     count = 0
-    for count, row in enumerate(read_jsonl(path), start=1):
+    for count, row in enumerate(iter_jsonl(path), start=1):
         result = validate_record(row, contract)
         if not result["ok"]:
             errors.append({"line": count, **result})

@@ -12,7 +12,7 @@ import sys
 import time
 from argparse import Namespace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
@@ -452,6 +452,72 @@ def write_record_jsonl_with_hashes(
         file_written = write_jsonl_if_changed(path, rows)
     hashes_written = save_hashes(diff["new_hashes"], hash_file)
     return diff_summary(diff) | {"file_written": file_written, "hashes_written": hashes_written}
+
+
+def _record_json_default(value: Any) -> Any:
+    if isinstance(value, array.array):
+        return list(value)
+    return str(value)
+
+
+def write_record_jsonl_stream_with_hashes(
+    path: Path,
+    rows: Iterable[dict[str, Any]],
+    hash_file: Path,
+    *,
+    id_fn: Callable[[dict[str, Any]], str] | None = None,
+    id_fields: tuple[str, ...] = ("id",),
+) -> dict[str, Any]:
+    """Streaming variant of write_record_jsonl_with_hashes.
+
+    Consumes rows one at a time: hashes/diffs against the sidecar and writes
+    to a temp file as it goes, so peak memory is one record plus the id->hash
+    maps instead of the whole record list (vectors included).
+    """
+    old_hashes = load_hashes(hash_file)
+    new_hashes: dict[str, str] = {}
+    skipped_unkeyed_rows = 0
+    new_rows = 0
+    changed_rows = 0
+    unchanged_rows = 0
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    with tmp.open("w", encoding="utf-8") as handle:
+        for record in rows:
+            rid = str(id_fn(record) if id_fn else record_id(record, id_fields)).strip()
+            if rid:
+                record_hash = compute_record_hash(record)
+                new_hashes[rid] = record_hash
+                old = old_hashes.get(rid)
+                if old is None:
+                    new_rows += 1
+                elif old != record_hash:
+                    changed_rows += 1
+                else:
+                    unchanged_rows += 1
+            else:
+                skipped_unkeyed_rows += 1
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True, default=_record_json_default) + "\n")
+    deleted_rows = sum(1 for rid in old_hashes if rid not in new_hashes)
+    changed = bool(new_rows or changed_rows or deleted_rows or skipped_unkeyed_rows)
+    file_written = False
+    if changed or not path.exists():
+        tmp.replace(path)
+        file_written = True
+    else:
+        tmp.unlink()
+    hashes_written = save_hashes(new_hashes, hash_file)
+    return {
+        "new_rows": new_rows,
+        "changed_rows": changed_rows,
+        "unchanged_rows": unchanged_rows,
+        "deleted_rows": deleted_rows,
+        "hashes": len(new_hashes),
+        "old_hashes_present": bool(old_hashes),
+        "skipped_unkeyed_rows": skipped_unkeyed_rows,
+        "file_written": file_written,
+        "hashes_written": hashes_written,
+    }
 
 
 def _processed_person_ids(output_dir: Path) -> set[str]:
@@ -1320,12 +1386,13 @@ def step_role_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[d
         write_stats(ledger, "embed_role_positions", stats)
         raise PipelinePartial("embed_role_positions", {"role_embeddings_checkpoint": str(ps["roles_dense"].parent / "embedding_checkpoints/checkpoint.json")}, stats)
     # Aleph upload contract names this field dense_embedding and keys by title_hash.
-    rows = []
-    for row in read_jsonl(ps["roles_embeddings"]):
-        shaped = {key: row.get(key) for key in ["cluster", "dense_text", "description", "doc2query", "inferred_skills", "raw_title", "role_ids", "role_track", "role_type", "seniority_band", "specialization", "title_hash"] if key in row}
-        shaped["dense_embedding"] = row.get("embedding", [])
-        rows.append(shaped)
-    write_jsonl(ps["roles_embeddings"], rows)
+    def _shaped_role_rows() -> Iterable[dict[str, Any]]:
+        for row in _iter_jsonl(ps["roles_embeddings"]):
+            shaped = {key: row.get(key) for key in ["cluster", "dense_text", "description", "doc2query", "inferred_skills", "raw_title", "role_ids", "role_track", "role_type", "seniority_band", "specialization", "title_hash"] if key in row}
+            shaped["dense_embedding"] = row.get("embedding", [])
+            yield shaped
+
+    _stream_write_jsonl(ps["roles_embeddings"], _shaped_role_rows())
     ps["aleph_roles_dir"].mkdir(parents=True, exist_ok=True)
     shutil.copyfile(ps["roles_embeddings"], ps["aleph_roles_embeddings"])
     stats = _embedding_stats(result, ledger)
@@ -1335,6 +1402,35 @@ def step_role_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[d
 
 def _load_by_id(path: Path, key: str = "id") -> dict[str, dict[str, Any]]:
     return {str(row.get(key)): row for row in read_jsonl(path) if row.get(key)}
+
+
+def _iter_jsonl(path: Path):
+    """Stream newline-delimited JSON objects without materializing the file."""
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                yield json.loads(line)
+
+
+def _stream_write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
+    """Stream rows to a temp file and atomically replace `path`.
+
+    Safe to consume a generator that reads `path` itself; the replace happens
+    only after the generator is exhausted. array.array vectors serialize as
+    plain JSON lists.
+    """
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with tmp.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True, default=_record_json_default) + "\n")
+            count += 1
+    tmp.replace(path)
+    return count
 
 
 def _role_hashes_for_flattened(people: list[dict[str, Any]]) -> list[str]:
@@ -1636,23 +1732,36 @@ def step_company_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tupl
         stats = _embedding_stats(result, ledger)
         write_stats(ledger, "embed_companies", stats)
         raise PipelinePartial("embed_companies", {"company_embeddings_checkpoint": str(ps["companies_corpus"].parent / "embedding_checkpoints/checkpoint.json")}, stats)
-    shaped_embeddings = []
-    for row in read_jsonl(ps["company_embeddings"]):
-        shaped_embeddings.append({
-            "company_urn": row.get("id") or row.get("company_urn"),
-            "company_name": row.get("company_name", ""),
-            "semantic_text": row.get("semantic_text", ""),
-            "embedding": row.get("embedding", []),
-        })
-    write_jsonl(ps["company_embeddings"], shaped_embeddings)
-    embeddings = _load_by_id(ps["company_embeddings"], "company_urn")
-    rows = []
-    for row in read_jsonl(ps["companies_records"]):
-        emb = embeddings.get(str(row.get("id")), {}).get("embedding")
-        if emb:
-            row["vector"] = emb
-        rows.append(row)
-    record_diff = write_record_jsonl_with_hashes(ps["companies_records"], rows, ps["companies_record_hashes"], id_fields=("id", "company_urn"))
+    # Memory: stream the shaping pass and keep only urn->vector resident as
+    # compact float64 arrays while attaching vectors to company records.
+    company_vectors: dict[str, array.array] = {}
+
+    def _shaped_company_rows() -> Iterable[dict[str, Any]]:
+        for row in _iter_jsonl(ps["company_embeddings"]):
+            urn = str(row.get("id") or row.get("company_urn") or "")
+            embedding = row.get("embedding", [])
+            if isinstance(embedding, list) and embedding:
+                embedding = array.array("d", embedding)
+            if urn and embedding:
+                company_vectors[urn] = embedding
+            yield {
+                "company_urn": urn,
+                "company_name": row.get("company_name", ""),
+                "semantic_text": row.get("semantic_text", ""),
+                "embedding": embedding,
+            }
+
+    _stream_write_jsonl(ps["company_embeddings"], _shaped_company_rows())
+
+    def _company_record_rows() -> Iterable[dict[str, Any]]:
+        for row in _iter_jsonl(ps["companies_records"]):
+            emb = company_vectors.get(str(row.get("id")))
+            if emb:
+                row["vector"] = emb
+            yield row
+
+    record_diff = write_record_jsonl_stream_with_hashes(
+        ps["companies_records"], _company_record_rows(), ps["companies_record_hashes"], id_fields=("id", "company_urn"))
     stats = _embedding_stats(result, ledger)
     stats["record_diff"] = record_diff
     write_stats(ledger, "embed_companies", stats)
@@ -1754,90 +1863,115 @@ def step_infer_ages(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[s
 
 
 def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
-    people = read_jsonl(ps["flattened"])
-    records = build_people_records(people, default_operator_id=ledger.get("default_operator_id"))
     role_data = _load_by_id(ps["roles_dense"], "title_hash")
-    role_embeddings = _load_by_id(ps["roles_embeddings"], "title_hash")
-    company_data = _load_by_id(ps["companies_records"]) if ps["companies_records"].exists() else {}
-    hashes = _role_hashes_for_flattened(people)
+    # Memory: at ~40k roles / ~25k companies the full embedding rows cost multiple
+    # GB of boxed floats. This join only needs one vector per title_hash, stored
+    # compactly as float64 arrays (bit-identical values, so record hashes do not
+    # churn), and the company vectors are never read here.
+    role_vectors: dict[str, array.array] = {}
+    for row in _iter_jsonl(ps["roles_embeddings"]):
+        key = str(row.get("title_hash") or "")
+        vector = row.get("dense_embedding") or row.get("embedding")
+        if key and vector:
+            role_vectors[key] = array.array("d", vector)
+    company_data: dict[str, dict[str, Any]] = {}
+    for row in _iter_jsonl(ps["companies_records"]):
+        key = str(row.get("id") or "")
+        if key:
+            row.pop("vector", None)
+            company_data[key] = row
     # Load founder enrichment
     founder_position_ids: set[str] = set()
     founder_person_ids: set[str] = set()
-    if ps["founder_enrichment"].exists():
-        for row in read_jsonl(ps["founder_enrichment"]):
-            if row.get("is_founder") and float(row.get("confidence", 0)) >= 0.7:
-                founder_position_ids.add(str(row.get("position_id", "")))
-                founder_person_ids.add(str(row.get("person_id", "")))
+    for row in _iter_jsonl(ps["founder_enrichment"]):
+        if row.get("is_founder") and float(row.get("confidence", 0)) >= 0.7:
+            founder_position_ids.add(str(row.get("position_id", "")))
+            founder_person_ids.add(str(row.get("person_id", "")))
     # Load inferred ages
     age_lookup: dict[str, int] = {}
-    if ps["inferred_ages"].exists():
-        for row in read_jsonl(ps["inferred_ages"]):
-            pid = str(row.get("person_id", "")).strip()
-            by = row.get("birth_year")
-            if pid and isinstance(by, (int, float)) and int(by) > 0:
-                age_lookup[pid] = int(by)
-    enriched = []
-    for idx, record in enumerate(records):
-        role_hash = hashes[idx] if idx < len(hashes) else ""
-        role = role_data.get(role_hash, {})
-        embedding_row = role_embeddings.get(role_hash, {})
-        if role_hash:
-            record["title_hash"] = role_hash
-        if role:
-            record["raw_title"] = role.get("raw_title") or record.get("raw_title") or record.get("position_title", "")
-            record["role_type_category"] = role.get("role_type") or record.get("role_type_category", "")
-            record["description"] = role.get("description") or record.get("description", "")
-            record["dense_text"] = role.get("dense_text") or record.get("dense_text", "")
-            record["seniority_band"] = role.get("seniority_band") or record.get("seniority_band", "")
-            record["role_track"] = role.get("role_track") or record.get("role_track", "")
-            record["role_ids"] = role.get("role_ids") or record.get("role_ids", [])
-            d2q_parts = []
-            for value in role.get("doc2query") or []:
-                if value:
-                    d2q_parts.append(str(value))
-            for value in role.get("inferred_skills") or []:
-                if value:
-                    d2q_parts.append(str(value))
-            if record.get("role_track"):
-                d2q_parts.append(str(record["role_track"]))
-            record["d2q_tokens"] = _word_tokenize(" ".join(d2q_parts)) if d2q_parts else record.get("d2q_tokens", [])
-        vector = embedding_row.get("dense_embedding") or embedding_row.get("embedding")
-        if vector:
-            record["vector"] = vector
-        # Company enrichment denormalization (local join on the companies corpus)
-        company = company_data.get(str(record.get("company_id") or ""))
-        if company:
-            _denormalize_company_onto_position(record, company)
-        # Founder injection
-        record_id = str(record.get("id") or "")
-        person_id = str(record.get("base_id") or record.get("person_id") or "")
-        if record_id in founder_position_ids or person_id in founder_person_ids:
-            d2q = record.get("d2q_tokens") or []
-            if "founder" not in d2q:
-                d2q = list(d2q) + _word_tokenize("founder co-founder startup")
-                record["d2q_tokens"] = d2q
-            role_ids = record.get("role_ids") or []
-            if "founder" not in role_ids:
-                record["role_ids"] = list(role_ids) + ["founder"]
-        # Inferred birth year
-        if person_id in age_lookup and not record.get("inferred_birth_year"):
-            record["inferred_birth_year"] = age_lookup[person_id]
-        enriched.append(record)
+    for row in _iter_jsonl(ps["inferred_ages"]):
+        pid = str(row.get("person_id", "")).strip()
+        by = row.get("birth_year")
+        if pid and isinstance(by, (int, float)) and int(by) > 0:
+            age_lookup[pid] = int(by)
     contract = load_search_contract("turbopuffer/people.namespace.json")
-    dropped = sorted(dropped_fields_for_records(enriched, contract))
+    # Streaming join: people are flattened/enriched/normalized one person at a
+    # time and written incrementally, so the full position-record list (with
+    # vectors) is never resident.
+    totals = {"records": 0, "with_vectors": 0}
+    dropped_fields: set[str] = set()
+    defaulted_numeric: dict[str, int] = {}
+
+    def normalized_rows() -> Iterable[dict[str, Any]]:
+        for person in _iter_jsonl(ps["flattened"]):
+            records = build_people_records([person], default_operator_id=ledger.get("default_operator_id"))
+            hashes = _role_hashes_for_flattened([person])
+            for idx, record in enumerate(records):
+                role_hash = hashes[idx] if idx < len(hashes) else ""
+                role = role_data.get(role_hash, {})
+                if role_hash:
+                    record["title_hash"] = role_hash
+                if role:
+                    record["raw_title"] = role.get("raw_title") or record.get("raw_title") or record.get("position_title", "")
+                    record["role_type_category"] = role.get("role_type") or record.get("role_type_category", "")
+                    record["description"] = role.get("description") or record.get("description", "")
+                    record["dense_text"] = role.get("dense_text") or record.get("dense_text", "")
+                    record["seniority_band"] = role.get("seniority_band") or record.get("seniority_band", "")
+                    record["role_track"] = role.get("role_track") or record.get("role_track", "")
+                    record["role_ids"] = role.get("role_ids") or record.get("role_ids", [])
+                    d2q_parts = []
+                    for value in role.get("doc2query") or []:
+                        if value:
+                            d2q_parts.append(str(value))
+                    for value in role.get("inferred_skills") or []:
+                        if value:
+                            d2q_parts.append(str(value))
+                    if record.get("role_track"):
+                        d2q_parts.append(str(record["role_track"]))
+                    record["d2q_tokens"] = _word_tokenize(" ".join(d2q_parts)) if d2q_parts else record.get("d2q_tokens", [])
+                vector = role_vectors.get(role_hash)
+                if vector:
+                    record["vector"] = vector
+                # Company enrichment denormalization (local join on the companies corpus)
+                company = company_data.get(str(record.get("company_id") or ""))
+                if company:
+                    _denormalize_company_onto_position(record, company)
+                # Founder injection
+                rid = str(record.get("id") or "")
+                person_id = str(record.get("base_id") or record.get("person_id") or "")
+                if rid in founder_position_ids or person_id in founder_person_ids:
+                    d2q = record.get("d2q_tokens") or []
+                    if "founder" not in d2q:
+                        d2q = list(d2q) + _word_tokenize("founder co-founder startup")
+                        record["d2q_tokens"] = d2q
+                    role_ids = record.get("role_ids") or []
+                    if "founder" not in role_ids:
+                        record["role_ids"] = list(role_ids) + ["founder"]
+                # Inferred birth year
+                if person_id in age_lookup and not record.get("inferred_birth_year"):
+                    record["inferred_birth_year"] = age_lookup[person_id]
+                dropped_fields.update(dropped_fields_for_records([record], contract))
+                for field, count in count_defaulted_numeric([record], contract).items():
+                    defaulted_numeric[field] = defaulted_numeric.get(field, 0) + count
+                out = normalize_record_for_contract(record, contract)
+                if record.get("vector") is not None:
+                    out["vector"] = record["vector"]
+                totals["records"] += 1
+                if out.get("vector") is not None:
+                    totals["with_vectors"] += 1
+                yield out
+
+    record_diff = write_record_jsonl_stream_with_hashes(
+        ps["people_records"], normalized_rows(), ps["people_record_hashes"], id_fields=("id", "person_id", "base_id"))
+    dropped = sorted(dropped_fields)
     if dropped:
         print(f"[build_people_records] contract dropped fields: {', '.join(dropped)}", file=sys.stderr)
-    normalized = [normalize_record_for_contract(row, contract) for row in enriched]
-    for out, src in zip(normalized, enriched):
-        if isinstance(src.get("vector"), list):
-            out["vector"] = src["vector"]
-    record_diff = write_record_jsonl_with_hashes(ps["people_records"], normalized, ps["people_record_hashes"], id_fields=("id", "person_id", "base_id"))
     stats = {
-        "people_records": len(normalized),
+        "people_records": totals["records"],
         "record_diff": record_diff,
-        "with_vectors": sum(1 for row in normalized if row.get("vector")),
+        "with_vectors": totals["with_vectors"],
         "contract_dropped_fields": {"people": dropped},
-        "defaulted_numeric_fields": {"people": count_defaulted_numeric(enriched, contract)},
+        "defaulted_numeric_fields": {"people": defaulted_numeric},
         "allowed_operator_ids_default": ledger.get("default_operator_id") or "local:user",
     }
     write_stats(ledger, "build_people_records", stats)
@@ -1919,7 +2053,7 @@ def step_vectors(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
     """Compatibility aggregate vector checkpoint after per-surface embedding stages."""
 
     def count_vectors(path: Path) -> int:
-        return sum(1 for row in read_jsonl(path) if isinstance(row.get("vector"), list) and len(row.get("vector")) == 1536)
+        return sum(1 for row in _iter_jsonl(path) if isinstance(row.get("vector"), list) and len(row.get("vector")) == 1536)
 
     counts = {
         "people": count_vectors(ps["people_records"]),

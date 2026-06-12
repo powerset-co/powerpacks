@@ -31,6 +31,9 @@ DEFAULT_SECRET_MAP = {
     # the same prod secret, see provision_user_secrets.PROVISION_PLAN.
     "RAPIDAPI_LINKEDIN_KEY": "powerpacks-rapidapi-linkedin-key",
     "RAPIDAPI_TWITTER_KEY": "powerpacks-rapidapi-twitter-key",
+    # Modal workspace token for cloud indexing/processing sandboxes.
+    "MODAL_TOKEN_ID": "powerpacks-modal-token-id",
+    "MODAL_TOKEN_SECRET": "powerpacks-modal-token-secret",
 }
 PROFILES = {
     "search-core": [
@@ -69,6 +72,10 @@ PROFILES = {
     "supabase-admin": [
         "SUPABASE_URL",
         "SUPABASE_SERVICE_ROLE_KEY",
+    ],
+    "modal": [
+        "MODAL_TOKEN_ID",
+        "MODAL_TOKEN_SECRET",
     ],
 }
 PROFILES["all"] = list(dict.fromkeys(key for keys in PROFILES.values() for key in keys))

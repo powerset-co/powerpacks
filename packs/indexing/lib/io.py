@@ -10,7 +10,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
 def ensure_parent(path: str | Path) -> Path:
@@ -67,16 +67,24 @@ def append_jsonl(path: str | Path, records: Iterable[dict[str, Any]]) -> Path:
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     """Read newline-delimited JSON objects, skipping blank lines."""
 
+    return list(iter_jsonl(path))
+
+
+def iter_jsonl(path: str | Path) -> Iterator[dict[str, Any]]:
+    """Stream newline-delimited JSON objects, skipping blank lines.
+
+    Use instead of read_jsonl when rows are processed one at a time, so large
+    files (e.g. embedding artifacts) are never fully resident.
+    """
+
     p = Path(path)
     if not p.exists():
-        return []
-    out: list[dict[str, Any]] = []
+        return
     with p.open(encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if line:
-                out.append(json.loads(line))
-    return out
+                yield json.loads(line)
 
 
 def atomic_write_text(path: str | Path, text: str) -> Path:

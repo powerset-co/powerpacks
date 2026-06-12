@@ -102,6 +102,20 @@ PROVISION_PLAN: list[dict[str, Any]] = [
         "profile": "supabase-admin",
         "source": {"kind": "secret", "name": "supabase-secret-key"},
     },
+    {
+        "env_key": "MODAL_TOKEN_ID",
+        "secret_suffix": "modal-token-id",
+        "capability": "modal",
+        "profile": "modal",
+        "source": {"kind": "secret", "name": "modal-token-id"},
+    },
+    {
+        "env_key": "MODAL_TOKEN_SECRET",
+        "secret_suffix": "modal-token-secret",
+        "capability": "modal",
+        "profile": "modal",
+        "source": {"kind": "secret", "name": "modal-token-secret"},
+    },
 ]
 
 
