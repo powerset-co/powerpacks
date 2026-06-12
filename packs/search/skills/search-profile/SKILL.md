@@ -462,7 +462,8 @@ For each profile search:
 1. Run `$search-network` with the profile's `query`, limit, filter-only mode,
    and the plan's pinned seniority bands (when non-empty)
 2. Skip the user approval gate — the plan approval covers all profile searches
-3. Collect the result: artifact_dir, csv path, found_count
+3. Capture the `state` path from the pipeline's JSON output — it is the only
+   thing Result Collection needs per search
 
 Prefer sub-agents (one per profile) when the harness supports workers.
 Otherwise run sequentially.
@@ -476,13 +477,40 @@ budget`:
 2. **Rewrite as a role-only semantic query.** Strip industry/sector/company
    qualifier terms; move them into the role description so they land in
    `semantic_query` instead of company filters.
-3. Record the fallback in `probe_summaries.json` with the original id +
-   `_role_only` suffix and `fallback_reason: "turbopuffer_permit_overflow"`.
+3. In Result Collection, pass the fallback run's state with
+   `--probe-id <original_id>_role_only` and
+   `--fallback-reason <original_id>_role_only=turbopuffer_permit_overflow`.
 
 ### Result Collection
 
-For each completed profile search, record in `probe_summaries.json`
-(legacy filename):
+After the profile searches finish, GENERATE `probe_summaries.json` (legacy
+filename) by running the collector — do not hand-write the file:
+
+```bash
+uv run --project . python packs/search/primitives/merge_candidate_frontier/merge_candidate_frontier.py \
+    collect-probes \
+    --run-dir <run_dir> \
+    --probe-id <profile_id_1> --state <state_json_1> \
+    --probe-id <profile_id_2> --state <state_json_2>
+```
+
+- One `--probe-id`/`--state` pair per profile search, in plan order. The Nth
+  `--probe-id` labels the Nth `--state`; use the plan's profile ids. Each
+  `--state` is the task state JSON path the pipeline printed
+  (`.powerpacks/runs/<task_id>-<slug>.json`).
+- Add `--fallback-reason <probe_id>=<reason>` for permit-overflow fallback
+  runs (see above).
+- The command reads each state's `query` and persisted `artifacts`
+  (artifact_dir, csv, row_count) and overwrites
+  `<run_dir>/probe_summaries.json` deterministically; re-running with the same
+  states produces the same file.
+
+The canonical shape is a **bare JSON list** of probe objects
+(`packs/search/schemas/probe-summaries.schema.json`). Hand-authoring or
+wrapping the list in an object (`{"probes": [...]}`) is forbidden; downstream
+primitives only tolerate the legacy wrapper for old runs.
+
+Field reference (all produced by the command):
 
 | Field | Value |
 |-------|-------|
@@ -552,8 +580,9 @@ uv run --project . python packs/search/primitives/merge_candidate_frontier/merge
     --run-dir <run_dir>
 ```
 
-It reads `probe_summaries.json` and `plan.json`, dedupes by `person_id` and
-normalized `linkedin_url`, and writes:
+It reads `probe_summaries.json` (the bare list written by `collect-probes`;
+the legacy object wrapper from old runs is tolerated) and `plan.json`, dedupes
+by `person_id` and normalized `linkedin_url`, and writes:
 
 | File | Content |
 |------|---------|
@@ -657,7 +686,7 @@ Append lineage events: `evaluations_captured`, `shortlist_exported`.
 <run_dir>/
 ├── source.txt, source.json           ← Task 1
 ├── plan.json                          ← Task 1 (profiles under initial_probes)
-├── probe_summaries.json               ← Task 2 (legacy filename)
+├── probe_summaries.json               ← Task 2 (collect-probes; bare list, legacy filename)
 ├── lineage.json                       ← Tasks 1-5
 ├── candidate_frontier.json/.jsonl     ← Task 4
 ├── candidates.debug.csv               ← Task 4
