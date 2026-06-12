@@ -224,12 +224,16 @@ evaluation primitive reads it and enforces it as a hard gate.
 
 #### Seniority bands (hard retrieval filter)
 
-Alongside `usable_cutoff`, derive canonical `seniority_bands` deterministically
-from the JD's **explicit level language only** and record them in `plan.json`
-as `seniority_bands` (next to `usable_cutoff`). Task 2 pins these bands on
-every profile search via `--seniority-bands`, so retrieval itself only returns
+Alongside `usable_cutoff`, derive canonical `seniority_bands` and record them
+in `plan.json` (next to `usable_cutoff`). Task 2 pins these bands on every
+profile search via `--seniority-bands`, so retrieval itself only returns
 in-band candidates instead of paying hydration and evaluation cost on
 out-of-band people.
+
+A hiring JD always encodes an intended band — never leave the plan silent
+about seniority. Explicit level language wins; when there is none, propose the
+title's conventional band range marked as inferred, and let the user correct
+it at the plan-preview hard stop.
 
 Derivation rules:
 
@@ -261,10 +265,25 @@ Derivation rules:
 3. **Never derive bands from years of experience**, team size, scope, or
    impact language. "8+ years" does not mean senior; "owns the roadmap end to
    end" does not mean director. YOE is unreliable — only explicit level words
-   count.
-4. **No explicit level language → empty list.** Write `"seniority_bands": []`,
-   run profile searches without the flag (retrieval stays unfiltered), and let
-   the `usable_cutoff` evaluation gate be the only seniority enforcement.
+   (rule 1) or the title's conventional range (rule 4) count.
+4. **No explicit level language → infer the title's conventional band range
+   and mark it inferred.** Hiring JDs always have an intended band; propose
+   the range the title conventionally spans so the user corrects a concrete
+   proposal instead of discovering an unfiltered search later:
+   - "Member of Technical Staff" → `["mid", "senior"]` (level-less IC title;
+     local index confirms most MTS holders are mid/senior — NOT the `staff`
+     band despite the word)
+   - bare IC titles ("Software Engineer", "Data Scientist", "Designer") →
+     `["mid", "senior"]`
+   - numbered levels: "Engineer I" → `["entry", "junior"]`; "Engineer II" →
+     `["junior", "mid"]`; "Engineer III"/"L4-L5" style → `["mid", "senior"]`
+   - "Founding Engineer" → `["senior", "staff"]`
+   Record these in `plan.json` like any other bands; the preview's
+   `Targeting:` line (Task 1d) plus the hard stop is where the user confirms
+   or corrects them. Only a brief with no role title at all (e.g.
+   "interesting infra people in my network") leaves `"seniority_bands": []`
+   with retrieval unfiltered and the `usable_cutoff` evaluation gate as the
+   only enforcement.
 
 #### What to ignore
 
@@ -435,14 +454,13 @@ enforcement is a given (in-band ICs match; executives/founders/advisors are
 gated at evaluation). Ask a question only if the band is genuinely ambiguous
 and changes the search (e.g. "director-level OK?").
 
-When the JD yielded NO explicit level language and `seniority_bands` is empty,
-do not stay silent — say so in one line so the user can pin a band before
-spend, e.g.:
+Title-inferred bands (Task 1b rule 4) show the same way as explicit ones —
+just state them (`Targeting: mid/senior ICs`); the plan-preview hard stop is
+where the user corrects them. In the rare case there is no role title at all
+and `seniority_bands` is empty, say so in one line so the user can pin a band
+before spend:
 
-`Targeting: all levels (JD states no explicit seniority) — pin a band?`
-
-(Example: "Member of Technical Staff" is a level-less IC title, not the
-`staff` band — such JDs derive empty bands and must surface this line.)
+`Targeting: all levels (no role title to infer from) — pin a band?`
 
 **If the user modifies the plan at this checkpoint** (corrects the seniority
 band, adds/removes a trait, changes scope): apply the change, re-validate
