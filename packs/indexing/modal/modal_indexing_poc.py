@@ -4,8 +4,9 @@
 Local machine = dispatcher/aggregator: upload inputs to a Modal Volume,
 dispatch the unmodified repo pipeline into a Sandbox, download results.
 
-Run with the modal CLI's python (has the modal SDK):
-  ~/.local/share/uv/tools/modal/bin/python packs/indexing/modal/modal_indexing_poc.py <cmd> ...
+Run via the repo environment (modal is a project dependency, and the Modal
+token comes from .env via `$powerset env pull` — no `modal token set` needed):
+  uv run --project . python packs/indexing/modal/modal_indexing_poc.py <cmd> ...
 
 Commands:
   upload    push local people.csv + precomputed artifacts to the Volume
@@ -29,7 +30,14 @@ import sys
 import time
 from pathlib import Path
 
-import modal
+from dotenv import load_dotenv
+
+_REPO_FOR_ENV = Path(__file__).resolve().parents[3]
+# MODAL_TOKEN_ID / MODAL_TOKEN_SECRET land in .env via `$powerset env pull`;
+# the modal SDK reads them from the environment, so load before importing.
+load_dotenv(_REPO_FOR_ENV / ".env", override=False)
+
+import modal  # noqa: E402
 
 APP_NAME = os.environ.get("POWERPACKS_MODAL_APP", "powerset-indexing")
 # Modal Volumes are workspace-scoped: anyone with a powerset-co token shares

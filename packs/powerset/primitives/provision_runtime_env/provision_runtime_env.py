@@ -48,6 +48,11 @@ PROFILES = {
         "OPENROUTER_API_KEY",
         "PARALLEL_API_KEY",
         "RAPIDAPI_LINKEDIN_KEY",
+        # Modal sandbox dispatch for cloud indexing. Optional: users without
+        # per-user modal secrets still get a clean default pull (see
+        # OPTIONAL_KEYS below).
+        "MODAL_TOKEN_ID",
+        "MODAL_TOKEN_SECRET",
     ],
     "search-network": [
         "TURBOPUFFER_API_KEY",
@@ -80,6 +85,9 @@ PROFILES = {
 }
 PROFILES["all"] = list(dict.fromkeys(key for keys in PROFILES.values() for key in keys))
 ALLOWED_KEYS = set(DEFAULT_SECRET_MAP)
+# Keys whose absence must not fail a pull: fetched best-effort, reported as
+# optional_missing, and excluded from the partial/exit-1 decision.
+OPTIONAL_KEYS = {"MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"}
 
 
 def emit(value: Any) -> None:
@@ -407,7 +415,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     keys = requested_keys(args.profile, args.include)
     _, existing = read_env(args.env_file)
     values = {key: existing.get(key, "") for key in keys}
-    missing = [key for key, value in values.items() if not value]
+    missing = [key for key, value in values.items() if not value and key not in OPTIONAL_KEYS]
+    optional_missing = [key for key, value in values.items() if not value and key in OPTIONAL_KEYS]
     emit({
         "primitive": "provision_runtime_env",
         "command": "check",
@@ -416,6 +425,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         "env_file": str(args.env_file),
         "secrets": redact_keys(values),
         "missing": missing,
+        "optional_missing": optional_missing,
     })
     return 0 if not missing else 1
 
@@ -468,9 +478,11 @@ def cmd_pull(args: argparse.Namespace) -> int:
         mapping = base_map
         scope = {"mode": "shared"}
 
+    required_keys = [key for key in keys if key not in OPTIONAL_KEYS]
+    optional_keys = [key for key in keys if key in OPTIONAL_KEYS]
     try:
         secrets, fetch_errors = fetch_from_gcp(
-            keys,
+            required_keys,
             mapping,
             args.gcp_project,
             best_effort=args.best_effort,
@@ -491,7 +503,17 @@ def cmd_pull(args: argparse.Namespace) -> int:
         })
         return 0 if args.best_effort else 1
 
-    missing = [key for key in keys if key not in secrets]
+    if optional_keys:
+        optional_secrets, optional_errors = fetch_from_gcp(
+            optional_keys,
+            mapping,
+            args.gcp_project,
+            best_effort=True,
+        )
+        secrets.update(optional_secrets)
+        fetch_errors.update(optional_errors)
+    missing = [key for key in keys if key not in secrets and key not in OPTIONAL_KEYS]
+    optional_missing = [key for key in optional_keys if key not in secrets]
     result = write_env(args.env_file, secrets, overwrite=args.overwrite)
     if not secrets:
         status = "not_privileged"
@@ -513,6 +535,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
         "written": result["written"],
         "skipped_existing": result["skipped_existing"],
         "missing": missing,
+        "optional_missing": optional_missing,
         "fetch_errors": fetch_errors,
         "secrets": redact_keys(secrets),
     }
