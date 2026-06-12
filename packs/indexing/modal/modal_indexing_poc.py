@@ -46,6 +46,25 @@ load_dotenv(_REPO_FOR_ENV / ".env", override=False)
 
 import modal  # noqa: E402
 
+
+def require_modal_credentials() -> None:
+    """Fail with actionable guidance instead of an SDK auth traceback.
+
+    We cannot log a user in for them (gcloud auth needs a human in a browser),
+    but we can say exactly what to run.
+    """
+    if os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET"):
+        return
+    if (Path.home() / ".modal.toml").exists():
+        return
+    raise SystemExit(
+        "No Modal credentials found.\n"
+        "Fix: run `$powerset login` (or `$powerset env pull`) to write MODAL_TOKEN_ID /\n"
+        "MODAL_TOKEN_SECRET into .env - it needs a signed-in gcloud account\n"
+        "(`gcloud auth login` once, in a browser). Then re-run this command."
+    )
+
+
 APP_NAME = os.environ.get("POWERPACKS_MODAL_APP", "powerset-indexing")
 # Modal Volumes are workspace-scoped: anyone with a powerset-co token shares
 # this default volume; outsiders cannot reach it. Set POWERPACKS_MODAL_VOLUME
@@ -473,6 +492,7 @@ def main() -> int:
     dl.add_argument("--wait", action="store_true", help="poll runs/<label>/status.json until the run finishes")
 
     args = ap.parse_args()
+    require_modal_credentials()
     return {"upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 
 
