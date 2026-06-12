@@ -34,6 +34,7 @@ from packs.indexing.lib.contracts import (  # noqa: E402
 )
 from packs.indexing.lib.io import atomic_write_text, emit_json, read_jsonl, write_json, write_jsonl  # noqa: E402
 from packs.indexing.lib.ledger import load_ledger, mark_step, now_iso, save_ledger  # noqa: E402
+from packs.indexing.lib.llm_config import openai_price_multiplier  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import (  # noqa: E402
     env_or_profile_int,
     openai_usage_tier_profile,
@@ -269,7 +270,7 @@ def _chat_cost_stage(
     prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
     estimated = None
     if prices:
-        estimated = _round_usd((input_tokens / 1000.0) * prices["input"] + (output_tokens / 1000.0) * prices["output"])
+        estimated = _round_usd(((input_tokens / 1000.0) * prices["input"] + (output_tokens / 1000.0) * prices["output"]) * openai_price_multiplier())
     return {
         "provider": provider,
         "model": model,

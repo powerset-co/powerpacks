@@ -82,11 +82,13 @@ def main() -> int:
     # context for new companies (teammates seed it with
     # `modal volume put <vol> .powerpacks/rapidapi-company-cache cache/rapidapi-company-cache`).
     os.environ.setdefault("POWERPACKS_RAPIDAPI_COMPANY_CACHE", str(cache_root / "rapidapi-company-cache"))
-    # Measured: gpt-5.1/5.2 enrichment calls average ~3 minutes each (reasoning
-    # models + structured output), so the 60s default timeout mass-fails them.
-    # A 256-way sweep showed the sandbox network handles full tier-5
-    # concurrency fine at 4 vCPU; keep concurrency high and the timeout above
-    # the slow-call tail.
+    # Measured (jake-150 run): flex-tier gpt-5.1/5.2 calls are queued
+    # server-side for minutes regardless of client concurrency — 487 role
+    # calls took 20 min at 256-way. Onboarding is interactive, so pay
+    # standard tier (~2x tokens, seconds per call); flex stays the library
+    # default for non-urgent bulk jobs. The 300s timeout covers the standard
+    # tail; a 256-way sweep showed the sandbox handles that concurrency fine.
+    os.environ.setdefault("POWERPACKS_OPENAI_SERVICE_TIER", "default")
     os.environ.setdefault("POWERPACKS_OPENAI_CONCURRENCY", "256")
     os.environ.setdefault("POWERPACKS_OPENAI_TIMEOUT_SECONDS", "300")
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}

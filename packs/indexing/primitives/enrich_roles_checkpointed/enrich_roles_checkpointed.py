@@ -32,7 +32,7 @@ from packs.indexing.lib.role_prompts import get_system_user_prompts, format_titl
 from packs.indexing.lib.llm_config import (  # noqa: E402
     DEFAULT_ROLE_MODEL as DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS,
     DEFAULT_OPENAI_TIMEOUT_SECONDS, DEFAULT_OPENAI_CONCURRENCY,
-    CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
+    CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs, openai_price_multiplier,
 )
 
 DEFAULT_CHECKPOINT_EVERY = 1000
@@ -582,7 +582,7 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
     estimated_cost = 0.0 if provider != "openai" else None
     if prices:
-        estimated_cost = round((input_tokens / 1000.0) * prices["input"] + (output_tokens / 1000.0) * prices["output"], 6)
+        estimated_cost = round(((input_tokens / 1000.0) * prices["input"] + (output_tokens / 1000.0) * prices["output"]) * openai_price_multiplier(), 6)
     return {
         "status": "dry-run",
         "stage": "enrich_roles_checkpointed",

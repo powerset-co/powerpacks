@@ -38,6 +38,7 @@ from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E4
 from packs.indexing.lib.llm_config import (  # noqa: E402
     DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_OPENAI_TIMEOUT_SECONDS,
     DEFAULT_OPENAI_CONCURRENCY, CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
+    openai_price_multiplier,
 )
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company  # noqa: E402
 
@@ -768,7 +769,7 @@ def estimate_payload(input_path: Path, provider: str, artifact: dict[str, dict[s
     prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
     estimated_cost = 0.0 if provider != "openai" else None
     if prices:
-        estimated_cost = round((estimated_input_tokens / 1000.0) * prices["input"] + (estimated_output_tokens / 1000.0) * prices["output"], 6)
+        estimated_cost = round(((estimated_input_tokens / 1000.0) * prices["input"] + (estimated_output_tokens / 1000.0) * prices["output"]) * openai_price_multiplier(), 6)
     return {
         "status": "dry_run",
         "stage": "enrich_companies_checkpointed",
