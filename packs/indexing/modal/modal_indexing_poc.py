@@ -8,8 +8,15 @@ Run via the repo environment (modal is a project dependency, and the Modal
 token comes from .env via `$powerset env pull` — no `modal token set` needed):
   uv run --project . python packs/indexing/modal/modal_indexing_poc.py <cmd> ...
 
+Volume layout (shared workspace volume, multi-operator):
+  /data/cache/...                      shared enrichment caches (key-union
+                                       merged after every successful run)
+  /data/operators/<operator-id>/input  this operator's people.csv
+  /data/operators/<operator-id>/runs   this operator's run outputs
+  /data/synthetic                      benchmark fixture (amplify)
+
 Commands:
-  upload    push local people.csv + precomputed artifacts to the Volume
+  upload    push this operator's people.csv (--seed-cache bootstraps /data/cache)
   amplify   build the synthetic Jake-scale dataset in-sandbox (no paid calls)
   run       client-driven benchmark run (streams per-phase, exec per step)
   process   fully automatic: server-side run (survives disconnects) + watch
@@ -63,6 +70,27 @@ PIPELINE = "/repo/packs/indexing/primitives/build_processing_pipeline/build_proc
 DUCKDB_SHIM = "/repo/scripts/build-local-duckdb-shim.py"
 BENCH = "/repo/packs/indexing/modal/bench_wrapper.py"
 AMPLIFY = "/repo/packs/indexing/modal/amplify_dataset.py"
+
+# Multi-operator volume layout: enrichment caches are shared by every operator
+# (keys are content-derived, so overlap across networks = free cache hits);
+# inputs and run outputs are per-operator so concurrent operators never
+# collide. The sandbox merges run outputs back into the shared cache by key
+# union after each successful run.
+CACHE_ROOT = "/data/cache"
+SYNTHETIC_ROOT = "/data/synthetic"
+OPERATOR_ROOT = f"/data/operators/{DEFAULT_OPERATOR_ID}"
+
+
+def dataset_paths(dataset: str) -> tuple[str, str]:
+    """Return (people_csv, cache_root) inside the sandbox for a dataset."""
+    if dataset == "synthetic":
+        # the amplifier writes a self-contained fixture: people.csv + artifacts/ + seeds/
+        return f"{SYNTHETIC_ROOT}/people.csv", SYNTHETIC_ROOT
+    return f"{OPERATOR_ROOT}/input/people.csv", CACHE_ROOT
+
+
+def run_vol_path(label: str) -> str:
+    return f"{OPERATOR_ROOT}/runs/{label}"
 
 # local artifact path (relative to .powerpacks/search-index) -> volume artifact name
 REAL_ARTIFACTS = {
@@ -139,21 +167,34 @@ def sb_read_json(sb: modal.Sandbox, path: str) -> dict | None:
 
 
 def cmd_upload(args: argparse.Namespace) -> int:
-    search_index = LOCAL_POWERPACKS / "search-index"
+    """Push this operator's people.csv (always) and optionally seed the shared cache.
+
+    --seed-cache bootstraps /data/cache from local enrichment artifacts and is
+    an OVERWRITE - use it on an empty/new volume. Day-to-day, the cache grows
+    server-side via the post-run key-union merge, so re-seeding is not needed
+    (and would discard rows other operators contributed since your local copy).
+    """
     people_csv = LOCAL_POWERPACKS / "network-import/merged/people.csv"
     vol = get_volume()
+    op_prefix = f"operators/{DEFAULT_OPERATOR_ID}"
     total_mb = people_csv.stat().st_size / 1e6
+    uploaded = 1
     with vol.batch_upload(force=True) as batch:
-        batch.put_file(people_csv, "input/real/people.csv")
-        for rel, name in REAL_ARTIFACTS.items():
-            src = search_index / rel
-            total_mb += src.stat().st_size / 1e6
-            batch.put_file(src, f"input/real/artifacts/{name}")
-        for rel, name in REAL_SEEDS.items():
-            src = search_index / rel
-            total_mb += src.stat().st_size / 1e6
-            batch.put_file(src, f"input/real/seeds/{name}")
-    print(f"uploaded people.csv + {len(REAL_ARTIFACTS) + len(REAL_SEEDS)} artifacts ({total_mb:.0f} MB) to volume {VOLUME_NAME}")
+        batch.put_file(people_csv, f"{op_prefix}/input/people.csv")
+        if args.seed_cache:
+            search_index = LOCAL_POWERPACKS / "search-index"
+            for rel, name in REAL_ARTIFACTS.items():
+                src = search_index / rel
+                total_mb += src.stat().st_size / 1e6
+                uploaded += 1
+                batch.put_file(src, f"cache/artifacts/{name}")
+            for rel, name in REAL_SEEDS.items():
+                src = search_index / rel
+                total_mb += src.stat().st_size / 1e6
+                uploaded += 1
+                batch.put_file(src, f"cache/seeds/{name}")
+    print(f"uploaded {uploaded} files ({total_mb:.0f} MB) to volume {VOLUME_NAME} "
+          f"(people.csv -> {op_prefix}/input/{', cache seeded' if args.seed_cache else ''})")
     return 0
 
 
@@ -165,17 +206,20 @@ def cmd_process(args: argparse.Namespace) -> int:
     this driver disconnects; re-attach later with `download --wait`.
     """
     label = args.label or f"{args.dataset}-process"
-    input_root = f"/data/input/{args.dataset}"
-    run_vol = f"/data/runs/{label}"
+    people_csv, cache_root = dataset_paths(args.dataset)
+    run_vol = run_vol_path(label)
     app = modal.App.lookup(APP_NAME, create_if_missing=True)
     entrypoint = [
         "python", "/repo/packs/indexing/modal/run_in_sandbox.py",
-        "--input-root", input_root,
+        "--people-csv", people_csv,
+        "--cache-root", cache_root,
         "--run-vol", run_vol,
         "--operator-id", DEFAULT_OPERATOR_ID,
     ]
     if args.persist_artifacts:
         entrypoint.append("--persist-artifacts")
+    if args.dataset == "synthetic":
+        entrypoint.append("--no-refresh-cache")
     started = time.time()
     sb = modal.Sandbox.create(
         *entrypoint,
@@ -204,10 +248,12 @@ def cmd_process(args: argparse.Namespace) -> int:
 
 def wait_for_status(label: str, timeout_s: int = 7200) -> dict | None:
     vol = get_volume()
+    # volume reads are relative to the volume root (no /data prefix)
+    status_path = run_vol_path(label).removeprefix("/data/") + "/status.json"
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:
-            data = b"".join(vol.read_file(f"runs/{label}/status.json"))
+            data = b"".join(vol.read_file(status_path))
             payload = json.loads(data)
         except (FileNotFoundError, json.JSONDecodeError):
             payload = None
@@ -226,8 +272,9 @@ def cmd_download(args: argparse.Namespace) -> int:
     (resume + incremental state); local search only needs local-search.duckdb
     plus manifest.json.
     """
+    run_prefix = run_vol_path(args.label).removeprefix("/data/")
     if getattr(args, "wait", False):
-        print(f"waiting for runs/{args.label}/status.json ...")
+        print(f"waiting for {run_prefix}/status.json ...")
         payload = wait_for_status(args.label)
         if not payload:
             print("timed out waiting for run status")
@@ -240,7 +287,7 @@ def cmd_download(args: argparse.Namespace) -> int:
     dest.mkdir(parents=True, exist_ok=True)
     started = time.time()
     for name in ("local-search.duckdb", "manifest.json"):
-        remote = f"runs/{args.label}/{name}"
+        remote = f"{run_prefix}/{name}"
         target = dest / name
         if target.exists():
             backup = target.with_name(target.name + ".bkup")
@@ -270,9 +317,9 @@ def cmd_amplify(args: argparse.Namespace) -> int:
     try:
         code, _ = sb_exec(
             sb, "python", AMPLIFY,
-            "--people-csv", "/data/input/real/people.csv",
-            "--artifacts-dir", "/data/input/real/artifacts",
-            "--output-dir", "/data/input/synthetic",
+            "--people-csv", f"{OPERATOR_ROOT}/input/people.csv",
+            "--artifacts-dir", f"{CACHE_ROOT}/artifacts",
+            "--output-dir", SYNTHETIC_ROOT,
             "--target-people", str(args.target_people),
             "--target-roles", str(args.target_roles),
             "--target-companies", str(args.target_companies),
@@ -316,12 +363,11 @@ def step_durations(ledger: dict) -> list[tuple[str, float | None]]:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    input_root = f"/data/input/{args.dataset}"
-    people_csv = f"{input_root}/people.csv"
-    artifacts = f"{input_root}/artifacts"
-    seeds = f"{input_root}/seeds"
+    people_csv, cache_root = dataset_paths(args.dataset)
+    artifacts = f"{cache_root}/artifacts"
+    seeds = f"{cache_root}/seeds"
     label = args.label or f"{args.dataset}-{int(args.cpu)}cpu-{args.memory_mib}mib"
-    run_vol = f"/data/runs/{label}"
+    run_vol = run_vol_path(label)
     work = "/tmp/run/search-index"  # container-local disk; results copied to volume after
 
     sb = make_sandbox(cpu=args.cpu, memory_mib=args.memory_mib, timeout=args.timeout)
@@ -381,7 +427,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("upload")
+    up = sub.add_parser("upload")
+    up.add_argument("--seed-cache", action="store_true",
+                    help="bootstrap the shared /data/cache from local artifacts (overwrite; new/empty volumes only)")
 
     amp = sub.add_parser("amplify")
     amp.add_argument("--cpu", type=float, default=4)
