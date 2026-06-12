@@ -15,6 +15,8 @@ try:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
+        latest_interaction,
+        merge_interaction_counts,
         normalize_linkedin_url,
         normalize_people_row,
     )
@@ -23,6 +25,8 @@ except ModuleNotFoundError:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
+        latest_interaction,
+        merge_interaction_counts,
         normalize_linkedin_url,
         normalize_people_row,
     )
@@ -267,14 +271,20 @@ def review_row_to_messages_people(row: dict[str, str], review_csv: Path, reason:
     current_title, current_company = split_title_company(row.get("top_title_company_pairs") or row.get("top_titles", ""))
     phone = (row.get("phone_e164") or "").strip()
     channels = messages_source_channels(row)
-    summary_parts = [
-        f"messages_total={row.get('total_messages') or '0'}",
-        f"selection={reason}",
-    ]
-    if row.get("last_message"):
-        summary_parts.append(f"last_message={row.get('last_message')}")
+    summary_parts = [f"selection={reason}"]
     if row.get("short_reason"):
         summary_parts.append(f"review_reason={row.get('short_reason')}")
+    interaction_counts: dict[str, int] = {}
+    for count_key, channel in (("imessage_message_count", "imessage"), ("whatsapp_message_count", "whatsapp")):
+        try:
+            count = int(float(row.get(count_key) or 0))
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            interaction_counts[channel] = count
+    last_interaction = latest_interaction(
+        row.get("imessage_last_message"), row.get("whatsapp_last_message"), row.get("last_message")
+    )
     people = {
         "id": row.get("network_person_id") or f"message-linkedin:{sha(public_identifier or linkedin_url, 16)}",
         "public_identifier": public_identifier,
@@ -293,6 +303,8 @@ def review_row_to_messages_people(row: dict[str, str], review_csv: Path, reason:
         "source_channels": ",".join(channels),
         "source_artifacts": str(review_csv),
         "enrichment_provider": f"messages_review:{reason}",
+        "interaction_counts": json.dumps(interaction_counts, ensure_ascii=False) if interaction_counts else "",
+        "last_interaction": last_interaction,
     }
     return normalize_people_row(people)
 
@@ -312,6 +324,9 @@ def merge_messages_people_candidate(existing: dict[str, str], incoming: dict[str
     providers = unique_strings([merged.get("enrichment_provider", ""), incoming.get("enrichment_provider", "")])
     if providers:
         merged["enrichment_provider"] = ",".join(providers)
+    counts = merge_interaction_counts(merged.get("interaction_counts"), incoming.get("interaction_counts"))
+    merged["interaction_counts"] = json.dumps(counts, ensure_ascii=False) if counts else ""
+    merged["last_interaction"] = latest_interaction(merged.get("last_interaction"), incoming.get("last_interaction"))
     return normalize_people_row(merged)
 
 

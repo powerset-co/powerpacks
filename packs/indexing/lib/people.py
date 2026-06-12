@@ -43,6 +43,7 @@ except Exception:  # pragma: no cover - fallback for copied primitive bundles
         "entity_urn", "enrichment_provider", "enriched_at", "harmonic_response", "harmonic_location",
         "rapidapi_response", "twitter_handle", "twitter_response", "primary_email", "all_emails",
         "primary_phone", "all_phones", "source_channels", "source_artifacts",
+        "interaction_counts", "last_interaction",
     ]
 
     def extract_public_identifier(linkedin_url: str) -> str:
@@ -131,6 +132,19 @@ def _json_list(value: Any) -> list[Any]:
 def _json_object(value: Any) -> dict[str, Any]:
     parsed = parse_jsonish(value, {})
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _interaction_summary(person: dict[str, Any]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    for channel, raw in _json_object(person.get("interaction_counts")).items():
+        value = _int_or_zero(raw)
+        if value > 0:
+            counts[str(channel).strip().lower()] = value
+    return {
+        "interaction_counts": counts,
+        "total_interactions": sum(counts.values()),
+        "last_interaction": _string(person.get("last_interaction")),
+    }
 
 
 def _social_counts(person: dict[str, Any]) -> dict[str, int]:
@@ -501,6 +515,8 @@ def flatten_people(rows: Iterable[dict[str, Any]] | str | Path) -> list[dict[str
             "x_twitter_handle": row.get("twitter_handle", ""),
             "source_channels": row.get("source_channels", ""),
             "source_artifacts": row.get("source_artifacts", ""),
+            "interaction_counts": row.get("interaction_counts", ""),
+            "last_interaction": row.get("last_interaction", ""),
             "allowed_operator_ids": local_operator_ids(raw, None) if (raw.get("allowed_operator_ids") or raw.get("operator_ids")) else [],
             "raw": {
                 **{key: row.get(key, "") for key in PEOPLE_CSV_COLUMNS},
@@ -611,6 +627,7 @@ def _hydrated_context(person: dict[str, Any]) -> dict[str, Any]:
     location = person.get("location_raw") or ", ".join(part for part in [person.get("city"), person.get("state"), person.get("country")] if part) or None
     rapid = person.get("rapidapi_response") or {}
     social = _social_counts(person)
+    interactions = _interaction_summary(person)
     return {
         "person_id": person.get("id", ""),
         "name": person.get("full_name", ""),
@@ -629,6 +646,9 @@ def _hydrated_context(person: dict[str, Any]) -> dict[str, Any]:
         "instagram_handle": rapid.get("instagram_handle") or None,
         "instagram_followers": social["ig_followers"],
         "years_of_experience": _years_of_experience([exp for exp in person.get("work_experiences") or [] if isinstance(exp, dict)]),
+        "interaction_counts": interactions["interaction_counts"],
+        "total_interactions": interactions["total_interactions"],
+        "last_interaction": interactions["last_interaction"] or None,
         "matched_position_indexes": [],
         "trait_scores": {},
         "vertical_sources": [value for value in str(person.get("source_channels") or "").split(",") if value],
@@ -674,6 +694,9 @@ def build_profile_contract_records(people: Iterable[dict[str, Any]]) -> list[dic
             "ig_handle": context.get("instagram_handle") or "",
             "ig_followers": context.get("instagram_followers", 0),
             "inferred_birth_year": _int_or_zero(person.get("inferred_birth_year")),
+            "interaction_counts": context.get("interaction_counts") or {},
+            "total_interactions": context.get("total_interactions", 0),
+            "last_interaction": context.get("last_interaction") or "",
         }
         records.append(record)
     return records
@@ -706,7 +729,9 @@ def build_unified_profiles(people: Iterable[dict[str, Any]], roles: Iterable[dic
             "instagram_followers": context["instagram_followers"],
             "inferred_age": None,
             "years_of_experience": context["years_of_experience"],
-            "total_interactions": None,
+            "total_interactions": context["total_interactions"] or None,
+            "interaction_counts": context["interaction_counts"],
+            "last_interaction": context["last_interaction"],
             "base_score": 0.0,
             "matched_position_indexes": [],
             "trait_scores": {},

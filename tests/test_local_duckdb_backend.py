@@ -264,12 +264,15 @@ class LocalDuckDBFixtureMixin:
                     work_experiences json,
                     education json,
                     hydrated_context json,
+                    interaction_counts json,
+                    total_interactions bigint,
+                    last_interaction varchar,
                     allowed_operator_ids varchar[]
                 )
                 """
             )
             con.executemany(
-                "insert into local_person_profiles values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "insert into local_person_profiles values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         "person-founder", "person-founder", "person-founder", "founder-example",
@@ -282,6 +285,7 @@ class LocalDuckDBFixtureMixin:
                         json.dumps([{"title": "Founder and CEO", "company": "Acme AI"}]),
                         json.dumps([{"school": "Stanford University"}]),
                         json.dumps({"positions": [{"title": "Founder and CEO", "company": "Acme AI"}]}),
+                        json.dumps({"gmail": 12}), 12, "2026-01-01T00:00:00+00:00",
                         ["op1", "op-founder"],
                     ),
                     (
@@ -295,6 +299,7 @@ class LocalDuckDBFixtureMixin:
                         json.dumps([{"title": "Backend Engineer", "company": "InfraDB"}]),
                         json.dumps([{"school": "Massachusetts Institute of Technology"}]),
                         json.dumps({"positions": [{"title": "Backend Engineer", "company": "InfraDB"}]}),
+                        None, 0, "",
                         ["op1", "op-eng"],
                     ),
                 ],

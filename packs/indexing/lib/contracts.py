@@ -15,6 +15,10 @@ ROOT = Path(__file__).resolve().parents[3]
 CONTRACT_ROOT = ROOT / "packs/search/contracts"
 CANONICAL_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 MERGE_COLUMNS = ["merge_key", "merge_confidence", "merge_sources", "merged_row_count", "needs_review"]
+# Columns newer than the oldest still-valid people.csv artifacts; absent
+# headers degrade to empty values via normalize_people_row, so their absence
+# is a warning rather than an error.
+OPTIONAL_PEOPLE_SCHEMA_COLUMNS = {"interaction_counts", "last_interaction"}
 CANONICAL_PEOPLE_COLUMNS = PEOPLE_SCHEMA_COLUMNS + MERGE_COLUMNS
 
 
@@ -206,9 +210,12 @@ def validate_people_csv(path: str | Path = CANONICAL_PEOPLE_CSV, *, require_rows
     if not p.exists():
         return ContractResult(str(p), False, 0, [f"missing people csv: {p}"], warnings, columns)
     columns = csv_header(p)
-    missing = [col for col in PEOPLE_SCHEMA_COLUMNS if col not in columns]
+    missing = [col for col in PEOPLE_SCHEMA_COLUMNS if col not in columns and col not in OPTIONAL_PEOPLE_SCHEMA_COLUMNS]
     if missing:
         errors.append("missing required people schema columns: " + ", ".join(missing))
+    missing_optional = [col for col in OPTIONAL_PEOPLE_SCHEMA_COLUMNS if col not in columns]
+    if missing_optional:
+        warnings.append("missing optional people schema columns: " + ", ".join(sorted(missing_optional)))
     missing_merge = [col for col in MERGE_COLUMNS if col not in columns]
     if missing_merge:
         warnings.append("missing merge bookkeeping columns: " + ", ".join(missing_merge))
