@@ -220,12 +220,20 @@ def cmd_process(args: argparse.Namespace) -> int:
         entrypoint.append("--persist-artifacts")
     if args.dataset == "synthetic":
         entrypoint.append("--no-refresh-cache")
+    secrets: list[modal.Secret] = []
+    if getattr(args, "enrich", False):
+        # Workspace-scoped secret (powerset-co members only). Only mounted for
+        # --enrich runs; default runs stay replay-only with no key in the
+        # sandbox, so they cannot spend.
+        secrets.append(modal.Secret.from_name("powerset-openai"))
+        entrypoint += ["--enrich", "--max-usd", str(args.max_usd)]
     started = time.time()
     sb = modal.Sandbox.create(
         *entrypoint,
         app=app,
         image=build_image(),
         volumes={"/data": get_volume()},
+        secrets=secrets,
         cpu=args.cpu,
         memory=args.memory_mib,
         timeout=args.timeout,
@@ -455,6 +463,9 @@ def main() -> int:
     proc.add_argument("--label")
     proc.add_argument("--persist-artifacts", action="store_true")
     proc.add_argument("--dest", help="download destination; defaults to .powerpacks/search-index")
+    proc.add_argument("--enrich", action="store_true",
+                      help="allow paid OpenAI calls for cache misses (mounts the powerset-openai secret; dry-run estimate gated by --max-usd)")
+    proc.add_argument("--max-usd", type=float, default=25.0)
 
     dl = sub.add_parser("download")
     dl.add_argument("--label", required=True, help="run label to pull, e.g. real-1x")

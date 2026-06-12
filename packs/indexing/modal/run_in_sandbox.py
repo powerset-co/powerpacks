@@ -121,6 +121,10 @@ def main() -> int:
     ap.add_argument("--operator-id", required=True)
     ap.add_argument("--persist-artifacts", action="store_true")
     ap.add_argument("--no-refresh-cache", action="store_true")
+    ap.add_argument("--enrich", action="store_true",
+                    help="allow paid OpenAI calls for cache misses (requires OPENAI_API_KEY in the sandbox)")
+    ap.add_argument("--max-usd", type=float, default=25.0,
+                    help="abort before the paid run if the dry-run estimate exceeds this")
     args = ap.parse_args()
 
     cache_root = Path(args.cache_root)
@@ -153,6 +157,33 @@ def main() -> int:
         "--summary-input-embeddings", str(artifacts / "summary_embeddings.jsonl"),
         "--person-tech-skills-input", str(artifacts / "person_tech_skills.jsonl"),
     ]
+    if args.enrich:
+        # Estimate gate: dry-run the same command, persist the estimate, and
+        # refuse to spend past --max-usd. The paid run itself still only pays
+        # for cache misses; covered rows replay free.
+        write_status(run_vol, status | {"phase": "estimate"})
+        dry = subprocess.run(pipeline_cmd[3:] + ["--dry-run"], capture_output=True, text=True)
+        estimated_usd = None
+        try:
+            estimate = json.loads((dry.stdout or "").strip().splitlines()[-1])
+            estimated_usd = float(estimate.get("estimated_cost_usd") or 0.0)
+            (run_vol / "estimate.json").write_text(json.dumps(estimate, indent=2))
+        except (json.JSONDecodeError, IndexError, ValueError):
+            pass
+        if estimated_usd is None:
+            write_status(run_vol, status | {"status": "failed", "phase": "estimate", "error": "could not parse dry-run estimate", "finished_at": now_iso()})
+            print(dry.stdout[-2000:] if dry.stdout else dry.stderr[-2000:], flush=True)
+            return 2
+        print(f"[run-in-sandbox] enrich estimate: ${estimated_usd:.2f} (cap ${args.max_usd:.2f})", flush=True)
+        if estimated_usd > args.max_usd:
+            write_status(run_vol, status | {"status": "failed", "phase": "estimate", "estimated_usd": estimated_usd, "max_usd": args.max_usd, "error": "estimate exceeds --max-usd cap", "finished_at": now_iso()})
+            return 2
+        pipeline_cmd += [
+            "--allow-paid-role-provider",
+            "--allow-paid-embeddings",
+            "--allow-paid-company-provider",
+        ]
+
     write_status(run_vol, status | {"phase": "pipeline"})
     pipeline_code = subprocess.run(pipeline_cmd).returncode
     if pipeline_code != 0:
