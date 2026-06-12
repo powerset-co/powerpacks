@@ -154,58 +154,69 @@ Known follow-ups (small): run state `status` never flips to "completed"
   **approval gate working as designed** (`in_network=true` → 79 eligible →
   69 imported after dedupe), not data loss.
 
-### Phase 1 — counts ride people.csv end-to-end ✅ plan
+### Phase 1 — counts ride people.csv end-to-end ✅ implemented 2026-06-12
 
 Design: two new schema columns instead of a sidecar/new table, so every
 stage stays on the one shared schema.
 
-- [ ] **Schema** (`packs/ingestion/schemas/people_schema.py`): add
+- [x] **Schema** (`packs/ingestion/schemas/people_schema.py`): add
       `interaction_counts` (JSON object, channel→int, e.g.
       `{"gmail": 142, "imessage": 87}`) and `last_interaction` (ISO-8601 UTC
       string) to `PEOPLE_SCHEMA_COLUMNS`; add `interaction_counts` to
       `JSON_OBJECT_COLUMNS`. Normalize gmail's `YYYY-MM-DD HH:MM:SS+00:00`
       and messages' ISO-T timestamps to one format.
-- [ ] **Messages writer**
+- [x] **Messages writer**
       (`discover_contacts_pipeline/messages.py::review_row_to_messages_people`):
       populate both columns from the review row's per-channel counts and
       last-message timestamps; drop the `messages_total=...` summary freetext
       hack (keep `selection=` reason). Channel-wise max in
       `merge_messages_people_candidate`.
-- [ ] **Gmail writer** (discover gmail contacts → people conversion feeding
+- [x] **Gmail writer** (discover gmail contacts → people conversion feeding
       `enrich_people` / `gmail_people_csv`): carry `total_messages` →
       `{"gmail": n}` and `last_interaction`. Verify `enrich_people` round-trips
       the new columns (it rewrites rows via `normalize_people_row`, so the
       schema addition should be sufficient — confirm with test).
-- [ ] **Merge** (`merge_network_sources.py`): new interaction merge rule next
+- [x] **Merge** (`merge_network_sources.py`): new interaction merge rule next
       to `LIST_VALUE_COLUMNS` — channel-wise **max** for `interaction_counts`
       (max, not sum, so re-merges stay idempotent; merge also re-consumes its
       own output as an input), max for `last_interaction`.
-- [ ] **Index**: `local_person_profiles` gains `interaction_counts` (JSON),
+- [x] **Index**: `local_person_profiles` gains `interaction_counts` (JSON),
       `total_interactions` (int, sum of channel values), `last_interaction`;
       populate `total_interactions` in `build_unified_profiles` instead of
       hardcoded `None`.
-- [ ] **Hydration** (`hydrate_people.py`): read `total_interactions` from
+- [x] **Hydration** (`hydrate_people.py`): read `total_interactions` from
       `local_person_profiles` (column-driven probe already exists; profiles
       satisfy `person_id` + `total_interactions` once the column lands).
-- [ ] **Tests**: schema round-trip, messages/gmail writer population, merge
+- [x] **Tests**: schema round-trip, messages/gmail writer population, merge
       idempotency (re-merge twice → same counts), index build + hydration
       carry-through. Full suite via
       `uv run --project . python -m unittest discover -s tests`.
-- [ ] **Verification on this machine** (no enrichment, reuse existing
+- [x] **Verification on this machine** (no enrichment, reuse existing
       rapidapi payloads): re-run messages materialize + merge + index build;
       assert the ~67 imessage people and gmail people carry counts in
       `local_person_profiles`; spot-check an agentic-SQL query
       ("most-messaged people") returns sane rows.
 
-### Phase 2 — phone/email match tiers (Jake's fix)
+### Phase 2 — phone/email match tiers (Jake's fix) ✅ implemented 2026-06-12
 
-- [ ] Tier-0 **phone-exact** (E.164-normalized) and **email-exact** match
+- [x] Tier-0 **phone-exact** (E.164-normalized) and **email-exact** match
       before all name tiers in the contact matcher.
-- [ ] Candidate catalog: union the Powerset API cache with local merged
+- [x] Candidate catalog: union the Powerset API cache with local merged
       people (`people.csv` `all_phones`/`all_emails`) so local-only people
       are matchable.
-- [ ] Target metric: shrink the 389 "missing contact name" unmatched bucket;
-      re-run match on this machine and compare to 81/63/705 baseline.
+- [x] Target metric vs 81/63/705 baseline: 96 matched / 73 suggested /
+      681 unmatched; 80/80 overlap agreement with the Jun-2 matched set,
+      0 disagreements, 16 net-new; `phone_exact` is now the top method (76).
+      Verification (temp sandbox, no enrichment, nothing written to
+      `.powerpacks`): 69 messages people (34 with counts), 276/276 gmail
+      people with counts, 290/500 merged people with counts incl. 21
+      cross-channel, `local_person_profiles` carries totals, hydration
+      returns `total_interactions` through `llm_profile_view`.
+      Learned: the 391 "missing contact name" contacts stay unmatched
+      because no source carries their phone↔identity mapping (gmail and
+      LinkedIn people have no phones); fixing that bucket needs a
+      phone-book source (e.g. macOS Contacts import), not a better
+      matcher — noted under Phase 3 follow-ups.
 
 ### Phase 3 — heal skill + console identity view (later, separate PR)
 
