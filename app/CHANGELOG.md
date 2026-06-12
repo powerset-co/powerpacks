@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.2.0...powerpacks-console-v0.3.0) (2026-06-12)
+
+
+### Features
+
+* add contacts, profiles, company directory, and local search to console ([091722d](https://github.com/powerset-co/powerpacks/commit/091722dc762f53dbbab55742e73f28057e3a507b))
+* add launchd daemon mode to the console run script ([d299848](https://github.com/powerset-co/powerpacks/commit/d299848b0498fa3f49106998cc963a3234bfb1d9))
+
 ## [0.2.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.1.0...powerpacks-console-v0.2.0) (2026-06-10)
 
 
