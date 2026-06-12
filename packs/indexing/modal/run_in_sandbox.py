@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -130,6 +131,10 @@ def main() -> int:
     cache_root = Path(args.cache_root)
     run_vol = Path(args.run_vol)
     work = Path("/tmp/run/search-index")
+    # Shared RapidAPI company-details cache: read by company enrichment as LLM
+    # context for new companies (teammates seed it with
+    # `modal volume put <vol> .powerpacks/rapidapi-company-cache cache/rapidapi-company-cache`).
+    os.environ.setdefault("POWERPACKS_RAPIDAPI_COMPANY_CACHE", str(cache_root / "rapidapi-company-cache"))
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
     write_status(run_vol, status)
 
