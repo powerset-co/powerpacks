@@ -327,7 +327,7 @@ def csv_connection_rows(path: Path) -> int:
 def estimate_seconds(rows: int, misses: int | None = None) -> int:
     """Rough wall-time estimate; misses defaults to rows (cold worst case)."""
     rapid = (misses if misses is not None else rows) / 3.3  # 200/min RapidAPI
-    return int(45 + rapid + 0.25 * rows + 105)  # dispatch + import + index + duckdb/download
+    return int(100 + rapid + 0.15 * rows)  # dispatch/download overhead + import + index
 
 
 def reset_run_status(vol: modal.Volume, label: str) -> None:
@@ -714,8 +714,8 @@ def main() -> int:
     pipe.add_argument("--source-user", default="linkedin")
     pipe.add_argument("--dest", help="download destination; defaults to .powerpacks/search-index")
     pipe.add_argument("--timeout", type=int, default=7200)
-    pipe.add_argument("--max-usd", type=float, default=50.0,
-                      help="sanity ceiling for the indexing enrichment estimate")
+    pipe.add_argument("--max-usd", type=float, default=0.0,
+                      help="0 (default) = uncapped, no estimate pass (internal team default); >0 adds a dry-run estimate gate")
     pipe.add_argument("--force", action="store_true", help="reprocess even if the csv is unchanged")
 
     up = sub.add_parser("upload")

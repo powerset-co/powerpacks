@@ -109,7 +109,16 @@ def main() -> int:
         "--summary-input-embeddings", str(artifacts / "summary_embeddings.jsonl"),
         "--person-tech-skills-input", str(artifacts / "person_tech_skills.jsonl"),
     ]
-    if args.enrich:
+    if args.enrich and args.max_usd <= 0:
+        # Uncapped internal mode: skip the dry-run estimate pass entirely (it
+        # costs a full extra read of the cache artifacts). The paid run still
+        # only pays for cache misses; covered rows replay free.
+        pipeline_cmd += [
+            "--allow-paid-role-provider",
+            "--allow-paid-embeddings",
+            "--allow-paid-company-provider",
+        ]
+    elif args.enrich:
         # Estimate gate: dry-run the same command, persist the estimate, and
         # refuse to spend past --max-usd. The paid run itself still only pays
         # for cache misses; covered rows replay free.

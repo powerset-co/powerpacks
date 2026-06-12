@@ -19,11 +19,11 @@ function countConnections(content: string): number {
   return lines.slice(headerIndex + 1).filter((line) => line.trim().length > 0).length;
 }
 
-// Calibrated from live runs: dispatch ~45s, RapidAPI ~200/min worst case,
-// indexing ~0.25s/person, duckdb+download ~105s. Shared-cache hits only make
-// this faster.
+// Calibrated from live runs: ~100s fixed (dispatch + duckdb + download),
+// RapidAPI ~200/min worst case, indexing ~0.15s/person. Shared-cache hits
+// only make this faster.
 function estimateMinutes(connections: number): number {
-  const seconds = 45 + connections / 3.3 + 0.25 * connections + 105;
+  const seconds = 100 + connections / 3.3 + 0.15 * connections;
   return Math.max(1, Math.round(seconds / 60));
 }
 
