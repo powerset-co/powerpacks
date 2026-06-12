@@ -3,13 +3,23 @@
 
 Runs as the Modal sandbox entrypoint so the whole processing run completes
 server-side even if the dispatching laptop disconnects. Progress and the final
-outcome land on the volume as runs/<label>/status.json; artifacts the local
+outcome land on the volume as <run-vol>/status.json; artifacts the local
 machine consumes (local-search.duckdb, manifest.json) are persisted alongside.
+
+Multi-operator volume layout: inputs and runs are per-operator
+(operators/<operator-id>/...), while the enrichment caches under /data/cache
+are shared by every operator. Cache keys are content-derived (title_hash,
+company name, person_id from the linkedin slug), so rows are operator-agnostic
+and overlap across networks means free cache hits. After a successful run the
+caches are refreshed by KEY-UNION merge - never overwrite - because a run's
+output only contains rows for that operator's network and a plain copy would
+drop other operators' cached rows.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -20,6 +30,29 @@ REPO = Path("/repo")
 PIPELINE = REPO / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
 DUCKDB_SHIM = REPO / "scripts/build-local-duckdb-shim.py"
 BENCH = REPO / "packs/indexing/modal/bench_wrapper.py"
+
+# cache-relative path -> key fields (first non-empty wins) used for union merge
+CACHE_KEYS = {
+    "artifacts/roles_with_dense_text.jsonl": ("title_hash",),
+    "artifacts/roles_with_embeddings.jsonl": ("title_hash",),
+    "artifacts/companies_corpus_v3.jsonl": ("company_urn", "company_name"),
+    "artifacts/company_embeddings_v3.jsonl": ("company_urn", "company_name"),
+    "artifacts/summary_embeddings.jsonl": ("person_id",),
+    "artifacts/person_tech_skills.jsonl": ("person_id",),
+    "seeds/founder_enrichment.jsonl": ("position_id",),
+    "seeds/inferred_ages.jsonl": ("person_id",),
+}
+# work-output path that feeds each cache file after a run
+WORK_TO_CACHE = {
+    "roles/roles_with_dense_text.jsonl": "artifacts/roles_with_dense_text.jsonl",
+    "roles/roles_with_embeddings.jsonl": "artifacts/roles_with_embeddings.jsonl",
+    "company/companies_corpus_v3.jsonl": "artifacts/companies_corpus_v3.jsonl",
+    "company/company_embeddings_v3.jsonl": "artifacts/company_embeddings_v3.jsonl",
+    "unified/summary_embeddings.jsonl": "artifacts/summary_embeddings.jsonl",
+    "unified/person_tech_skills.jsonl": "artifacts/person_tech_skills.jsonl",
+    "unified/roles/founder_enrichment.jsonl": "seeds/founder_enrichment.jsonl",
+    "unified/inferred_ages.jsonl": "seeds/inferred_ages.jsonl",
+}
 
 
 def now_iso() -> str:
@@ -33,29 +66,93 @@ def write_status(run_vol: Path, payload: dict) -> None:
     tmp.replace(run_vol / "status.json")
 
 
+def row_key(row: dict, key_fields: tuple[str, ...]) -> str:
+    for field in key_fields:
+        value = str(row.get(field) or "").strip()
+        if value:
+            return f"{field}={value}"
+    return ""
+
+
+def merge_cache_file(new_rows_path: Path, cache_path: Path, key_fields: tuple[str, ...]) -> tuple[int, int]:
+    """Union-merge: new rows win for shared keys, existing cache rows for keys
+    the run did not touch are preserved. Streaming with a seen-key set; atomic
+    tmp+rename so concurrent runs cannot corrupt the file (a lost race only
+    delays a row until the next run re-adds it)."""
+    seen: set[str] = set()
+    tmp = cache_path.parent / (cache_path.name + f".tmp-{new_rows_path.stat().st_ino}")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    new_count = 0
+    kept_count = 0
+    with tmp.open("w", encoding="utf-8") as out:
+        with new_rows_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                key = row_key(json.loads(line), key_fields)
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                out.write(line + "\n")
+                new_count += 1
+        if cache_path.exists():
+            with cache_path.open(encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    key = row_key(json.loads(line), key_fields)
+                    if key and key in seen:
+                        continue
+                    if key:
+                        seen.add(key)
+                    out.write(line + "\n")
+                    kept_count += 1
+    tmp.replace(cache_path)
+    return new_count, kept_count
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input-root", required=True)
+    ap.add_argument("--people-csv", required=True)
+    ap.add_argument("--cache-root", required=True)
     ap.add_argument("--run-vol", required=True)
     ap.add_argument("--operator-id", required=True)
     ap.add_argument("--persist-artifacts", action="store_true")
+    ap.add_argument("--no-refresh-cache", action="store_true")
+    ap.add_argument("--enrich", action="store_true",
+                    help="allow paid OpenAI calls for cache misses (requires OPENAI_API_KEY in the sandbox)")
+    ap.add_argument("--max-usd", type=float, default=25.0,
+                    help="abort before the paid run if the dry-run estimate exceeds this")
     args = ap.parse_args()
 
-    input_root = Path(args.input_root)
+    cache_root = Path(args.cache_root)
     run_vol = Path(args.run_vol)
     work = Path("/tmp/run/search-index")
+    # Shared RapidAPI company-details cache: read by company enrichment as LLM
+    # context for new companies (teammates seed it with
+    # `modal volume put <vol> .powerpacks/rapidapi-company-cache cache/rapidapi-company-cache`).
+    os.environ.setdefault("POWERPACKS_RAPIDAPI_COMPANY_CACHE", str(cache_root / "rapidapi-company-cache"))
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
     write_status(run_vol, status)
 
     (work / "unified/roles").mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(input_root / "seeds/founder_enrichment.jsonl", work / "unified/roles/founder_enrichment.jsonl")
-    shutil.copyfile(input_root / "seeds/inferred_ages.jsonl", work / "unified/inferred_ages.jsonl")
+    seed_map = {
+        "seeds/founder_enrichment.jsonl": "unified/roles/founder_enrichment.jsonl",
+        "seeds/inferred_ages.jsonl": "unified/inferred_ages.jsonl",
+    }
+    for rel_src, rel_dest in seed_map.items():
+        src = cache_root / rel_src
+        if src.exists():
+            shutil.copyfile(src, work / rel_dest)
 
-    artifacts = input_root / "artifacts"
+    artifacts = cache_root / "artifacts"
     pipeline_cmd = [
         sys.executable, str(BENCH), str(run_vol / "bench-pipeline.json"),
         sys.executable, str(PIPELINE), "run",
-        "--input", str(input_root / "people.csv"),
+        "--input", args.people_csv,
         "--output-dir", str(work),
         "--default-operator-id", args.operator_id,
         "--role-input-classifications", str(artifacts / "roles_with_dense_text.jsonl"),
@@ -65,6 +162,33 @@ def main() -> int:
         "--summary-input-embeddings", str(artifacts / "summary_embeddings.jsonl"),
         "--person-tech-skills-input", str(artifacts / "person_tech_skills.jsonl"),
     ]
+    if args.enrich:
+        # Estimate gate: dry-run the same command, persist the estimate, and
+        # refuse to spend past --max-usd. The paid run itself still only pays
+        # for cache misses; covered rows replay free.
+        write_status(run_vol, status | {"phase": "estimate"})
+        dry = subprocess.run(pipeline_cmd[3:] + ["--dry-run"], capture_output=True, text=True)
+        estimated_usd = None
+        try:
+            estimate = json.loads((dry.stdout or "").strip().splitlines()[-1])
+            estimated_usd = float(estimate.get("estimated_cost_usd") or 0.0)
+            (run_vol / "estimate.json").write_text(json.dumps(estimate, indent=2))
+        except (json.JSONDecodeError, IndexError, ValueError):
+            pass
+        if estimated_usd is None:
+            write_status(run_vol, status | {"status": "failed", "phase": "estimate", "error": "could not parse dry-run estimate", "finished_at": now_iso()})
+            print(dry.stdout[-2000:] if dry.stdout else dry.stderr[-2000:], flush=True)
+            return 2
+        print(f"[run-in-sandbox] enrich estimate: ${estimated_usd:.2f} (cap ${args.max_usd:.2f})", flush=True)
+        if estimated_usd > args.max_usd:
+            write_status(run_vol, status | {"status": "failed", "phase": "estimate", "estimated_usd": estimated_usd, "max_usd": args.max_usd, "error": "estimate exceeds --max-usd cap", "finished_at": now_iso()})
+            return 2
+        pipeline_cmd += [
+            "--allow-paid-role-provider",
+            "--allow-paid-embeddings",
+            "--allow-paid-company-provider",
+        ]
+
     write_status(run_vol, status | {"phase": "pipeline"})
     pipeline_code = subprocess.run(pipeline_cmd).returncode
     if pipeline_code != 0:
@@ -98,29 +222,14 @@ def main() -> int:
     if args.persist_artifacts and (work / "records").exists():
         shutil.copytree(work / "records", run_vol / "records", dirs_exist_ok=True)
 
-    # Refresh the enrichment caches on the volume in place so the next run
-    # (including one with new people) replays everything already paid for.
-    # Outputs are merged full files, so this is the union of old cache + any
-    # newly enriched rows.
-    cache_map = {
-        "roles/roles_with_dense_text.jsonl": "artifacts/roles_with_dense_text.jsonl",
-        "roles/roles_with_embeddings.jsonl": "artifacts/roles_with_embeddings.jsonl",
-        "company/companies_corpus_v3.jsonl": "artifacts/companies_corpus_v3.jsonl",
-        "company/company_embeddings_v3.jsonl": "artifacts/company_embeddings_v3.jsonl",
-        "unified/summary_embeddings.jsonl": "artifacts/summary_embeddings.jsonl",
-        "unified/person_tech_skills.jsonl": "artifacts/person_tech_skills.jsonl",
-        "unified/roles/founder_enrichment.jsonl": "seeds/founder_enrichment.jsonl",
-        "unified/inferred_ages.jsonl": "seeds/inferred_ages.jsonl",
-    }
-    refreshed = 0
-    for rel_src, rel_dest in cache_map.items():
-        src = work / rel_src
-        if src.exists() and src.stat().st_size > 0:
-            dest = input_root / rel_dest
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dest)
-            refreshed += 1
-    print(f"[run-in-sandbox] refreshed {refreshed} cache artifacts on volume", flush=True)
+    if not args.no_refresh_cache:
+        write_status(run_vol, status | {"phase": "refresh-cache"})
+        for rel_src, rel_cache in WORK_TO_CACHE.items():
+            src = work / rel_src
+            if not src.exists() or src.stat().st_size == 0:
+                continue
+            new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, CACHE_KEYS[rel_cache])
+            print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
 
     write_status(run_vol, status | {"status": "completed", "phase": "done", "finished_at": now_iso()})
     print("[run-in-sandbox] completed", flush=True)
