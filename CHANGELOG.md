@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.3.1...powerpacks-v0.4.0) (2026-06-12)
+
+
+### Features
+
+* add agentic SQL search vertical over local DuckDB ([9fb23d2](https://github.com/powerset-co/powerpacks/commit/9fb23d2b76700d43aedadb5db78a3c1b1bb1f532))
+* add agentic SQL search vertical over local DuckDB ([76c95ea](https://github.com/powerset-co/powerpacks/commit/76c95eaa52d0a3316b43db648d187e26cf69b6a5))
+* add contacts, profiles, company directory, and local search to console ([091722d](https://github.com/powerset-co/powerpacks/commit/091722dc762f53dbbab55742e73f28057e3a507b))
+* add cross-trait trigger to the agentic SQL fan-out gate ([a6cb0a2](https://github.com/powerset-co/powerpacks/commit/a6cb0a2ef4c80f728787127927e78d4386f8064e))
+* add hiring seniority and recruitability defaults to search skills ([364a84d](https://github.com/powerset-co/powerpacks/commit/364a84d98f50dea70be894425b2b6aa221333c5f))
+* add launchd daemon mode to the console run script ([d299848](https://github.com/powerset-co/powerpacks/commit/d299848b0498fa3f49106998cc963a3234bfb1d9))
+* add Modal indexing PoC and stream pipeline memory hot paths ([#51](https://github.com/powerset-co/powerpacks/issues/51)) ([80ccc85](https://github.com/powerset-co/powerpacks/commit/80ccc858337749c1e7def5930166c94357ec95d0))
+* add person-lookup fast path, zero-result SQL fallback, and pool-size preview gate ([58206d2](https://github.com/powerset-co/powerpacks/commit/58206d27c1310ab0aba504e8f17f40af97cf2fe8))
+* backfill company HQ locations from rapidapi cache in indexing pipeline ([377ded4](https://github.com/powerset-co/powerpacks/commit/377ded4811896bae548bd5abdbe059239a9790ee))
+* fan agentic SQL candidates into the shared rerank pipeline ([a9c61a9](https://github.com/powerset-co/powerpacks/commit/a9c61a9b6a1ef7e5765a12526a02846030df8e28))
+* gate agentic SQL fan-out behind a crisp relational-query rubric ([38179ab](https://github.com/powerset-co/powerpacks/commit/38179ab6c26bdef9175b33eae92aea08e1f84f32))
+* grade skill evals with an LLM judge instead of keyword matching ([6534502](https://github.com/powerset-co/powerpacks/commit/6534502107547a5b238b0e5cd9022fbc60add34d))
+
+
+### Bug Fixes
+
+* cap company semantic lookup top_k at 1000 per subquery ([571425e](https://github.com/powerset-co/powerpacks/commit/571425ee91ddabc02bfe03fb0a651d6cb1316430))
+* configure local backend mode before prepare/run payload transforms ([1080d39](https://github.com/powerset-co/powerpacks/commit/1080d39a0d95bcde8b3ff208585ae439dd9c75db))
+* cut resolve_companies latency from minutes to seconds on large pools ([4127c36](https://github.com/powerset-co/powerpacks/commit/4127c368686129151047463d53691bd2c5bcceae))
+* fork per-call DuckDB cursors instead of sharing one connection across threads ([aa9fedb](https://github.com/powerset-co/powerpacks/commit/aa9fedbb59b468c3a673f5611784b0713f6908ae))
+* local prefilter fails with 'missing table' under chunked company fan-out ([d1b2339](https://github.com/powerset-co/powerpacks/commit/d1b23394d7b7aeeeffe2f074afdf7136827638d8))
+* local prepare/run built filters in remote mode, zeroing pools under a foreign set id ([8b45ec5](https://github.com/powerset-co/powerpacks/commit/8b45ec5032e679e0009a06aad4892cccd742e5f6))
+* strip set/operator scope keys from local payloads outright ([f91e09b](https://github.com/powerset-co/powerpacks/commit/f91e09b800f3d1fd1aa703f4951e5d9983e901f7))
+
 ## [0.3.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.3.0...powerpacks-v0.3.1) (2026-06-11)
 
 
