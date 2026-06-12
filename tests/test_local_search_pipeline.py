@@ -443,6 +443,50 @@ class LocalSearchPipelineTests(unittest.TestCase):
             ["software engineer", "backend engineer", "Software Engineer", "Backend Engineer"],
         )
         self.assertEqual(normalized["traits"], payload["traits"])
+        self.assertTrue(filters["is_current_role"])
+
+    def test_normalize_query_expansion_payload_derives_currentness_from_traits(self) -> None:
+        # Regression: a temporal=current role trait must become
+        # is_current_role=true at the prepare boundary, otherwise past
+        # senior/staff positions admit people who have since moved on.
+        mod = load_pipeline_module()
+        payload = {
+            "original_query": "senior or staff backend infrastructure engineers",
+            "traits": [
+                {
+                    "meaning": "role",
+                    "temporal": "current",
+                    "value": "Senior or staff backend infrastructure engineer",
+                }
+            ],
+            "role_search_filters": {
+                "semantic_query": "Senior backend infrastructure engineers.",
+                "bm25_queries": ["backend engineer"],
+                "seniority_bands": ["senior", "staff"],
+            },
+        }
+
+        filters = mod.normalize_query_expansion_payload(payload)["role_search_filters"]
+        self.assertTrue(filters["is_current_role"])
+        self.assertEqual(filters["seniority_bands"], ["senior", "staff"])
+
+        past = mod.normalize_query_expansion_payload(
+            {
+                "original_query": "ex-Stripe engineers",
+                "traits": [{"meaning": "company", "temporal": "past", "value": "Stripe"}],
+                "role_search_filters": {"bm25_queries": ["engineer"], "company_names": ["Stripe"]},
+            }
+        )["role_search_filters"]
+        self.assertFalse(past["is_current_company"])
+
+        untouched = mod.normalize_query_expansion_payload(
+            {
+                "original_query": "backend engineers",
+                "role_search_filters": {"bm25_queries": ["backend engineer"]},
+            }
+        )["role_search_filters"]
+        self.assertNotIn("is_current_role", untouched)
+        self.assertNotIn("is_current_company", untouched)
 
     def test_prod_shaped_role_expansion_reaches_local_duckdb_retrieval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_raw:

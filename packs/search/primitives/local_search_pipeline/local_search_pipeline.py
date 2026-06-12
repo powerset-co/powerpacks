@@ -30,7 +30,10 @@ LOCAL_DIR = PRIMITIVES_DIR / "local"
 TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands  # noqa: E402
+from search_common import apply_trait_currentness  # noqa: E402
 PAYLOAD_KEYS = {"intent_type", "source_type", "normalized_query", "vertical", "role_search_filters", "traits", "notes"}
 REMOTE_SCOPE_KEYS = {"set_id", "operator_ids", "allowed_operator_ids", "searcher_operator_id"}
 UNSUPPORTED_LOCAL_FILTERS = {
@@ -411,6 +414,11 @@ def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | N
         normalized["bm25_queries"] = _dedupe_present([*(normalized.get("bm25_queries") or []), *examples])
 
     normalized = {key: value for key, value in normalized.items() if is_present(value)}
+    # Trait temporals are the extractor's currentness contract; honor them at
+    # this boundary the same way role_payload_from_state does on the state path
+    # (e.g. a temporal=current role trait must become is_current_role=true so
+    # past senior/staff positions don't admit people who have since moved on).
+    normalized = apply_trait_currentness(normalized, payload.get("traits"))
     out = dict(payload)
     out["role_search_filters"] = normalized
     out.setdefault("intent_type", "role_search")
