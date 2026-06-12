@@ -199,6 +199,15 @@ stage stays on the one shared schema.
 
 ### Phase 2 — phone/email match tiers (Jake's fix) ✅ implemented 2026-06-12
 
+- [x] **Approval gate (Arthur's rule: matching never expands the approved
+      set).** `matched` auto-derives `in_network=true` downstream, so every
+      tier is gated on `research_review.csv`: `matched` only for approved
+      contacts; reviewed-but-unapproved contacts are skipped by identifier
+      tiers entirely; all other hits (incl. name-tier matches against new
+      local candidates) demote to `suggested` for review. The raw-contacts
+      direct merge path attributes no interaction counts (no approval state).
+      Verified: 80 matched ⊆ 81 approved, 0 outside.
+
 - [x] Tier-0 **phone-exact** (E.164-normalized) and **email-exact** match
       before all name tiers in the contact matcher.
 - [x] Candidate catalog: union the Powerset API cache with local merged
