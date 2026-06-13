@@ -11,6 +11,7 @@ import {
   LogIn,
   Mail,
   MessageSquare,
+  Plus,
   Search,
   Terminal,
   Upload,
@@ -25,11 +26,13 @@ import { cn } from "@/lib/utils";
 import {
   estimateGmailSync,
   fetchEnvStatus,
+  fetchOnboardingV2GmailStatus,
   fetchOnboardingV3LinkedInStatus,
   fetchPowersetWhoami,
   fetchSetupJob,
   runOnboardingV3LinkedIn,
   runPowersetLogin,
+  runSetupAction,
   updateEnvKeys,
   uploadLinkedInCsv,
   type GmailSyncEstimateResponse,
@@ -438,39 +441,166 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
 }
 
 function GmailSyncPanel() {
+  const [linked, setLinked] = useState<string[]>([]);
+  const [discovered, setDiscovered] = useState<Array<{ email: string; count: number }>>([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
   const [totals, setTotals] = useState<Record<string, GmailSyncWindowEstimate>>({});
   const [selected, setSelected] = useState<SyncWindowId>("1y");
-  const [loading, setLoading] = useState(true);
+  const [estimating, setEstimating] = useState(false);
+  const [allPending, setAllPending] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
+  const runEstimate = useCallback((emails: string[]) => {
+    if (emails.length === 0) {
+      setTotals({});
+      return;
+    }
+    setEstimating(true);
+    setAllPending(true);
     const merge = (res: GmailSyncEstimateResponse) => {
-      if (!cancelled && res.status === "completed" && res.totals) {
-        setTotals((prev) => ({ ...prev, ...res.totals }));
-      }
+      if (res.status === "completed" && res.totals) setTotals((prev) => ({ ...prev, ...res.totals }));
     };
     // Fast windows first so the panel fills in quickly; "all time" pagination
     // can take ~30s on a large inbox, so fetch it in parallel without blocking.
-    estimateGmailSync({ windows: ["1y", "2y", "5y"] })
+    estimateGmailSync({ accounts: emails, windows: ["1y", "2y", "5y"] })
       .then((res) => {
         merge(res);
-        if (!cancelled && res.status !== "completed") setError(res.error || "Couldn't estimate your inbox.");
+        if (res.status !== "completed") setError(res.error || "Couldn't estimate your inbox.");
       })
-      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : "Estimate failed"))
-      .finally(() => !cancelled && setLoading(false));
-    estimateGmailSync({ windows: ["all"] }).then(merge).catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+      .catch((err) => setError(err instanceof Error ? err.message : "Estimate failed"))
+      .finally(() => setEstimating(false));
+    estimateGmailSync({ accounts: emails, windows: ["all"] })
+      .then(merge)
+      .catch(() => {})
+      .finally(() => setAllPending(false));
   }, []);
+
+  const loadAccounts = useCallback(async () => {
+    try {
+      const status = await fetchOnboardingV2GmailStatus();
+      const linkedNext = (Array.isArray(status.linked_accounts) ? status.linked_accounts : [])
+        .map((value) => String(value))
+        .filter(Boolean);
+      const discoveredNext = (Array.isArray(status.discovered_accounts) ? status.discovered_accounts : [])
+        .map((row) => ({ email: String((row as Record<string, unknown>).account_email || ""), count: Number((row as Record<string, unknown>).message_count || 0) }))
+        .filter((row) => row.email && !linkedNext.includes(row.email));
+      setLinked(linkedNext);
+      setDiscovered(discoveredNext);
+      return linkedNext;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load Gmail accounts");
+      return [];
+    } finally {
+      setAccountsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAccounts().then((emails) => runEstimate(emails));
+  }, [loadAccounts, runEstimate]);
+
+  async function linkDiscovered(email: string) {
+    setLinking(true);
+    setError(null);
+    try {
+      await runSetupAction({ action: "gmail-account", email });
+      runEstimate(await loadAccounts());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to link account");
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  async function addAccount(email: string) {
+    setLinking(true);
+    setError(null);
+    try {
+      await runSetupAction({ action: "gmail-link-emails", emails: email });
+      setNewEmail("");
+      setAddOpen(false);
+      runEstimate(await loadAccounts());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add account");
+    } finally {
+      setLinking(false);
+    }
+  }
 
   const current = totals[selected];
   const selectedLabel = SYNC_WINDOWS.find((w) => w.id === selected)?.label.toLowerCase() ?? "";
+  const hasAccounts = linked.length > 0;
 
   return (
     <div className="space-y-3">
+      {/* Accounts */}
+      <div className="rounded-lg border bg-muted/30 p-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium">Gmail accounts</span>
+          <button
+            type="button"
+            onClick={() => setAddOpen((open) => !open)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add
+          </button>
+        </div>
+
+        {accountsLoading ? (
+          <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading accounts…
+          </div>
+        ) : hasAccounts ? (
+          <ul className="mt-2 space-y-1">
+            {linked.map((email) => (
+              <li key={email} className="flex items-center gap-2 break-all text-sm">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /> {email}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-2 text-sm text-muted-foreground">No Gmail accounts yet — add one to estimate.</p>
+        )}
+
+        {discovered.length > 0 && (
+          <div className="mt-2 space-y-1.5">
+            {discovered.map((account) => (
+              <div key={account.email} className="flex items-center justify-between gap-2 text-sm">
+                <span className="break-all text-muted-foreground">{account.email}</span>
+                <Button size="sm" variant="outline" disabled={linking} onClick={() => linkDiscovered(account.email)}>
+                  {linking ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null} Link
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {addOpen && (
+          <div className="mt-2 space-y-1">
+            <div className="flex items-end gap-2">
+              <Input
+                value={newEmail}
+                onChange={(event) => setNewEmail(event.target.value)}
+                placeholder="name@gmail.com"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && newEmail.trim()) {
+                    event.preventDefault();
+                    addAccount(newEmail.trim());
+                  }
+                }}
+              />
+              <Button size="sm" disabled={!newEmail.trim() || linking} onClick={() => addAccount(newEmail.trim())}>
+                {linking ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null} Connect
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">Opens Google sign-in in your browser for read-only access.</p>
+          </div>
+        )}
+      </div>
+
       <p className="text-sm text-muted-foreground">
         We sync the people you actually email — newsletters, promotions and social are skipped. Pick how far back to go.
       </p>
@@ -479,19 +609,27 @@ function GmailSyncPanel() {
         {SYNC_WINDOWS.map((window) => {
           const total = totals[window.id];
           const isSelected = selected === window.id;
+          const pending = hasAccounts && !total && (estimating || (window.id === "all" && allPending));
           return (
             <button
               key={window.id}
               type="button"
+              disabled={!hasAccounts}
               onClick={() => setSelected(window.id)}
               className={cn(
-                "flex flex-col items-center gap-0.5 rounded-lg border px-2 py-3 text-center transition-colors",
+                "flex flex-col items-center gap-0.5 rounded-lg border px-2 py-3 text-center transition-colors disabled:opacity-50",
                 isSelected ? "border-primary bg-primary/5" : "border-muted-foreground/20 hover:border-muted-foreground/40"
               )}
             >
               <span className={cn("text-sm font-medium", isSelected ? "text-primary" : "")}>{window.label}</span>
-              <span className="text-xs text-muted-foreground">
-                {loading ? "…" : total ? `${total.messages.toLocaleString()}${total.truncated ? "+" : ""}` : "—"}
+              <span className="flex h-4 items-center justify-center text-xs text-muted-foreground">
+                {pending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : total ? (
+                  `${total.messages.toLocaleString()}${total.truncated ? "+" : ""}`
+                ) : (
+                  "—"
+                )}
               </span>
             </button>
           );
