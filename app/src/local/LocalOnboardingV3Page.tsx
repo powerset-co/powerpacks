@@ -27,6 +27,7 @@ import {
   fetchSetupJob,
   runOnboardingV3LinkedIn,
   runPowersetLogin,
+  runPowersetPullKeys,
   updateEnvKeys,
   uploadLinkedInCsv,
   type PowersetWhoami,
@@ -107,10 +108,30 @@ function Stepper({ steps, active, done, onSelect }: {
   );
 }
 
+type PullState = { phase: "idle" | "pulling" | "done"; status?: string; missing?: string[] };
+
 function PowersetAuthPanel({ onConnected }: { onConnected: () => void }) {
   const [who, setWho] = useState<PowersetWhoami | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pull, setPull] = useState<PullState>({ phase: "idle" });
   const [error, setError] = useState<string | null>(null);
+
+  async function pullKeys() {
+    setPull({ phase: "pulling" });
+    try {
+      const { job } = await runPowersetPullKeys();
+      let current = job;
+      while (current.status === "running") {
+        await new Promise((r) => setTimeout(r, 1000));
+        current = await fetchSetupJob(job.id);
+      }
+      const out = (current.output || {}) as { status?: string; missing?: string[] };
+      setPull({ phase: "done", status: out.status, missing: out.missing });
+    } catch (err) {
+      setPull({ phase: "done", status: "error" });
+      setError(err instanceof Error ? err.message : "Key pull failed");
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -138,8 +159,10 @@ function PowersetAuthPanel({ onConnected }: { onConnected: () => void }) {
       }
       if (current.status !== "completed") {
         setError("Login did not complete. Try again, or use your own keys below.");
+        return;
       }
       await refresh();
+      await pullKeys();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -152,12 +175,30 @@ function PowersetAuthPanel({ onConnected }: { onConnected: () => void }) {
   return (
     <div className="space-y-3">
       {loggedIn ? (
-        <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4">
-          <CheckCircle2 className="h-5 w-5 text-primary" />
-          <div>
-            <div className="text-sm font-medium">Connected to Powerset</div>
-            <div className="text-xs text-muted-foreground">{who?.email}</div>
+        <div className="space-y-2">
+          <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4">
+            <CheckCircle2 className="h-5 w-5 text-primary" />
+            <div className="flex-1">
+              <div className="text-sm font-medium">Connected to Powerset</div>
+              <div className="text-xs text-muted-foreground">{who?.email}</div>
+            </div>
+            {pull.phase === "pulling" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           </div>
+          {pull.phase === "pulling" && (
+            <p className="text-xs text-muted-foreground">Pulling your Modal token + OpenAI key…</p>
+          )}
+          {pull.phase === "done" && pull.status === "ok" && (
+            <p className="text-xs text-emerald-600">Keys pulled into .env — you're ready.</p>
+          )}
+          {pull.phase === "done" && pull.status && pull.status !== "ok" && (
+            <p className="text-xs text-amber-600">
+              {pull.missing?.length ? `Not provisioned: ${pull.missing.join(", ")}. ` : "Couldn't pull keys. "}
+              Ask an admin to provision your keys, or use your own below.
+            </p>
+          )}
+          {pull.phase === "done" && pull.status !== "ok" && (
+            <Button size="sm" variant="outline" onClick={pullKeys}>Retry key pull</Button>
+          )}
         </div>
       ) : (
         <>
