@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.4.0...powerpacks-v0.5.0) (2026-06-13)
+
+
+### Features
+
+* add schema validator primitive for agent-authored artifacts ([4367e32](https://github.com/powerset-co/powerpacks/commit/4367e3272aade9534ea6a74e2485fae5aa84de3e))
+* batch role enrichment calls 100 titles per request (prod parity) ([5a07440](https://github.com/powerset-co/powerpacks/commit/5a07440da87cd46f895e1e4f9b796691ac491fdd))
+* cache preload command and tuned sandbox OpenAI settings ([7dcc6f7](https://github.com/powerset-co/powerpacks/commit/7dcc6f7f37b47c8493be689f709fd389eb3cafc6))
+* carry interaction counts end-to-end and add tier-0 identifier matching ([ada2b76](https://github.com/powerset-co/powerpacks/commit/ada2b766aacb0249d850c787b97a45f9a499fa4c))
+* carry interaction counts end-to-end and add tier-0 identifier matching ([6bdba06](https://github.com/powerset-co/powerpacks/commit/6bdba0684f938f8ff66dd3bc790506c9e14cd4dd))
+* clearer file-attached state and standalone count/estimate on onboarding-v3 ([e0ddf2a](https://github.com/powerset-co/powerpacks/commit/e0ddf2acea12c66e0481716edacc693813af2f97))
+* clearer file-attached state and standalone count/estimate on onboarding-v3 ([ab1d722](https://github.com/powerset-co/powerpacks/commit/ab1d722986b286422f7b05485504816014a4179b))
+* configurable OpenAI service tier, standard tier for Modal onboarding ([52a9f6d](https://github.com/powerset-co/powerpacks/commit/52a9f6d1ef190e19947e1b258bc6baa424a8c896))
+* enforce JD seniority bands at retrieval in profile search ([d788ea1](https://github.com/powerset-co/powerpacks/commit/d788ea158299e6ff0ca59b1c016fe89c1f9c7ad7))
+* infer seniority bands from the role title when a JD states no level ([0ad67c1](https://github.com/powerset-co/powerpacks/commit/0ad67c132f96080772e33630b72de4b6815a2cfe))
+* LinkedIn connections.csv to searchable index on Modal (onboarding v3) ([bf1a679](https://github.com/powerset-co/powerpacks/commit/bf1a6793e688c27f6bf8437d24b80f3b778c8be1))
+* LinkedIn connections.csv to searchable index pipeline on Modal ([82a0bda](https://github.com/powerset-co/powerpacks/commit/82a0bdae537a0a55323739ba2b2a24f4860be0bb))
+* make Modal cloud indexing work out of the box from env pull ([#54](https://github.com/powerset-co/powerpacks/issues/54)) ([305657a](https://github.com/powerset-co/powerpacks/commit/305657abb4283ec30a6f48f3407f20ef7a902143))
+* onboarding-v3 console page for LinkedIn csv to cloud index ([2d3159b](https://github.com/powerset-co/powerpacks/commit/2d3159bcfdb0bf7f8e73faac61b926684a6414b8))
+* persist setup job driver logs under .powerpacks ([2b26781](https://github.com/powerset-co/powerpacks/commit/2b26781079f700605b2618bd44c85db505f5f472))
+* persist setup job driver logs under .powerpacks/runs/job-logs ([a32af20](https://github.com/powerset-co/powerpacks/commit/a32af201d83872529bf5cedc2a9951add654426c))
+* stream paid enrichment results instead of gathering waves ([8e7838a](https://github.com/powerset-co/powerpacks/commit/8e7838a29a99a95cb6c7c45fad7785bbf78cb552))
+* timestamp each line in setup job driver logs ([4acc82d](https://github.com/powerset-co/powerpacks/commit/4acc82d5a68bd51ccdec1c4cf5e16722aa7212ab))
+* timestamp each line in setup job driver logs ([f847f20](https://github.com/powerset-co/powerpacks/commit/f847f20615ab92988ca66c5f2c4c5b1f1ffa650c))
+
+
+### Bug Fixes
+
+* build local_person_profiles in modal indexing so /contacts populates ([9cdc49b](https://github.com/powerset-co/powerpacks/commit/9cdc49b85d0b145335a44f768c62a5e6148d005a))
+* build local_person_profiles in modal indexing so /contacts populates ([a8454d3](https://github.com/powerset-co/powerpacks/commit/a8454d377011bbeea27173ba218e63f7e00a1ff8))
+* generate probe_summaries deterministically and share its reader contract ([1d54faa](https://github.com/powerset-co/powerpacks/commit/1d54faa601037d628fbb5e28fab16f838623944d))
+* honor trait temporals at the local prepare boundary ([635ce3e](https://github.com/powerset-co/powerpacks/commit/635ce3e257254ca18bb1ff59266177f1cde93dd0))
+* make search-profile plan preview a hard stop with re-confirmation ([507659b](https://github.com/powerset-co/powerpacks/commit/507659b20137d71435d26dbc8b30b9104e7c1ed2))
+* matching never expands the user's approved contact set ([166e791](https://github.com/powerset-co/powerpacks/commit/166e791fda349a7bf977146f73a55a8a28208ae7))
+* messages import diff tolerates an empty materialize result ([346882c](https://github.com/powerset-co/powerpacks/commit/346882c43a76bbe31869cccc8b3de7007e73bb59))
+* messages import diff tolerates an empty materialize result ([bd7b5e5](https://github.com/powerset-co/powerpacks/commit/bd7b5e5ba72f9fe9c817304f2244e2f0be8a0456))
+* messages import refreshes people.csv when approved contacts' counts change ([abf11a2](https://github.com/powerset-co/powerpacks/commit/abf11a2a7184406f1c0e473cb887bc0bdf7e3428))
+* messages import self-invalidates when people.csv predates interaction columns ([76cdb1c](https://github.com/powerset-co/powerpacks/commit/76cdb1ce4ba0c6d2703cffcfbe2766586d9cadef))
+* surface empty seniority bands in previews and ban YOE-derived bands everywhere ([d79275a](https://github.com/powerset-co/powerpacks/commit/d79275ae427875449d108610ded5925705599333))
+
+
+### Performance Improvements
+
+* parallel cache classification and skip estimate pass for internal runs ([bf204de](https://github.com/powerset-co/powerpacks/commit/bf204debd0cbcf53ab6cec39e46c7aecb6d77fce))
+
+
+### Documentation
+
+* record interaction-counts implementation and verification results ([3abd212](https://github.com/powerset-co/powerpacks/commit/3abd212f70c4bde06cb17efd093e6fcfe261d660))
+* record matching approval-gate rule and verification ([4e6067f](https://github.com/powerset-co/powerpacks/commit/4e6067f6db5a3f47f42f8b5c63cf6f9301b984c9))
+
 ## [0.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.3.1...powerpacks-v0.4.0) (2026-06-12)
 
 
