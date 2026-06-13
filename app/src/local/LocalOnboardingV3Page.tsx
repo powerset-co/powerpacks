@@ -70,16 +70,16 @@ function Stepper({ steps, active, done, onSelect }: {
   onSelect: (id: StepId) => void;
 }) {
   return (
-    <div className="flex items-center">
+    <div className="flex items-start">
       {steps.map((step, index) => {
         const complete = done[step.id];
         const isActive = active === step.id;
         return (
-          <div key={step.id} className="flex flex-1 items-center last:flex-none">
+          <div key={step.id} className="flex flex-1 items-start last:flex-none">
             <button
               type="button"
               onClick={() => onSelect(step.id)}
-              className="flex items-center gap-2 text-left"
+              className="flex flex-col items-center gap-1.5 text-center"
             >
               <span
                 className={cn(
@@ -93,10 +93,12 @@ function Stepper({ steps, active, done, onSelect }: {
               >
                 {complete ? <CheckCircle2 className="h-4 w-4" /> : index + 1}
               </span>
-              <span className={cn("text-sm font-medium", isActive ? "" : "text-muted-foreground")}>{step.label}</span>
+              <span className={cn("text-xs font-medium leading-tight", isActive ? "" : "text-muted-foreground")}>
+                {step.label}
+              </span>
             </button>
             {index < steps.length - 1 && (
-              <span className={cn("mx-3 h-px flex-1", complete ? "bg-primary" : "bg-border")} />
+              <span className={cn("mx-2 mt-4 h-px flex-1", complete ? "bg-primary" : "bg-border")} />
             )}
           </div>
         );
