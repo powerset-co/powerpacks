@@ -123,6 +123,30 @@ export function runOnboardingV3LinkedIn(
   return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v3/linkedin/run", body);
 }
 
+export function updateEnvKeys(
+  updates: Record<string, string>
+): Promise<{ written: string[]; rejected: string[]; status: EnvStatusResponse }> {
+  return postJson<{ written: string[]; rejected: string[]; status: EnvStatusResponse }>(
+    "/local-api/env/update",
+    updates
+  );
+}
+
+export type PowersetWhoami = {
+  status: string;
+  email: string | null;
+  expired: boolean | null;
+  secondsRemaining: number | null;
+};
+
+export function fetchPowersetWhoami(): Promise<PowersetWhoami> {
+  return getJson<PowersetWhoami>("/local-api/powerset/whoami");
+}
+
+export function runPowersetLogin(): Promise<{ job: SetupJob }> {
+  return postJson<{ job: SetupJob }>("/local-api/powerset/login", {});
+}
+
 export function fetchMessageReview(
   options: { filter?: MessageReviewFilter; query?: string; offset?: number; limit?: number } = {}
 ): Promise<MessageReviewResponse> {

@@ -1,9 +1,14 @@
 import path from "path";
 
 import { powerpacksRepoRoot } from "../lib/paths";
-import { readEnvSummary } from "../lib/env";
+import { readEnvSummary, writeEnvKeys } from "../lib/env";
 import { fileSummary } from "../lib/fsUtils";
-import { sendJson } from "../lib/http";
+import { readRequestJson, sendJson } from "../lib/http";
+
+// Keys the onboarding "bring your own keys" panel is allowed to write. Limiting
+// the write path to provider keys keeps the .env editor from clobbering infra
+// values (DATABASE_URL, tokens) that arrive through other flows.
+const WRITABLE_ENV_KEYS = new Set(["OPENAI_API_KEY", "RAPIDAPI_LINKEDIN_KEY", "PARALLEL_API_KEY"]);
 
 type EnvKeySpec = {
   key: string;
@@ -143,6 +148,19 @@ function envStatus() {
 export async function handleEnvRoutes(req: any, res: any, url: URL): Promise<boolean> {
   if (url.pathname === "/local-api/env/status") {
     sendJson(res, envStatus());
+    return true;
+  }
+
+  if (url.pathname === "/local-api/env/update" && req.method === "POST") {
+    const body = await readRequestJson(req);
+    const updates: Record<string, string> = {};
+    const rejected: string[] = [];
+    for (const [key, value] of Object.entries(body || {})) {
+      if (WRITABLE_ENV_KEYS.has(key)) updates[key] = String(value ?? "");
+      else rejected.push(key);
+    }
+    const written = writeEnvKeys(updates);
+    sendJson(res, { written, rejected, status: envStatus() });
     return true;
   }
 
