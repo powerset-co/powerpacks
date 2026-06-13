@@ -541,17 +541,39 @@ the `$search-network` skill by passing:
    retrieval then only returns positions whose `seniority_band` is in the
    pinned set. If the plan's `seniority_bands` is empty, omit the flag
    entirely; never invent bands at search time.
+5. **pinned current role (always)** — append `--current-role` on every
+   profile search. This pins `is_current_role=true` as a hard retrieval
+   filter so a person only qualifies on a CURRENT in-band position, not a
+   past one. Without it, retrieval qualifies people on old roles — a current
+   founder/CEO who was once a senior engineer matches on the stale role and
+   leaks in. Query expansion only sets this when the query says "currently",
+   which recruiter profile queries never do, so pin it explicitly; never rely
+   on phrasing.
+
+   ```
+   ... search_network_pipeline.py run ... --limit 200 --filter-only --seniority-bands senior,staff --current-role
+   ```
+
+**Current-role is enforced with double redundancy.** `--current-role` is the
+first layer (retrieval drops stale in-band positions); the JD evaluator's
+seniority gate (Task 5) is the second (anyone whose CURRENT primary identity
+is founder/CEO/exec/advisor is marked `too_senior` → `out`, even if a
+concatenated current title also shows a senior-engineer role). Keep both on;
+neither alone is sufficient — retrieval can still surface multi-current-role
+profiles, and the eval gate alone would pay hydration/eval cost on stale
+matches.
 
 Do not call `search_network_pipeline.py` directly from this skill except to
-append the `--limit`, `--filter-only`, and `--seniority-bands` flags to the
-`execute_command` that `$search-network` produced.
+append the `--limit`, `--filter-only`, `--seniority-bands`, and
+`--current-role` flags to the `execute_command` that `$search-network`
+produced.
 
 The delegated input must be only the profile's English `query` value. Do not
 send a JSON object or internal labels.
 
 For each profile search:
 1. Run `$search-network` with the profile's `query`, limit, filter-only mode,
-   and the plan's pinned seniority bands (when non-empty)
+   `--current-role`, and the plan's pinned seniority bands (when non-empty)
 2. Skip the user approval gate — the plan approval covers all profile searches
 3. Capture the `state` path from the pipeline's JSON output — it is the only
    thing Result Collection needs per search
@@ -662,7 +684,10 @@ Instead run **one deep search on the winning profile only**:
   `$search-network` pipeline (retrieval → hydrate → filter → **LLM rerank**)
   scores the deeper pool for you instead of dumping everything into the JD
   evaluator.
-- Keep the plan's pinned `--seniority-bands`.
+- Keep the plan's pinned `--seniority-bands` and `--current-role`. The deeper
+  the pull, the more stale-role matches leak in, so `--current-role` matters
+  most here (a limit-1000 run without it pulled in ~4× the current
+  founders/execs).
 - Then merge the deep run's results into the frontier and re-run the JD
   evaluator (Task 5) over the combined pool.
 

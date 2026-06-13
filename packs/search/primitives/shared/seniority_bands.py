@@ -101,3 +101,28 @@ def pin_payload_seniority_bands(payload: dict[str, Any], bands: list[str]) -> di
         notes.append(note)
     out["notes"] = notes
     return out
+
+
+def pin_payload_current_role(payload: dict[str, Any], value: bool = True) -> dict[str, Any]:
+    """Return a copy of an expand_search_request payload with is_current_role pinned.
+
+    Query expansion only sets is_current_role when the query carries temporal
+    language ("currently..."); recruiter profile queries rarely do, so retrieval
+    otherwise qualifies a person on PAST in-band positions (e.g. a current
+    founder who was once a senior engineer). For profile / JD-style searches we
+    almost always want CURRENT in-band people, so pin it explicitly as a hard
+    retrieval filter instead of leaving it to phrasing.
+    """
+    out = dict(payload)
+    filters = out.get("role_search_filters")
+    filters = dict(filters) if isinstance(filters, dict) else {}
+    filters["is_current_role"] = bool(value)
+    filters["is_current_role_pinned"] = True
+    out["role_search_filters"] = filters
+    notes = out.get("notes")
+    notes = list(notes) if isinstance(notes, list) else []
+    note = f"is_current_role pinned via --current-role: {bool(value)}"
+    if note not in notes:
+        notes.append(note)
+    out["notes"] = notes
+    return out
