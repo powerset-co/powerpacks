@@ -22,8 +22,13 @@ DEFAULT_MODEL = "gpt-5.2"
 # 180-item role_ids enum (picks random values like investment_banker for
 # Instructor). gpt-5.1 classifies correctly.
 DEFAULT_ROLE_MODEL = "gpt-5.1"
-DEFAULT_MAX_COMPLETION_TOKENS = 2500
+# Prod parity (combined_enrichment.py): reasoning calls cap at 2000.
+DEFAULT_MAX_COMPLETION_TOKENS = 2000
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
+# "flex" bills gpt-5.x chat tokens at ~50% but is a server-side queue: calls
+# routinely take minutes regardless of client concurrency. Interactive paths
+# (Modal onboarding) set POWERPACKS_OPENAI_SERVICE_TIER=default for speed.
+DEFAULT_SERVICE_TIER = "flex"
 
 # Pull concurrency from tier profile (tier_5 default = 256).
 _profile = openai_usage_tier_profile()
@@ -50,6 +55,17 @@ def is_reasoning_model(model: str) -> bool:
     return any(x in model.lower() for x in ["o1", "o3", "gpt-5", "5.1", "5.2"])
 
 
+def openai_service_tier() -> str:
+    """Service tier sent on reasoning-model calls (``flex`` or ``default``)."""
+    tier = os.getenv("POWERPACKS_OPENAI_SERVICE_TIER", DEFAULT_SERVICE_TIER).strip().lower()
+    return tier or DEFAULT_SERVICE_TIER
+
+
+def openai_price_multiplier() -> float:
+    """Multiplier on CHAT_MODEL_PRICES (standard-tier) for the active tier."""
+    return 0.5 if openai_service_tier() == "flex" else 1.0
+
+
 def api_call_kwargs(model: str) -> dict[str, Any]:
     """Return the non-message kwargs for ``client.chat.completions.create``.
 
@@ -63,7 +79,7 @@ def api_call_kwargs(model: str) -> dict[str, Any]:
     }
     if is_reasoning_model(model):
         kwargs["reasoning_effort"] = "low"
-        kwargs["service_tier"] = "flex"
+        kwargs["service_tier"] = openai_service_tier()
     else:
         kwargs["temperature"] = 0
     return kwargs

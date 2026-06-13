@@ -664,14 +664,29 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
     refresh_cache = bool(ledger["input"].get("refresh_cache"))
     cache_index = set() if refresh_cache else profile_cache_index(profile_cache_dir)
     failure_retry_hours = float(ledger["input"].get("failure_retry_hours") if ledger["input"].get("failure_retry_hours") is not None else DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
+    routed: list[tuple[str, dict[str, Any]]] = []
     for row in rows:
         route, reason = route_row(row, force=bool(ledger["input"].get("force")))
         row["enrichment_route"] = route
         row["enrichment_reason"] = reason
         route_counts[route] = route_counts.get(route, 0) + 1
+        routed.append((route, row))
+    provider_rows = [row for route, row in routed if route == "linkedin_provider"]
+    # Classification reads cached profiles from disk, which may be a network
+    # filesystem (e.g. a Modal volume) where per-file round-trip latency
+    # dominates; overlap the reads. Results stay in input order.
+    classifications: list[tuple[str, str, Path | None, dict[str, Any] | None]] = []
+    if provider_rows:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(provider_rows))) as pool:
+            classifications = list(pool.map(
+                lambda row: classify_rapidapi_cache_status(row, profile_cache_dir, refresh_cache, failure_retry_hours, cache_index),
+                provider_rows,
+            ))
+    classification_iter = iter(classifications)
+    for route, row in routed:
         if route == "linkedin_provider":
             queue.append(row)
-            status, cache_reason, cache_path, recent_failure = classify_rapidapi_cache_status(row, profile_cache_dir, refresh_cache, failure_retry_hours, cache_index)
+            status, cache_reason, cache_path, recent_failure = next(classification_iter)
             cache_row = dict(row)
             cache_row.update({"cache_status": status, "cache_path": str(cache_path or ""), "cache_reason": cache_reason})
             if status == "hit":

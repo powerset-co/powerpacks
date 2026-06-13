@@ -185,10 +185,15 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                     "confidence_score": 0.8,
                 }
 
-            def fake_classifier_batch(rows, **_kwargs):
-                return [fake_classifier(row) for row in rows]
+            def fake_stream(rows, *, on_result, **_kwargs):
+                try:
+                    for i, row in enumerate(rows):
+                        on_result(i, fake_classifier(row))
+                except stage.StopStreaming as stop:
+                    return stop.payload
+                return None
 
-            with mock.patch.object(stage, "call_openai_company_classifiers", side_effect=fake_classifier_batch) as mocked:
+            with mock.patch.object(stage, "stream_openai_company_classifiers", side_effect=fake_stream) as mocked:
                 manifest = stage.run(Namespace(
                     input=str(input_path),
                     output=str(output_path),
@@ -311,24 +316,26 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                 {"company_urn": "urn:li:company:1", "company_name": "Acme AI", "rapidapi_company_id": "12345"},
             ])
 
-            def fake_classifier_batch(rows, **_kwargs):
-                return [{
-                    "entity_types": ["venture_backed_startup"],
-                    "sector_types": ["ai_ml"],
-                    "technology_types": [],
-                    "customer_type": "Business (B2B)",
-                    "funding_stage": "SEED",
-                    "company_type": "STARTUP",
-                    "ownership_status": "PRIVATE",
-                    "stage": "Seed",
-                    "accelerators": [],
-                    "yc_batches": [],
-                    "doc2query": ["ai company"],
-                    "d2q_text": "ai company",
-                    "word_text": "ai",
-                    "semantic_text": "Acme AI",
-                    "confidence_score": 0.9,
-                } for _ in rows]
+            def fake_stream(rows, *, on_result, **_kwargs):
+                for i, _row in enumerate(rows):
+                    on_result(i, {
+                        "entity_types": ["venture_backed_startup"],
+                        "sector_types": ["ai_ml"],
+                        "technology_types": [],
+                        "customer_type": "Business (B2B)",
+                        "funding_stage": "SEED",
+                        "company_type": "STARTUP",
+                        "ownership_status": "PRIVATE",
+                        "stage": "Seed",
+                        "accelerators": [],
+                        "yc_batches": [],
+                        "doc2query": ["ai company"],
+                        "d2q_text": "ai company",
+                        "word_text": "ai",
+                        "semantic_text": "Acme AI",
+                        "confidence_score": 0.9,
+                    })
+                return None
 
             fake_responses = {
                 "12345": {
@@ -343,7 +350,7 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {"RAPIDAPI_KEY": "test-key"}), \
                     mock.patch.object(rapidapi_company, "fetch_company_details_batch", return_value=fake_responses) as fetched, \
-                    mock.patch.object(stage, "call_openai_company_classifiers", side_effect=fake_classifier_batch):
+                    mock.patch.object(stage, "stream_openai_company_classifiers", side_effect=fake_stream):
                 manifest = stage.run(Namespace(
                     input=str(input_path),
                     output=str(output_path),

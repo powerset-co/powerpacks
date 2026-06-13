@@ -113,6 +113,16 @@ export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {
   });
 }
 
+export function fetchOnboardingV3LinkedInStatus(): Promise<Record<string, any>> {
+  return getJson<Record<string, any>>("/local-api/onboarding-v3/linkedin/status");
+}
+
+export function runOnboardingV3LinkedIn(
+  body: Record<string, unknown>
+): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v3/linkedin/run", body);
+}
+
 export function fetchMessageReview(
   options: { filter?: MessageReviewFilter; query?: string; offset?: number; limit?: number } = {}
 ): Promise<MessageReviewResponse> {

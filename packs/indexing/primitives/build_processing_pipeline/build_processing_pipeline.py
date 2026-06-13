@@ -34,6 +34,7 @@ from packs.indexing.lib.contracts import (  # noqa: E402
 )
 from packs.indexing.lib.io import atomic_write_text, emit_json, read_jsonl, write_json, write_jsonl  # noqa: E402
 from packs.indexing.lib.ledger import load_ledger, mark_step, now_iso, save_ledger  # noqa: E402
+from packs.indexing.lib.llm_config import openai_price_multiplier  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import (  # noqa: E402
     env_or_profile_int,
     openai_usage_tier_profile,
@@ -269,7 +270,7 @@ def _chat_cost_stage(
     prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
     estimated = None
     if prices:
-        estimated = _round_usd((input_tokens / 1000.0) * prices["input"] + (output_tokens / 1000.0) * prices["output"])
+        estimated = _round_usd(((input_tokens / 1000.0) * prices["input"] + (output_tokens / 1000.0) * prices["output"]) * openai_price_multiplier())
     return {
         "provider": provider,
         "model": model,
@@ -841,19 +842,11 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
     role_available = _jsonl_id_set(role_input, "title_hash") | _records_role_ids(output_dir)
     role_coverage = _coverage(role_required, role_available, role_input)
     role_missing = [role for role in role_inputs if str(role.get("title_hash") or "").strip() not in role_available]
-    role_input_tokens = 0
-    for role in role_missing:
-        payload = {
-            "model": role_model,
-            "response_format": {"type": "json_object"},
-            "messages": enrich_roles_checkpointed.role_prompt(role),
-            "temperature": 0,
-        }
-        role_input_tokens += _estimated_tokens(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    role_calls, role_input_tokens = enrich_roles_checkpointed.estimate_role_call_shape(role_missing, role_model)
     role_stage = _chat_cost_stage(
         provider=role_provider,
         model=role_model,
-        calls=len(role_missing),
+        calls=role_calls,
         input_tokens=role_input_tokens,
         output_tokens=len(role_missing) * DEFAULT_ROLE_OUTPUT_TOKENS,
         precomputed=not role_missing,
