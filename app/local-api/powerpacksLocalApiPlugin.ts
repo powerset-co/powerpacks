@@ -7,6 +7,7 @@ import { handleEnvRoutes } from "./routes/env";
 import { handleOnboardingV2Routes } from "./routes/onboarding";
 import { handleMessagesRoutes } from "./routes/messages";
 import { handleContactsRoutes } from "./routes/contacts";
+import { handlePowersetRoutes } from "./routes/powerset";
 import { handlePersonDetailsRoutes } from "./routes/personDetails";
 import { handleCompaniesRoutes } from "./routes/companies";
 import { handleLocalSearchRoutes } from "./routes/localSearch";
@@ -22,6 +23,7 @@ const routeHandlers: LocalApiRouteHandler[] = [
   handleOnboardingV2Routes,
   handleMessagesRoutes,
   handleContactsRoutes,
+  handlePowersetRoutes,
   handlePersonDetailsRoutes,
   handleCompaniesRoutes,
   handleLocalSearchRoutes,
