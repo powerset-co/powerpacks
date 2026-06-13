@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Copy,
   ExternalLink,
@@ -9,6 +11,7 @@ import {
   Loader2,
   LogIn,
   Search,
+  Terminal,
   Upload,
   Users,
 } from "lucide-react";
@@ -390,11 +393,18 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
     );
   }
 
+  function openCodex() {
+    // Codex.app registers the `codex://` scheme and reads a `path` query param,
+    // so this opens the desktop app at the repo. If path is ignored it still
+    // opens Codex; if the app isn't installed the browser no-ops.
+    const url = repoRoot ? `codex://?path=${encodeURIComponent(repoRoot)}` : "codex://";
+    window.location.href = url;
+  }
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Your index is local. Open your editor in the repo and ask Codex to run a network search —
-        just paste the command into the Codex panel.
+        Your index is local. Open Codex in the repo, then run a network search — paste the command in.
       </p>
 
       <div className="rounded-lg border bg-muted/40 p-3">
@@ -407,21 +417,20 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {repoRoot && (
-          <>
-            <Button variant="secondary" onClick={() => { window.location.href = `vscode://file/${repoRoot}`; }}>
-              <ExternalLink className="mr-2 h-4 w-4" /> Open in VS Code
-            </Button>
-            <Button variant="secondary" onClick={() => { window.location.href = `cursor://file/${repoRoot}`; }}>
-              <ExternalLink className="mr-2 h-4 w-4" /> Open in Cursor
-            </Button>
-          </>
-        )}
-      </div>
+      <Button onClick={openCodex} className="w-full">
+        <Terminal className="mr-2 h-4 w-4" /> Open Codex
+      </Button>
       <p className="text-xs text-muted-foreground">
-        The button opens your editor at the repo; paste the copied command into your Codex session to run it
-        (there's no deeplink that can type into Codex for you).
+        Opens the Codex desktop app at this repo. Requires{" "}
+        <a
+          href="https://developers.openai.com/codex"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 underline"
+        >
+          Codex <ExternalLink className="h-3 w-3" />
+        </a>
+        . Paste the command above to run your first search.
       </p>
     </div>
   );
@@ -431,11 +440,15 @@ export function LocalOnboardingV3Page() {
   const [active, setActive] = useState<StepId>("connect");
   const [powersetConnected, setPowersetConnected] = useState(false);
   const [keysReady, setKeysReady] = useState(false);
+  const [byoOpen, setByoOpen] = useState(false);
   const [repoRoot, setRepoRoot] = useState("");
 
   useEffect(() => {
     fetchEnvStatus()
-      .then((s) => setRepoRoot(s.path.replace(/\/\.env$/, "")))
+      .then((s) => {
+        setRepoRoot(s.path.replace(/\/\.env$/, ""));
+        setKeysReady(BYO_KEYS.every((key) => s.keys.find((k) => k.key === key)?.satisfied));
+      })
       .catch(() => {});
   }, []);
 
@@ -461,14 +474,33 @@ export function LocalOnboardingV3Page() {
           <CardHeader>
             <CardTitle className="text-base">Connect</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-5">
+          <CardContent className="space-y-4">
             <PowersetAuthPanel onConnected={() => setPowersetConnected(true)} />
-            <div className="flex items-center gap-3">
-              <span className="h-px flex-1 bg-border" />
-              <span className="text-xs uppercase tracking-wide text-muted-foreground">or bring your own keys</span>
-              <span className="h-px flex-1 bg-border" />
+
+            <div className="rounded-lg border">
+              <button
+                type="button"
+                onClick={() => setByoOpen((open) => !open)}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-muted/50"
+              >
+                {byoOpen ? (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                )}
+                <span className="font-medium">Bring your own keys</span>
+                <span className="text-xs text-muted-foreground">
+                  {keysReady ? "all set" : "for open-source / no Powerset account"}
+                </span>
+                {keysReady && <CheckCircle2 className="ml-auto h-4 w-4 text-emerald-600" />}
+              </button>
+              {byoOpen && (
+                <div className="border-t px-3 py-3">
+                  <ByoKeysPanel onReady={setKeysReady} />
+                </div>
+              )}
             </div>
-            <ByoKeysPanel onReady={setKeysReady} />
+
             <Button className="w-full" disabled={!done.connect} onClick={() => setActive("import")}>
               Continue to import
             </Button>
