@@ -11,6 +11,7 @@ import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
 import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
 import { LocalOnboardingV3Page } from "./LocalOnboardingV3Page";
+import { GmailSourcePage, LinkedInSourcePage } from "./LocalSourcePage";
 import { LocalEnvPage } from "./LocalEnvPage";
 import { LocalPersonDetailsPage } from "./LocalPersonDetailsPage";
 import { LocalCompaniesPage } from "./LocalCompaniesPage";
@@ -37,6 +38,8 @@ type LocalView =
   | "setup"
   | "onboardingV2"
   | "onboardingV3"
+  | "gmailSource"
+  | "linkedinSource"
   | "messagesReview"
   | "env"
   | "runs";
@@ -54,6 +57,8 @@ function personIdFromPath(): string | null {
 function viewFromPath(): LocalView {
   if (window.location.pathname === "/onboarding-v2") return "onboardingV2";
   if (window.location.pathname === "/onboarding-v3") return "onboardingV3";
+  if (window.location.pathname === "/sources/gmail") return "gmailSource";
+  if (window.location.pathname === "/sources/linkedin") return "linkedinSource";
   if (window.location.pathname === "/onboarding") return "setup";
   if (personIdFromPath()) return "personDetails";
   if (window.location.pathname === "/contacts") return "contacts";
@@ -253,6 +258,11 @@ export function LocalPowerpacksApp() {
           onSelectLinkSetup={() => {
             navigate("/setup?tab=link");
           }}
+          onSelectSource={(id) => {
+            if (id === "gmail") navigate("/sources/gmail");
+            else if (id === "linkedin_csv") navigate("/sources/linkedin");
+            else navigate("/setup?tab=link");
+          }}
           onSelect={(run) => {
             const id = run.conversationId || run.taskId;
             setSelectedTaskId(id);
@@ -268,6 +278,10 @@ export function LocalPowerpacksApp() {
               <LocalOnboardingV2Page />
             ) : activeView === "onboardingV3" ? (
               <LocalOnboardingV3Page />
+            ) : activeView === "gmailSource" ? (
+              <GmailSourcePage />
+            ) : activeView === "linkedinSource" ? (
+              <LinkedInSourcePage />
             ) : activeView === "env" ? (
               <LocalEnvPage />
             ) : activeView === "contacts" ? (
