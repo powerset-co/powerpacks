@@ -4,7 +4,6 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
-  Copy,
   ExternalLink,
   FileCheck2,
   KeyRound,
@@ -383,18 +382,6 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
 const SEARCH_EXAMPLE = '$search-network "software engineers in SF who worked at early-stage startups"';
 
 function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
-  const [copied, setCopied] = useState(false);
-
-  function copy() {
-    navigator.clipboard.writeText(SEARCH_EXAMPLE).then(
-      () => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 2000);
-      },
-      () => {}
-    );
-  }
-
   function openCodex() {
     // Codex.app handles codex://threads/new with prompt= and path= params, so
     // this opens a new Codex chat at the repo with the search prefilled. If the
@@ -406,26 +393,22 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        Your index is local. Open Codex in the repo, then run a network search — paste the command in.
+        Your index is local. Open it in Codex with a network search prefilled — just hit enter.
       </p>
 
       <div className="rounded-lg border bg-muted/40 p-3">
         <div className="flex items-center justify-between gap-3">
           <code className="truncate font-mono text-sm">{SEARCH_EXAMPLE}</code>
-          <Button size="sm" variant="outline" onClick={copy}>
-            {copied ? <CheckCircle2 className="mr-1 h-4 w-4 text-emerald-600" /> : <Copy className="mr-1 h-4 w-4" />}
-            {copied ? "Copied" : "Copy"}
+          <Button size="sm" onClick={openCodex}>
+            <Terminal className="mr-1 h-4 w-4" /> Codex
           </Button>
         </div>
       </div>
 
-      <Button onClick={openCodex} className="w-full">
-        <Terminal className="mr-2 h-4 w-4" /> Open Codex with this search
-      </Button>
       <p className="text-xs text-muted-foreground">
-        Opens a new Codex chat at this repo with the search prefilled — just hit enter. Requires the{" "}
+        Opens a new Codex chat at this repo. Requires the{" "}
         <a
           href="https://developers.openai.com/codex"
           target="_blank"
@@ -434,7 +417,7 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
         >
           Codex desktop app <ExternalLink className="h-3 w-3" />
         </a>
-        ; the Copy button is a fallback.
+        .
       </p>
     </div>
   );
