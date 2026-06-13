@@ -262,7 +262,7 @@ function ByoKeysPanel({ onReady }: { onReady: (ready: boolean) => void }) {
   );
 }
 
-function ImportPanel() {
+function ImportPanel({ onDone }: { onDone: () => void }) {
   const [fileName, setFileName] = useState("");
   const [csvPath, setCsvPath] = useState("");
   const [connections, setConnections] = useState(0);
@@ -273,11 +273,13 @@ function ImportPanel() {
 
   const loadStatus = useCallback(async () => {
     try {
-      setStatus(await fetchOnboardingV3LinkedInStatus());
+      const next = await fetchOnboardingV3LinkedInStatus();
+      setStatus(next);
+      if (String(next?.status || "") === "completed") onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load status");
     }
-  }, []);
+  }, [onDone]);
 
   useEffect(() => {
     loadStatus();
@@ -394,11 +396,13 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
   }
 
   function openCodex() {
-    // Codex.app registers the `codex://` scheme and reads a `path` query param,
-    // so this opens the desktop app at the repo. If path is ignored it still
-    // opens Codex; if the app isn't installed the browser no-ops.
-    const url = repoRoot ? `codex://?path=${encodeURIComponent(repoRoot)}` : "codex://";
-    window.location.href = url;
+    // Codex.app handles codex://threads/new with prompt= and path= params, so
+    // this opens a new Codex chat at the repo with the search prefilled. If the
+    // app isn't installed the browser no-ops.
+    const params = `prompt=${encodeURIComponent(SEARCH_EXAMPLE)}${
+      repoRoot ? `&path=${encodeURIComponent(repoRoot)}` : ""
+    }`;
+    window.location.href = `codex://threads/new?${params}`;
   }
 
   return (
@@ -418,19 +422,19 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
       </div>
 
       <Button onClick={openCodex} className="w-full">
-        <Terminal className="mr-2 h-4 w-4" /> Open Codex
+        <Terminal className="mr-2 h-4 w-4" /> Open Codex with this search
       </Button>
       <p className="text-xs text-muted-foreground">
-        Opens the Codex desktop app at this repo. Requires{" "}
+        Opens a new Codex chat at this repo with the search prefilled — just hit enter. Requires the{" "}
         <a
           href="https://developers.openai.com/codex"
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 underline"
         >
-          Codex <ExternalLink className="h-3 w-3" />
+          Codex desktop app <ExternalLink className="h-3 w-3" />
         </a>
-        . Paste the command above to run your first search.
+        ; the Copy button is a fallback.
       </p>
     </div>
   );
@@ -441,6 +445,7 @@ export function LocalOnboardingV3Page() {
   const [powersetConnected, setPowersetConnected] = useState(false);
   const [keysReady, setKeysReady] = useState(false);
   const [byoOpen, setByoOpen] = useState(false);
+  const [importDone, setImportDone] = useState(false);
   const [repoRoot, setRepoRoot] = useState("");
 
   useEffect(() => {
@@ -454,7 +459,7 @@ export function LocalOnboardingV3Page() {
 
   const done: Record<StepId, boolean> = {
     connect: powersetConnected || keysReady,
-    import: false,
+    import: importDone,
     search: false,
   };
 
@@ -514,7 +519,7 @@ export function LocalOnboardingV3Page() {
             <CardTitle className="text-base">Import your LinkedIn network</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <ImportPanel />
+            <ImportPanel onDone={() => setImportDone(true)} />
             <Button variant="secondary" className="w-full" onClick={() => setActive("search")}>
               I'm done — try a search
             </Button>
