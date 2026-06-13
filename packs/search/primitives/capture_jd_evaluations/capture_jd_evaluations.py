@@ -35,9 +35,14 @@ from pathlib import Path
 from typing import Any
 
 
-VERDICTS = {"strong", "maybe", "weak", "out"}
+VERDICTS = {"top_tier", "high_potential", "out"}
+LEGACY_VERDICTS = {"strong", "maybe", "weak", "out"}
 SENIORITY_FIT = {"ideal", "acceptable", "too_senior", "too_junior", "wrong_track", "unknown"}
-REQ_STATUS = {"strong", "partial", "weak", "missing", "unknown"}
+REQ_STATUS = {
+    "doing_now", "experienced", "capable", "foundational", "thin", "missing", "unknown",
+    # legacy buckets still accepted from older run dirs
+    "strong", "partial", "weak",
+}
 EVALUATOR_MODES = {"harness_subagents", "harness_single_agent", "primitive"}
 
 RERANKED_CSV_FIELDS = [
@@ -126,11 +131,11 @@ def validate_evaluation(ev: dict[str, Any], idx: int) -> list[str]:
     score = ev.get("jd_score")
     if not isinstance(score, (int, float)) or score < 0 or score > 1:
         errors.append(f"{prefix}: jd_score must be 0-1, got {score}")
-    if ev.get("verdict") not in VERDICTS:
+    if ev.get("verdict") not in VERDICTS and ev.get("verdict") not in LEGACY_VERDICTS:
         errors.append(f"{prefix}: invalid verdict '{ev.get('verdict')}'")
     if ev.get("seniority_fit") not in SENIORITY_FIT:
         errors.append(f"{prefix}: invalid seniority_fit '{ev.get('seniority_fit')}'")
-    if ev.get("verdict") in {"strong", "maybe"} and ev.get("seniority_fit") in {"too_senior", "too_junior", "wrong_track"}:
+    if ev.get("verdict") in {"top_tier", "high_potential", "strong", "maybe"} and ev.get("seniority_fit") in {"too_senior", "too_junior", "wrong_track"}:
         errors.append(
             f"{prefix}: verdict '{ev.get('verdict')}' cannot be used with "
             f"seniority_fit '{ev.get('seniority_fit')}'"
@@ -156,6 +161,12 @@ def validate_evaluation(ev: dict[str, Any], idx: int) -> list[str]:
         errors.append(f"{prefix}: missing rationale")
     if not isinstance(ev.get("caveats"), list):
         errors.append(f"{prefix}: caveats must be array")
+    else:
+        for i, c in enumerate(ev["caveats"]):
+            if not isinstance(c, (str, dict)):
+                errors.append(f"{prefix}.caveats[{i}]: must be string or object")
+            elif isinstance(c, dict) and not c.get("text"):
+                errors.append(f"{prefix}.caveats[{i}]: object caveat missing text")
 
     return errors
 
@@ -201,6 +212,13 @@ def strip_internal_fields(ev: dict[str, Any]) -> dict[str, Any]:
 # CSV writer
 # ---------------------------------------------------------------------------
 
+def caveat_text(c: Any) -> str:
+    if isinstance(c, dict):
+        text = str(c.get("text", ""))
+        return f"{text} [material]" if c.get("material") else text
+    return str(c)
+
+
 def write_reranked_csv(path: Path, evaluations: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as fh:
@@ -221,7 +239,7 @@ def write_reranked_csv(path: Path, evaluations: list[dict[str, Any]]) -> None:
                 "seniority_fit": ev.get("seniority_fit", ""),
                 "matched_probe_count": ev.get("_matched_probe_count", ""),
                 "rationale": ev.get("rationale", ""),
-                "caveats": "; ".join(ev.get("caveats") or []),
+                "caveats": "; ".join(caveat_text(c) for c in (ev.get("caveats") or [])),
             })
 
 
@@ -316,9 +334,8 @@ def run(args: argparse.Namespace) -> None:
     summary = {
         "created_at": now_iso(),
         "candidate_count": len(evaluations),
-        "strong": sum(1 for e in evaluations if e.get("verdict") == "strong"),
-        "maybe": sum(1 for e in evaluations if e.get("verdict") == "maybe"),
-        "weak": sum(1 for e in evaluations if e.get("verdict") == "weak"),
+        "top_tier": sum(1 for e in evaluations if e.get("verdict") == "top_tier"),
+        "high_potential": sum(1 for e in evaluations if e.get("verdict") == "high_potential"),
         "out": sum(1 for e in evaluations if e.get("verdict") == "out"),
         "validation_errors": len(all_errors),
         "outputs": {

@@ -3,10 +3,27 @@
 
 Reads candidate_frontier.json(l) + plan.json from a profile-search run
 directory, loads hydrated profiles from profile-search artifacts, and runs an
-async LLM evaluation per candidate with seniority enforced as a hard gate that
-is independent of skill-trait scores. Writes candidate_evaluations.raw.jsonl
-in the Task 5a schema so capture_jd_evaluations / export_candidate_shortlist
-work unchanged.
+async LLM evaluation per candidate. The model produces structured judgments
+only — per-trait evidence statuses, excellence subscores (trajectory /
+pedigree / impact), seniority fit, and caveats. The final score and verdict
+are computed deterministically in code from those judgments:
+
+    trait_score    = (2*sum(must statuses) + sum(nice statuses)) / (2*n_must + n_nice)
+    excellence     = 0.4*trajectory + 0.3*impact + 0.3*pedigree
+    caveat_penalty = min(0.20, 0.05 * material_caveat_count)
+    final_score    = 0.55*trait_score + 0.45*excellence - caveat_penalty
+
+Verdict ladder (bar-raiser model — default is out):
+    top_tier        in-band, no missing must-have, trait_score >= 0.85,
+                    excellence >= 0.70
+    high_potential  in-band, trait_score >= 0.60, trajectory >= 0.75
+                    (confident diamond-in-the-rough)
+    out             everyone else, including seniority-gated candidates
+
+Seniority is a hard gate enforced in code: too_senior / too_junior /
+wrong_track force verdict out and cap final_score at 0.3 regardless of
+trait scores. Writes candidate_evaluations.raw.jsonl in the Task 5a schema so
+capture_jd_evaluations / export_candidate_shortlist work unchanged.
 """
 
 from __future__ import annotations
@@ -29,19 +46,72 @@ SHARED_DIR = ROOT / "packs/search/primitives/shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from probe_artifacts import load_probe_summaries  # noqa: E402
-DEFAULT_MODEL = os.environ.get("PROFILE_EVAL_MODEL", os.environ.get("JD_EVAL_MODEL", "gpt-5.1"))
-DEFAULT_REASONING_EFFORT = os.environ.get("PROFILE_EVAL_REASONING_EFFORT", os.environ.get("JD_EVAL_REASONING_EFFORT", "low"))
+DEFAULT_MODEL = os.environ.get("PROFILE_EVAL_MODEL", os.environ.get("JD_EVAL_MODEL", "gpt-5.4"))
+DEFAULT_REASONING_EFFORT = os.environ.get("PROFILE_EVAL_REASONING_EFFORT", os.environ.get("JD_EVAL_REASONING_EFFORT", "medium"))
 DEFAULT_CONCURRENCY = 100
-DEFAULT_MAX_CANDIDATES = 200
+DEFAULT_MAX_CANDIDATES = 0  # 0 = evaluate the full merged frontier
 
-VALID_VERDICTS = {"strong", "maybe", "weak", "out"}
+VALID_VERDICTS = {"top_tier", "high_potential", "out"}
 VALID_SENIORITY = {"ideal", "acceptable", "too_senior", "too_junior", "wrong_track", "unknown"}
-VALID_TRAIT_STATUS = {"strong", "partial", "weak", "missing", "unknown"}
+# Per-trait evidence ladder. The model assigns a labeled bucket; code maps it
+# to a value. Anchored buckets are more consistent than raw 0-1 floats, and
+# aggregation stays deterministic.
+#   doing_now     doing this exact work in the current role
+#   experienced   clear prior direct experience
+#   capable       enough evidence to do the work / pick it up quickly
+#   foundational  adjacent/foundational background + vertical expertise to slot in
+#   thin          weak, speculative
+#   missing       no evidence
+STATUS_VALUE = {
+    "doing_now": 0.95,
+    "experienced": 0.80,
+    "capable": 0.70,
+    "foundational": 0.50,
+    "thin": 0.25,
+    "missing": 0.0,
+    "unknown": 0.0,
+    # Legacy buckets (old run dirs / fallbacks) folded onto the ladder.
+    "strong": 0.80,
+    "partial": 0.50,
+    "weak": 0.25,
+}
+VALID_TRAIT_STATUS = set(STATUS_VALUE)
 GATED_SENIORITY = {"too_senior", "too_junior", "wrong_track"}
 
-SYSTEM_PROMPT = """You are a senior technical recruiter producing the final evaluation for a hiring-manager shortlist.
+# Deterministic scoring constants.
+MUST_WEIGHT = 2.0
+NICE_WEIGHT = 1.0
+TRAIT_COMPONENT_WEIGHT = 0.55
+EXCELLENCE_COMPONENT_WEIGHT = 0.45
+EXCELLENCE_WEIGHTS = {"trajectory": 0.4, "impact": 0.3, "pedigree": 0.3}
+CAVEAT_PENALTY_EACH = 0.05
+CAVEAT_PENALTY_CAP = 0.20
+# Quorum / consensus aggregation for must-haves. Real top candidates spike on
+# most must-haves and have a gap or two; a linear mean punishes that gap
+# proportionally, a quorum does not. We discount the candidate's weakest
+# ~(1-QUORUM_FRACTION) of must-haves (they count QUORUM_DISCOUNT instead of
+# full weight). For 2-4 must-haves this means "forgive one":
+#   3/3 -> 1.00, 2/3 -> 0.87, 1/3 -> 0.43; 5/7 -> 0.89; 5/9 -> 0.72
+QUORUM_FRACTION = 0.70
+QUORUM_DISCOUNT = 0.30
+NICE_BONUS_WEIGHT = 0.10  # nice-to-haves are upside, never a gate
+# Thresholds anchored to the trait ladder: 0.80 == "experienced" across
+# must-haves (you'd be lucky to have them); 0.60 == "capable" coverage
+# (can do the work / pick it up quickly).
+TOP_TIER_MIN_TRAIT = 0.80
+TOP_TIER_MIN_EXCELLENCE = 0.70
+HIGH_POTENTIAL_MIN_MUST = 0.60  # must-have coverage only; nice-to-haves are differentiators
+HIGH_POTENTIAL_DIAMOND_MIN_MUST = 0.45  # lower coverage tolerated when trajectory is steep
+HIGH_POTENTIAL_MIN_TRAJECTORY = 0.75
+GATED_SCORE_CAP = 0.3
 
-You will receive: the job context, the seniority band / usable cutoff policy, must-have traits, nice-to-have traits, and one candidate profile.
+SYSTEM_PROMPT = """You are the bar-raiser for a team recruiting top-tier talent. Your default disposition is OUT.
+
+You only surface candidates the hiring team would be lucky to get — people who would raise the team's bar, not people who could merely do the job. Eagerness test: if the evidence would not make a hiring manager move fast, the candidate does not belong on the shortlist.
+
+You will receive: the job context (including hire stage), the seniority band / usable cutoff policy, must-have traits, nice-to-have traits, and one candidate profile.
+
+You do NOT produce a final score or verdict. You produce structured judgments — per-trait evidence statuses, excellence subscores, seniority fit, and caveats. The final score and verdict are computed deterministically from your judgments, so be precise and calibrated: every status and subscore directly moves the ranking.
 
 === SENIORITY IS A HARD GATE, SEPARATE FROM SKILLS ===
 
@@ -55,26 +125,59 @@ First decide seniority_fit from the candidate's CURRENT career level:
 
 A candidate with deep matching skills but out-of-band seniority is OUT. Do not rescue a CTO because they once built ETL pipelines. Past founder roles are fine if the CURRENT role is an in-band IC role at a different company.
 
-=== VERDICT RULES ===
+=== TRAIT EVIDENCE LADDER ===
 
-- seniority_fit in (too_senior, too_junior, wrong_track) => verdict MUST be "out", regardless of trait scores.
-- Otherwise: "strong" = in-band and strong evidence on most must-have traits; "maybe" = in-band with partial/uncertain evidence; "weak" = thin evidence, keep only for debug pools; "out" = does not fit.
-- Only profile evidence counts. Do not invent facts. Missing evidence is "missing" or "unknown", not "partial".
+For every provided trait, assign exactly one evidence level with a short cite from the profile. The levels are a capability ladder — "can this person do this part of the job, and how surely?":
+- "doing_now": doing this exact work in the CURRENT role. They are clearly performing it today.
+- "experienced": clear prior direct experience doing this work (not current, or current but lighter). Has demonstrably done it before.
+- "capable": enough adjacent/recent evidence to do the work or pick it up quickly. Not a direct match, but the building blocks are plainly there.
+- "foundational": foundational background plus enough product/vertical context to plausibly slot in, but no direct evidence of doing this specific work.
+- "thin": weak or speculative — only a faint signal.
+- "missing": no evidence in the profile.
+- "unknown": profile genuinely cannot answer.
+
+Discipline:
+- Only profile evidence counts. Do not invent facts. No evidence is "missing" or "unknown", not "foundational".
+- Recency: weight current and recent (last ~5 years) roles most heavily. A trait evidenced only by roles older than ~8 years caps at "capable".
+- Cross-track: evidence from a different career lane than the trait implies caps at "capable", never "experienced"/"doing_now" (e.g. SRE/platform reliability work for a product-API-ownership trait).
+- Brand-name employers, total years of experience, and seniority of past titles are NOT trait evidence by themselves. Score the trait, not the resume.
+- Do not park everyone at "capable"/"foundational" to hedge. If they are clearly doing it now, say "doing_now"; if there is genuinely nothing, say "missing". Calibrate honestly — the buckets are the score.
+
+=== EXCELLENCE SUBSCORES (0.0-1.0 each, evidence required) ===
+
+- "trajectory": speed and steepness of growth — promotions and scope expansion relative to time, increasing difficulty of problems chosen, leaving comfortable roles for harder ones. This is where late bloomers and diamonds in the rough surface: a steep recent curve at unknown companies scores high.
+- "pedigree": selectivity of companies, teams, and schools — known-strong engineering organizations, competitive programs, hard-to-get-into teams. List the companies and schools you counted. Pedigree is a prior, not a gate: it can RAISE the picture, never sink it. A high-trajectory candidate with a no-name background must not lose points here being scored low while trajectory carries them.
+- "impact": concrete shipped outcomes with ownership — built X used by Y, owned the migration that did Z, scaled W. Outcomes, not responsibilities.
+
+Calibration: 0.9+ is exceptional / top-decile; 0.7 clearly above average; 0.5 typical for the band; below 0.3 weak. Do not inflate. Most candidates are near 0.5 on most subscores.
+
+=== HIRE STAGE BAR ===
+
+The job context names a hire stage. Apply the matching bar:
+- "founding_early": weight trajectory steepness, 0-to-1 ownership, breadth, speed of scope growth, comfort with ambiguity. A high-growth builder with 5 years beats a 20-year maintainer.
+- "scaling_late": weight depth plus years of experience WITH continued growth — evidence of hardening MVPs/POCs into battle-tested production systems, reliability under real load, scaling teams and systems, leading through influence.
+
+=== CAVEATS ===
+
+Each caveat is {"text": "...", "material": true|false}. Mark material=true only when it would genuinely give the hiring manager pause for THIS role. Material caveats reduce the computed score; do not pad with trivia.
 
 === OUTPUT ===
 
 Return ONLY a JSON object:
 {
-  "jd_score": 0.0-1.0,
-  "verdict": "strong|maybe|weak|out",
   "seniority_fit": "ideal|acceptable|too_senior|too_junior|wrong_track|unknown",
-  "must_have": [{"trait": "<exact trait text>", "status": "strong|partial|weak|missing|unknown", "evidence": "<short cite from profile>"}],
+  "must_have": [{"trait": "<exact trait text>", "status": "doing_now|experienced|capable|foundational|thin|missing|unknown", "evidence": "<short cite from profile>"}],
   "nice_to_have": [{"trait": "<exact trait text>", "status": "...", "evidence": "..."}],
+  "excellence": {
+    "trajectory": {"score": 0.0, "evidence": "<short justification>"},
+    "pedigree": {"score": 0.0, "evidence": "<short justification>", "companies": [], "schools": []},
+    "impact": {"score": 0.0, "evidence": "<short justification>"}
+  },
   "rationale": "<one short paragraph>",
-  "caveats": ["<short strings>"]
+  "caveats": [{"text": "<short string>", "material": true}]
 }
 
-Include every provided trait exactly once with its exact text. jd_score reflects overall fit; gated candidates should score <= 0.3.
+Include every provided trait exactly once with its exact text.
 """
 
 
@@ -148,8 +251,10 @@ def build_user_prompt(plan: dict[str, Any], profile: dict[str, Any]) -> str:
     traits = plan.get("traits", {}) or {}
     must = [t.get("trait") for t in traits.get("must_have", []) if t.get("trait")]
     nice = [t.get("trait") for t in traits.get("nice_to_have", []) if t.get("trait")]
+    hire_stage = plan.get("hire_stage") or "founding_early"
     parts = [
         f"Job: {plan.get('job_title') or ''} ({plan.get('normalized_archetype') or ''})",
+        f"Hire stage: {hire_stage}",
         f"Seniority / usable cutoff policy: {plan.get('usable_cutoff') or 'Senior in-band IC; executives, founders, and advisors are out.'}",
         "Must-have traits:",
         *[f"- {t}" for t in must],
@@ -169,10 +274,99 @@ def supports_reasoning_effort(model: str) -> bool:
     return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
+# ---------------------------------------------------------------------------
+# Deterministic scoring
+# ---------------------------------------------------------------------------
+
+def quorum_aggregate(values: list[float], discount: float = QUORUM_DISCOUNT, quorum_fraction: float = QUORUM_FRACTION) -> float:
+    """Consensus aggregate: the weakest ~(1-quorum_fraction) of the values are
+    discounted to ``discount`` weight, the rest count fully. Equal values are
+    unaffected (a uniform list returns its own value). Never discounts all."""
+    if not values:
+        return 0.0
+    s = sorted(values)  # ascending; weakest first
+    n = len(s)
+    k = round((1.0 - quorum_fraction) * n)
+    k = max(0, min(k, n - 1))
+    weights = [discount] * k + [1.0] * (n - k)
+    return sum(w * v for w, v in zip(weights, s)) / sum(weights)
+
+
+def _status_values(traits: list[dict[str, Any]]) -> list[float]:
+    return [STATUS_VALUE.get(t.get("status", "unknown"), 0.0) for t in traits]
+
+
+def compute_trait_score(must: list[dict[str, Any]], nice: list[dict[str, Any]]) -> float:
+    """Quorum over must-haves, plus nice-to-haves as a small additive bonus.
+
+    Must-haves drive the score via the consensus aggregate (a gap or two is
+    forgiven). Nice-to-haves are differentiators: they can only RAISE the
+    score (capped at 1.0), never sink a candidate below the bar.
+    """
+    must_vals = _status_values(must)
+    nice_vals = _status_values(nice)
+    must_q = quorum_aggregate(must_vals)
+    nice_avg = sum(nice_vals) / len(nice_vals) if nice_vals else 0.0
+    return min(1.0, must_q + NICE_BONUS_WEIGHT * nice_avg)
+
+
+def compute_excellence(excellence: dict[str, Any]) -> float:
+    total = 0.0
+    for key, weight in EXCELLENCE_WEIGHTS.items():
+        block = excellence.get(key) or {}
+        try:
+            score = max(0.0, min(1.0, float(block.get("score", 0))))
+        except (TypeError, ValueError):
+            score = 0.0
+        total += weight * score
+    return total
+
+
+def caveat_penalty(caveats: list[dict[str, Any]]) -> float:
+    material = sum(1 for c in caveats if isinstance(c, dict) and c.get("material"))
+    return min(CAVEAT_PENALTY_CAP, CAVEAT_PENALTY_EACH * material)
+
+
+def must_coverage(must: list[dict[str, Any]]) -> float:
+    """Must-have coverage as the quorum/consensus aggregate (0-1)."""
+    return quorum_aggregate(_status_values(must))
+
+
+def decide_verdict(
+    seniority_fit: str,
+    trait_score: float,
+    excellence: float,
+    trajectory: float,
+    must: list[dict[str, Any]],
+) -> str:
+    """Deterministic verdict ladder. Default is out.
+
+    top_tier gates on combined trait coverage (must + nice) plus excellence.
+    high_potential gates on must-have coverage only — nice-to-haves are
+    differentiators and must not sink a steep-trajectory candidate — plus a
+    high trajectory subscore (the explicit diamond-in-the-rough bet).
+    """
+    if seniority_fit in GATED_SENIORITY:
+        return "out"
+    must_missing = any(t.get("status") in ("missing",) for t in must)
+    if not must_missing and trait_score >= TOP_TIER_MIN_TRAIT and excellence >= TOP_TIER_MIN_EXCELLENCE:
+        return "top_tier"
+    cov = must_coverage(must)
+    # high_potential = solid must-have coverage (can do the work / pick it up
+    # quickly), OR the diamond-in-the-rough escape: lighter coverage rescued
+    # by a steep trajectory. Trajectory is an OR escape hatch, never a second
+    # AND-gate that sinks solid-coverage candidates.
+    if cov >= HIGH_POTENTIAL_MIN_MUST:
+        return "high_potential"
+    if cov >= HIGH_POTENTIAL_DIAMOND_MIN_MUST and trajectory >= HIGH_POTENTIAL_MIN_TRAJECTORY:
+        return "high_potential"
+    return "out"
+
+
 def normalize_evaluation(parsed: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
     traits = plan.get("traits", {}) or {}
-    must = [t.get("trait") for t in traits.get("must_have", []) if t.get("trait")]
-    nice = [t.get("trait") for t in traits.get("nice_to_have", []) if t.get("trait")]
+    must_expected = [t.get("trait") for t in traits.get("must_have", []) if t.get("trait")]
+    nice_expected = [t.get("trait") for t in traits.get("nice_to_have", []) if t.get("trait")]
 
     def norm_traits(items: Any, expected: list[str]) -> list[dict[str, Any]]:
         by_trait = {}
@@ -187,31 +381,77 @@ def normalize_evaluation(parsed: dict[str, Any], plan: dict[str, Any]) -> dict[s
                     }
         return [by_trait.get(t, {"trait": t, "status": "unknown", "evidence": ""}) for t in expected]
 
-    try:
-        jd_score = max(0.0, min(1.0, float(parsed.get("jd_score", 0))))
-    except (TypeError, ValueError):
-        jd_score = 0.0
-    verdict = str(parsed.get("verdict", "")).lower()
-    if verdict not in VALID_VERDICTS:
-        verdict = "out"
+    def norm_excellence(raw: Any) -> dict[str, Any]:
+        raw = raw if isinstance(raw, dict) else {}
+        out: dict[str, Any] = {}
+        for key in EXCELLENCE_WEIGHTS:
+            block = raw.get(key) if isinstance(raw.get(key), dict) else {}
+            try:
+                score = max(0.0, min(1.0, float(block.get("score", 0))))
+            except (TypeError, ValueError):
+                score = 0.0
+            entry: dict[str, Any] = {
+                "score": round(score, 2),
+                "evidence": str(block.get("evidence", ""))[:400],
+            }
+            if key == "pedigree":
+                entry["companies"] = [str(c)[:80] for c in (block.get("companies") or []) if c][:12]
+                entry["schools"] = [str(s)[:80] for s in (block.get("schools") or []) if s][:8]
+            out[key] = entry
+        return out
+
+    def norm_caveats(raw: Any) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        if not isinstance(raw, list):
+            raw = [raw] if raw else []
+        for c in raw:
+            if isinstance(c, dict) and c.get("text"):
+                out.append({"text": str(c["text"])[:200], "material": bool(c.get("material"))})
+            elif isinstance(c, str) and c.strip():
+                # Legacy plain-string caveats: keep, but do not penalize.
+                out.append({"text": c[:200], "material": False})
+        return out[:8]
+
     seniority_fit = str(parsed.get("seniority_fit", "")).lower()
     if seniority_fit not in VALID_SENIORITY:
         seniority_fit = "unknown"
+
+    must = norm_traits(parsed.get("must_have"), must_expected)
+    nice = norm_traits(parsed.get("nice_to_have"), nice_expected)
+    excellence_block = norm_excellence(parsed.get("excellence"))
+    caveats = norm_caveats(parsed.get("caveats"))
+
+    trait_score = compute_trait_score(must, nice)
+    excellence_score = compute_excellence(excellence_block)
+    trajectory = float(excellence_block.get("trajectory", {}).get("score", 0))
+    penalty = caveat_penalty(caveats)
+
+    final_score = TRAIT_COMPONENT_WEIGHT * trait_score + EXCELLENCE_COMPONENT_WEIGHT * excellence_score - penalty
+    final_score = max(0.0, min(1.0, final_score))
+
+    verdict = decide_verdict(seniority_fit, trait_score, excellence_score, trajectory, must)
     # Hard gate enforced in code, not just the prompt.
     if seniority_fit in GATED_SENIORITY:
         verdict = "out"
-        jd_score = min(jd_score, 0.3)
-    caveats = parsed.get("caveats") or []
-    if not isinstance(caveats, list):
-        caveats = [str(caveats)]
+        final_score = min(final_score, GATED_SCORE_CAP)
+
     return {
-        "jd_score": round(jd_score, 2),
+        # jd_score keeps its name for downstream contract compatibility, but
+        # it is now computed in code, never model-assigned.
+        "jd_score": round(final_score, 3),
         "verdict": verdict,
         "seniority_fit": seniority_fit,
-        "must_have": norm_traits(parsed.get("must_have"), must),
-        "nice_to_have": norm_traits(parsed.get("nice_to_have"), nice),
+        "must_have": must,
+        "nice_to_have": nice,
+        "excellence": excellence_block,
+        "score_breakdown": {
+            "trait_score": round(trait_score, 3),
+            "excellence_score": round(excellence_score, 3),
+            "caveat_penalty": round(penalty, 3),
+            "formula": f"{TRAIT_COMPONENT_WEIGHT}*trait + {EXCELLENCE_COMPONENT_WEIGHT}*excellence - penalty",
+        },
         "rationale": str(parsed.get("rationale", ""))[:1200],
-        "caveats": [str(c)[:200] for c in caveats][:8],
+        "caveats": caveats,
     }
 
 
@@ -245,7 +485,7 @@ async def evaluate_one(
             "must_have": [],
             "nice_to_have": [],
             "rationale": "No hydrated profile available for evaluation.",
-            "caveats": ["missing_hydrated_profile"],
+            "caveats": [{"text": "missing_hydrated_profile", "material": True}],
             "error": "missing_profile",
         }
     user_prompt = build_user_prompt(plan, profile)
@@ -280,9 +520,12 @@ async def evaluate_one(
         "must_have": [],
         "nice_to_have": [],
         "rationale": f"Evaluation failed: {last_error[:200]}",
-        "caveats": ["evaluation_error"],
+        "caveats": [{"text": "evaluation_error", "material": True}],
         "error": last_error[:400],
     }
+
+
+VERDICT_ORDER = {"top_tier": 0, "high_potential": 1, "out": 2}
 
 
 async def evaluate_all(args: argparse.Namespace) -> dict[str, Any]:
@@ -330,8 +573,11 @@ async def evaluate_all(args: argparse.Namespace) -> dict[str, Any]:
     results = await asyncio.gather(*tasks)
     elapsed = round(time.monotonic() - started, 2)
 
-    # Rank by jd_score desc; gated/out candidates sink naturally.
-    ordered = sorted(results, key=lambda r: -r.get("jd_score", 0))
+    # Rank by verdict tier first, then computed score; out candidates sink.
+    ordered = sorted(
+        results,
+        key=lambda r: (VERDICT_ORDER.get(r.get("verdict", "out"), 9), -r.get("jd_score", 0)),
+    )
     for i, r in enumerate(ordered):
         r["rank"] = i + 1
 
@@ -340,7 +586,7 @@ async def evaluate_all(args: argparse.Namespace) -> dict[str, Any]:
         for r in ordered:
             handle.write(json.dumps(r, sort_keys=True) + "\n")
 
-    counts = {v: sum(1 for r in ordered if r.get("verdict") == v) for v in ("strong", "maybe", "weak", "out")}
+    counts = {v: sum(1 for r in ordered if r.get("verdict") == v) for v in ("top_tier", "high_potential", "out")}
     gated = sum(1 for r in ordered if r.get("seniority_fit") in GATED_SENIORITY)
     errors = sum(1 for r in ordered if r.get("error"))
     return {
@@ -365,9 +611,9 @@ async def evaluate_all(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Automated profile-search candidate evaluation with seniority hard gate")
+    parser = argparse.ArgumentParser(description="Automated profile-search candidate evaluation with deterministic bar-raiser scoring")
     parser.add_argument("--run-dir", required=True, help="Profile-search run directory containing plan.json and candidate_frontier.jsonl")
-    parser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES, help="Evaluate only the top-N frontier candidates by best probe score; 0 = all")
+    parser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES, help="Evaluate only the top-N frontier candidates by best probe score; 0 = all (default)")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)

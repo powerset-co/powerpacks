@@ -145,7 +145,7 @@
         "score_basis": "Score against the full JD plan, not the individual probe that found the candidate.",
         "must_have": "Clear misses should cap or lower score; only truly central named requirements should exclude.",
         "nice_to_have": "Use as differentiators and boosts.",
-        "seniority_band": "Treat the JD seniority band as a hard gate for strong/maybe verdicts. Candidates marked too_senior, too_junior, or wrong_track must be out, not weak fallback. Allow an exception only when company-size context makes the current title plausibly analogous to the JD level, e.g. hands-on startup Director of Finance for a senior analyst/FP&A role.",
+        "seniority_band": "Treat the JD seniority band as a hard gate for top_tier/high_potential verdicts. Candidates marked too_senior, too_junior, or wrong_track must be out. Allow an exception only when company-size context makes the current title plausibly analogous to the JD level, e.g. hands-on startup Director of Finance for a senior analyst/FP&A role.",
         "duplicate_signal": "Use repeated appearance across probes as a positive evidence signal only when the matched probes cover meaningful different traits."
       }
     },
@@ -201,7 +201,7 @@
     "search_scope may contain location or sourcing scope, but location/onsite/relocation/commute willingness are not job-fit traits and do not appear in targets_traits.",
     "The final JD score is based on the full JD, not the individual probe query that found the candidate.",
     "Clear JD requirements are classified into hard_disqualifier, required_but_stackable, or preferred_signal before final rerank.",
-    "JD seniority is enforced as a strict hiring band: strong/maybe candidates must be analogous to the JD level, and clearly too-senior/too-junior/wrong-track candidates are out.",
+    "JD seniority is enforced as a strict hiring band: top_tier/high_potential candidates must be analogous to the JD level, and clearly too-senior/too-junior/wrong-track candidates are out.",
     "Weak candidates are not included in sendable hiring-manager shortlists; they may only appear in debug/reranked pool artifacts.",
     "Vague basics implied by seniority and company-side close concerns are ignored entirely — not generated in plan.json, not used in scoring.",
     "Candidates missing required_but_stackable criteria remain visible below qualified candidates with a capped score instead of disappearing.",
