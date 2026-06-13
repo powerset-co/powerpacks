@@ -369,7 +369,40 @@ function startOnboardingV2Messages(body: Record<string, any>): SetupJob {
   });
 }
 
+// Onboarding v3 Gmail: estimate how much a date-windowed sync would pull,
+// per window, without syncing. Read-only and free (Gmail label/id counts).
+function estimateGmailSync(body: Record<string, any>) {
+  const accounts: string[] = Array.isArray(body.accounts) ? body.accounts.map(String).filter(Boolean) : [];
+  const windows: string[] = Array.isArray(body.windows) && body.windows.length
+    ? body.windows.map(String)
+    : ["1y", "2y", "5y", "all"];
+  const command = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/estimate_gmail_sync/estimate_gmail_sync.py",
+    "estimate",
+  ];
+  for (const account of accounts) command.push("--account", account);
+  for (const window of windows) command.push("--window", window);
+  const result = spawnSync(command[0], command.slice(1), {
+    cwd: powerpacksRepoRoot,
+    env: setupProcessEnv(),
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: 5 * 60 * 1000,
+  });
+  const output = parseLastJsonFragment(result.stdout || "") || {};
+  if (result.status === 0 && output && (output as Record<string, any>).status === "completed") {
+    return output;
+  }
+  return { status: "failed", code: result.status, error: result.stderr || "estimate failed", output };
+}
+
 export async function handleOnboardingV2Routes(req: any, res: any, url: URL): Promise<boolean> {
+  if (url.pathname === "/local-api/onboarding-v3/gmail/estimate" && req.method === "POST") {
+    sendJson(res, estimateGmailSync(await readRequestJson(req)));
+    return true;
+  }
+
   if (url.pathname === "/local-api/onboarding-v3/linkedin/status") {
     sendJson(res, onboardingV2Status(ONBOARDING_V3_LINKEDIN));
     return true;

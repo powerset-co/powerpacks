@@ -97,6 +97,28 @@ export function checkGmailTokens(emails: string[]): Promise<{ expired: string[] 
   return postJson<{ expired: string[] }>("/local-api/onboarding-v2/gmail/check-tokens", { emails });
 }
 
+export interface GmailSyncWindowEstimate {
+  messages: number;
+  est_seconds: number;
+  est_minutes: number;
+  truncated?: boolean;
+}
+
+export interface GmailSyncEstimateResponse {
+  status: string;
+  scope_query?: string;
+  windows?: string[];
+  accounts?: Array<{ email: string; error?: string; windows: Record<string, GmailSyncWindowEstimate> }>;
+  totals?: Record<string, GmailSyncWindowEstimate>;
+  error?: string;
+}
+
+export function estimateGmailSync(
+  body: { accounts?: string[]; windows?: string[] } = {}
+): Promise<GmailSyncEstimateResponse> {
+  return postJson<GmailSyncEstimateResponse>("/local-api/onboarding-v3/gmail/estimate", body);
+}
+
 export function fetchOnboardingV2MessagesStatus(): Promise<Record<string, unknown>> {
   return getJson<Record<string, unknown>>("/local-api/onboarding-v2/messages/status");
 }

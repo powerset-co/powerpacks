@@ -9,6 +9,8 @@ import {
   KeyRound,
   Loader2,
   LogIn,
+  Mail,
+  MessageSquare,
   Search,
   Terminal,
   Upload,
@@ -21,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
+  estimateGmailSync,
   fetchEnvStatus,
   fetchOnboardingV3LinkedInStatus,
   fetchPowersetWhoami,
@@ -29,6 +32,8 @@ import {
   runPowersetLogin,
   updateEnvKeys,
   uploadLinkedInCsv,
+  type GmailSyncEstimateResponse,
+  type GmailSyncWindowEstimate,
   type PowersetWhoami,
 } from "./powerpacksApi";
 import { OnboardingStatusCard } from "./onboarding-v2/OnboardingStatusCard";
@@ -44,9 +49,18 @@ const BYO_KEYS = ["OPENAI_API_KEY", "RAPIDAPI_LINKEDIN_KEY", "PARALLEL_API_KEY"]
 const WIZARD_STEPS = [
   { id: "connect", label: "Connect" },
   { id: "import", label: "Import LinkedIn" },
+  { id: "email", label: "Sync email" },
   { id: "search", label: "First search" },
 ] as const;
 type StepId = (typeof WIZARD_STEPS)[number]["id"];
+
+const SYNC_WINDOWS = [
+  { id: "1y", label: "1 year" },
+  { id: "2y", label: "2 years" },
+  { id: "5y", label: "5 years" },
+  { id: "all", label: "All time" },
+] as const;
+type SyncWindowId = (typeof SYNC_WINDOWS)[number]["id"];
 
 function countConnections(content: string): number {
   const lines = content.split(/\r?\n/);
@@ -423,6 +437,95 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
   );
 }
 
+function GmailSyncPanel() {
+  const [totals, setTotals] = useState<Record<string, GmailSyncWindowEstimate>>({});
+  const [selected, setSelected] = useState<SyncWindowId>("1y");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const merge = (res: GmailSyncEstimateResponse) => {
+      if (!cancelled && res.status === "completed" && res.totals) {
+        setTotals((prev) => ({ ...prev, ...res.totals }));
+      }
+    };
+    // Fast windows first so the panel fills in quickly; "all time" pagination
+    // can take ~30s on a large inbox, so fetch it in parallel without blocking.
+    estimateGmailSync({ windows: ["1y", "2y", "5y"] })
+      .then((res) => {
+        merge(res);
+        if (!cancelled && res.status !== "completed") setError(res.error || "Couldn't estimate your inbox.");
+      })
+      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : "Estimate failed"))
+      .finally(() => !cancelled && setLoading(false));
+    estimateGmailSync({ windows: ["all"] }).then(merge).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const current = totals[selected];
+  const selectedLabel = SYNC_WINDOWS.find((w) => w.id === selected)?.label.toLowerCase() ?? "";
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        We sync the people you actually email — newsletters, promotions and social are skipped. Pick how far back to go.
+      </p>
+
+      <div className="grid grid-cols-4 gap-2">
+        {SYNC_WINDOWS.map((window) => {
+          const total = totals[window.id];
+          const isSelected = selected === window.id;
+          return (
+            <button
+              key={window.id}
+              type="button"
+              onClick={() => setSelected(window.id)}
+              className={cn(
+                "flex flex-col items-center gap-0.5 rounded-lg border px-2 py-3 text-center transition-colors",
+                isSelected ? "border-primary bg-primary/5" : "border-muted-foreground/20 hover:border-muted-foreground/40"
+              )}
+            >
+              <span className={cn("text-sm font-medium", isSelected ? "text-primary" : "")}>{window.label}</span>
+              <span className="text-xs text-muted-foreground">
+                {loading ? "…" : total ? `${total.messages.toLocaleString()}${total.truncated ? "+" : ""}` : "—"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {current && (
+        <div className="flex items-center justify-center gap-5 rounded-md bg-muted/50 px-4 py-2.5 text-sm">
+          <span className="flex items-center gap-1.5">
+            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+            <span className="font-medium">
+              {current.messages.toLocaleString()}
+              {current.truncated ? "+" : ""}
+            </span>
+            <span className="text-muted-foreground">emails</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            <span className="text-muted-foreground">about</span>
+            <span className="font-medium">{current.est_minutes} min</span>
+            <span className="text-muted-foreground">to sync</span>
+          </span>
+        </div>
+      )}
+
+      <Button className="w-full" disabled>
+        <Mail className="mr-2 h-4 w-4" /> Sync {selectedLabel}
+      </Button>
+      <p className="text-center text-xs text-muted-foreground">Estimate preview — sync wiring lands next.</p>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+    </div>
+  );
+}
+
 export function LocalOnboardingV3Page() {
   const [active, setActive] = useState<StepId>("connect");
   const [powersetConnected, setPowersetConnected] = useState(false);
@@ -443,6 +546,7 @@ export function LocalOnboardingV3Page() {
   const done: Record<StepId, boolean> = {
     connect: powersetConnected || keysReady,
     import: importDone,
+    email: false,
     search: false,
   };
 
@@ -503,6 +607,22 @@ export function LocalOnboardingV3Page() {
           </CardHeader>
           <CardContent className="space-y-3">
             <ImportPanel onDone={() => setImportDone(true)} />
+            <Button variant="secondary" className="w-full" onClick={() => setActive("email")}>
+              Next — sync email
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {active === "email" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Mail className="h-4 w-4" /> Sync your email network
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <GmailSyncPanel />
             <Button variant="secondary" className="w-full" onClick={() => setActive("search")}>
               I'm done — try a search
             </Button>
