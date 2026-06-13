@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs";
-import { spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { randomUUID } from "crypto";
 
 import {
@@ -371,7 +371,9 @@ function startOnboardingV2Messages(body: Record<string, any>): SetupJob {
 
 // Onboarding v3 Gmail: estimate how much a date-windowed sync would pull,
 // per window, without syncing. Read-only and free (Gmail label/id counts).
-function estimateGmailSync(body: Record<string, any>) {
+// Uses async spawn (never spawnSync) so the Gmail pagination — up to ~30s on a
+// large inbox — does not block the single-threaded dev server event loop.
+function estimateGmailSync(body: Record<string, any>): Promise<Record<string, any>> {
   const accounts: string[] = Array.isArray(body.accounts) ? body.accounts.map(String).filter(Boolean) : [];
   const windows: string[] = Array.isArray(body.windows) && body.windows.length
     ? body.windows.map(String)
@@ -383,23 +385,29 @@ function estimateGmailSync(body: Record<string, any>) {
   ];
   for (const account of accounts) command.push("--account", account);
   for (const window of windows) command.push("--window", window);
-  const result = spawnSync(command[0], command.slice(1), {
-    cwd: powerpacksRepoRoot,
-    env: setupProcessEnv(),
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    timeout: 5 * 60 * 1000,
+  return new Promise((resolve) => {
+    const child = spawn(command[0], command.slice(1), { cwd: powerpacksRepoRoot, env: setupProcessEnv() });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 5 * 60 * 1000);
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ status: "failed", error: String(err) });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const output = parseLastJsonFragment(stdout) || {};
+      if (code === 0 && (output as Record<string, any>).status === "completed") resolve(output);
+      else resolve({ status: "failed", code, error: stderr || "estimate failed", output });
+    });
   });
-  const output = parseLastJsonFragment(result.stdout || "") || {};
-  if (result.status === 0 && output && (output as Record<string, any>).status === "completed") {
-    return output;
-  }
-  return { status: "failed", code: result.status, error: result.stderr || "estimate failed", output };
 }
 
 export async function handleOnboardingV2Routes(req: any, res: any, url: URL): Promise<boolean> {
   if (url.pathname === "/local-api/onboarding-v3/gmail/estimate" && req.method === "POST") {
-    sendJson(res, estimateGmailSync(await readRequestJson(req)));
+    sendJson(res, await estimateGmailSync(await readRequestJson(req)));
     return true;
   }
 
