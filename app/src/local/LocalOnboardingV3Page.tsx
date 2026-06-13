@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, Upload } from "lucide-react";
+import { Clock, FileCheck2, Loader2, Upload, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -99,16 +99,26 @@ export function LocalOnboardingV3Page() {
           <CardTitle className="text-base">Connections.csv</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-muted-foreground/25 p-8 text-center transition-colors hover:border-muted-foreground/50">
-            <Upload className="h-6 w-6 text-muted-foreground" />
-            <span className="text-sm font-medium">
-              {fileName || "Click to choose your Connections.csv"}
-            </span>
-            {fileName && connections > 0 && (
-              <span className="text-xs text-muted-foreground">
-                {connections} connections · about {eta} min to process
-              </span>
+          <label
+            className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 p-8 text-center transition-colors ${
+              fileName
+                ? "border-solid border-primary/40 bg-primary/5"
+                : "border-dashed border-muted-foreground/25 hover:border-muted-foreground/50"
+            }`}
+          >
+            {uploading ? (
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            ) : fileName ? (
+              <FileCheck2 className="h-6 w-6 text-primary" />
+            ) : (
+              <Upload className="h-6 w-6 text-muted-foreground" />
             )}
+            <span className={`text-sm font-medium ${fileName ? "text-primary" : ""}`}>
+              {uploading ? "Reading file…" : fileName || "Click to choose your Connections.csv"}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {fileName ? "Click to choose a different file" : "LinkedIn → Settings → Data privacy → Get a copy of your data → Connections"}
+            </span>
             <input
               type="file"
               accept=".csv"
@@ -117,6 +127,23 @@ export function LocalOnboardingV3Page() {
               onChange={(event) => handleFile(event.target.files?.[0])}
             />
           </label>
+
+          {fileName && connections > 0 && (
+            <div className="flex items-center justify-center gap-5 rounded-md bg-muted/50 px-4 py-2.5 text-sm">
+              <span className="flex items-center gap-1.5">
+                <Users className="h-4 w-4 text-muted-foreground" />
+                <span className="font-medium">{connections.toLocaleString()}</span>
+                <span className="text-muted-foreground">connections</span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <span className="text-muted-foreground">about</span>
+                <span className="font-medium">{eta} min</span>
+                <span className="text-muted-foreground">to process</span>
+              </span>
+            </div>
+          )}
+
           <Button className="w-full" disabled={!csvPath || uploading || starting || running} onClick={handleProcess}>
             {(starting || running) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {running ? "Processing…" : "Process"}
