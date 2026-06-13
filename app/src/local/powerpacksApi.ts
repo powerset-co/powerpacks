@@ -119,6 +119,28 @@ export function estimateGmailSync(
   return postJson<GmailSyncEstimateResponse>("/local-api/onboarding-v3/gmail/estimate", body);
 }
 
+export interface GmailAccount {
+  email: string;
+  message_count: number;
+  last_sync: string;
+}
+
+export interface GmailAccountsResponse {
+  status: string;
+  accounts: GmailAccount[];
+  error?: string;
+}
+
+export function fetchGmailAccounts(): Promise<GmailAccountsResponse> {
+  return getJson<GmailAccountsResponse>("/local-api/onboarding-v3/gmail/accounts");
+}
+
+export function runGmailWindowSync(
+  body: { window: string; accounts?: string[]; limit?: number }
+): Promise<{ job: SetupJob }> {
+  return postJson<{ job: SetupJob }>("/local-api/onboarding-v3/gmail/sync", body);
+}
+
 export function fetchOnboardingV2MessagesStatus(): Promise<Record<string, unknown>> {
   return getJson<Record<string, unknown>>("/local-api/onboarding-v2/messages/status");
 }

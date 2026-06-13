@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -172,9 +173,47 @@ def cmd_estimate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_accounts(args: argparse.Namespace) -> int:
+    """List Gmail accounts msgvault manages — the single source of truth.
+
+    Backed by ``msgvault list-accounts --json`` (its sources table), so it
+    reflects add-account / remove-account exactly and never drifts from
+    accounts.json."""
+    home = Path(args.home).expanduser()
+    cmd = ["msgvault"]
+    default_home = DEFAULT_HOME
+    if home != default_home:
+        cmd.extend(["--home", str(home)])
+    cmd.extend(["list-accounts", "--json"])
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        emit({"status": "failed", "error": f"msgvault: {exc}", "accounts": []})
+        return 1
+    try:
+        raw = json.loads(result.stdout or "[]")
+    except ValueError:
+        emit({"status": "failed", "error": result.stderr.strip() or "list-accounts not JSON", "accounts": []})
+        return 1
+    accounts = [
+        {
+            "email": str(row.get("email") or ""),
+            "message_count": int(row.get("message_count") or 0),
+            "last_sync": row.get("last_sync") or "",
+        }
+        for row in raw
+        if str(row.get("type") or "gmail") == "gmail" and row.get("email")
+    ]
+    emit({"status": "completed", "accounts": accounts})
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Estimate Gmail msgvault sync size per date window")
     sub = parser.add_subparsers(dest="command", required=True)
+    acc = sub.add_parser("accounts", help="List msgvault Gmail accounts (the source of truth)")
+    acc.add_argument("--home", default=str(DEFAULT_HOME), help="msgvault home dir")
+    acc.set_defaults(func=cmd_accounts)
     est = sub.add_parser("estimate", help="Estimate message counts + time per window")
     est.add_argument("--account", action="append", help="Account email (repeatable); default: all msgvault tokens")
     est.add_argument("--window", action="append", choices=["1y", "2y", "5y", "all"], help="Window (repeatable); default: all four")

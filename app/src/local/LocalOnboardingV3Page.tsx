@@ -26,15 +26,17 @@ import { cn } from "@/lib/utils";
 import {
   estimateGmailSync,
   fetchEnvStatus,
-  fetchOnboardingV2GmailStatus,
+  fetchGmailAccounts,
   fetchOnboardingV3LinkedInStatus,
   fetchPowersetWhoami,
   fetchSetupJob,
+  runGmailWindowSync,
   runOnboardingV3LinkedIn,
   runPowersetLogin,
   runSetupAction,
   updateEnvKeys,
   uploadLinkedInCsv,
+  type GmailAccount,
   type GmailSyncEstimateResponse,
   type GmailSyncWindowEstimate,
   type PowersetWhoami,
@@ -441,8 +443,7 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
 }
 
 function GmailSyncPanel() {
-  const [linked, setLinked] = useState<string[]>([]);
-  const [discovered, setDiscovered] = useState<Array<{ email: string; count: number }>>([]);
+  const [accounts, setAccounts] = useState<GmailAccount[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [totals, setTotals] = useState<Record<string, GmailSyncWindowEstimate>>({});
   const [selected, setSelected] = useState<SyncWindowId>("1y");
@@ -451,6 +452,8 @@ function GmailSyncPanel() {
   const [linking, setLinking] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [newEmail, setNewEmail] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncDone, setSyncDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const runEstimate = useCallback((emails: string[]) => {
@@ -478,18 +481,14 @@ function GmailSyncPanel() {
       .finally(() => setAllPending(false));
   }, []);
 
+  // msgvault is the single source of truth for which Gmail accounts exist.
   const loadAccounts = useCallback(async () => {
     try {
-      const status = await fetchOnboardingV2GmailStatus();
-      const linkedNext = (Array.isArray(status.linked_accounts) ? status.linked_accounts : [])
-        .map((value) => String(value))
-        .filter(Boolean);
-      const discoveredNext = (Array.isArray(status.discovered_accounts) ? status.discovered_accounts : [])
-        .map((row) => ({ email: String((row as Record<string, unknown>).account_email || ""), count: Number((row as Record<string, unknown>).message_count || 0) }))
-        .filter((row) => row.email && !linkedNext.includes(row.email));
-      setLinked(linkedNext);
-      setDiscovered(discoveredNext);
-      return linkedNext;
+      const res = await fetchGmailAccounts();
+      const next = res.status === "completed" ? res.accounts : [];
+      setAccounts(next);
+      if (res.status !== "completed") setError(res.error || "Failed to load Gmail accounts");
+      return next.map((account) => account.email);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load Gmail accounts");
       return [];
@@ -501,19 +500,6 @@ function GmailSyncPanel() {
   useEffect(() => {
     loadAccounts().then((emails) => runEstimate(emails));
   }, [loadAccounts, runEstimate]);
-
-  async function linkDiscovered(email: string) {
-    setLinking(true);
-    setError(null);
-    try {
-      await runSetupAction({ action: "gmail-account", email });
-      runEstimate(await loadAccounts());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to link account");
-    } finally {
-      setLinking(false);
-    }
-  }
 
   async function addAccount(email: string) {
     setLinking(true);
@@ -530,9 +516,35 @@ function GmailSyncPanel() {
     }
   }
 
+  async function handleSync() {
+    setSyncing(true);
+    setSyncDone(null);
+    setError(null);
+    const emails = accounts.map((account) => account.email);
+    try {
+      const { job } = await runGmailWindowSync({ window: selected, accounts: emails });
+      let current = job;
+      while (current.status === "running" || current.status === "pending") {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        current = await fetchSetupJob(job.id);
+      }
+      if (current.status === "completed") {
+        setSyncDone(`Synced ${selectedLabel}. Refreshing estimate…`);
+        runEstimate(emails);
+      } else {
+        setError(current.stderr || "Sync did not complete.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   const current = totals[selected];
   const selectedLabel = SYNC_WINDOWS.find((w) => w.id === selected)?.label.toLowerCase() ?? "";
-  const hasAccounts = linked.length > 0;
+  const accountCount = accounts.length;
+  const hasAccounts = accountCount > 0;
 
   return (
     <div className="space-y-3">
@@ -555,27 +567,20 @@ function GmailSyncPanel() {
           </div>
         ) : hasAccounts ? (
           <ul className="mt-2 space-y-1">
-            {linked.map((email) => (
-              <li key={email} className="flex items-center gap-2 break-all text-sm">
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /> {email}
+            {accounts.map((account) => (
+              <li key={account.email} className="flex items-center gap-2 text-sm">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                <span className="break-all">{account.email}</span>
+                {account.message_count > 0 && (
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                    {account.message_count.toLocaleString()} synced
+                  </span>
+                )}
               </li>
             ))}
           </ul>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">No Gmail accounts yet — add one to estimate.</p>
-        )}
-
-        {discovered.length > 0 && (
-          <div className="mt-2 space-y-1.5">
-            {discovered.map((account) => (
-              <div key={account.email} className="flex items-center justify-between gap-2 text-sm">
-                <span className="break-all text-muted-foreground">{account.email}</span>
-                <Button size="sm" variant="outline" disabled={linking} onClick={() => linkDiscovered(account.email)}>
-                  {linking ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null} Link
-                </Button>
-              </div>
-            ))}
-          </div>
         )}
 
         {addOpen && (
@@ -645,7 +650,7 @@ function GmailSyncPanel() {
               {current.truncated ? "+" : ""}
             </span>
             <span className="text-muted-foreground">
-              emails{linked.length > 1 ? ` across ${linked.length} accounts` : ""}
+              emails{accountCount > 1 ? ` across ${accountCount} accounts` : ""}
             </span>
           </span>
           <span className="flex items-center gap-1.5">
@@ -657,10 +662,11 @@ function GmailSyncPanel() {
         </div>
       )}
 
-      <Button className="w-full" disabled>
-        <Mail className="mr-2 h-4 w-4" /> Sync {selectedLabel}
+      <Button className="w-full" disabled={!hasAccounts || syncing} onClick={handleSync}>
+        {syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
+        {syncing ? `Syncing ${selectedLabel}…` : `Sync ${selectedLabel}`}
       </Button>
-      <p className="text-center text-xs text-muted-foreground">Estimate preview — sync wiring lands next.</p>
+      {syncDone && <p className="text-center text-sm text-emerald-600">{syncDone}</p>}
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
   );

@@ -8,9 +8,11 @@ import hashlib
 import json
 import shutil
 import sqlite3
+import subprocess
 import sys
 import urllib.parse
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -263,10 +265,45 @@ def infer_msgvault_sync_after(db: str, email: str) -> dict[str, str]:
         con.close()
 
 
-def sync_msgvault_account(email: str, db: str, query: str) -> dict[str, Any]:
-    inferred = infer_msgvault_sync_after(db, email)
-    sync_after = inferred.get("sync_after", "")
-    sync_after_source = inferred.get("source", "")
+@lru_cache(maxsize=1)
+def msgvault_sync_supports_no_attachments() -> bool:
+    """True only if this msgvault build exposes --no-attachments on sync-full.
+    Older builds (e.g. v0.14.1) only expose it on the import-* commands, so we
+    must not pass it to sync-full or the command errors out."""
+    if not shutil.which("msgvault"):
+        return False
+    try:
+        help_text = subprocess.run(
+            ["msgvault", "sync-full", "--help"], capture_output=True, text=True, timeout=15
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "--no-attachments" in help_text
+
+
+def sync_msgvault_account(
+    email: str,
+    db: str,
+    query: str,
+    *,
+    sync_after_override: str = "",
+    sync_before: str = "",
+    fresh: bool = False,
+    limit: int = 0,
+    no_attachments: bool = False,
+) -> dict[str, Any]:
+    # An explicit window (from the onboarding date picker) overrides the
+    # resume-inferred --after. With a window we also pass --noresume so the
+    # full range is rescanned deterministically; already-stored messages are
+    # skipped, so this only downloads what is genuinely new.
+    if sync_after_override:
+        sync_after = sync_after_override
+        sync_after_source = "explicit_window"
+    else:
+        inferred = infer_msgvault_sync_after(db, email)
+        sync_after = inferred.get("sync_after", "")
+        sync_after_source = inferred.get("source", "")
+    no_attachments_applied = bool(no_attachments) and msgvault_sync_supports_no_attachments()
     if not shutil.which("msgvault"):
         return {
             "status": "skipped",
@@ -284,8 +321,16 @@ def sync_msgvault_account(email: str, db: str, query: str) -> dict[str, Any]:
     cmd.extend(["sync-full", email])
     if sync_after:
         cmd.extend(["--after", sync_after])
+    if sync_before:
+        cmd.extend(["--before", sync_before])
     if query:
         cmd.extend(["--query", query])
+    if fresh or sync_after_override:
+        cmd.append("--noresume")
+    if limit and int(limit) > 0:
+        cmd.extend(["--limit", str(int(limit))])
+    if no_attachments_applied:
+        cmd.append("--no-attachments")
     code, payload, stderr = run_cmd(cmd)
     return {
         "status": "completed" if code == 0 else "failed",
@@ -295,7 +340,12 @@ def sync_msgvault_account(email: str, db: str, query: str) -> dict[str, Any]:
         "error": stderr or payload if code != 0 else "",
         "sync_after": sync_after,
         "sync_after_source": sync_after_source,
+        "sync_before": sync_before,
         "query": query,
+        "fresh": bool(fresh or sync_after_override),
+        "limit": int(limit) if limit else 0,
+        "no_attachments_requested": bool(no_attachments),
+        "no_attachments_applied": no_attachments_applied,
     }
 
 
@@ -370,6 +420,11 @@ def discover(
     msgvault_db: str | None = None,
     sync_query: str | None = None,
     skip_msgvault_sync: bool = False,
+    sync_after: str = "",
+    sync_before: str = "",
+    fresh: bool = False,
+    limit: int = 0,
+    no_attachments: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
     cfg = load_config()
@@ -413,7 +468,16 @@ def discover(
                 "query": source_inputs["sync_query"],
             }
         else:
-            sync = sync_msgvault_account(email, source_inputs["msgvault_db"], source_inputs["sync_query"])
+            sync = sync_msgvault_account(
+                email,
+                source_inputs["msgvault_db"],
+                source_inputs["sync_query"],
+                sync_after_override=sync_after,
+                sync_before=sync_before,
+                fresh=fresh,
+                limit=limit,
+                no_attachments=no_attachments,
+            )
         if sync["status"] == "failed":
             payload = {"status": "failed", "source": "gmail", "account_email": email, "error": sync}
             write_stage_manifest(manifest_json, payload)
@@ -530,16 +594,32 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Discover Gmail contacts from existing msgvault metadata")
     parser.add_argument("command", choices=["discover"])
     parser.add_argument("--accounts", type=Path, default=None)
-    parser.add_argument("--account-email", default="")
+    parser.add_argument("--account-email", action="append", default=[], help="Account email to sync (repeatable); default: all linked")
     parser.add_argument("--msgvault-db", default="")
     parser.add_argument("--sync-query", default=None)
     parser.add_argument("--skip-msgvault-sync", action="store_true")
+    parser.add_argument("--sync-after", default="", help="Window start YYYY-MM-DD (overrides resume inference)")
+    parser.add_argument("--sync-before", default="", help="Window end YYYY-MM-DD")
+    parser.add_argument("--fresh", action="store_true", help="Force --noresume so the full window is rescanned")
+    parser.add_argument("--limit", type=int, default=0, help="Cap messages per account (testing safety)")
+    parser.add_argument("--no-attachments", action="store_true", help="Skip attachment download when msgvault supports it")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    emit(discover(accounts_file=args.accounts, account_email=args.account_email, msgvault_db=args.msgvault_db, sync_query=args.sync_query, skip_msgvault_sync=args.skip_msgvault_sync))
+    emit(discover(
+        accounts_file=args.accounts,
+        selected_accounts=args.account_email or None,
+        msgvault_db=args.msgvault_db,
+        sync_query=args.sync_query,
+        skip_msgvault_sync=args.skip_msgvault_sync,
+        sync_after=args.sync_after,
+        sync_before=args.sync_before,
+        fresh=args.fresh,
+        limit=args.limit,
+        no_attachments=args.no_attachments,
+    ))
     return 0
 
 
