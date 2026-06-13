@@ -161,12 +161,18 @@ def main() -> int:
         return pipeline_code
 
     write_status(run_vol, status | {"phase": "duckdb"})
+    # Feed the same people.csv that fed the processing pipeline as the
+    # person-profiles source so the shim also builds local_person_profiles
+    # (the denormalized contacts table the /contacts UI reads). It is loaded
+    # through the same flatten_people path as --input, so no reshaping is
+    # needed; LinkedIn-only rows simply carry sparse email/phone.
     duckdb_code = subprocess.run([
         sys.executable, str(BENCH), str(run_vol / "bench-duckdb.json"),
         sys.executable, str(DUCKDB_SHIM),
         "--records-dir", str(work),
         "--output-dir", str(work),
         "--operator-id", args.operator_id,
+        "--person-profiles-csv", args.people_csv,
         "--force",
     ]).returncode
     if duckdb_code != 0:
