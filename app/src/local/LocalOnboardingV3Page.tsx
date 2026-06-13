@@ -644,7 +644,9 @@ function GmailSyncPanel() {
               {current.messages.toLocaleString()}
               {current.truncated ? "+" : ""}
             </span>
-            <span className="text-muted-foreground">emails</span>
+            <span className="text-muted-foreground">
+              emails{linked.length > 1 ? ` across ${linked.length} accounts` : ""}
+            </span>
           </span>
           <span className="flex items-center gap-1.5">
             <Clock className="h-4 w-4 text-muted-foreground" />
