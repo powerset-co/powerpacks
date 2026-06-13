@@ -14,6 +14,7 @@ export type SetupJob = {
   stdout?: string;
   stderr?: string;
   log?: string;
+  logPath?: string;
   output?: Record<string, any> | null;
 };
 export type SetupOperator = { id: string; email?: string; label: string };

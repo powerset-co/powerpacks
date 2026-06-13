@@ -1,5 +1,7 @@
 import { spawn } from "child_process";
 import { randomUUID } from "crypto";
+import { createWriteStream, mkdirSync } from "fs";
+import { join } from "path";
 
 import { powerpacksRepoRoot } from "./lib/paths";
 import { setupProcessEnv } from "./lib/env";
@@ -31,6 +33,16 @@ export function startSetupJob(action: string, command: string[], timeoutMs = 6 *
   };
   setupJobs.set(job.id, job);
 
+  // Persist the driver's raw stdout/stderr under .powerpacks so progress and
+  // failures survive console restarts. One fixed file per action, overwritten
+  // each run (same contract as the pipeline's status.json).
+  const logDir = join(powerpacksRepoRoot, ".powerpacks", "runs", "job-logs");
+  mkdirSync(logDir, { recursive: true });
+  const logPath = join(logDir, `${action.replace(/[^a-zA-Z0-9_-]+/g, "-")}.log`);
+  const logStream = createWriteStream(logPath);
+  logStream.write(`# ${job.startedAt} job=${job.id}\n# ${command.join(" ")}\n`);
+  job.logPath = logPath;
+
   const child = spawn(command[0], command.slice(1), {
     cwd: powerpacksRepoRoot,
     env: setupProcessEnv(),
@@ -45,11 +57,13 @@ export function startSetupJob(action: string, command: string[], timeoutMs = 6 *
     const text = chunk.toString();
     job.stdout = `${job.stdout || ""}${text}`;
     job.log = `${job.log || ""}${text}`;
+    logStream.write(text);
   });
   child.stderr.on("data", (chunk) => {
     const text = chunk.toString();
     job.stderr = `${job.stderr || ""}${text}`;
     job.log = `${job.log || ""}${text}`;
+    logStream.write(text);
   });
   child.on("error", (err) => {
     clearTimeout(timer);
@@ -57,6 +71,7 @@ export function startSetupJob(action: string, command: string[], timeoutMs = 6 *
     job.completedAt = new Date().toISOString();
     job.stderr = `${job.stderr || ""}${err.message}`;
     job.log = `${job.log || ""}${err.message}`;
+    logStream.end(`\n# error: ${err.message}\n`);
   });
   child.on("close", (code) => {
     clearTimeout(timer);
@@ -69,6 +84,7 @@ export function startSetupJob(action: string, command: string[], timeoutMs = 6 *
       : code === 20 || code === 21 || outputStatus.startsWith("blocked")
         ? "blocked"
         : "failed";
+    logStream.end(`\n# exit code=${code} status=${job.status}\n`);
   });
 
   return job;
