@@ -21,21 +21,30 @@ function formatDate(value?: string | null): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-function StatCard({ label, value, hint }: { label: string; value: string; hint: string }) {
+function StatCard({ label, value, hint, loading }: { label: string; value: string; hint: string; loading?: boolean }) {
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-lg">{value}</CardTitle>
+        <CardTitle className="text-lg">
+          {loading ? <div className="h-6 w-16 animate-pulse rounded-md bg-muted" /> : value}
+        </CardTitle>
       </CardHeader>
       <CardContent>
-        <p className="text-xs text-muted-foreground">{hint}</p>
+        {loading ? (
+          <div className="h-3 w-28 animate-pulse rounded bg-muted" />
+        ) : (
+          <p className="text-xs text-muted-foreground">{hint}</p>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-function ConnectionBadge({ source }: { source?: SetupSourceStatus }) {
+function ConnectionBadge({ source, loading }: { source?: SetupSourceStatus; loading?: boolean }) {
+  if (loading) {
+    return <div className="h-6 w-24 animate-pulse rounded-full bg-muted" />;
+  }
   if (source?.linked) {
     return (
       <Badge className="gap-1 bg-emerald-600 hover:bg-emerald-600">
@@ -121,6 +130,7 @@ export function GmailSourcePage() {
   const { status, refresh } = useSetupStatus();
   const { running, error, run } = useSourceJob(refresh);
 
+  const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "gmail");
   const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "gmail");
   const imp = status?.import.sources.find((s: SetupImportSource) => s.sourceId === "gmail");
@@ -129,21 +139,23 @@ export function GmailSourcePage() {
     <div className="mx-auto max-w-3xl px-4 py-8">
       <div className="mb-6 flex items-center justify-between gap-3">
         <SourceHeader icon={GMAIL_ICON} title="Gmail" description="Sync the people you email and enrich them into your network." />
-        <ConnectionBadge source={accountSource} />
+        <ConnectionBadge source={accountSource} loading={loading} />
       </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <StatCard
+          loading={loading}
           label="Contacts discovered"
           value={enrich?.candidates ? enrich.candidates.toLocaleString() : "—"}
           hint={imp?.accountCount ? `Across ${imp.accountCount} account${imp.accountCount === 1 ? "" : "s"}` : "From your synced email"}
         />
         <StatCard
+          loading={loading}
           label="Enriched"
           value={enrich?.enriched ? enrich.enriched.toLocaleString() : "—"}
           hint={enrich?.matched ? `${enrich.matched.toLocaleString()} matched to profiles` : "Run enrich to resolve profiles"}
         />
-        <StatCard label="Last sync" value={formatDate(accountSource?.lastSuccessAt)} hint={imp?.status ? `Import ${imp.status}` : "Sync below to update"} />
+        <StatCard loading={loading} label="Last sync" value={formatDate(accountSource?.lastSuccessAt)} hint={imp?.status ? `Import ${imp.status}` : "Sync below to update"} />
       </div>
 
       <Card className="mb-6">
@@ -192,6 +204,7 @@ export function LinkedInSourcePage() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "linkedin_csv");
   const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "linkedin_csv");
 
@@ -215,21 +228,23 @@ export function LinkedInSourcePage() {
     <div className="mx-auto max-w-3xl px-4 py-8">
       <div className="mb-6 flex items-center justify-between gap-3">
         <SourceHeader icon={LINKEDIN_ICON} title="LinkedIn" description="Import and enrich your LinkedIn connections." />
-        <ConnectionBadge source={accountSource} />
+        <ConnectionBadge source={accountSource} loading={loading} />
       </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <StatCard
+          loading={loading}
           label="Connections"
           value={enrich?.candidates ? enrich.candidates.toLocaleString() : "—"}
           hint="From your Connections.csv"
         />
         <StatCard
+          loading={loading}
           label="Enriched"
           value={enrich?.enriched ? enrich.enriched.toLocaleString() : "—"}
           hint={enrich?.matched ? `${enrich.matched.toLocaleString()} matched to profiles` : "Run enrich to resolve profiles"}
         />
-        <StatCard label="Last import" value={formatDate(accountSource?.lastSuccessAt)} hint={accountSource?.linked ? "Connected" : "Upload a CSV to start"} />
+        <StatCard loading={loading} label="Last import" value={formatDate(accountSource?.lastSuccessAt)} hint={accountSource?.linked ? "Connected" : "Upload a CSV to start"} />
       </div>
 
       <Card className="mb-6">
