@@ -505,10 +505,21 @@ function GmailSyncPanel() {
     setLinking(true);
     setError(null);
     try {
-      await runSetupAction({ action: "gmail-link-emails", emails: email });
+      // gmail-link-emails runs the OAuth flow as a background job; wait for it
+      // to finish before reloading, or the new account isn't in msgvault yet.
+      const { job } = await runSetupAction({ action: "gmail-link-emails", emails: email });
+      let current = job;
+      while (current.status === "running" || current.status === "pending") {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        current = await fetchSetupJob(job.id);
+      }
       setNewEmail("");
       setAddOpen(false);
-      runEstimate(await loadAccounts());
+      if (current.status === "completed") {
+        runEstimate(await loadAccounts());
+      } else {
+        setError(current.stderr || "Could not add that account.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add account");
     } finally {
@@ -529,8 +540,8 @@ function GmailSyncPanel() {
         current = await fetchSetupJob(job.id);
       }
       if (current.status === "completed") {
-        setSyncDone(`Synced ${selectedLabel}. Refreshing estimate…`);
-        runEstimate(emails);
+        setSyncDone(`Synced ${selectedLabel}. Refreshing…`);
+        runEstimate(await loadAccounts());
       } else {
         setError(current.stderr || "Sync did not complete.");
       }
