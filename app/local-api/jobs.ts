@@ -43,6 +43,32 @@ export function startSetupJob(action: string, command: string[], timeoutMs = 6 *
   logStream.write(`# ${job.startedAt} job=${job.id}\n# ${command.join(" ")}\n`);
   job.logPath = logPath;
 
+  // Prefix each complete line with an ISO timestamp as it lands. Chunks aren't
+  // line-aligned, so buffer the partial trailing line until its newline
+  // arrives; flush whatever's left when the stream ends. Only the file is
+  // stamped — job.stdout stays raw so the final-JSON status line still parses.
+  function makeLineStamper() {
+    let buf = "";
+    return {
+      push(text: string) {
+        buf += text;
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          logStream.write(`[${new Date().toISOString()}] ${buf.slice(0, nl)}\n`);
+          buf = buf.slice(nl + 1);
+        }
+      },
+      flush() {
+        if (buf.length) {
+          logStream.write(`[${new Date().toISOString()}] ${buf}\n`);
+          buf = "";
+        }
+      },
+    };
+  }
+  const outStamp = makeLineStamper();
+  const errStamp = makeLineStamper();
+
   const child = spawn(command[0], command.slice(1), {
     cwd: powerpacksRepoRoot,
     env: setupProcessEnv(),
@@ -57,13 +83,13 @@ export function startSetupJob(action: string, command: string[], timeoutMs = 6 *
     const text = chunk.toString();
     job.stdout = `${job.stdout || ""}${text}`;
     job.log = `${job.log || ""}${text}`;
-    logStream.write(text);
+    outStamp.push(text);
   });
   child.stderr.on("data", (chunk) => {
     const text = chunk.toString();
     job.stderr = `${job.stderr || ""}${text}`;
     job.log = `${job.log || ""}${text}`;
-    logStream.write(text);
+    errStamp.push(text);
   });
   child.on("error", (err) => {
     clearTimeout(timer);
@@ -71,6 +97,8 @@ export function startSetupJob(action: string, command: string[], timeoutMs = 6 *
     job.completedAt = new Date().toISOString();
     job.stderr = `${job.stderr || ""}${err.message}`;
     job.log = `${job.log || ""}${err.message}`;
+    outStamp.flush();
+    errStamp.flush();
     logStream.end(`\n# error: ${err.message}\n`);
   });
   child.on("close", (code) => {
@@ -84,6 +112,8 @@ export function startSetupJob(action: string, command: string[], timeoutMs = 6 *
       : code === 20 || code === 21 || outputStatus.startsWith("blocked")
         ? "blocked"
         : "failed";
+    outStamp.flush();
+    errStamp.flush();
     logStream.end(`\n# exit code=${code} status=${job.status}\n`);
   });
 
