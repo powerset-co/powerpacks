@@ -464,6 +464,36 @@ function startGmailWindowSync(body: Record<string, any>): SetupJob {
   });
 }
 
+// Link an uploaded Connections.csv into accounts.json WITHOUT processing it:
+// writes csv_path + linked=true so the source page shows connected, leaving
+// enrich/index behind their own buttons. Async spawn — it's a fast file+json op.
+function linkLinkedinCsv(body: Record<string, any>): Promise<Record<string, any>> {
+  const csvPath = safeOnboardingV2LinkedInCsvPath(body.csvPath) || "";
+  if (!csvPath) return Promise.resolve({ status: "failed", error: "csvPath is required" });
+  const command = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py",
+    "link", "--csv", csvPath,
+  ];
+  const sourceLabel = String(body.sourceLabel || "").trim();
+  if (sourceLabel) command.push("--source-user", sourceLabel);
+  return new Promise((resolve) => {
+    const child = spawn(command[0], command.slice(1), { cwd: powerpacksRepoRoot, env: setupProcessEnv() });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 60 * 1000);
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (err) => { clearTimeout(timer); resolve({ status: "failed", error: String(err) }); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const output = parseLastJsonFragment(stdout) || {};
+      if (code === 0 && (output as Record<string, any>).status === "completed") resolve(output);
+      else resolve({ status: "failed", code, error: stderr || "link failed", output });
+    });
+  });
+}
+
 export async function handleOnboardingV2Routes(req: any, res: any, url: URL): Promise<boolean> {
   if (url.pathname === "/local-api/onboarding-v3/gmail/estimate" && req.method === "POST") {
     sendJson(res, await estimateGmailSync(await readRequestJson(req)));
@@ -489,6 +519,11 @@ export async function handleOnboardingV2Routes(req: any, res: any, url: URL): Pr
   if (url.pathname === "/local-api/onboarding-v3/linkedin/run" && req.method === "POST") {
     const job = startOnboardingV3LinkedIn(await readRequestJson(req));
     sendJson(res, { job, status: onboardingV2Status(ONBOARDING_V3_LINKEDIN) });
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding-v3/linkedin/link" && req.method === "POST") {
+    sendJson(res, await linkLinkedinCsv(await readRequestJson(req)));
     return true;
   }
 

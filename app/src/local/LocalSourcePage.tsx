@@ -9,7 +9,7 @@ import { MessagesSyncPanel } from "./MessagesSyncPanel";
 import {
   fetchSetupJob,
   fetchSetupStatus,
-  runOnboardingV3LinkedIn,
+  linkLinkedInCsv,
   runSetupAction,
   uploadLinkedInCsv,
 } from "./powerpacksApi";
@@ -221,17 +221,11 @@ export function LinkedInSourcePage() {
     setUploadError(null);
     try {
       const { path } = await uploadLinkedInCsv(file);
-      // runOnboardingV3LinkedIn only STARTS the Modal import job. Poll it to
-      // completion so the button stays "Importing…" the whole time and we
-      // refresh (and surface failures) only once the import actually finished
-      // and wrote accounts.json/stats — a single early refresh showed nothing.
-      const { job } = await runOnboardingV3LinkedIn({ csvPath: path });
-      let current = job;
-      while (current.status === "running" || current.status === "pending") {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        current = await fetchSetupJob(job.id);
-      }
-      if (current.status !== "completed") setUploadError(current.stderr || "Import did not complete.");
+      // Linking only registers the CSV (writes csv_path + linked=true) — it does
+      // NOT import/enrich/index. Processing stays behind the Enrich and Rebuild
+      // index buttons, matching Gmail (Add account links; Sync/Enrich process).
+      const result = await linkLinkedInCsv({ csvPath: path });
+      if (result.status !== "completed") setUploadError(result.error || "Could not link that CSV.");
       refresh();
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
@@ -266,8 +260,10 @@ export function LinkedInSourcePage() {
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle className="text-base">Import connections</CardTitle>
+          <CardTitle className="text-base">Connect LinkedIn</CardTitle>
           <CardDescription>
+            Upload your Connections.csv to link it — enrich and index run from the buttons below.
+            <br />
             LinkedIn → Settings → Data privacy → Get a copy of your data → Connections.
           </CardDescription>
         </CardHeader>
@@ -275,11 +271,11 @@ export function LinkedInSourcePage() {
           <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={(e) => handleUpload(e.target.files?.[0])} />
           <Button disabled={uploading} onClick={() => fileInputRef.current?.click()}>
             {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-            {uploading ? "Importing…" : accountSource?.linked ? "Re-upload Connections.csv" : "Upload Connections.csv"}
+            {uploading ? "Linking…" : accountSource?.linked ? "Re-upload Connections.csv" : "Upload Connections.csv"}
           </Button>
           {accountSource?.linked && (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <FileCheck2 className="h-3.5 w-3.5" /> Connections imported. Re-upload to refresh.
+              <FileCheck2 className="h-3.5 w-3.5" /> Connections.csv linked. Run enrich below to import profiles.
             </p>
           )}
           {uploadError && <p className="mt-2 text-sm text-destructive">{uploadError}</p>}
