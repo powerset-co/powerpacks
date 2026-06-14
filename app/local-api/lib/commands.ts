@@ -215,7 +215,7 @@ export function messagesDiscoveryCommand(): string[] {
   ];
 }
 
-export function enrichmentNetworkCommand(operatorId: string, sourceId: string, options: { approveSpend?: boolean } = {}): string[] {
+export function enrichmentNetworkCommand(operatorId: string, sourceId: string, options: { approveSpend?: boolean; force?: boolean } = {}): string[] {
   const source = sourceId === "linkedin_csv" ? "linkedin" : sourceId;
   if (!["gmail", "linkedin", "messages"].includes(source)) return [];
   const command = [
@@ -227,6 +227,9 @@ export function enrichmentNetworkCommand(operatorId: string, sourceId: string, o
   ];
   if (options.approveSpend && source === "messages") command.push("--confirm-import");
   else if (options.approveSpend) command.push("--approve-parallel-spend");
+  // Force a real re-run so Sync/Import never no-ops on an unchanged manifest.
+  // messages has its own ledger/resume, so --force only applies to gmail/linkedin.
+  if (options.force && source !== "messages") command.push("--force");
   return command;
 }
 
