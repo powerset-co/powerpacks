@@ -11,7 +11,7 @@ import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
 import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
 import { LocalOnboardingV3Page } from "./LocalOnboardingV3Page";
-import { GmailSourcePage, LinkedInSourcePage } from "./LocalSourcePage";
+import { GmailSourcePage, LinkedInSourcePage, MessagesSourcePage } from "./LocalSourcePage";
 import { LocalEnvPage } from "./LocalEnvPage";
 import { LocalPersonDetailsPage } from "./LocalPersonDetailsPage";
 import { LocalCompaniesPage } from "./LocalCompaniesPage";
@@ -40,6 +40,7 @@ type LocalView =
   | "onboardingV3"
   | "gmailSource"
   | "linkedinSource"
+  | "messagesSource"
   | "messagesReview"
   | "env"
   | "runs";
@@ -59,6 +60,7 @@ function viewFromPath(): LocalView {
   if (window.location.pathname === "/onboarding-v3") return "onboardingV3";
   if (window.location.pathname === "/sources/gmail") return "gmailSource";
   if (window.location.pathname === "/sources/linkedin") return "linkedinSource";
+  if (window.location.pathname === "/sources/messages") return "messagesSource";
   if (window.location.pathname === "/onboarding") return "setup";
   if (personIdFromPath()) return "personDetails";
   if (window.location.pathname === "/contacts") return "contacts";
@@ -261,6 +263,7 @@ export function LocalPowerpacksApp() {
           onSelectSource={(id) => {
             if (id === "gmail") navigate("/sources/gmail");
             else if (id === "linkedin_csv") navigate("/sources/linkedin");
+            else if (id === "messages") navigate("/sources/messages");
             else navigate("/setup?tab=link");
           }}
           onSelect={(run) => {
@@ -282,6 +285,8 @@ export function LocalPowerpacksApp() {
               <GmailSourcePage />
             ) : activeView === "linkedinSource" ? (
               <LinkedInSourcePage />
+            ) : activeView === "messagesSource" ? (
+              <MessagesSourcePage />
             ) : activeView === "env" ? (
               <LocalEnvPage />
             ) : activeView === "contacts" ? (

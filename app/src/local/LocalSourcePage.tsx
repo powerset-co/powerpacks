@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, FileCheck2, Loader2, Sparkles, Upload } from "lucide-react";
+import { CheckCircle2, FileCheck2, Loader2, MessageCircle, Sparkles, Upload } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { GmailSyncPanel } from "./GmailSyncPanel";
+import { MessagesSyncPanel } from "./MessagesSyncPanel";
 import {
   fetchSetupJob,
   fetchSetupStatus,
@@ -123,6 +124,12 @@ const GMAIL_ICON = (
 const LINKEDIN_ICON = (
   <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#0A66C2]/10 text-base font-bold text-[#0A66C2]">
     in
+  </span>
+);
+
+const MESSAGES_ICON = (
+  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#15803D]/10">
+    <MessageCircle className="h-5 w-5 text-[#15803D]" />
   </span>
 );
 
@@ -279,6 +286,82 @@ export function LinkedInSourcePage() {
             variant="secondary"
             disabled={!accountSource?.linked || running !== null}
             onClick={() => run("enrich", { action: "enrich-source", source: "linkedin_csv", approveSpend: true })}
+          >
+            {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+            Re-run enrich
+          </Button>
+          <Button variant="outline" disabled={running !== null} onClick={() => run("index", { action: "index" })}>
+            {running === "index" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Rebuild index
+          </Button>
+          {error && <p className="w-full text-sm text-destructive">{error}</p>}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export function MessagesSourcePage() {
+  const { status, refresh } = useSetupStatus();
+  const { running, error, run } = useSourceJob(refresh);
+
+  const loading = !status;
+  const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "messages");
+  const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "messages");
+  const imp = status?.import.sources.find((s: SetupImportSource) => s.sourceId === "messages");
+
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-8">
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <SourceHeader
+          icon={MESSAGES_ICON}
+          title="Messages"
+          description="Sync the people you iMessage and WhatsApp, then enrich them into your network."
+        />
+        <ConnectionBadge source={accountSource} loading={loading} />
+      </div>
+
+      <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <StatCard
+          loading={loading}
+          label="Contacts discovered"
+          value={enrich?.candidates ? enrich.candidates.toLocaleString() : "—"}
+          hint="From your conversations"
+        />
+        <StatCard
+          loading={loading}
+          label="In network"
+          value={enrich?.enriched ? enrich.enriched.toLocaleString() : "—"}
+          hint={enrich?.candidates ? "Approved and enriched" : "Approve contacts to enrich"}
+        />
+        <StatCard
+          loading={loading}
+          label="Last import"
+          value={formatDate(accountSource?.lastSuccessAt)}
+          hint={imp?.status ? `Import ${imp.status}` : "Sync below to update"}
+        />
+      </div>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="text-base">Sync messages</CardTitle>
+          <CardDescription>Link iMessage and WhatsApp, then review who&apos;s worth enriching. No message contents are read.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <MessagesSyncPanel onChange={refresh} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Enrich</CardTitle>
+          <CardDescription>Resolve your approved contacts into full profiles, then rebuild the local index.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            disabled={!accountSource?.linked || running !== null}
+            onClick={() => run("enrich", { action: "enrich-source", source: "messages", approveSpend: true })}
           >
             {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
             Re-run enrich
