@@ -266,7 +266,10 @@ export function LinkedInSourcePage() {
       // index buttons, matching Gmail (Add account links; Sync/Enrich process).
       const result = await linkLinkedInCsv({ csvPath: path });
       if (result.status !== "completed") setUploadError(result.error || "Could not link that CSV.");
-      refresh();
+      // Await the refresh so the button stays in its spinner state until the new
+      // linked status lands — otherwise it briefly flashes back to "Upload" while
+      // the status reloads, then auto-discover takes over the spinner.
+      await refresh();
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -316,9 +319,9 @@ export function LinkedInSourcePage() {
         </CardHeader>
         <CardContent>
           <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={(e) => handleUpload(e.target.files?.[0])} />
-          <Button disabled={uploading} onClick={() => fileInputRef.current?.click()}>
-            {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-            {uploading ? "Linking…" : accountSource?.linked ? "Re-upload Connections.csv" : "Upload Connections.csv"}
+          <Button disabled={uploading || syncing} onClick={() => fileInputRef.current?.click()}>
+            {uploading || syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+            {uploading ? "Linking…" : syncing ? "Syncing contacts…" : accountSource?.linked ? "Re-upload Connections.csv" : "Upload Connections.csv"}
           </Button>
           {accountSource?.linked && (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
