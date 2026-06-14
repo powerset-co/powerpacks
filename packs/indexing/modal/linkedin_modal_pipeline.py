@@ -54,6 +54,12 @@ _REPO_FOR_ENV = Path(__file__).resolve().parents[3]
 # the modal SDK reads them from the environment, so load before importing.
 load_dotenv(_REPO_FOR_ENV / ".env", override=False)
 
+# The driver runs locally, so it can mark accounts.json from the repo root.
+# `python <script>` only puts the script dir on sys.path, so add the repo root
+# for the `packs.*` import below.
+sys.path.insert(0, str(_REPO_FOR_ENV))
+
+from packs.ingestion.accounts import update_channel  # noqa: E402
 import modal  # noqa: E402
 
 
@@ -368,6 +374,20 @@ def watch_run(label: str, progress: PipelineProgress, stage_id: str, message_pre
     return None
 
 
+def mark_linkedin_linked(csv_path: Path) -> None:
+    """Flip the linkedin_csv channel to linked in accounts.json on a successful
+    import so the console source page and sidebar show LinkedIn connected.
+
+    v2 onboarding writes accounts.json; the v3 Modal path historically did not,
+    so a v3-imported LinkedIn looked unlinked. Best-effort: a status-file write
+    must never fail an otherwise-successful import.
+    """
+    try:
+        update_channel("linkedin_csv", linked=True, success=True, artifact=str(csv_path))
+    except Exception as exc:  # never fail the pipeline on a status write
+        print(f"[accounts] could not mark linkedin linked: {exc}", flush=True)
+
+
 def cmd_pipeline(args: argparse.Namespace) -> int:
     """Drop a Connections.csv -> searchable local-search.duckdb.
 
@@ -392,6 +412,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     if last_sha == csv_sha and not args.force:
         progress.event("importing", "Connections.csv unchanged - already imported", status="completed")
         progress.event("indexing", "Search index already up to date", status="completed", progress=1.0)
+        mark_linkedin_linked(csv_path)
         progress.finish({"noop": True, "csv": str(csv_path), "connections": rows})
         print(json.dumps({"status": "noop", "connections": rows}))
         return 0
@@ -469,6 +490,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     result = {"csv": str(csv_path), "connections": rows, "import": stats,
               "duckdb": str(dest / "local-search.duckdb")}
     progress.event("indexing", "Search index is ready", status="completed", progress=1.0, payload=result)
+    mark_linkedin_linked(csv_path)
     progress.finish(result)
     print(json.dumps({"status": "completed", **result}))
     return 0
