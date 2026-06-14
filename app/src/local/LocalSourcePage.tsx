@@ -101,6 +101,44 @@ function useSourceJob(refresh: () => void) {
   return { running, error, run };
 }
 
+// Auto-refresh a linked source's contacts on page load so the enrichable count
+// is current — but only when the last discover is stale, so repeatedly
+// refreshing the page never re-kicks discover. Runs at most once per mount, and
+// only after the source is linked (so clicking Link also triggers it). Discover
+// is metadata-only and never spends; enrich/index stay behind their buttons.
+const DISCOVER_FRESHNESS_MS = 10 * 60 * 1000;
+
+function useAutoDiscover(source: string, status: SetupStatusResponse | null, refresh: () => void) {
+  const [syncing, setSyncing] = useState(false);
+  const ran = useRef(false);
+  useEffect(() => {
+    if (!status || ran.current) return;
+    const account = status.accounts.sources.find((s: SetupSourceStatus) => s.id === source);
+    if (!account?.linked || account.skipped) return; // not linked yet — wait, don't consume the one-shot
+    const imp = status.import.sources.find((s: SetupImportSource) => s.sourceId === source);
+    const last = imp?.updatedAt ? new Date(imp.updatedAt).getTime() : 0;
+    ran.current = true; // linked: attempt at most once per mount
+    if (last && Date.now() - last < DISCOVER_FRESHNESS_MS) return; // discovered recently — skip
+    (async () => {
+      setSyncing(true);
+      try {
+        const { job } = await runSetupAction({ action: "import-source", source });
+        let current = job;
+        while (current.status === "running" || current.status === "pending") {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          current = await fetchSetupJob(job.id);
+        }
+        refresh();
+      } catch {
+        /* best-effort; existing stats still render */
+      } finally {
+        setSyncing(false);
+      }
+    })();
+  }, [status, source, refresh]);
+  return syncing;
+}
+
 function SourceHeader({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
   return (
     <div className="mb-6 flex items-start gap-3">
@@ -207,6 +245,7 @@ export function GmailSourcePage() {
 export function LinkedInSourcePage() {
   const { status, refresh } = useSetupStatus();
   const { running, error, run } = useSourceJob(refresh);
+  const syncing = useAutoDiscover("linkedin_csv", status, refresh);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -214,6 +253,7 @@ export function LinkedInSourcePage() {
   const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "linkedin_csv");
   const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "linkedin_csv");
+  const candidates = enrich?.candidates || 0;
 
   async function handleUpload(file?: File | null) {
     if (!file) return;
@@ -239,15 +279,22 @@ export function LinkedInSourcePage() {
     <div className="mx-auto max-w-3xl px-4 py-8">
       <div className="mb-6 flex items-center justify-between gap-3">
         <SourceHeader icon={LINKEDIN_ICON} title="LinkedIn" description="Import and enrich your LinkedIn connections." />
-        <ConnectionBadge source={accountSource} loading={loading} />
+        <div className="flex items-center gap-2">
+          {syncing && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing latest contacts…
+            </span>
+          )}
+          <ConnectionBadge source={accountSource} loading={loading} />
+        </div>
       </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <StatCard
           loading={loading}
           label="Connections"
-          value={enrich?.candidates ? enrich.candidates.toLocaleString() : "—"}
-          hint="From your Connections.csv"
+          value={candidates ? candidates.toLocaleString() : "—"}
+          hint={syncing ? "Syncing latest…" : "From your Connections.csv"}
         />
         <StatCard
           loading={loading}
@@ -284,17 +331,16 @@ export function LinkedInSourcePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Enrich</CardTitle>
-          <CardDescription>Resolve your connections into full profiles, then rebuild the local index.</CardDescription>
+          <CardTitle className="text-base">Enrich &amp; index</CardTitle>
+          <CardDescription>Resolve your connections into full profiles (LinkedIn enrichment is free), then rebuild the local index.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-2">
           <Button
-            variant="secondary"
-            disabled={!accountSource?.linked || running !== null}
-            onClick={() => run("enrich", { action: "enrich-source", source: "linkedin_csv", approveSpend: true })}
+            disabled={!accountSource?.linked || syncing || running !== null}
+            onClick={() => run("enrich", { action: "enrich-source", source: "linkedin_csv", approveSpend: true, force: true })}
           >
             {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            Re-run enrich
+            {candidates ? `Enrich ${candidates.toLocaleString()} connections` : "Enrich connections"}
           </Button>
           <Button variant="outline" disabled={running !== null} onClick={() => run("index", { action: "index" })}>
             {running === "index" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
