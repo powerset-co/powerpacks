@@ -174,25 +174,34 @@ const MESSAGES_ICON = (
 export function GmailSourcePage() {
   const { status, refresh } = useSetupStatus();
   const { running, error, run } = useSourceJob(refresh);
+  const syncing = useAutoDiscover("gmail", status, refresh);
 
   const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "gmail");
   const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "gmail");
   const imp = status?.import.sources.find((s: SetupImportSource) => s.sourceId === "gmail");
+  const candidates = enrich?.candidates || 0;
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
       <div className="mb-6 flex items-center justify-between gap-3">
         <SourceHeader icon={GMAIL_ICON} title="Gmail" description="Sync the people you email and enrich them into your network." />
-        <ConnectionBadge source={accountSource} loading={loading} />
+        <div className="flex items-center gap-2">
+          {syncing && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing latest contacts…
+            </span>
+          )}
+          <ConnectionBadge source={accountSource} loading={loading} />
+        </div>
       </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <StatCard
           loading={loading}
           label="Contacts discovered"
-          value={enrich?.candidates ? enrich.candidates.toLocaleString() : "—"}
-          hint={imp?.accountCount ? `Across ${imp.accountCount} account${imp.accountCount === 1 ? "" : "s"}` : "From your synced email"}
+          value={candidates ? candidates.toLocaleString() : "—"}
+          hint={syncing ? "Syncing latest…" : imp?.accountCount ? `Across ${imp.accountCount} account${imp.accountCount === 1 ? "" : "s"}` : "From your synced email"}
         />
         <StatCard
           loading={loading}
@@ -215,17 +224,16 @@ export function GmailSourcePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Enrich</CardTitle>
+          <CardTitle className="text-base">Enrich &amp; index</CardTitle>
           <CardDescription>Resolve your synced contacts into full profiles, then rebuild the local index.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-2">
           <Button
-            variant="secondary"
-            disabled={!accountSource?.linked || running !== null}
-            onClick={() => run("enrich", { action: "enrich-source", source: "gmail", approveSpend: true })}
+            disabled={!accountSource?.linked || syncing || running !== null}
+            onClick={() => run("enrich", { action: "enrich-source", source: "gmail", approveSpend: true, force: true })}
           >
             {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            Re-run enrich
+            {candidates ? `Enrich ${candidates.toLocaleString()} contacts` : "Enrich contacts"}
           </Button>
           <Button
             variant="outline"
@@ -235,6 +243,7 @@ export function GmailSourcePage() {
             {running === "index" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Rebuild index
           </Button>
+          <p className="w-full text-xs text-muted-foreground">Enrichment uses Parallel.ai — this is a paid lookup.</p>
           {error && <p className="w-full text-sm text-destructive">{error}</p>}
         </CardContent>
       </Card>
