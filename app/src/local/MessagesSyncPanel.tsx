@@ -72,6 +72,18 @@ export function MessagesSyncPanel({ onChange }: { onChange?: () => void } = {}) 
   const reviewCounts = objectValue(reviewPayload.review_counts);
   const reviewTotal = numberValue(reviewCounts.total);
 
+  // Surface a failed background run — otherwise the panel showed nothing when a
+  // stage failed (it only rendered the review/approval gates and live errors).
+  // The pipeline runs as a background job; the panel polls status. Reflect a
+  // running run on the button so it doesn't look idle while work is happening.
+  const running = currentStatus === "running" || Boolean(status?.active_job);
+  const failed = currentStatus === "failed";
+  const failedEntry = failed
+    ? Object.entries(objectValue(status?.stages)).find(([, v]) => stringValue(objectValue(v).status) === "failed")
+    : undefined;
+  const failedStageLabel = failedEntry ? stringValue(objectValue(failedEntry[1]).label) || failedEntry[0] : "";
+  const failedMessage = failedEntry ? stringValue(objectValue(failedEntry[1]).message) : "";
+
   async function runPipeline(body: Record<string, unknown>) {
     setLoading(true);
     setError(null);
@@ -230,9 +242,16 @@ export function MessagesSyncPanel({ onChange }: { onChange?: () => void } = {}) 
         </div>
       )}
 
-      <Button className="w-full" disabled={loading || !hasSources} onClick={() => runPipeline({})}>
-        {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MessageSquare className="mr-2 h-4 w-4" />}
-        {loading ? "Syncing messages…" : "Sync messages"}
+      {failed && !loading && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+          Sync failed{failedStageLabel ? ` at "${failedStageLabel}"` : ""}
+          {failedMessage ? `: ${failedMessage}` : ""}. Press Sync messages to retry.
+        </div>
+      )}
+
+      <Button className="w-full" disabled={loading || running || !hasSources} onClick={() => runPipeline({})}>
+        {loading || running ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MessageSquare className="mr-2 h-4 w-4" />}
+        {loading || running ? "Syncing messages…" : failed ? "Retry sync" : "Sync messages"}
       </Button>
       {!hasSources && (
         <p className="text-center text-xs text-muted-foreground">Link iMessage or WhatsApp above to start.</p>
