@@ -221,7 +221,17 @@ export function LinkedInSourcePage() {
     setUploadError(null);
     try {
       const { path } = await uploadLinkedInCsv(file);
-      await runOnboardingV3LinkedIn({ csvPath: path });
+      // runOnboardingV3LinkedIn only STARTS the Modal import job. Poll it to
+      // completion so the button stays "Importing…" the whole time and we
+      // refresh (and surface failures) only once the import actually finished
+      // and wrote accounts.json/stats — a single early refresh showed nothing.
+      const { job } = await runOnboardingV3LinkedIn({ csvPath: path });
+      let current = job;
+      while (current.status === "running" || current.status === "pending") {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        current = await fetchSetupJob(job.id);
+      }
+      if (current.status !== "completed") setUploadError(current.stderr || "Import did not complete.");
       refresh();
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
