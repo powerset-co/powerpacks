@@ -215,7 +215,7 @@ export function messagesDiscoveryCommand(): string[] {
   ];
 }
 
-export function enrichmentNetworkCommand(operatorId: string, sourceId: string, options: { approveSpend?: boolean } = {}): string[] {
+export function enrichmentNetworkCommand(operatorId: string, sourceId: string, options: { approveSpend?: boolean; force?: boolean } = {}): string[] {
   const source = sourceId === "linkedin_csv" ? "linkedin" : sourceId;
   if (!["gmail", "linkedin", "messages"].includes(source)) return [];
   const command = [
@@ -225,8 +225,14 @@ export function enrichmentNetworkCommand(operatorId: string, sourceId: string, o
     "--accounts", ".powerpacks/ingestion/accounts.json",
     "--operator-id", operatorId,
   ];
+  // Spend flags are per-source: messages = deep research (--confirm-import),
+  // gmail = Parallel.ai (--approve-parallel-spend). LinkedIn is RapidAPI (free)
+  // and its primitive accepts neither flag, so it gets none.
   if (options.approveSpend && source === "messages") command.push("--confirm-import");
-  else if (options.approveSpend) command.push("--approve-parallel-spend");
+  else if (options.approveSpend && source === "gmail") command.push("--approve-parallel-spend");
+  // Force a real re-run so Sync/Import never no-ops on an unchanged manifest.
+  // messages has its own ledger/resume, so --force only applies to gmail/linkedin.
+  if (options.force && source !== "messages") command.push("--force");
   return command;
 }
 

@@ -179,6 +179,41 @@ def args_for_index(operator_id: str) -> argparse.Namespace:
     )
 
 
+def _parse_json_output(stdout: str) -> dict[str, Any] | None:
+    """Parse the JSON result a primitive prints.
+
+    Primitives emit pretty-printed (multi-line) JSON, so the old "find a line
+    that starts with {" scan never matched and every step failed with
+    "no output". Try the whole output as one object first, then a {...} block
+    embedded in logs, then a legacy single-line object.
+    """
+    text = (stdout or "").strip()
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            obj = json.loads(text[start:end + 1])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
 def _check_imessage_access() -> dict[str, Any]:
     """Check if iMessage chat.db is readable."""
     try:
@@ -188,16 +223,8 @@ def _check_imessage_access() -> dict[str, Any]:
              "check"],
             capture_output=True, text=True, timeout=15, cwd=str(ROOT),
         )
-        output = result.stdout + result.stderr
-        payload = {}
-        for line in output.splitlines():
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    pass
-        readable = payload.get("readable", False) or "readable" in output.lower()
+        payload = _parse_json_output(result.stdout) or {}
+        readable = payload.get("readable", False) or "readable" in (result.stdout + result.stderr).lower()
         return {"available": True, "readable": readable, "payload": payload}
     except (subprocess.TimeoutExpired, OSError):
         return {"available": False, "readable": False}
@@ -218,13 +245,9 @@ def _run_messages_discovery(accounts_path: Path) -> dict[str, Any]:
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=10 * 60, cwd=str(ROOT),
     )
-    for line in reversed(result.stdout.splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                pass
+    payload = _parse_json_output(result.stdout)
+    if payload is not None:
+        return payload
     return {"status": "failed", "error": result.stderr or "no output", "code": result.returncode}
 
 
@@ -246,13 +269,9 @@ def _run_llm_review() -> dict[str, Any]:
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=30 * 60, cwd=str(ROOT),
     )
-    for line in reversed(result.stdout.splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                pass
+    payload = _parse_json_output(result.stdout)
+    if payload is not None:
+        return payload
     return {"status": "failed", "error": result.stderr or "no output", "code": result.returncode}
 
 
@@ -277,13 +296,9 @@ def _run_deep_research(approve_spend: bool = False) -> dict[str, Any]:
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=60 * 60, cwd=str(ROOT),
     )
-    for line in reversed(result.stdout.splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                pass
+    payload = _parse_json_output(result.stdout)
+    if payload is not None:
+        return payload
     return {"status": "failed", "error": result.stderr or "no output", "code": result.returncode}
 
 

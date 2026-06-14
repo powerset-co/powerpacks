@@ -167,6 +167,17 @@ export function runOnboardingV3LinkedIn(
   return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v3/linkedin/run", body);
 }
 
+// Link an uploaded Connections.csv (write csv_path + linked) without running the
+// import/enrich/index pipeline — enrich/index stay behind their own buttons.
+export function linkLinkedInCsv(
+  body: { csvPath: string; sourceLabel?: string }
+): Promise<{ status: string; linked?: boolean; csv?: string; error?: string }> {
+  return postJson<{ status: string; linked?: boolean; csv?: string; error?: string }>(
+    "/local-api/onboarding-v3/linkedin/link",
+    body
+  );
+}
+
 export function updateEnvKeys(
   updates: Record<string, string>
 ): Promise<{ written: string[]; rejected: string[]; status: EnvStatusResponse }> {

@@ -160,7 +160,7 @@ def auto_approve_gmail_parallel(ledger: dict[str, Any], contacts: int, reason: s
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     current = import_manifest_current("gmail", import_dir=DEFAULT_IMPORT_DIR)
-    if current:
+    if current and not getattr(args, "force", False):
         return current
     accounts = read_accounts(args.accounts)
     legacy = load_legacy_discover_module()
@@ -266,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
     parser.add_argument("--operator-id", default="local")
     parser.add_argument("--approve-parallel-spend", action="store_true")
+    parser.add_argument("--force", action="store_true", help="Re-run even if the import manifest is current (no no-op skip)")
     return parser
 
 

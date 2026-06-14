@@ -41,6 +41,7 @@ from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa
 )
 from packs.ingestion.primitives.linkedin_network_import import linkedin_network_import  # noqa: E402
 from packs.indexing.primitives.index_contacts_pipeline import index_contacts_pipeline  # noqa: E402
+from packs.ingestion.accounts import load_registry, save_registry  # noqa: E402
 
 VERTICAL = "linkedin_csv"
 RUN_ROOT = Path(".powerpacks/runs/setup-linkedin-csv")
@@ -280,6 +281,34 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, str]:
     return Path(str(csv_value)).expanduser(), str(source_user or "local")
 
 
+def link(args: argparse.Namespace) -> dict[str, Any]:
+    """Register an uploaded Connections.csv without processing it.
+
+    Writes csv_path/source_label and flips linked=true in accounts.json so the
+    console source page shows LinkedIn connected. Discovery, enrichment, and
+    indexing stay behind their own explicit buttons — link does none of them.
+    """
+    csv_path, source_user = resolve_inputs(args)
+    if not csv_path.exists():
+        return {"status": "failed", "vertical": VERTICAL, "error": f"LinkedIn Connections CSV not found: {csv_path}"}
+    csv_stats = read_csv_stats(csv_path, source_user)
+    if csv_stats.get("status") != "ok":
+        return {"status": "failed", "vertical": VERTICAL, "error": csv_stats.get("error") or "Could not parse LinkedIn CSV", "csv_stats": csv_stats}
+    accounts_path = Path(args.accounts)
+    registry = load_registry(accounts_path)
+    li = registry["accounts"]["linkedin_csv"]
+    li["config"]["csv_path"] = str(csv_path)
+    if args.source_user:
+        li["config"]["source_label"] = source_user
+    li["linked"] = True
+    li["skipped"] = False
+    li["last_success_at"] = now_iso()
+    if str(csv_path) not in li["artifacts"]:
+        li["artifacts"].append(str(csv_path))
+    save_registry(registry, accounts_path)
+    return {"status": "completed", "vertical": VERTICAL, "linked": True, "csv": str(csv_path), "source_user": source_user, "csv_stats": csv_stats}
+
+
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     csv_path, source_user = resolve_inputs(args)
     stats = read_csv_stats(csv_path, source_user) if csv_path.exists() else {"status": "missing", "path": str(csv_path)}
@@ -385,7 +414,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run LinkedIn CSV onboarding v2 vertical")
     sub = parser.add_subparsers(dest="command", required=True)
-    for cmd in ["dry-run", "run"]:
+    for cmd in ["dry-run", "run", "link"]:
         s = sub.add_parser(cmd)
         s.add_argument("--csv", default="")
         s.add_argument("--source-user", default="")
@@ -417,6 +446,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         emit_json(status_payload(args.run_id))
         return 0
+    if args.command == "link":
+        payload = link(args)
+        emit_json(payload)
+        return 0 if payload.get("status") == "completed" else 1
     payload = run(args)
     emit_json(payload)
     return 0 if payload.get("status") == "completed" else 20 if payload.get("status") == "blocked_approval" else 1

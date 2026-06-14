@@ -1031,6 +1031,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   if (action === "enrich-source") {
     const sourceId = requireString(body.source, "source");
     const approveSpend = body.approveSpend === true;
+    const force = body.force === true;
     const source = buildImportSources(accounts, operator.id).find((candidate) => candidate.id === sourceId);
     if (!source) throw new Error(`unsupported import source: ${sourceId}`);
     if (!source.linked) throw new Error(`source is not linked: ${sourceId}`);
@@ -1038,7 +1039,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     if (source.runnable === false || source.command.length === 0) {
       throw new Error(source.disabledReason || `source is not importable yet: ${sourceId}`);
     }
-    const command = enrichmentNetworkCommand(operator.id, sourceId, { approveSpend });
+    const command = enrichmentNetworkCommand(operator.id, sourceId, { approveSpend, force });
     if (command.length === 0) {
       throw new Error(`source enrichment is not wired yet: ${sourceId}`);
     }

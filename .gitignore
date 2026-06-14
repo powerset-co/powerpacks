@@ -5,6 +5,7 @@ __pycache__/
 *.py[cod]
 install-manifest.json
 *.log
+.powerpacks
 .powerpacks/
 .codex/AGENTS.md
 .pi/team/runtime/

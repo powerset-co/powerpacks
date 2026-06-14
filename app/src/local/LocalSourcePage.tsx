@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, FileCheck2, Loader2, Sparkles, Upload } from "lucide-react";
+import { CheckCircle2, FileCheck2, Loader2, MessageCircle, Sparkles, Upload } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { GmailSyncPanel } from "./GmailSyncPanel";
+import { MessagesSyncPanel } from "./MessagesSyncPanel";
 import {
   fetchSetupJob,
   fetchSetupStatus,
-  runOnboardingV3LinkedIn,
+  linkLinkedInCsv,
   runSetupAction,
   uploadLinkedInCsv,
 } from "./powerpacksApi";
@@ -100,6 +101,44 @@ function useSourceJob(refresh: () => void) {
   return { running, error, run };
 }
 
+// Auto-refresh a linked source's contacts on page load so the enrichable count
+// is current — but only when the last discover is stale, so repeatedly
+// refreshing the page never re-kicks discover. Runs at most once per mount, and
+// only after the source is linked (so clicking Link also triggers it). Discover
+// is metadata-only and never spends; enrich/index stay behind their buttons.
+const DISCOVER_FRESHNESS_MS = 10 * 60 * 1000;
+
+function useAutoDiscover(source: string, status: SetupStatusResponse | null, refresh: () => void) {
+  const [syncing, setSyncing] = useState(false);
+  const ran = useRef(false);
+  useEffect(() => {
+    if (!status || ran.current) return;
+    const account = status.accounts.sources.find((s: SetupSourceStatus) => s.id === source);
+    if (!account?.linked || account.skipped) return; // not linked yet — wait, don't consume the one-shot
+    const imp = status.import.sources.find((s: SetupImportSource) => s.sourceId === source);
+    const last = imp?.updatedAt ? new Date(imp.updatedAt).getTime() : 0;
+    ran.current = true; // linked: attempt at most once per mount
+    if (last && Date.now() - last < DISCOVER_FRESHNESS_MS) return; // discovered recently — skip
+    (async () => {
+      setSyncing(true);
+      try {
+        const { job } = await runSetupAction({ action: "import-source", source });
+        let current = job;
+        while (current.status === "running" || current.status === "pending") {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          current = await fetchSetupJob(job.id);
+        }
+        refresh();
+      } catch {
+        /* best-effort; existing stats still render */
+      } finally {
+        setSyncing(false);
+      }
+    })();
+  }, [status, source, refresh]);
+  return syncing;
+}
+
 function SourceHeader({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
   return (
     <div className="mb-6 flex items-start gap-3">
@@ -126,28 +165,43 @@ const LINKEDIN_ICON = (
   </span>
 );
 
+const MESSAGES_ICON = (
+  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#15803D]/10">
+    <MessageCircle className="h-5 w-5 text-[#15803D]" />
+  </span>
+);
+
 export function GmailSourcePage() {
   const { status, refresh } = useSetupStatus();
   const { running, error, run } = useSourceJob(refresh);
+  const syncing = useAutoDiscover("gmail", status, refresh);
 
   const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "gmail");
   const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "gmail");
   const imp = status?.import.sources.find((s: SetupImportSource) => s.sourceId === "gmail");
+  const candidates = enrich?.candidates || 0;
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
       <div className="mb-6 flex items-center justify-between gap-3">
         <SourceHeader icon={GMAIL_ICON} title="Gmail" description="Sync the people you email and enrich them into your network." />
-        <ConnectionBadge source={accountSource} loading={loading} />
+        <div className="flex items-center gap-2">
+          {syncing && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing latest contacts…
+            </span>
+          )}
+          <ConnectionBadge source={accountSource} loading={loading} />
+        </div>
       </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <StatCard
           loading={loading}
           label="Contacts discovered"
-          value={enrich?.candidates ? enrich.candidates.toLocaleString() : "—"}
-          hint={imp?.accountCount ? `Across ${imp.accountCount} account${imp.accountCount === 1 ? "" : "s"}` : "From your synced email"}
+          value={candidates ? candidates.toLocaleString() : "—"}
+          hint={syncing ? "Syncing latest…" : imp?.accountCount ? `Across ${imp.accountCount} account${imp.accountCount === 1 ? "" : "s"}` : "From your synced email"}
         />
         <StatCard
           loading={loading}
@@ -170,17 +224,16 @@ export function GmailSourcePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Enrich</CardTitle>
+          <CardTitle className="text-base">Enrich &amp; index</CardTitle>
           <CardDescription>Resolve your synced contacts into full profiles, then rebuild the local index.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-2">
           <Button
-            variant="secondary"
-            disabled={!accountSource?.linked || running !== null}
-            onClick={() => run("enrich", { action: "enrich-source", source: "gmail", approveSpend: true })}
+            disabled={!accountSource?.linked || syncing || running !== null}
+            onClick={() => run("enrich", { action: "enrich-source", source: "gmail", approveSpend: true, force: true })}
           >
             {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            Re-run enrich
+            {candidates ? `Enrich ${candidates.toLocaleString()} contacts` : "Enrich contacts"}
           </Button>
           <Button
             variant="outline"
@@ -190,6 +243,7 @@ export function GmailSourcePage() {
             {running === "index" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Rebuild index
           </Button>
+          <p className="w-full text-xs text-muted-foreground">Enrichment uses Parallel.ai — this is a paid lookup.</p>
           {error && <p className="w-full text-sm text-destructive">{error}</p>}
         </CardContent>
       </Card>
@@ -200,6 +254,7 @@ export function GmailSourcePage() {
 export function LinkedInSourcePage() {
   const { status, refresh } = useSetupStatus();
   const { running, error, run } = useSourceJob(refresh);
+  const syncing = useAutoDiscover("linkedin_csv", status, refresh);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -207,6 +262,7 @@ export function LinkedInSourcePage() {
   const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "linkedin_csv");
   const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "linkedin_csv");
+  const candidates = enrich?.candidates || 0;
 
   async function handleUpload(file?: File | null) {
     if (!file) return;
@@ -214,8 +270,15 @@ export function LinkedInSourcePage() {
     setUploadError(null);
     try {
       const { path } = await uploadLinkedInCsv(file);
-      await runOnboardingV3LinkedIn({ csvPath: path });
-      refresh();
+      // Linking only registers the CSV (writes csv_path + linked=true) — it does
+      // NOT import/enrich/index. Processing stays behind the Enrich and Rebuild
+      // index buttons, matching Gmail (Add account links; Sync/Enrich process).
+      const result = await linkLinkedInCsv({ csvPath: path });
+      if (result.status !== "completed") setUploadError(result.error || "Could not link that CSV.");
+      // Await the refresh so the button stays in its spinner state until the new
+      // linked status lands — otherwise it briefly flashes back to "Upload" while
+      // the status reloads, then auto-discover takes over the spinner.
+      await refresh();
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -228,15 +291,22 @@ export function LinkedInSourcePage() {
     <div className="mx-auto max-w-3xl px-4 py-8">
       <div className="mb-6 flex items-center justify-between gap-3">
         <SourceHeader icon={LINKEDIN_ICON} title="LinkedIn" description="Import and enrich your LinkedIn connections." />
-        <ConnectionBadge source={accountSource} loading={loading} />
+        <div className="flex items-center gap-2">
+          {syncing && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing latest contacts…
+            </span>
+          )}
+          <ConnectionBadge source={accountSource} loading={loading} />
+        </div>
       </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <StatCard
           loading={loading}
           label="Connections"
-          value={enrich?.candidates ? enrich.candidates.toLocaleString() : "—"}
-          hint="From your Connections.csv"
+          value={candidates ? candidates.toLocaleString() : "—"}
+          hint={syncing ? "Syncing latest…" : "From your Connections.csv"}
         />
         <StatCard
           loading={loading}
@@ -249,20 +319,22 @@ export function LinkedInSourcePage() {
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle className="text-base">Import connections</CardTitle>
+          <CardTitle className="text-base">Connect LinkedIn</CardTitle>
           <CardDescription>
+            Upload your Connections.csv to link it — enrich and index run from the buttons below.
+            <br />
             LinkedIn → Settings → Data privacy → Get a copy of your data → Connections.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={(e) => handleUpload(e.target.files?.[0])} />
-          <Button disabled={uploading} onClick={() => fileInputRef.current?.click()}>
-            {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-            {uploading ? "Importing…" : accountSource?.linked ? "Re-upload Connections.csv" : "Upload Connections.csv"}
+          <Button disabled={uploading || syncing} onClick={() => fileInputRef.current?.click()}>
+            {uploading || syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+            {uploading ? "Linking…" : syncing ? "Syncing contacts…" : accountSource?.linked ? "Re-upload Connections.csv" : "Upload Connections.csv"}
           </Button>
           {accountSource?.linked && (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <FileCheck2 className="h-3.5 w-3.5" /> Connections imported. Re-upload to refresh.
+              <FileCheck2 className="h-3.5 w-3.5" /> Connections.csv linked. Run enrich below to import profiles.
             </p>
           )}
           {uploadError && <p className="mt-2 text-sm text-destructive">{uploadError}</p>}
@@ -271,22 +343,106 @@ export function LinkedInSourcePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Enrich</CardTitle>
-          <CardDescription>Resolve your connections into full profiles, then rebuild the local index.</CardDescription>
+          <CardTitle className="text-base">Enrich &amp; index</CardTitle>
+          <CardDescription>Resolve your connections into full profiles (LinkedIn enrichment is free), then rebuild the local index.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-2">
           <Button
-            variant="secondary"
-            disabled={!accountSource?.linked || running !== null}
-            onClick={() => run("enrich", { action: "enrich-source", source: "linkedin_csv", approveSpend: true })}
+            disabled={!accountSource?.linked || syncing || running !== null}
+            onClick={() => run("enrich", { action: "enrich-source", source: "linkedin_csv", approveSpend: true, force: true })}
           >
             {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            Re-run enrich
+            {candidates ? `Enrich ${candidates.toLocaleString()} connections` : "Enrich connections"}
           </Button>
           <Button variant="outline" disabled={running !== null} onClick={() => run("index", { action: "index" })}>
             {running === "index" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Rebuild index
           </Button>
+          {error && <p className="w-full text-sm text-destructive">{error}</p>}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export function MessagesSourcePage() {
+  const { status, refresh } = useSetupStatus();
+  const { running, error, run } = useSourceJob(refresh);
+  const syncing = useAutoDiscover("messages", status, refresh);
+
+  const loading = !status;
+  const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "messages");
+  const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "messages");
+  const imp = status?.import.sources.find((s: SetupImportSource) => s.sourceId === "messages");
+  const candidates = enrich?.candidates || 0;
+
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-8">
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <SourceHeader
+          icon={MESSAGES_ICON}
+          title="Messages"
+          description="Sync the people you iMessage and WhatsApp, then enrich them into your network."
+        />
+        <div className="flex items-center gap-2">
+          {syncing && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing latest contacts…
+            </span>
+          )}
+          <ConnectionBadge source={accountSource} loading={loading} />
+        </div>
+      </div>
+
+      <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <StatCard
+          loading={loading}
+          label="Contacts discovered"
+          value={candidates ? candidates.toLocaleString() : "—"}
+          hint={syncing ? "Syncing latest…" : "From your conversations"}
+        />
+        <StatCard
+          loading={loading}
+          label="In network"
+          value={enrich?.enriched ? enrich.enriched.toLocaleString() : "—"}
+          hint={enrich?.candidates ? "Approved and enriched" : "Approve contacts to enrich"}
+        />
+        <StatCard
+          loading={loading}
+          label="Last import"
+          value={formatDate(accountSource?.lastSuccessAt)}
+          hint={imp?.status ? `Import ${imp.status}` : "Sync below to update"}
+        />
+      </div>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="text-base">Sync messages</CardTitle>
+          <CardDescription>Link iMessage and WhatsApp, then review who&apos;s worth enriching. No message contents are read.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <MessagesSyncPanel onChange={refresh} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Enrich &amp; index</CardTitle>
+          <CardDescription>Enrich your approved contacts into full profiles, then rebuild the local index. Review approval happens in the panel above.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-2">
+          <Button
+            disabled={!accountSource?.linked || syncing || running !== null}
+            onClick={() => run("enrich", { action: "enrich-source", source: "messages", approveSpend: true })}
+          >
+            {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+            {candidates ? `Enrich ${candidates.toLocaleString()} approved` : "Enrich approved contacts"}
+          </Button>
+          <Button variant="outline" disabled={running !== null} onClick={() => run("index", { action: "index" })}>
+            {running === "index" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Rebuild index
+          </Button>
+          <p className="w-full text-xs text-muted-foreground">Enrichment uses deep research — this is a paid lookup.</p>
           {error && <p className="w-full text-sm text-destructive">{error}</p>}
         </CardContent>
       </Card>
