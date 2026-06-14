@@ -167,6 +167,34 @@ export function runOnboardingV3LinkedIn(
   return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v3/linkedin/run", body);
 }
 
+// msgvault setup state: gcloud auth, OAuth app (client_secret), db, authorized accounts.
+export interface MsgvaultStatus {
+  status: string; // "ok" | "needs_setup" | "error"
+  accounts: Array<{ account_email?: string }>;
+  config?: { oauth_configured?: boolean; exists?: boolean };
+  database?: { exists?: boolean };
+  gcloud?: { installed?: boolean; account?: string; project?: string };
+  msgvault?: { installed?: boolean };
+  error?: string;
+}
+
+export function fetchMsgvaultStatus(): Promise<MsgvaultStatus> {
+  return getJson<MsgvaultStatus>("/local-api/onboarding-v3/gmail/msgvault-status");
+}
+
+// One-shot: create gcloud project + OAuth app + add all emails as test users
+// (no authorization). Returns a job to poll.
+export function runGmailVaultSetup(
+  body: { primaryEmail: string; additionalEmails?: string[] }
+): Promise<{ job: SetupJob }> {
+  return postJson<{ job: SetupJob }>("/local-api/onboarding-v3/gmail/vault-setup", body);
+}
+
+// Authorize one Gmail account (per-account browser grant). Returns a job to poll.
+export function runGmailAuthorize(body: { email: string }): Promise<{ job: SetupJob }> {
+  return postJson<{ job: SetupJob }>("/local-api/onboarding-v3/gmail/authorize", body);
+}
+
 // Link an uploaded Connections.csv (write csv_path + linked) without running the
 // import/enrich/index pipeline — enrich/index stay behind their own buttons.
 export function linkLinkedInCsv(
