@@ -24,7 +24,7 @@ registration so users do not need to run multiple smaller commands.
 | `$powerset sets`, `$powerset sets list` | List sets via the Powerset Search MCP. |
 | `$powerset sets use <id|name>` | Resolve a set via MCP and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
 | `$powerset mcp install` | Register/refresh the `powerset-search` MCP for local hosts. |
-| `$powerset env pull [--profile <profile>]` | Pull allowlisted runtime keys into `.env`. The explicit command is consent to write `.env`. Default `search-core` is the standard setup; use `search-network` or `import-contacts` for minimal per-user provisioning. |
+| `$powerset env pull` | Pull your Modal token + OpenAI key from the Powerset API (using your Auth0 login) into `.env`. The explicit command is consent to write `.env`. No gcloud/GCP. |
 | `$powerset create oauth app` | Route to the msgvault setup primitive for Gmail OAuth Desktop app guidance. |
 
 Aliases remain valid for backcompat: `$powerset-login` means `$powerset login`;
@@ -118,40 +118,12 @@ User-facing output must be terse:
 - If still blocked, give one short sentence with the required action. Do not
   paste raw reports or secret values.
 
-### Visible gcloud reauthentication
-
-When `gcloud` credentials need reauthentication inside Codex/Claude-style
-harnesses, use a live PTY-backed command and keep the session open until the
-user provides the code. Prefer the current active gcloud account so the user
-sees the expected identity:
-
-```bash
-acct="$(gcloud config get-value account 2>/dev/null || true)"
-if [[ -n "$acct" ]]; then
-  gcloud auth login "$acct" --no-launch-browser --force
-else
-  gcloud auth login --no-launch-browser --force
-fi
-```
-
-For Codex specifically: run that command as an ongoing `exec_command` session
-with `tty: true` and a large output budget. Relay the full
-`https://accounts.google.com/...` URL in chat, ask the user to paste the
-authorization code, then send the code plus a newline to the still-running
-session. Do not wrap `gcloud auth login` in `expect` from Codex; failures inside
-that wrapper can leave a stale OAuth challenge and a stuck process. If the URL
-is truncated in the UI, poll the running session again with a larger output
-budget; do not use an auth URL captured from a command that has already exited.
-If the harness cannot keep the `gcloud` process open with stdin attached, stop
-and ask the user to run the command directly in their terminal.
-
 Run one internal setup check first:
 
 ```bash
 uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
-  --env-file .env \
-  --gcp-project powerset-search
+  --env-file .env
 ```
 
 Handle `fix_kind` values exactly as in the `$powerset login` workflow below.
@@ -164,23 +136,18 @@ If `auth0_login` is missing or expired, run the Auth0 login directly:
 uv run --project . python packs/powerset/primitives/auth/auth.py login
 ```
 
-After Auth0 credentials and gcloud access are usable, always run the env pull
-for the requested/default profile, even if the initial setup check was already
-healthy. This makes `$powerset setup` the single refresh command for rotated or
-newly added per-user runtime keys:
+After Auth0 login, always run the env pull so rotated or newly added keys land
+in `.env`, even if the initial setup check was already healthy. This pulls your
+Modal token + OpenAI key from the Powerset API using your Auth0 bearer — no
+gcloud, no GCP:
 
 ```bash
-uv run --project . python packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
-  --profile search-core \
-  --env-file .env \
-  --confirm \
-  --best-effort
+uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
+  --env-file .env
 ```
 
-If this reports expired gcloud credentials, immediately run:
-
-Run the visible gcloud reauthentication flow above, then rerun the env pull
-command.
+If it reports `not_provisioned`, an admin must provision your Modal token out of
+band; relay that one-line action and continue.
 
 Then sync the operator bootstrap:
 
@@ -189,13 +156,9 @@ uv run --project . python packs/powerset/primitives/operator_bootstrap/operator_
   --env-file .env
 ```
 
-If this reports expired gcloud credentials, immediately run:
-
-Run the visible gcloud reauthentication flow above, then rerun the env pull
-command and the operator bootstrap sync command. If bootstrap sync reports
-`skipped` because no matching bundle is published or the registry is not
-available, continue with MCP installation; `$setup` can still proceed from local
-account linking/import.
+If bootstrap sync reports `skipped` because no matching bundle is published or
+the registry is not available, continue with MCP installation; `$setup` can
+still proceed from local account linking/import.
 
 Then install/refresh MCP:
 
@@ -204,9 +167,9 @@ uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py i
 ```
 
 Re-run the setup check at the end and use the success/blocker message above. If
-`user_secrets` is still a human-action blocker, tell the user to ping
-`#powerpacks` with the email they use for gcloud so a maintainer can provision
-per-user secrets.
+`runtime_keys` is still missing, the env pull reported `not_provisioned` — tell
+the user an admin must provision their Modal token / OpenAI key for their
+Powerset user (the endpoints never mint).
 
 ## `$powerset login`
 
@@ -228,12 +191,8 @@ Run one internal setup check:
 ```bash
 uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
-  --env-file .env \
-  --gcp-project powerset-search
+  --env-file .env
 ```
-
-This check intentionally does **not** check gcloud application-default
-credentials. ADC is not needed for normal Powerpacks workflows.
 
 If `overall == "ok"`, use the already-valid success sentence above and stop.
 Otherwise handle `fix_kind` values internally:
@@ -248,8 +207,7 @@ Common direct fixes:
 
 ```bash
 uv run --project . python packs/powerset/primitives/auth/auth.py login
-uv run --project . python packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
-  --profile search-core --env-file .env --confirm --best-effort
+uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull --env-file .env
 uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
@@ -257,23 +215,10 @@ Do not run nested fix commands in the normal login flow; they can hide
 interactive work inside a subprocess. Run the direct primitives above instead.
 Never print secret values.
 
-The setup check only probes per-user Secret Manager access when `.env` is incomplete
-(or when `--check-user-secrets` is used for refresh debugging). If `.env` already
-has the requested profile keys, expired gcloud Secret Manager auth is not a
-login blocker and should not be surfaced.
-
-If the setup check reports `user_secrets` with `fix_kind: interactive` or a message
-like `gcloud credentials need reauthentication`, this is not a Slack/IAM issue:
-the selected `@powerset.co` account is fine, but gcloud's cached token expired.
-For explicit `$powerset setup`, `$powerset login`, or `$powerset env pull`
-requests, immediately run the visible gcloud reauthentication flow above, relay
-the full verification URL/code prompt, and ask them to paste the code. Do not
-stop for a separate yes/no confirmation.
-
 Re-run the setup check at the end and use one of the terse final messages above.
-If `user_secrets` is still
-a human-action blocker, tell the user to ping `#powerpacks` with their
-`@powerset.co` email so a maintainer can provision per-user secrets.
+If `runtime_keys` is still missing after the env pull, the API returned
+`not_provisioned` — tell the user an admin must provision their Modal token /
+OpenAI key for their Powerset user (the endpoints never mint).
 
 ## `$powerset status`
 
@@ -282,12 +227,11 @@ Run the setup check read-only with the requested or default profile:
 ```bash
 uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
-  --env-file .env \
-  --gcp-project powerset-search
+  --env-file .env
 ```
 
 Summarize only `Ready` or the concise blocker/action. Do not mention the checker,
-raw counts, ADC, or individual passed checks unless the user explicitly asks for
+raw counts or individual passed checks unless the user explicitly asks for
 debugging detail.
 
 ## `$powerset whoami`
@@ -312,32 +256,22 @@ uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py s
 
 ## `$powerset env pull`
 
-Default profile is `search-core` unless the user specifies another profile.
-It pulls the standard Powerpacks runtime secrets into `.env` on a best-effort
-basis. The explicit `$powerset env pull` request is consent to write `.env`;
-do not ask for separate confirmation. Run:
+Pulls the keys the local machine needs into `.env` from the Powerset API using
+your Auth0 login — no gcloud, no GCP. Heavy work runs on Modal (which holds
+RapidAPI/Parallel/etc. as workspace secrets), so the laptop only needs a Modal
+token (to dispatch) and an OpenAI key (local search LLM steps). The explicit
+`$powerset env pull` request is consent to write `.env`; do not ask for separate
+confirmation. Run:
 
 ```bash
-uv run --project . python packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
-  --profile search-core \
-  --env-file .env \
-  --confirm \
-  --best-effort
+uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
+  --env-file .env
 ```
 
-If this reports expired gcloud credentials or the setup check reports
-`user_secrets` with `fix_kind: interactive`, immediately run the visible gcloud
-reauthentication flow above, then rerun the env pull command.
-
-For non-`@powerset.co` users, do not block on the email domain. Secret Manager
-is the source of truth: if the matching per-user secrets are missing or IAM does
-not grant access, the pull reports `not_provisioned` / `not_privileged`.
-Useful minimal profiles:
-
-- `search-network`: local search execution (`TURBOPUFFER_API_KEY`,
-  `DATABASE_URL`, `OPENAI_API_KEY`)
-- `import-contacts`: LLM review + Parallel research
-  (`OPENROUTER_API_KEY`, `PARALLEL_API_KEY`)
+This fetches `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` and `OPENAI_API_KEY`. If the
+pull reports `not_provisioned` for a key, an admin must provision it for your
+Powerset user out of band (the endpoints never mint) — relay that one-line
+action and continue. Requires a valid Auth0 login (`$powerset login`).
 
 ## `$powerset create oauth app`
 

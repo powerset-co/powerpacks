@@ -27,6 +27,7 @@ SELF_DIR = Path(__file__).resolve().parent
 PACK_DIR = SELF_DIR.parent
 AUTH = PACK_DIR / "auth" / "auth.py"
 PROVISION = PACK_DIR / "provision_runtime_env" / "provision_runtime_env.py"
+PULL = PACK_DIR / "pull_runtime_keys" / "pull_runtime_keys.py"
 MCP_INSTALL = PACK_DIR / "mcp_install" / "mcp_install.py"
 
 DEFAULT_CREDS = Path(os.environ.get(
@@ -415,6 +416,30 @@ def check_mcp_powerset_search() -> dict[str, Any]:
     )
 
 
+def check_runtime_keys(env_file: Path) -> dict[str, Any]:
+    """Modal-flow runtime keys: MODAL_TOKEN_ID/SECRET + OPENAI_API_KEY in .env.
+
+    Pulled from the Powerset API via `pull_runtime_keys` (Auth0, no gcloud), so
+    the fix is `$powerset env pull` rather than a Secret Manager probe.
+    """
+    code, out, _ = run([sys.executable, str(PULL), "check", "--env-file", str(env_file)])
+    try:
+        payload = json.loads(out) if out else {}
+    except json.JSONDecodeError:
+        return check("runtime_keys", "fail", f"could not parse check output for {env_file}")
+    if payload.get("status") == "ok":
+        return check("runtime_keys", "ok", f"Modal token + OpenAI key present in {env_file}")
+    missing = payload.get("missing", [])
+    return check(
+        "runtime_keys", "missing",
+        f"{len(missing)} runtime key(s) missing from {env_file}: {', '.join(missing)}",
+        missing=missing,
+        fix_kind="interactive",
+        fix_command="$powerset env pull",
+        fix_args=[sys.executable, str(PULL), "pull", "--env-file", str(env_file)],
+    )
+
+
 def check_env_file(env_file: Path, profile: str) -> dict[str, Any]:
     code, out, _ = run([
         sys.executable, str(PROVISION),
@@ -449,35 +474,19 @@ def check_env_file(env_file: Path, profile: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def collect_checks(args: argparse.Namespace) -> list[dict[str, Any]]:
+    # Modal-only setup: the laptop just needs uv (run python), an Auth0 login,
+    # and the runtime keys (Modal token + OpenAI) pulled from the Powerset API.
+    # No gcloud / Secret Manager — those checks are retired from this path
+    # (the check_gcloud_* functions remain for legacy/admin callers).
     checks: list[dict[str, Any]] = []
     checks.append(check_python())
     checks.append(check_uv_installed())
-    checks.append(check_gcloud_installed())
-
-    gcloud_ok = checks[-1]["status"] == "ok"
-    if gcloud_ok:
-        checks.append(check_gcloud_account())
-        if args.check_adc:
-            checks.append(check_gcloud_adc())
 
     checks.append(check_auth0_login())
     if checks[-1]["status"] == "ok":
         checks.append(check_auth0_role())
 
-    env_check = check_env_file(args.env_file, args.profile)
-    checks.append(env_check)
-
-    # Secret Manager access is only required when the local env is incomplete
-    # (or when explicitly debugging refresh/provisioning). If .env is already
-    # usable, an expired gcloud token should not make normal Powerpacks health
-    # look broken.
-    if args.check_user_secrets or env_check["status"] != "ok":
-        if gcloud_ok:
-            active = next(
-                (c for c in checks if c["id"] == "gcloud_account" and c["status"] == "ok"), None
-            )
-            if active:
-                checks.append(check_user_secrets(args.profile, args.gcp_project))
+    checks.append(check_runtime_keys(args.env_file))
 
     if not args.skip_mcp:
         checks.append(check_mcp_powerset_search())

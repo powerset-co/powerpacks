@@ -147,6 +147,10 @@ export function runPowersetLogin(): Promise<{ job: SetupJob }> {
   return postJson<{ job: SetupJob }>("/local-api/powerset/login", {});
 }
 
+export function runPowersetPullKeys(): Promise<{ job: SetupJob }> {
+  return postJson<{ job: SetupJob }>("/local-api/powerset/pull-keys", {});
+}
+
 export function fetchMessageReview(
   options: { filter?: MessageReviewFilter; query?: string; offset?: number; limit?: number } = {}
 ): Promise<MessageReviewResponse> {
