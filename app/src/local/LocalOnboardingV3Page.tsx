@@ -9,6 +9,7 @@ import {
   KeyRound,
   Loader2,
   LogIn,
+  Mail,
   Search,
   Terminal,
   Upload,
@@ -32,6 +33,7 @@ import {
   uploadLinkedInCsv,
   type PowersetWhoami,
 } from "./powerpacksApi";
+import { GmailSyncPanel } from "./GmailSyncPanel";
 import { OnboardingStatusCard } from "./onboarding-v2/OnboardingStatusCard";
 import type { EnvKeyStatus, EnvStatusResponse, JsonObject } from "./types";
 
@@ -45,6 +47,7 @@ const BYO_KEYS = ["OPENAI_API_KEY", "RAPIDAPI_LINKEDIN_KEY", "PARALLEL_API_KEY"]
 const WIZARD_STEPS = [
   { id: "connect", label: "Connect" },
   { id: "import", label: "Import LinkedIn" },
+  { id: "email", label: "Sync email" },
   { id: "search", label: "First search" },
 ] as const;
 type StepId = (typeof WIZARD_STEPS)[number]["id"];
@@ -486,6 +489,7 @@ export function LocalOnboardingV3Page() {
   const done: Record<StepId, boolean> = {
     connect: powersetConnected || keysReady,
     import: importDone,
+    email: false,
     search: false,
   };
 
@@ -546,6 +550,22 @@ export function LocalOnboardingV3Page() {
           </CardHeader>
           <CardContent className="space-y-3">
             <ImportPanel onDone={() => setImportDone(true)} />
+            <Button variant="secondary" className="w-full" onClick={() => setActive("email")}>
+              Next — sync email
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {active === "email" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Mail className="h-4 w-4" /> Sync your email network
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <GmailSyncPanel />
             <Button variant="secondary" className="w-full" onClick={() => setActive("search")}>
               I'm done — try a search
             </Button>

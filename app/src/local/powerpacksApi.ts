@@ -97,6 +97,50 @@ export function checkGmailTokens(emails: string[]): Promise<{ expired: string[] 
   return postJson<{ expired: string[] }>("/local-api/onboarding-v2/gmail/check-tokens", { emails });
 }
 
+export interface GmailSyncWindowEstimate {
+  messages: number;
+  est_seconds: number;
+  est_minutes: number;
+  truncated?: boolean;
+}
+
+export interface GmailSyncEstimateResponse {
+  status: string;
+  scope_query?: string;
+  windows?: string[];
+  accounts?: Array<{ email: string; error?: string; windows: Record<string, GmailSyncWindowEstimate> }>;
+  totals?: Record<string, GmailSyncWindowEstimate>;
+  error?: string;
+}
+
+export function estimateGmailSync(
+  body: { accounts?: string[]; windows?: string[] } = {}
+): Promise<GmailSyncEstimateResponse> {
+  return postJson<GmailSyncEstimateResponse>("/local-api/onboarding-v3/gmail/estimate", body);
+}
+
+export interface GmailAccount {
+  email: string;
+  message_count: number;
+  last_sync: string;
+}
+
+export interface GmailAccountsResponse {
+  status: string;
+  accounts: GmailAccount[];
+  error?: string;
+}
+
+export function fetchGmailAccounts(): Promise<GmailAccountsResponse> {
+  return getJson<GmailAccountsResponse>("/local-api/onboarding-v3/gmail/accounts");
+}
+
+export function runGmailWindowSync(
+  body: { window: string; accounts?: string[]; limit?: number }
+): Promise<{ job: SetupJob }> {
+  return postJson<{ job: SetupJob }>("/local-api/onboarding-v3/gmail/sync", body);
+}
+
 export function fetchOnboardingV2MessagesStatus(): Promise<Record<string, unknown>> {
   return getJson<Record<string, unknown>>("/local-api/onboarding-v2/messages/status");
 }

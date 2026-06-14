@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs";
-import { spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { randomUUID } from "crypto";
 
 import {
@@ -369,7 +369,118 @@ function startOnboardingV2Messages(body: Record<string, any>): SetupJob {
   });
 }
 
+// Onboarding v3 Gmail: estimate how much a date-windowed sync would pull,
+// per window, without syncing. Read-only and free (Gmail label/id counts).
+// Uses async spawn (never spawnSync) so the Gmail pagination — up to ~30s on a
+// large inbox — does not block the single-threaded dev server event loop.
+function estimateGmailSync(body: Record<string, any>): Promise<Record<string, any>> {
+  const accounts: string[] = Array.isArray(body.accounts) ? body.accounts.map(String).filter(Boolean) : [];
+  const windows: string[] = Array.isArray(body.windows) && body.windows.length
+    ? body.windows.map(String)
+    : ["1y", "2y", "5y", "all"];
+  const command = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/estimate_gmail_sync/estimate_gmail_sync.py",
+    "estimate",
+  ];
+  for (const account of accounts) command.push("--account", account);
+  for (const window of windows) command.push("--window", window);
+  return new Promise((resolve) => {
+    const child = spawn(command[0], command.slice(1), { cwd: powerpacksRepoRoot, env: setupProcessEnv() });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 5 * 60 * 1000);
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ status: "failed", error: String(err) });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const output = parseLastJsonFragment(stdout) || {};
+      if (code === 0 && (output as Record<string, any>).status === "completed") resolve(output);
+      else resolve({ status: "failed", code, error: stderr || "estimate failed", output });
+    });
+  });
+}
+
+// Gmail accounts source of truth: msgvault list-accounts (not accounts.json).
+// Async spawn so it never blocks the dev server.
+function listGmailAccounts(): Promise<Record<string, any>> {
+  const command = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/estimate_gmail_sync/estimate_gmail_sync.py",
+    "accounts",
+  ];
+  return new Promise((resolve) => {
+    const child = spawn(command[0], command.slice(1), { cwd: powerpacksRepoRoot, env: setupProcessEnv() });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 60 * 1000);
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (err) => { clearTimeout(timer); resolve({ status: "failed", error: String(err), accounts: [] }); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const output = parseLastJsonFragment(stdout) || {};
+      if (code === 0 && (output as Record<string, any>).status === "completed") resolve(output);
+      else resolve({ status: "failed", code, error: stderr || "list-accounts failed", accounts: [] });
+    });
+  });
+}
+
+// Map a window id to the msgvault --after date (YYYY-MM-DD). "all" -> no bound.
+function windowAfterDate(window: string): string {
+  const years: Record<string, number> = { "1y": 1, "2y": 2, "5y": 5 };
+  const n = years[window];
+  if (!n) return "";
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Run the windowed Gmail sync + contact discovery as a background job: sync-full
+// --after <window> --query <scope> --noresume, then extract contacts. Async via
+// startSetupJob so it never blocks the dev server.
+function startGmailWindowSync(body: Record<string, any>): SetupJob {
+  const window = String(body.window || "1y");
+  const after = windowAfterDate(window);
+  const limit = Number(body.limit || 0);
+  // Sync exactly the accounts the panel passed (the msgvault SoT). Passing them
+  // explicitly means discover never falls back to accounts.json, so it can't
+  // re-provision an account the user removed from msgvault.
+  const accounts: string[] = Array.isArray(body.accounts) ? body.accounts.map(String).filter(Boolean) : [];
+  const command = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/discover_contacts_pipeline/gmail.py",
+    "discover", "--fresh", "--no-attachments",
+  ];
+  for (const account of accounts) command.push("--account-email", account);
+  if (after) command.push("--sync-after", after);
+  if (limit > 0) command.push("--limit", String(limit));
+  return startSetupJob("onboarding-v3-gmail-sync", command, 6 * 60 * 60 * 1000, {
+    actionKey: `onboarding-v3:gmail-sync:${window}`,
+  });
+}
+
 export async function handleOnboardingV2Routes(req: any, res: any, url: URL): Promise<boolean> {
+  if (url.pathname === "/local-api/onboarding-v3/gmail/estimate" && req.method === "POST") {
+    sendJson(res, await estimateGmailSync(await readRequestJson(req)));
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding-v3/gmail/accounts") {
+    sendJson(res, await listGmailAccounts());
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding-v3/gmail/sync" && req.method === "POST") {
+    const job = startGmailWindowSync(await readRequestJson(req));
+    sendJson(res, { job });
+    return true;
+  }
+
   if (url.pathname === "/local-api/onboarding-v3/linkedin/status") {
     sendJson(res, onboardingV2Status(ONBOARDING_V3_LINKEDIN));
     return true;

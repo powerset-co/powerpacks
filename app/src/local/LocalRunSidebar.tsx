@@ -30,6 +30,7 @@ interface LocalRunSidebarProps {
   onSelectSetup: () => void;
   onSelectEnv: () => void;
   onSelectLinkSetup: () => void;
+  onSelectSource?: (id: string) => void;
   onSelect: (run: LocalRunSummary) => void;
 }
 
@@ -98,6 +99,7 @@ export function LocalRunSidebar({
   onSelectSetup,
   onSelectEnv,
   onSelectLinkSetup,
+  onSelectSource,
   onSelect,
 }: LocalRunSidebarProps) {
   const [showAllRuns, setShowAllRuns] = useState(false);
@@ -151,7 +153,7 @@ export function LocalRunSidebar({
             <button
               key={item.id}
               type="button"
-              onClick={onSelectLinkSetup}
+              onClick={() => (onSelectSource ? onSelectSource(item.id) : onSelectLinkSetup())}
               className="flex w-full items-center justify-between rounded-md p-1.5 text-left transition-colors hover:bg-accent"
             >
               <div className="flex min-w-0 items-center">
