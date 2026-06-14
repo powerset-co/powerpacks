@@ -161,6 +161,22 @@ Before keeping any trait, apply this test:
 
 If the answer is no, do not make it a trait.
 
+**Center of gravity comes first.** The first must-have must name the role's
+center of gravity — what this person does day-to-day, phrased so a strong
+candidate from a neighboring lane cannot fully satisfy it. "Backend
+engineering for production APIs" lets a career SRE score strong on every
+trait; "builds customer/developer-facing product APIs" does not. Reliability,
+scale, and ownership wording without a product anchor is an SRE/platform
+magnet — anchor the trait to the work product, not the systems touched.
+
+Adjacent-lane test before finalizing traits: *could a strong candidate from a
+neighboring lane (SRE/platform for product-backend, data analyst for data
+engineering, consultant for in-house IC) score "strong" on every must-have?*
+If yes, the traits are too loose — sharpen the center-of-gravity trait until
+the adjacent lane caps at partial. There is no adjacent-lane verdict tier:
+adjacent profiles that cannot evidence the core work are `out`, so loose
+traits are the only way they leak into the shortlist.
+
 #### must_have traits
 
 The non-negotiable, profile-evaluable qualifications. Usually 2-4. A candidate
@@ -214,13 +230,32 @@ Instead, calibrate the role level:
 - Treat the JD seniority band as a strict hiring constraint. We are matching
   analogous hires, not selling to advisors, cofounders, fractional executives,
   or overqualified network contacts.
-- A candidate outside the seniority band can be `strong` or `maybe` only when
-  the current role is plausibly analogous after company-size context. A CFO,
-  CEO, Founder, President, Partner, Board Member, or enterprise VP should be
-  `out` unless the JD explicitly asks for that seniority.
+- A candidate outside the seniority band can be `top_tier` or
+  `high_potential` only when the current role is plausibly analogous after
+  company-size context. A CFO, CEO, Founder, President, Partner, Board
+  Member, or enterprise VP should be `out` unless the JD explicitly asks for
+  that seniority.
 
 Record the seniority policy in `plan.json` as `usable_cutoff` — the automated
 evaluation primitive reads it and enforces it as a hard gate.
+
+#### Hire stage (`hire_stage`)
+
+Derive `hire_stage` in `plan.json` — the evaluation primitive uses it to pick
+the excellence bar:
+
+- `founding_early` — founding engineer/team, first N hires, seed/Series A
+  startup roles, 0→1 language ("wear many hats", "build from scratch",
+  "ship daily"). The evaluator weights trajectory steepness, 0→1 ownership,
+  breadth, and speed of scope growth.
+- `scaling_late` — growth/late-stage or established companies, roles about
+  hardening and scaling ("productionize", "scale our platform", "reliability
+at scale"). The evaluator weights depth + years of experience with continued
+  growth, and evidence of turning MVPs/POCs into battle-tested production
+  systems.
+
+Default to `founding_early` when ambiguous and the company is small; say which
+stage was chosen in the plan preview's `Targeting:` line context.
 
 #### Seniority bands (hard retrieval filter)
 
@@ -315,6 +350,10 @@ Human-facing trait names must be plain English. Do not show snake_case labels.
 Before writing `plan.json`, check:
 
 - 4-6 total traits across `must_have` and `nice_to_have`.
+- The first must-have names the role's center of gravity and passes the
+  adjacent-lane test (an SRE, analyst, or consultant cannot score "strong" on
+  every must-have).
+- `hire_stage` is set (`founding_early` or `scaling_late`).
 - No trait is just a soft skill, personality trait, mission phrase, or benefits
   text.
 - No credential is invented from adjacent wording.
@@ -386,9 +425,11 @@ qualifiers ("people at healthcare/biotech/medtech companies").
 strings) it is designed to surface candidates for. This enables coverage gap
 analysis in Task 3.
 
-**Budget every profile.** Each profile carries a `limit` (default 100,
-maximum 150). The limit is passed to `$search-network` and caps the candidates
-kept after retrieval, which caps the entire downstream pipeline cost.
+**Budget every profile.** Each profile carries a `limit` (default 200; use
+100 only for quick/cheap previews). The limit is passed to `$search-network`
+and caps the candidates kept after retrieval, which caps the entire
+downstream pipeline cost. A too-small limit lets a noisy archetype crowd out
+better candidates before the aggregate evaluator ever sees them.
 
 #### Profile fields (stored under `initial_probes` for schema compatibility)
 
@@ -480,7 +521,7 @@ Each candidate profile is one self-contained people search. Delegate each to
 the `$search-network` skill by passing:
 
 1. the profile's `query` string as the search query
-2. the profile's `limit` (default 100) — `$search-network` appends
+2. the profile's `limit` (default 200) — `$search-network` appends
    `--limit <N>` to the pipeline command
 3. **filter-only mode** — `$search-network` appends `--filter-only` so the run
    keeps the cheap conservative LLM filter (reject clear junk, pass anything
@@ -491,7 +532,7 @@ the `$search-network` skill by passing:
    bands to the pipeline `execute_command`, e.g.:
 
    ```
-   ... search_network_pipeline.py run ... --limit 100 --filter-only --seniority-bands senior,staff
+   ... search_network_pipeline.py run ... --limit 200 --filter-only --seniority-bands senior,staff
    ```
 
    The flag works identically on `local_search_pipeline.py run` commands. It
@@ -500,17 +541,39 @@ the `$search-network` skill by passing:
    retrieval then only returns positions whose `seniority_band` is in the
    pinned set. If the plan's `seniority_bands` is empty, omit the flag
    entirely; never invent bands at search time.
+5. **pinned current role (always)** — append `--current-role` on every
+   profile search. This pins `is_current_role=true` as a hard retrieval
+   filter so a person only qualifies on a CURRENT in-band position, not a
+   past one. Without it, retrieval qualifies people on old roles — a current
+   founder/CEO who was once a senior engineer matches on the stale role and
+   leaks in. Query expansion only sets this when the query says "currently",
+   which recruiter profile queries never do, so pin it explicitly; never rely
+   on phrasing.
+
+   ```
+   ... search_network_pipeline.py run ... --limit 200 --filter-only --seniority-bands senior,staff --current-role
+   ```
+
+**Current-role is enforced with double redundancy.** `--current-role` is the
+first layer (retrieval drops stale in-band positions); the JD evaluator's
+seniority gate (Task 5) is the second (anyone whose CURRENT primary identity
+is founder/CEO/exec/advisor is marked `too_senior` → `out`, even if a
+concatenated current title also shows a senior-engineer role). Keep both on;
+neither alone is sufficient — retrieval can still surface multi-current-role
+profiles, and the eval gate alone would pay hydration/eval cost on stale
+matches.
 
 Do not call `search_network_pipeline.py` directly from this skill except to
-append the `--limit`, `--filter-only`, and `--seniority-bands` flags to the
-`execute_command` that `$search-network` produced.
+append the `--limit`, `--filter-only`, `--seniority-bands`, and
+`--current-role` flags to the `execute_command` that `$search-network`
+produced.
 
 The delegated input must be only the profile's English `query` value. Do not
 send a JSON object or internal labels.
 
 For each profile search:
 1. Run `$search-network` with the profile's `query`, limit, filter-only mode,
-   and the plan's pinned seniority bands (when non-empty)
+   `--current-role`, and the plan's pinned seniority bands (when non-empty)
 2. Skip the user approval gate — the plan approval covers all profile searches
 3. Capture the `state` path from the pipeline's JSON output — it is the only
    thing Result Collection needs per search
@@ -582,7 +645,7 @@ Write `lineage.json` events: `source_fetched`, `plan_created`,
 
 After the initial profile searches complete, assess whether the pool is
 sufficient. Default to **not expanding**: 2-3 well-crafted profiles with
-limit 100 give a 200-300 candidate pool, which is normally enough for a
+limit 200 give a 400-600 candidate pool, which is normally enough for a
 shortlist. Returning candidates for user review beats running more searches.
 
 ### Coverage Assessment
@@ -608,6 +671,37 @@ check:
 - Ask the user before running expansion profiles unless they pre-approved
   fan-out.
 - After expansion, re-dedupe and report deltas.
+
+### Targeted deep-dive (when a profile clearly outperforms)
+
+If the initial shallow searches show **one profile carrying the shortlist**
+(most of the top_tier / high_potential candidates trace to a single profile,
+and the others are redundant or dead), do not re-run every profile deeper.
+Instead run **one deep search on the winning profile only**:
+
+- Run that profile's `query` through `$search-network` with a large limit
+  (`--limit 1000`, up to 2000) and **WITHOUT `--filter-only`**, so the full
+  `$search-network` pipeline (retrieval → hydrate → filter → **LLM rerank**)
+  scores the deeper pool for you instead of dumping everything into the JD
+  evaluator.
+- Keep the plan's pinned `--seniority-bands` and `--current-role`. The deeper
+  the pull, the more stale-role matches leak in, so `--current-role` matters
+  most here (a limit-1000 run without it pulled in ~4× the current
+  founders/execs).
+- Then merge the deep run's results into the frontier and re-run the JD
+  evaluator (Task 5) over the combined pool.
+
+Why this shape: a deep `--filter-only` run would push 1000-2000 candidates
+straight into the JD evaluator (expensive, and the cheap filter barely
+narrows). Letting `$search-network` do its own rerank on the deep pool first
+is the cost-controlled way to go deep on a productive lane. Reserve this for
+a profile that has already proven it yields strong candidates — never run
+1000-2000 on every profile speculatively.
+
+To identify the winning profile, read which profile(s) the top_tier /
+high_potential candidates came from (each candidate's `matched_probe_ids`),
+not just raw row counts — a profile can return many rows but contribute few
+shortlisted candidates.
 
 ### Trait Mutations
 
@@ -654,24 +748,49 @@ Run the evaluation primitive — do not hand-score candidates in chat:
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py \
-    --run-dir <run_dir> \
-    --max-candidates 200
+    --run-dir <run_dir>
 ```
 
 The primitive:
 
-- selects the top `--max-candidates` frontier candidates by best per-search
-  score (default 200; 0 = all)
+- evaluates the full merged frontier by default (`--max-candidates 0`); set a
+  cap only for very large frontiers
 - loads hydrated profiles from the profile-search artifacts
-- runs one async LLM evaluation per candidate against `plan.json` traits with
-  the `usable_cutoff` seniority policy
+- runs one async LLM evaluation per candidate against `plan.json` traits,
+  `hire_stage`, and the `usable_cutoff` seniority policy
+- the model returns judgments only — per-trait evidence levels, excellence
+  subscores (trajectory / pedigree / impact), seniority fit, and
+  material-flagged caveats; the **final score and verdict are computed
+  deterministically in code** from those judgments
+- per-trait evidence ladder (the model picks the bucket, code maps the value):
+  `doing_now` 0.95 (doing this exact work now) · `experienced` 0.80 (clear
+  prior direct experience) · `capable` 0.70 (enough to do it / pick it up
+  quickly) · `foundational` 0.50 (adjacent background, could slot in) · `thin`
+  0.25 · `missing` 0.0
+- must-haves aggregate by **quorum/consensus**, not linear average: the
+  candidate's weakest ~30% of must-haves are discounted, so a strong
+  candidate with a gap or two is not punished proportionally (3/3 → 1.0,
+  2/3 → 0.87, 1/3 → 0.43). Nice-to-haves are a small additive bonus (upside
+  only, never a gate).
+- verdict ladder (bar-raiser; default is `out`):
+  - `top_tier` — the team would be lucky to get them: in-band, no missing
+    must-have, trait coverage ≥ 0.80 (≈ "experienced" across must-haves),
+    excellence ≥ 0.70
+  - `high_potential` — can do the work / pick it up quickly: in-band,
+    must-coverage ≥ 0.60, OR the diamond escape (must-coverage ≥ 0.45 rescued
+    by trajectory ≥ 0.75)
+  - `out` — everyone else; there is no "maybe" or adjacent-lane tier
 - enforces seniority as a hard gate **in code**: `too_senior` / `too_junior` /
-  `wrong_track` force verdict `out` and cap `jd_score` at 0.3, regardless of
+  `wrong_track` force verdict `out` and cap the score at 0.3, regardless of
   trait scores
-- writes `candidate_evaluations.raw.jsonl` in the Task 5a schema
+- material caveats reduce the computed score (0.05 each, capped at 0.20)
+- writes `candidate_evaluations.raw.jsonl` in the Task 5a schema, including
+  `excellence` and `score_breakdown` blocks for auditability
 
 This is where precision comes from. The per-search filter only rejected
 obvious junk; this pass sees the full JD context and the seniority policy.
+Because scoring is deterministic, **trait quality (Task 1b) is the single
+point of failure** — tune the plan's traits, not the evaluator.
 
 Useful flags: `--model`, `--reasoning-effort`, `--concurrency`,
 `--max-candidates`.
@@ -700,9 +819,9 @@ uv run --project . python packs/search/primitives/export_candidate_shortlist/exp
     --run-dir <run_dir>
 ```
 
-Optional: `--min-verdict maybe` (default) or `--min-verdict strong` for a
-tighter list; `--out-dir <dir>` to export somewhere user-visible. Never use
-`--min-verdict weak` for sendable shortlists.
+Optional: `--min-verdict high_potential` (default) or `--min-verdict
+top_tier` for a tighter list; `--out-dir <dir>` to export somewhere
+user-visible. Never use `--min-verdict out` for sendable shortlists.
 
 Append lineage events: `evaluations_captured`, `shortlist_exported`.
 
@@ -719,16 +838,19 @@ Append lineage events: `evaluations_captured`, `shortlist_exported`.
   not mention internal artifact paths or legacy field names.
 - Each profile search's `execute_command` already includes
   `--execute-approved`; do not ask for another approval per search.
-- Keep per-profile limits at 100 (max 150) unless the user explicitly asks for
-  a bigger pool.
+- Keep per-profile limits at 200 (use 100 only for quick/cheap previews)
+  unless the user explicitly asks for a different pool size.
 
 ## Cost model (why these defaults)
 
 - Per-search LLM rerank is skipped (`--filter-only`); ranking happens once in
   the evaluation primitive with full JD context.
-- `--limit 100` caps retrieval, hydration, filter, and evaluation volume.
-- 3 profiles × limit 100 ≈ a few hundred cheap filter calls + ≤200 evaluation
-  calls, instead of tens of thousands of uncapped filter/rerank calls.
+- `--limit 200` caps retrieval, hydration, filter, and evaluation volume while
+  giving each archetype enough depth that a noisy profile cannot crowd out
+  better candidates before the aggregate evaluator sees them.
+- 3 profiles × limit 200 ≈ several hundred cheap filter calls + a few hundred
+  evaluation calls, instead of tens of thousands of uncapped filter/rerank
+  calls. The evaluator sees the full merged frontier by default.
 
 ## End-to-end artifact chain
 

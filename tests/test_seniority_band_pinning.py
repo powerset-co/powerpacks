@@ -109,6 +109,32 @@ class PinPayloadSeniorityBandsTests(unittest.TestCase):
         self.assertIn(("seniority_band", "In", ["director", "vice-president"]), clauses)
 
 
+class PinPayloadCurrentRoleTests(unittest.TestCase):
+    def test_pins_is_current_role_and_marks_pinned(self) -> None:
+        payload = {
+            "normalized_query": "backend engineers",
+            "role_search_filters": {"semantic_query": "x" * 90, "seniority_bands": ["senior"]},
+        }
+        pinned = sb.pin_payload_current_role(payload, True)
+        filters = pinned["role_search_filters"]
+        self.assertIs(filters["is_current_role"], True)
+        self.assertTrue(filters["is_current_role_pinned"])
+        self.assertTrue(any("is_current_role pinned" in note for note in pinned["notes"]))
+        # Does not disturb existing filters.
+        self.assertEqual(filters["seniority_bands"], ["senior"])
+        # Original payload is not mutated.
+        self.assertNotIn("is_current_role", payload["role_search_filters"])
+
+    def test_composes_with_seniority_pin(self) -> None:
+        payload = {"role_search_filters": {"seniority_bands": ["mid"]}}
+        out = sb.pin_payload_current_role(sb.pin_payload_seniority_bands(payload, ["senior", "staff"]), True)
+        rf = out["role_search_filters"]
+        self.assertEqual(rf["seniority_bands"], ["senior", "staff"])
+        self.assertTrue(rf["seniority_bands_pinned"])
+        self.assertIs(rf["is_current_role"], True)
+        self.assertTrue(rf["is_current_role_pinned"])
+
+
 class PipelineCliTests(unittest.TestCase):
     def test_both_pipelines_accept_seniority_bands_flag(self) -> None:
         network = load_module("_network_pipeline_for_bands", NETWORK_PIPELINE)
@@ -121,12 +147,32 @@ class PipelineCliTests(unittest.TestCase):
         )
         self.assertEqual(prepare_args.seniority_bands, "director")
 
+    def test_both_pipelines_accept_current_role_flag(self) -> None:
+        network = load_module("_network_pipeline_for_current", NETWORK_PIPELINE)
+        args = network.build_parser().parse_args(
+            ["run", "--query", "q", "--payload-json", "p.json", "--current-role"]
+        )
+        self.assertTrue(args.current_role)
+        prepare_args = network.build_parser().parse_args(
+            ["prepare", "--query", "q", "--current-role"]
+        )
+        self.assertTrue(prepare_args.current_role)
+        # Defaults off when not passed.
+        self.assertFalse(network.build_parser().parse_args(["run", "--state", "s.json"]).current_role)
+
     def test_network_resume_from_state_rejects_pin(self) -> None:
         network = load_module("_network_pipeline_for_bands_state", NETWORK_PIPELINE)
         args = argparse.Namespace(state="some-state.json", query=None, payload_json=None, seniority_bands="senior")
         with self.assertRaises(network.Failed) as ctx:
             network.init_state(args, Path("unused-ledger.json"), {})
         self.assertIn("--seniority-bands", str(ctx.exception))
+
+    def test_network_resume_from_state_rejects_current_role_pin(self) -> None:
+        network = load_module("_network_pipeline_for_current_state", NETWORK_PIPELINE)
+        args = argparse.Namespace(state="some-state.json", query=None, payload_json=None, seniority_bands=None, current_role=True)
+        with self.assertRaises(network.Failed) as ctx:
+            network.init_state(args, Path("unused-ledger.json"), {})
+        self.assertIn("--current-role", str(ctx.exception))
 
 
 class LocalPipelineSeniorityPinningTests(unittest.TestCase):

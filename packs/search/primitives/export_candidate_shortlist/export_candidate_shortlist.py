@@ -2,8 +2,8 @@
 """Task 5b — Export a sendable shortlist CSV from captured evaluations.
 
 Reads candidate_evaluations.json and candidate_frontier.json, filters to
-strong/maybe verdicts, and writes a clean shortlist.csv suitable for sharing
-with hiring managers.
+top_tier/high_potential verdicts, and writes a clean shortlist.csv suitable
+for sharing with hiring managers.
 
 Usage:
 
@@ -62,7 +62,12 @@ def req_summary(reqs: list[dict[str, Any]]) -> str:
     for r in reqs:
         status = r.get("status", "?")
         trait = r.get("trait", "?")
-        icon = {"strong": "✓", "partial": "~", "weak": "✗", "missing": "—", "unknown": "?"}.get(status, "?")
+        icon = {
+            "doing_now": "★", "experienced": "✓", "capable": "+", "foundational": "~",
+            "thin": "✗", "missing": "—", "unknown": "?",
+            # legacy
+            "strong": "✓", "partial": "~", "weak": "✗",
+        }.get(status, "?")
         parts.append(f"{icon} {trait}")
     return "; ".join(parts)
 
@@ -91,15 +96,14 @@ def run(args: argparse.Namespace) -> None:
     for c in frontier.get("candidates", []):
         frontier_map[c["candidate_id"]] = c
 
-    # Filter evaluations
+    # Filter evaluations. Legacy verdicts map onto the new ladder so old
+    # run dirs still export: strong->top_tier, maybe/weak->high_potential.
     min_verdict = args.min_verdict
-    include_verdicts = {"strong"}
-    if min_verdict in ("maybe", "weak", "out"):
-        include_verdicts.add("maybe")
-    if min_verdict in ("weak", "out"):
-        include_verdicts.add("weak")
+    include_verdicts = {"top_tier", "strong"}
+    if min_verdict in ("high_potential", "out"):
+        include_verdicts.update({"high_potential", "maybe"})
     if min_verdict == "out":
-        include_verdicts.add("out")
+        include_verdicts.update({"weak", "out"})
 
     evaluations = evals_doc.get("evaluations", [])
     filtered = [e for e in evaluations if e.get("verdict") in include_verdicts]
@@ -142,10 +146,9 @@ def run(args: argparse.Namespace) -> None:
         "shortlisted": len(filtered),
         "shortlist_csv": str(shortlist_path),
         "verdict_breakdown": {
-            "strong": sum(1 for e in filtered if e.get("verdict") == "strong"),
-            "maybe": sum(1 for e in filtered if e.get("verdict") == "maybe"),
-            "weak": sum(1 for e in filtered if e.get("verdict") == "weak"),
-            "out": sum(1 for e in filtered if e.get("verdict") == "out"),
+            "top_tier": sum(1 for e in filtered if e.get("verdict") in ("top_tier", "strong")),
+            "high_potential": sum(1 for e in filtered if e.get("verdict") in ("high_potential", "maybe")),
+            "out": sum(1 for e in filtered if e.get("verdict") in ("weak", "out")),
         },
     }
     manifest_path = out_dir / "shortlist_manifest.json"
@@ -162,9 +165,9 @@ def main() -> None:
     parser.add_argument("--evaluations-json", help="Path to candidate_evaluations.json")
     parser.add_argument("--frontier-json", help="Path to candidate_frontier.json")
     parser.add_argument("--out-dir", help="Output directory (defaults to run-dir)")
-    parser.add_argument("--min-verdict", default="maybe",
-                        choices=["strong", "maybe", "weak", "out"],
-                        help="Minimum verdict to include (default: maybe)")
+    parser.add_argument("--min-verdict", default="high_potential",
+                        choices=["top_tier", "high_potential", "out"],
+                        help="Minimum verdict to include (default: high_potential)")
 
     args = parser.parse_args()
     run(args)

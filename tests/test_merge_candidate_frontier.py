@@ -359,7 +359,7 @@ class TestCaptureJdEvaluations(unittest.TestCase):
             "candidate_id": "abc",
             "rank": 1,
             "jd_score": 0.85,
-            "verdict": "strong",
+            "verdict": "top_tier",
             "seniority_fit": "ideal",
             "must_have": [{"trait": "Python", "status": "strong", "evidence": "5yr exp"}],
             "nice_to_have": [],
@@ -405,7 +405,7 @@ class TestCaptureJdEvaluations(unittest.TestCase):
             "candidate_id": "abc",
             "rank": 1,
             "jd_score": 0.5,
-            "verdict": "maybe",
+            "verdict": "high_potential",
             "seniority_fit": "too_senior",
             "must_have": [],
             "nice_to_have": [],
@@ -420,8 +420,8 @@ class TestCaptureJdEvaluations(unittest.TestCase):
         errors = validate_evaluation(base, 0)
         self.assertTrue(any("cannot be used with seniority_fit" in e for e in errors))
 
-        weak = {**base, "verdict": "weak"}
-        self.assertEqual(validate_evaluation(weak, 0), [])
+        out = {**base, "verdict": "out"}
+        self.assertEqual(validate_evaluation(out, 0), [])
 
     def test_validate_evaluation_missing_fields(self) -> None:
         from packs.search.primitives.capture_jd_evaluations.capture_jd_evaluations import (
