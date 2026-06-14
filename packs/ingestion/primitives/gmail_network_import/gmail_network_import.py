@@ -612,6 +612,16 @@ def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "", exc
         sender_select = "sender_p.email_address AS sender_email, sender_p.display_name AS sender_display_name,"
     rfc822_select = "m.rfc822_message_id AS rfc822_message_id," if "rfc822_message_id" in message_columns else "NULL AS rfc822_message_id,"
     source_msg_select = "m.source_message_id AS source_message_id," if "source_message_id" in message_columns else "NULL AS source_message_id,"
+    # Order rows so every row for one canonical message is contiguous, letting
+    # the aggregator stream one message at a time instead of buffering them all.
+    # Mirrors canonical_message_id()'s precedence (rfc822 -> source -> row id) so
+    # rows that collapse to the same canonical message sort adjacently.
+    canon_when = []
+    if "rfc822_message_id" in message_columns:
+        canon_when.append("WHEN m.rfc822_message_id IS NOT NULL AND TRIM(m.rfc822_message_id) != '' THEN 'rfc822_message_id:' || TRIM(m.rfc822_message_id)")
+    if "source_message_id" in message_columns:
+        canon_when.append("WHEN m.source_message_id IS NOT NULL AND TRIM(m.source_message_id) != '' THEN 'source_message_id:' || TRIM(m.source_message_id)")
+    canon_key_sql = ("CASE " + " ".join(canon_when) + " ELSE 'row:' || m.id END") if canon_when else "'row:' || m.id"
     label_select = "'' AS label_names"
     has_label_tables_select = "0 AS has_label_tables"
     if has_label_tables:
@@ -653,7 +663,7 @@ def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "", exc
           AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
           AND (? = '' OR LOWER(s.identifier) = LOWER(?))
           {label_filter}
-        ORDER BY LOWER(p.email_address), m.id
+        ORDER BY {canon_key_sql}, m.id
     """.format(
         sender_select=sender_select,
         label_select=label_select,
@@ -662,6 +672,7 @@ def iter_msgvault_metadata(con: sqlite3.Connection, account_email: str = "", exc
         source_msg_select=source_msg_select,
         sender_join=sender_join,
         label_filter=label_filter,
+        canon_key_sql=canon_key_sql,
     )
     yield from con.execute(query, params)
 
@@ -698,37 +709,18 @@ def canonical_message_id(row: Any) -> str:
 
 
 def aggregate_msgvault_contacts(con: sqlite3.Connection, account_email: str = "", exclude_labels: Iterable[str] | None = None) -> list[dict[str, Any]]:
-    messages: dict[str, dict[str, Any]] = {}
     account_filter = account_email.strip().lower()
-    for row in iter_msgvault_metadata(con, account_filter, exclude_labels):
-        msg_id = canonical_message_id(row)
-        message = messages.setdefault(msg_id, {
-            "message_id": msg_id,
-            "conversation_id": row["conversation_id"],
-            "message_at": str(row["message_at"] or "").strip(),
-            "source_id": row["source_id"],
-            "source_account": str(row["account_email"] or "").strip().lower(),
-            "sender_email": str(row["sender_email"] or "").strip().lower(),
-            "sender_display_name": str(row["sender_display_name"] or "").strip(),
-            "label_names": normalize_label_names(str(row["label_names"] or "").split(",")),
-            "has_label_tables": bool(row["has_label_tables"]),
-            "participants": [],
-        })
-        try:
-            email = normalize_email(str(row["email"] or ""))
-        except ValueError:
-            continue
-        message["participants"].append({
-            "email": email,
-            "recipient_type": str(row["recipient_type"] or "").strip().lower(),
-            "recipient_display_name": str(row["recipient_display_name"] or "").strip(),
-            "participant_display_name": str(row["participant_display_name"] or "").strip(),
-        })
     records: dict[str, dict[str, Any]] = {}
-    for message in messages.values():
+
+    # Fold one fully-collected message into the per-contact records. Rows arrive
+    # grouped by canonical message (iter_msgvault_metadata ORDER BY), so each
+    # message is processed as soon as the next one begins and we never hold more
+    # than a single message in memory. The records dict is then the only
+    # structure that grows with the dataset.
+    def flush_message(message: dict[str, Any]) -> None:
         source_account = str(message.get("source_account") or "").strip().lower()
         if account_filter and source_account != account_filter:
-            continue
+            return
         participants = message.get("participants") or []
         from_emails = {str(p.get("email") or "").strip().lower() for p in participants if p.get("recipient_type") == "from"}
         sender_email = str(message.get("sender_email") or "").strip().lower()
@@ -821,6 +813,40 @@ def aggregate_msgvault_contacts(con: sqlite3.Connection, account_email: str = ""
                     record["first_interaction"] = message_at
                 if not record["last_interaction"] or message_at > record["last_interaction"]:
                     record["last_interaction"] = message_at
+
+    current_id: str | None = None
+    message: dict[str, Any] | None = None
+    for row in iter_msgvault_metadata(con, account_filter, exclude_labels):
+        msg_id = canonical_message_id(row)
+        if msg_id != current_id:
+            if message is not None:
+                flush_message(message)
+            current_id = msg_id
+            message = {
+                "message_id": msg_id,
+                "conversation_id": row["conversation_id"],
+                "message_at": str(row["message_at"] or "").strip(),
+                "source_id": row["source_id"],
+                "source_account": str(row["account_email"] or "").strip().lower(),
+                "sender_email": str(row["sender_email"] or "").strip().lower(),
+                "sender_display_name": str(row["sender_display_name"] or "").strip(),
+                "label_names": normalize_label_names(str(row["label_names"] or "").split(",")),
+                "has_label_tables": bool(row["has_label_tables"]),
+                "participants": [],
+            }
+        try:
+            email = normalize_email(str(row["email"] or ""))
+        except ValueError:
+            continue
+        message["participants"].append({
+            "email": email,
+            "recipient_type": str(row["recipient_type"] or "").strip().lower(),
+            "recipient_display_name": str(row["recipient_display_name"] or "").strip(),
+            "participant_display_name": str(row["participant_display_name"] or "").strip(),
+        })
+    if message is not None:
+        flush_message(message)
+
     out: list[dict[str, Any]] = []
     for email, record in records.items():
         display_name = best_display_name(email, record["names"])

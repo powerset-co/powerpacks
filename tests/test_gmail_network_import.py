@@ -216,6 +216,57 @@ class GmailNetworkImportTests(unittest.TestCase):
         self.assertEqual(pat["total_sent"], 1)
         con.close()
 
+    def test_msgvault_merges_canonical_copies_when_rows_not_adjacent(self):
+        """Streaming aggregation merges by canonical message id, not row order.
+
+        The aggregator processes one message at a time and relies on every row
+        of a canonical message arriving contiguously (iter_msgvault_metadata
+        ORDER BY). This fixture stores the same rfc822 message under two copies
+        whose row ids are far apart (10 and 40) with an unrelated message (20)
+        between them, so a naive row-order grouping would split it. Correct
+        canonical grouping must still count it once."""
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript("""
+            CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+            CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                source_id INTEGER,
+                conversation_id INTEGER,
+                rfc822_message_id TEXT,
+                source_message_id TEXT,
+                message_type TEXT,
+                sent_at TEXT,
+                received_at TEXT,
+                internal_date TEXT,
+                deleted_at TEXT,
+                deleted_from_source_at TEXT
+            );
+            CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
+            INSERT INTO sources (id, source_type, identifier, display_name) VALUES (1, 'gmail', 'me@gmail.com', 'Me');
+            INSERT INTO participants (id, email_address, display_name, domain) VALUES
+                (1, 'me@gmail.com', 'Me', 'gmail.com'),
+                (2, 'pat@example.com', 'Pat', 'example.com');
+            -- Copies of '<dup@x>' at row ids 10 and 40, with '<mid@x>' (id 20) between.
+            INSERT INTO messages (id, source_id, conversation_id, rfc822_message_id, message_type, sent_at) VALUES
+                (10, 1, 100, '<dup@x>',  'email', '2026-01-01T00:00:00Z'),
+                (20, 1, 100, '<mid@x>',  'email', '2026-01-02T00:00:00Z'),
+                (40, 1, 200, '<dup@x>',  'email', '2026-01-01T00:00:00Z');
+            INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
+                (10, 2, 'from', 'Pat'), (10, 1, 'to', 'Me'),
+                (20, 2, 'from', 'Pat'), (20, 1, 'to', 'Me'),
+                (40, 2, 'from', 'Pat'), (40, 1, 'to', 'Me');
+        """)
+
+        rows = gmail_network_import.aggregate_msgvault_contacts(con, "me@gmail.com")
+        pat = {row["email"]: row for row in rows}["pat@example.com"]
+        # 3 msgvault rows -> 2 real messages ('<dup@x>' counted once + '<mid@x>')
+        self.assertEqual(pat["total_messages"], 2)
+        self.assertEqual(pat["total_received"], 2)
+        self.assertEqual(pat["total_sent"], 0)
+        con.close()
+
     def test_msgvault_group_email_counts_direction_at_message_level(self):
         con = sqlite3.connect(":memory:")
         con.row_factory = sqlite3.Row
