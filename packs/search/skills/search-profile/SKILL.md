@@ -94,7 +94,7 @@ Apply the same trait rules as Task 1b with these adjustments:
 ### S3. Candidate profile design
 
 Usually **one** candidate profile is enough — the person *is* the archetype.
-Design a single capped search (limit 100) describing the person's role,
+Design a single capped search (limit 200) describing the person's role,
 level, skills, and domain in plain English. Add a second profile only when
 the seed person genuinely spans two distinct patterns (e.g. operator +
 investor) and say which pattern each search targets.
@@ -438,7 +438,7 @@ better candidates before the aggregate evaluator ever sees them.
   "id": "profile_bigco_equivalent",
   "query": "Senior or staff data engineers in New York or San Francisco at large technology companies who build production ETL pipelines and data platforms with Python and SQL",
   "strategy": "role_focused",
-  "limit": 100,
+  "limit": 200,
   "targets_traits": [
     "Senior hands-on data engineering experience",
     "ETL pipeline architecture"
@@ -641,67 +641,72 @@ Write `lineage.json` events: `source_fetched`, `plan_created`,
 
 ---
 
-## Task 3 — Expand on Coverage Gaps
+## Task 3 — Deep-Dive on the Best Lane (standard step)
 
-After the initial profile searches complete, assess whether the pool is
-sufficient. Default to **not expanding**: 2-3 well-crafted profiles with
-limit 200 give a 400-600 candidate pool, which is normally enough for a
-shortlist. Returning candidates for user review beats running more searches.
+After the initial shallow lanes are merged (Task 4) and evaluated once
+(Task 5a), **always run one deep search on the single best-performing lane**.
+This is not optional or conditional — it is the default flow. The shallow
+lanes (limit 200, filter-only) only find the *shape* of the pool; the deep
+dive is where you actually go get the candidates.
 
-### Coverage Assessment
+### Pick the lane (highest precision)
 
-Dedupe candidates across all profile CSVs by person_id / LinkedIn URL. Then
-check:
+From the **first** evaluation pass, compute each lane's precision:
 
-1. **Total pool size** — if fewer than ~8 unique usable candidates,
-   expansion is needed.
-2. **Trait coverage** — if a must-have trait cluster has <2 candidates with
-   plausible evidence, design one focused expansion profile for it.
-3. **Seniority distribution** — if the pool skews too senior or too junior,
-   design a profile targeting the right band.
-4. **Profile overlap** — compute the share of candidates that appeared in
-   multiple profile searches. If >50% of the pool matched most profiles, the
-   profiles were not distinct; note this in the lineage and design any
-   expansion profile on a genuinely different axis.
+```
+lane_precision = (lane candidates that are top_tier or high_potential)
+                 / (lane's total evaluated candidates)
+```
 
-### Expansion Rules
+Use each candidate's `matched_probe_ids` to attribute them to lanes (a
+candidate in multiple lanes counts for each). Pick the lane with the
+**highest precision**; tie-break on the larger absolute count of good
+candidates. Dead lanes (0 rows) are skipped. Report the per-lane precision in
+one line so the choice is visible.
 
-- Expansion means **new profile searches**, not re-sorting the existing pool.
-- 1-2 expansion profiles, same design and budget rules.
-- Ask the user before running expansion profiles unless they pre-approved
-  fan-out.
-- After expansion, re-dedupe and report deltas.
+### Run that one lane deep
 
-### Targeted deep-dive (when a profile clearly outperforms)
+Run the winning lane's `query` through `$search-network` with a large limit
+and the full reranker:
 
-If the initial shallow searches show **one profile carrying the shortlist**
-(most of the top_tier / high_potential candidates trace to a single profile,
-and the others are redundant or dead), do not re-run every profile deeper.
-Instead run **one deep search on the winning profile only**:
+```
+... search_network_pipeline.py run ... --limit 1000 --seniority-bands senior,staff --current-role
+```
 
-- Run that profile's `query` through `$search-network` with a large limit
-  (`--limit 1000`, up to 2000) and **WITHOUT `--filter-only`**, so the full
-  `$search-network` pipeline (retrieval → hydrate → filter → **LLM rerank**)
-  scores the deeper pool for you instead of dumping everything into the JD
-  evaluator.
+- **`--limit 1000`** (up to 2000) — go deep; this is the point of the step.
+- **WITHOUT `--filter-only`** — the full `$search-network` pipeline
+  (retrieval → hydrate → filter → **LLM rerank**) scores the deep pool for
+  you, instead of dumping 1000+ raw candidates into the JD evaluator.
 - Keep the plan's pinned `--seniority-bands` and `--current-role`. The deeper
   the pull, the more stale-role matches leak in, so `--current-role` matters
   most here (a limit-1000 run without it pulled in ~4× the current
   founders/execs).
-- Then merge the deep run's results into the frontier and re-run the JD
-  evaluator (Task 5) over the combined pool.
+
+Then merge the deep run's results into the frontier and **re-run the JD
+evaluator (Task 5)** over the combined pool, then export from that final
+evaluation. Only one lane goes deep — never run 1000-2000 on every lane.
 
 Why this shape: a deep `--filter-only` run would push 1000-2000 candidates
 straight into the JD evaluator (expensive, and the cheap filter barely
-narrows). Letting `$search-network` do its own rerank on the deep pool first
-is the cost-controlled way to go deep on a productive lane. Reserve this for
-a profile that has already proven it yields strong candidates — never run
-1000-2000 on every profile speculatively.
+narrows). Letting `$search-network` rerank the deep pool first is the
+cost-controlled way to go deep on the lane that already proved productive.
 
-To identify the winning profile, read which profile(s) the top_tier /
-high_potential candidates came from (each candidate's `matched_probe_ids`),
-not just raw row counts — a profile can return many rows but contribute few
-shortlisted candidates.
+### Coverage / extra expansion (only if still thin)
+
+If after the deep dive the pool is still thin (fewer than ~8 unique usable
+candidates) or a must-have trait cluster has <2 plausible candidates, assess
+whether the pool is sufficient before stopping.
+
+### Extra expansion (rare)
+
+If the deep dive still leaves gaps, expansion means **new profile searches**,
+not re-sorting the pool:
+
+- 1-2 expansion profiles on a genuinely different axis (e.g. a must-have
+  trait cluster with <2 plausible candidates), same design and budget rules.
+- If >50% of the pool matched most lanes, the lanes were not distinct; design
+  any expansion on a different axis.
+- After expansion, re-dedupe, re-evaluate, and report deltas.
 
 ### Trait Mutations
 
@@ -741,6 +746,16 @@ Report the overlap share from `merge_summary.json` in one line. Log
 ---
 
 ## Task 5 — Evaluate Candidates and Export Shortlist
+
+The evaluator runs **twice** in the standard flow: once on the shallow merged
+pool to pick the deep-dive lane (Task 3), then again on the combined pool
+after the deep dive. Both passes use the same command below; the export
+(5b/5c) runs only on the **final** pass.
+
+1. Merge shallow lanes (Task 4) → run 5a → use the per-lane precision to pick
+   and run the deep-dive lane (Task 3).
+2. Merge the deep run into the frontier (Task 4 again) → run 5a again → 5b →
+   5c on this final pool.
 
 ### 5a. Automated Evaluation (primitive)
 
@@ -843,14 +858,21 @@ Append lineage events: `evaluations_captured`, `shortlist_exported`.
 
 ## Cost model (why these defaults)
 
-- Per-search LLM rerank is skipped (`--filter-only`); ranking happens once in
-  the evaluation primitive with full JD context.
-- `--limit 200` caps retrieval, hydration, filter, and evaluation volume while
-  giving each archetype enough depth that a noisy profile cannot crowd out
-  better candidates before the aggregate evaluator sees them.
-- 3 profiles × limit 200 ≈ several hundred cheap filter calls + a few hundred
-  evaluation calls, instead of tens of thousands of uncapped filter/rerank
-  calls. The evaluator sees the full merged frontier by default.
+Two-phase by design: cheap-and-broad to find the productive lane, then deep on
+just that one.
+
+- **Shallow phase:** each lane runs `--filter-only` at `--limit 200` — the
+  cheap conservative filter only, no per-lane rerank. Enough depth that a
+  noisy lane cannot crowd out better candidates, without paying rerank on
+  every lane. First JD evaluation runs on this merged pool.
+- **Deep phase:** exactly **one** lane (highest precision) runs at
+  `--limit 1000` WITHOUT `--filter-only`, so `$search-network`'s own rerank
+  scores the deep pool before it reaches the JD evaluator. One deep lane, not
+  all of them.
+- The JD evaluator runs twice (shallow pool, then combined pool) and sees the
+  full frontier by default. Net: a few hundred cheap filter calls + one deep
+  reranked lane + two bounded evaluation passes — not tens of thousands of
+  uncapped calls.
 
 ## End-to-end artifact chain
 
