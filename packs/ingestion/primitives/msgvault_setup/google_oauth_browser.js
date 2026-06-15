@@ -8,7 +8,40 @@
 
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const { chromium } = require("playwright-core");
+
+// Fallback Chrome major used only if the installed version can't be read. Keep
+// this reasonably current so the UA never looks stale to Google's checks.
+const FALLBACK_CHROME_MAJOR = 149;
+const MAC_CHROME_BINARY = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+function installedChromeMajor() {
+  for (const bin of [MAC_CHROME_BINARY, "google-chrome", "chromium"]) {
+    try {
+      const out = execFileSync(bin, ["--version"], { encoding: "utf8", timeout: 5000 });
+      const match = /(\d+)\.\d+\.\d+/.exec(out || "");
+      if (match) return Number(match[1]);
+    } catch (error) {
+      // try the next candidate binary
+    }
+  }
+  return FALLBACK_CHROME_MAJOR;
+}
+
+// Build a consumer-grade desktop UA that matches the REAL installed Chrome major
+// version. With channel:"chrome" the browser also sends Sec-CH-UA client hints
+// for that same major, so UA + client hints stay consistent (a random UA from a
+// package would mismatch the hints and look MORE automated). Modern Chrome
+// freezes the macOS token at 10_15_7 and the minor at 0.0.0 for privacy, so we
+// mirror exactly what a real Chrome of this major emits.
+function recentMacUserAgent() {
+  const major = installedChromeMajor();
+  return (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+    `(KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`
+  );
+}
 
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
@@ -759,7 +792,22 @@ async function main() {
     headless: false,
     acceptDownloads: true,
     viewport: null,
-    args: ["--start-maximized"],
+    // Present a current, consumer-grade UA (no HeadlessChrome token), matched to
+    // the installed Chrome major so it stays consistent with Sec-CH-UA hints.
+    userAgent: recentMacUserAgent(),
+    // Strip the automation fingerprints Google's "this browser may not be
+    // secure" check keys on: the --enable-automation switch (which also sets
+    // navigator.webdriver and shows the "controlled by automated software" +
+    // --no-sandbox infobar) and the AutomationControlled blink feature.
+    // Omit --no-sandbox (re-adds the flag banner) and --disable-web-security
+    // (breaks the GCP console's CORS/OAuth flow).
+    ignoreDefaultArgs: ["--enable-automation"],
+    args: [
+      "--start-maximized",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-infobars",
+      "--disable-extensions",
+    ],
   });
   const page = context.pages()[0] || await context.newPage();
   page.setDefaultTimeout(Math.max(5000, timeoutSeconds * 1000));

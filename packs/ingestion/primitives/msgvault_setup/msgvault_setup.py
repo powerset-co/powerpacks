@@ -197,6 +197,18 @@ def is_gcloud_reauth_error(text: str) -> bool:
     )
 
 
+def is_project_taken_error(text: str) -> bool:
+    # A deterministic project id can be globally reserved by another account, or
+    # held in Google's 30-day soft-delete purge window, even when the active
+    # account cannot describe it. gcloud surfaces this as "already in use".
+    haystack = (text or "").lower()
+    return (
+        "already in use by another project" in haystack
+        or "requested entity already exists" in haystack
+        or "project id you specified is already in use" in haystack
+    )
+
+
 def gcloud_context(project: str | None = None) -> dict[str, Any]:
     gcloud_path = shutil.which("gcloud") or ""
     active_project = project or gcloud_value(["config", "get-value", "project", "--quiet"])
@@ -377,7 +389,13 @@ def project_exists(project_id: str) -> bool:
     return result["ok"]
 
 
-def create_gcloud_project(project_id: str, project_name: str) -> dict[str, Any]:
+def create_gcloud_project(
+    project_id: str,
+    project_name: str,
+    *,
+    allow_fallback: bool = True,
+    max_attempts: int = 4,
+) -> dict[str, Any]:
     project_id = validate_project_id(project_id)
     if not shutil.which("gcloud"):
         return {"status": "error", "message": "gcloud not installed"}
@@ -385,26 +403,53 @@ def create_gcloud_project(project_id: str, project_name: str) -> dict[str, Any]:
     if project_exists(project_id):
         progress(f"Using existing Google Cloud project {project_id}.")
         return {"status": "ok", "project": project_id, "created": False}
-    progress(f"Creating Google Cloud project {project_id}...")
-    result = run_command(
-        ["gcloud", "projects", "create", project_id, "--name", project_name, "--format=json"],
-        timeout=180,
-    )
-    if result["ok"]:
-        progress(f"Google Cloud project {project_id} created.")
-        return {"status": "ok", "project": project_id, "created": True}
-    message = tail(result.get("stderr") or result.get("stdout") or "")
-    if is_gcloud_reauth_error(message):
+
+    attempt_id = project_id
+    fallbacks_used: list[str] = []
+    for attempt in range(max_attempts):
+        progress(f"Creating Google Cloud project {attempt_id}...")
+        result = run_command(
+            ["gcloud", "projects", "create", attempt_id, "--name", project_name, "--format=json"],
+            timeout=180,
+        )
+        if result["ok"]:
+            progress(f"Google Cloud project {attempt_id} created.")
+            return {
+                "status": "ok",
+                "project": attempt_id,
+                "created": True,
+                "requested_project": project_id,
+                "fallbacks_used": fallbacks_used,
+            }
+        message = tail(result.get("stderr") or result.get("stdout") or "")
+        if is_gcloud_reauth_error(message):
+            return {
+                "status": "reauth_required",
+                "project": attempt_id,
+                "message": message,
+                "fix_command": "gcloud auth login",
+            }
+        # The deterministic id is globally reserved (owned by another account or
+        # in soft-delete limbo). Retry with a fresh random id so a fresh install
+        # is not blocked for 30 days by a poisoned project id.
+        if allow_fallback and is_project_taken_error(message) and attempt < max_attempts - 1:
+            attempt_id = default_project_id()
+            fallbacks_used.append(attempt_id)
+            progress(f"Project id is already in use; retrying with {attempt_id}...")
+            continue
         return {
-            "status": "reauth_required",
-            "project": project_id,
+            "status": "error",
+            "project": attempt_id,
+            "requested_project": project_id,
+            "fallbacks_used": fallbacks_used,
             "message": message,
-            "fix_command": "gcloud auth login",
         }
     return {
         "status": "error",
-        "project": project_id,
-        "message": message,
+        "project": attempt_id,
+        "requested_project": project_id,
+        "fallbacks_used": fallbacks_used,
+        "message": "exhausted project id creation attempts",
     }
 
 
@@ -1081,6 +1126,17 @@ def cmd_browser_setup(args: argparse.Namespace) -> int:
         if project["status"] != "ok":
             emit({"status": "error", "message": "Google Cloud project creation failed.", "project": project})
             return 1
+        # create_gcloud_project may have fallen back to a fresh id when the
+        # deterministic one was globally reserved. Adopt the id that was really
+        # created and pin it to state so every later step and re-run reuses it.
+        created_project_id = validate_project_id(str(project.get("project") or "")) or project_id
+        if created_project_id != project_id:
+            project_id = created_project_id
+            save_oauth_app_state(
+                home,
+                app_name,
+                {"project_id": project_id, "email": args.email or auth.get("account", "")},
+            )
     else:
         progress(f"Using Google Cloud project {project_id}.")
     selected_project = {
