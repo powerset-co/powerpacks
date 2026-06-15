@@ -600,57 +600,6 @@ export async function handleOnboardingRoutes(req: any, res: any, url: URL): Prom
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v2/linkedin/status") {
-    sendJson(res, onboardingV2LinkedInStatus());
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/linkedin/dry-run" && req.method === "POST") {
-    sendJson(res, dryRunOnboardingV2LinkedIn(await readRequestJson(req)));
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/linkedin/run" && req.method === "POST") {
-    const job = startOnboardingV2LinkedIn(await readRequestJson(req));
-    sendJson(res, { job, status: onboardingV2LinkedInStatus() });
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/gmail/status") {
-    sendJson(res, onboardingV2GmailStatus());
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/gmail/check-tokens" && req.method === "POST") {
-    const body = await readRequestJson(req);
-    const emails = Array.isArray(body.emails) ? body.emails.map(String).filter(Boolean) : [];
-    if (emails.length === 0) {
-      sendJson(res, { expired: [] });
-      return true;
-    }
-    const command = [
-      "uv", "run", "--project", ".", "python", "-c",
-      `import json; from packs.ingestion.primitives.setup_gmail.setup_gmail import _check_gmail_tokens; print(json.dumps({"expired": _check_gmail_tokens(${JSON.stringify(emails)})}))`,
-    ];
-    const result = spawnSync(command[0], command.slice(1), {
-      cwd: powerpacksRepoRoot, env: setupProcessEnv(), encoding: "utf8", timeout: 60000,
-    });
-    const payload = parseJsonFragment(result.stdout || "") || { expired: emails };
-    sendJson(res, payload);
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/gmail/dry-run" && req.method === "POST") {
-    sendJson(res, dryRunOnboardingV2Gmail());
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/gmail/run" && req.method === "POST") {
-    const job = startOnboardingV2Gmail(await readRequestJson(req));
-    sendJson(res, { job, status: onboardingV2GmailStatus() });
-    return true;
-  }
-
   if (url.pathname === "/local-api/onboarding/messages/status") {
     sendJson(res, onboardingV2MessagesStatus());
     return true;
