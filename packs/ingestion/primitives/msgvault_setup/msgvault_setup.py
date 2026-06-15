@@ -558,10 +558,21 @@ def status_payload(home: Path) -> dict[str, Any]:
         name: {"path": value, "exists": bool(value and Path(value).expanduser().exists())}
         for name, value in secrets.items()
     }
-    ready = bool(msgvault_path and cfg_path.exists() and secrets and db_path(home).exists())
+    # "ready" means the user can actually sync: vault configured AND at least one
+    # authorized account. Without the account gate the Gmail page jumps to the
+    # stats view and the authorize step becomes unreachable.
+    ready = bool(msgvault_path and cfg_path.exists() and secrets and db_path(home).exists() and accounts)
+    setup_state = load_setup_state(home)
+    owner_email = str(setup_state.get("email") or "")
+    # The emails the user asked to authorize live in setup state as test_users
+    # (saved by add-test-users). They're the source of truth for "accounts
+    # available to authorize" — msgvault only knows who's already authorized.
+    desired_emails = normalize_email_list([owner_email, *(setup_state.get("test_users") or [])])
     return {
         "status": "ok" if ready else "needs_setup",
         "home": str(home),
+        "owner_email": owner_email,
+        "desired_emails": desired_emails,
         "msgvault": {
             "installed": bool(msgvault_path),
             "path": msgvault_path,

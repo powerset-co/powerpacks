@@ -1113,7 +1113,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
   }
 
   if (action === "gmail-link-emails") {
-    return startSetupJob(action, gmailLinkCommand(operator.id, body.emails), 60 * 60 * 1000);
+    return startSetupJob(action, gmailLinkCommand(operator.id, body.emails, { skipAuthorize: Boolean(body.skipAuthorize) }), 60 * 60 * 1000);
   }
 
   if (action === "linkedin-csv") {

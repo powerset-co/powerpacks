@@ -142,7 +142,9 @@ export function runOnboardingLinkedIn(
 // msgvault setup state: gcloud auth, OAuth app (client_secret), db, authorized accounts.
 export interface MsgvaultStatus {
   status: string; // "ok" | "needs_setup" | "error"
-  accounts: Array<{ account_email?: string }>;
+  owner_email?: string; // primary account from setup state (seeds the authorize list)
+  desired_emails?: string[]; // emails the user asked to authorize (test_users) — source of truth pre-auth
+  accounts: Array<{ email?: string; message_count?: number; last_sync?: string | null }>; // authorized (msgvault rows)
   config?: { oauth_configured?: boolean; exists?: boolean };
   database?: { exists?: boolean };
   gcloud?: { installed?: boolean; account?: string; project?: string };

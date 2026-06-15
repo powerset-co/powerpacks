@@ -7,7 +7,9 @@ import { cn } from "@/lib/utils";
 import {
   estimateGmailSync,
   fetchGmailAccounts,
+  fetchMsgvaultStatus,
   fetchSetupJob,
+  runGmailAuthorize,
   runGmailWindowSync,
   runSetupAction,
   type GmailAccount,
@@ -36,8 +38,10 @@ export function GmailSyncPanel({ onChange }: { onChange?: () => void } = {}) {
   const [estimating, setEstimating] = useState(false);
   const [allPending, setAllPending] = useState(false);
   const [linking, setLinking] = useState(false);
+  const [linkingEmail, setLinkingEmail] = useState<string | null>(null); // which email is being authorized
   const [addOpen, setAddOpen] = useState(false);
   const [newEmail, setNewEmail] = useState("");
+  const [desired, setDesired] = useState<string[]>([]); // emails the user asked to authorize (backend test_users)
   const [syncing, setSyncing] = useState(false);
   const [syncDone, setSyncDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -83,17 +87,31 @@ export function GmailSyncPanel({ onChange }: { onChange?: () => void } = {}) {
     }
   }, []);
 
+  // Desired emails (test_users) are the backend source of truth for who the user
+  // wants authorized — msgvault only knows who already *is* authorized.
+  const loadDesired = useCallback(async () => {
+    try {
+      const s = await fetchMsgvaultStatus();
+      setDesired((s.desired_emails || []).map((e) => e.toLowerCase()));
+    } catch {
+      /* leave desired as-is */
+    }
+  }, []);
+
   useEffect(() => {
     loadAccounts().then((emails) => runEstimate(emails));
-  }, [loadAccounts, runEstimate]);
+    loadDesired();
+  }, [loadAccounts, loadDesired, runEstimate]);
 
   async function addAccount(email: string) {
     setLinking(true);
+    setLinkingEmail(email.toLowerCase());
     setError(null);
     try {
-      // gmail-link-emails runs the OAuth flow as a background job; wait for it
-      // to finish before reloading, or the new account isn't in msgvault yet.
-      const { job } = await runSetupAction({ action: "gmail-link-emails", emails: email });
+      // Add = register + add as OAuth test user, left PENDING (skipAuthorize).
+      // The user authorizes it separately via its Authorize button. Background
+      // job; wait for it to finish before reloading.
+      const { job } = await runSetupAction({ action: "gmail-link-emails", emails: email, skipAuthorize: true });
       let current = job;
       while (current.status === "running" || current.status === "pending") {
         await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -103,6 +121,7 @@ export function GmailSyncPanel({ onChange }: { onChange?: () => void } = {}) {
       setAddOpen(false);
       if (current.status === "completed") {
         runEstimate(await loadAccounts());
+        loadDesired();
       } else {
         setError(current.stderr || "Could not add that account.");
       }
@@ -110,6 +129,35 @@ export function GmailSyncPanel({ onChange }: { onChange?: () => void } = {}) {
       setError(err instanceof Error ? err.message : "Failed to add account");
     } finally {
       setLinking(false);
+      setLinkingEmail(null);
+    }
+  }
+
+  // Authorize an account that's already in the desired/test-user list: run the
+  // per-account grant (add-account) only — no add-test-users / OAuth console
+  // panel, since it was already added at create time.
+  async function authorizeOnly(email: string) {
+    setLinking(true);
+    setLinkingEmail(email.toLowerCase());
+    setError(null);
+    try {
+      const { job } = await runGmailAuthorize({ email });
+      let current = job;
+      while (current.status === "running" || current.status === "pending") {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        current = await fetchSetupJob(job.id);
+      }
+      if (current.status === "completed") {
+        runEstimate(await loadAccounts());
+        loadDesired();
+      } else {
+        setError(current.stderr || `Couldn't authorize ${email}.`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Authorization failed");
+    } finally {
+      setLinking(false);
+      setLinkingEmail(null);
     }
   }
 
@@ -129,6 +177,7 @@ export function GmailSyncPanel({ onChange }: { onChange?: () => void } = {}) {
         setSyncDone(`Synced ${selectedLabel}. Refreshing…`);
         runEstimate(await loadAccounts());
         onChange?.();
+        setSyncDone(`Synced ${selectedLabel}`);
       } else {
         setError(current.stderr || "Sync did not complete.");
       }
@@ -143,6 +192,10 @@ export function GmailSyncPanel({ onChange }: { onChange?: () => void } = {}) {
   const selectedLabel = SYNC_WINDOWS.find((w) => w.id === selected)?.label.toLowerCase() ?? "";
   const accountCount = accounts.length;
   const hasAccounts = accountCount > 0;
+  // Desired emails the user picked at create time that aren't authorized yet —
+  // shown with an Authorize button so they don't have to retype them.
+  const authorizedSet = new Set(accounts.map((a) => (a.email || "").toLowerCase()));
+  const pending = desired.filter((email) => !authorizedSet.has(email));
 
   return (
     <div className="space-y-3">
@@ -163,17 +216,33 @@ export function GmailSyncPanel({ onChange }: { onChange?: () => void } = {}) {
           <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading accounts…
           </div>
-        ) : hasAccounts ? (
+        ) : hasAccounts || pending.length > 0 ? (
           <ul className="mt-2 space-y-1">
             {accounts.map((account) => (
               <li key={account.email} className="flex items-center gap-2 text-sm">
                 <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
                 <span className="break-all">{account.email}</span>
-                {account.message_count > 0 && (
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    {account.message_count.toLocaleString()} synced
-                  </span>
-                )}
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                  {account.message_count > 0
+                    ? `${account.message_count.toLocaleString()} synced`
+                    : "Not synced yet"}
+                </span>
+              </li>
+            ))}
+            {pending.map((email) => (
+              <li key={email} className="flex items-center gap-2 text-sm">
+                <Clock className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="break-all text-muted-foreground">{email}</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-7"
+                  disabled={linking}
+                  onClick={() => authorizeOnly(email)}
+                >
+                  {linkingEmail === email ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                  {linkingEmail === email ? "Authorizing…" : "Authorize"}
+                </Button>
               </li>
             ))}
           </ul>
@@ -196,10 +265,10 @@ export function GmailSyncPanel({ onChange }: { onChange?: () => void } = {}) {
                 }}
               />
               <Button size="sm" disabled={!newEmail.trim() || linking} onClick={() => addAccount(newEmail.trim())}>
-                {linking ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null} Connect
+                {linking ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null} Add
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">Opens Google sign-in in your browser for read-only access.</p>
+            <p className="text-xs text-muted-foreground">Adds the account as a test user, then it appears below to Authorize.</p>
           </div>
         )}
       </div>
@@ -264,7 +333,16 @@ export function GmailSyncPanel({ onChange }: { onChange?: () => void } = {}) {
         {syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
         {syncing ? `Syncing ${selectedLabel}…` : `Sync ${selectedLabel}`}
       </Button>
-      {syncDone && <p className="text-center text-sm text-emerald-600">{syncDone}</p>}
+      {syncDone && (
+        <p className="flex items-center justify-center gap-1.5 text-center text-sm text-emerald-600">
+          {syncDone.endsWith("…") ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4" />
+          )}
+          {syncDone}
+        </p>
+      )}
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
   );

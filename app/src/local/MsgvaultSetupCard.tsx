@@ -9,6 +9,7 @@ import {
   fetchSetupJob,
   runGmailAuthorize,
   runGmailVaultSetup,
+  runSetupAction,
   type MsgvaultStatus,
   type SetupJob,
 } from "./powerpacksApi";
@@ -60,6 +61,7 @@ export function MsgvaultSetupCard({ onReady }: { onReady?: () => void }) {
   const [busy, setBusy] = useState<string | null>(null); // "setup" | `auth:<email>`
   const [error, setError] = useState<string | null>(null);
   const [desired, setDesired] = useState<string[]>(() => loadDesired());
+  const [authEmail, setAuthEmail] = useState(""); // manual "authorize another" input
 
   const refresh = useCallback(async () => {
     try {
@@ -83,7 +85,7 @@ export function MsgvaultSetupCard({ onReady }: { onReady?: () => void }) {
   const gcloudReady = Boolean(status?.gcloud?.installed && status?.gcloud?.account);
   const oauthConfigured = status?.config?.oauth_configured === true;
   const authorized = new Set(
-    (status?.accounts || []).map((a) => String(a.account_email || "").toLowerCase()).filter(Boolean)
+    (status?.accounts || []).map((a) => String(a.email || "").toLowerCase()).filter(Boolean)
   );
 
   function addAdditional() {
@@ -131,6 +133,27 @@ export function MsgvaultSetupCard({ onReady }: { onReady?: () => void }) {
     }
   }
 
+  // Add a brand-new account: register it + add as OAuth test user, left PENDING
+  // (skipAuthorize). It then appears in the list with its own Authorize button.
+  // (A new email isn't a test user yet, so we can't grant it directly.)
+  async function handleAddAccount(email: string) {
+    const normalized = email.trim().toLowerCase();
+    if (!normalized) return;
+    setBusy(`add:${normalized}`);
+    setError(null);
+    try {
+      const { job } = await runSetupAction({ action: "gmail-link-emails", emails: normalized, skipAuthorize: true });
+      const done = await pollJob(job);
+      if (done.status !== "completed") setError(done.stderr || `Couldn't add ${normalized}.`);
+      setAuthEmail("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Add failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   // gcloud prerequisite — browser-setup can't run without an authed gcloud.
   if (!loading && !gcloudReady) {
     return (
@@ -160,9 +183,16 @@ export function MsgvaultSetupCard({ onReady }: { onReady?: () => void }) {
     );
   }
 
-  // Phase 2 — vault exists, authorize each requested account.
+  // Phase 2 — vault exists, authorize each requested account. Build the list
+  // from the backend owner email + any locally-remembered desired emails + who
+  // msgvault already shows as authorized, so it never depends on localStorage
+  // alone (e.g. vault created in another browser/session).
   if (oauthConfigured) {
-    const accounts = desired.length ? desired : [...authorized];
+    const ownerEmail = String(status?.owner_email || "").toLowerCase();
+    const backendDesired = (status?.desired_emails || []).map((e) => e.toLowerCase());
+    const accounts = [...new Set(
+      [ownerEmail, ...backendDesired, ...desired, ...authorized].filter(Boolean)
+    )];
     return (
       <Card>
         <CardHeader>
@@ -199,8 +229,27 @@ export function MsgvaultSetupCard({ onReady }: { onReady?: () => void }) {
               </div>
             );
           })}
-          {busy?.startsWith("auth:") && (
-            <p className="text-xs text-muted-foreground">A browser window opened — finish the Google grant for this account.</p>
+          <div className="flex items-end gap-2 pt-1">
+            <Input
+              value={authEmail}
+              onChange={(event) => setAuthEmail(event.target.value)}
+              placeholder="Add another account…"
+              disabled={busy !== null}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && authEmail.trim()) handleAddAccount(authEmail);
+              }}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy !== null || !authEmail.trim()}
+              onClick={() => handleAddAccount(authEmail)}
+            >
+              Add
+            </Button>
+          </div>
+          {(busy?.startsWith("auth:") || busy?.startsWith("add:")) && (
+            <p className="text-xs text-muted-foreground">A browser window opened — finish the step for this account.</p>
           )}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </CardContent>

@@ -24,7 +24,7 @@ import {
   resolveOperator,
 } from "../lib/accounts";
 import { messagesLinkStatus, sourceSlug } from "../lib/sources";
-import { msgvaultHomeArgs, normalizeEmailList, onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
+import { gmailLinkCommand, msgvaultHomeArgs, normalizeEmailList, onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
 import { shellJoin } from "../lib/shell";
 import { readRequestJson, sendJson } from "../lib/http";
 import { setupJobsList, startSetupJob } from "../jobs";
@@ -541,12 +541,18 @@ function startGmailVaultSetup(body: Record<string, any>): SetupJob {
   return startSetupJob("gmail-vault-setup", command, 30 * 60 * 1000, { actionKey: "gmail-vault-setup" });
 }
 
-// Authorize one Gmail account — the per-account browser grant. On success the
-// account shows up in msgvault list-accounts.
+// Authorize one Gmail account: per-account browser grant (add-account) AND
+// register it in accounts.json (--gmail-add-email/--gmail-authorized-email) so
+// the discover/sync pipeline actually syncs it. Skips add-test-users (no GCP
+// console panel) since the email is already a test user from create time.
+// Routed through gmailLinkCommand so the card and the panel share one path.
 function startGmailAuthorize(body: Record<string, any>): SetupJob {
   const email = String(body.email || "").trim().toLowerCase();
   if (!email) throw new Error("email is required");
-  const command = ["uv", "run", "--project", ".", "python", MSGVAULT_PY, "add-account", "--email", email, ...msgvaultHomeArgs()];
+  const setupLedger = readJsonSync(setupLedgerPath) || {};
+  const accounts = readJsonSync(accountsPath) || {};
+  const operator = resolveOperator(setupLedger, accounts);
+  const command = gmailLinkCommand(operator.id, [email], { skipTestUsers: true });
   return startSetupJob("gmail-authorize", command, 15 * 60 * 1000, { actionKey: `gmail-authorize:${email}` });
 }
 

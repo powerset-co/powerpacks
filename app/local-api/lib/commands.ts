@@ -82,7 +82,11 @@ export function msgvaultOauthConfigured(): boolean {
   }
 }
 
-export function gmailLinkCommand(operatorId: string, rawEmails: unknown): string[] {
+export function gmailLinkCommand(
+  operatorId: string,
+  rawEmails: unknown,
+  opts: { skipTestUsers?: boolean; skipAuthorize?: boolean } = {},
+): string[] {
   const emails = normalizeEmailList(rawEmails);
   if (emails.length === 0) throw new Error("at least one Gmail email is required");
   for (const email of emails) {
@@ -125,26 +129,38 @@ export function gmailLinkCommand(operatorId: string, rawEmails: unknown): string
       }
     }
   } else {
-    automation.push([
-      "uv", "run", "--project", ".", "python",
-      "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
-      "add-test-users",
-      ...emails,
-      ...homeArgs,
-    ]);
-    for (const email of emails) {
+    // skipTestUsers: the emails are already OAuth test users (added at create
+    // time), so the Authorize action skips the add-test-users browser step (no
+    // GCP console panel) and just registers + grants.
+    if (!opts.skipTestUsers) {
       automation.push([
         "uv", "run", "--project", ".", "python",
         "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
-        "add-account",
-        "--email", email,
+        "add-test-users",
+        ...emails,
         ...homeArgs,
       ]);
+    }
+    // skipAuthorize: Add only registers + adds the test user and leaves the
+    // account PENDING — no per-account grant. The user authorizes separately.
+    if (!opts.skipAuthorize) {
+      for (const email of emails) {
+        automation.push([
+          "uv", "run", "--project", ".", "python",
+          "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+          "add-account",
+          "--email", email,
+          ...homeArgs,
+        ]);
+      }
     }
   }
 
   const recordPending = `${shellJoin(setupAdd)}; code=$?; if [[ $code -ne 0 && $code -ne 20 ]]; then exit $code; fi`;
-  return ["/bin/zsh", "-lc", [recordPending, ...automation.map(shellJoin), shellJoin(setupAuthorized)].join(" && ")];
+  // Only mark authorized in accounts.json when we actually granted (add-account).
+  const parts = [recordPending, ...automation.map(shellJoin)];
+  if (!opts.skipAuthorize) parts.push(shellJoin(setupAuthorized));
+  return ["/bin/zsh", "-lc", parts.join(" && ")];
 }
 
 export function wahaRuntimeCommand(command: "up" | "status", extra: string[] = []): string[] {

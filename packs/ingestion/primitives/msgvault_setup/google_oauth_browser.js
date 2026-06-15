@@ -86,8 +86,24 @@ function result(payload) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+const START_MS = Date.now();
+let lastLogMs = START_MS;
+
 function log(message) {
-  process.stderr.write(`[local-msg-vault/browser] ${message}\n`);
+  const now = Date.now();
+  const total = ((now - START_MS) / 1000).toFixed(1);
+  const delta = ((now - lastLogMs) / 1000).toFixed(1);
+  lastLogMs = now;
+  process.stderr.write(`[local-msg-vault/browser] [t=${total}s +${delta}s] ${message}\n`);
+}
+
+// Wait for the page to settle (network idle), capped at `ms`, and log how long
+// it actually took so timings are visible in the job log. Never throws — a slow
+// page just continues; the element waits that follow are the real backstop.
+async function settle(page, label = "settle", ms = 5000) {
+  const start = Date.now();
+  await page.waitForLoadState("networkidle", { timeout: ms }).catch(() => {});
+  log(`${label}: waited ${Date.now() - start}ms (cap ${ms}ms)`);
 }
 
 function regexEscape(value) {
@@ -401,7 +417,7 @@ async function setupConsent(page, project, email, clientName, audience, timeoutM
   const overview = `https://console.cloud.google.com/auth/overview?project=${encodeURIComponent(project)}`;
   await gotoPage(page, overview, "OAuth overview");
   await waitForHumanLogin(page, email, timeoutMs);
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
 
   log("configuring OAuth app overview");
   if (await googleAuthConfigured(page)) {
@@ -413,7 +429,7 @@ async function setupConsent(page, project, email, clientName, audience, timeoutM
   if (!opened || !page.url().includes("/auth/overview/create")) {
     await gotoPage(page, createUrl, "OAuth branding create page");
   }
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
 
   await fillFirstVisibleInput(page, clientName, 2500);
   await selectSupportEmail(page, email);
@@ -430,8 +446,8 @@ async function setupConsent(page, project, email, clientName, audience, timeoutM
 
   await acceptUserDataPolicy(page);
   await clickButton(page, [/^Create$/i], 2500);
-  await page.waitForTimeout(5000);
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
+  await settle(page);
   await requireGoogleAuthConfigured(page);
 }
 
@@ -472,7 +488,7 @@ async function addScopes(page, project) {
   log("adding Gmail OAuth scopes");
   const scopesUrl = `https://console.cloud.google.com/auth/scopes?project=${encodeURIComponent(project)}`;
   await gotoPage(page, scopesUrl, "OAuth scopes");
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
 
   const existing = await verifyScopesOnCurrentPage(page);
   if (existing.ok) {
@@ -503,7 +519,7 @@ async function addScopes(page, project) {
   await page.waitForTimeout(1200);
   await clickButton(page, [/^Save$/i], 2500);
   await page.waitForTimeout(3000);
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
   const verified = await verifyScopes(page, project);
   if (!verified.ok) {
     throw new StepError("scopes.verify", `Missing Gmail scopes after save: ${verified.missing.join(", ")}`);
@@ -515,7 +531,7 @@ async function addTestUsers(page, project, email, testUsers, timeoutMs) {
   const audienceUrl = `https://console.cloud.google.com/auth/audience?project=${encodeURIComponent(project)}`;
   await gotoPage(page, audienceUrl, "OAuth audience");
   await waitForHumanLogin(page, email, timeoutMs);
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
   await requireGoogleAuthConfigured(page);
 
   let body = await page.locator("body").innerText({ timeout: 10000 }).catch(() => "");
@@ -571,10 +587,10 @@ async function addTestUsers(page, project, email, testUsers, timeoutMs) {
     throw new StepError("test_users.save", "Save was not visible after entering OAuth test users.");
   }
   await page.waitForTimeout(3500);
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
 
   await gotoPage(page, audienceUrl, "OAuth audience verification");
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
   for (const user of testUsers) {
     await page.getByText(user, { exact: false }).first().waitFor({ state: "visible", timeout: 6000 }).catch(() => {});
   }
@@ -612,7 +628,7 @@ async function verifyScopesOnCurrentPage(page) {
 async function verifyScopes(page, project) {
   const scopesUrl = `https://console.cloud.google.com/auth/scopes?project=${encodeURIComponent(project)}`;
   await gotoPage(page, scopesUrl, "OAuth scopes verification");
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
   return verifyScopesOnCurrentPage(page);
 }
 
@@ -668,20 +684,28 @@ async function existingDesktopClientVisible(page, clientName) {
 async function tryDownloadExistingClient(page, clientName, downloadDir) {
   if (!(await existingDesktopClientVisible(page, clientName))) return null;
   log(`OAuth Desktop client ${clientName} already exists`);
-  const name = page.getByRole("link", { name: new RegExp(regexEscape(clientName), "i") });
-  if (await visible(name, 1500)) {
-    await name.first().click({ timeout: 2500 }).catch(() => {});
-    await page.waitForTimeout(2000);
-  } else {
-    const text = page.getByText(clientName, { exact: true });
-    if (await visible(text, 1500)) {
-      await text.first().click({ timeout: 2500 }).catch(() => {});
+  // The new "Google Auth Platform" console doesn't reliably let automation
+  // re-download an existing client's secret. Treat any failure here as "couldn't
+  // reuse" and return null so the caller creates a fresh client (which always
+  // downloads cleanly) instead of killing the whole run.
+  try {
+    const name = page.getByRole("link", { name: new RegExp(regexEscape(clientName), "i") });
+    if (await visible(name, 1500)) {
+      await name.first().click({ timeout: 2500 }).catch(() => {});
       await page.waitForTimeout(2000);
+    } else {
+      const text = page.getByText(clientName, { exact: true });
+      if (await visible(text, 1500)) {
+        await text.first().click({ timeout: 2500 }).catch(() => {});
+        await page.waitForTimeout(2000);
+      }
     }
-  }
-  const downloaded = await downloadClientJson(page, downloadDir, "clients.download_existing");
-  if (downloaded) {
-    return { ...downloaded, reused_existing_client: true };
+    const downloaded = await downloadClientJson(page, downloadDir, "clients.download_existing");
+    if (downloaded) {
+      return { ...downloaded, reused_existing_client: true };
+    }
+  } catch (error) {
+    log(`could not re-download existing client (${error.message}); creating a fresh client instead`);
   }
   return null;
 }
@@ -691,16 +715,22 @@ async function createClient(page, project, email, clientName, downloadDir, timeo
   const legacyClient = `https://console.cloud.google.com/apis/credentials/oauthclient?project=${encodeURIComponent(project)}`;
   await gotoPage(page, clients, "OAuth clients page");
   await waitForHumanLogin(page, email, timeoutMs);
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await settle(page);
 
   const existing = await tryDownloadExistingClient(page, clientName, downloadDir);
   if (existing) return existing;
+
+  // Either there was no existing client, or its secret couldn't be re-downloaded
+  // and we fell through. Re-open the clients list (the failed reuse may have
+  // navigated into a client detail page) so the create flow is on the right page.
+  await gotoPage(page, clients, "OAuth clients page");
+  await settle(page);
 
   let opened = await clickFirst(page, [/Create client/i, /Create OAuth client/i, /Create OAuth client ID/i], 3500);
   if (!opened) {
     log("falling back to legacy OAuth client URL");
     await gotoPage(page, legacyClient, "legacy OAuth client URL");
-    await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+    await settle(page);
   }
 
   const selectedType = await chooseOption(page, [/Application type/i], [/Desktop app/i, "Desktop app"]);

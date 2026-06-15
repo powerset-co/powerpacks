@@ -193,6 +193,12 @@ def cmd_accounts(args: argparse.Namespace) -> int:
     try:
         raw = json.loads(result.stdout or "[]")
     except ValueError:
+        # msgvault prints a plain-text "No accounts found..." line instead of []
+        # when no accounts are authorized yet. That is an empty list, not a
+        # failure (mirrors status_payload's handling).
+        if "No accounts found" in (result.stdout or ""):
+            emit({"status": "completed", "accounts": []})
+            return 0
         emit({"status": "failed", "error": result.stderr.strip() or "list-accounts not JSON", "accounts": []})
         return 1
     accounts = [
