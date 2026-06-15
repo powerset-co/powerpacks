@@ -550,52 +550,52 @@ function startGmailAuthorize(body: Record<string, any>): SetupJob {
   return startSetupJob("gmail-authorize", command, 15 * 60 * 1000, { actionKey: `gmail-authorize:${email}` });
 }
 
-export async function handleOnboardingV2Routes(req: any, res: any, url: URL): Promise<boolean> {
-  if (url.pathname === "/local-api/onboarding-v3/gmail/estimate" && req.method === "POST") {
+export async function handleOnboardingRoutes(req: any, res: any, url: URL): Promise<boolean> {
+  if (url.pathname === "/local-api/onboarding/gmail/estimate" && req.method === "POST") {
     sendJson(res, await estimateGmailSync(await readRequestJson(req)));
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/gmail/accounts") {
+  if (url.pathname === "/local-api/onboarding/gmail/accounts") {
     sendJson(res, await listGmailAccounts());
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/gmail/msgvault-status") {
+  if (url.pathname === "/local-api/onboarding/gmail/msgvault-status") {
     sendJson(res, await msgvaultStatus());
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/gmail/vault-setup" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/gmail/vault-setup" && req.method === "POST") {
     const job = startGmailVaultSetup(await readRequestJson(req));
     sendJson(res, { job });
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/gmail/authorize" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/gmail/authorize" && req.method === "POST") {
     const job = startGmailAuthorize(await readRequestJson(req));
     sendJson(res, { job });
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/gmail/sync" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/gmail/sync" && req.method === "POST") {
     const job = startGmailWindowSync(await readRequestJson(req));
     sendJson(res, { job });
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/linkedin/status") {
+  if (url.pathname === "/local-api/onboarding/linkedin/status") {
     sendJson(res, onboardingV2Status(ONBOARDING_V3_LINKEDIN));
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/linkedin/run" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/linkedin/run" && req.method === "POST") {
     const job = startOnboardingV3LinkedIn(await readRequestJson(req));
     sendJson(res, { job, status: onboardingV2Status(ONBOARDING_V3_LINKEDIN) });
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/linkedin/link" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/linkedin/link" && req.method === "POST") {
     sendJson(res, await linkLinkedinCsv(await readRequestJson(req)));
     return true;
   }
@@ -651,12 +651,12 @@ export async function handleOnboardingV2Routes(req: any, res: any, url: URL): Pr
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v2/messages/status") {
+  if (url.pathname === "/local-api/onboarding/messages/status") {
     sendJson(res, onboardingV2MessagesStatus());
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v2/messages/run" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/messages/run" && req.method === "POST") {
     const job = startOnboardingV2Messages(await readRequestJson(req));
     sendJson(res, { job, status: onboardingV2MessagesStatus() });
     return true;

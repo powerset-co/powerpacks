@@ -23,10 +23,10 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   fetchEnvStatus,
-  fetchOnboardingV3LinkedInStatus,
+  fetchOnboardingLinkedInStatus,
   fetchPowersetWhoami,
   fetchSetupJob,
-  runOnboardingV3LinkedIn,
+  runOnboardingLinkedIn,
   runPowersetLogin,
   runPowersetPullKeys,
   updateEnvKeys,
@@ -34,7 +34,7 @@ import {
   type PowersetWhoami,
 } from "./powerpacksApi";
 import { GmailSyncPanel } from "./GmailSyncPanel";
-import { OnboardingStatusCard } from "./onboarding-v2/OnboardingStatusCard";
+import { OnboardingStatusCard } from "./onboarding/OnboardingStatusCard";
 import type { EnvKeyStatus, EnvStatusResponse, JsonObject } from "./types";
 
 const V3_STAGES = [
@@ -318,7 +318,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
 
   const loadStatus = useCallback(async () => {
     try {
-      const next = await fetchOnboardingV3LinkedInStatus();
+      const next = await fetchOnboardingLinkedInStatus();
       setStatus(next);
       if (String(next?.status || "") === "completed") onDone();
     } catch (err) {
@@ -357,7 +357,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
     setStarting(true);
     setError(null);
     try {
-      const result = await runOnboardingV3LinkedIn({ csvPath });
+      const result = await runOnboardingLinkedIn({ csvPath });
       setStatus((result.status as JsonObject) || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start");
@@ -469,7 +469,7 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
   );
 }
 
-export function LocalOnboardingV3Page() {
+export function LocalOnboardingPage() {
   const [active, setActive] = useState<StepId>("connect");
   const [powersetConnected, setPowersetConnected] = useState(false);
   const [keysReady, setKeysReady] = useState(false);
