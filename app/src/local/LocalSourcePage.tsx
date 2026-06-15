@@ -219,7 +219,11 @@ export function GmailSourcePage() {
         </div>
       </div>
 
-      {vaultReady === false ? (
+      {vaultReady === null ? (
+        <div className="flex items-center justify-center gap-2 rounded-lg border p-12 text-sm text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" /> Checking your Gmail vault…
+        </div>
+      ) : vaultReady === false ? (
         <MsgvaultSetupCard onReady={refreshVault} />
       ) : (
       <>
