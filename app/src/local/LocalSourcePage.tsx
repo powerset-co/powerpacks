@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { GmailSyncPanel } from "./GmailSyncPanel";
 import { MessagesSyncPanel } from "./MessagesSyncPanel";
+import { MsgvaultSetupCard } from "./MsgvaultSetupCard";
 import {
+  fetchMsgvaultStatus,
   fetchSetupJob,
   fetchSetupStatus,
   linkLinkedInCsv,
@@ -171,10 +173,31 @@ const MESSAGES_ICON = (
   </span>
 );
 
+// Whether msgvault is set up (gcloud + OAuth app + db + authorized accounts).
+// Gates the Gmail page between the vault-setup flow and the normal stats view.
+function useMsgvaultReady() {
+  const [ready, setReady] = useState<boolean | null>(null);
+  const refresh = useCallback(async () => {
+    try {
+      const s = await fetchMsgvaultStatus();
+      setReady(s.status === "ok");
+    } catch {
+      setReady(null);
+    }
+  }, []);
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+  return { ready, refresh };
+}
+
 export function GmailSourcePage() {
   const { status, refresh } = useSetupStatus();
   const { running, error, run } = useSourceJob(refresh);
   const syncing = useAutoDiscover("gmail", status, refresh);
+  const { ready: vaultReady, refresh: refreshVault } = useMsgvaultReady();
 
   const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "gmail");
@@ -196,6 +219,14 @@ export function GmailSourcePage() {
         </div>
       </div>
 
+      {vaultReady === null ? (
+        <div className="flex items-center justify-center gap-2 rounded-lg border p-12 text-sm text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" /> Checking your Gmail vault…
+        </div>
+      ) : vaultReady === false ? (
+        <MsgvaultSetupCard onReady={refreshVault} />
+      ) : (
+      <>
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <StatCard
           loading={loading}
@@ -247,6 +278,8 @@ export function GmailSourcePage() {
           {error && <p className="w-full text-sm text-destructive">{error}</p>}
         </CardContent>
       </Card>
+      </>
+      )}
     </div>
   );
 }

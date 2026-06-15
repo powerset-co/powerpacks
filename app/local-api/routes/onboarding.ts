@@ -24,7 +24,8 @@ import {
   resolveOperator,
 } from "../lib/accounts";
 import { messagesLinkStatus, sourceSlug } from "../lib/sources";
-import { onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
+import { msgvaultHomeArgs, normalizeEmailList, onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
+import { shellJoin } from "../lib/shell";
 import { readRequestJson, sendJson } from "../lib/http";
 import { setupJobsList, startSetupJob } from "../jobs";
 import type { SetupJob, SetupJobStage } from "../lib/types";
@@ -430,6 +431,33 @@ function listGmailAccounts(): Promise<Record<string, any>> {
   });
 }
 
+// msgvault setup readiness: gcloud auth, OAuth app (client_secret), db, and the
+// authorized account list. Drives the Gmail page's "create vault" vs "authorize"
+// vs "stats" states. Async spawn; status emits pretty-printed JSON which
+// parseLastJsonFragment handles (it's brace-balanced, not line-based).
+function msgvaultStatus(): Promise<Record<string, any>> {
+  const command = [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+    "status",
+  ];
+  return new Promise((resolve) => {
+    const child = spawn(command[0], command.slice(1), { cwd: powerpacksRepoRoot, env: setupProcessEnv() });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 60 * 1000);
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (err) => { clearTimeout(timer); resolve({ status: "error", error: String(err) }); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const output = parseLastJsonFragment(stdout) || {};
+      if ((output as Record<string, any>).status) resolve(output);
+      else resolve({ status: "error", code, error: stderr || "msgvault status failed" });
+    });
+  });
+}
+
 // Map a window id to the msgvault --after date (YYYY-MM-DD). "all" -> no bound.
 function windowAfterDate(window: string): string {
   const years: Record<string, number> = { "1y": 1, "2y": 2, "5y": 5 };
@@ -494,96 +522,90 @@ function linkLinkedinCsv(body: Record<string, any>): Promise<Record<string, any>
   });
 }
 
-export async function handleOnboardingV2Routes(req: any, res: any, url: URL): Promise<boolean> {
-  if (url.pathname === "/local-api/onboarding-v3/gmail/estimate" && req.method === "POST") {
+const MSGVAULT_PY = "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py";
+
+// One-shot vault creation: create the gcloud project + OAuth app via browser
+// automation (NO auto-authorize), then add every email as an OAuth test user.
+// Per-account authorization happens afterward via startGmailAuthorize. Long job
+// (opens a browser); the FE polls it, then polls msgvault-status.
+function startGmailVaultSetup(body: Record<string, any>): SetupJob {
+  const primary = String(body.primaryEmail || "").trim().toLowerCase();
+  if (!primary) throw new Error("primaryEmail is required");
+  const additional = normalizeEmailList(body.additionalEmails);
+  const all = [...new Set([primary, ...additional])];
+  const home = msgvaultHomeArgs();
+  const py = ["uv", "run", "--project", ".", "python", MSGVAULT_PY];
+  const browserSetup = [...py, "browser-setup", "--email", primary, ...home];
+  const addTestUsers = [...py, "add-test-users", ...all, ...home];
+  const command = ["/bin/zsh", "-lc", [shellJoin(browserSetup), shellJoin(addTestUsers)].join(" && ")];
+  return startSetupJob("gmail-vault-setup", command, 30 * 60 * 1000, { actionKey: "gmail-vault-setup" });
+}
+
+// Authorize one Gmail account — the per-account browser grant. On success the
+// account shows up in msgvault list-accounts.
+function startGmailAuthorize(body: Record<string, any>): SetupJob {
+  const email = String(body.email || "").trim().toLowerCase();
+  if (!email) throw new Error("email is required");
+  const command = ["uv", "run", "--project", ".", "python", MSGVAULT_PY, "add-account", "--email", email, ...msgvaultHomeArgs()];
+  return startSetupJob("gmail-authorize", command, 15 * 60 * 1000, { actionKey: `gmail-authorize:${email}` });
+}
+
+export async function handleOnboardingRoutes(req: any, res: any, url: URL): Promise<boolean> {
+  if (url.pathname === "/local-api/onboarding/gmail/estimate" && req.method === "POST") {
     sendJson(res, await estimateGmailSync(await readRequestJson(req)));
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/gmail/accounts") {
+  if (url.pathname === "/local-api/onboarding/gmail/accounts") {
     sendJson(res, await listGmailAccounts());
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/gmail/sync" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/gmail/msgvault-status") {
+    sendJson(res, await msgvaultStatus());
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding/gmail/vault-setup" && req.method === "POST") {
+    const job = startGmailVaultSetup(await readRequestJson(req));
+    sendJson(res, { job });
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding/gmail/authorize" && req.method === "POST") {
+    const job = startGmailAuthorize(await readRequestJson(req));
+    sendJson(res, { job });
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding/gmail/sync" && req.method === "POST") {
     const job = startGmailWindowSync(await readRequestJson(req));
     sendJson(res, { job });
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/linkedin/status") {
+  if (url.pathname === "/local-api/onboarding/linkedin/status") {
     sendJson(res, onboardingV2Status(ONBOARDING_V3_LINKEDIN));
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/linkedin/run" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/linkedin/run" && req.method === "POST") {
     const job = startOnboardingV3LinkedIn(await readRequestJson(req));
     sendJson(res, { job, status: onboardingV2Status(ONBOARDING_V3_LINKEDIN) });
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v3/linkedin/link" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/linkedin/link" && req.method === "POST") {
     sendJson(res, await linkLinkedinCsv(await readRequestJson(req)));
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v2/linkedin/status") {
-    sendJson(res, onboardingV2LinkedInStatus());
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/linkedin/dry-run" && req.method === "POST") {
-    sendJson(res, dryRunOnboardingV2LinkedIn(await readRequestJson(req)));
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/linkedin/run" && req.method === "POST") {
-    const job = startOnboardingV2LinkedIn(await readRequestJson(req));
-    sendJson(res, { job, status: onboardingV2LinkedInStatus() });
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/gmail/status") {
-    sendJson(res, onboardingV2GmailStatus());
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/gmail/check-tokens" && req.method === "POST") {
-    const body = await readRequestJson(req);
-    const emails = Array.isArray(body.emails) ? body.emails.map(String).filter(Boolean) : [];
-    if (emails.length === 0) {
-      sendJson(res, { expired: [] });
-      return true;
-    }
-    const command = [
-      "uv", "run", "--project", ".", "python", "-c",
-      `import json; from packs.ingestion.primitives.setup_gmail.setup_gmail import _check_gmail_tokens; print(json.dumps({"expired": _check_gmail_tokens(${JSON.stringify(emails)})}))`,
-    ];
-    const result = spawnSync(command[0], command.slice(1), {
-      cwd: powerpacksRepoRoot, env: setupProcessEnv(), encoding: "utf8", timeout: 60000,
-    });
-    const payload = parseJsonFragment(result.stdout || "") || { expired: emails };
-    sendJson(res, payload);
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/gmail/dry-run" && req.method === "POST") {
-    sendJson(res, dryRunOnboardingV2Gmail());
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/gmail/run" && req.method === "POST") {
-    const job = startOnboardingV2Gmail(await readRequestJson(req));
-    sendJson(res, { job, status: onboardingV2GmailStatus() });
-    return true;
-  }
-
-  if (url.pathname === "/local-api/onboarding-v2/messages/status") {
+  if (url.pathname === "/local-api/onboarding/messages/status") {
     sendJson(res, onboardingV2MessagesStatus());
     return true;
   }
 
-  if (url.pathname === "/local-api/onboarding-v2/messages/run" && req.method === "POST") {
+  if (url.pathname === "/local-api/onboarding/messages/run" && req.method === "POST") {
     const job = startOnboardingV2Messages(await readRequestJson(req));
     sendJson(res, { job, status: onboardingV2MessagesStatus() });
     return true;

@@ -9,8 +9,7 @@ import { fetchLocalProfile, fetchRunResults, fetchRuns } from "./powerpacksApi";
 import { LocalContactsPage } from "./LocalContactsPage";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
-import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
-import { LocalOnboardingV3Page } from "./LocalOnboardingV3Page";
+import { LocalOnboardingPage } from "./LocalOnboardingPage";
 import { GmailSourcePage, LinkedInSourcePage, MessagesSourcePage } from "./LocalSourcePage";
 import { LocalEnvPage } from "./LocalEnvPage";
 import { LocalPersonDetailsPage } from "./LocalPersonDetailsPage";
@@ -36,8 +35,7 @@ type LocalView =
   | "companies"
   | "companyDetails"
   | "setup"
-  | "onboardingV2"
-  | "onboardingV3"
+  | "onboarding"
   | "gmailSource"
   | "linkedinSource"
   | "messagesSource"
@@ -56,12 +54,10 @@ function personIdFromPath(): string | null {
 }
 
 function viewFromPath(): LocalView {
-  if (window.location.pathname === "/onboarding-v2") return "onboardingV2";
-  if (window.location.pathname === "/onboarding-v3") return "onboardingV3";
+  if (window.location.pathname === "/onboarding") return "onboarding";
   if (window.location.pathname === "/sources/gmail") return "gmailSource";
   if (window.location.pathname === "/sources/linkedin") return "linkedinSource";
   if (window.location.pathname === "/sources/messages") return "messagesSource";
-  if (window.location.pathname === "/onboarding") return "setup";
   if (personIdFromPath()) return "personDetails";
   if (window.location.pathname === "/contacts") return "contacts";
   if (companyIdFromPath()) return "companyDetails";
@@ -169,10 +165,6 @@ export function LocalPowerpacksApp() {
   }, [selectedTaskId]);
 
   useEffect(() => {
-    if (window.location.pathname === "/onboarding") {
-      window.history.replaceState({}, "", "/setup");
-      setActiveView("setup");
-    }
     refreshRuns();
     refreshProfile();
 
@@ -277,10 +269,8 @@ export function LocalPowerpacksApp() {
           <div className="mx-auto max-w-7xl space-y-4 p-6">
             {activeView === "setup" ? (
               <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
-            ) : activeView === "onboardingV2" ? (
-              <LocalOnboardingV2Page />
-            ) : activeView === "onboardingV3" ? (
-              <LocalOnboardingV3Page />
+            ) : activeView === "onboarding" ? (
+              <LocalOnboardingPage />
             ) : activeView === "gmailSource" ? (
               <GmailSourcePage />
             ) : activeView === "linkedinSource" ? (

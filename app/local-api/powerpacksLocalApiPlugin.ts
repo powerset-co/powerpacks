@@ -4,7 +4,7 @@ import { sendJson } from "./lib/http";
 import { handleRunsRoutes } from "./routes/runs";
 import { handleSetupRoutes } from "./routes/setup";
 import { handleEnvRoutes } from "./routes/env";
-import { handleOnboardingV2Routes } from "./routes/onboarding";
+import { handleOnboardingRoutes } from "./routes/onboarding";
 import { handleMessagesRoutes } from "./routes/messages";
 import { handleContactsRoutes } from "./routes/contacts";
 import { handlePowersetRoutes } from "./routes/powerset";
@@ -20,7 +20,7 @@ const routeHandlers: LocalApiRouteHandler[] = [
   handleRunsRoutes,
   handleSetupRoutes,
   handleEnvRoutes,
-  handleOnboardingV2Routes,
+  handleOnboardingRoutes,
   handleMessagesRoutes,
   handleContactsRoutes,
   handlePowersetRoutes,

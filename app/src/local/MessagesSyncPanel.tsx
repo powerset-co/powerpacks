@@ -3,11 +3,11 @@ import { CheckCircle2, DollarSign, ExternalLink, Loader2, MessageSquare, ShieldA
 
 import { Button } from "@/components/ui/button";
 import {
-  fetchOnboardingV2MessagesStatus,
-  runOnboardingV2Messages,
+  fetchOnboardingMessagesStatus,
+  runOnboardingMessages,
   runSetupAction,
 } from "./powerpacksApi";
-import { numberValue, objectValue, stringValue } from "./onboarding-v2/utils";
+import { numberValue, objectValue, stringValue } from "./onboarding/utils";
 
 /**
  * iMessage/WhatsApp readiness + import pipeline for the Messages source page.
@@ -26,7 +26,7 @@ export function MessagesSyncPanel({ onChange }: { onChange?: () => void } = {}) 
 
   const loadStatus = useCallback(async () => {
     try {
-      setStatus(await fetchOnboardingV2MessagesStatus());
+      setStatus(await fetchOnboardingMessagesStatus());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load messages status");
     }
@@ -88,7 +88,7 @@ export function MessagesSyncPanel({ onChange }: { onChange?: () => void } = {}) 
     setLoading(true);
     setError(null);
     try {
-      const response = await runOnboardingV2Messages(body);
+      const response = await runOnboardingMessages(body);
       setStatus(response.status);
       await loadStatus();
       onChange?.();

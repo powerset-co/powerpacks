@@ -69,34 +69,6 @@ export function runSetupAction(body: Record<string, unknown>): Promise<{ job: Se
   return postJson<{ job: SetupJob }>("/local-api/setup/run", body);
 }
 
-export function fetchOnboardingV2LinkedInStatus(): Promise<Record<string, unknown>> {
-  return getJson<Record<string, unknown>>("/local-api/onboarding-v2/linkedin/status");
-}
-
-export function dryRunOnboardingV2LinkedIn(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>("/local-api/onboarding-v2/linkedin/dry-run", body);
-}
-
-export function runOnboardingV2LinkedIn(body: Record<string, unknown>): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
-  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/linkedin/run", body);
-}
-
-export function fetchOnboardingV2GmailStatus(): Promise<Record<string, unknown>> {
-  return getJson<Record<string, unknown>>("/local-api/onboarding-v2/gmail/status");
-}
-
-export function dryRunOnboardingV2Gmail(body: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-  return postJson<Record<string, unknown>>("/local-api/onboarding-v2/gmail/dry-run", body);
-}
-
-export function runOnboardingV2Gmail(body: Record<string, unknown> = {}): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
-  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/gmail/run", body);
-}
-
-export function checkGmailTokens(emails: string[]): Promise<{ expired: string[] }> {
-  return postJson<{ expired: string[] }>("/local-api/onboarding-v2/gmail/check-tokens", { emails });
-}
-
 export interface GmailSyncWindowEstimate {
   messages: number;
   est_seconds: number;
@@ -116,7 +88,7 @@ export interface GmailSyncEstimateResponse {
 export function estimateGmailSync(
   body: { accounts?: string[]; windows?: string[] } = {}
 ): Promise<GmailSyncEstimateResponse> {
-  return postJson<GmailSyncEstimateResponse>("/local-api/onboarding-v3/gmail/estimate", body);
+  return postJson<GmailSyncEstimateResponse>("/local-api/onboarding/gmail/estimate", body);
 }
 
 export interface GmailAccount {
@@ -132,21 +104,21 @@ export interface GmailAccountsResponse {
 }
 
 export function fetchGmailAccounts(): Promise<GmailAccountsResponse> {
-  return getJson<GmailAccountsResponse>("/local-api/onboarding-v3/gmail/accounts");
+  return getJson<GmailAccountsResponse>("/local-api/onboarding/gmail/accounts");
 }
 
 export function runGmailWindowSync(
   body: { window: string; accounts?: string[]; limit?: number }
 ): Promise<{ job: SetupJob }> {
-  return postJson<{ job: SetupJob }>("/local-api/onboarding-v3/gmail/sync", body);
+  return postJson<{ job: SetupJob }>("/local-api/onboarding/gmail/sync", body);
 }
 
-export function fetchOnboardingV2MessagesStatus(): Promise<Record<string, unknown>> {
-  return getJson<Record<string, unknown>>("/local-api/onboarding-v2/messages/status");
+export function fetchOnboardingMessagesStatus(): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>("/local-api/onboarding/messages/status");
 }
 
-export function runOnboardingV2Messages(body: Record<string, unknown> = {}): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
-  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v2/messages/run", body);
+export function runOnboardingMessages(body: Record<string, unknown> = {}): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding/messages/run", body);
 }
 
 export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {
@@ -157,14 +129,42 @@ export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {
   });
 }
 
-export function fetchOnboardingV3LinkedInStatus(): Promise<Record<string, any>> {
-  return getJson<Record<string, any>>("/local-api/onboarding-v3/linkedin/status");
+export function fetchOnboardingLinkedInStatus(): Promise<Record<string, any>> {
+  return getJson<Record<string, any>>("/local-api/onboarding/linkedin/status");
 }
 
-export function runOnboardingV3LinkedIn(
+export function runOnboardingLinkedIn(
   body: Record<string, unknown>
 ): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
-  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding-v3/linkedin/run", body);
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding/linkedin/run", body);
+}
+
+// msgvault setup state: gcloud auth, OAuth app (client_secret), db, authorized accounts.
+export interface MsgvaultStatus {
+  status: string; // "ok" | "needs_setup" | "error"
+  accounts: Array<{ account_email?: string }>;
+  config?: { oauth_configured?: boolean; exists?: boolean };
+  database?: { exists?: boolean };
+  gcloud?: { installed?: boolean; account?: string; project?: string };
+  msgvault?: { installed?: boolean };
+  error?: string;
+}
+
+export function fetchMsgvaultStatus(): Promise<MsgvaultStatus> {
+  return getJson<MsgvaultStatus>("/local-api/onboarding/gmail/msgvault-status");
+}
+
+// One-shot: create gcloud project + OAuth app + add all emails as test users
+// (no authorization). Returns a job to poll.
+export function runGmailVaultSetup(
+  body: { primaryEmail: string; additionalEmails?: string[] }
+): Promise<{ job: SetupJob }> {
+  return postJson<{ job: SetupJob }>("/local-api/onboarding/gmail/vault-setup", body);
+}
+
+// Authorize one Gmail account (per-account browser grant). Returns a job to poll.
+export function runGmailAuthorize(body: { email: string }): Promise<{ job: SetupJob }> {
+  return postJson<{ job: SetupJob }>("/local-api/onboarding/gmail/authorize", body);
 }
 
 // Link an uploaded Connections.csv (write csv_path + linked) without running the
@@ -173,7 +173,7 @@ export function linkLinkedInCsv(
   body: { csvPath: string; sourceLabel?: string }
 ): Promise<{ status: string; linked?: boolean; csv?: string; error?: string }> {
   return postJson<{ status: string; linked?: boolean; csv?: string; error?: string }>(
-    "/local-api/onboarding-v3/linkedin/link",
+    "/local-api/onboarding/linkedin/link",
     body
   );
 }
