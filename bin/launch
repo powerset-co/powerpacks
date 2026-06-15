@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# One command to update Powerpacks and open the local onboarding console.
+#
+#   bin/launch            # update + open the onboarding wizard (/onboarding-v3)
+#   bin/launch /sources/gmail   # ...open a specific route instead
+#
+# Designed to be the single thing a new operator runs (or has Codex run) after
+# cloning the repo: it pulls the latest code, reinstalls skills + Python deps via
+# bin/update-codex, then starts the local console and opens the page in a browser.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROUTE="${1:-/onboarding-v3}"
+
+"$ROOT/bin/update-codex"
+
+# run-powerpacks-console.sh resolves the repo from PWD/preferred dirs; pin it so
+# `bin/launch` works regardless of where it was invoked from.
+POWERPACKS_REPO_ROOT="$ROOT" exec "$ROOT/scripts/run-powerpacks-console.sh" start --open --path "$ROUTE"
