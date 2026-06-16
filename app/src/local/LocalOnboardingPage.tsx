@@ -332,7 +332,11 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
     return () => window.clearInterval(timer);
   }, [loadStatus]);
 
-  const running = String(status?.status || "") === "running" || Boolean(status?.active_job);
+  // A persisted "running" status whose runner was killed stays "running"
+  // forever; the backend marks it stale. Treat stale runs as not-running so the
+  // Process button doesn't lock on a dead run from a previous session.
+  const running = !status?.stale
+    && (String(status?.status || "") === "running" || Boolean(status?.active_job));
   const eta = useMemo(() => (connections > 0 ? estimateMinutes(connections) : 0), [connections]);
 
   async function handleFile(file?: File | null) {
