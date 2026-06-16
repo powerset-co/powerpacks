@@ -980,25 +980,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     paid_timeout = int(os.getenv("POWERPACKS_OPENAI_TIMEOUT_SECONDS", str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     chunks_this_run = 0
 
-    # Resolve RapidAPI company details for all companies in the input so the
-    # LLM has real descriptions, headcounts, and industries, and so every
-    # finalized record (paid or artifact/cached) can backfill headcount,
-    # website_domain, and founded_year. Paid runs fetch cache misses from the
-    # network; all other runs only read the local disk cache (free) and skip
-    # misses.
+    # Resolve RapidAPI company details so the LLM has real descriptions,
+    # headcounts, and industries when classifying NEW companies. Only hydrate
+    # companies that miss the corpus artifact — reused companies already carry
+    # headcount/website/sector from the corpus, so re-fetching them is pure
+    # waste (and on a large network that is tens of thousands of needless paid
+    # calls). Paid runs fetch cache misses from the network; all other runs only
+    # read the local disk cache (free) and skip misses.
     rapidapi_lookup: dict[str, dict[str, Any]] = {}  # rapidapi_id → response
     rapidapi_name_to_id: dict[str, str] = {}  # norm_name → rapidapi_id
     rapid_key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
     if rapid_key:
         # Collect unique rapidapi_company_ids from the input.
         # Try the input JSONL first; fall back to the people CSV ledger.
-        unique_ids: dict[str, str] = {}  # rapidapi_id → company_name
+        unique_ids: dict[str, str] = {}  # rapidapi_id → company_name (all, for free cache backfill)
+        missing_ids: list[str] = []      # corpus-missing ids → eligible for the PAID network fetch
         for row in read_jsonl(input_path):
             rid = clean(row.get("rapidapi_company_id"))
             name = norm_name(row.get("company_name"))
             if rid and rid not in unique_ids:
                 unique_ids[rid] = name
                 rapidapi_name_to_id[name] = rid
+                if not (artifact and lookup_artifact_row(artifact, row)):
+                    missing_ids.append(rid)
         # If input JSONL had no IDs, scan the people CSV (passed via --rapidapi-people-csv).
         if not unique_ids:
             csv_path = getattr(args, "rapidapi_people_csv", None)
@@ -1015,41 +1019,49 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                                 if rid and name and rid not in unique_ids:
                                     unique_ids[rid] = name
                                     rapidapi_name_to_id[name] = rid
-        if unique_ids and allow_paid:
-            sys.stderr.write(f"[enrich-companies] fetching {len(unique_ids)} company profiles from RapidAPI\n")
-            rapidapi_lookup = rapidapi_company.fetch_company_details_batch(
-                list(unique_ids.keys()), api_key=rapid_key,
-            )
+                                    if not (artifact and lookup_artifact_row(artifact, exp)):
+                                        missing_ids.append(rid)
+        if missing_ids and allow_paid:
+            sys.stderr.write(f"[enrich-companies] fetching {len(missing_ids)} new company profiles from RapidAPI\n")
+            rapidapi_lookup = rapidapi_company.fetch_company_details_batch(missing_ids, api_key=rapid_key)
             ok = sum(1 for v in rapidapi_lookup.values() if not v.get("error"))
-            sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(unique_ids)} company profiles\n")
-        elif unique_ids:
-            rapidapi_lookup = rapidapi_company.load_cached_company_details(list(unique_ids.keys()))
-            if rapidapi_lookup:
-                sys.stderr.write(f"[enrich-companies] loaded {len(rapidapi_lookup)}/{len(unique_ids)} cached company profiles\n")
+            sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(missing_ids)} company profiles\n")
+        # Free disk-cache backfill for the rest (reused companies) — never hits the network.
+        cache_only_ids = [rid for rid in unique_ids if rid not in rapidapi_lookup]
+        if cache_only_ids:
+            cached = rapidapi_company.load_cached_company_details(cache_only_ids)
+            if cached:
+                rapidapi_lookup.update(cached)
+                sys.stderr.write(f"[enrich-companies] loaded {len(cached)} cached company profiles (free)\n")
 
         # Companies that carry a LinkedIn slug but no rapidapi_company_id — the
         # long-tail companies LinkedIn knows but Harmonic doesn't. Hydrate them by
         # slug so the LLM gets real context (description/headcount/industry); cached
         # on the volume cache dir so future runs and operators reuse them for free.
-        unique_slugs: dict[str, str] = {}  # slug → company_name
+        all_slugs: dict[str, str] = {}   # slug → company_name (all, for free cache backfill)
+        missing_slugs: list[str] = []    # corpus-missing slugs → eligible for the PAID fetch
         for row in read_jsonl(input_path):
             if clean(row.get("rapidapi_company_id")):
                 continue
             slug = company_slug(row)
             name = norm_name(row.get("company_name"))
-            if slug and slug not in unique_slugs:
-                unique_slugs[slug] = name
+            if slug and slug not in all_slugs:
+                all_slugs[slug] = name
                 if name:
                     rapidapi_name_to_id.setdefault(name, f"slug:{slug}")
-        if unique_slugs and allow_paid:
-            sys.stderr.write(f"[enrich-companies] fetching {len(unique_slugs)} company profiles by slug from RapidAPI\n")
-            by_slug = rapidapi_company.fetch_company_details_batch_by_slug(list(unique_slugs.keys()), api_key=rapid_key)
+                if not (artifact and lookup_artifact_row(artifact, row)):
+                    missing_slugs.append(slug)
+        if missing_slugs and allow_paid:
+            sys.stderr.write(f"[enrich-companies] fetching {len(missing_slugs)} new company profiles by slug from RapidAPI\n")
+            by_slug = rapidapi_company.fetch_company_details_batch_by_slug(missing_slugs, api_key=rapid_key)
             ok_slug = sum(1 for v in by_slug.values() if not v.get("error"))
-            sys.stderr.write(f"[enrich-companies] fetched {ok_slug}/{len(unique_slugs)} company profiles by slug\n")
+            sys.stderr.write(f"[enrich-companies] fetched {ok_slug}/{len(missing_slugs)} company profiles by slug\n")
             for slug, resp in by_slug.items():
                 rapidapi_lookup[f"slug:{slug}"] = resp
-        elif unique_slugs:
-            for slug, resp in rapidapi_company.load_cached_company_details_by_slug(list(unique_slugs.keys())).items():
+        # Free cache backfill for the rest (reused slug-companies) — never hits the network.
+        cache_only_slugs = [s for s in all_slugs if f"slug:{s}" not in rapidapi_lookup]
+        if cache_only_slugs:
+            for slug, resp in rapidapi_company.load_cached_company_details_by_slug(cache_only_slugs).items():
                 rapidapi_lookup[f"slug:{slug}"] = resp
 
     def flush_output(force: bool = False) -> dict[str, Any] | None:
