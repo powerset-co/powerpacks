@@ -9,10 +9,12 @@ import { MessagesSyncPanel } from "./MessagesSyncPanel";
 import { MsgvaultSetupCard } from "./MsgvaultSetupCard";
 import {
   fetchMsgvaultStatus,
+  fetchOnboardingGmailRunStatus,
   fetchOnboardingLinkedInStatus,
   fetchSetupJob,
   fetchSetupStatus,
   linkLinkedInCsv,
+  runOnboardingGmail,
   runOnboardingLinkedIn,
   runSetupAction,
   uploadLinkedInCsv,
@@ -199,15 +201,51 @@ function useMsgvaultReady() {
 
 export function GmailSourcePage() {
   const { status, refresh } = useSetupStatus();
-  const { running, error, run } = useSourceJob(refresh);
   const syncing = useAutoDiscover("gmail", status, refresh);
   const { ready: vaultReady, refresh: refreshVault } = useMsgvaultReady();
+  const [modalStatus, setModalStatus] = useState<JsonObject | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [processError, setProcessError] = useState<string | null>(null);
 
   const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "gmail");
   const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "gmail");
   const imp = status?.import.sources.find((s: SetupImportSource) => s.sourceId === "gmail");
   const candidates = enrich?.candidates || 0;
+
+  const loadModalStatus = useCallback(async () => {
+    try {
+      setModalStatus(await fetchOnboardingGmailRunStatus());
+    } catch {
+      // transient status read; keep last known state and retry next tick
+    }
+  }, []);
+
+  useEffect(() => {
+    loadModalStatus();
+    const timer = window.setInterval(loadModalStatus, 2000);
+    return () => window.clearInterval(timer);
+  }, [loadModalStatus]);
+
+  // !stale so a killed run never locks the button (see LinkedInSourcePage).
+  const modalRunning = !modalStatus?.stale
+    && (String(modalStatus?.status || "") === "running" || Boolean(modalStatus?.active_job));
+  const showModalStatus = modalStatus != null && String(modalStatus.status || "") !== "missing";
+
+  async function handleProcess() {
+    setStarting(true);
+    setProcessError(null);
+    try {
+      // Local Parallel.ai enrich -> merged people.csv -> Modal index-only.
+      const result = await runOnboardingGmail();
+      setModalStatus((result.status as JsonObject) || null);
+      refresh();
+    } catch (err) {
+      setProcessError(err instanceof Error ? err.message : "Failed to start");
+    } finally {
+      setStarting(false);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
@@ -260,26 +298,16 @@ export function GmailSourcePage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Enrich &amp; index</CardTitle>
-          <CardDescription>Resolve your synced contacts into full profiles, then rebuild the local index.</CardDescription>
+          <CardDescription>Resolve your synced contacts into full profiles (enriched locally), then build the search index on Modal — one step.</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-2">
-          <Button
-            disabled={!accountSource?.linked || syncing || running !== null}
-            onClick={() => run("enrich", { action: "enrich-source", source: "gmail", approveSpend: true, force: true })}
-          >
-            {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            {candidates ? `Enrich ${candidates.toLocaleString()} contacts` : "Enrich contacts"}
+        <CardContent className="space-y-3">
+          <Button disabled={!accountSource?.linked || syncing || starting || modalRunning} onClick={handleProcess}>
+            {starting || modalRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+            {modalRunning ? "Processing…" : candidates ? `Process ${candidates.toLocaleString()} contacts` : "Process contacts"}
           </Button>
-          <Button
-            variant="outline"
-            disabled={running !== null}
-            onClick={() => run("index", { action: "index" })}
-          >
-            {running === "index" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Rebuild index
-          </Button>
-          <p className="w-full text-xs text-muted-foreground">Enrichment uses Parallel.ai — this is a paid lookup.</p>
-          {error && <p className="w-full text-sm text-destructive">{error}</p>}
+          <p className="text-xs text-muted-foreground">Enrichment uses Parallel.ai — this is a paid lookup.</p>
+          {processError && <p className="text-sm text-destructive">{processError}</p>}
+          {showModalStatus && <OnboardingStatusCard status={modalStatus} defaultStages={GMAIL_MODAL_STAGES} />}
         </CardContent>
       </Card>
       </>
@@ -296,6 +324,13 @@ const LINKEDIN_MODAL_STAGES = [
   { id: "indexing", label: "Building search index" },
 ];
 const LINKEDIN_STABLE_CSV = ".powerpacks/network-import/discover/linkedin/Connections.csv";
+
+// Gmail "Process": local Parallel.ai enrich -> Modal index-only. Matches the
+// backend setup-gmail-modal status.json stages.
+const GMAIL_MODAL_STAGES = [
+  { id: "importing", label: "Loading enriched contacts" },
+  { id: "indexing", label: "Building search index" },
+];
 
 export function LinkedInSourcePage() {
   const { status, refresh } = useSetupStatus();

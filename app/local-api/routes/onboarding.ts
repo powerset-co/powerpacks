@@ -9,6 +9,7 @@ import {
   onboardingV2LinkedInRunsDir,
   onboardingV2MessagesRunsDir,
   onboardingV3LinkedInRunsDir,
+  onboardingV3GmailRunsDir,
   powerpacksRepoRoot,
   powerpacksStateRoot,
   setupLedgerPath,
@@ -24,7 +25,7 @@ import {
   resolveOperator,
 } from "../lib/accounts";
 import { messagesLinkStatus, sourceSlug } from "../lib/sources";
-import { gmailLinkCommand, msgvaultHomeArgs, normalizeEmailList, onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
+import { gmailLinkCommand, msgvaultHomeArgs, normalizeEmailList, onboardingGmailRunCommand, onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
 import { shellJoin } from "../lib/shell";
 import { readRequestJson, sendJson } from "../lib/http";
 import { setupJobsList, startSetupJob } from "../jobs";
@@ -269,6 +270,33 @@ function startOnboardingV3LinkedIn(body: Record<string, any>): SetupJob {
   return startSetupJob(ONBOARDING_V3_LINKEDIN.action, command, 6 * 60 * 60 * 1000, {
     source: ONBOARDING_V3_LINKEDIN.vertical,
     stages: onboardingV2JobStages(ONBOARDING_V3_LINKEDIN),
+  });
+}
+
+// Gmail "Process": local Parallel.ai enrich -> ship merged people.csv to Modal
+// for index-only. One job covers both phases; the Modal half writes the same
+// status.json shape the console renders (setup-gmail-modal runs dir).
+const ONBOARDING_V3_GMAIL: OnboardingV2Vertical = {
+  vertical: "gmail_modal",
+  action: "onboarding-v3-gmail",
+  actionKeyPrefix: "onboarding-v3:gmail:",
+  runsDir: onboardingV3GmailRunsDir,
+  defaultStages: [
+    { id: "importing", label: "Loading enriched contacts" },
+    { id: "indexing", label: "Building search index" },
+  ],
+};
+
+function startOnboardingV3Gmail(): SetupJob {
+  const existing = runningOnboardingV2VerticalJob(ONBOARDING_V3_GMAIL);
+  if (existing) return existing;
+  const setupLedger = readJsonSync(setupLedgerPath) || {};
+  const accounts = readJsonSync(accountsPath) || {};
+  const operator = resolveOperator(setupLedger, accounts);
+  const command = onboardingGmailRunCommand(operator.id);
+  return startSetupJob(ONBOARDING_V3_GMAIL.action, command, 6 * 60 * 60 * 1000, {
+    source: ONBOARDING_V3_GMAIL.vertical,
+    stages: onboardingV2JobStages(ONBOARDING_V3_GMAIL),
   });
 }
 
@@ -587,6 +615,17 @@ export async function handleOnboardingRoutes(req: any, res: any, url: URL): Prom
   if (url.pathname === "/local-api/onboarding/gmail/sync" && req.method === "POST") {
     const job = startGmailWindowSync(await readRequestJson(req));
     sendJson(res, { job });
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding/gmail/run-status") {
+    sendJson(res, onboardingV2Status(ONBOARDING_V3_GMAIL));
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding/gmail/run" && req.method === "POST") {
+    const job = startOnboardingV3Gmail();
+    sendJson(res, { job, status: onboardingV2Status(ONBOARDING_V3_GMAIL) });
     return true;
   }
 

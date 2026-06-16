@@ -265,22 +265,25 @@ class PipelineProgress:
     atomic writes), collapsed to the two user-facing stages.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, progress_dir: Path = PROGRESS_DIR, stages: list[dict] = PIPELINE_STAGES,
+                 vertical: str = PIPELINE_VERTICAL) -> None:
         self.run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-        PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
-        self.status_path = PROGRESS_DIR / "status.json"
-        self.events_path = PROGRESS_DIR / "events.jsonl"
+        self.stages = stages
+        self.vertical = vertical
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        self.status_path = progress_dir / "status.json"
+        self.events_path = progress_dir / "events.jsonl"
         self.events_path.write_text("")
         self.status: dict = {
             "schema_version": 1,
-            "vertical": PIPELINE_VERTICAL,
+            "vertical": vertical,
             "run_id": self.run_id,
             "status": "running",
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "progress": 0.0,
-            "current_stage": PIPELINE_STAGES[0]["id"],
+            "current_stage": stages[0]["id"],
             "stages": {},
-            "stage_order": PIPELINE_STAGES,
+            "stage_order": stages,
         }
         self._write()
 
@@ -292,17 +295,17 @@ class PipelineProgress:
 
     def event(self, stage_id: str, message: str, *, status: str = "running",
               progress: float | None = None, payload: dict | None = None) -> None:
-        index = next((i for i, s in enumerate(PIPELINE_STAGES) if s["id"] == stage_id), 0) + 1
-        label = PIPELINE_STAGES[index - 1]["label"]
+        index = next((i for i, s in enumerate(self.stages) if s["id"] == stage_id), 0) + 1
+        label = self.stages[index - 1]["label"]
         if progress is None:
-            progress = index / len(PIPELINE_STAGES) if status == "completed" else (index - 1) / len(PIPELINE_STAGES)
+            progress = index / len(self.stages) if status == "completed" else (index - 1) / len(self.stages)
         record = {
-            "vertical": PIPELINE_VERTICAL,
+            "vertical": self.vertical,
             "run_id": self.run_id,
             "stage": stage_id,
             "stage_label": label,
             "stage_index": index,
-            "stage_total": len(PIPELINE_STAGES),
+            "stage_total": len(self.stages),
             "status": status,
             "message": message,
             "progress": round(progress, 3),
@@ -503,6 +506,79 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
               "duckdb": str(dest / "local-search.duckdb")}
     progress.event("indexing", "Search index is ready", status="completed", progress=1.0, payload=result)
     mark_linkedin_linked(csv_path)
+    progress.finish(result)
+    print(json.dumps({"status": "completed", **result}))
+    return 0
+
+
+GMAIL_VERTICAL = "gmail_modal"
+GMAIL_STAGES = [
+    {"id": "importing", "label": "Loading enriched contacts"},
+    {"id": "indexing", "label": "Building search index"},
+]
+GMAIL_PROGRESS_DIR = LOCAL_POWERPACKS / "runs/setup-gmail-modal"
+GMAIL_INDEX_LABEL = "gmail-index"
+
+
+def people_csv_rows(path: Path) -> int:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        return max(0, sum(1 for _ in handle) - 1)
+
+
+def cmd_index_people(args: argparse.Namespace) -> int:
+    """Index an already-enriched people.csv on Modal (no RapidAPI import stage).
+
+    Gmail enriches locally (Parallel.ai email+context); this ships the resulting
+    people.csv to the volume and runs the SAME indexing sandbox the LinkedIn
+    pipeline uses. Use it for any source whose enrichment already happened
+    locally, so Modal only does role/company/age classification + duckdb.
+    """
+    people_path = Path(args.people_csv).expanduser()
+    if not people_path.exists():
+        raise SystemExit(f"missing people.csv: {people_path}")
+    rows = people_csv_rows(people_path)
+    vol = get_volume()
+    progress = PipelineProgress(GMAIL_PROGRESS_DIR, GMAIL_STAGES, GMAIL_VERTICAL)
+
+    progress.event("importing", f"Uploading {rows} enriched contacts", payload={"contacts": rows})
+    with vol.batch_upload(force=True) as batch:
+        batch.put_file(people_path, f"{OPERATOR_ROOT}/input/people.csv")
+    progress.event("importing", f"Loaded {rows} contacts", status="completed", payload={"contacts": rows})
+
+    app = modal.App.lookup(APP_NAME, create_if_missing=True)
+    index_vol = run_vol_path(GMAIL_INDEX_LABEL)
+    people_csv, cache_root = dataset_paths("real")
+    reset_run_status(vol, GMAIL_INDEX_LABEL)
+    sb = modal.Sandbox.create(
+        "python", "/repo/packs/indexing/modal/run_indexing.py",
+        "--people-csv", people_csv,
+        "--cache-root", cache_root,
+        "--run-vol", index_vol,
+        "--operator-id", DEFAULT_OPERATOR_ID,
+        "--enrich", "--max-usd", str(args.max_usd),
+        app=app,
+        image=build_image(),
+        volumes={"/data": vol},
+        secrets=[modal.Secret.from_name("powerset-openai"), rapidapi_secret()],
+        cpu=4,
+        memory=16384,
+        timeout=args.timeout,
+    )
+    progress.event("indexing", "Building search records", payload={"sandbox": sb.object_id})
+    payload = watch_run(GMAIL_INDEX_LABEL, progress, "indexing", "Indexing")
+    if not payload or payload.get("status") != "completed":
+        progress.event("indexing", f"Indexing failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
+        return 1
+
+    dl = argparse.Namespace(label=GMAIL_INDEX_LABEL, dest=args.dest, wait=False)
+    code = cmd_download(dl)
+    if code != 0:
+        progress.event("indexing", "Download failed", status="failed")
+        return code
+    dest = Path(args.dest) if args.dest else LOCAL_POWERPACKS / "search-index"
+    result = {"people_csv": str(people_path), "contacts": rows,
+              "duckdb": str(dest / "local-search.duckdb")}
+    progress.event("indexing", "Search index is ready", status="completed", progress=1.0, payload=result)
     progress.finish(result)
     print(json.dumps({"status": "completed", **result}))
     return 0
@@ -812,6 +888,13 @@ def main() -> int:
                       help="0 (default) = uncapped, no estimate pass (internal team default); >0 adds a dry-run estimate gate")
     pipe.add_argument("--force", action="store_true", help="reprocess even if the csv is unchanged")
 
+    idx = sub.add_parser("index-people", help="index an already-enriched people.csv (no import stage) -> searchable duckdb")
+    idx.add_argument("--people-csv", required=True, help="path to an enriched people.csv (e.g. the Gmail merged people.csv)")
+    idx.add_argument("--dest", help="download destination; defaults to .powerpacks/search-index")
+    idx.add_argument("--timeout", type=int, default=7200)
+    idx.add_argument("--max-usd", type=float, default=0.0,
+                     help="0 (default) = uncapped, no estimate pass; >0 adds a dry-run estimate gate")
+
     pre = sub.add_parser("preload", help="union-merge local cache payloads into the shared volume cache")
     pre.add_argument("--role-classifications")
     pre.add_argument("--role-embeddings")
@@ -859,7 +942,7 @@ def main() -> int:
 
     args = ap.parse_args()
     require_modal_credentials()
-    return {"pipeline": cmd_pipeline, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
+    return {"pipeline": cmd_pipeline, "index-people": cmd_index_people, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 
 
 if __name__ == "__main__":
