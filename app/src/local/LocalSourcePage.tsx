@@ -327,7 +327,12 @@ export function LinkedInSourcePage() {
     return () => window.clearInterval(timer);
   }, [loadModalStatus]);
 
-  const modalRunning = String(modalStatus?.status || "") === "running" || Boolean(modalStatus?.active_job);
+  // A persisted "running" status whose Python runner was killed (dev-server
+  // restart, sandbox death) stays "running" forever; the backend flags it
+  // stale. Don't treat a stale run as in-progress, or the Process button locks
+  // on a dead run from a previous session.
+  const modalRunning = !modalStatus?.stale
+    && (String(modalStatus?.status || "") === "running" || Boolean(modalStatus?.active_job));
   const showModalStatus = modalStatus != null && String(modalStatus.status || "") !== "missing";
 
   async function handleProcess() {
