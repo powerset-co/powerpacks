@@ -93,6 +93,10 @@ def main() -> int:
     os.environ.setdefault("POWERPACKS_OPENAI_SERVICE_TIER", "default")
     os.environ.setdefault("POWERPACKS_OPENAI_CONCURRENCY", "256")
     os.environ.setdefault("POWERPACKS_OPENAI_TIMEOUT_SECONDS", "300")
+    # The duckdb shim defaults to a 2GB memory_limit; DuckDB also misdetects the
+    # container's RAM, so a full-network build OOMs at ~1.8GB. The indexing
+    # sandbox has 16GB, so lift the limit (leaving headroom for python + OS).
+    os.environ.setdefault("POWERPACKS_DUCKDB_MEMORY_LIMIT", "12GB")
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
     write_status(run_vol, status)
 
