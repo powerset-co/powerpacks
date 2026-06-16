@@ -1027,6 +1027,31 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if rapidapi_lookup:
                 sys.stderr.write(f"[enrich-companies] loaded {len(rapidapi_lookup)}/{len(unique_ids)} cached company profiles\n")
 
+        # Companies that carry a LinkedIn slug but no rapidapi_company_id — the
+        # long-tail companies LinkedIn knows but Harmonic doesn't. Hydrate them by
+        # slug so the LLM gets real context (description/headcount/industry); cached
+        # on the volume cache dir so future runs and operators reuse them for free.
+        unique_slugs: dict[str, str] = {}  # slug → company_name
+        for row in read_jsonl(input_path):
+            if clean(row.get("rapidapi_company_id")):
+                continue
+            slug = company_slug(row)
+            name = norm_name(row.get("company_name"))
+            if slug and slug not in unique_slugs:
+                unique_slugs[slug] = name
+                if name:
+                    rapidapi_name_to_id.setdefault(name, f"slug:{slug}")
+        if unique_slugs and allow_paid:
+            sys.stderr.write(f"[enrich-companies] fetching {len(unique_slugs)} company profiles by slug from RapidAPI\n")
+            by_slug = rapidapi_company.fetch_company_details_batch_by_slug(list(unique_slugs.keys()), api_key=rapid_key)
+            ok_slug = sum(1 for v in by_slug.values() if not v.get("error"))
+            sys.stderr.write(f"[enrich-companies] fetched {ok_slug}/{len(unique_slugs)} company profiles by slug\n")
+            for slug, resp in by_slug.items():
+                rapidapi_lookup[f"slug:{slug}"] = resp
+        elif unique_slugs:
+            for slug, resp in rapidapi_company.load_cached_company_details_by_slug(list(unique_slugs.keys())).items():
+                rapidapi_lookup[f"slug:{slug}"] = resp
+
     def flush_output(force: bool = False) -> dict[str, Any] | None:
         nonlocal batch, chunks_this_run
         if not batch or (not force and len(batch) < int(args.checkpoint_every)):

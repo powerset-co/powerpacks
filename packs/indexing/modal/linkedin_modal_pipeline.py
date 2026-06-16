@@ -468,7 +468,9 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         app=app,
         image=build_image(),
         volumes={"/data": vol},
-        secrets=[modal.Secret.from_name("powerset-openai")],
+        # openai for LLM classification; rapidapi to hydrate company details for
+        # the long-tail companies not in the corpus (cached on the volume).
+        secrets=[modal.Secret.from_name("powerset-openai"), modal.Secret.from_name("powerset-rapidapi")],
         cpu=4,
         memory=16384,
         timeout=args.timeout,
@@ -524,6 +526,10 @@ def cmd_process(args: argparse.Namespace) -> int:
         # --enrich runs; default runs stay replay-only with no key in the
         # sandbox, so they cannot spend.
         secrets.append(modal.Secret.from_name("powerset-openai"))
+        # rapidapi hydrates company details (by id and by slug) for companies not
+        # in the corpus, so the LLM classifies them with real context; the cache
+        # lands on the volume for reuse.
+        secrets.append(modal.Secret.from_name("powerset-rapidapi"))
         entrypoint += ["--enrich", "--max-usd", str(args.max_usd)]
     started = time.time()
     sb = modal.Sandbox.create(
