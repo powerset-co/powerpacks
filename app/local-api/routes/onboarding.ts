@@ -25,7 +25,7 @@ import {
   resolveOperator,
 } from "../lib/accounts";
 import { messagesLinkStatus, sourceSlug } from "../lib/sources";
-import { gmailLinkCommand, msgvaultHomeArgs, normalizeEmailList, onboardingGmailRunCommand, onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
+import { gmailEnrichEstimateCommand, gmailLinkCommand, msgvaultHomeArgs, normalizeEmailList, onboardingGmailRunCommand, onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
 import { shellJoin } from "../lib/shell";
 import { readRequestJson, sendJson } from "../lib/http";
 import { setupJobsList, startSetupJob } from "../jobs";
@@ -286,6 +286,19 @@ const ONBOARDING_V3_GMAIL: OnboardingV2Vertical = {
     { id: "indexing", label: "Building search index" },
   ],
 };
+
+// Free, instant incremental Parallel.ai spend estimate (queue minus directory.csv).
+function gmailEnrichEstimate(): Record<string, any> {
+  const command = gmailEnrichEstimateCommand();
+  const result = spawnSync(command[0], command.slice(1), {
+    cwd: powerpacksRepoRoot,
+    env: setupProcessEnv(),
+    encoding: "utf8",
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: 60 * 1000,
+  });
+  return parseLastJsonFragment(result.stdout || "") || { status: "unavailable" };
+}
 
 function startOnboardingV3Gmail(): SetupJob {
   const existing = runningOnboardingV2VerticalJob(ONBOARDING_V3_GMAIL);
@@ -620,6 +633,11 @@ export async function handleOnboardingRoutes(req: any, res: any, url: URL): Prom
 
   if (url.pathname === "/local-api/onboarding/gmail/run-status") {
     sendJson(res, onboardingV2Status(ONBOARDING_V3_GMAIL));
+    return true;
+  }
+
+  if (url.pathname === "/local-api/onboarding/gmail/enrich-estimate") {
+    sendJson(res, gmailEnrichEstimate());
     return true;
   }
 

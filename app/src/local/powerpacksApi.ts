@@ -143,6 +143,11 @@ export function fetchOnboardingGmailRunStatus(): Promise<Record<string, any>> {
   return getJson<Record<string, any>>("/local-api/onboarding/gmail/run-status");
 }
 
+// Free, instant incremental Parallel.ai spend estimate for the next Gmail Process.
+export function fetchGmailEnrichEstimate(): Promise<Record<string, any>> {
+  return getJson<Record<string, any>>("/local-api/onboarding/gmail/enrich-estimate");
+}
+
 // Gmail "Process": local Parallel.ai enrich -> Modal index-only. Body is empty;
 // the backend resolves the operator and the merged people.csv path itself.
 export function runOnboardingGmail(

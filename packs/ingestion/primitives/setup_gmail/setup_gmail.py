@@ -447,6 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--max-enrich", type=int, default=0, help="Limit resolution queue to N rows for testing")
         s.add_argument("--continue", dest="continue_run", action="store_true", default=False, help="Resume from last completed stage")
     status = sub.add_parser("status")
+    sub.add_parser("estimate", help="free, instant Parallel.ai spend estimate (queue minus directory.csv); no API calls")
     return parser
 
 
@@ -468,6 +469,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "status":
         emit_json(status_payload())
+        return 0
+    if args.command == "estimate":
+        emit_json(estimate_parallel_spend())
         return 0
     payload = run(args)
     emit_json(payload)
