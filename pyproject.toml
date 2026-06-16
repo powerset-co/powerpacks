@@ -1,6 +1,6 @@
 [project]
 name = "powerpacks"
-version = "0.6.0"
+version = "0.7.0"
 description = "Portable recruiting-search skills, primitives, schemas, and contracts for agent runtimes."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

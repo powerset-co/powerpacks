@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.5.0...powerpacks-console-v0.6.0) (2026-06-16)
+
+
+### Features
+
+* button copy 'Process Contacts' with count on its own line (LinkedIn + Gmail) ([ba33487](https://github.com/powerset-co/powerpacks/commit/ba334870bc0b6f3e4d14b6425a0fa9a976e7643c))
+* drop email step from /onboarding, move full wizard to /onboarding-v2 ([6ef5434](https://github.com/powerset-co/powerpacks/commit/6ef5434b14c7cf15a476ba3e0bfa889c181d82bc))
+* drop email step from /onboarding, move full wizard to /onboarding-v2 ([f2d9f16](https://github.com/powerset-co/powerpacks/commit/f2d9f16b749cf5c141533b2882dd098fc63e54b9))
+* incremental Parallel.ai cost estimate under Gmail Process button ([3102b97](https://github.com/powerset-co/powerpacks/commit/3102b97e574cddf91f8b524854910f05fd8493ed))
+* show incremental Parallel.ai cost estimate under Gmail Process button ([11b87dc](https://github.com/powerset-co/powerpacks/commit/11b87dcd7efdd16e1a9358e1fdf21245c39dd48f))
+* single "Process" button for Gmail (local enrich -&gt; Modal index) ([f482423](https://github.com/powerset-co/powerpacks/commit/f48242394ec8b1e099d0fcaea2d4538462286733))
+* single Process button for Gmail (local enrich → Modal index) ([ebff403](https://github.com/powerset-co/powerpacks/commit/ebff403ac59984d8a60a6bee39b4dcf9f8f35c85))
+
+
+### Bug Fixes
+
+* don't treat stale (killed) Modal runs as in-progress ([318ea30](https://github.com/powerset-co/powerpacks/commit/318ea30ccf75f05804f3d49f98bbdb59f2ebaa11))
+* don't treat stale (killed) Modal runs as in-progress ([ba40f44](https://github.com/powerset-co/powerpacks/commit/ba40f44a8ad2bc19af684f2ebd5ac5eafe0704a1))
+
 ## [0.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.4.0...powerpacks-console-v0.5.0) (2026-06-16)
 
 
