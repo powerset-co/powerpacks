@@ -165,6 +165,16 @@ def get_volume() -> modal.Volume:
     return modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 
+def rapidapi_secret() -> modal.Secret:
+    """RapidAPI key for the sandboxes. Prefer a local RAPIDAPI_LINKEDIN_KEY_BACKUP
+    from .env so we can swap keys (e.g. when the workspace key hits its quota)
+    without touching the shared powerset-rapidapi secret; fall back to it."""
+    backup = os.environ.get("RAPIDAPI_LINKEDIN_KEY_BACKUP", "").strip()
+    if backup:
+        return modal.Secret.from_dict({"RAPIDAPI_LINKEDIN_KEY": backup})
+    return modal.Secret.from_name("powerset-rapidapi")
+
+
 def make_sandbox(cpu: float, memory_mib: int, timeout: int) -> modal.Sandbox:
     app = modal.App.lookup(APP_NAME, create_if_missing=True)
     return modal.Sandbox.create(
@@ -438,7 +448,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         app=app,
         image=build_image(),
         volumes={"/data": vol},
-        secrets=[modal.Secret.from_name("powerset-rapidapi")],
+        secrets=[rapidapi_secret()],
         cpu=2,
         memory=4096,
         timeout=args.timeout,
@@ -468,7 +478,9 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         app=app,
         image=build_image(),
         volumes={"/data": vol},
-        secrets=[modal.Secret.from_name("powerset-openai")],
+        # openai for LLM classification; rapidapi to hydrate company details for
+        # the long-tail companies not in the corpus (cached on the volume).
+        secrets=[modal.Secret.from_name("powerset-openai"), rapidapi_secret()],
         cpu=4,
         memory=16384,
         timeout=args.timeout,
@@ -524,6 +536,10 @@ def cmd_process(args: argparse.Namespace) -> int:
         # --enrich runs; default runs stay replay-only with no key in the
         # sandbox, so they cannot spend.
         secrets.append(modal.Secret.from_name("powerset-openai"))
+        # rapidapi hydrates company details (by id and by slug) for companies not
+        # in the corpus, so the LLM classifies them with real context; the cache
+        # lands on the volume for reuse.
+        secrets.append(rapidapi_secret())
         entrypoint += ["--enrich", "--max-usd", str(args.max_usd)]
     started = time.time()
     sb = modal.Sandbox.create(

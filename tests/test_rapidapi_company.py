@@ -105,5 +105,38 @@ class FetchCompanyDetailsRetryTests(unittest.TestCase):
             conn_cls.assert_not_called()
 
 
+class FetchCompanyDetailsBySlugTests(unittest.TestCase):
+    MODULE = "packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company"
+
+    def test_fetch_by_slug_hits_username_endpoint_and_caches_namespaced(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            conn = _fake_connection(_fake_response(200, json.dumps({"data": {"name": "Acme"}})))
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection", return_value=conn):
+                result = rapidapi_company.fetch_company_details_by_slug("acme-inc", api_key="k", cache_dir=cache_dir)
+            self.assertEqual(result, {"data": {"name": "Acme"}})
+            # hit the username endpoint, not the by-id one
+            path = conn.request.call_args.args[1]
+            self.assertIn("/get-company-details?username=acme-inc", path)
+            # cached under a slug-namespaced key so it never collides with ids
+            self.assertTrue((cache_dir / "slug__acme-inc.json").exists())
+
+    def test_by_slug_cache_hit_skips_network(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            (cache_dir / "slug__acme-inc.json").write_text(json.dumps({"data": {"name": "Cached"}}), encoding="utf-8")
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection") as conn_cls:
+                result = rapidapi_company.fetch_company_details_by_slug("acme-inc", api_key="k", cache_dir=cache_dir)
+            self.assertEqual(result, {"data": {"name": "Cached"}})
+            conn_cls.assert_not_called()
+
+    def test_no_key_returns_error_without_network(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection") as conn_cls:
+                result = rapidapi_company.fetch_company_details_by_slug("acme-inc", api_key="", cache_dir=Path(td))
+            self.assertIn("error", result)
+            conn_cls.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

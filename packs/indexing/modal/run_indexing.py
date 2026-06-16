@@ -71,6 +71,8 @@ def main() -> int:
     ap.add_argument("--no-refresh-cache", action="store_true")
     ap.add_argument("--enrich", action="store_true",
                     help="allow paid OpenAI calls for cache misses (requires OPENAI_API_KEY in the sandbox)")
+    ap.add_argument("--no-skip-unresolved-companies", action="store_true",
+                    help="opt out of the default: by default we skip LLM enrichment for companies with no LinkedIn slug that also miss the corpus (freetext employer strings, no handle to enrich)")
     ap.add_argument("--max-usd", type=float, default=25.0,
                     help="abort before the paid run if the dry-run estimate exceeds this")
     args = ap.parse_args()
@@ -91,6 +93,10 @@ def main() -> int:
     os.environ.setdefault("POWERPACKS_OPENAI_SERVICE_TIER", "default")
     os.environ.setdefault("POWERPACKS_OPENAI_CONCURRENCY", "256")
     os.environ.setdefault("POWERPACKS_OPENAI_TIMEOUT_SECONDS", "300")
+    # The duckdb shim defaults to a 2GB memory_limit; DuckDB also misdetects the
+    # container's RAM, so a full-network build OOMs at ~1.8GB. The indexing
+    # sandbox has 16GB, so lift the limit (leaving headroom for python + OS).
+    os.environ.setdefault("POWERPACKS_DUCKDB_MEMORY_LIMIT", "12GB")
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
     write_status(run_vol, status)
 
@@ -118,6 +124,12 @@ def main() -> int:
         "--summary-input-embeddings", str(artifacts / "summary_embeddings.jsonl"),
         "--person-tech-skills-input", str(artifacts / "person_tech_skills.jsonl"),
     ]
+    if not args.no_skip_unresolved_companies:
+        # Default: skip freetext companies (no LinkedIn slug, miss the corpus) —
+        # there is no handle to enrich them. Applies to both the dry-run estimate
+        # (pipeline_cmd[3:] + --dry-run) and the paid run, so the estimate matches
+        # what the build does.
+        pipeline_cmd.append("--skip-unresolved-companies")
     if args.enrich and args.max_usd <= 0:
         # Uncapped internal mode: skip the dry-run estimate pass entirely (it
         # costs a full extra read of the cache artifacts). The paid run still
@@ -160,6 +172,19 @@ def main() -> int:
         write_status(run_vol, status | {"status": "failed", "phase": "pipeline", "exit_code": pipeline_code, "finished_at": now_iso()})
         return pipeline_code
 
+    # Refresh the shared caches BEFORE the duckdb build so the expensive
+    # enrichment (company corpus, roles, summary embeddings) persists to the
+    # volume even if the heavy duckdb build fails — we never want to re-pay the
+    # LLM enrichment because of a downstream packaging failure.
+    if not args.no_refresh_cache:
+        write_status(run_vol, status | {"phase": "refresh-cache"})
+        for rel_src, rel_cache in WORK_TO_CACHE.items():
+            src = work / rel_src
+            if not src.exists() or src.stat().st_size == 0:
+                continue
+            new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, CACHE_KEYS[rel_cache])
+            print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
+
     write_status(run_vol, status | {"phase": "duckdb"})
     # Feed the same people.csv that fed the processing pipeline as the
     # person-profiles source so the shim also builds local_person_profiles
@@ -192,15 +217,6 @@ def main() -> int:
             shutil.copyfile(src, dest)
     if args.persist_artifacts and (work / "records").exists():
         shutil.copytree(work / "records", run_vol / "records", dirs_exist_ok=True)
-
-    if not args.no_refresh_cache:
-        write_status(run_vol, status | {"phase": "refresh-cache"})
-        for rel_src, rel_cache in WORK_TO_CACHE.items():
-            src = work / rel_src
-            if not src.exists() or src.stat().st_size == 0:
-                continue
-            new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, CACHE_KEYS[rel_cache])
-            print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
 
     write_status(run_vol, status | {"status": "completed", "phase": "done", "finished_at": now_iso()})
     print("[run-in-sandbox] completed", flush=True)

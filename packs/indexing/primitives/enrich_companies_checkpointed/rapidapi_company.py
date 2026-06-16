@@ -16,6 +16,7 @@ import json
 import os
 import random
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -182,6 +183,123 @@ def load_cached_company_details(
         cached = _read_cache(cid, cache_dir)
         if cached is not None:
             results[cid] = cached
+    return results
+
+
+def _slug_cache_key(slug: str) -> str:
+    """Slug-namespaced cache key so slug entries never collide with numeric ids."""
+    return f"slug__{slug.lower()}"
+
+
+def fetch_company_details_by_slug(
+    slug: str,
+    *,
+    api_key: str | None = None,
+    host: str = DEFAULT_HOST,
+    timeout: int = DEFAULT_TIMEOUT,
+    cache_dir: str | Path | None = None,
+    max_attempts: int = 3,
+) -> dict[str, Any]:
+    """Fetch company details by LinkedIn company slug (vanity username).
+
+    For companies that carry a LinkedIn slug but no RapidAPI company id — the
+    common long-tail case (companies LinkedIn knows but Harmonic doesn't). Same
+    retry/backoff contract as fetch_company_details; cached under a slug-namespaced
+    key so the (volume) cache dir persists it for reuse across runs and operators.
+    """
+    key_name = _slug_cache_key(slug)
+    cached = _read_cache(key_name, cache_dir)
+    if cached is not None:
+        return cached
+
+    key = api_key or _api_key()
+    if not key:
+        return {"error": "no RAPIDAPI_LINKEDIN_KEY or RAPIDAPI_KEY set"}
+
+    headers = {
+        "x-rapidapi-key": key,
+        "x-rapidapi-host": host,
+        "Content-Type": "application/json",
+    }
+    last_error: dict[str, Any] = {"error": "no fetch attempts made"}
+    for attempt in range(max_attempts):
+        conn = http.client.HTTPSConnection(host, timeout=timeout)
+        retry_after: float | None = None
+        try:
+            conn.request("GET", f"/get-company-details?username={urllib.parse.quote(slug)}", headers=headers)
+            res = conn.getresponse()
+            raw = res.read().decode("utf-8")
+            if res.status == 200:
+                result = json.loads(raw)
+                _write_cache(key_name, result, cache_dir)
+                return result
+            last_error = {"error": f"HTTP {res.status}", "body": raw[:500]}
+            if res.status != 429 and not 500 <= res.status < 600:
+                return last_error
+            if res.status == 429:
+                header_val = res.getheader("Retry-After")
+                if header_val is not None:
+                    try:
+                        retry_after = min(float(header_val), 10.0)
+                    except (TypeError, ValueError):
+                        retry_after = None
+        except Exception as exc:
+            last_error = {"error": str(exc)}
+        finally:
+            conn.close()
+        if attempt < max_attempts - 1:
+            delay = retry_after if retry_after is not None else 1.0 * (2 ** attempt) + random.uniform(0, 0.5)
+            time.sleep(delay)
+    return last_error
+
+
+def fetch_company_details_batch_by_slug(
+    slugs: list[str],
+    *,
+    api_key: str | None = None,
+    host: str = DEFAULT_HOST,
+    timeout: int = DEFAULT_TIMEOUT,
+    max_workers: int = 50,
+    cache_dir: str | Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Fetch multiple companies by slug concurrently; cache hits served instantly."""
+    key = api_key or _api_key()
+    if not key:
+        return {s: {"error": "no API key"} for s in slugs}
+
+    results: dict[str, dict[str, Any]] = {}
+    need_fetch: list[str] = []
+    for s in slugs:
+        cached = _read_cache(_slug_cache_key(s), cache_dir)
+        if cached is not None:
+            results[s] = cached
+        else:
+            need_fetch.append(s)
+    if not need_fetch:
+        return results
+
+    def _fetch_one(s: str) -> tuple[str, dict[str, Any]]:
+        return s, fetch_company_details_by_slug(s, api_key=key, host=host, timeout=timeout, cache_dir=cache_dir)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_fetch_one, s): s for s in need_fetch}
+        for future in concurrent.futures.as_completed(futures):
+            s, resp = future.result()
+            results[s] = resp
+    return results
+
+
+def load_cached_company_details_by_slug(
+    slugs: list[str],
+    *,
+    cache_dir: str | Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return cached by-slug company responses only; never hits the network."""
+    results: dict[str, dict[str, Any]] = {}
+    for s in slugs:
+        cached = _read_cache(_slug_cache_key(s), cache_dir)
+        if cached is not None:
+            results[s] = cached
     return results
 
 
