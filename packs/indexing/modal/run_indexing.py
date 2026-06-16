@@ -71,6 +71,8 @@ def main() -> int:
     ap.add_argument("--no-refresh-cache", action="store_true")
     ap.add_argument("--enrich", action="store_true",
                     help="allow paid OpenAI calls for cache misses (requires OPENAI_API_KEY in the sandbox)")
+    ap.add_argument("--no-skip-unresolved-companies", action="store_true",
+                    help="opt out of the default: by default we skip LLM enrichment for companies with no LinkedIn slug that also miss the corpus (freetext employer strings, no handle to enrich)")
     ap.add_argument("--max-usd", type=float, default=25.0,
                     help="abort before the paid run if the dry-run estimate exceeds this")
     args = ap.parse_args()
@@ -118,6 +120,12 @@ def main() -> int:
         "--summary-input-embeddings", str(artifacts / "summary_embeddings.jsonl"),
         "--person-tech-skills-input", str(artifacts / "person_tech_skills.jsonl"),
     ]
+    if not args.no_skip_unresolved_companies:
+        # Default: skip freetext companies (no LinkedIn slug, miss the corpus) —
+        # there is no handle to enrich them. Applies to both the dry-run estimate
+        # (pipeline_cmd[3:] + --dry-run) and the paid run, so the estimate matches
+        # what the build does.
+        pipeline_cmd.append("--skip-unresolved-companies")
     if args.enrich and args.max_usd <= 0:
         # Uncapped internal mode: skip the dry-run estimate pass entirely (it
         # costs a full extra read of the cache artifacts). The paid run still

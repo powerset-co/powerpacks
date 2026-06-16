@@ -573,6 +573,19 @@ def _records_company_names(output_dir: Path) -> set[str]:
     return {_company_name_key(row.get("company_name")) for row in read_jsonl(path) if _company_name_key(row.get("company_name"))}
 
 
+def _records_company_keys(output_dir: Path) -> set[str]:
+    """Reuse keys (slug + name) for already-built company records — mirrors the
+    enrich-companies reuse so a company is counted reused when its LinkedIn slug
+    matches even if its name drifted."""
+    path = output_dir / "records/companies.records.jsonl"
+    if not path.exists():
+        return set()
+    keys: set[str] = set()
+    for row in read_jsonl(path):
+        keys.update(enrich_companies_checkpointed.company_index_keys(row))
+    return keys
+
+
 def _records_company_ids(output_dir: Path, *, require_vector: bool = False) -> set[str]:
     return _jsonl_id_set(output_dir / "records/companies.records.jsonl", "company_urn", require_vector=require_vector) | _jsonl_id_set(
         output_dir / "records/companies.records.jsonl",
@@ -853,15 +866,31 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
     )
     role_stage["artifact_coverage"] = role_coverage
 
-    company_artifact_keys = _records_company_names(output_dir)
+    company_artifact_keys = _records_company_keys(output_dir)
     if company_input:
-        company_artifact_keys.update({_company_name_key(row.get("company_name")) for row in read_jsonl(Path(company_input)) if _company_name_key(row.get("company_name"))})
-    company_required = {_company_name_key(row.get("company_name")) for row in companies if _company_name_key(row.get("company_name"))}
-    company_coverage = _coverage(company_required, company_artifact_keys, company_input)
+        for row in read_jsonl(Path(company_input)):
+            company_artifact_keys.update(enrich_companies_checkpointed.company_index_keys(row))
+    company_required_rows = [row for row in companies if enrich_companies_checkpointed.company_index_keys(row)]
     company_missing_rows = [
         row for row in companies
-        if _company_name_key(row.get("company_name")) not in company_artifact_keys
+        if not any(key in company_artifact_keys for key in enrich_companies_checkpointed.company_index_keys(row))
     ]
+    # Optionally skip unresolved (no LinkedIn slug) misses — freetext employer
+    # strings with no handle to enrich. Slug-less but real entities still match
+    # the corpus by name above, so they never reach this filter.
+    company_skipped_rows = []
+    if getattr(args, "skip_unresolved_companies", False):
+        company_skipped_rows = [row for row in company_missing_rows if not enrich_companies_checkpointed.company_slug(row)]
+        company_missing_rows = [row for row in company_missing_rows if enrich_companies_checkpointed.company_slug(row)]
+    company_coverage = {
+        "artifact": company_input or "",
+        "required": len(company_required_rows),
+        "reused": len(company_required_rows) - len(company_missing_rows) - len(company_skipped_rows),
+        "missing": len(company_missing_rows),
+        "skipped_unresolved": len(company_skipped_rows),
+        "complete": bool(company_input) and not company_missing_rows,
+        "missing_sample": [row.get("company_name") for row in company_missing_rows[:20]],
+    }
     company_payload_rows = [enrich_companies_checkpointed.shape_company(row) for row in company_missing_rows]
     company_input_tokens = 0
     for row in company_payload_rows:
@@ -992,6 +1021,7 @@ def default_ledger(
     company_provider: str = "openai",
     allow_paid_company_provider: bool = False,
     company_artifact_missing_policy: str = "error",
+    skip_unresolved_companies: bool = False,
     company_openai_model: str | None = None,
     company_openai_api_key: str | None = None,
     company_openai_base_url: str | None = None,
@@ -1027,6 +1057,7 @@ def default_ledger(
         "company_provider": company_provider,
         "allow_paid_company_provider": allow_paid_company_provider,
         "company_artifact_missing_policy": company_artifact_missing_policy,
+        "skip_unresolved_companies": skip_unresolved_companies,
         "company_openai_model": company_openai_model,
         "company_openai_api_key": company_openai_api_key,
         "company_openai_base_url": company_openai_base_url,
@@ -1626,6 +1657,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
         provider=provider,
         artifact_path=artifact_path,
         artifact_missing_policy=str(ledger.get("company_artifact_missing_policy") or "error"),
+        skip_unresolved=bool(ledger.get("skip_unresolved_companies")),
         dry_run=False,
         estimate=False,
         allow_paid=bool(ledger.get("allow_paid_company_provider")),
@@ -2323,6 +2355,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--company-provider", choices=["artifact", "openai", "llm"], default="openai")
     run.add_argument("--allow-paid-company-provider", action="store_true")
     run.add_argument("--company-artifact-missing-policy", choices=["error", "skip"], default="error")
+    run.add_argument("--skip-unresolved-companies", action="store_true",
+                     help="skip LLM enrichment for companies with no LinkedIn slug that also miss the corpus (freetext employer strings, no handle to enrich)")
     run.add_argument("--company-openai-model", default=None)
     run.add_argument("--company-openai-api-key")
     run.add_argument("--company-openai-base-url")
@@ -2394,6 +2428,7 @@ def main() -> None:
             company_provider=args.company_provider,
             allow_paid_company_provider=args.allow_paid_company_provider,
             company_artifact_missing_policy=args.company_artifact_missing_policy,
+            skip_unresolved_companies=getattr(args, "skip_unresolved_companies", False),
             company_openai_model=args.company_openai_model,
             company_openai_api_key=args.company_openai_api_key,
             company_openai_base_url=args.company_openai_base_url,

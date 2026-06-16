@@ -209,6 +209,44 @@ def norm_name(value: Any) -> str:
     return re.sub(r"\s+", " ", clean(value).lower()).strip()
 
 
+def company_slug(row: dict[str, Any]) -> str:
+    """LinkedIn company slug — the stable cross-source reuse key. ``company_urn``
+    cannot be used to join: the corpus carries the Harmonic urn while locally we
+    mint a UUIDv5 from the slug, so they never match. The slug is identical on
+    both sides (people.csv carries company_public_identifier; corpus rows carry
+    linkedin_url), so it survives company-name drift ('Google' vs 'Google LLC')."""
+    pid = clean(row.get("company_public_identifier"))
+    if pid:
+        return pid.lower()
+    key = clean(row.get("company_key"))
+    if key.lower().startswith("linkedin_company:"):
+        return key.split(":", 1)[1].lower()
+    match = re.search(r"/company/([^/?#]+)", clean(row.get("linkedin_url")), re.IGNORECASE)
+    return match.group(1).strip().rstrip("/").lower() if match else ""
+
+
+def company_index_keys(row: dict[str, Any]) -> list[str]:
+    """Reuse-match keys for a company row, strongest first: LinkedIn slug, then
+    normalized name. A row is reused if any key hits the precomputed artifact."""
+    keys: list[str] = []
+    slug = company_slug(row)
+    if slug:
+        keys.append(f"slug:{slug}")
+    name = norm_name(row.get("company_name"))
+    if name:
+        keys.append(f"name:{name}")
+    return keys
+
+
+def lookup_artifact_row(artifact: dict[str, dict[str, Any]], row: dict[str, Any]) -> dict[str, Any] | None:
+    """Find the precomputed artifact row for a company by slug, then by name."""
+    for key in company_index_keys(row):
+        hit = artifact.get(key)
+        if hit:
+            return hit
+    return None
+
+
 def normalize_website_domain(value: Any) -> str:
     """Reduce a website URL to a bare domain, e.g. 'https://www.acme.com/about' -> 'acme.com'."""
     text = clean(value).lower()
@@ -405,7 +443,11 @@ def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
     artifact_path = Path(path)
     if not artifact_path.exists():
         raise SystemExit(f"missing company artifact: {artifact_path}")
-    return {norm_name(row.get("company_name")): row for row in read_jsonl(artifact_path) if norm_name(row.get("company_name"))}
+    index: dict[str, dict[str, Any]] = {}
+    for row in read_jsonl(artifact_path):
+        for key in company_index_keys(row):
+            index.setdefault(key, row)
+    return index
 
 
 def merge_enrichment(local: dict[str, Any], enriched: dict[str, Any]) -> dict[str, Any]:
@@ -431,7 +473,7 @@ def merge_enrichment(local: dict[str, Any], enriched: dict[str, Any]) -> dict[st
 def apply_artifact(local: dict[str, Any], artifact: dict[str, dict[str, Any]], missing_policy: str) -> dict[str, Any] | None:
     if not artifact:
         raise RuntimeError("company artifact provider requires a non-empty precomputed artifact")
-    cached = artifact.get(norm_name(local.get("company_name")))
+    cached = lookup_artifact_row(artifact, local)
     if cached:
         return merge_enrichment(local, cached)
     if missing_policy == "error":
@@ -827,7 +869,7 @@ def estimate_payload(input_path: Path, provider: str, artifact: dict[str, dict[s
     rows = list(read_jsonl(input_path))
     artifact = artifact or {}
     model = model_override or os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL)
-    missing = [clean(row.get("company_name")) for row in rows if provider == "artifact" and norm_name(row.get("company_name")) not in artifact]
+    missing = [clean(row.get("company_name")) for row in rows if provider == "artifact" and not lookup_artifact_row(artifact, row)]
     estimated_input_tokens = sum(max(1, len(json.dumps(row, ensure_ascii=False)) // 4) for row in rows)
     estimated_output_tokens = len(rows) * 350
     prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
@@ -901,6 +943,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir)
     output_path = Path(args.output)
     provider = "openai" if args.provider == "llm" else str(args.provider)
+    # Skip companies with no LinkedIn slug that also miss the artifact: they are
+    # freetext employer strings (no slug/url/id) that aren't in the corpus, so
+    # there is no handle to look them up and no value in a name-only LLM guess.
+    # Real entities typed without a slug (e.g. "Stanford University") still match
+    # the corpus by name and are reused, so they are never skipped here.
+    skip_unresolved = bool(getattr(args, "skip_unresolved", False))
     if provider not in {"artifact", "openai"}:
         raise SystemExit(f"company provider '{args.provider}' is not supported; no paid API was called")
     if not input_path.exists():
@@ -1060,7 +1108,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     local_prepare_started = time.perf_counter()
     for idx, row in iter_unprocessed(input_path, int(state.get("input_rows_processed") or 0)):
         shaped = shape_company(row)
-        cached = artifact.get(norm_name(shaped.get("company_name"))) if artifact else None
+        cached = lookup_artifact_row(artifact, row) if artifact else None
         if cached:
             try:
                 merge_started = time.perf_counter()
@@ -1073,6 +1121,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         else:
             if artifact:
                 state["artifact_misses"] = int(state.get("artifact_misses") or 0) + 1
+            if skip_unresolved and not company_slug(row):
+                state["skipped_unresolved"] = int(state.get("skipped_unresolved") or 0) + 1
+                state["input_rows_processed"] = idx
+                continue
             if provider == "artifact" and not allow_paid:
                 if args.artifact_missing_policy == "skip":
                     state["input_rows_processed"] = idx
