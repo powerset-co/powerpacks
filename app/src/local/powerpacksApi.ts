@@ -139,6 +139,18 @@ export function runOnboardingLinkedIn(
   return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding/linkedin/run", body);
 }
 
+export function fetchOnboardingGmailRunStatus(): Promise<Record<string, any>> {
+  return getJson<Record<string, any>>("/local-api/onboarding/gmail/run-status");
+}
+
+// Gmail "Process": local Parallel.ai enrich -> Modal index-only. Body is empty;
+// the backend resolves the operator and the merged people.csv path itself.
+export function runOnboardingGmail(
+  body: Record<string, unknown> = {}
+): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
+  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding/gmail/run", body);
+}
+
 // msgvault setup state: gcloud auth, OAuth app (client_secret), db, authorized accounts.
 export interface MsgvaultStatus {
   status: string; // "ok" | "needs_setup" | "error"

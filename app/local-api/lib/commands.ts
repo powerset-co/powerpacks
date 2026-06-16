@@ -252,6 +252,21 @@ export function enrichmentNetworkCommand(operatorId: string, sourceId: string, o
   return command;
 }
 
+// Gmail "Process": enrich locally (Parallel.ai email+context), then ship the
+// merged people.csv to Modal for index-only (no RapidAPI import). Chained in one
+// shell so a single job/status covers both phases, mirroring the LinkedIn
+// modal pipeline button.
+export function onboardingGmailRunCommand(operatorId: string): string[] {
+  const enrich = enrichmentNetworkCommand(operatorId, "gmail", { approveSpend: true, force: true });
+  const index = [
+    "uv", "run", "--project", ".", "python",
+    "packs/indexing/modal/linkedin_modal_pipeline.py",
+    "index-people",
+    "--people-csv", ".powerpacks/network-import/merged/people.csv",
+  ];
+  return ["bash", "-c", `${shellJoin(enrich)} && ${shellJoin(index)}`];
+}
+
 export function processLocalNetworkCommand(operatorId: string): string[] {
   return [
     "uv", "run", "--project", ".", "python",
