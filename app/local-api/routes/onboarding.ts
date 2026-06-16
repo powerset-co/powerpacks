@@ -300,9 +300,36 @@ function gmailEnrichEstimate(): Record<string, any> {
   return parseLastJsonFragment(result.stdout || "") || { status: "unavailable" };
 }
 
+// Seed a real status.json the instant the run starts so the progress card shows
+// "Enriching…" immediately — the Modal phase only writes this file after the
+// local enrich (Parallel) finishes, which otherwise leaves the card blank.
+function seedGmailStatus(): void {
+  const now = new Date().toISOString();
+  const payload = {
+    schema_version: 1,
+    vertical: ONBOARDING_V3_GMAIL.vertical,
+    status: "running",
+    started_at: now,
+    updated_at: now,
+    progress: 0,
+    current_stage: "enriching",
+    stage_order: [
+      { id: "enriching", label: "Enriching contacts" },
+      { id: "importing", label: "Loading enriched contacts" },
+      { id: "indexing", label: "Building search index" },
+    ],
+    stages: {
+      enriching: { status: "running", label: "Enriching contacts", message: "Resolving contacts via Parallel.ai…", updated_at: now },
+    },
+  };
+  fs.mkdirSync(onboardingV3GmailRunsDir, { recursive: true });
+  fs.writeFileSync(path.join(onboardingV3GmailRunsDir, "status.json"), `${JSON.stringify(payload, null, 2)}\n`);
+}
+
 function startOnboardingV3Gmail(): SetupJob {
   const existing = runningOnboardingV2VerticalJob(ONBOARDING_V3_GMAIL);
   if (existing) return existing;
+  seedGmailStatus();
   const setupLedger = readJsonSync(setupLedgerPath) || {};
   const accounts = readJsonSync(accountsPath) || {};
   const operator = resolveOperator(setupLedger, accounts);
