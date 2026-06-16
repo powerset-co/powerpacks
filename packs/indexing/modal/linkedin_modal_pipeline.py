@@ -541,15 +541,6 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     # Enrich already happened locally (Parallel) before this command runs.
     progress.event("enriching", "Enriched contacts locally", status="completed", payload={"contacts": rows})
 
-    if getattr(args, "stub", False):
-        # UI test: drive the status card to completion without touching Modal.
-        progress.event("importing", f"[stub] Loaded {rows} contacts", status="completed", payload={"contacts": rows})
-        progress.event("indexing", "[stub] Skipped Modal sandbox (UI test)", status="completed", progress=1.0)
-        result = {"stub": True, "people_csv": str(people_path), "contacts": rows}
-        progress.finish(result)
-        print(json.dumps({"status": "completed", **result}))
-        return 0
-
     vol = get_volume()
     progress.event("importing", f"Uploading {rows} enriched contacts", payload={"contacts": rows})
     with vol.batch_upload(force=True) as batch:
@@ -905,8 +896,6 @@ def main() -> int:
     idx.add_argument("--timeout", type=int, default=7200)
     idx.add_argument("--max-usd", type=float, default=0.0,
                      help="0 (default) = uncapped, no estimate pass; >0 adds a dry-run estimate gate")
-    idx.add_argument("--stub", action="store_true",
-                     help="UI test: drive the status card to completed without dispatching a Modal sandbox")
 
     pre = sub.add_parser("preload", help="union-merge local cache payloads into the shared volume cache")
     pre.add_argument("--role-classifications")
