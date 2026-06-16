@@ -10,6 +10,7 @@ import { LocalContactsPage } from "./LocalContactsPage";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
 import { LocalOnboardingPage } from "./LocalOnboardingPage";
+import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
 import { GmailSourcePage, LinkedInSourcePage, MessagesSourcePage } from "./LocalSourcePage";
 import { LocalEnvPage } from "./LocalEnvPage";
 import { LocalPersonDetailsPage } from "./LocalPersonDetailsPage";
@@ -36,6 +37,7 @@ type LocalView =
   | "companyDetails"
   | "setup"
   | "onboarding"
+  | "onboardingV2"
   | "gmailSource"
   | "linkedinSource"
   | "messagesSource"
@@ -54,6 +56,7 @@ function personIdFromPath(): string | null {
 }
 
 function viewFromPath(): LocalView {
+  if (window.location.pathname === "/onboarding-v2") return "onboardingV2";
   if (window.location.pathname === "/onboarding") return "onboarding";
   if (window.location.pathname === "/sources/gmail") return "gmailSource";
   if (window.location.pathname === "/sources/linkedin") return "linkedinSource";
@@ -271,6 +274,8 @@ export function LocalPowerpacksApp() {
               <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
             ) : activeView === "onboarding" ? (
               <LocalOnboardingPage />
+            ) : activeView === "onboardingV2" ? (
+              <LocalOnboardingV2Page />
             ) : activeView === "gmailSource" ? (
               <GmailSourcePage />
             ) : activeView === "linkedinSource" ? (
