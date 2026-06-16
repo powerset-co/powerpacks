@@ -172,6 +172,19 @@ def main() -> int:
         write_status(run_vol, status | {"status": "failed", "phase": "pipeline", "exit_code": pipeline_code, "finished_at": now_iso()})
         return pipeline_code
 
+    # Refresh the shared caches BEFORE the duckdb build so the expensive
+    # enrichment (company corpus, roles, summary embeddings) persists to the
+    # volume even if the heavy duckdb build fails — we never want to re-pay the
+    # LLM enrichment because of a downstream packaging failure.
+    if not args.no_refresh_cache:
+        write_status(run_vol, status | {"phase": "refresh-cache"})
+        for rel_src, rel_cache in WORK_TO_CACHE.items():
+            src = work / rel_src
+            if not src.exists() or src.stat().st_size == 0:
+                continue
+            new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, CACHE_KEYS[rel_cache])
+            print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
+
     write_status(run_vol, status | {"phase": "duckdb"})
     # Feed the same people.csv that fed the processing pipeline as the
     # person-profiles source so the shim also builds local_person_profiles
@@ -204,15 +217,6 @@ def main() -> int:
             shutil.copyfile(src, dest)
     if args.persist_artifacts and (work / "records").exists():
         shutil.copytree(work / "records", run_vol / "records", dirs_exist_ok=True)
-
-    if not args.no_refresh_cache:
-        write_status(run_vol, status | {"phase": "refresh-cache"})
-        for rel_src, rel_cache in WORK_TO_CACHE.items():
-            src = work / rel_src
-            if not src.exists() or src.stat().st_size == 0:
-                continue
-            new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, CACHE_KEYS[rel_cache])
-            print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
 
     write_status(run_vol, status | {"status": "completed", "phase": "done", "finished_at": now_iso()})
     print("[run-in-sandbox] completed", flush=True)
