@@ -348,8 +348,19 @@ def fetch_person_rows(person_ids: list[str], env_file: Path | None = None) -> li
     return all_rows
 
 
-def fetch_interaction_counts(person_ids: list[str], env_file: Path | None = None) -> dict[str, int]:
+def fetch_interaction_counts(
+    person_ids: list[str],
+    env_file: Path | None = None,
+    allowed_operator_ids: list[str] | None = None,
+) -> dict[str, int]:
+    """Total interactions per person.
+
+    When ``allowed_operator_ids`` is provided, only interactions from those
+    operators are counted; an empty list yields zero counts (fail closed). When
+    None, no operator scope is applied (legacy/global behavior).
+    """
     load_env_file(env_file)
+    scope = None if allowed_operator_ids is None else {str(op) for op in allowed_operator_ids}
     fixture = fixture_rows("person_source_summary")
     if fixture is not None:
         wanted = {str(pid) for pid in person_ids}
@@ -358,27 +369,41 @@ def fetch_interaction_counts(person_ids: list[str], env_file: Path | None = None
             pid = str(row.get("person_id") or "")
             if pid not in wanted:
                 continue
+            if scope is not None and str(row.get("operator_id") or "") not in scope:
+                continue
             counts[pid] = counts.get(pid, 0) + int(row.get("total_interactions") or 0)
         return counts
 
-    assert_columns_in_contract("person_source_summary", ["person_id", "total_interactions"])
+    columns = ["person_id", "total_interactions"]
+    if scope is not None:
+        columns.append("operator_id")
+    assert_columns_in_contract("person_source_summary", columns)
     psycopg2 = ensure_psycopg2()
-    query = """
+    params: list[Any] = [person_ids]
+    scope_sql = ""
+    if scope is not None:
+        scope_sql = " AND operator_id::uuid = ANY(%s::uuid[])"
+        params.append(list(allowed_operator_ids))
+    query = f"""
         SELECT person_id::text, SUM(total_interactions)::int AS total
         FROM person_source_summary
-        WHERE person_id = ANY(%s::uuid[])
+        WHERE person_id = ANY(%s::uuid[]){scope_sql}
         GROUP BY person_id
     """
     try:
         with psycopg2.connect(database_url()) as conn:
             with conn.cursor() as cur:
-                cur.execute(query, (person_ids,))
+                cur.execute(query, tuple(params))
                 return {str(row[0]): int(row[1] or 0) for row in cur.fetchall()}
     except Exception:
         return {}
 
 
-def fetch_source_attribution(person_ids: list[str], env_file: Path | None = None) -> dict[str, dict[str, Any]]:
+def fetch_source_attribution(
+    person_ids: list[str],
+    env_file: Path | None = None,
+    allowed_operator_ids: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Per-person source attribution for the sendable shortlist.
 
     Returns {person_id: {
@@ -395,6 +420,7 @@ def fetch_source_attribution(person_ids: list[str], env_file: Path | None = None
     if not person_ids:
         return {}
     load_env_file(env_file)
+    scope = None if allowed_operator_ids is None else {str(op) for op in allowed_operator_ids}
 
     def _build(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         wanted = {str(pid) for pid in person_ids}
@@ -439,6 +465,8 @@ def fetch_source_attribution(person_ids: list[str], env_file: Path | None = None
         name_by_op = {str(u.get("id") or ""): (u.get("name") or u.get("email") or "") for u in users_fixture}
         rows = []
         for row in fixture:
+            if scope is not None and str(row.get("operator_id") or "") not in scope:
+                continue
             enriched = dict(row)
             enriched["operator_name"] = name_by_op.get(str(row.get("operator_id") or ""), "")
             rows.append(enriched)
@@ -446,19 +474,24 @@ def fetch_source_attribution(person_ids: list[str], env_file: Path | None = None
 
     assert_columns_in_contract("person_source_summary", ["person_id", "operator_id", "total_interactions"])
     psycopg2 = ensure_psycopg2()
-    query = """
+    params: list[Any] = [person_ids]
+    scope_sql = ""
+    if scope is not None:
+        scope_sql = " AND pss.operator_id::uuid = ANY(%s::uuid[])"
+        params.append(list(allowed_operator_ids))
+    query = f"""
         SELECT pss.person_id::text AS person_id,
                COALESCE(u.name, u.email, '') AS operator_name,
                pss.source_channel AS source_channel,
                pss.total_interactions AS total_interactions
         FROM person_source_summary pss
         LEFT JOIN users u ON u.id::text = pss.operator_id::text
-        WHERE pss.person_id = ANY(%s::uuid[])
+        WHERE pss.person_id = ANY(%s::uuid[]){scope_sql}
     """
     try:
         with psycopg2.connect(database_url()) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(query, (person_ids,))
+                cur.execute(query, tuple(params))
                 rows = [dict(r) for r in cur.fetchall()]
         return _build(rows)
     except Exception:

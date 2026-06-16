@@ -167,6 +167,21 @@ def step_output(state: dict[str, Any], step_id: str) -> dict[str, Any]:
     return {}
 
 
+def allowed_operator_ids(state: dict[str, Any]) -> list[str] | None:
+    """In-scope operator IDs for the active Powerset set.
+
+    Read from the resolve_set_operators step that runs first in the search
+    pipeline (the same scope TurboPuffer uses to gate people). Returns None when
+    that step did not run (no scope info -> preserve legacy behavior); returns a
+    possibly-empty list when it did, so provenance is strictly scoped and fails
+    closed for a set with zero in-scope operators.
+    """
+    resolved = step_output(state, "resolve_set_operators")
+    if "operator_ids" not in resolved:
+        return None
+    return list(dict.fromkeys(str(op) for op in (resolved.get("operator_ids") or []) if op))
+
+
 def frontier_ids(state: dict[str, Any]) -> list[str]:
     llm_filter = step_output(state, "llm_filter_candidates")
     ids = llm_filter.get("passed_candidate_ids") or []
@@ -727,11 +742,12 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         return
 
     env_file = Path(args.env_file) if args.env_file else None
+    allowed_ops = allowed_operator_ids(state)
     rows = fetch_local_person_rows(requested, env_file=env_file, db_path=args.local_db, workers=args.local_workers, batch_size=args.local_batch_size)
     if rows is None:
         rows = fetch_person_rows(requested, env_file=env_file)
-        interaction_counts = fetch_interaction_counts(requested, env_file=env_file)
-        source_attribution = fetch_source_attribution(requested, env_file=env_file)
+        interaction_counts = fetch_interaction_counts(requested, env_file=env_file, allowed_operator_ids=allowed_ops)
+        source_attribution = fetch_source_attribution(requested, env_file=env_file, allowed_operator_ids=allowed_ops)
         source = {
             "type": "postgres_contract",
             "backend": "postgres_supabase",
