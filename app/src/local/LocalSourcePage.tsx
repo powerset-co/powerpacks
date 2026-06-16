@@ -348,6 +348,7 @@ const LINKEDIN_STABLE_CSV = ".powerpacks/network-import/discover/linkedin/Connec
 // Gmail "Process": local Parallel.ai enrich -> Modal index-only. Matches the
 // backend setup-gmail-modal status.json stages.
 const GMAIL_MODAL_STAGES = [
+  { id: "enriching", label: "Enriching contacts" },
   { id: "importing", label: "Loading enriched contacts" },
   { id: "indexing", label: "Building search index" },
 ];

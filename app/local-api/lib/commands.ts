@@ -16,7 +16,7 @@ import { resolveOperator } from "./accounts";
 import { normalizeSetupSources } from "./sources";
 import type { RunState } from "./types";
 
-export function setupCommandArgs(operatorId: string, phase: "status" | "next" | "bootstrap" | "link" | "import" | "fan-in" | "index" | "run", extra: string[] = []) {
+export function setupCommandArgs(operatorId: string, phase: "status" | "next" | "link" | "import" | "fan-in" | "index" | "run", extra: string[] = []) {
   return [
     "uv", "run", "--project", ".", "python",
     "packs/ingestion/primitives/setup/setup.py",
@@ -257,13 +257,17 @@ export function enrichmentNetworkCommand(operatorId: string, sourceId: string, o
 // shell so a single job/status covers both phases, mirroring the LinkedIn
 // modal pipeline button.
 export function onboardingGmailRunCommand(operatorId: string): string[] {
-  const enrich = enrichmentNetworkCommand(operatorId, "gmail", { approveSpend: true, force: true });
   const index = [
     "uv", "run", "--project", ".", "python",
     "packs/indexing/modal/linkedin_modal_pipeline.py",
     "index-people",
     "--people-csv", ".powerpacks/network-import/merged/people.csv",
   ];
+  // UI test mode: skip the Parallel enrich + Modal sandbox entirely and just
+  // drive the status card to completion, so clicking shows visible progress
+  // with no spend. Set POWERPACKS_GMAIL_PROCESS_STUB to enable.
+  if (process.env.POWERPACKS_GMAIL_PROCESS_STUB) return [...index, "--stub"];
+  const enrich = enrichmentNetworkCommand(operatorId, "gmail", { approveSpend: true, force: true });
   return ["bash", "-c", `${shellJoin(enrich)} && ${shellJoin(index)}`];
 }
 

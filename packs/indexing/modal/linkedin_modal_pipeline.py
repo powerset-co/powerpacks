@@ -66,8 +66,8 @@ import modal  # noqa: E402
 def require_modal_credentials() -> None:
     """Fail with actionable guidance instead of an SDK auth traceback.
 
-    We cannot log a user in for them (gcloud auth needs a human in a browser),
-    but we can say exactly what to run.
+    We cannot provision Modal credentials locally, but we can say exactly what
+    to run.
     """
     if os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET"):
         return
@@ -76,8 +76,7 @@ def require_modal_credentials() -> None:
     raise SystemExit(
         "No Modal credentials found.\n"
         "Fix: run `$powerset login` (or `$powerset env pull`) to write MODAL_TOKEN_ID /\n"
-        "MODAL_TOKEN_SECRET into .env - it needs a signed-in gcloud account\n"
-        "(`gcloud auth login` once, in a browser). Then re-run this command."
+        "MODAL_TOKEN_SECRET into .env for provisioned Powerset users. Then re-run this command."
     )
 
 
@@ -513,6 +512,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
 
 GMAIL_VERTICAL = "gmail_modal"
 GMAIL_STAGES = [
+    {"id": "enriching", "label": "Enriching contacts"},
     {"id": "importing", "label": "Loading enriched contacts"},
     {"id": "indexing", "label": "Building search index"},
 ]
@@ -537,9 +537,20 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     if not people_path.exists():
         raise SystemExit(f"missing people.csv: {people_path}")
     rows = people_csv_rows(people_path)
-    vol = get_volume()
     progress = PipelineProgress(GMAIL_PROGRESS_DIR, GMAIL_STAGES, GMAIL_VERTICAL)
+    # Enrich already happened locally (Parallel) before this command runs.
+    progress.event("enriching", "Enriched contacts locally", status="completed", payload={"contacts": rows})
 
+    if getattr(args, "stub", False):
+        # UI test: drive the status card to completion without touching Modal.
+        progress.event("importing", f"[stub] Loaded {rows} contacts", status="completed", payload={"contacts": rows})
+        progress.event("indexing", "[stub] Skipped Modal sandbox (UI test)", status="completed", progress=1.0)
+        result = {"stub": True, "people_csv": str(people_path), "contacts": rows}
+        progress.finish(result)
+        print(json.dumps({"status": "completed", **result}))
+        return 0
+
+    vol = get_volume()
     progress.event("importing", f"Uploading {rows} enriched contacts", payload={"contacts": rows})
     with vol.batch_upload(force=True) as batch:
         batch.put_file(people_path, f"{OPERATOR_ROOT}/input/people.csv")
@@ -894,6 +905,8 @@ def main() -> int:
     idx.add_argument("--timeout", type=int, default=7200)
     idx.add_argument("--max-usd", type=float, default=0.0,
                      help="0 (default) = uncapped, no estimate pass; >0 adds a dry-run estimate gate")
+    idx.add_argument("--stub", action="store_true",
+                     help="UI test: drive the status card to completed without dispatching a Modal sandbox")
 
     pre = sub.add_parser("preload", help="union-merge local cache payloads into the shared volume cache")
     pre.add_argument("--role-classifications")
