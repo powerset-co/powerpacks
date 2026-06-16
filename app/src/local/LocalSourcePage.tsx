@@ -9,12 +9,16 @@ import { MessagesSyncPanel } from "./MessagesSyncPanel";
 import { MsgvaultSetupCard } from "./MsgvaultSetupCard";
 import {
   fetchMsgvaultStatus,
+  fetchOnboardingLinkedInStatus,
   fetchSetupJob,
   fetchSetupStatus,
   linkLinkedInCsv,
+  runOnboardingLinkedIn,
   runSetupAction,
   uploadLinkedInCsv,
 } from "./powerpacksApi";
+import { OnboardingStatusCard } from "./onboarding/OnboardingStatusCard";
+import type { JsonObject } from "./onboarding/utils";
 import type { SetupEnrichmentSource, SetupImportSource, SetupSourceStatus, SetupStatusResponse } from "./types";
 
 function formatDate(value?: string | null): string {
@@ -284,18 +288,63 @@ export function GmailSourcePage() {
   );
 }
 
+// The Modal pipeline (import -> index) the onboarding "Process" button runs, and
+// the stable linked Connections.csv it operates on. Reused here so /sources/linkedin
+// triggers the exact same enrich+index flow as /onboarding's LinkedIn section.
+const LINKEDIN_MODAL_STAGES = [
+  { id: "importing", label: "Importing contacts" },
+  { id: "indexing", label: "Building search index" },
+];
+const LINKEDIN_STABLE_CSV = ".powerpacks/network-import/discover/linkedin/Connections.csv";
+
 export function LinkedInSourcePage() {
   const { status, refresh } = useSetupStatus();
-  const { running, error, run } = useSourceJob(refresh);
   const syncing = useAutoDiscover("linkedin_csv", status, refresh);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadedCsvPath, setUploadedCsvPath] = useState<string | null>(null);
+  const [modalStatus, setModalStatus] = useState<JsonObject | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [processError, setProcessError] = useState<string | null>(null);
 
   const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "linkedin_csv");
   const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "linkedin_csv");
   const candidates = enrich?.candidates || 0;
+
+  const loadModalStatus = useCallback(async () => {
+    try {
+      setModalStatus(await fetchOnboardingLinkedInStatus());
+    } catch {
+      // transient status read; keep last known state and retry on the next tick
+    }
+  }, []);
+
+  useEffect(() => {
+    loadModalStatus();
+    const timer = window.setInterval(loadModalStatus, 2000);
+    return () => window.clearInterval(timer);
+  }, [loadModalStatus]);
+
+  const modalRunning = String(modalStatus?.status || "") === "running" || Boolean(modalStatus?.active_job);
+  const showModalStatus = modalStatus != null && String(modalStatus.status || "") !== "missing";
+
+  async function handleProcess() {
+    setStarting(true);
+    setProcessError(null);
+    try {
+      // Same endpoint/command as the onboarding "Process" button: Modal pipeline
+      // (import -> index). Use the freshly uploaded CSV if we have it this session,
+      // otherwise the stable linked Connections.csv so it works on reload too.
+      const result = await runOnboardingLinkedIn({ csvPath: uploadedCsvPath || LINKEDIN_STABLE_CSV });
+      setModalStatus((result.status as JsonObject) || null);
+    } catch (err) {
+      setProcessError(err instanceof Error ? err.message : "Failed to start");
+    } finally {
+      setStarting(false);
+    }
+  }
 
   async function handleUpload(file?: File | null) {
     if (!file) return;
@@ -303,9 +352,10 @@ export function LinkedInSourcePage() {
     setUploadError(null);
     try {
       const { path } = await uploadLinkedInCsv(file);
+      setUploadedCsvPath(path);
       // Linking only registers the CSV (writes csv_path + linked=true) — it does
-      // NOT import/enrich/index. Processing stays behind the Enrich and Rebuild
-      // index buttons, matching Gmail (Add account links; Sync/Enrich process).
+      // NOT import/enrich/index. Processing stays behind the Enrich & Index button,
+      // matching Gmail (Add account links; Sync/Enrich process).
       const result = await linkLinkedInCsv({ csvPath: path });
       if (result.status !== "completed") setUploadError(result.error || "Could not link that CSV.");
       // Await the refresh so the button stays in its spinner state until the new
@@ -354,7 +404,7 @@ export function LinkedInSourcePage() {
         <CardHeader>
           <CardTitle className="text-base">Connect LinkedIn</CardTitle>
           <CardDescription>
-            Upload your Connections.csv to link it — enrich and index run from the buttons below.
+            Upload your Connections.csv to link it — enrich and index run from the Process button below.
             <br />
             LinkedIn → Settings → Data privacy → Get a copy of your data → Connections.
           </CardDescription>
@@ -367,7 +417,7 @@ export function LinkedInSourcePage() {
           </Button>
           {accountSource?.linked && (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <FileCheck2 className="h-3.5 w-3.5" /> Connections.csv linked. Run enrich below to import profiles.
+              <FileCheck2 className="h-3.5 w-3.5" /> Connections.csv linked. Click Process below to enrich &amp; index.
             </p>
           )}
           {uploadError && <p className="mt-2 text-sm text-destructive">{uploadError}</p>}
@@ -377,21 +427,15 @@ export function LinkedInSourcePage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Enrich &amp; index</CardTitle>
-          <CardDescription>Resolve your connections into full profiles (LinkedIn enrichment is free), then rebuild the local index.</CardDescription>
+          <CardDescription>Resolve your connections into full profiles and rebuild the local search index in one step, on Modal. LinkedIn enrichment is free, and cached profiles, roles, and companies are skipped automatically.</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-2">
-          <Button
-            disabled={!accountSource?.linked || syncing || running !== null}
-            onClick={() => run("enrich", { action: "enrich-source", source: "linkedin_csv", approveSpend: true, force: true })}
-          >
-            {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            {candidates ? `Enrich ${candidates.toLocaleString()} connections` : "Enrich connections"}
+        <CardContent className="space-y-3">
+          <Button disabled={!accountSource?.linked || syncing || starting || modalRunning} onClick={handleProcess}>
+            {starting || modalRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+            {modalRunning ? "Processing…" : candidates ? `Process ${candidates.toLocaleString()} contacts` : "Process contacts"}
           </Button>
-          <Button variant="outline" disabled={running !== null} onClick={() => run("index", { action: "index" })}>
-            {running === "index" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Rebuild index
-          </Button>
-          {error && <p className="w-full text-sm text-destructive">{error}</p>}
+          {processError && <p className="text-sm text-destructive">{processError}</p>}
+          {showModalStatus && <OnboardingStatusCard status={modalStatus} defaultStages={LINKEDIN_MODAL_STAGES} />}
         </CardContent>
       </Card>
     </div>
