@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.6.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.5.0...powerpacks-v0.6.0) (2026-06-16)
+
+
+### Features
+
+* collapse BYO keys behind a chevron; open Codex via codex:// deeplink ([22d1ef5](https://github.com/powerset-co/powerpacks/commit/22d1ef5bb8fe4d858e86a53d3057813516bbaacf))
+* double-line stepper (label stacked under each circle) ([4dab26c](https://github.com/powerset-co/powerpacks/commit/4dab26c8ed682d8c3722349eef046ec28ccdaa1b))
+* GCP-free Modal setup — pull runtime keys from Powerset API ([2710c51](https://github.com/powerset-co/powerpacks/commit/2710c517b73ac1c9d3c2bf7cc1b0f5b975b19538))
+* Gmail sync date-window + per-vertical source pages ([#67](https://github.com/powerset-co/powerpacks/issues/67)) ([a3f4176](https://github.com/powerset-co/powerpacks/commit/a3f4176641c1e793c2d3d151420e1dd53f585ce1))
+* Gmail vault setup UI + onboarding consolidation + bin/launch ([#71](https://github.com/powerset-co/powerpacks/issues/71)) ([f6f4041](https://github.com/powerset-co/powerpacks/commit/f6f4041fb8094018e74ed166386c45facf380ddc))
+* hydrate uncached companies via RapidAPI by id and slug during indexing ([e28eb75](https://github.com/powerset-co/powerpacks/commit/e28eb75cf1e4ee1a2126e24aaae2c06720ea4ef6))
+* make deep-dive a standard step + fix limit-200 default in search-profile ([#70](https://github.com/powerset-co/powerpacks/issues/70)) ([e5c764f](https://github.com/powerset-co/powerpacks/commit/e5c764f5bd8ad3b3de14866b56831e0a4e457413))
+* onboarding-v3 pulls runtime keys after Powerset login with progress ([8d523ff](https://github.com/powerset-co/powerpacks/commit/8d523ff540a8e7c231043644ddc113274a51b36a))
+* onboarding-v3 wizard — Powerset login / BYO keys / first search ([b84e100](https://github.com/powerset-co/powerpacks/commit/b84e100b4605b6068b4b0fe8aeeb72991ab50f16))
+* onboarding-v3 wizard (Powerset login / BYO keys / first search) ([59b5bfb](https://github.com/powerset-co/powerpacks/commit/59b5bfb07daef0fc481ed8d1b259045d5183afdb))
+* per-vertical source pages with link-only + load-time auto-discover ([#68](https://github.com/powerset-co/powerpacks/issues/68)) ([b494869](https://github.com/powerset-co/powerpacks/commit/b494869207d6543c01474042f07141aa533c62fd))
+* prefill Codex deeplink + mark import step complete in stepper ([837a726](https://github.com/powerset-co/powerpacks/commit/837a7267d79789cd425bc634eae7e455334bdbce))
+* pull_runtime_keys — fetch Modal token + OpenAI key from API, no GCP ([fc4c92e](https://github.com/powerset-co/powerpacks/commit/fc4c92e68e5e96548cbe4c6992d78fcc6a926d36))
+* quorum-based JD candidate scoring with bar-raiser verdict ladder ([#64](https://github.com/powerset-co/powerpacks/issues/64)) ([5e84662](https://github.com/powerset-co/powerpacks/commit/5e846620eb2ed29873b872fbdfde8bb0323718f6))
+* reuse company classification by LinkedIn slug + skip unresolved companies ([093d69c](https://github.com/powerset-co/powerpacks/commit/093d69c9a283a541aa45ae2b2c5ee5e99e44b5be))
+* reuse company classification by LinkedIn slug and skip unresolved companies ([ef7b66c](https://github.com/powerset-co/powerpacks/commit/ef7b66c114cc81484b454e0528a6d9490a64c431))
+* route env pull to pull_runtime_keys; drop gcloud from doctor ([d43257a](https://github.com/powerset-co/powerpacks/commit/d43257adbef2a72c70305c52cac55efd8904b983))
+* single "Process" button on LinkedIn source page runs Modal enrich+index ([b8eedea](https://github.com/powerset-co/powerpacks/commit/b8eedea8f9b0adb5542f39c2ea76c9f1d6ccaad0))
+* single Codex launch button on first-search step ([24e1c60](https://github.com/powerset-co/powerpacks/commit/24e1c6027fe6306e5edd40127bd76634f22ef63b))
+
+
+### Bug Fixes
+
+* make local Gmail vault setup and per-account authorize/sync work end-to-end ([58bb39c](https://github.com/powerset-co/powerpacks/commit/58bb39c75fdd5a6d06aa723b9480ccffdf624d24))
+* make msgvault setup survive a reserved project id and Google's automation block ([95db21b](https://github.com/powerset-co/powerpacks/commit/95db21b0a3d1419344cf8a5b3d182c4b02acd3b1))
+* only PAID-hydrate corpus-missing companies; add RapidAPI key override ([ef03579](https://github.com/powerset-co/powerpacks/commit/ef03579334ab8fa5547b86d9cedc46e8ec8f128c))
+* raise duckdb memory_limit to 12GB for full-network index builds ([fb0fdcb](https://github.com/powerset-co/powerpacks/commit/fb0fdcb9243aa8d63cb20edfb8e7a36234d62987))
+* refresh shared caches before duckdb build so enrichment persists on failure ([ced6f0d](https://github.com/powerset-co/powerpacks/commit/ced6f0daeda410372be5aa6e989eb33604a14a9a))
+* **search:** scope source/interaction provenance to in-set operators ([#73](https://github.com/powerset-co/powerpacks/issues/73)) ([2b87ec0](https://github.com/powerset-co/powerpacks/commit/2b87ec0e7a135a6c95d7f5d2cc49e0684a3dfe6b))
+
+
+### Documentation
+
+* strip gcloud narrative from powerset SKILL (lean Modal flow) ([3ba3112](https://github.com/powerset-co/powerpacks/commit/3ba3112ae57542d81cafc483cd30aefe6f1f156e))
+
 ## [0.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.4.0...powerpacks-v0.5.0) (2026-06-13)
 
 
