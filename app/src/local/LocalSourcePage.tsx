@@ -315,8 +315,9 @@ export function GmailSourcePage() {
         <CardContent className="space-y-3">
           <Button disabled={!accountSource?.linked || syncing || starting || modalRunning} onClick={handleProcess}>
             {starting || modalRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            {modalRunning ? "Processing…" : candidates ? `Process ${candidates.toLocaleString()} contacts` : "Process contacts"}
+            {modalRunning ? "Processing…" : "Process Contacts"}
           </Button>
+          {candidates ? <p className="text-xs text-muted-foreground">{candidates.toLocaleString()} contacts</p> : null}
           {estimate && Number(estimate.pending_contacts) > 0 ? (
             <p className="text-xs text-muted-foreground">
               ≈ {Number(estimate.pending_contacts).toLocaleString()} new contacts to resolve · ~${Number(estimate.estimated_usd ?? 0).toFixed(2)} via Parallel.ai
@@ -491,8 +492,9 @@ export function LinkedInSourcePage() {
         <CardContent className="space-y-3">
           <Button disabled={!accountSource?.linked || syncing || starting || modalRunning} onClick={handleProcess}>
             {starting || modalRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            {modalRunning ? "Processing…" : candidates ? `Process ${candidates.toLocaleString()} contacts` : "Process contacts"}
+            {modalRunning ? "Processing…" : "Process Contacts"}
           </Button>
+          {candidates ? <p className="text-xs text-muted-foreground">{candidates.toLocaleString()} contacts</p> : null}
           {processError && <p className="text-sm text-destructive">{processError}</p>}
           {showModalStatus && <OnboardingStatusCard status={modalStatus} defaultStages={LINKEDIN_MODAL_STAGES} />}
         </CardContent>
