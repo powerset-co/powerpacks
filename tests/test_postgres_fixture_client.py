@@ -14,6 +14,9 @@ import postgres_client  # noqa: E402
 
 SET_ID = "10000000-0000-0000-0000-000000000001"
 OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
+# Operator who is NOT a member of the active set. Shares PERSON_1 globally;
+# their provenance must never appear in a set-scoped search.
+OUT_OF_SCOPE_OPERATOR_ID = "20000000-0000-0000-0000-0000000000ff"
 PERSON_1 = "00000000-0000-0000-0000-000000000001"
 PERSON_2 = "00000000-0000-0000-0000-000000000002"
 
@@ -39,7 +42,13 @@ class PostgresFixtureClientTests(unittest.TestCase):
                     "user_id": "auth0|owner",
                     "email": "owner@example.com",
                     "name": "Owner User",
-                }
+                },
+                {
+                    "id": OUT_OF_SCOPE_OPERATOR_ID,
+                    "user_id": "auth0|stranger",
+                    "email": "eric@ef7.co",
+                    "name": "",
+                },
             ],
             "set_members": [
                 {
@@ -62,9 +71,11 @@ class PostgresFixtureClientTests(unittest.TestCase):
                 },
             ],
             "person_source_summary": [
-                {"person_id": PERSON_1, "operator_id": OPERATOR_ID, "total_interactions": 2},
-                {"person_id": PERSON_1, "operator_id": OPERATOR_ID, "total_interactions": 5},
-                {"person_id": PERSON_2, "operator_id": OPERATOR_ID, "total_interactions": 3},
+                {"person_id": PERSON_1, "operator_id": OPERATOR_ID, "total_interactions": 2, "source_channel": "gmail"},
+                {"person_id": PERSON_1, "operator_id": OPERATOR_ID, "total_interactions": 5, "source_channel": "linkedin"},
+                {"person_id": PERSON_2, "operator_id": OPERATOR_ID, "total_interactions": 3, "source_channel": "gmail"},
+                # Out-of-scope operator also has PERSON_1 globally.
+                {"person_id": PERSON_1, "operator_id": OUT_OF_SCOPE_OPERATOR_ID, "total_interactions": 9, "source_channel": "imessage"},
             ],
         }
         self.fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
@@ -98,9 +109,43 @@ class PostgresFixtureClientTests(unittest.TestCase):
         self.assertEqual(rows[1]["hydrated_context"]["name"], "Ada Backend")
 
     def test_fetch_interaction_counts_aggregates_fixture_rows(self) -> None:
+        # Unscoped (legacy): aggregates all operators globally, including the
+        # out-of-scope operator's 9 interactions with PERSON_1.
         counts = postgres_client.fetch_interaction_counts([PERSON_1, PERSON_2])
 
+        self.assertEqual(counts, {PERSON_1: 16, PERSON_2: 3})
+
+    def test_fetch_interaction_counts_scoped_excludes_out_of_scope_operator(self) -> None:
+        counts = postgres_client.fetch_interaction_counts(
+            [PERSON_1, PERSON_2], allowed_operator_ids=[OPERATOR_ID]
+        )
+
+        # Out-of-scope operator's 9 interactions with PERSON_1 must be excluded.
         self.assertEqual(counts, {PERSON_1: 7, PERSON_2: 3})
+
+    def test_fetch_interaction_counts_empty_scope_fails_closed(self) -> None:
+        counts = postgres_client.fetch_interaction_counts(
+            [PERSON_1, PERSON_2], allowed_operator_ids=[]
+        )
+
+        self.assertEqual(counts, {})
+
+    def test_fetch_source_attribution_scoped_excludes_out_of_scope_operator(self) -> None:
+        scoped = postgres_client.fetch_source_attribution(
+            [PERSON_1], allowed_operator_ids=[OPERATOR_ID]
+        )
+
+        self.assertEqual(scoped[PERSON_1]["operators"], ["Owner User"])
+        self.assertNotIn("eric@ef7.co", scoped[PERSON_1]["operators"])
+        self.assertEqual(scoped[PERSON_1]["primary_operator"], "Owner User")
+        self.assertNotIn("imessage", scoped[PERSON_1]["channels"])
+
+    def test_fetch_source_attribution_unscoped_leaks_all_operators(self) -> None:
+        # Documents the legacy (global) behavior the scope param guards against:
+        # without scope, the out-of-scope operator's email leaks in.
+        unscoped = postgres_client.fetch_source_attribution([PERSON_1])
+
+        self.assertIn("eric@ef7.co", unscoped[PERSON_1]["operators"])
 
 
 if __name__ == "__main__":
