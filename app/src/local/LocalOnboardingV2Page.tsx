@@ -9,6 +9,7 @@ import {
   KeyRound,
   Loader2,
   LogIn,
+  Mail,
   Search,
   Terminal,
   Upload,
@@ -32,6 +33,7 @@ import {
   uploadLinkedInCsv,
   type PowersetWhoami,
 } from "./powerpacksApi";
+import { GmailSyncPanel } from "./GmailSyncPanel";
 import { OnboardingStatusCard } from "./onboarding/OnboardingStatusCard";
 import type { EnvKeyStatus, EnvStatusResponse, JsonObject } from "./types";
 
@@ -42,11 +44,10 @@ const V3_STAGES = [
 
 const BYO_KEYS = ["OPENAI_API_KEY", "RAPIDAPI_LINKEDIN_KEY", "PARALLEL_API_KEY"];
 
-// The email/Gmail sync step is intentionally omitted here until it is rock
-// solid; it lives in LocalOnboardingV2Page (/onboarding-v2) for now.
 const WIZARD_STEPS = [
   { id: "connect", label: "Connect" },
   { id: "import", label: "Import LinkedIn" },
+  { id: "email", label: "Sync email" },
   { id: "search", label: "First search" },
 ] as const;
 type StepId = (typeof WIZARD_STEPS)[number]["id"];
@@ -472,7 +473,10 @@ function FirstSearchPanel({ repoRoot }: { repoRoot: string }) {
   );
 }
 
-export function LocalOnboardingPage() {
+// onboarding-v2: the full wizard including the still-being-refined Gmail / email
+// sync step. The shipped /onboarding route (LocalOnboardingPage) drops the email
+// step until it is rock solid; new email work lands here first.
+export function LocalOnboardingV2Page() {
   const [active, setActive] = useState<StepId>("connect");
   const [powersetConnected, setPowersetConnected] = useState(false);
   const [keysReady, setKeysReady] = useState(false);
@@ -492,6 +496,7 @@ export function LocalOnboardingPage() {
   const done: Record<StepId, boolean> = {
     connect: powersetConnected || keysReady,
     import: importDone,
+    email: false,
     search: false,
   };
 
@@ -552,8 +557,24 @@ export function LocalOnboardingPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <ImportPanel onDone={() => setImportDone(true)} />
+            <Button variant="secondary" className="w-full" onClick={() => setActive("email")}>
+              Next — sync email
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {active === "email" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Mail className="h-4 w-4" /> Sync your email network
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <GmailSyncPanel />
             <Button variant="secondary" className="w-full" onClick={() => setActive("search")}>
-              Next — try a search
+              I'm done — try a search
             </Button>
           </CardContent>
         </Card>
