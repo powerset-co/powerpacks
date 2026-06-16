@@ -8,6 +8,7 @@ import { GmailSyncPanel } from "./GmailSyncPanel";
 import { MessagesSyncPanel } from "./MessagesSyncPanel";
 import { MsgvaultSetupCard } from "./MsgvaultSetupCard";
 import {
+  fetchGmailEnrichEstimate,
   fetchMsgvaultStatus,
   fetchOnboardingGmailRunStatus,
   fetchOnboardingLinkedInStatus,
@@ -206,6 +207,7 @@ export function GmailSourcePage() {
   const [modalStatus, setModalStatus] = useState<JsonObject | null>(null);
   const [starting, setStarting] = useState(false);
   const [processError, setProcessError] = useState<string | null>(null);
+  const [estimate, setEstimate] = useState<Record<string, any> | null>(null);
 
   const loading = !status;
   const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "gmail");
@@ -221,11 +223,20 @@ export function GmailSourcePage() {
     }
   }, []);
 
+  const loadEstimate = useCallback(async () => {
+    try {
+      setEstimate(await fetchGmailEnrichEstimate());
+    } catch {
+      // estimate is best-effort info; leave it absent on error
+    }
+  }, []);
+
   useEffect(() => {
     loadModalStatus();
+    loadEstimate();
     const timer = window.setInterval(loadModalStatus, 2000);
     return () => window.clearInterval(timer);
-  }, [loadModalStatus]);
+  }, [loadModalStatus, loadEstimate]);
 
   // !stale so a killed run never locks the button (see LinkedInSourcePage).
   const modalRunning = !modalStatus?.stale
@@ -240,6 +251,7 @@ export function GmailSourcePage() {
       const result = await runOnboardingGmail();
       setModalStatus((result.status as JsonObject) || null);
       refresh();
+      loadEstimate();
     } catch (err) {
       setProcessError(err instanceof Error ? err.message : "Failed to start");
     } finally {
@@ -305,7 +317,14 @@ export function GmailSourcePage() {
             {starting || modalRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
             {modalRunning ? "Processing…" : candidates ? `Process ${candidates.toLocaleString()} contacts` : "Process contacts"}
           </Button>
-          <p className="text-xs text-muted-foreground">Enrichment uses Parallel.ai — this is a paid lookup.</p>
+          {estimate && Number(estimate.pending_contacts) > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              ≈ {Number(estimate.pending_contacts).toLocaleString()} new contacts to resolve · ~${Number(estimate.estimated_usd ?? 0).toFixed(2)} via Parallel.ai
+              {Number(estimate.already_resolved) > 0 ? ` · ${Number(estimate.already_resolved).toLocaleString()} already in your directory (free)` : ""}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">Enrichment uses Parallel.ai (~$0.05/new contact). Contacts already in your directory are free.</p>
+          )}
           {processError && <p className="text-sm text-destructive">{processError}</p>}
           {showModalStatus && <OnboardingStatusCard status={modalStatus} defaultStages={GMAIL_MODAL_STAGES} />}
         </CardContent>

@@ -267,6 +267,16 @@ export function onboardingGmailRunCommand(operatorId: string): string[] {
   return ["bash", "-c", `${shellJoin(enrich)} && ${shellJoin(index)}`];
 }
 
+// Free + instant: reads the resolution queue minus directory.csv to estimate the
+// incremental Parallel.ai spend for the next Gmail Process. No API calls.
+export function gmailEnrichEstimateCommand(): string[] {
+  return [
+    "uv", "run", "--project", ".", "python",
+    "packs/ingestion/primitives/setup_gmail/setup_gmail.py",
+    "estimate",
+  ];
+}
+
 export function processLocalNetworkCommand(operatorId: string): string[] {
   return [
     "uv", "run", "--project", ".", "python",
