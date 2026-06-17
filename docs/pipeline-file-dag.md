@@ -1,95 +1,107 @@
-# 🗺️ Pipeline File DAG — LinkedIn & Gmail
+# 🗺️ Pipeline File Registry & DAG — LinkedIn & Gmail
 
 > Created: 2026-06-16
 >
-> **Purpose:** single source of truth for every input/output file in the LinkedIn
-> and Gmail ingestion → merge → index flows, which script produces it, and which
-> consumes it. Built to kill the recurring bug class: *the same logical resource
-> has two string representations and a hand-passed `--path` arg picks the wrong
-> one* (double-nested dirs, `/data` vs volume-relative keys, discovery-CSV vs
-> people-CSV). Paths here are derived from code (`file:line` cited inline in the
-> session that produced this), not memory.
+> **Purpose:** make the pipeline deterministic by giving **every input and every
+> output exactly one canonical location constant and one attached schema**. A
+> stage never receives a hand-built `--path`; it writes to a registry location
+> and asserts the registry schema at every read boundary. This kills the
+> recurring bug class — *one resource, two string representations, picked wrong*
+> (double-nested dirs, `/data` vs volume-relative keys, discovery-CSV vs
+> people-CSV, missing-vs-blank coercion). Everything below is derived from code
+> (`file:line`), not memory.
 >
 > **Changelog**
 > - 2026-06-16: initial inventory (Gmail + LinkedIn + Modal handoff + risk register).
+> - 2026-06-16: restructured to a **File Registry** — every IO now carries a
+>   location constant **and** a schema constant, with `exists / 🆕 to-create`
+>   status; added §6 spec for a single `pipeline_files.py` registry module.
 
 ---
 
-## 0. 📌 Canonical path constants (the only values that should ever be hard-coded)
+## 0. 📒 File Registry — every input/output = (location constant, schema constant)
 
-| Constant | Defined in | Resolved value |
-|---|---|---|
-| `DEFAULT_BASE_DIR` | `discover_contacts_pipeline/common.py:19` | `.powerpacks/network-import` |
-| `DISCOVER_DIR` | `discover_contacts_pipeline/common.py:20` | `.powerpacks/network-import/discover` |
-| `DEFAULT_DIRECTORY_CSV` | `discover_contacts_pipeline/common.py:23` | `.powerpacks/network-import/directory.csv` |
-| `DEFAULT_IMPORT_DIR` | `import_contacts_pipeline/common.py:28` | `.powerpacks/network-import/import` |
-| `DEFAULT_OUTPUT_DIR` (merge) | `merge_network_sources.py:51` | `.powerpacks/network-import/merged` |
-| `DEFAULT_PEOPLE_CSV` (index) | `index_contacts_pipeline.py:31` | `.powerpacks/network-import/merged/people.csv` |
-| `OPERATOR_ROOT` (modal, **mount view**) | `linkedin_modal_pipeline.py:115` | `/data/operators/<operator-id>` |
-| `op_prefix` / `operator_volume_prefix()` (modal, **key view**) | `linkedin_modal_pipeline.py:130,421` | `operators/<operator-id>` |
+Legend: ✅ constant exists · ⚠️ exists but duplicated / stage-scoped · 🆕 must be created.
+"Location" = canonical path/key. "Schema" = expected CSV header (or kind for non-CSV).
 
-**Rule of thumb:** everything under `.powerpacks/network-import/` is keyed off
-`DEFAULT_BASE_DIR`. The Modal volume has TWO views of the same location — see §4.
+### Gmail flow
+
+| Artifact | Location constant | Status | Schema constant | Status |
+|---|---|---|---|---|
+| accounts.json | `DEFAULT_ACCOUNTS` (`import_contacts_pipeline/common.py:27`) | ⚠️ dup in `index_contacts_pipeline.py:30` | _(json)_ | — |
+| msgvault.db | `DEFAULT_MSGVAULT_DB` (`discover_contacts_pipeline/common.py:24`) | ✅ | _(sqlite)_ | — |
+| discover/gmail/**contacts.csv** | `DISCOVER_CONTACTS_CSV` (`setup_gmail.py:48`) | ⚠️ defined only in setup_gmail; discover/import re-derive | `GMAIL_DISCOVERY_COLUMNS` (`discover_contacts_pipeline/gmail.py:71`) | ✅ |
+| discover/gmail/**linkedin_resolution_queue.csv** | 🆕 `GMAIL_DISCOVER_QUEUE_CSV` | 🆕 | `LINKEDIN_RESOLUTION_QUEUE_COLUMNS` (`gmail_network_import.py:183`) | ✅ |
+| discover/gmail/**manifest.json** | 🆕 `GMAIL_DISCOVER_MANIFEST` | 🆕 | _(manifest)_ | — |
+| discover/gmail/**`<acct>`/** (per-account dir) | 🆕 `gmail_account_dir(email)` | 🆕 *(the double-nest origin)* | — | — |
+| discover/gmail/`<acct>`/**people.csv** | 🆕 `gmail_account_people_csv(email)` | 🆕 | `PEOPLE_SCHEMA_COLUMNS` (`people_schema.py:19`) | ✅ |
+| import/gmail/**people.csv** | 🆕 `GMAIL_IMPORT_PEOPLE_CSV` (= `DEFAULT_IMPORT_DIR/"gmail"/"people.csv"`) | 🆕 | `PEOPLE_SCHEMA_COLUMNS` | ✅ |
+| **directory.csv** | `DEFAULT_DIRECTORY_CSV` (`discover_contacts_pipeline/common.py:23`) | ✅ | `DIRECTORY_COLUMNS` (`directory.py:44`) | ✅ |
+
+### LinkedIn flow
+
+| Artifact | Location constant | Status | Schema constant | Status |
+|---|---|---|---|---|
+| Connections.csv (staged) | `DISCOVER_CONNECTIONS_CSV` (`setup_linkedin_csv.py:53`) | ⚠️ setup-scoped | `LINKEDIN_DISCOVERY_COLUMNS` (`discover_contacts_pipeline/linkedin.py:57`) | ✅ |
+| profile_cache_v2/ | `DEFAULT_PROFILE_CACHE_DIR` (`import_contacts_pipeline/common.py:29`) | ⚠️ re-built as string `setup_linkedin_csv.py:235` | _(profile cache)_ | — |
+| import/linkedin/**people.csv** | 🆕 `LINKEDIN_IMPORT_PEOPLE_CSV` | 🆕 | `PEOPLE_SCHEMA_COLUMNS` | ✅ |
+| search-index/**local-search.duckdb** | 🆕 `LOCAL_SEARCH_DUCKDB` | 🆕 *(hand-built `output_dir/"local-search.duckdb"` ~5×)* | _(duckdb)_ | — |
+
+### Shared join point
+
+| Artifact | Location constant | Status | Schema constant | Status |
+|---|---|---|---|---|
+| **merged/people.csv** | `DEFAULT_PEOPLE_CSV` (`index_contacts_pipeline.py:31`) — also `DEFAULT_OUTPUT_DIR/"people.csv"` (`merge:51`) | ⚠️ two names for one file | `MERGED_COLUMNS` (`merge_network_sources.py:52`) | ✅ |
+
+### Modal handoff (each location has TWO views — write key vs read path)
+
+| Artifact | Write **key** constant | Read **path** constant | Status | Schema |
+|---|---|---|---|---|
+| operator root | — | `OPERATOR_ROOT` (`linkedin_modal_pipeline.py:117`) | ✅ | — |
+| operator prefix | 🆕 `OPERATOR_VOLUME_PREFIX` | `OPERATOR_ROOT` | 🆕 *(`op_prefix` hand-built `:421`; fn `:130`)* | — |
+| input/people.csv | 🆕 `OP_INPUT_PEOPLE_KEY` | 🆕 `OP_INPUT_PEOPLE_PATH` | 🆕 | `MERGED_COLUMNS`/`PEOPLE_SCHEMA_COLUMNS` |
+| input/connections.csv | 🆕 `OP_INPUT_CONNECTIONS_KEY` | 🆕 `OP_INPUT_CONNECTIONS_PATH` | 🆕 | `LINKEDIN_DISCOVERY_COLUMNS` |
+| runs/`<label>`/local-search.duckdb | 🆕 `op_run_duckdb_key(label)` | `run_vol_path(label)` (`:127`) | 🆕 key | _(duckdb)_ |
+
+> **Reading the status column:** every 🆕 and ⚠️ row is a place the pipeline today
+> re-derives a path or schema by hand — i.e. a spot the next wrong-path bug can
+> enter. The schemas mostly already exist; the **bindings** (location↔schema, one
+> owner) do not.
 
 ---
 
-## 1. 🟦 Gmail flow (DAG)
+## 1. 🟦 Gmail flow (DAG) — references registry names from §0
 
-| # | Script : subcommand | Inputs (path — source) | Outputs (path — source) |
-|---|---|---|---|
-| 1 | `discover_contacts_pipeline/gmail.py : discover` | `accounts.json` (`.powerpacks/ingestion/accounts.json` — `--accounts`)<br>`msgvault.db` (`~/.msgvault/msgvault.db` — `--msgvault-db`/state) | **aggregate** `discover/gmail/{contacts.csv, linkedin_resolution_queue.csv, manifest.json}` (hard-coded) |
-| 1a | ↳ per-account child `gmail_network_import.py : msgvault` | `--db`, `--account-email`, `--output-dir = DEFAULT_BASE_DIR` (the **base**, not the final dir) | `discover/gmail/<acct-slug>/{people.csv, linkedin_resolution_queue.csv, manifest.json, accounts.csv, gmail_threads.csv, …}` — **callee appends `discover/gmail/<slug>`** via `gmail_discover_dir()` (`gmail_network_import.py:440,1511`). `people.csv` carries `interaction_counts={"gmail": N}` (`:875`) |
-| 2 | `import_contacts_pipeline/gmail.py : run` | `discover/gmail/manifest.json` (hard-coded `:93`) → `gmail_artifacts_from_discovery()` selects **per-account `people.csv`** from `children[].artifacts.people_csv`, **validated** for `interaction_counts` (`:89,112`) | `import/gmail/{people.csv, manifest.json, ledger.json}`<br>appends `directory.csv` |
-| 3 | `merge_network_sources.py : run` | `--input` × N: `import/gmail/people.csv`, `import/linkedin/people.csv`, messages contacts, … | **`merged/people.csv`** (canonical) + `network_contacts.csv`, `network_companies.csv`, `merge_manifest.json` |
-| 4 | `linkedin_modal_pipeline.py : index-people` | `--people-csv = merged/people.csv` | uploads → volume key `operators/<id>/input/people.csv` (`:552`, via `operator_volume_prefix()`); run → `operators/<id>/runs/gmail-index/{local-search.duckdb, manifest.json}` → download local |
+`accounts.json` + `msgvault.db`
+→ **discover** (`discover_contacts_pipeline/gmail.py`) writes `gmail_account_people_csv(email)` (schema `PEOPLE_SCHEMA_COLUMNS`, carries `interaction_counts`) + aggregate `DISCOVER_CONTACTS_CSV`/queue/manifest
+→ **import** (`import_contacts_pipeline/gmail.py`, `gmail_artifacts_from_discovery` validates `interaction_counts` at the seam) writes `GMAIL_IMPORT_PEOPLE_CSV`; appends `DEFAULT_DIRECTORY_CSV`
+→ **merge** (`merge_network_sources.py`) writes `DEFAULT_PEOPLE_CSV` (schema `MERGED_COLUMNS`)
+→ **modal index-people** uploads `OP_INPUT_PEOPLE_KEY`, sandbox reads `OP_INPUT_PEOPLE_PATH`, run writes `op_run_duckdb_key("gmail-index")`.
 
-**Gmail edges:**
-`accounts.json` + `msgvault.db` → **discover** → `discover/gmail/<slug>/people.csv` (+ aggregate `contacts.csv`/queue) → **import** (`gmail_artifacts_from_discovery`) → `import/gmail/people.csv` → **merge** → `merged/people.csv` → **modal index-people** → `runs/gmail-index/local-search.duckdb`.
-
----
+> per-account child: `gmail_network_import.py msgvault` is passed `--output-dir = DEFAULT_BASE_DIR` (the **base**) and internally appends `discover/gmail/<slug>` via `gmail_discover_dir()` (`:440,1511`). `gmail_account_dir(email)` must be the single owner of that final path so no caller ever appends it again.
 
 ## 2. 🟩 LinkedIn flow (DAG)
 
-| # | Script : subcommand | Inputs | Outputs |
-|---|---|---|---|
-| 1 | `setup_linkedin_csv.py : run` | `Connections.csv` (`--csv`), `--source-user`, `accounts.json` | stages `discover/linkedin/Connections.csv`; status under `.powerpacks/runs/setup-linkedin-csv/` |
-| 2 | `linkedin_network_import.py` | `--csv`, `--output-dir = DEFAULT_BASE_DIR`, ledger `discover/linkedin/linkedin_network_import.ledger.json` | `connections_for_enrichment.csv`, `source_people.csv` (run dir) |
-| 3 | `enrich_people.py` (RapidAPI 💸) | `source_people.csv` (from ledger), profile cache `DEFAULT_BASE_DIR/profile_cache_v2` | `people.csv` (run dir) + `rapidapi_cache_{hits,misses}.csv`, queues |
-| 4 | `import_contacts_pipeline/linkedin.py : run` | `accounts.json` → `linkedin_csv_path()`, enriched `people.csv` | `import/linkedin/{people.csv, manifest.json}`; appends `directory.csv` |
-| 5 | `merge_network_sources.py : run` | `--input import/linkedin/people.csv` (+ other sources) | **`merged/people.csv`** ⟵ *shared with Gmail* |
-| 6a | `index_contacts_pipeline.py` (local) | `DEFAULT_PEOPLE_CSV = merged/people.csv` | `.powerpacks/search-index/local-search.duckdb` |
-| 6b | `linkedin_modal_pipeline.py : pipeline` (cloud) | `--csv Connections.csv` | upload `operators/<id>/input/connections.csv` → `run_linkedin.py` → `operators/<id>/input/people.csv` → `run_indexing.py` → `runs/linkedin-index/local-search.duckdb` |
+`Connections.csv` (`DISCOVER_CONNECTIONS_CSV`, schema `LINKEDIN_DISCOVERY_COLUMNS`)
+→ **import/enrich** (RapidAPI 💸, cache `DEFAULT_PROFILE_CACHE_DIR`) writes `LINKEDIN_IMPORT_PEOPLE_CSV` (schema `PEOPLE_SCHEMA_COLUMNS`)
+→ **merge** writes `DEFAULT_PEOPLE_CSV`
+→ **index** (local `index_contacts_pipeline.py` → `LOCAL_SEARCH_DUCKDB`, or modal `index-people`/`pipeline`).
 
-**LinkedIn edges:**
-`Connections.csv` → **import/enrich** → `import/linkedin/people.csv` → **merge** → `merged/people.csv` → **index** (local `index_contacts_pipeline` *or* modal `index-people`/`pipeline`) → `local-search.duckdb`.
-
-> ⚠️ `merge_network_sources` filters rows via `keep_people_csv_row()` (`:209,553`):
-> a row needs a stable LinkedIn key **and** a usable RapidAPI profile to reach
-> `merged/people.csv`. Incomplete enrichment silently drops rows here.
+> ⚠️ `merge_network_sources.keep_people_csv_row()` (`:209,553`) drops rows lacking a stable LinkedIn key **and** a usable RapidAPI profile — silent attrition into `merged/people.csv`.
 
 ---
 
 ## 3. 🔗 Shared join point
 
-Both flows converge on **`.powerpacks/network-import/merged/people.csv`** (produced by `merge_network_sources`, consumed by every indexer). This is the one file the Modal index is *supposed* to consume. Everything upstream is per-source; everything downstream is source-agnostic.
+Both flows converge on **`DEFAULT_PEOPLE_CSV` = `.powerpacks/network-import/merged/people.csv`** (schema `MERGED_COLUMNS`), produced by `merge_network_sources`, consumed by every indexer. Upstream = per-source; downstream = source-agnostic.
 
 ---
 
 ## 4. ☁️ Local → Modal handoff (the `/data` vs volume-key trap)
 
-The Modal Volume is **written** with volume-relative keys and **read** (inside the sandbox) at the `/data` mount. Same location, two strings. Writing the mount-view string as a key produces a phantom `data/operators/...` key the sandbox never reads — this was the "indexed the stale 277-row file" bug.
+The Modal Volume is **written** with volume-relative keys and **read** in the sandbox at the `/data` mount — same location, two strings. Writing the mount-view string as a key produces a phantom `data/operators/...` key the sandbox never reads (the "indexed the stale 277-row file" bug). Each row of the Modal table in §0 therefore has **two** constants (`*_KEY` and `*_PATH`); a `volume_key(path)` helper must be the only way to derive one from the other.
 
-| Local file | Volume **write** key | Sandbox **read** path |
-|---|---|---|
-| `merged/people.csv` | `operators/<id>/input/people.csv` | `/data/operators/<id>/input/people.csv` |
-| `Connections.csv` | `operators/<id>/input/connections.csv` | `/data/operators/<id>/input/connections.csv` |
-| `search-index/*` artifacts | `cache/artifacts/*`, `cache/seeds/*` | `/data/cache/artifacts/*` |
-| (run output) | `operators/<id>/runs/<label>/local-search.duckdb` | `/data/operators/<id>/runs/<label>/local-search.duckdb` |
-
-`run_indexing.py` then feeds the **same** sandbox `people.csv` to both
-`build_processing_pipeline.py --input` and
-`build-local-duckdb-shim.py --person-profiles-csv` (`run_indexing.py:194-202`),
-so the duckdb's `interaction_counts`/`total_interactions` come from that one file.
+`run_indexing.py` feeds the **same** sandbox `people.csv` to both `build_processing_pipeline.py --input` and `build-local-duckdb-shim.py --person-profiles-csv` (`run_indexing.py:194-202`), so the duckdb's `interaction_counts`/`total_interactions` come from that one registry file.
 
 ---
 
@@ -97,34 +109,54 @@ so the duckdb's `interaction_counts`/`total_interactions` come from that one fil
 
 | Class | Where it lives | Symptom when wrong | Status |
 |---|---|---|---|
-| **base-dir vs final-dir** | `gmail_discover_dir()` appends `discover/gmail/<slug>` onto `--output-dir`; caller must pass the **base** | `…/discover/gmail/raw/<acct>/discover/gmail/<acct>/` double-nest | ✅ fixed (working tree) |
-| **mount-view vs key-view** | modal writes must use `operators/<id>/…`, reads use `/data/operators/<id>/…` | upload lands at `data/operators/…`, sandbox reads stale file | ✅ fixed `:552`; ⚠️ `:421` still hand-builds `op_prefix` (correct value, but not via the helper) |
-| **discovery-CSV vs people-CSV** | `contacts.csv` (has `total_messages`, no `interaction_counts`) vs `people.csv` (people schema) | counts column present but all 0 | ✅ guard added (`_valid_gmail_people_csv`) |
-| **missing vs blank** | `normalize_people_row` defaults every column to `""` (`people_schema.py:114`) | wrong-shape input laundered into valid-but-empty output | ⚠️ only `messages.py` has a staleness guard; gmail path now rejects at the seam |
+| **base-dir vs final-dir** | `gmail_discover_dir()` appends `discover/gmail/<slug>` onto `--output-dir`; caller must pass the **base** | `…/discover/gmail/raw/<acct>/discover/gmail/<acct>/` double-nest | ✅ fixed; permanent fix = `gmail_account_dir(email)` owns the final path |
+| **mount-view vs key-view** | modal writes `operators/<id>/…`, reads `/data/operators/<id>/…` | upload lands at `data/operators/…`, sandbox reads stale file | ✅ fixed `:552`; ⚠️ `:421` still hand-builds `op_prefix` → promote to `OPERATOR_VOLUME_PREFIX` + `volume_key()` |
+| **discovery-CSV vs people-CSV** | `contacts.csv` (`GMAIL_DISCOVERY_COLUMNS`) vs `people.csv` (`PEOPLE_SCHEMA_COLUMNS`) | counts column present but all 0 | ✅ guard added; permanent fix = `require_schema()` at the seam |
+| **missing vs blank** | `normalize_people_row` defaults every column to `""` (`people_schema.py:114`) | wrong-shape input laundered into valid-but-empty output | ⚠️ assert-at-boundary (`require_schema`) instead of coerce |
 
 ---
 
-## 6. 🎯 Direction (toward hard-coded, un-confusable paths)
+## 6. 🎯 The fix: one `pipeline_files.py` registry (location ⊗ schema)
 
-The fix for the whole class is to stop passing ambiguous strings and give each
-representation **one owner + one assertion**:
+A single module binds every artifact in §0 to its location **and** schema, so a stage references a registry entry instead of a string, and asserts the schema on read.
 
-1. **A single `paths` module** that defines every canonical path in §0 once and
-   exposes typed helpers instead of raw strings:
-   - `gmail_account_dir(email)` → the one true per-account dir (no caller ever
-     appends `discover/gmail/<slug>` by hand).
-   - `volume_key(p)` vs `sandbox_path(p)` → impossible to write a `/data` string
-     as a volume key (generalize `operator_volume_prefix()`; retire the hand-built
-     `op_prefix` at `:421`).
-   - `merged_people_csv()` → the join point in §3.
-2. **Primitives default to these constants**; keep `--arg` overrides only for
-   tests, never as the normal call path. (This is the "no one actually uses these
-   as real CLIs" point — the agent is the only caller, so the default should be
-   the canonical path and the agent should pass nothing.)
-3. **Assert-at-boundary, don't coerce:** `require_people_schema(csv)` raises on a
-   discovery-shape CSV at every seam that expects people schema.
+```python
+# packs/ingestion/schemas/pipeline_files.py
+from dataclasses import dataclass
+from pathlib import Path
 
-> Current state: the three fixes (gmail seam, path double-nest, modal upload key)
-> are present in the working tree, **uncommitted**. This doc is step 1 (the
-> inventory); the `paths` module + hard-coding is the follow-up that prevents
-> regression.
+@dataclass(frozen=True)
+class FileSpec:
+    location: Path | str             # canonical path OR volume key (one owner)
+    schema: tuple[str, ...] | None   # expected CSV header; None for non-CSV
+    produced_by: str
+    consumed_by: tuple[str, ...]
+
+# every §0 row becomes one entry, reusing the EXISTING schema constants:
+GMAIL_DISCOVER_CONTACTS = FileSpec(DISCOVER_DIR_GMAIL / "contacts.csv",
+    GMAIL_DISCOVERY_COLUMNS, "discover/gmail.py", ("import/gmail.py",))
+GMAIL_IMPORT_PEOPLE     = FileSpec(DEFAULT_IMPORT_DIR / "gmail" / "people.csv",
+    PEOPLE_SCHEMA_COLUMNS, "import/gmail.py", ("merge_network_sources.py",))
+MERGED_PEOPLE           = FileSpec(DEFAULT_OUTPUT_DIR / "people.csv",
+    MERGED_COLUMNS, "merge_network_sources.py", ("index", "modal"))
+def gmail_account_dir(email):  ...            # single owner of the per-account dir
+def volume_key(path: str) -> str:             # mount-view  -> key-view, the ONLY converter
+    return str(path).removeprefix("/data/").lstrip("/")
+
+class PipelineSchemaError(Exception): ...
+def require_schema(spec: FileSpec, csv: Path) -> None:
+    header = read_csv_header(csv)
+    missing = [c for c in (spec.schema or ()) if c not in header]
+    if missing:
+        raise PipelineSchemaError(f"{csv} missing {missing} for {spec.produced_by}")
+```
+
+Determinism contract:
+- **Locations:** every 🆕/⚠️ row in §0 gets exactly one constant here; primitives import it and pass **nothing** (CLI `--path` args become test-only overrides).
+- **Schemas:** each entry reuses the existing column constant (`PEOPLE_SCHEMA_COLUMNS`, `MERGED_COLUMNS`, `GMAIL_DISCOVERY_COLUMNS`, …) — no new schema definitions, just bindings.
+- **Boundaries:** every stage calls `require_schema(spec, csv)` on read → wrong-shape input fails **loud** instead of being coerced to blank.
+- **Modal:** `volume_key()` is the single mount→key converter; no hand-built `/data/...` or `operators/...` strings anywhere (retires `op_prefix` at `:421`).
+
+> Current state: the three fixes (gmail seam, path nest, modal upload key) are
+> committed on `fix/pipeline-path-dag` (PR #83). This registry module is the
+> follow-up that makes the pattern enforced, not just patched.
