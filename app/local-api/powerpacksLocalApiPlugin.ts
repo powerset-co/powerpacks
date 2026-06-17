@@ -11,6 +11,7 @@ import { handlePowersetRoutes } from "./routes/powerset";
 import { handlePersonDetailsRoutes } from "./routes/personDetails";
 import { handleCompaniesRoutes } from "./routes/companies";
 import { handleLocalSearchRoutes } from "./routes/localSearch";
+import { handleSystemRoutes } from "./routes/system";
 
 // Each handler inspects the request and returns true once it has written a
 // response, or false to let the next handler (and ultimately Vite) take over.
@@ -27,6 +28,7 @@ const routeHandlers: LocalApiRouteHandler[] = [
   handlePersonDetailsRoutes,
   handleCompaniesRoutes,
   handleLocalSearchRoutes,
+  handleSystemRoutes,
 ];
 
 export function powerpacksLocalApiPlugin(): Plugin {

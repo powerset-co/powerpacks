@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { format, isSameMonth, isSameWeek, isSameYear, isToday, isYesterday } from "date-fns";
-import { Building2, ContactRound, KeyRound, Loader2, Mail, MessageCircle, Plus, Search, Settings2 } from "lucide-react";
+import { Building2, ContactRound, Cpu, KeyRound, Loader2, Mail, MessageCircle, Plus, Search, Settings2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import type { LocalProfileResponse, LocalRunSummary } from "./types";
 
 interface LocalRunSidebarProps {
-  activeView: "contacts" | "companies" | "setup" | "env" | "runs";
+  activeView: "contacts" | "companies" | "setup" | "env" | "system" | "runs";
   runs: LocalRunSummary[];
   operatorEmail?: string;
   accountSources?: LocalProfileResponse["accounts"]["sources"];
@@ -29,6 +29,7 @@ interface LocalRunSidebarProps {
   onSelectCompanies: () => void;
   onSelectSetup: () => void;
   onSelectEnv: () => void;
+  onSelectSystem: () => void;
   onSelectLinkSetup: () => void;
   onSelectSource?: (id: string) => void;
   onSelect: (run: LocalRunSummary) => void;
@@ -98,6 +99,7 @@ export function LocalRunSidebar({
   onSelectCompanies,
   onSelectSetup,
   onSelectEnv,
+  onSelectSystem,
   onSelectLinkSetup,
   onSelectSource,
   onSelect,
@@ -298,6 +300,10 @@ export function LocalRunSidebar({
             <DropdownMenuItem onClick={onSelectEnv}>
               <KeyRound className="mr-2 h-4 w-4" />
               Environment
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onSelectSystem}>
+              <Cpu className="mr-2 h-4 w-4" />
+              System
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
