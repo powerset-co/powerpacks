@@ -135,7 +135,7 @@ repo="$(resolve_powerpacks_root)" || {
   exit 1
 }
 cd "$repo"
-scripts/run-powerpacks-console.sh start --path /setup --open
+scripts/run-powerpacks-console.sh start --path / --open
 ```
 
 If the script reports that the app is already running, use the printed `Open:`
