@@ -428,10 +428,30 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         last_sha = ""
     if last_sha == csv_sha and not args.force:
         progress.event("importing", "Connections.csv unchanged - already imported", status="completed")
-        progress.event("indexing", "Search index already up to date", status="completed", progress=1.0)
+        # Remote is already up to date, but a clean/fresh local workspace may have
+        # no local-search.duckdb. Hydrate it from the existing run instead of
+        # finishing with empty local artifacts.
+        dest = Path(args.dest) if args.dest else LOCAL_POWERPACKS / "search-index"
+        local_duckdb = dest / "local-search.duckdb"
+        downloaded = False
+        if not local_duckdb.exists() or local_duckdb.stat().st_size == 0:
+            progress.event("indexing", "Downloading existing search index")
+            code = cmd_download(argparse.Namespace(label=INDEX_LABEL, dest=args.dest, wait=False))
+            if code != 0:
+                progress.event("indexing", "Could not download existing search index", status="failed")
+                return code
+            downloaded = True
+        progress.event(
+            "indexing",
+            "Search index is ready" if downloaded else "Search index already up to date",
+            status="completed",
+            progress=1.0,
+        )
         mark_linkedin_linked(csv_path)
-        progress.finish({"noop": True, "csv": str(csv_path), "connections": rows})
-        print(json.dumps({"status": "noop", "connections": rows}))
+        result = {"noop": True, "csv": str(csv_path), "connections": rows,
+                  "downloaded": downloaded, "duckdb": str(local_duckdb)}
+        progress.finish(result)
+        print(json.dumps({"status": "noop", "connections": rows, "downloaded": downloaded}))
         return 0
 
     eta = estimate_seconds(rows)
