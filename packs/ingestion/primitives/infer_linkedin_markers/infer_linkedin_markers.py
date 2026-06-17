@@ -23,6 +23,7 @@ import asyncio
 import csv
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -358,6 +359,17 @@ def build_manifest(markers_path: Path, args: argparse.Namespace, *, concurrency:
     return manifest
 
 
+def maybe_open(path: Path, do_open: bool) -> None:
+    """Open the CSV in the OS default app when --open is set. macOS only and
+    best-effort, so headless/CI/remote runs (the default) are never affected."""
+    if not do_open or sys.platform != "darwin" or not path.exists():
+        return
+    try:
+        subprocess.run(["open", str(path)], check=False)
+    except Exception as exc:  # never let opening a file fail the run
+        print(f"[infer_linkedin_markers] could not open {path}: {exc}", file=sys.stderr)
+
+
 def write_markers_csv(markers_path: Path, out_dir: Path) -> Path:
     """Flat one-row-per-person CSV: identity fields + one column per marker category."""
     csv_path = out_dir / "markers.csv"
@@ -448,6 +460,7 @@ async def run_async(args: argparse.Namespace) -> dict[str, Any]:
     )
     manifest["output_csv"] = str(csv_path)
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    maybe_open(csv_path, args.open)
     return manifest
 
 
@@ -468,6 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--concurrency", type=int, default=0, help="In-flight slots (0 = tier profile, default 256)")
     parser.add_argument("--max-retries", type=int, default=4, help="Retries per call on transient API errors")
     parser.add_argument("--owner-context", default="", help="Prior about the mailbox owner (e.g. 'Went to UCLA; from Palo Alto, CA') to disambiguate personal contacts")
+    parser.add_argument("--open", action="store_true", help="Open markers.csv when done (macOS, interactive; off by default for headless runs)")
     parser.add_argument("--force", action="store_true", help="Ignore existing markers.jsonl and re-run from scratch")
     parser.add_argument("--timeout", type=int, default=120)
     return parser

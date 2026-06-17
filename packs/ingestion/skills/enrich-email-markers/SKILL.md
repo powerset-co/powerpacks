@@ -62,7 +62,8 @@ uv run --project . python packs/ingestion/primitives/infer_linkedin_markers/infe
   --sample-work 7 --sample-personal 3
 
 # full network (idempotent: resumes, skips contacts already done; --force to redo)
-uv run --project . python packs/ingestion/primitives/infer_linkedin_markers/infer_linkedin_markers.py --all
+# --open pops markers.csv when done (macOS, interactive; omit for headless runs)
+uv run --project . python packs/ingestion/primitives/infer_linkedin_markers/infer_linkedin_markers.py --all --open
 ```
 
 Useful flags:
@@ -75,10 +76,12 @@ plus a `manifest.json` with token + cost totals.
 
 ## Review
 
-Open `markers.csv`. One row per contact, with `linkedin_query` and one column per
+`markers.csv` has one row per contact, with `linkedin_query` and one column per
 marker category (`current_employer`, `job_title`, `school`, `location`,
 `professional_affiliation`, `online_identifier`, …), each `value (confidence)`.
 `overall_confidence` ranks how resolvable the contact is.
+
+Passing `--open` (above) pops it automatically on macOS. To open it manually:
 
 ```bash
 open .powerpacks/network-import/discover/email-context/markers/markers.csv
@@ -98,4 +101,4 @@ a `candidates` shortlist. To feed these markers into it, build a queue CSV with 
 before running.
 
 ---
-_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior)._
+_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS._
