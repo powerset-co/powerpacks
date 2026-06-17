@@ -552,7 +552,7 @@ export function LocalOnboardingPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <ImportPanel onDone={() => setImportDone(true)} />
-            <Button variant="secondary" className="w-full" onClick={() => setActive("search")}>
+            <Button variant={importDone ? "default" : "secondary"} className="w-full" onClick={() => setActive("search")}>
               Next — try a search
             </Button>
           </CardContent>
