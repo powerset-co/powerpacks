@@ -69,6 +69,88 @@ export function runSetupAction(body: Record<string, unknown>): Promise<{ job: Se
   return postJson<{ job: SetupJob }>("/local-api/setup/run", body);
 }
 
+export interface SystemUpdateStatus {
+  branch: string;
+  current_hash: string;
+  latest_hash: string;
+  short_current: string;
+  short_latest: string;
+  behind: number;
+  dirty: boolean;
+  update_available: boolean;
+  versions: { powerpacks: string; console: string };
+  hosts: { claude: boolean; codex: boolean };
+  checked_at: string;
+}
+
+export interface SystemDaemonStatus {
+  daemonized: boolean;
+  running: boolean;
+  pid: number | null;
+  port: string;
+  raw: string;
+}
+
+export function fetchSystemUpdateStatus(): Promise<SystemUpdateStatus> {
+  return getJson<SystemUpdateStatus>("/local-api/system/update-status");
+}
+
+export function fetchSystemDaemonStatus(): Promise<SystemDaemonStatus> {
+  return getJson<SystemDaemonStatus>("/local-api/system/daemon-status");
+}
+
+export function startSystemUpdate(): Promise<{ job: SetupJob; hosts: { claude: boolean; codex: boolean }; steps: string[]; auto_restart: boolean }> {
+  return postJson("/local-api/system/update", {});
+}
+
+export function restartSystem(): Promise<{ restarting: boolean; url: string; port: string }> {
+  return postJson("/local-api/system/restart", {});
+}
+
+// Cheap liveness probe used by the FE to detect when the server is back after a
+// self-restart. Returns false (rather than throwing) while the server is down.
+export async function fetchSystemHealth(): Promise<boolean> {
+  try {
+    const res = await fetch("/local-api/system/health", { cache: "no-store" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export interface SystemReadinessSecret {
+  key: string;
+  label: string;
+  provider: string;
+  satisfied: boolean;
+  writable: boolean;
+  fix: string;
+  getUrl: string;
+  optional: boolean;
+}
+
+export interface SystemReadinessCapability {
+  id: string;
+  label: string;
+  description?: string;
+  requires: string[];
+  core: boolean;
+  satisfied: boolean;
+  missing: string[];
+}
+
+export interface SystemReadiness {
+  ready: boolean;
+  login: { logged_in: boolean; email: string; expires_at: number; expired: boolean };
+  secrets: SystemReadinessSecret[];
+  capabilities: SystemReadinessCapability[];
+  checked_at: string;
+}
+
+export function fetchSystemReadiness(): Promise<SystemReadiness> {
+  return getJson<SystemReadiness>("/local-api/system/readiness");
+}
+
 export interface GmailSyncWindowEstimate {
   messages: number;
   est_seconds: number;

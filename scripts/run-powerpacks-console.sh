@@ -117,13 +117,39 @@ if [[ "$APP_PATH" != /* ]]; then
   APP_PATH="/$APP_PATH"
 fi
 
+console_pid_on_port() {
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1
+}
+
 is_running() {
-  [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+  # Primary signal: the pid file we wrote on the last `start`.
+  if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    return 0
+  fi
+  # Fallback: something is already serving our port (daemonized via launchd, or
+  # started outside this script) but the pid file is stale/absent. Recognize it
+  # as running and heal the pid file so reuse, status, stop, and restart all work
+  # without anyone hand-editing files.
+  local port_pid
+  port_pid="$(console_pid_on_port)"
+  if [[ -n "$port_pid" ]]; then
+    printf "%s" "$port_pid" > "$PID_FILE"
+    return 0
+  fi
+  return 1
 }
 
 console_url() {
-  local base
-  base="$(grep -Eo 'http://localhost:[0-9]+' "$LOG_FILE" 2>/dev/null | tail -1 || true)"
+  local base=""
+  # Prefer the canonical port when it is actually serving. This covers reuse of a
+  # daemonized/running console and avoids stale ports lingering in the log file
+  # (an earlier duplicate could otherwise send the user to the wrong page).
+  if [[ -n "$(console_pid_on_port)" ]]; then
+    base="http://localhost:$PORT"
+  fi
+  if [[ -z "$base" ]]; then
+    base="$(grep -Eo 'http://localhost:[0-9]+' "$LOG_FILE" 2>/dev/null | tail -1 || true)"
+  fi
   if [[ -z "$base" ]]; then
     base="$(grep -Eo 'http://127\.0\.0\.1:[0-9]+' "$LOG_FILE" 2>/dev/null | tail -1 || true)"
   fi

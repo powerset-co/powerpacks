@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
-import { Loader2 } from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { fetchLocalProfile, fetchRunResults, fetchRuns } from "./powerpacksApi";
+import { fetchLocalProfile, fetchRunResults, fetchRuns, fetchSystemUpdateStatus } from "./powerpacksApi";
 import { LocalContactsPage } from "./LocalContactsPage";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
 import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
@@ -13,6 +14,7 @@ import { LocalOnboardingPage } from "./LocalOnboardingPage";
 import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
 import { GmailSourcePage, LinkedInSourcePage, MessagesSourcePage } from "./LocalSourcePage";
 import { LocalEnvPage } from "./LocalEnvPage";
+import { LocalSystemPage } from "./LocalSystemPage";
 import { LocalPersonDetailsPage } from "./LocalPersonDetailsPage";
 import { LocalCompaniesPage } from "./LocalCompaniesPage";
 import { LocalCompanyDetailsPage } from "./LocalCompanyDetailsPage";
@@ -43,6 +45,7 @@ type LocalView =
   | "messagesSource"
   | "messagesReview"
   | "env"
+  | "system"
   | "runs";
 
 function companyIdFromPath(): string | null {
@@ -66,6 +69,7 @@ function viewFromPath(): LocalView {
   if (companyIdFromPath()) return "companyDetails";
   if (window.location.pathname === "/companies") return "companies";
   if (window.location.pathname === "/env") return "env";
+  if (window.location.pathname === "/system") return "system";
   if (window.location.pathname === "/setup/imessage/review") return "messagesReview";
   if (window.location.pathname === "/setup") return "setup";
   return "runs";
@@ -109,6 +113,7 @@ export function LocalPowerpacksApp() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newSearchToken, setNewSearchToken] = useState(0);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   const navigate = useCallback((nextPath: string) => {
@@ -179,6 +184,25 @@ export function LocalPowerpacksApp() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  // Poll for a newer release so the header can surface an upgrade nudge.
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const status = await fetchSystemUpdateStatus();
+        if (!cancelled) setUpdateAvailable(status.update_available);
+      } catch {
+        /* ignore: header badge is best-effort */
+      }
+    };
+    check();
+    const timer = window.setInterval(check, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   useEffect(() => {
     if (activeView !== "runs" || !selectedTaskId) return;
     setResultResponse(null);
@@ -226,11 +250,13 @@ export function LocalPowerpacksApp() {
               ? "runs"
               : activeView === "env"
                 ? "env"
-                : activeView === "contacts" || activeView === "personDetails"
-                  ? "contacts"
-                  : activeView === "companies" || activeView === "companyDetails"
-                    ? "companies"
-                    : "setup"
+                : activeView === "system"
+                  ? "system"
+                  : activeView === "contacts" || activeView === "personDetails"
+                    ? "contacts"
+                    : activeView === "companies" || activeView === "companyDetails"
+                      ? "companies"
+                      : "setup"
           }
           runs={filteredRuns}
           operatorEmail={profile?.operator.email || profile?.operator.label}
@@ -252,6 +278,9 @@ export function LocalPowerpacksApp() {
           onSelectEnv={() => {
             navigate("/env");
           }}
+          onSelectSystem={() => {
+            navigate("/system");
+          }}
           onSelectLinkSetup={() => {
             navigate("/setup?tab=link");
           }}
@@ -269,6 +298,19 @@ export function LocalPowerpacksApp() {
         />
 
         <main className="min-w-0 flex-1 overflow-y-auto">
+          {/* Update nudge. Always-on for now so placement is visible; gate on
+              updateAvailable once the placement is approved. */}
+          <header className="sticky top-0 z-10 flex items-center justify-end gap-2 bg-background/95 px-6 py-2 backdrop-blur">
+            <button
+              type="button"
+              onClick={() => navigate("/system")}
+              className="transition-opacity hover:opacity-80"
+            >
+              <Badge variant={updateAvailable ? "default" : "secondary"} className="cursor-pointer gap-1">
+                <AlertCircle className="h-3 w-3" /> Newer version available — click to upgrade
+              </Badge>
+            </button>
+          </header>
           <div className="mx-auto max-w-7xl space-y-4 p-6">
             {activeView === "setup" ? (
               <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
@@ -284,6 +326,8 @@ export function LocalPowerpacksApp() {
               <MessagesSourcePage />
             ) : activeView === "env" ? (
               <LocalEnvPage />
+            ) : activeView === "system" ? (
+              <LocalSystemPage />
             ) : activeView === "contacts" ? (
               <LocalContactsPage />
             ) : activeView === "personDetails" ? (
