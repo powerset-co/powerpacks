@@ -126,6 +126,11 @@ def dataset_paths(dataset: str) -> tuple[str, str]:
 def run_vol_path(label: str) -> str:
     return f"{OPERATOR_ROOT}/runs/{label}"
 
+
+def operator_volume_prefix() -> str:
+    """Volume-relative operator prefix; sandbox paths mount the same key at /data."""
+    return OPERATOR_ROOT.removeprefix("/data/").lstrip("/")
+
 # local artifact path (relative to .powerpacks/search-index) -> volume artifact name
 REAL_ARTIFACTS = {
     "roles/roles_with_dense_text.jsonl": "roles_with_dense_text.jsonl",
@@ -220,7 +225,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
     """
     people_csv = LOCAL_POWERPACKS / "network-import/merged/people.csv"
     vol = get_volume()
-    op_prefix = f"operators/{DEFAULT_OPERATOR_ID}"
+    op_prefix = operator_volume_prefix()
     total_mb = people_csv.stat().st_size / 1e6
     uploaded = 1
     with vol.batch_upload(force=True) as batch:
@@ -544,7 +549,7 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     vol = get_volume()
     progress.event("importing", f"Uploading {rows} enriched contacts", payload={"contacts": rows})
     with vol.batch_upload(force=True) as batch:
-        batch.put_file(people_path, f"{OPERATOR_ROOT}/input/people.csv")
+        batch.put_file(people_path, f"{operator_volume_prefix()}/input/people.csv")
     progress.event("importing", f"Loaded {rows} contacts", status="completed", payload={"contacts": rows})
 
     app = modal.App.lookup(APP_NAME, create_if_missing=True)

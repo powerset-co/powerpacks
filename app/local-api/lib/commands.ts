@@ -252,19 +252,27 @@ export function enrichmentNetworkCommand(operatorId: string, sourceId: string, o
   return command;
 }
 
-// Gmail "Process": enrich locally (Parallel.ai email+context), then ship the
-// merged people.csv to Modal for index-only (no RapidAPI import). Chained in one
-// shell so a single job/status covers both phases, mirroring the LinkedIn
-// modal pipeline button.
+// Gmail "Process": enrich locally (Parallel.ai email+context), refresh the
+// canonical merged people.csv, then ship it to Modal for index-only. Chained in
+// one shell so a single job/status covers the button flow.
 export function onboardingGmailRunCommand(operatorId: string): string[] {
   const enrich = enrichmentNetworkCommand(operatorId, "gmail", { approveSpend: true, force: true });
+  const fanIn = [
+    "uv", "run", "--project", ".", "python",
+    "packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py",
+    "fan-in",
+    "--operator-id", operatorId,
+    "--accounts", ".powerpacks/ingestion/accounts.json",
+    "--people-csv", ".powerpacks/network-import/merged/people.csv",
+    "--no-include-existing-artifacts",
+  ];
   const index = [
     "uv", "run", "--project", ".", "python",
     "packs/indexing/modal/linkedin_modal_pipeline.py",
     "index-people",
     "--people-csv", ".powerpacks/network-import/merged/people.csv",
   ];
-  return ["bash", "-c", `${shellJoin(enrich)} && ${shellJoin(index)}`];
+  return ["bash", "-c", [enrich, fanIn, index].map(shellJoin).join(" && ")];
 }
 
 // Free + instant: reads the resolution queue minus directory.csv to estimate the

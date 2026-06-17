@@ -14,6 +14,7 @@ try:
         DEFAULT_DIRECTORY_CSV,
         emit,
         now_iso,
+        read_csv_rows,
         read_accounts,
         read_json,
         source_slug,
@@ -39,6 +40,7 @@ except ModuleNotFoundError:
         DEFAULT_DIRECTORY_CSV,
         emit,
         now_iso,
+        read_csv_rows,
         read_accounts,
         read_json,
         source_slug,
@@ -62,6 +64,31 @@ except ModuleNotFoundError:
 GMAIL_PARALLEL_AUTO_APPROVE_UNDER = 25
 
 
+def _child_artifacts(child: dict[str, Any]) -> dict[str, Any]:
+    artifacts: dict[str, Any] = {}
+    payload = child.get("payload") if isinstance(child.get("payload"), dict) else {}
+    payload_artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+    artifacts.update(payload_artifacts)
+    direct_artifacts = child.get("artifacts") if isinstance(child.get("artifacts"), dict) else {}
+    artifacts.update(direct_artifacts)
+    if child.get("people_csv"):
+        artifacts["people_csv"] = child.get("people_csv")
+    if child.get("linkedin_resolution_queue_csv"):
+        artifacts["linkedin_resolution_queue_csv"] = child.get("linkedin_resolution_queue_csv")
+    return artifacts
+
+
+def _valid_gmail_people_csv(path_text: Any) -> bool:
+    path = Path(str(path_text or ""))
+    if not path.exists() or not path.is_file():
+        return False
+    try:
+        fields, _rows = read_csv_rows(path)
+    except OSError:
+        return False
+    return "primary_email" in fields and "interaction_counts" in fields
+
+
 def gmail_artifacts_from_discovery() -> dict[str, Any]:
     manifest = read_json(DEFAULT_BASE_DIR / "discover" / "gmail" / "manifest.json", {}) or {}
     artifacts: dict[str, Any] = {}
@@ -73,35 +100,38 @@ def gmail_artifacts_from_discovery() -> dict[str, Any]:
         artifacts["gmail_linkedin_resolution_queue_csv"] = stable_queue_csv
     queue_records: list[dict[str, Any]] = []
     people_records: list[dict[str, Any]] = []
+    invalid_records: list[dict[str, Any]] = []
     for child in manifest.get("children") or []:
         if not isinstance(child, dict):
             continue
         account_email = str(child.get("account_email") or "")
-        payload = child.get("payload") if isinstance(child.get("payload"), dict) else {}
-        child_artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+        child_artifacts = _child_artifacts(child)
         queue_csv = child_artifacts.get("linkedin_resolution_queue_csv")
         people_csv = child_artifacts.get("people_csv")
         slug = source_slug(account_email or "gmail")
-        if people_csv and Path(str(people_csv)).exists():
+        valid_people = _valid_gmail_people_csv(people_csv)
+        if valid_people:
             people_records.append({"account_email": account_email, "people_csv": people_csv, "slug": slug})
-        if queue_csv and Path(str(queue_csv)).exists():
+        elif people_csv:
+            invalid_records.append({
+                "account_email": account_email,
+                "people_csv": people_csv,
+                "queue_csv": queue_csv or "",
+                "reason": "missing_people_schema_or_interaction_counts",
+            })
+        if queue_csv and Path(str(queue_csv)).exists() and valid_people:
             queue_records.append({
                 "account_email": account_email,
                 "queue_csv": queue_csv,
-                "people_csv": people_csv if people_csv and Path(str(people_csv)).exists() else "",
+                "people_csv": people_csv,
                 "slug": slug,
             })
-    if Path(stable_queue_csv).exists():
-        queue_records = [{
-            "account_email": "",
-            "queue_csv": stable_queue_csv,
-            "people_csv": contacts_csv if Path(contacts_csv).exists() else people_records[0]["people_csv"] if people_records else "",
-            "slug": "all",
-        }]
     if queue_records:
         artifacts["gmail_linkedin_resolution_queue_csvs"] = queue_records
     if people_records:
         artifacts["gmail_people_records"] = people_records
+    if invalid_records:
+        artifacts["gmail_invalid_discovery_records"] = invalid_records
     return artifacts
 
 
@@ -186,8 +216,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "steps": {},
         "artifacts": gmail_artifacts_from_discovery(),
     }
-    if not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csvs") and not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csv"):
-        return write_manifest("gmail", {"status": "skipped", "reason": "no Gmail discovery queue", "artifact_dir": str(import_dir)}, import_dir=DEFAULT_IMPORT_DIR)
+    if not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csvs"):
+        reason = "no Gmail discovery queue"
+        status = "skipped"
+        if ledger["artifacts"].get("gmail_linkedin_resolution_queue_csv") or ledger["artifacts"].get("gmail_invalid_discovery_records"):
+            reason = "gmail_discovery_missing_per_account_people_csv"
+        return write_manifest("gmail", {
+            "status": status,
+            "reason": reason,
+            "artifact_dir": str(import_dir),
+            "artifacts": ledger.get("artifacts", {}),
+        }, import_dir=DEFAULT_IMPORT_DIR)
     write_json(ledger_path, ledger)
     for func_name in ("run_gmail_directory", "run_gmail_linkedin_resolution", "run_gmail_apply_and_enrich"):
         if func_name == "run_gmail_linkedin_resolution" and not ledger.get("input", {}).get("approve_parallel_spend"):

@@ -18,6 +18,7 @@ from typing import Any
 
 try:
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
+        DEFAULT_BASE_DIR,
         DEFAULT_MSGVAULT_DB,
         GMAIL_INTERACTION_CALCULATION_VERSION,
         emit,
@@ -30,6 +31,7 @@ try:
         run_cmd,
         source_slug,
         write_csv_rows,
+        write_json,
         write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
@@ -42,6 +44,7 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
+        DEFAULT_BASE_DIR,
         DEFAULT_MSGVAULT_DB,
         GMAIL_INTERACTION_CALCULATION_VERSION,
         emit,
@@ -54,6 +57,7 @@ except ModuleNotFoundError:
         run_cmd,
         source_slug,
         write_csv_rows,
+        write_json,
         write_stage_manifest,
     )
     from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
@@ -170,6 +174,14 @@ def gmail_discovery_merge_plan(existing_manifest: dict[str, Any], selected_accou
     if child_modes and all(mode == GMAIL_CALCULATION_INCREMENTAL_DELTA for mode in child_modes):
         return {"mode": "incremental_update", "reason": "children_returned_incremental_deltas"}
     return {"mode": "full_rewrite", "reason": "children_returned_full_recounts"}
+
+
+def gmail_network_import_base_dir(contacts_csv: Path) -> Path:
+    """Return the base dir expected by gmail_network_import.py --output-dir."""
+    gmail_dir = contacts_csv.parent
+    if gmail_dir.name == "gmail" and gmail_dir.parent.name == "discover":
+        return gmail_dir.parent.parent
+    return DEFAULT_BASE_DIR
 
 
 def inputs(accounts: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -457,9 +469,9 @@ def discover(
     incoming_outputs: list[dict[str, Any]] = []
     children: list[dict[str, Any]] = []
     child_modes: list[str] = []
-    raw_root = contacts_csv.parent / "raw"
+    child_output_base = gmail_network_import_base_dir(contacts_csv)
     for email in source_inputs["selected_accounts"]:
-        account_raw_dir = raw_root / source_slug(email)
+        account_artifact_dir = child_output_base / "discover" / "gmail" / source_slug(email)
         if skip_msgvault_sync:
             sync = {
                 "status": "skipped",
@@ -490,13 +502,15 @@ def discover(
             "--account-email",
             email,
             "--output-dir",
-            str(account_raw_dir),
+            str(child_output_base),
         )
         code, child, stderr = run_cmd(cmd)
         child_mode = str(child.get("calculation_mode") or child.get("counts", {}).get("calculation_mode") or GMAIL_CALCULATION_FULL_RECOUNT) if isinstance(child, dict) else GMAIL_CALCULATION_FULL_RECOUNT
         child_modes.append(child_mode)
-        child_artifacts = child.get("artifacts") if isinstance(child, dict) else {}
+        child_artifacts = child.get("artifacts") if isinstance(child, dict) and isinstance(child.get("artifacts"), dict) else {}
         child_queue_text = str((child_artifacts or {}).get("linkedin_resolution_queue_csv") or "").strip()
+        child_people_text = str((child_artifacts or {}).get("people_csv") or "").strip()
+        child_artifact_dir = str(child.get("artifact_dir") or account_artifact_dir) if isinstance(child, dict) else str(account_artifact_dir)
         child_queue = Path(child_queue_text) if child_queue_text else None
         rows_written = 0
         rows: list[dict[str, Any]] = []
@@ -519,7 +533,10 @@ def discover(
             "calculation_mode": child_mode,
             "incremental_input_id": incremental_input_id if child_mode == GMAIL_CALCULATION_INCREMENTAL_DELTA else "",
             "rows_read": rows_written,
-            "raw_dir": str(account_raw_dir),
+            "artifact_dir": child_artifact_dir,
+            "people_csv": child_people_text,
+            "linkedin_resolution_queue_csv": child_queue_text,
+            "artifacts": child_artifacts,
         })
         if code != 0:
             payload = {"status": "failed", "source": "gmail", "account_email": email, "error": stderr or child}

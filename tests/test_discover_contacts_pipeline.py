@@ -158,9 +158,11 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                     }
                 }
             }), encoding="utf-8")
-            scratch_queue = tmp / "scratch" / "queue-me@example.com.csv"
+            account_dir = tmp / "discover/gmail/me-example.com"
+            account_queue = account_dir / "linkedin_resolution_queue.csv"
+            account_people = account_dir / "people.csv"
             write_csv(
-                scratch_queue,
+                account_queue,
                 discover_gmail.GMAIL_DISCOVERY_COLUMNS,
                 [{
                     "handle": "jane@example.com",
@@ -177,6 +179,19 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                     "last_interaction": "2026-01-02T00:00:00Z",
                 }],
             )
+            write_csv(
+                account_people,
+                PEOPLE_SCHEMA_COLUMNS,
+                [{
+                    **{column: "" for column in PEOPLE_SCHEMA_COLUMNS},
+                    "id": "gmail:me@example.com:email:jane@example.com",
+                    "full_name": "Jane Example",
+                    "primary_email": "jane@example.com",
+                    "source_channels": "gmail_msgvault",
+                    "interaction_counts": json.dumps({"gmail": 2}),
+                    "last_interaction": "2026-01-02T00:00:00Z",
+                }],
+            )
 
             paths = {
                 ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
@@ -189,12 +204,13 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
             def fake_run_cmd(cmd, timeout=None):
                 self.assertIn("--output-dir", cmd)
-                self.assertEqual(Path(cmd[cmd.index("--output-dir") + 1]), tmp / "discover/gmail/raw/me-example.com")
+                self.assertEqual(Path(cmd[cmd.index("--output-dir") + 1]), tmp)
                 return 0, {
                     "status": "completed",
+                    "artifact_dir": str(account_dir),
                     "artifacts": {
-                        "linkedin_resolution_queue_csv": str(scratch_queue),
-                        "people_csv": str(tmp / "scratch" / "people.csv"),
+                        "linkedin_resolution_queue_csv": str(account_queue),
+                        "people_csv": str(account_people),
                     },
                     "counts": {"contacts_written": 1},
                 }, ""
@@ -210,7 +226,10 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(payload["linkedin_resolution_queue_csv"], str(paths[("gmail", "linkedin_resolution_queue_csv")]))
             manifest = json.loads(paths[("gmail", "manifest_json")].read_text(encoding="utf-8"))
             self.assertNotIn("payload", manifest["children"][0])
-            self.assertNotIn(str(scratch_queue), json.dumps(manifest))
+            self.assertNotIn("/raw/", json.dumps(manifest))
+            self.assertEqual(manifest["children"][0]["artifact_dir"], str(account_dir))
+            self.assertEqual(manifest["children"][0]["people_csv"], str(account_people))
+            self.assertEqual(manifest["children"][0]["linkedin_resolution_queue_csv"], str(account_queue))
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual([row["primary_email"] for row in rows], ["jane@example.com"])
@@ -231,6 +250,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(rerun_rows[0]["total_messages"], "2")
             self.assertEqual(rerun_rows[0]["thread_count"], "1")
 
+            scratch_queue = account_queue
             write_csv(
                 scratch_queue,
                 discover_gmail.GMAIL_DISCOVERY_COLUMNS,
