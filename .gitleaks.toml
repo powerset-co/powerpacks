@@ -1,0 +1,17 @@
+title = "Powerpacks gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public Auth0 PKCE client ID default used by Powerpacks auth primitives"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''packs/messages/primitives/powerset_auth/powerset_auth\.py''',
+  '''packs/powerset/primitives/auth/auth\.py''',
+]
+regexes = [
+  '''POWERPACKS_AUTH0_CLIENT_ID", "U7p09NWeJ0jy9M4GiaWa4cz0YVCdDVBl"''',
+]
