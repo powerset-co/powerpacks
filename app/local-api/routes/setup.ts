@@ -83,7 +83,7 @@ type SetupEnrichmentSource = {
   blocked?: boolean;
   updatedAt?: string | null;
 };
-type SetupStatusTab = "link" | "discover" | "enrichment" | "index" | "all";
+type SetupStatusTab = "link" | "discover" | "enrichment" | "index" | "sources" | "all";
 
 let cachedIndexEstimate: { key: string; expiresAt: number; value: Record<string, any> } | null = null;
 let cachedIndexCoverage: { key: string; expiresAt: number; value: Record<string, any> } | null = null;
@@ -99,6 +99,7 @@ function summarizeEnrichmentStatus(sources: SetupEnrichmentSource[]): string {
 function normalizeSetupStatusTab(value: unknown): SetupStatusTab {
   const tab = String(value || "").trim().toLowerCase();
   if (tab === "import" || tab === "discover") return "discover";
+  if (tab === "source" || tab === "sources") return "sources";
   if (tab === "link" || tab === "enrichment" || tab === "index" || tab === "all") return tab;
   return "all";
 }
@@ -121,6 +122,91 @@ function localProfile() {
       linkedCount: sources.filter((source) => source.linked).length,
       skippedCount: sources.filter((source) => source.skipped).length,
       sources,
+    },
+  };
+}
+
+function numberValue(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function firstNumber(...values: unknown[]): number {
+  for (const value of values) {
+    const parsed = numberValue(value);
+    if (parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+function linkedinSourceStatus() {
+  const accounts = readJsonSync(accountsPath) || {};
+  const record = accountRecords(accounts).linkedin_csv || {};
+  const config = record.config && typeof record.config === "object" ? record.config as Record<string, any> : {};
+  const linked = Boolean(record.linked || record.status === "linked");
+  const skipped = Boolean(record.skipped || record.status === "skipped");
+  const artifacts = Array.isArray(record.artifacts) ? record.artifacts.map(String) : [];
+  const discoverManifestPath = path.join(powerpacksStateRoot, "network-import", "discover", "linkedin", "manifest.json");
+  const importManifestPath = path.join(powerpacksStateRoot, "network-import", "import", "linkedin", "manifest.json");
+  const discoverManifest = readJsonSync(discoverManifestPath) || {};
+  const importState = readJsonSync(importManifestPath) || {};
+  const enrichStep = importState.steps?.enrich_people || {};
+  const sourceCsv = String(config.csv_path || discoverManifest.source_csv || artifacts[0] || ".powerpacks/network-import/discover/linkedin/Connections.csv");
+  const sourceCsvSummary = fileSummary(path.isAbsolute(sourceCsv) ? sourceCsv : path.join(powerpacksRepoRoot, sourceCsv));
+  const cacheHits = firstNumber(
+    importState.stats?.cache_hits,
+    importState.stats?.existing_matches,
+    enrichStep.summary?.cache_hit_count,
+  );
+  const enriched = firstNumber(
+    importState.stats?.profiles_found,
+    importState.stats?.people,
+    enrichStep.summary?.people,
+  );
+  const candidates = firstNumber(
+    importState.stats?.candidates,
+    enrichStep.summary?.queue_count,
+    discoverManifest.contacts,
+    discoverManifest.stats?.parsed,
+  );
+
+  return {
+    source: {
+      id: "linkedin_csv",
+      label: SETUP_SOURCE_LABELS.linkedin_csv,
+      status: skipped ? "skipped" : linked ? "linked" : String(record.status || "unlinked"),
+      linked,
+      skipped,
+      usernames: Array.isArray(record.usernames) ? record.usernames.map(String) : [],
+      artifacts,
+      notes: record.notes || "",
+      lastCheckedAt: record.last_checked_at || record.lastCheckedAt || null,
+      lastSuccessAt: record.last_success_at || record.lastSuccessAt || null,
+      config,
+    },
+    discovery: {
+      status: String(discoverManifest.status || (linked ? "ready" : "not_linked")),
+      connections: firstNumber(discoverManifest.contacts, discoverManifest.stats?.parsed, candidates),
+      parsed: numberValue(discoverManifest.stats?.parsed),
+      skippedInvalid: numberValue(discoverManifest.stats?.skipped_invalid),
+      updatedAt: discoverManifest.updated_at || fileSummary(discoverManifestPath).updatedAt || null,
+      artifactDir: ".powerpacks/network-import/discover/linkedin",
+      sourceCsv,
+      sourceCsvExists: sourceCsvSummary.exists,
+      sourceCsvSizeBytes: sourceCsvSummary.sizeBytes || 0,
+    },
+    enrichment: {
+      id: "linkedin_csv",
+      label: SETUP_SOURCE_LABELS.linkedin_csv,
+      status: String(importState.status || enrichStep.status || "unknown"),
+      candidates,
+      enriched,
+      skipped: firstNumber(importState.stats?.not_found, importState.stats?.skipped, importState.stats?.failed, enrichStep.summary?.recent_failure_count),
+      matched: cacheHits,
+      unresolved: 0,
+      estimatedCostUsd: null,
+      blocked: String(importState.status || "").startsWith("blocked"),
+      updatedAt: skipped ? null : importState.updated_at || enrichStep.finished_at || null,
     },
   };
 }
@@ -776,10 +862,10 @@ function deriveNextAction(setupLedger: RunState | null, sources: ReturnType<type
 
 async function setupStatus(tabInput: unknown = "all") {
   const tab = normalizeSetupStatusTab(tabInput);
-  const includeDiscover = tab === "all" || tab === "discover" || tab === "enrichment";
-  const includeEnrichment = tab === "all" || tab === "enrichment";
+  const includeDiscover = tab === "all" || tab === "discover" || tab === "enrichment" || tab === "sources";
+  const includeEnrichment = tab === "all" || tab === "enrichment" || tab === "sources";
   const includeIndex = tab === "all" || tab === "index";
-  const includeReview = includeEnrichment;
+  const includeReview = tab === "all" || tab === "enrichment";
   const setupLedger = readJsonSync(setupLedgerPath) || {};
   const accounts = readJsonSync(accountsPath) || {};
   const importRefreshLedger = readJsonSync(importRefreshLedgerPath) || {};
@@ -1219,6 +1305,11 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
 export async function handleSetupRoutes(req: any, res: any, url: URL): Promise<boolean> {
   if (url.pathname === "/local-api/profile") {
     sendJson(res, localProfile());
+    return true;
+  }
+
+  if (url.pathname === "/local-api/sources/linkedin/status") {
+    sendJson(res, linkedinSourceStatus());
     return true;
   }
 

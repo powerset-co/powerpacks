@@ -9,6 +9,7 @@ import { MessagesSyncPanel } from "./MessagesSyncPanel";
 import { MsgvaultSetupCard } from "./MsgvaultSetupCard";
 import {
   fetchGmailEnrichEstimate,
+  fetchLinkedInSourceStatus,
   fetchMsgvaultStatus,
   fetchOnboardingGmailRunStatus,
   fetchOnboardingLinkedInStatus,
@@ -19,6 +20,7 @@ import {
   runOnboardingLinkedIn,
   runSetupAction,
   uploadLinkedInCsv,
+  type LinkedInSourceStatusResponse,
 } from "./powerpacksApi";
 import { OnboardingStatusCard } from "./onboarding/OnboardingStatusCard";
 import type { JsonObject } from "./onboarding/utils";
@@ -65,19 +67,34 @@ function ConnectionBadge({ source, loading }: { source?: SetupSourceStatus; load
   return <Badge variant="outline" className="text-muted-foreground">Not connected</Badge>;
 }
 
-function useSetupStatus() {
+function useSetupStatus(tab = "sources") {
   const [status, setStatus] = useState<SetupStatusResponse | null>(null);
   const refresh = useCallback(async () => {
     try {
-      setStatus(await fetchSetupStatus());
+      setStatus(await fetchSetupStatus({ tab }));
     } catch {
       /* best-effort poll */
     }
-  }, []);
+  }, [tab]);
   useEffect(() => {
     refresh();
     const timer = window.setInterval(refresh, 5000);
     return () => window.clearInterval(timer);
+  }, [refresh]);
+  return { status, refresh };
+}
+
+function useLinkedInSourceStatus() {
+  const [status, setStatus] = useState<LinkedInSourceStatusResponse | null>(null);
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await fetchLinkedInSourceStatus());
+    } catch {
+      /* best-effort status read */
+    }
+  }, []);
+  useEffect(() => {
+    refresh();
   }, [refresh]);
   return { status, refresh };
 }
@@ -354,8 +371,7 @@ const GMAIL_MODAL_STAGES = [
 ];
 
 export function LinkedInSourcePage() {
-  const { status, refresh } = useSetupStatus();
-  const syncing = useAutoDiscover("linkedin_csv", status, refresh);
+  const { status, refresh } = useLinkedInSourceStatus();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -365,9 +381,10 @@ export function LinkedInSourcePage() {
   const [processError, setProcessError] = useState<string | null>(null);
 
   const loading = !status;
-  const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "linkedin_csv");
-  const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "linkedin_csv");
-  const candidates = enrich?.candidates || 0;
+  const accountSource = status?.source;
+  const enrich = status?.enrichment;
+  const connections = status?.discovery.connections || enrich?.candidates || 0;
+  const lastImportAt = status?.discovery.updatedAt || enrich?.updatedAt || accountSource?.lastSuccessAt;
 
   const loadModalStatus = useCallback(async () => {
     try {
@@ -420,8 +437,7 @@ export function LinkedInSourcePage() {
       const result = await linkLinkedInCsv({ csvPath: path });
       if (result.status !== "completed") setUploadError(result.error || "Could not link that CSV.");
       // Await the refresh so the button stays in its spinner state until the new
-      // linked status lands — otherwise it briefly flashes back to "Upload" while
-      // the status reloads, then auto-discover takes over the spinner.
+      // linked status lands.
       await refresh();
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
@@ -436,11 +452,6 @@ export function LinkedInSourcePage() {
       <div className="mb-6 flex items-center justify-between gap-3">
         <SourceHeader icon={LINKEDIN_ICON} title="LinkedIn" description="Import and enrich your LinkedIn connections." />
         <div className="flex items-center gap-2">
-          {syncing && (
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing latest contacts…
-            </span>
-          )}
           <ConnectionBadge source={accountSource} loading={loading} />
         </div>
       </div>
@@ -449,8 +460,8 @@ export function LinkedInSourcePage() {
         <StatCard
           loading={loading}
           label="Connections"
-          value={candidates ? candidates.toLocaleString() : "—"}
-          hint={syncing ? "Syncing latest…" : "From your Connections.csv"}
+          value={connections ? connections.toLocaleString() : "—"}
+          hint="From your Connections.csv"
         />
         <StatCard
           loading={loading}
@@ -458,7 +469,7 @@ export function LinkedInSourcePage() {
           value={enrich?.enriched ? enrich.enriched.toLocaleString() : "—"}
           hint={enrich?.matched ? `${enrich.matched.toLocaleString()} matched to profiles` : "Run enrich to resolve profiles"}
         />
-        <StatCard loading={loading} label="Last import" value={formatDate(accountSource?.lastSuccessAt)} hint={accountSource?.linked ? "Connected" : "Upload a CSV to start"} />
+        <StatCard loading={loading} label="Last import" value={formatDate(lastImportAt)} hint={accountSource?.linked ? "Connected" : "Upload a CSV to start"} />
       </div>
 
       <Card className="mb-6">
@@ -472,9 +483,9 @@ export function LinkedInSourcePage() {
         </CardHeader>
         <CardContent>
           <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={(e) => handleUpload(e.target.files?.[0])} />
-          <Button disabled={uploading || syncing} onClick={() => fileInputRef.current?.click()}>
-            {uploading || syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-            {uploading ? "Linking…" : syncing ? "Syncing contacts…" : accountSource?.linked ? "Re-upload Connections.csv" : "Upload Connections.csv"}
+          <Button disabled={uploading} onClick={() => fileInputRef.current?.click()}>
+            {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+            {uploading ? "Linking…" : accountSource?.linked ? "Re-upload Connections.csv" : "Upload Connections.csv"}
           </Button>
           {accountSource?.linked && (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -491,11 +502,11 @@ export function LinkedInSourcePage() {
           <CardDescription>Resolve your connections into full profiles and rebuild the local search index in one step, on Modal. LinkedIn enrichment is free, and cached profiles, roles, and companies are skipped automatically.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Button disabled={!accountSource?.linked || syncing || starting || modalRunning} onClick={handleProcess}>
+          <Button disabled={!accountSource?.linked || starting || modalRunning} onClick={handleProcess}>
             {starting || modalRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
             {modalRunning ? "Processing…" : "Process Contacts"}
           </Button>
-          {candidates ? <p className="text-xs text-muted-foreground">{candidates.toLocaleString()} contacts</p> : null}
+          {connections ? <p className="text-xs text-muted-foreground">{connections.toLocaleString()} contacts</p> : null}
           {processError && <p className="text-sm text-destructive">{processError}</p>}
           {showModalStatus && <OnboardingStatusCard status={modalStatus} defaultStages={LINKEDIN_MODAL_STAGES} />}
         </CardContent>

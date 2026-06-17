@@ -5,7 +5,9 @@ import type {
   LocalRunSummary,
   MessageReviewFilter,
   MessageReviewResponse,
+  SetupEnrichmentSource,
   SetupJob,
+  SetupSourceStatus,
   SetupStatusResponse,
 } from "./types";
 
@@ -213,6 +215,26 @@ export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {
 
 export function fetchOnboardingLinkedInStatus(): Promise<Record<string, any>> {
   return getJson<Record<string, any>>("/local-api/onboarding/linkedin/status");
+}
+
+export interface LinkedInSourceStatusResponse {
+  source: SetupSourceStatus;
+  discovery: {
+    status: string;
+    connections: number;
+    parsed: number;
+    skippedInvalid: number;
+    updatedAt?: string | null;
+    artifactDir: string;
+    sourceCsv: string;
+    sourceCsvExists: boolean;
+    sourceCsvSizeBytes: number;
+  };
+  enrichment: SetupEnrichmentSource;
+}
+
+export function fetchLinkedInSourceStatus(): Promise<LinkedInSourceStatusResponse> {
+  return getJson<LinkedInSourceStatusResponse>("/local-api/sources/linkedin/status");
 }
 
 export function runOnboardingLinkedIn(
