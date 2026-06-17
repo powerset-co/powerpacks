@@ -234,14 +234,16 @@ let it finish.
 
 ### Step 8 — Validate the search index downloaded
 
+Run the validation primitive:
+
 ```bash
 cd "$REPO"
-ls -lh .powerpacks/search-index/local-search.duckdb .powerpacks/search-index/manifest.json
+uv run --project . python packs/indexing/primitives/validate_search_index/validate_search_index.py
 ```
 
-The step passes when both files exist and `local-search.duckdb` is a non-trivial
-size. If `local-search.duckdb` is missing after Step 7 succeeded, surface the
-pipeline output — do not silently retry. Report local search as ready.
+It prints JSON with `status` (`ok` / `fail` / `missing`), per-table row counts,
+`total_people`, and a `summary`. Pass only on `status: ok` (exit 0); on
+`fail`/`missing` (exit 1), report the `errors`. Echo the `summary`.
 
 ---
 
