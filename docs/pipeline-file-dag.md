@@ -19,6 +19,11 @@
 > - 2026-06-16: show **full repo-root paths** for every artifact + `<operator_id>`
 >   / `<gmail_account>` / `<label>` placeholders; clarify `—` = non-CSV contract
 >   (bind `LOCAL_TABLE_CONTRACT` etc.), not "unknown".
+> - 2026-06-16: inventory every artifact's contract (CSV/JSON/SQLite/DuckDB/dir);
+>   re-badge non-owned artifacts as **🔴 must-fix / 🟡 drift** (errors, not warnings).
+> - 2026-06-17: add **§7 validation plan** — static path/key parity guards → unit
+>   (`require_schema`) → fixture→duckdb column-contract edge test → gated live
+>   Sync→Process; plus a per-fix validation matrix.
 
 ---
 
@@ -178,3 +183,61 @@ Determinism contract:
 > Current state: the three fixes (gmail seam, path nest, modal upload key) are
 > committed on `fix/pipeline-path-dag` (PR #83). This registry module is the
 > follow-up that makes the pattern enforced, not just patched.
+
+---
+
+## 7. ✅ Validation plan — how we prove a change is correct
+
+These rules come straight from why this bug class cost a week (see the post-mortem):
+the checks must **exercise the real path** (gmail → merge → Modal duckdb, *not* a
+cousin like iMessage), **force-regen / disable cache** so a stale artifact can't
+mask the result, **test edges** (stage-N output fed as stage-N+1 input, not a
+hand-built ideal row), and stay **cheap** (zero paid APIs) so we actually run them.
+
+Run order is cheapest-first; stop at the first red.
+
+### 7.0 Pre-flight (instant, every change)
+- `git status` + re-read the touched function before reasoning — the cache that bit us was our own context.
+- `uv run --project . python -m unittest discover -s tests` — full suite green before and after.
+
+### 7.1 Level 0 — Static parity & guards (no execution, < 1s)
+The refactor to `pipeline_files.py` must be **behavior-preserving** before any primitive switches to it.
+- **Path parity:** for every registry entry, assert its resolved location == the literal path the current code produces today (e.g. `GMAIL_IMPORT_PEOPLE_CSV == ".powerpacks/network-import/import/gmail/people.csv"`). This proves the swap changes *who owns the path*, not the path.
+- **Modal key↔path parity:** assert `volume_key(OP_INPUT_PEOPLE_PATH) == OP_INPUT_PEOPLE_KEY` for every Modal row — i.e. the **upload key equals the sandbox-read key**. This is the direct guard for the "indexed the stale 277-row file" bug.
+- **Single-owner guard:** grep/AST test that each registry path literal (`local-search.duckdb`, `discover/gmail`, `/data/operators`, `merged/people.csv`) is constructed in **exactly one place** (the registry). Drives every 🟡 `dup`/`two-names`/`re-derived` and 🔴 `setup-scoped` to zero and keeps them there.
+
+### 7.2 Level 1 — Unit (registry + schema, < 1s)
+- **Resolution:** scoped helpers produce the expected path — `gmail_account_dir("a@b.co")` → `…/discover/gmail/a-b.co/` (slug, no double-nest); `op_run_duckdb_key("gmail-index")` → `operators/<id>/runs/gmail-index/local-search.duckdb`.
+- **`require_schema`:** accepts a conforming header; **raises `PipelineSchemaError`** on a discovery-shape `contacts.csv` where people-schema is required (binds the assert to the actual bug — wrong shape fails loud instead of coercing to blank).
+- Extend existing `tests/test_interaction_counts.py` node tests rather than duplicate.
+
+### 7.3 Level 2 — Integration: the column-contract **edge** test (the one that was missing)
+This is the test that would have caught the original bug on day one.
+- Drive a fixture per-account `people.csv` carrying `interaction_counts={"gmail": N}` at the discovery location → `gmail_artifacts_from_discovery()` + apply → `merge_network_sources` → duckdb shim materialize → **assert `local_person_profiles.total_interactions == N`**. Full chain, **no cache, no network** (fixture CSVs / fixture msgvault db; zero Parallel/RapidAPI).
+- **Negative:** feed the discovery-shape `contacts.csv` at the seam → assert it is **rejected** (`gmail_invalid_discovery_records`), never laundered to a 0-count `people.csv`.
+- New file `tests/test_pipeline_file_registry.py`; run with the suite.
+
+### 7.4 Level 3 — Live verification (💸 paid, gated, run once after 0–2 are green)
+- Real button round-trip: **Sync → Process** on `/sources/gmail`, then read the Modal duckdb.
+- Pass criteria: (1) volume has **no phantom `data/operators/…` key**; (2) duckdb `local_person_profiles` row count == `merged/people.csv` row count; (3) `total_interactions` populated for Gmail contacts.
+- Cost: Parallel.ai ($0.05/lookup) + RapidAPI — **requires explicit go-ahead**, not part of CI.
+
+### 7.5 Per-fix validation matrix
+
+| Registry badge | Fix | Proven green by |
+|---|---|---|
+| 🔴 `setup-scoped` (paths bypassed) | primitives import the registry constant | 7.1 single-owner guard + 7.1 path parity |
+| 🔴 `create` (no owner) | add the constant + helper | 7.1 path parity + 7.2 resolution |
+| 🔴 Modal key bug | `volume_key()` sole converter | 7.1 key↔path parity + 7.4 no phantom key |
+| 🔴 schema `create` (json/dir contracts) | bind contract + `require_schema` | 7.2 `require_schema` accept/reject |
+| 🟡 `dup` / `two-names` / `re-derived` | collapse to one constant | 7.1 single-owner guard |
+| (the original bug) `interaction_counts` dropped | seam guard + registry | 7.3 fixture→duckdb edge test |
+
+### 7.6 Commands
+```bash
+# Levels 0–2 (free, run every change):
+uv run --project . python -m unittest discover -s tests
+uv run --project . python -m unittest tests.test_pipeline_file_registry tests.test_interaction_counts -v
+# Level 3 (paid, gated): Sync then Process on /sources/gmail, then:
+#   read .../runs/gmail-index/local-search.duckdb -> local_person_profiles.total_interactions
+```
