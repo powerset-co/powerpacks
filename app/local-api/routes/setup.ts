@@ -125,35 +125,6 @@ function localProfile() {
   };
 }
 
-function findBootstrapOperatorSummary(operator: SetupOperator): Record<string, any> {
-  const summary = readJsonSync(path.join(powerpacksStateRoot, "operator-bootstrap", "registry", "summary.json")) || {};
-  const operators = Array.isArray(summary.operators) ? summary.operators : [];
-  return operators.find((item: any) => item?.operator_id === operator.id || item?.operator === operator.label || item?.operator === operator.email)
-    || operators.find((item: any) => String(item?.gcs?.bundle || "").includes(`/operators/${operator.id}/`))
-    || {};
-}
-
-function bootstrapSummary(operator: SetupOperator) {
-  const latest = readJsonSync(path.join(powerpacksStateRoot, "operator-bootstrap", "registry", "latest-sync.json")) || {};
-  const operatorSummary = findBootstrapOperatorSummary(operator);
-  const processing = operatorSummary.processing_counts || {};
-  const importCounts = operatorSummary.import_counts || {};
-  const bundle = latest.bundle || operatorSummary.bundle || "";
-  const hasRecords = Number(processing.people_records || 0) > 0;
-  return {
-    status: bundle ? "available" : "missing",
-    bundle,
-    mode: hasRecords && !Object.keys(importCounts).length ? "records only" : hasRecords ? "records plus import checkpoints" : "",
-    bundleSha256: latest.bundle_sha256 || latest.bundle_download?.sha256 || "",
-    peopleRecords: Number(processing.people_records || 0) || undefined,
-    selectedPeople: Number(processing.selected_people || 0) || undefined,
-    selectedPositions: Number(processing.selected_positions || 0) || undefined,
-    linkedinCount: Number(processing.linkedin_counts || 0) || undefined,
-    twitterCount: Number(processing.x_twitter_counts || 0) || undefined,
-    companyRecords: Number(processing.companies_records || 0) || undefined,
-  };
-}
-
 function ledgerStatus(filePath: string, fallback: string) {
   const ledger = readJsonSync(filePath) || {};
   const block = ledger.current_block && typeof ledger.current_block === "object" ? ledger.current_block : null;
@@ -798,12 +769,6 @@ function publicImportSources(sources: SetupImportSource[]) {
 
 function deriveNextAction(setupLedger: RunState | null, sources: ReturnType<typeof normalizeSetupSources>) {
   const phases = setupLedger?.phases || {};
-  if ((phases.bootstrap?.status || "pending") === "pending") {
-    const bundles = fs.existsSync(path.join(powerpacksStateRoot, "operator-bootstrap", "bundles"))
-      ? fs.readdirSync(path.join(powerpacksStateRoot, "operator-bootstrap", "bundles")).filter((file) => file.endsWith(".operator-bootstrap.tar.gz"))
-      : [];
-    if (bundles.length > 0) return { status: "run_command", phase: "bootstrap", reason: "bootstrap bundle available" };
-  }
   if (phases.import?.status === "refresh_due") return { status: "run_command", phase: "import", reason: phases.import?.refresh_due?.reason || "refresh due" };
   if (["needs_processing", "not_ready"].includes(phases.index?.status)) return { status: "run_command", phase: "index", reason: phases.index?.reason || "index not ready" };
   return { status: "done", phase: "ready", reason: setupLedger?.status || "ready" };
@@ -829,7 +794,6 @@ async function setupStatus(tabInput: unknown = "all") {
   const operator = resolveOperator(setupLedger, accounts);
   const importSources = includeDiscover ? buildImportSources(accounts, operator.id) : [];
   const enrichmentSources = includeEnrichment ? buildEnrichmentSources(sources) : [];
-  const bootstrap = bootstrapSummary(operator);
   const setupFile = fileSummary(setupLedgerPath);
   const importFile = includeDiscover ? fileSummary(importRefreshLedgerPath) : { path: path.relative(powerpacksRepoRoot, importRefreshLedgerPath), exists: fs.existsSync(importRefreshLedgerPath) };
   const indexPhase = phases.index || {};
@@ -844,9 +808,8 @@ async function setupStatus(tabInput: unknown = "all") {
     duckdbTables = localDuckdbTableCounts(duckdbPath);
   }
   const duckdbHasRows = duckdbTables.some((table) => Number(table.rows || 0) > 0);
-  const bootstrapRecords = includeIndex ? localSearchRecordSummary() : { recordFiles: 0, nonemptyRecordFiles: 0 };
-  const bootstrapRestorePreferred = Number(bootstrap.peopleRecords || 0) > 0
-    && Boolean(bootstrapRecords.nonemptyRecordFiles)
+  const localRecords = includeIndex ? localSearchRecordSummary() : { recordFiles: 0, nonemptyRecordFiles: 0 };
+  const localRecordsPreferred = Boolean(localRecords.nonemptyRecordFiles)
     && (!duckdbFile.exists || !duckdbHasRows);
   const processingEstimate = !includeIndex ? {
     status: "not_loaded",
@@ -855,11 +818,11 @@ async function setupStatus(tabInput: unknown = "all") {
     counts: {},
     providers: {},
     error: "",
-  } : bootstrapRestorePreferred ? {
+  } : localRecordsPreferred ? {
     status: "local_records_restore",
     totalEstimatedUsd: 0,
     estimatedPaidCalls: {},
-    counts: { people: Number(bootstrap.peopleRecords || 0) },
+    counts: { records: Number(localRecords.nonemptyRecordFiles || 0) },
     providers: {},
     error: "",
   } : lastIndexProcessingEstimate(peopleSha256);
@@ -869,13 +832,11 @@ async function setupStatus(tabInput: unknown = "all") {
 
   return {
     operator,
-    bootstrap,
     setup: {
       ...setupFile,
       status: setupLedger.status || "unknown",
       updatedAt: setupLedger.updated_at || setupFile.updatedAt || null,
       phases: {
-        bootstrap: phases.bootstrap?.status || "unknown",
         link: phases.link?.status || "unknown",
         import: phases.import?.status || "unknown",
         index: phases.index?.status || "unknown",
@@ -926,7 +887,7 @@ async function setupStatus(tabInput: unknown = "all") {
       readiness: indexPhase.status || "unknown",
       reason: indexPhase.reason || "",
       indexInputSha256: indexPhase.index_input_sha256 || "",
-      bootstrapRecords,
+      localRecords,
       duckdbRepair,
       coverage: indexCoverage,
       processingEstimate,
@@ -994,7 +955,7 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     return startSetupJob(action, indexContactsCommand(operator.id));
   }
 
-  if (["bootstrap", "link", "run"].includes(action)) {
+  if (["link", "run"].includes(action)) {
     return startSetupJob(action, setupCommandArgs(operator.id, action as any));
   }
 

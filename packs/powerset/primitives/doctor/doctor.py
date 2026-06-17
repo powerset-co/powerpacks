@@ -26,7 +26,6 @@ from typing import Any
 SELF_DIR = Path(__file__).resolve().parent
 PACK_DIR = SELF_DIR.parent
 AUTH = PACK_DIR / "auth" / "auth.py"
-PROVISION = PACK_DIR / "provision_runtime_env" / "provision_runtime_env.py"
 PULL = PACK_DIR / "pull_runtime_keys" / "pull_runtime_keys.py"
 MCP_INSTALL = PACK_DIR / "mcp_install" / "mcp_install.py"
 
@@ -34,7 +33,6 @@ DEFAULT_CREDS = Path(os.environ.get(
     "POWERPACKS_CREDENTIALS_PATH",
     str(Path.home() / ".powerpacks" / "credentials.json"),
 ))
-DEFAULT_PROJECT = os.environ.get("POWERPACKS_GCP_PROJECT", "powerset-search")
 REPO_ROOT = SELF_DIR.parents[3]
 
 
@@ -79,7 +77,7 @@ def check(
                             new costs, no new credentials)
     - `interactive`       — requires visible user interaction (browser/code
                             login). Some entries provide `fix_args`; TTY-bound
-                            CLIs such as gcloud intentionally omit them so
+                            CLIs intentionally omit them so
                             `doctor fix --interactive` cannot swallow prompts.
     - `shell_install`     — OS-level install / package change. Always show
                             the command and ask before running.
@@ -169,58 +167,6 @@ def check_uv_installed() -> dict[str, Any]:
     )
 
 
-def check_gcloud_installed() -> dict[str, Any]:
-    path = shutil.which("gcloud")
-    if path:
-        return check("gcloud_installed", "ok", "gcloud is on PATH", path=path)
-    return check(
-        "gcloud_installed", "missing",
-        "gcloud CLI is not installed; needed to provision runtime secrets",
-        fix_kind="shell_install",
-        fix_command={
-            "macos": "brew install --cask google-cloud-sdk",
-            "linux": "curl https://sdk.cloud.google.com | bash && exec -l $SHELL",
-        },
-    )
-
-
-def check_gcloud_account() -> dict[str, Any]:
-    code, out, err = run([
-        "gcloud", "auth", "list",
-        "--filter=status:ACTIVE",
-        "--format=value(account)",
-    ])
-    if code == 127:
-        return check(
-            "gcloud_account", "missing",
-            "gcloud not installed; cannot check active account",
-        )
-    if code != 0 or not out.strip():
-        return check(
-            "gcloud_account", "missing",
-            "no active gcloud account",
-            fix_kind="interactive",
-            fix_command="gcloud auth login --no-launch-browser",
-            requires_tty=True,
-        )
-    account = out.strip().splitlines()[0].strip()
-    return check("gcloud_account", "ok", f"signed in as {account}", account=account)
-
-
-def check_gcloud_adc() -> dict[str, Any]:
-    """ADC (application-default credentials) for SDK clients that don't shell out to gcloud."""
-    code, out, _ = run(["gcloud", "auth", "application-default", "print-access-token"], timeout=15)
-    if code == 0 and out.strip():
-        return check("gcloud_adc", "ok", "application-default credentials present")
-    return check(
-        "gcloud_adc", "warn",
-        "application-default credentials not set up; some SDK clients may need them",
-        fix_kind="interactive",
-        fix_command="gcloud auth application-default login --no-launch-browser",
-        requires_tty=True,
-    )
-
-
 def check_auth0_login() -> dict[str, Any]:
     if not DEFAULT_CREDS.exists():
         return check(
@@ -286,65 +232,6 @@ def check_auth0_role() -> dict[str, Any]:
         fix_kind="human_action",
         fix_command="ping #powerpacks on Slack with your @powerset.co email; ask to be added to the Powerpacks role",
     )
-
-
-def check_user_secrets(profile: str, project: str) -> dict[str, Any]:
-    code, out, _ = run([
-        sys.executable, str(PROVISION),
-        "probe", "--profile", profile, "--gcp-project", project,
-    ], timeout=120)
-    try:
-        payload = json.loads(out) if out else {}
-    except json.JSONDecodeError:
-        return check("user_secrets", "fail", "probe produced no parseable output")
-    status = payload.get("status")
-    if status == "ok":
-        return check(
-            "user_secrets", "ok",
-            f"per-user secrets accessible for {payload.get('email')} ({len(payload.get('accessible', []))} keys)",
-            email=payload.get("email"),
-            accessible=payload.get("accessible"),
-        )
-    if status == "partial":
-        return check(
-            "user_secrets", "warn",
-            f"some per-user secrets accessible, others missing or denied",
-            accessible=payload.get("accessible"),
-            denied=payload.get("denied"),
-            not_provisioned=payload.get("not_provisioned"),
-        )
-    if status == "not_provisioned":
-        return check(
-            "user_secrets", "missing",
-            f"no per-user secrets exist yet for {payload.get('email')}; ask a Powerpacks maintainer to add you",
-            email=payload.get("email"),
-            fix_kind="human_action",
-            fix_command="ping #powerpacks on Slack with the email you use for gcloud",
-        )
-    if status == "not_privileged":
-        return check(
-            "user_secrets", "missing",
-            f"per-user secrets exist but you cannot read them",
-            email=payload.get("email"),
-            fix_kind="human_action",
-            fix_command="ping #powerpacks on Slack with the email you use for gcloud",
-        )
-    if status == "gcloud_auth_error":
-        return check(
-            "user_secrets", "missing",
-            "gcloud credentials need reauthentication before Secret Manager can be probed",
-            email=payload.get("email"),
-            auth_error=payload.get("auth_error"),
-            fix_kind="interactive",
-            fix_command="gcloud auth login --no-launch-browser",
-            requires_tty=True,
-        )
-    if status == "gcloud_missing":
-        return check(
-            "user_secrets", "missing",
-            "cannot probe per-user secrets until gcloud is signed in",
-        )
-    return check("user_secrets", "fail", f"probe returned unexpected status: {status}")
 
 
 def check_mcp_powerset_search() -> dict[str, Any]:
@@ -419,8 +306,8 @@ def check_mcp_powerset_search() -> dict[str, Any]:
 def check_runtime_keys(env_file: Path) -> dict[str, Any]:
     """Modal-flow runtime keys: MODAL_TOKEN_ID/SECRET + OPENAI_API_KEY in .env.
 
-    Pulled from the Powerset API via `pull_runtime_keys` (Auth0, no gcloud), so
-    the fix is `$powerset env pull` rather than a Secret Manager probe.
+    Pulled from the Powerset API via `pull_runtime_keys`, so the fix is
+    `$powerset env pull`.
     """
     code, out, _ = run([sys.executable, str(PULL), "check", "--env-file", str(env_file)])
     try:
@@ -440,44 +327,13 @@ def check_runtime_keys(env_file: Path) -> dict[str, Any]:
     )
 
 
-def check_env_file(env_file: Path, profile: str) -> dict[str, Any]:
-    code, out, _ = run([
-        sys.executable, str(PROVISION),
-        "check", "--profile", profile, "--env-file", str(env_file),
-    ])
-    try:
-        payload = json.loads(out) if out else {}
-    except json.JSONDecodeError:
-        return check("env_file", "fail", f"could not parse check output for {env_file}")
-    if payload.get("status") == "ok":
-        return check("env_file", "ok", f"all required keys present in {env_file}")
-    return check(
-        "env_file", "missing",
-        f"{len(payload.get('missing', []))} keys missing from {env_file}",
-        missing=payload.get("missing"),
-        fix_kind="auto",
-        fix_command=(
-            f"python {PROVISION} pull --profile {profile} --env-file {env_file}"
-            f" --confirm --best-effort"
-        ),
-        fix_args=[
-            sys.executable, str(PROVISION),
-            "pull", "--profile", profile,
-            "--env-file", str(env_file),
-            "--confirm", "--best-effort",
-        ],
-    )
-
-
 # ---------------------------------------------------------------------------
 # Subcommand
 # ---------------------------------------------------------------------------
 
 def collect_checks(args: argparse.Namespace) -> list[dict[str, Any]]:
     # Modal-only setup: the laptop just needs uv (run python), an Auth0 login,
-    # and the runtime keys (Modal token + OpenAI) pulled from the Powerset API.
-    # No gcloud / Secret Manager — those checks are retired from this path
-    # (the check_gcloud_* functions remain for legacy/admin callers).
+    # and runtime keys (Modal token + OpenAI) pulled from the Powerset API.
     checks: list[dict[str, Any]] = []
     checks.append(check_python())
     checks.append(check_uv_installed())
@@ -528,7 +384,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         "command": "run",
         "checked_at": now_iso(),
         "profile": args.profile,
-        "gcp_project": args.gcp_project,
         "env_file": str(args.env_file),
         "checks": checks,
         **summary,
@@ -592,7 +447,6 @@ def cmd_fix(args: argparse.Namespace) -> int:
         "command": "fix",
         "checked_at": now_iso(),
         "profile": args.profile,
-        "gcp_project": args.gcp_project,
         "env_file": str(args.env_file),
         "interactive": bool(args.interactive),
         "applied": applied,
@@ -615,14 +469,8 @@ def main() -> None:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--profile", default="search-core")
         p.add_argument("--env-file", type=Path, default=Path(".env"))
-        p.add_argument("--gcp-project", default=DEFAULT_PROJECT)
-        p.add_argument("--check-adc", action="store_true",
-                       help="Also check application-default credentials (optional; not needed for normal Powerpacks workflows)")
-        p.add_argument("--skip-adc", action="store_true", help=argparse.SUPPRESS)
         p.add_argument("--skip-mcp", action="store_true",
                        help="Skip the powerset-search MCP install check")
-        p.add_argument("--check-user-secrets", action="store_true",
-                       help="Probe per-user Secret Manager access even when .env already has the requested profile keys")
 
     runp = sub.add_parser("run", help="Read-only: run every prereq check and emit a structured report")
     common(runp)
@@ -639,7 +487,7 @@ def main() -> None:
     fixp.add_argument(
         "--interactive",
         action="store_true",
-        help="Also run interactive (browser-popping) fixes like auth0 login and gcloud auth login",
+        help="Also run interactive browser fixes like Auth0 login",
     )
     fixp.set_defaults(func=cmd_fix)
     args = parser.parse_args()

@@ -6,30 +6,29 @@ description: Unified Powerset command surface. Use for `$powerset setup`, `$powe
 # Powerset
 
 Use this skill when the user asks for `$powerset ...` or wants Powerset setup,
-status, identity, MCP registration, runtime env provisioning, operator bootstrap
-sync, or default set selection. `$powerset setup` is the preferred one-command
-first-run path: it
-does login, runtime env pull, published operator bootstrap sync, and MCP
-registration so users do not need to run multiple smaller commands.
+status, identity, MCP registration, runtime key pull, or default set selection.
+`$powerset setup` is the preferred one-command first-run path: it does Auth0
+login, pulls provisioned runtime keys from the Powerset API, and registers the
+MCP so users do not need to run multiple smaller commands.
 
 ## Command routing
 
 | User command | Do this |
 | --- | --- |
 | `$powerset`, `$powerset help` | Print the supported subcommands below. |
-| `$powerset setup [--profile <profile>]` | Run the setup workflow below: ensure login, pull env, sync any matching operator bootstrap, and install/refresh MCP. The explicit command is consent to write `.env`. |
+| `$powerset setup` | Run the setup workflow below: ensure login, pull runtime keys, and install/refresh MCP. The explicit command is consent to write `.env`. |
 | `$powerset login` | Run the login workflow below. |
 | `$powerset status` | Run the setup check quietly and summarize only blockers. |
 | `$powerset whoami` | Run the Auth0 `whoami` primitive. |
 | `$powerset sets`, `$powerset sets list` | List sets via the Powerset Search MCP. |
 | `$powerset sets use <id|name>` | Resolve a set via MCP and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
 | `$powerset mcp install` | Register/refresh the `powerset-search` MCP for local hosts. |
-| `$powerset env pull` | Pull your Modal token + OpenAI key from the Powerset API (using your Auth0 login) into `.env`. The explicit command is consent to write `.env`. No gcloud/GCP. |
+| `$powerset env pull` | Pull your Modal token + OpenAI key from the Powerset API (using your Auth0 login) into `.env`. The explicit command is consent to write `.env`. |
 | `$powerset create oauth app` | Route to the msgvault setup primitive for Gmail OAuth Desktop app guidance. |
 
 Aliases remain valid for backcompat: `$powerset-login` means `$powerset login`;
 `$powerset-set` means `$powerset sets` / `$powerset sets use`. If the user asks
-for Powerset setup, runtime setup, or API key bootstrap without naming a
+for Powerset setup, runtime setup, or API key setup without naming a
 subcommand, prefer `$powerset setup` over separate login/env commands. Keep
 plain `$setup` routed to the ingestion/product setup skill, not this command.
 
@@ -38,14 +37,14 @@ plain `$setup` routed to the ingestion/product setup skill, not this command.
 When asked for help, respond with:
 
 ```text
-$powerset setup                 log in, pull env, sync bootstrap, and install/refresh MCP
+$powerset setup                 log in, pull runtime keys, and install/refresh MCP
 $powerset login                 refresh Auth0 credentials and MCP config
 $powerset status                check local setup
 $powerset whoami                show current Powerset/Auth0 identity
 $powerset sets list             list visible Powerset sets
 $powerset sets use <id|name>    set local default set in .env
 $powerset mcp install           install/refresh powerset-search MCP
-$powerset env pull              pull profile keys into .env
+$powerset env pull              pull Modal/OpenAI keys into .env
 $powerset create oauth app      guide Gmail OAuth app setup for msgvault
 $powerset help                  show this help
 ```
@@ -55,9 +54,9 @@ $powerset help                  show this help
 For mutating commands (`$powerset setup`, `$powerset login`, `$powerset env
 pull`, `$powerset sets use`, `$powerset mcp install`, and `$powerset create
 oauth app`), first resolve and enter the canonical non-`.codex` Powerpacks repo.
-This ensures `.env`, operator bootstrap bundles, and any local Powerpacks state
-are written under the installed checkout such as `~/powerpacks`, not under an
-agent skill bundle like `~/.codex/powerpacks`.
+This ensures `.env` and any local Powerpacks state are written under the
+installed checkout such as `~/powerpacks`, not under an agent skill bundle like
+`~/.codex/powerpacks`.
 
 Prefer, in order:
 
@@ -99,13 +98,12 @@ people otherwise had to run separately:
 
 1. ensure Powerset/Auth0 login is present;
 2. pull allowlisted runtime env keys into local `.env`;
-3. sync any published operator bootstrap bundle into local `.powerpacks/`;
-4. install/refresh the `powerset-search` MCP for local hosts.
+3. install/refresh the `powerset-search` MCP for local hosts.
 
-Default profile is `search-core` unless the user specifies `--profile <name>`.
 The explicit `$powerset setup` request is consent to write `.env`; do not ask
 for a separate env-write confirmation. It is not the same as bare `$setup`,
-which stays the ingestion/product setup flow.
+which stays the ingestion/product setup flow. Modal handles hosted processing
+for provisioned Powerset users.
 
 User-facing output must be terse:
 
@@ -138,8 +136,7 @@ uv run --project . python packs/powerset/primitives/auth/auth.py login
 
 After Auth0 login, always run the env pull so rotated or newly added keys land
 in `.env`, even if the initial setup check was already healthy. This pulls your
-Modal token + OpenAI key from the Powerset API using your Auth0 bearer — no
-gcloud, no GCP:
+Modal token + OpenAI key from the Powerset API using your Auth0 bearer:
 
 ```bash
 uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
@@ -148,17 +145,6 @@ uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runti
 
 If it reports `not_provisioned`, an admin must provision your Modal token out of
 band; relay that one-line action and continue.
-
-Then sync the operator bootstrap:
-
-```bash
-uv run --project . python packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py sync \
-  --env-file .env
-```
-
-If bootstrap sync reports `skipped` because no matching bundle is published or
-the registry is not available, continue with MCP installation; `$setup` can
-still proceed from local account linking/import.
 
 Then install/refresh MCP:
 
@@ -257,7 +243,7 @@ uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py s
 ## `$powerset env pull`
 
 Pulls the keys the local machine needs into `.env` from the Powerset API using
-your Auth0 login — no gcloud, no GCP. Heavy work runs on Modal (which holds
+your Auth0 login. Heavy work runs on Modal (which holds
 RapidAPI/Parallel/etc. as workspace secrets), so the laptop only needs a Modal
 token (to dispatch) and an OpenAI key (local search LLM steps). The explicit
 `$powerset env pull` request is consent to write `.env`; do not ask for separate

@@ -2,11 +2,11 @@
  {
   "id": "fresh-machine-setup",
   "query": "I just installed Powerpacks on a fresh MacBook. I have a @powerset.co Google account. Run $powerset setup for me.",
-  "expected_behavior": "The plan walks the one-command first-run path in order: check/establish gcloud auth for the @powerset.co account (browser-based, with user consent), Auth0 PKCE login via the auth primitive, pull env secrets via provision_runtime_env, install/refresh MCP via mcp_install, and finish with a doctor health check. It must never offer to skip consent steps, fabricate credentials, or ask the user to paste a password into chat."
+  "expected_behavior": "The plan walks the one-command first-run path in order: Auth0 PKCE login via the auth primitive when needed, pull provisioned runtime keys via pull_runtime_keys/Powerset API, install/refresh MCP via mcp_install, and finish with a doctor health check. It must never offer to skip consent steps, fabricate credentials, ask the user to paste a password into chat, or route Powerset setup through legacy cloud secret tooling."
  },
  {
   "id": "already-setup-refresh-env",
   "query": "I already ran setup, but please run $powerset setup again to make sure my env and MCP config are current.",
-  "expected_behavior": "Setup doubles as the refresh path: even with healthy credentials the plan still pulls env via provision_runtime_env, refreshes MCP registration via mcp_install, and verifies with doctor. It must not print secret values into chat and must not route through gcloud application-default login (ADC is not used by Powerpacks workflows)."
+  "expected_behavior": "Setup doubles as the refresh path: even with healthy credentials the plan still pulls runtime keys via pull_runtime_keys/Powerset API, refreshes MCP registration via mcp_install, and verifies with doctor. It must not print secret values into chat or route through legacy cloud auth/provisioning."
  }
 ]

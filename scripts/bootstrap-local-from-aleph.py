@@ -6,7 +6,7 @@ regenerating paid enrichment. It scopes rows per operator, writes the local
 record artifacts DuckDB needs, and writes checkpoint/chunk files matching the
 Powerpacks checkpointed stages so future runs are monotonic/resumable.
 
-Operator access input is required for real per-operator bootstrap. Supported
+Operator access input is required for real per-operator local artifact restore. Supported
 formats:
 - CSV with operator_id, person_id columns (operator_email optional)
 - JSONL with operator_id and person_id/base_person_id (operator_email optional)
@@ -814,7 +814,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-every", type=int, default=1000)
     parser.add_argument("--education-limit", type=int, default=5000)
     parser.add_argument("--skip-duckdb", action="store_true")
-    parser.add_argument("--restore-records-only", action="store_true", help="Write only records, stats, and DuckDB outputs needed by operator bootstrap restore bundles.")
+    parser.add_argument("--restore-records-only", action="store_true", help="Write only records, stats, and DuckDB outputs needed by local restore artifacts.")
     parser.add_argument("--force", action="store_true")
     return parser
 

@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Drive the powerset-login pack's primitives end-to-end against fakes /
-# read-only flows. No real Auth0 PKCE, no real GCP, no MCP mutations.
+# read-only flows. No real Auth0 PKCE, no real runtime-key API pull, no MCP
+# mutations.
 #
 # Exercises:
 #   - auth.py whoami     (against a synthetic credentials.json)
 #   - auth.py token      (--bearer-only against the same fixture)
-#   - provision_runtime_env --help / list-profiles  (no gcloud calls)
-#   - provision_runtime_env plan  (with stubbed gcloud — describes what
-#     would be pulled, doesn't pull)
+#   - pull_runtime_keys check  (against a synthetic .env)
 #   - mcp_install status --host all  (read-only)
 #   - mcp_install token-env  (reads creds, prints export line, no host
 #     mutation)
@@ -16,13 +15,13 @@
 #
 # Honest limitations (not exercised here):
 #   - Real Auth0 browser flow  (would need a mock OIDC server)
-#   - Real gcloud secret pull  (would need real credentials or stub
-#     secret manager)
+#   - Real runtime-key API pull  (would need a mock API server or provisioned
+#     Powerset account)
 #   - Real claude/codex MCP install  (would mutate ~/.claude.json or
 #     ~/.codex/config.toml — out of scope for smoke)
 #
 # These gaps are covered by:
-#   - tests/test_provision_runtime_env.py  (provision_runtime_env unit tests)
+#   - tests/test_pull_runtime_keys.py  (pull_runtime_keys unit tests)
 #   - scripts/run-skill-eval --skill powerset-login (skill-level eval)
 #
 # Safe to run repeatedly. No money. No network outside localhost.
@@ -84,25 +83,33 @@ tok=$($PY "$PACK/auth/auth.py" token --bearer-only --credentials-path "$POWERPAC
 ok "token --bearer-only printed a token (len=${#tok})"
 
 # ---------------------------------------------------------------------------
-step "3. provision_runtime_env plan --profile messages (read-only)"
+step "3. pull_runtime_keys check (read-only)"
 # ---------------------------------------------------------------------------
-# `plan` is read-only — lists which secrets WOULD be pulled per profile.
-# Doesn't actually call gcloud secret manager.
-$PY "$PACK/provision_runtime_env/provision_runtime_env.py" plan --profile messages \
-  --env-file "$TMP/.env" >"$TMP/plan.json" 2>&1
+$PY "$PACK/pull_runtime_keys/pull_runtime_keys.py" check --env-file "$TMP/.env" >"$TMP/runtime-missing.json" 2>&1 || true
 $PY -c "
 import json
-d=json.load(open('$TMP/plan.json'))
-# 'plan' returns a structured payload describing requested keys and their
-# resolution status. We don't care about gcloud connectivity here, only
-# that the primitive ran end-to-end and emitted a valid plan structure.
+d=json.load(open('$TMP/runtime-missing.json'))
 assert isinstance(d, dict), d
-for key in ('command', 'profile'):
-    assert key in d, f'plan output missing {key}: {list(d)}'
-print('  profile:', d.get('profile'))
-print('  keys:   ', len(d.get('items', d.get('keys', [])) or []))
+assert d['status'] == 'missing', d
+assert 'MODAL_TOKEN_ID' in d['missing'], d
+print('  status:', d['status'])
+print('  missing:', ', '.join(d['missing']))
 "
-ok "plan ran end-to-end and emitted structured output"
+cat >"$TMP/.env" <<ENV
+MODAL_TOKEN_ID=fake-token-id
+MODAL_TOKEN_SECRET=fake-token-secret
+OPENAI_API_KEY=fake-openai-key
+ENV
+chmod 0600 "$TMP/.env"
+$PY "$PACK/pull_runtime_keys/pull_runtime_keys.py" check --env-file "$TMP/.env" >"$TMP/runtime-ok.json" 2>&1
+$PY -c "
+import json
+d=json.load(open('$TMP/runtime-ok.json'))
+assert d['status'] == 'ok', d
+print('  status:', d['status'])
+print('  have:  ', ', '.join(d['have']))
+"
+ok "runtime-key check emitted structured output"
 
 # ---------------------------------------------------------------------------
 step "4. mcp_install token-env (reads synthetic credentials)"
@@ -129,8 +136,8 @@ ok "status reported on claude + codex"
 step "6. doctor run (read-only check sweep)"
 # ---------------------------------------------------------------------------
 # doctor run already emits JSON to stdout. Some checks may report status
-# != ok (no real Auth0 token, missing gcloud login, etc.) — we only
-# validate that the runner itself works.
+# != ok depending on the local host setup — we only validate that the runner
+# itself works.
 $PY "$PACK/doctor/doctor.py" run >"$TMP/doctor.json" 2>&1 || true
 $PY -c "
 import json
@@ -145,10 +152,10 @@ print('  ids:    ', ', '.join(checks[:6]) + ('...' if len(checks) > 6 else ''))
 ok "doctor run produced a structured report"
 
 # ---------------------------------------------------------------------------
-step "7. unit tests for provision_runtime_env"
+step "7. unit tests for pull_runtime_keys"
 # ---------------------------------------------------------------------------
-$PY -m unittest tests.test_provision_runtime_env -v 2>&1 | tail -3
-ok "provision_runtime_env unit tests passed"
+$PY -m unittest tests.test_pull_runtime_keys -v 2>&1 | tail -3
+ok "pull_runtime_keys unit tests passed"
 
 echo
 printf '\033[1;32m✓ powerset-login pack smoke complete\033[0m\n'

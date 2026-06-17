@@ -2,12 +2,12 @@
  {
   "id": "explicit-login-fresh-machine-backcompat",
   "query": "I explicitly want to run $powerset login on a fresh MacBook with my @powerset.co Google account. Refresh everything.",
-  "expected_behavior": "The legacy explicit-login alias still walks the full first-run sequence: gcloud auth check for the @powerset.co account, Auth0 PKCE login via the auth primitive, GCP secret provisioning/env pull, MCP install, and a final doctor check. It must never offer to skip consent, fabricate credentials, or ask for a password in chat."
+  "expected_behavior": "The legacy explicit-login alias still walks the supported first-run sequence: Auth0 PKCE login via the auth primitive when needed, provisioned runtime key pull via pull_runtime_keys/Powerset API, MCP install, and a final doctor check. It must never offer to skip consent, fabricate credentials, ask for a password in chat, or route Powerset setup through legacy cloud secret tooling."
  },
  {
   "id": "non-powerset-google-account",
   "query": "I have a personal @gmail.com account, no @powerset.co. What can I still set up?",
-  "expected_behavior": "The plan explains the non-Powerset path honestly: OSS-friendly skills work with the user's own API keys (e.g. their own OpenRouter/OpenAI key), and per-user GCP Secret Manager env pull only works if a maintainer has explicitly provisioned that email. It must not fabricate credentials or ask the user to paste passwords."
+  "expected_behavior": "The plan explains the non-Powerset path honestly: OSS-friendly skills work with the user's own API keys (e.g. their own OpenRouter/OpenAI key), and Powerset API runtime-key pull only works for explicitly provisioned users. It must not fabricate credentials or ask the user to paste passwords."
  },
  {
   "id": "already-logged-in-verify",

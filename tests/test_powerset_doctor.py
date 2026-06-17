@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 
@@ -16,20 +17,24 @@ def load_doctor():
 
 
 class PowersetDoctorTests(unittest.TestCase):
-    def test_gcloud_login_fix_requires_tty_not_fix_args(self) -> None:
+    def test_runtime_keys_missing_uses_api_pull(self) -> None:
         doctor = load_doctor()
         original_run = doctor.run
         try:
-            doctor.run = lambda *args, **kwargs: (1, "", "no active account")
-            payload = doctor.check_gcloud_account()
+            doctor.run = lambda *args, **kwargs: (
+                2,
+                json.dumps({"status": "missing", "missing": ["MODAL_TOKEN_ID"]}),
+                "",
+            )
+            payload = doctor.check_runtime_keys(Path(".env"))
         finally:
             doctor.run = original_run
 
-        self.assertEqual(payload["id"], "gcloud_account")
+        self.assertEqual(payload["id"], "runtime_keys")
+        self.assertEqual(payload["status"], "missing")
         self.assertEqual(payload["fix_kind"], "interactive")
-        self.assertEqual(payload["fix_command"], "gcloud auth login --no-launch-browser")
-        self.assertTrue(payload["requires_tty"])
-        self.assertNotIn("fix_args", payload)
+        self.assertEqual(payload["fix_command"], "$powerset env pull")
+        self.assertIn("pull_runtime_keys", payload["fix_args"][1])
 
 
 if __name__ == "__main__":

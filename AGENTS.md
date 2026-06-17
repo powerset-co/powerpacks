@@ -199,28 +199,17 @@ bin/doctor fix
 bin/doctor fix --interactive
 ```
 
-Never run `fix` unprompted. Browser logins, gcloud auth, Full Disk Access,
+Never run `fix` unprompted. Browser logins, Google Cloud auth for msgvault/Gmail OAuth setup, Full Disk Access,
 Docker/WAHA QR setup, and spend-bearing operations are user-consent operations.
 Python dependency setup via `bin/setup-python` is part of normal onboarding.
 
-For Powerset users, proactively distinguish expired/reauth-needed credentials
-from IAM/secret provisioning failures. If any `gcloud` command fails with auth
-expiration / reauthentication text (for example `problem refreshing your current
-auth tokens`, `Reauthentication failed`, or `cannot prompt during
-non-interactive execution`), the fix is:
-
-```bash
-gcloud auth login --no-launch-browser
-```
-
-Run it from this shell after user consent, relay the verification URL/code
-prompt, and ask the user to paste the code. If `.env` already has the requested
-profile keys, expired gcloud Secret Manager access is not a blocker and should
-not be surfaced unless the user asks to refresh/provision secrets. If `.env` is
-missing keys and the doctor reports `user_secrets` with `fix_kind: interactive`,
-tell the user their selected `@powerset.co` account is fine but gcloud's cached
-token expired. Do not route this to Slack and do not run ADC setup;
-application-default credentials are not needed for normal Powerpacks workflows.
+For Powerset users, runtime keys come from the authenticated Powerset API via
+`packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py`. The normal
+Powerset setup path is Auth0 plus API key pull plus MCP registration. If
+runtime keys are missing after `$powerset env pull`, the likely blocker is
+Powerset-side provisioning of the user's Modal/OpenAI runtime keys. Google Cloud
+CLI login is still a valid user-consent flow for msgvault/Gmail OAuth app setup
+only; keep that scoped to the msgvault primitives.
 
 ## Pack-specific readiness
 
@@ -282,8 +271,8 @@ Routes:
 - `$build-local-search-index`, local indexing, build local search index,
   prepare `.powerpacks/search-index` artifacts →
   `packs/indexing/skills/build-local-search-index/SKILL.md`
-- `$setup`, one-time setup, operator bootstrap restore, end-to-end local
-  ingestion setup, account/source linking plus import/index orchestration →
+- `$setup`, one-time setup, end-to-end local ingestion setup, account/source
+  linking plus import/index orchestration →
   `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`

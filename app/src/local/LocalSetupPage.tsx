@@ -1402,8 +1402,8 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
   const coverage = status.index.coverage || {};
   const indexedPeople = Number(coverage.indexedPeople || 0);
   const pendingPeople = Number(coverage.pendingPeople || 0);
-  const bootstrapRecordCount = Number(status.index.bootstrapRecords?.nonemptyRecordFiles || 0);
-  const localRecordsMode = String(estimate.status || "") === "local_records_restore" || (bootstrapRecordCount > 0 && !status.index.duckdbTables?.length);
+  const localRecordCount = Number(status.index.localRecords?.nonemptyRecordFiles || 0);
+  const localRecordsMode = String(estimate.status || "") === "local_records_restore" || (localRecordCount > 0 && !status.index.duckdbTables?.length);
   const duckdbRepaired = status.index.duckdbRepair?.status === "ok";
   const hasProviderEstimate = paidCalls > 0 || (estimate.totalEstimatedUsd || 0) > 0;
   const updateAvailable = ["needs_processing", "people_csv_ready_for_processing"].includes(String(readiness || "").toLowerCase())
@@ -1425,11 +1425,11 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
             </div>
             {localRecordsMode ? (
               <div className="text-sm text-muted-foreground">
-                Bootstrap search records are available locally. Processing will build the DuckDB tables from those records without provider calls.
+                Local search records are available. Processing will build the DuckDB tables from those records without provider calls.
               </div>
             ) : duckdbRepaired ? (
               <div className="text-sm text-muted-foreground">
-                Built local DuckDB tables from bootstrap records. A full rebuild from the current people.csv would use the estimate below.
+                Built local DuckDB tables from local search records. A full rebuild from the current people.csv would use the estimate below.
               </div>
             ) : showProviderEstimate ? (
               <div className="text-sm text-muted-foreground">
@@ -1476,10 +1476,10 @@ function IndexTab({ status, onRun, actionState }: { status: SetupStatusResponse;
                 <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Pending dry-run estimates</div>
                 {localRecordsMode ? (
                   <div className="grid gap-3 p-3 sm:grid-cols-2">
-                    <KeyValue label="Action" value="Build DuckDB from bootstrap records" />
+                    <KeyValue label="Action" value="Build DuckDB from local records" />
                     <KeyValue label="Provider calls" value="None" />
-                    <KeyValue label="Record files" value={bootstrapRecordCount.toLocaleString()} />
-                    <KeyValue label="Source" value="operator bootstrap" />
+                    <KeyValue label="Record files" value={localRecordCount.toLocaleString()} />
+                    <KeyValue label="Source" value="local search records" />
                   </div>
                 ) : showProviderEstimate ? (
                   <div className="grid gap-3 p-3 sm:grid-cols-2">

@@ -26,8 +26,7 @@ has_powerpacks_state() {
     || [[ -f "$candidate/.powerpacks/ingestion/accounts.json" ]] \
     || [[ -f "$candidate/.powerpacks/network-import/merged/people.csv" ]] \
     || [[ -f "$candidate/.powerpacks/messages/research_review.csv" ]] \
-    || [[ -f "$candidate/.powerpacks/search-index/local-search.duckdb" ]] \
-    || [[ -f "$candidate/.powerpacks/operator-bootstrap/restore-manifest.json" ]]
+    || [[ -f "$candidate/.powerpacks/search-index/local-search.duckdb" ]]
 }
 
 resolve_repo_root() {

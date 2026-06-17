@@ -44,7 +44,7 @@ _STEMMER = snowballstemmer.stemmer("english")
 
 
 def _phrase_tokens(text: str) -> list[str]:
-    # Match the operator-bootstrap summaries shape: deduped stemmed 1- to 4-grams.
+    # Match persisted summary records: deduped stemmed 1- to 4-grams.
     stems = _STEMMER.stemWords(re.findall(r"[a-z0-9]+", (text or "").lower()))
     grams = [" ".join(stems[idx : idx + size]) for size in range(1, 5) for idx in range(len(stems) - size + 1)]
     return list(dict.fromkeys(grams))

@@ -97,6 +97,8 @@ def collect_primitives() -> dict[str, dict[str, Any]]:
                 continue
             py = d / f"{d.name}.py"
             files = sorted(p for p in d.iterdir() if p.is_file() and is_tracked(p))
+            if not files and not py.exists():
+                continue
             primitives[d.name] = {
                 "name": d.name,
                 "pack": pack_dir.name,

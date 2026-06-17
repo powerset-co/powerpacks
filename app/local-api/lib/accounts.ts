@@ -40,7 +40,7 @@ export function shouldAutoLinkGmailRecord(record: Record<string, any>): boolean 
   if (record.linked === true && record.skipped !== true) return false;
   if (record.skipped !== true) return true;
   const notes = String(record.notes || "").toLowerCase();
-  return notes.includes("bootstrap") || notes.includes("local search pipeline");
+  return notes.includes("local search pipeline");
 }
 
 export function discoverMsgvaultAccounts(dbPath: string): { accounts: string[]; rows: Record<string, any>[]; error?: string } {
@@ -108,23 +108,17 @@ export function autoLinkGmailFromMsgvault(accounts: RunState | null): RunState {
 }
 
 export function resolveOperator(setupLedger: RunState | null, accounts: RunState | null): SetupOperator {
-  const restoreManifest = readJsonSync(path.join(powerpacksStateRoot, "operator-bootstrap", "restore-manifest.json"));
-  const latestSync = readJsonSync(path.join(powerpacksStateRoot, "operator-bootstrap", "registry", "latest-sync.json"));
   const searchManifest = readJsonSync(path.join(powerpacksStateRoot, "search-index", "manifest.json"));
   const env = readEnvSummary();
   const candidates = [
     setupLedger?.operator_id,
     accounts?.operator_id || accounts?.operatorId,
-    restoreManifest?.operator_id,
     process.env.POWERPACKS_OPERATOR_ID,
     env.POWERPACKS_OPERATOR_ID,
   ];
   const found = candidates.find((candidate) => typeof candidate === "string" && candidate.trim());
-  const syncSource = Array.isArray(latestSync?.operator_resolution?.sources) ? latestSync.operator_resolution.sources[0] : null;
   const email = String(
     searchManifest?.operator_email
-      || syncSource?.email
-      || latestSync?.operator
       || env.POWERPACKS_OPERATOR_EMAIL
       || ""
   ).trim();

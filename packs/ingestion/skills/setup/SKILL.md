@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Unified Powerpacks ingestion setup. Use for $setup, one-time setup, operator bootstrap restore, account/source linking, import/enrichment fan-out, and local search-index/DuckDB readiness.
+description: Unified Powerpacks ingestion setup. Use for $setup, one-time setup, account/source linking, import/enrichment fan-out, and local search-index/DuckDB readiness.
 ---
 
 # setup
@@ -10,13 +10,11 @@ an ingestion/product setup flow, not a generic `$powerset login` alias.
 
 ## Phase model
 
-1. **bootstrap** — inspect/pull/apply operator bootstrap bundles as prior local
-   artifacts/checkpoints.
-2. **link** — run onboarding as source linking only; record non-secret state in
+1. **link** — run onboarding as source linking only; record non-secret state in
    `.powerpacks/ingestion/accounts.json`.
-3. **import** — automatically refresh linked sources when setup has not already
+2. **import** — automatically refresh linked sources when setup has not already
    done a recent live sync, reusing existing artifacts by default.
-4. **index** — after import fan-in, run processing/indexing and local DuckDB
+3. **index** — after import fan-in, run processing/indexing and local DuckDB
    materialization when safe or approved.
 
 Onboarding must remain link-only. Do not run Gmail metadata import,
@@ -51,14 +49,13 @@ normal updates unless the user asks for technical details.
 Good opening summary:
 
 ```text
-I’m going to get your local Powerpacks search ready in four steps:
-1. Restore any safe prior progress we already have for you.
-2. Connect the sources you choose, like Gmail, LinkedIn, Messages, Twitter, or WhatsApp.
-3. Import each connected source in parallel where possible.
-4. Combine everything into one local network and make it searchable on this machine.
+I’m going to get your local Powerpacks search ready in three steps:
+1. Connect the sources you choose, like Gmail, LinkedIn, Messages, Twitter, or WhatsApp.
+2. Import each connected source in parallel where possible.
+3. Combine everything into one local network and make it searchable on this machine.
 
 I won’t upload anything automatically, and I’ll only stop to ask you when a login,
-QR/device link, overwrite, or paid provider step needs your approval.
+QR/device link, or paid provider step needs your approval.
 ```
 
 When reporting status, say what changed for the user:
@@ -156,16 +153,13 @@ still runs the real setup flow. It just avoids one giant Codex-driven chain and
 makes user actions visible.
 
 Use the setup runner only when the user explicitly asks for `$setup cli`, a
-deterministic CLI run, or a specific phase. It is idempotent: it restores a safe
-matching bootstrap when needed, refreshes whatever sources are already linked,
-then reuses completed recent work. If no sources are linked and no local
-network/index artifacts exist yet, setup may suggest linking a source, but it
-must not require skip markers for every unused source. `$setup` does not do
-Powerset login, env pull, MCP registration, or remote GCS bootstrap discovery.
-If a published Powerset operator bootstrap exists, `$powerset setup` syncs it
-into `.powerpacks/operator-bootstrap/bundles/` first; `$setup` then treats that
-local bundle like any other previous-run artifact. If no local matching bundle
-exists, setup simply continues with source linking/import.
+deterministic CLI run, or a specific phase. It is idempotent: it refreshes
+whatever sources are already linked, then reuses completed recent work. If no
+sources are linked and no local network/index artifacts exist yet, setup may
+suggest linking a source, but it must not require skip markers for every unused
+source. `$setup` does not do Powerset login, env pull, MCP registration, bundle
+sync, or cloud secret access. Modal handles hosted processing for provisioned
+Powerset users.
 
 For debugging, operator testing, or resuming after a blocker, use the
 deterministic phase entrypoints below instead of rerunning the product app flow
@@ -197,10 +191,6 @@ scope so agents can test or resume one layer at a time:
 
 ```bash
 cd "${POWERPACKS_REPO_ROOT:-$HOME/powerpacks}"
-uv run --project . python packs/ingestion/primitives/setup/setup.py bootstrap \
-  --operator-id <operator-id> \
-  --setup-ledger .powerpacks/setup/setup-run.json
-
 uv run --project . python packs/ingestion/primitives/setup/setup.py link \
   --operator-id <operator-id> \
   --accounts .powerpacks/ingestion/accounts.json
@@ -218,9 +208,9 @@ uv run --project . python packs/ingestion/primitives/setup/setup.py index \
 
 Do not change the product behavior by default: when `setup.py run` sees linked
 sources, it should run the setup refresh path for those sources without asking
-about empty optional sources. If no sources are linked and no restored/existing
-local artifacts can be indexed, `setup.py run` can return the next link action
-as a first-source suggestion. Use phase commands to avoid repeating completed or
+about empty optional sources. If no sources are linked and no existing local
+artifacts can be indexed, `setup.py run` can return the next link action as a
+first-source suggestion. Use phase commands to avoid repeating completed or
 unrelated phases during debugging.
 
 For inspection without running refresh work, use local status:
@@ -232,40 +222,6 @@ uv run --project . python packs/ingestion/primitives/setup/setup.py status \
   --accounts .powerpacks/ingestion/accounts.json \
   --setup-ledger .powerpacks/setup/setup-run.json
 ```
-
-If the user has a local operator bootstrap bundle, inspect before applying:
-
-```bash
-uv run --project . python packs/ingestion/primitives/setup/setup.py inspect-bootstrap \
-  --bundle .powerpacks/operator-bootstrap/bundles/<operator>.operator-bootstrap.tar.gz
-```
-
-Only after explicit approval, apply with `--force` if overwrites are required:
-
-```bash
-uv run --project . python packs/ingestion/primitives/setup/setup.py apply-bootstrap \
-  --bundle .powerpacks/operator-bootstrap/bundles/<operator>.operator-bootstrap.tar.gz \
-  --operator-id <operator-id> \
-  --force
-```
-
-Manual exact-object GCS bootstrap pulls require explicit approval. The normal
-Powerset path is `$powerset setup`; use this only when someone gives an exact
-object URI:
-
-```bash
-uv run --project . python packs/ingestion/primitives/setup/setup.py pull-bootstrap \
-  --gcs-uri gs://bucket/path/operator-bootstrap.tar.gz \
-  --output .powerpacks/operator-bootstrap/bundles/<operator>.operator-bootstrap.tar.gz \
-  --allow-gcs-download
-```
-
-`pull-bootstrap` defaults to `--download-backend auto`: it uses `gcloud storage
-cp` when Google Cloud CLI is installed, and can fall back to the project
-`google-cloud-storage` dependency when run through `uv run --project .` with
-`--download-backend python`. Raw service-account JSON in
-`GOOGLE_APPLICATION_CREDENTIALS` is materialized to a temporary 0600 key and
-cleaned up after either backend.
 
 To link or add sources later:
 
@@ -358,8 +314,6 @@ The main thread owns these approvals. Never let workers approve them silently:
 - GCP Desktop OAuth app creation and OAuth test-user additions;
 - adding/authing each extra Gmail account;
 - WhatsApp QR/device linking;
-- manual exact-object GCS bootstrap download;
-- destructive bootstrap restore/overwrite (`--force`);
 - RapidAPI, Parallel, OpenAI/TLM, embedding, or other provider spend;
 - `$import-contacts` research/review/upload or any upload/prod write.
 
@@ -369,9 +323,9 @@ materialization may run without spend approval.
 
 ## Index phase
 
-If bootstrap restored `.powerpacks/search-index/local-search.duckdb` and a
-verified ledger/records, report local search ready. If records exist without
-DuckDB, run only local materialization:
+If `.powerpacks/search-index/local-search.duckdb` exists with verified local
+records, report local search ready. If records exist without DuckDB, run only
+local materialization:
 
 ```bash
 uv run --project . python scripts/build-local-duckdb-shim.py \

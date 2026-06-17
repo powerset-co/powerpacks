@@ -23,16 +23,12 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config/powerpacks-state-paths.json"
-DIRECTORY_CSV = Path(".powerpacks/network-import/directory.csv")
-BOOTSTRAP_BUNDLES_DIR = Path(".powerpacks/operator-bootstrap/bundles")
-BOOTSTRAP_DIRECTORY_MEMBER = ".powerpacks/network-import/directory.csv"
 VERTICAL_STAGE_PATHS = {
     "gmail": {
         "discovery": ".powerpacks/network-import/discover/gmail/manifest.json",
@@ -132,36 +128,6 @@ def csv_count(path: Path) -> int:
             return sum(1 for _ in csv.DictReader(handle))
     except Exception:
         return 0
-
-
-def directory_stats_from_rows(rows: list[dict[str, str]]) -> dict[str, int]:
-    return {
-        "rows": len(rows),
-        "linkedin_urls": sum(bool(str(row.get("linkedin_url") or "").strip()) for row in rows),
-    }
-
-
-def directory_stats(path: Path) -> dict[str, Any]:
-    payload: dict[str, Any] = {"path": str(path), "exists": path.exists(), "rows": 0, "linkedin_urls": 0}
-    if not path.exists() or not path.is_file():
-        return payload
-    try:
-        with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-            rows = list(csv.DictReader(handle))
-        payload.update(directory_stats_from_rows(rows))
-        payload["size_bytes"] = path.stat().st_size
-    except Exception as exc:
-        payload.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
-    return payload
-
-
-def directory_stats_from_member(data: bytes) -> dict[str, Any]:
-    try:
-        text = data.decode("utf-8-sig", errors="replace").splitlines()
-        rows = list(csv.DictReader(text))
-        return {**directory_stats_from_rows(rows), "size_bytes": len(data)}
-    except Exception as exc:
-        return {"rows": 0, "linkedin_urls": 0, "size_bytes": len(data), "error": f"{type(exc).__name__}: {exc}"}
 
 
 def rel(path: Path) -> str:
@@ -347,39 +313,6 @@ def run_json_command(cmd: list[str], *, cwd: Path, timeout: int = 90) -> dict[st
         except json.JSONDecodeError:
             continue
     return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "json": payload}
-
-
-def local_gcloud_status(canonical: Path) -> dict[str, Any]:
-    gcloud = shutil.which("gcloud")
-    if not gcloud:
-        return {"status": "missing", "message": "gcloud CLI not found; cannot inspect local auth state"}
-    auth = run_json_command([gcloud, "auth", "list", "--filter=status:ACTIVE", "--format=json"], cwd=canonical, timeout=20)
-    config = run_json_command([gcloud, "config", "list", "--format=json"], cwd=canonical, timeout=20)
-    accounts = auth.get("json") if isinstance(auth.get("json"), list) else []
-    # run_json_command is object-oriented; parse array output directly here.
-    if not accounts:
-        try:
-            parsed = json.loads(str(auth.get("stdout") or "[]"))
-            accounts = parsed if isinstance(parsed, list) else []
-        except Exception:
-            accounts = []
-    active_accounts = [
-        {
-            "account": item.get("account"),
-            "status": item.get("status"),
-        }
-        for item in accounts
-        if isinstance(item, dict)
-    ]
-    return {
-        "status": "ok" if auth.get("returncode") == 0 else "failed",
-        "active_accounts": active_accounts,
-        "project": ((config.get("json") or {}).get("core") or {}).get("project") if isinstance(config.get("json"), dict) else "",
-        "auth_returncode": auth.get("returncode"),
-        "config_returncode": config.get("returncode"),
-        "note": "This is local gcloud config only; it does not prove the latest GCS bootstrap was pulled.",
-        "error": (auth.get("stderr") or "")[-1000:] if auth.get("returncode") else "",
-    }
 
 
 def wacli_auth_status(canonical: Path, store: Path) -> dict[str, Any]:
@@ -711,136 +644,6 @@ def vertical_stage_health(canonical: Path) -> dict[str, Any]:
     }
 
 
-def bootstrap_registry_summary(canonical: Path) -> dict[str, Any]:
-    registry = canonical / ".powerpacks/operator-bootstrap/registry"
-    return {
-        "latest_sync": load_json(registry / "latest-sync.json"),
-        "summary": load_json(registry / "summary.json"),
-    }
-
-
-def inspect_bootstrap_bundle(bundle: Path) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "bundle": str(bundle),
-        "exists": bundle.exists(),
-        "size_bytes": bundle.stat().st_size if bundle.exists() else 0,
-        "mtime": newest_mtime(bundle),
-        "readable": False,
-        "directory_member": {"exists": False, "rows": 0, "linkedin_urls": 0},
-        "restore_manifest": {},
-    }
-    if not bundle.exists():
-        return payload
-    try:
-        with tarfile.open(bundle, "r:*") as archive:
-            names = set(archive.getnames())
-            payload["readable"] = True
-            payload["member_count"] = len(names)
-            payload["has_restore_manifest"] = ".powerpacks/operator-bootstrap/restore-manifest.json" in names
-            payload["has_discovery_artifacts"] = any(name.startswith(".powerpacks/network-import/discover/") for name in names)
-            payload["has_import_artifacts"] = any(name.startswith(".powerpacks/network-import/import/") for name in names)
-            payload["has_profile_cache"] = any(name == ".powerpacks/network-import/profile_cache_v2" or name.startswith(".powerpacks/network-import/profile_cache_v2/") for name in names)
-            payload["has_merged_people"] = ".powerpacks/network-import/merged/people.csv" in names
-            if payload["has_restore_manifest"]:
-                member = archive.extractfile(".powerpacks/operator-bootstrap/restore-manifest.json")
-                if member:
-                    restore = json.loads(member.read().decode("utf-8"))
-                    payload["restore_manifest"] = {
-                        "operator": restore.get("operator"),
-                        "operator_id": restore.get("operator_id"),
-                        "bundle_mode": restore.get("bundle_mode"),
-                        "generated_at": restore.get("generated_at"),
-                        "normal_pipeline_outputs": restore.get("normal_pipeline_outputs") or [],
-                    }
-            if BOOTSTRAP_DIRECTORY_MEMBER in names:
-                member = archive.extractfile(BOOTSTRAP_DIRECTORY_MEMBER)
-                data = member.read() if member else b""
-                payload["directory_member"] = {
-                    "exists": True,
-                    **directory_stats_from_member(data),
-                    "member": BOOTSTRAP_DIRECTORY_MEMBER,
-                }
-    except Exception as exc:
-        payload.update({"readable": False, "error": f"{type(exc).__name__}: {exc}"})
-    return payload
-
-
-def extract_bootstrap_directory(bundle: Path, target: Path, *, apply: bool, backup: bool) -> dict[str, Any]:
-    source_stats = {"exists": False, "rows": 0, "linkedin_urls": 0}
-    try:
-        with tarfile.open(bundle, "r:*") as archive:
-            names = set(archive.getnames())
-            if BOOTSTRAP_DIRECTORY_MEMBER not in names:
-                return {"action": "skipped", "reason": "bundle_has_no_directory_csv", "source_stats": source_stats}
-            member = archive.extractfile(BOOTSTRAP_DIRECTORY_MEMBER)
-            data = member.read() if member else b""
-            source_stats = {"exists": True, **directory_stats_from_member(data)}
-    except Exception as exc:
-        return {"action": "failed", "reason": f"{type(exc).__name__}: {exc}", "source_stats": source_stats}
-
-    target_stats = directory_stats(target)
-    result: dict[str, Any] = {
-        "bundle": str(bundle),
-        "target": str(target),
-        "source_stats": source_stats,
-        "target_stats": target_stats,
-    }
-    if int(source_stats.get("linkedin_urls") or 0) <= 0:
-        return {**result, "action": "skipped", "reason": "bundle_directory_has_no_linkedin_urls"}
-    if int(target_stats.get("linkedin_urls") or 0) >= int(source_stats.get("linkedin_urls") or 0):
-        return {**result, "action": "kept_target", "reason": "target_has_equal_or_more_linkedin_urls"}
-    backup_path = ""
-    if apply:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists() and backup:
-            backup_path = str(target.with_name(f"{target.name}.backup-{stamp()}"))
-            shutil.copy2(target, backup_path)
-        with tarfile.open(bundle, "r:*") as archive:
-            member = archive.extractfile(BOOTSTRAP_DIRECTORY_MEMBER)
-            data = member.read() if member else b""
-        target.write_bytes(data)
-    return {
-        **result,
-        "action": "copied" if apply else "would_copy",
-        "reason": "bundle_directory_has_more_linkedin_urls",
-        "backup": backup_path,
-        "target_after_stats": directory_stats(target) if apply else target_stats,
-    }
-
-
-def operator_bootstrap_health(canonical: Path, *, apply: bool, backup: bool) -> dict[str, Any]:
-    bundles = sorted((canonical / BOOTSTRAP_BUNDLES_DIR).glob("*.operator-bootstrap.tar.gz"))
-    bundle_reports = [inspect_bootstrap_bundle(bundle) for bundle in bundles]
-    canonical_directory = directory_stats(canonical / DIRECTORY_CSV)
-    best = max(
-        bundle_reports,
-        key=lambda item: int(((item.get("directory_member") or {}).get("linkedin_urls") or 0)),
-        default=None,
-    )
-    directory_repair = {"action": "skipped", "reason": "no_bootstrap_bundle_with_directory_csv"}
-    if best and int(((best.get("directory_member") or {}).get("linkedin_urls") or 0)) > 0:
-        directory_repair = extract_bootstrap_directory(
-            Path(str(best.get("bundle"))),
-            canonical / DIRECTORY_CSV,
-            apply=apply,
-            backup=backup,
-        )
-    return {
-        "status": "ok",
-        "registry": bootstrap_registry_summary(canonical),
-        "bundle_count": len(bundle_reports),
-        "bundles": bundle_reports,
-        "canonical_directory": canonical_directory,
-        "best_directory_bundle": best,
-        "directory_repair": directory_repair,
-        "gcloud": local_gcloud_status(canonical),
-        "notes": [
-            "The fixer does not pull from GCS. It validates and repairs from local bootstrap bundles only.",
-            "If the best local bundle is missing or stale, run $powerset setup to pull the latest operator bootstrap, then rerun $fix-powerpacks.",
-        ],
-    }
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(CONFIG))
@@ -882,11 +685,7 @@ def main() -> int:
         status = "needs_attention"
         issues.append(str(wacli_repair.get("root_cause") or "wacli store can be repaired"))
     checks = linked_source_checks(canonical, config)
-    bootstrap = operator_bootstrap_health(canonical, apply=args.apply, backup=args.backup)
     stages = vertical_stage_health(canonical)
-    if (bootstrap.get("directory_repair") or {}).get("action") in {"would_copy"}:
-        status = "needs_attention"
-        issues.append("bootstrap directory.csv has more LinkedIn mappings than canonical directory.csv")
     for source, item in (checks.get("sources") or {}).items():
 
         if isinstance(item, dict) and item.get("ok") is False:
@@ -913,7 +712,6 @@ def main() -> int:
         "gmail_accounts_repair": gmail_repair,
         "wacli_store_repair": wacli_repair,
         "linked_source_checks": checks,
-        "operator_bootstrap": bootstrap,
         "source_stage_health": stages,
         "quarantine": quarantine,
         "next": "cd " + str(canonical),

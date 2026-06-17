@@ -70,7 +70,7 @@ uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/
 The bridge maintains `.powerpacks/network-import/directory.csv`, a reusable
 checkpoint keyed by `source_key` with `source`, `email`, `phone`, `name`,
 `linkedin_url`, `public_identifier`, confidence, evidence, and source artifact
-metadata. Operator bootstrap restores this file directly from the bundle.
+metadata. Existing local restore flows may populate this file before discovery.
 Gmail/provider stages may write their own intermediate
 `linkedin_resolutions.csv` files, but only the final combined stage output is
 folded back into the canonical `directory.csv`. Gmail then applies matching

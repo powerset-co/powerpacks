@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stdlib-only setup orchestration primitive for ingestion bootstrap safety."""
+"""Stdlib-only setup orchestration primitive for local ingestion setup."""
 from __future__ import annotations
 
 import argparse
@@ -7,16 +7,13 @@ import csv
 import hashlib
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
 import sys
-import tarfile
-import tempfile
 import threading
 from datetime import datetime, timedelta, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 ROOT = Path.cwd()
@@ -28,49 +25,11 @@ EMPTY_LOCAL_SEARCH_DUCKDB_MAX_BYTES = int(os.environ.get('POWERPACKS_SETUP_EMPTY
 SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/discover/ledger.setup.json')
 SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
 SETUP_SOURCE_CHANNELS = ['gmail', 'linkedin_csv', 'messages', 'twitter']
-BOOTSTRAP_DIRECTORY_RESTORE_PATH = '.powerpacks/network-import/directory.csv'
-REQUIRED_PRIVACY = [
-    'raw_msgvault_db_copied', 'raw_mail_copied', 'message_bodies_copied',
-    'attachments_copied', 'secrets_copied',
-]
-PRIVACY_ALIASES = {
-    'raw_msgvault_db_copied': ['raw_msgvault_db_copied', 'raw_msgvault_db'],
-    'raw_mail_copied': ['raw_mail_copied', 'raw_mail'],
-    'message_bodies_copied': ['message_bodies_copied', 'message_bodies'],
-    'attachments_copied': ['attachments_copied', 'attachments'],
-    'secrets_copied': ['secrets_copied', 'secrets'],
-}
-ALLOWED_ROOTS = [
-    PurePosixPath('.powerpacks/search-index'),
-    PurePosixPath('.powerpacks/network-import/directory.csv'),
-    PurePosixPath('.powerpacks/network-import/discover'),
-    PurePosixPath('.powerpacks/network-import/final'),
-    PurePosixPath('.powerpacks/network-import/merged'),
-    PurePosixPath('.powerpacks/network-import/profile_cache_v2'),
-    PurePosixPath('.powerpacks/operator-bootstrap/restore-manifest.json'),
-]
-SEARCH_BOOTSTRAP_PREFIX_MEMBERS = [
-    PurePosixPath('.powerpacks/search-index/records'),
-    PurePosixPath('.powerpacks/search-index/company'),
-    PurePosixPath('.powerpacks/search-index/education'),
-    PurePosixPath('.powerpacks/search-index/location'),
-    PurePosixPath('.powerpacks/search-index/profiles'),
-    PurePosixPath('.powerpacks/search-index/roles'),
-    PurePosixPath('.powerpacks/search-index/summaries'),
-    PurePosixPath('.powerpacks/search-index/unified'),
-]
-SEARCH_BOOTSTRAP_EXACT_MEMBERS = {
-    PurePosixPath('.powerpacks/search-index/ledger.json'),
-    PurePosixPath('.powerpacks/search-index/manifest.json'),
-    PurePosixPath('.powerpacks/search-index/stats/bootstrap_from_aleph.json'),
-    PurePosixPath('.powerpacks/search-index/vectors/checkpoint.json'),
-}
+SETUP_PHASES = ['link', 'import', 'index']
 APPROVALS = [
     ('browser_auth', 'Browser/Gmail OAuth authorization requires user approval.'),
     ('gcp_console_oauth_app', 'GCP Console/OAuth app automation requires user approval.'),
     ('oauth_test_users', 'OAuth test-user changes require user approval.'),
-    ('gcs_download', 'GCS bootstrap download requires --allow-gcs-download and user approval.'),
-    ('destructive_restore_overwrite', 'Destructive bootstrap overwrite requires --force and user approval.'),
     ('provider_spend', 'RapidAPI/Parallel/OpenAI spend requires explicit allow flags.'),
     ('uploads_research', 'Uploads/research actions require approval.'),
     ('provider_allow_flags', 'Provider allow flags require approval.'),
@@ -179,10 +138,6 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def load_setup_ledger(path: Path = SETUP_LEDGER) -> dict[str, Any]:
     if path.exists():
         try:
@@ -192,7 +147,7 @@ def load_setup_ledger(path: Path = SETUP_LEDGER) -> dict[str, Any]:
     return {
         'schema_version': 1,
         'status': 'pending',
-        'phases': {phase: {'status': 'pending'} for phase in ['bootstrap', 'link', 'import', 'index']},
+        'phases': {phase: {'status': 'pending'} for phase in SETUP_PHASES},
         'approval_requirements': [],
     }
 
@@ -220,525 +175,6 @@ def age_hours(value: Any) -> float | None:
     if parsed is None:
         return None
     return (datetime.now(timezone.utc) - parsed).total_seconds() / 3600
-
-
-def safe_member_name(name: str) -> PurePosixPath:
-    pp = PurePosixPath(name)
-    if pp.is_absolute() or any(part in ('..', '') for part in pp.parts):
-        raise ValueError(f'unsafe tar member path: {name}')
-    return pp
-
-
-def validate_tar_members(tf: tarfile.TarFile) -> list[str]:
-    names = []
-    for m in tf.getmembers():
-        safe_member_name(m.name)
-        if m.issym() or m.islnk() or m.isdev():
-            raise ValueError(f'unsafe tar member type: {m.name}')
-        names.append(m.name)
-    return names
-
-
-def extract_member_bytes(tf: tarfile.TarFile, name: str) -> bytes:
-    f = tf.extractfile(name)
-    if f is None:
-        raise ValueError(f'missing file content: {name}')
-    return f.read()
-
-
-def find_manifests(tf: tarfile.TarFile, names: list[str]) -> tuple[str, str]:
-    op = [n for n in names if len(PurePosixPath(n).parts) == 2 and PurePosixPath(n).name == 'manifest.json' and PurePosixPath(n).parts[0] != '.powerpacks']
-    restore = '.powerpacks/operator-bootstrap/restore-manifest.json'
-    if not op:
-        raise ValueError('operator manifest not found')
-    if restore not in names:
-        raise ValueError('restore manifest not found')
-    return sorted(op)[0], restore
-
-
-def privacy_flags(manifest: dict[str, Any]) -> tuple[dict[str, bool | None], list[str], list[str]]:
-    containers = []
-    if isinstance(manifest.get('privacy'), dict):
-        containers.append(manifest['privacy'])
-    sync = ((manifest.get('stages') or {}).get('sync') or {}) if isinstance(manifest.get('stages'), dict) else {}
-    if isinstance(sync.get('included'), dict):
-        containers.append(sync['included'])
-    found: dict[str, bool | None] = {}
-    missing, unsafe = [], []
-    for flag in REQUIRED_PRIVACY:
-        val: Any = None
-        present = False
-        for container in containers:
-            for key in PRIVACY_ALIASES[flag]:
-                if key in container:
-                    val = container[key]
-                    present = True
-                    break
-            if present:
-                break
-        found[flag] = val if present else None
-        if not present:
-            missing.append(flag)
-        elif val is not False:
-            unsafe.append(flag)
-    return found, missing, unsafe
-
-
-def allowed_restore_path(pp: PurePosixPath) -> bool:
-    for root in ALLOWED_ROOTS:
-        if pp == root or str(pp).startswith(str(root) + '/'):
-            return True
-    return False
-
-
-def classify_restore(paths: list[str]) -> dict[str, list[str]]:
-    out = {'allowed': [], 'blocked': []}
-    for p in sorted(set(paths)):
-        try:
-            pp = safe_member_name(p)
-        except ValueError:
-            out['blocked'].append(p)
-            continue
-        (out['allowed'] if allowed_restore_path(pp) else out['blocked']).append(p)
-    return out
-
-
-def set_problem(payload: dict[str, Any], status: str, error: Any, *, reason: bool = False) -> None:
-    payload['status'] = status
-    if reason:
-        payload['reason'] = error
-    else:
-        payload.setdefault('errors', []).append(error)
-
-
-def inspect_bundle(bundle: Path, allow_legacy: bool = False) -> dict[str, Any]:
-    payload: dict[str, Any] = {'status': 'ok', 'bundle': str(bundle), 'bundle_sha256': sha256_file(bundle)}
-    with tarfile.open(bundle, 'r:*') as tf:
-        names = validate_tar_members(tf)
-        op_name, restore_name = find_manifests(tf, names)
-        op_bytes = extract_member_bytes(tf, op_name)
-        restore_bytes = extract_member_bytes(tf, restore_name)
-        manifest = json.loads(op_bytes.decode('utf-8'))
-        restore = json.loads(restore_bytes.decode('utf-8'))
-    payload.update({
-        'operator_manifest_member': op_name,
-        'restore_manifest_member': restore_name,
-        'operator_manifest_sha256': sha256_bytes(op_bytes),
-        'restore_manifest_sha256': sha256_bytes(restore_bytes),
-        'operator_id': manifest.get('operator_id'),
-        'operator': manifest.get('operator'),
-        'schema_version': manifest.get('schema_version'),
-    })
-    if manifest.get('schema_version') not in (1,):
-        set_problem(payload, 'needs_user_action', 'unsupported schema_version', reason=True)
-    if not manifest.get('operator_id') or restore.get('operator_id') != manifest.get('operator_id'):
-        set_problem(payload, 'needs_user_action', 'operator_id mismatch or missing')
-    flags, missing, unsafe = privacy_flags(manifest)
-    payload['privacy_flags'] = flags
-    if unsafe:
-        set_problem(payload, 'rejected', {'unsafe_privacy_flags': unsafe})
-    if missing and not allow_legacy:
-        payload['status'] = 'needs_user_action'
-        payload['legacy_privacy_override_required'] = True
-        payload['missing_privacy_flags'] = missing
-    restore_paths = list(restore.get('normal_pipeline_outputs') or []) + ['.powerpacks/operator-bootstrap/restore-manifest.json']
-    payload['restore_root_classification'] = classify_restore(restore_paths)
-    payload['would_restore'] = payload['restore_root_classification']['allowed']
-    payload['would_overwrite'] = [p for p in payload['would_restore'] if (ROOT / p).exists()]
-    payload['manifest'] = {'operator': manifest.get('operator'), 'operator_id': manifest.get('operator_id')}
-    return payload
-
-
-def run_inspect(args: argparse.Namespace) -> int:
-    try:
-        payload = inspect_bundle(Path(args.bundle), args.allow_legacy_bootstrap_manifest)
-    except Exception as exc:
-        payload = {'status': 'rejected', 'error': str(exc)}
-    emit(payload)
-    return 0 if payload.get('status') == 'ok' else 2
-
-
-def redacted_error(text: str) -> str:
-    return re.sub(r'/(?:var/tmp|tmp|[^\s]*)/[^\s]*', '<redacted-path>', text or '')
-
-
-def parse_exact_gcs_uri(uri: str) -> tuple[str, str]:
-    if not uri.startswith('gs://') or uri.endswith('/') or '*' in uri:
-        raise ValueError('gcs-uri must be an exact object gs:// URI')
-    rest = uri[5:]
-    bucket, sep, object_name = rest.partition('/')
-    if not bucket or not sep or not object_name:
-        raise ValueError('gcs-uri must be an exact object gs:// URI')
-    return bucket, object_name
-
-
-def slugify(value: Any, fallback: str = 'operator') -> str:
-    return re.sub(r'[^A-Za-z0-9._-]+', '-', str(value or '')).strip('-') or fallback
-
-
-def materialize_raw_google_credentials(env: dict[str, str], *, needs_config: bool) -> tuple[dict[str, str], Path | None, Path | None]:
-    tmp_key = None
-    cfg = None
-    gac = env.get('GOOGLE_APPLICATION_CREDENTIALS', '').strip()
-    if gac.startswith('{'):
-        tmp_dir = ROOT / '.powerpacks/setup/tmp'
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        fd, key_path = tempfile.mkstemp(prefix='gcloud-key-', suffix='.json', dir=str(tmp_dir))
-        os.close(fd)
-        tmp_key = Path(key_path)
-        tmp_key.write_text(gac, encoding='utf-8')
-        tmp_key.chmod(0o600)
-        env['GOOGLE_APPLICATION_CREDENTIALS'] = str(tmp_key)
-        if needs_config:
-            cfg = Path(tempfile.mkdtemp(prefix='gcloud-config-', dir=str(tmp_dir)))
-            env['CLOUDSDK_CONFIG'] = str(cfg)
-    return env, tmp_key, cfg
-
-
-def run_gcloud_download(gcs_uri: str, out: Path, env: dict[str, str]) -> tuple[int, dict[str, Any]]:
-    cp = subprocess.run(
-        ['gcloud', 'storage', 'cp', gcs_uri, str(out)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if cp.returncode != 0:
-        return 2, {
-            'status': 'needs_user_action',
-            'reason': 'gcloud storage cp failed',
-            'guidance': 'Run gcloud auth login --no-launch-browser, install Google Cloud CLI, or retry with --download-backend python.',
-            'stderr': redacted_error(cp.stderr),
-        }
-    return 0, {'status': 'ok', 'download_backend': 'gcloud'}
-
-
-def run_python_gcs_download(gcs_uri: str, out: Path, env: dict[str, str]) -> tuple[int, dict[str, Any]]:
-    try:
-        from google.cloud import storage  # type: ignore
-    except Exception as exc:
-        return 2, {
-            'status': 'needs_user_action',
-            'reason': 'google-cloud-storage is unavailable',
-            'guidance': 'Run through uv (`uv run --project . python ...`) so project dependencies are available, or use --download-backend gcloud.',
-            'error': str(exc),
-        }
-    bucket_name, object_name = parse_exact_gcs_uri(gcs_uri)
-    try:
-        client = storage.Client()
-        client.bucket(bucket_name).blob(object_name).download_to_filename(str(out))
-    except Exception as exc:
-        return 2, {
-            'status': 'needs_user_action',
-            'reason': 'python google-cloud-storage download failed',
-            'guidance': 'Verify ADC/service-account credentials and exact-object permissions, or retry with --download-backend gcloud.',
-            'error': redacted_error(str(exc)),
-        }
-    return 0, {'status': 'ok', 'download_backend': 'python-google-cloud-storage'}
-
-
-def download_gcs_object(gcs_uri: str, output: Path, *, download_backend: str = 'auto') -> tuple[int, dict[str, Any]]:
-    try:
-        parse_exact_gcs_uri(str(gcs_uri))
-    except ValueError:
-        return 2, {'status': 'rejected', 'reason': 'gcs-uri must be an exact object gs:// URI'}
-    output.parent.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    tmp_key = None
-    cfg = None
-    try:
-        backend = download_backend
-        use_gcloud = backend == 'gcloud' or (backend == 'auto' and shutil.which('gcloud'))
-        env, tmp_key, cfg = materialize_raw_google_credentials(env, needs_config=use_gcloud)
-        if use_gcloud and tmp_key:
-            auth = subprocess.run(
-                ['gcloud', 'auth', 'activate-service-account', '--key-file', str(tmp_key)],
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if auth.returncode != 0:
-                if backend == 'auto':
-                    code, payload = run_python_gcs_download(gcs_uri, output, env)
-                    payload['gcloud_fallback_reason'] = 'gcloud service-account activation failed'
-                    payload['gcloud_stderr'] = redacted_error(auth.stderr)
-                    if code == 0:
-                        payload.update({'output': str(output), 'bundle_sha256': sha256_file(output) if output.exists() else ''})
-                    return code, payload
-                return 2, {
-                    'status': 'needs_user_action',
-                    'reason': 'gcloud service-account activation failed',
-                    'guidance': 'Run gcloud auth login --no-launch-browser or provide a valid service account.',
-                    'stderr': redacted_error(auth.stderr),
-                }
-        if use_gcloud:
-            code, payload = run_gcloud_download(gcs_uri, output, env)
-            if code != 0 and backend == 'auto':
-                gcloud_payload = payload
-                code, payload = run_python_gcs_download(gcs_uri, output, env)
-                payload['gcloud_fallback_reason'] = gcloud_payload.get('reason')
-                if gcloud_payload.get('stderr'):
-                    payload['gcloud_stderr'] = gcloud_payload.get('stderr')
-        elif backend in ('auto', 'python'):
-            code, payload = run_python_gcs_download(gcs_uri, output, env)
-        else:
-            code, payload = 2, {'status': 'rejected', 'reason': f'unsupported download backend: {backend}'}
-        if code == 0:
-            payload.update({'output': str(output), 'bundle_sha256': sha256_file(output) if output.exists() else ''})
-        return code, payload
-    finally:
-        if tmp_key:
-            try:
-                tmp_key.unlink()
-            except FileNotFoundError:
-                pass
-        if cfg:
-            shutil.rmtree(cfg, ignore_errors=True)
-
-
-def run_pull(args: argparse.Namespace) -> int:
-    if not args.allow_gcs_download:
-        emit({
-            'status': 'needs_user_action',
-            'reason': 'GCS download requires --allow-gcs-download',
-            'requires_approval': [{'id': 'gcs_download'}],
-        })
-        return 2
-    code, payload = download_gcs_object(
-        str(args.gcs_uri),
-        Path(args.output),
-        download_backend=getattr(args, 'download_backend', 'auto'),
-    )
-    emit(payload)
-    return code
-
-
-def copy_replace(src: Path, dst: Path, force: bool, backup_root: Path, overwritten: list[str]) -> None:
-    if dst.exists():
-        if not force:
-            raise FileExistsError(f'target exists: {dst}')
-        rel = dst.relative_to(ROOT)
-        backup = backup_root / rel
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        if dst.is_dir():
-            if backup.exists():
-                shutil.rmtree(backup)
-            shutil.copytree(dst, backup)
-            shutil.rmtree(dst)
-        else:
-            shutil.copy2(dst, backup)
-            dst.unlink()
-        overwritten.append(str(rel))
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if src.is_dir():
-        shutil.copytree(src, dst)
-    else:
-        shutil.copy2(src, dst)
-
-
-def directory_linkedin_stats(path: Path) -> dict[str, int]:
-    if not path.exists() or not path.is_file():
-        return {'rows': 0, 'linkedin_urls': 0}
-    rows = 0
-    linkedin_urls = 0
-    try:
-        with path.open(newline='', encoding='utf-8-sig', errors='replace') as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
-                rows += 1
-                if str(row.get('linkedin_url') or '').strip():
-                    linkedin_urls += 1
-    except Exception:
-        return {'rows': 0, 'linkedin_urls': 0}
-    return {'rows': rows, 'linkedin_urls': linkedin_urls}
-
-
-def copy_bootstrap_directory_if_better(src: Path, dst: Path, backup_root: Path, overwritten: list[str]) -> dict[str, Any]:
-    src_stats = directory_linkedin_stats(src)
-    dst_stats = directory_linkedin_stats(dst)
-    payload: dict[str, Any] = {
-        'path': BOOTSTRAP_DIRECTORY_RESTORE_PATH,
-        'source_stats': src_stats,
-        'target_stats': dst_stats,
-    }
-    if src_stats['linkedin_urls'] <= 0:
-        return {**payload, 'status': 'skipped', 'reason': 'bootstrap_directory_has_no_linkedin_urls'}
-    if dst.exists() and dst_stats['linkedin_urls'] >= src_stats['linkedin_urls']:
-        return {**payload, 'status': 'kept_target', 'reason': 'target_has_equal_or_more_linkedin_urls'}
-    if dst.exists():
-        rel = dst.relative_to(ROOT)
-        backup = backup_root / rel
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(dst, backup)
-        dst.unlink()
-        if str(rel) not in overwritten:
-            overwritten.append(str(rel))
-        payload['backup'] = str(backup)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
-    return {
-        **payload,
-        'status': 'restored',
-        'reason': 'bootstrap_directory_has_more_linkedin_urls',
-        'target_after_stats': directory_linkedin_stats(dst),
-    }
-
-
-def mark_restored_ledgers(paths: list[Path], operator_id: str) -> list[str]:
-    touched = []
-    for p in paths:
-        if p.name.endswith('.json') and p.exists():
-            try:
-                data = read_json(p)
-                if isinstance(data, dict) and ('status' in data or 'steps' in data):
-                    data['status'] = 'restored'
-                    data['restored_from_operator_bootstrap'] = True
-                    data['restored_operator_id'] = operator_id
-                    if isinstance(data.get('steps'), list):
-                        for s in data['steps']:
-                            if isinstance(s, dict):
-                                s['status'] = 'restored'
-                    elif isinstance(data.get('steps'), dict):
-                        for s in data['steps'].values():
-                            if isinstance(s, dict):
-                                s['status'] = 'restored'
-                    write_json(p, data)
-                    touched.append(str(p.relative_to(ROOT)))
-            except Exception:
-                pass
-    return touched
-
-
-def materialize_bootstrap_directory() -> dict[str, Any]:
-    directory_csv = ROOT / '.powerpacks/network-import/directory.csv'
-    if directory_csv.exists():
-        return {'status': 'ok', 'directory_csv': str(directory_csv), 'source': 'restored_directory_csv'}
-    return {'status': 'skipped', 'reason': 'no restored directory.csv'}
-
-
-def restore_candidates(wanted: set[str]) -> list[str]:
-    candidates: list[str] = []
-    restore_roots = [
-        '.powerpacks/network-import/directory.csv',
-        '.powerpacks/search-index',
-        '.powerpacks/network-import/merged',
-        '.powerpacks/network-import/profile_cache_v2',
-    ]
-    for root_rel in restore_roots:
-        if any(p == root_rel or p.startswith(root_rel + '/') for p in wanted):
-            candidates.append(root_rel)
-    if '.powerpacks/operator-bootstrap/restore-manifest.json' in wanted:
-        candidates.append('.powerpacks/operator-bootstrap/restore-manifest.json')
-    return list(dict.fromkeys(candidates))
-
-
-def restored_ledger_paths(restored: list[str]) -> list[Path]:
-    paths = [ROOT / rel / 'ledger.json' for rel in restored]
-    discover = ROOT / '.powerpacks/network-import/discover'
-    if discover.exists():
-        paths.extend(discover.glob('**/*.json'))
-    return paths
-
-
-def apply_bundle(args: argparse.Namespace) -> dict[str, Any]:
-    bundle = Path(args.bundle)
-    inspect = inspect_bundle(bundle, args.allow_legacy_bootstrap_manifest)
-    if inspect.get('status') not in ('ok',):
-        return {'status': 'rejected', 'inspect': inspect}
-    if inspect.get('operator_id') != args.operator_id:
-        return {'status': 'rejected', 'reason': 'operator_id mismatch', 'inspect': inspect}
-    if args.inspect_file:
-        prior = read_json(Path(args.inspect_file))
-        for key in ['bundle_sha256', 'operator_manifest_sha256', 'restore_manifest_sha256']:
-            if prior.get(key) != inspect.get(key):
-                return {'status': 'rejected', 'reason': f'inspect/apply hash mismatch: {key}', 'inspect': inspect}
-    ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    backup_root = ROOT / '.powerpacks/operator-bootstrap/backups' / ts
-    overwritten: list[str] = []
-    restored: list[str] = []
-    directory_restore: dict[str, Any] = {'status': 'not_attempted'}
-    with tempfile.TemporaryDirectory(prefix='setup-restore-') as td:
-        tmp = Path(td)
-        with tarfile.open(bundle, 'r:*') as tf:
-            validate_tar_members(tf)
-            try:
-                tf.extractall(tmp, filter='data')
-            except TypeError:
-                tf.extractall(tmp)
-        # manual post-extract destination containment check
-        for p in tmp.rglob('*'):
-            p.resolve().relative_to(tmp.resolve())
-        # Copy only restore-manifest allowlisted roots and referenced child ledgers/outputs.
-        wanted = set(inspect.get('would_restore') or [])
-        for rel in restore_candidates(wanted):
-            src = tmp / rel
-            if src.exists():
-                if rel == BOOTSTRAP_DIRECTORY_RESTORE_PATH and not bool(args.force):
-                    directory_restore = copy_bootstrap_directory_if_better(src, ROOT / rel, backup_root, overwritten)
-                    if (ROOT / rel).exists():
-                        restored.append(rel)
-                    continue
-                try:
-                    copy_replace(src, ROOT / rel, bool(args.force), backup_root, overwritten)
-                except FileExistsError as exc:
-                    return {
-                        'status': 'rejected',
-                        'reason': str(exc),
-                        'requires_approval': [{'id': 'destructive_restore_overwrite'}],
-                        'inspect': inspect,
-                        'directory_restore': directory_restore,
-                    }
-                restored.append(rel)
-                if rel == BOOTSTRAP_DIRECTORY_RESTORE_PATH:
-                    directory_restore = {
-                        'status': 'restored',
-                        'path': rel,
-                        'source_stats': directory_linkedin_stats(src),
-                        'target_after_stats': directory_linkedin_stats(ROOT / rel),
-                        'reason': 'force_restore',
-                    }
-    touched = mark_restored_ledgers(restored_ledger_paths(restored), args.operator_id)
-    directory_bootstrap = materialize_bootstrap_directory()
-    op_slug = re.sub(r'[^A-Za-z0-9._-]+', '-', str(inspect.get('operator') or args.operator_id)).strip('-') or 'operator'
-    provenance = {
-        'applied_at': now(),
-        'operator_id': args.operator_id,
-        'bundle': str(bundle),
-        'bundle_sha256': inspect['bundle_sha256'],
-        'operator_manifest_sha256': inspect['operator_manifest_sha256'],
-        'restore_manifest_sha256': inspect['restore_manifest_sha256'],
-        'restored': restored,
-        'overwritten': overwritten,
-        'directory_bootstrap': directory_bootstrap,
-        'directory_restore': directory_restore,
-    }
-    write_json(ROOT / '.powerpacks/operator-bootstrap/applied' / op_slug / 'manifest.json', provenance)
-    ledger = load_setup_ledger(Path(args.setup_ledger))
-    ledger['operator_id'] = args.operator_id
-    ledger['phases']['bootstrap'] = {
-        'status': 'restored',
-        'bundle_sha256': inspect['bundle_sha256'],
-        'restored': restored,
-        'directory_bootstrap': directory_bootstrap,
-        'provenance': str(Path('.powerpacks/operator-bootstrap/applied') / op_slug / 'manifest.json'),
-    }
-    save_setup_ledger(ledger, Path(args.setup_ledger))
-    return {
-        'status': 'ok',
-        **provenance,
-        'backup_root': str(backup_root) if overwritten else '',
-        'restored_ledgers': touched,
-    }
-
-
-def run_apply(args: argparse.Namespace) -> int:
-    try:
-        payload = apply_bundle(args)
-    except Exception as exc:
-        payload = {'status': 'rejected', 'error': str(exc)}
-    emit(payload)
-    return 0 if payload.get('status') == 'ok' else 2
 
 
 def empty_account_summary_channel() -> dict[str, Any]:
@@ -1098,64 +534,6 @@ def local_search_duckdb_missing_or_tiny() -> bool:
         return True
 
 
-def should_restore_bootstrap_search_records() -> bool:
-    return search_records_missing_or_empty() and local_search_duckdb_missing_or_tiny()
-
-
-def allowed_search_bootstrap_member(pp: PurePosixPath) -> bool:
-    if pp in SEARCH_BOOTSTRAP_EXACT_MEMBERS:
-        return True
-    for root in SEARCH_BOOTSTRAP_PREFIX_MEMBERS:
-        if pp == root or str(pp).startswith(str(root) + '/'):
-            return True
-    return False
-
-
-def restore_search_index_from_bootstrap(bundle: Path, operator_id: str) -> dict[str, Any]:
-    inspected = inspect_bundle(bundle)
-    if inspected.get('status') != 'ok':
-        return {'status': 'rejected', 'reason': 'bootstrap bundle is not restorable', 'inspect': inspected}
-    if inspected.get('operator_id') != operator_id:
-        return {'status': 'rejected', 'reason': 'operator_id mismatch', 'inspect': inspected}
-
-    restored: list[str] = []
-    with tarfile.open(bundle, 'r:*') as tf:
-        members = {member.name: member for member in tf.getmembers()}
-        validate_tar_members(tf)
-        for name in sorted(members):
-            member = members[name]
-            pp = safe_member_name(member.name)
-            if not allowed_search_bootstrap_member(pp):
-                continue
-            if member.isdir():
-                continue
-            src = tf.extractfile(member)
-            if src is None:
-                continue
-            dst = ROOT / str(pp)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            with dst.open('wb') as out:
-                shutil.copyfileobj(src, out)
-            restored.append(str(pp))
-
-    summary = search_record_summary()
-    if not summary.get('nonempty_record_files'):
-        return {
-            'status': 'skipped',
-            'reason': 'bootstrap_search_records_empty',
-            'bundle': str(bundle),
-            'restored': restored,
-            'record_summary': summary,
-        }
-    return {
-        'status': 'restored',
-        'bundle': str(bundle),
-        'bundle_sha256': inspected.get('bundle_sha256', ''),
-        'restored': restored,
-        'record_summary': summary,
-    }
-
-
 def run_processing_dry_run(operator_id: str, args: argparse.Namespace | None = None) -> dict[str, Any]:
     code, payload, stderr = run_json_command(processing_dry_run_command_args(operator_id, args), timeout=60 * 60)
     if code != 0:
@@ -1189,51 +567,6 @@ def run_processing_index(args: argparse.Namespace, ledger: dict[str, Any], ledge
     people = ROOT / '.powerpacks/network-import/merged/people.csv'
     idx = indexing_readiness(args.operator_id)
     account_state = accounts_summary(Path(args.accounts))
-    if should_restore_bootstrap_search_records():
-        bundle = matching_bootstrap_bundle(args.operator_id)
-        if bundle:
-            restore_payload = restore_search_index_from_bootstrap(bundle, args.operator_id)
-            if restore_payload.get('status') == 'restored':
-                code, duckdb_payload, duckdb_stderr = run_json_command(build_local_duckdb_shim_command_args(args.operator_id), timeout=60 * 60)
-                if code != 0:
-                    payload = {
-                        'status': 'failed',
-                        'step': 'local_duckdb',
-                        'source': 'operator_bootstrap',
-                        'bootstrap_records_restore': restore_payload,
-                        'local_duckdb': duckdb_payload,
-                        'error': tail(duckdb_stderr) or duckdb_payload,
-                    }
-                    ledger.setdefault('phases', {})['index'] = payload
-                    ledger['status'] = 'failed'
-                    save_setup_ledger(ledger, ledger_path)
-                    return payload, 1
-                payload = {
-                    'status': 'ready',
-                    'source': 'operator_bootstrap',
-                    'people_csv': '.powerpacks/network-import/merged/people.csv' if people.exists() else '',
-                    'people_sha256': sha256_file(people) if people.exists() else '',
-                    'bootstrap_records_restore': restore_payload,
-                    'local_duckdb': duckdb_payload,
-                    'duckdb': duckdb_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb') if isinstance(duckdb_payload, dict) else '.powerpacks/search-index/local-search.duckdb',
-                    'manifest': duckdb_payload.get('manifest', '') if isinstance(duckdb_payload, dict) else '',
-                    'updated_at': now(),
-                }
-                ledger.setdefault('phases', {})['index'] = payload
-                ledger['status'] = 'ready'
-                save_setup_ledger(ledger, ledger_path)
-                return payload, 0
-            if restore_payload.get('status') != 'skipped':
-                payload = {
-                    'status': 'failed',
-                    'step': 'bootstrap_search_records_restore',
-                    'bootstrap_records_restore': restore_payload,
-                }
-                ledger.setdefault('phases', {})['index'] = payload
-                ledger['status'] = 'failed'
-                save_setup_ledger(ledger, ledger_path)
-                return payload, 1
-
     if idx.get('status') == 'search_ready' and not linked_sources(account_state):
         payload = {
             'status': 'ready',
@@ -1377,7 +710,7 @@ def import_refresh_due(
     if force_refresh:
         return {'due': True, 'reason': 'forced', 'linked_sources': sources, 'source_fingerprint': fingerprint}
     if refresh.get('status') != 'completed':
-        return {'due': True, 'reason': 'never_synced_after_bootstrap', 'linked_sources': sources, 'source_fingerprint': fingerprint}
+        return {'due': True, 'reason': 'never_synced_after_link', 'linked_sources': sources, 'source_fingerprint': fingerprint}
     if refresh.get('source_fingerprint') != fingerprint:
         return {'due': True, 'reason': 'linked_sources_changed', 'linked_sources': sources, 'source_fingerprint': fingerprint}
     artifact_issue = completed_refresh_artifact_issue(refresh)
@@ -1455,8 +788,9 @@ def normalize_setup_phases(
     operator_id: str = '',
     refresh_interval_hours: int = DEFAULT_REFRESH_INTERVAL_HOURS,
 ) -> None:
-    phases = ledger.setdefault('phases', {phase: {'status': 'pending'} for phase in ['bootstrap', 'link', 'import', 'index']})
-    for phase in ['bootstrap', 'link', 'import', 'index']:
+    phases = ledger.setdefault('phases', {phase: {'status': 'pending'} for phase in SETUP_PHASES})
+    phases.pop('bootstrap', None)
+    for phase in SETUP_PHASES:
         phases.setdefault(phase, {'status': 'pending'})
 
     current_link = link_state(accounts)
@@ -1482,7 +816,7 @@ def normalize_setup_phases(
     if refresh_state.get('due'):
         phases['import'] = {
             'status': 'refresh_due',
-            'source': 'operator_bootstrap' if phases.get('bootstrap', {}).get('status') == 'restored' else 'linked_sources',
+            'source': 'linked_sources',
             'people_csv': '.powerpacks/network-import/merged/people.csv' if people_csv.exists() else '',
             'refresh_due': refresh_state,
             'live_refresh': live_refresh,
@@ -1492,14 +826,6 @@ def normalize_setup_phases(
             'status': 'ready',
             'source': 'live_refresh',
             'people_csv': '.powerpacks/network-import/merged/people.csv',
-            'live_refresh': live_refresh,
-        }
-    elif people_csv.exists() and phases.get('bootstrap', {}).get('status') == 'restored' and current_link['linked']:
-        phases['import'] = {
-            'status': 'refresh_due',
-            'source': 'operator_bootstrap',
-            'people_csv': '.powerpacks/network-import/merged/people.csv',
-            'refresh_due': refresh_state,
             'live_refresh': live_refresh,
         }
     elif people_csv.exists() and not current_link['linked']:
@@ -1555,7 +881,7 @@ def normalize_setup_phases(
             'index_input_sha256': idx.get('index_input_sha256', ''),
         }
 
-    statuses = {phase: phases.get(phase, {}).get('status') for phase in ['bootstrap', 'link', 'import', 'index']}
+    statuses = {phase: phases.get(phase, {}).get('status') for phase in SETUP_PHASES}
     if statuses['import'] in ('ready', 'completed') and statuses['index'] == 'ready':
         ledger['status'] = 'ready'
     elif not current_link['linked'] and statuses['index'] == 'ready' and idx.get('status') == 'search_ready':
@@ -1576,12 +902,7 @@ def status_payload(args: argparse.Namespace) -> dict[str, Any]:
     if isinstance(ledger.get('handoff'), dict):
         ledger['handoff']['commands'] = setup_commands(args)
         ledger['handoff']['requires_approval'] = approval_payload()
-    bundles = sorted(
-        str(p) for p in (ROOT / '.powerpacks/operator-bootstrap/bundles').glob('*.operator-bootstrap.tar.gz')
-    )
     next_actions = []
-    if bundles and ledger['phases']['bootstrap']['status'] == 'pending':
-        next_actions.append('inspect-bootstrap')
     link_phase = ledger.get('phases', {}).get('link', {})
     import_phase = ledger.get('phases', {}).get('import', {})
     has_linked_sources = bool(link_phase.get('linked_sources'))
@@ -1599,7 +920,6 @@ def status_payload(args: argparse.Namespace) -> dict[str, Any]:
         'operator_id': args.operator_id,
         'accounts': accounts,
         'setup_ledger': ledger,
-        'bootstrap_bundle_candidates': bundles,
         'search_index_readiness': idx,
         'canonical_people_csv': {
             'path': '.powerpacks/network-import/merged/people.csv',
@@ -1626,9 +946,9 @@ def setup_phase_command(args: argparse.Namespace, phase: str) -> str:
         phase,
         '--operator-id', args.operator_id,
     ]
-    if phase in ('bootstrap', 'link', 'import', 'index', 'next', 'status'):
+    if phase in ('link', 'import', 'index', 'next', 'status'):
         cmd.extend(['--accounts', args.accounts])
-    if phase in ('bootstrap', 'link', 'import', 'index', 'next', 'status'):
+    if phase in ('link', 'import', 'index', 'next', 'status'):
         cmd.extend(['--setup-ledger', args.setup_ledger])
     return ' '.join(quote_arg(part) for part in cmd)
 
@@ -1637,22 +957,13 @@ def next_action_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload = status_payload(args)
     ledger = payload['setup_ledger']
     phases = ledger.get('phases') or {}
-    bootstrap = phases.get('bootstrap') if isinstance(phases.get('bootstrap'), dict) else {}
     link = phases.get('link') if isinstance(phases.get('link'), dict) else {}
     import_phase = phases.get('import') if isinstance(phases.get('import'), dict) else {}
     index = phases.get('index') if isinstance(phases.get('index'), dict) else {}
     idx = payload.get('search_index_readiness') if isinstance(payload.get('search_index_readiness'), dict) else {}
 
     action: dict[str, Any]
-    if bootstrap.get('status') == 'pending' and payload.get('bootstrap_bundle_candidates'):
-        action = {
-            'status': 'run_command',
-            'phase': 'bootstrap',
-            'auto_safe': True,
-            'reason': 'matching bootstrap bundle can be restored',
-            'command': setup_phase_command(args, 'bootstrap'),
-        }
-    elif import_phase.get('status') == 'refresh_due':
+    if import_phase.get('status') == 'refresh_due':
         action = {
             'status': 'run_command',
             'phase': 'import',
@@ -1698,34 +1009,6 @@ def next_action_payload(args: argparse.Namespace) -> dict[str, Any]:
 def run_next(args: argparse.Namespace) -> int:
     payload = next_action_payload(args)
     emit(payload)
-    return 0
-
-
-def run_bootstrap_phase(args: argparse.Namespace) -> int:
-    ledger_path = Path(args.setup_ledger)
-    ledger = load_setup_ledger(ledger_path)
-    bootstrap_payload, bootstrap_code = maybe_apply_bootstrap(args, ledger)
-    if bootstrap_payload is None:
-        bootstrap_payload = {'status': 'skipped', 'reason': 'bootstrap_already_completed'}
-    if bootstrap_code:
-        emit({'status': bootstrap_payload.get('status', 'failed'), 'phase': 'bootstrap', 'bootstrap': bootstrap_payload})
-        return bootstrap_code
-    status_args = argparse.Namespace(
-        operator_id=args.operator_id,
-        accounts=getattr(args, 'accounts', '.powerpacks/ingestion/accounts.json'),
-        setup_ledger=args.setup_ledger,
-        refresh_interval_hours=getattr(args, 'refresh_interval_hours', DEFAULT_REFRESH_INTERVAL_HOURS),
-    )
-    final_status = status_payload(status_args)
-    save_setup_ledger(final_status['setup_ledger'], ledger_path)
-    emit({
-        'status': bootstrap_payload.get('status', 'ok'),
-        'phase': 'bootstrap',
-        'operator_id': args.operator_id,
-        'bootstrap': bootstrap_payload,
-        'setup_ledger': final_status['setup_ledger'],
-        'next': next_action_payload(status_args)['next'],
-    })
     return 0
 
 
@@ -1984,7 +1267,7 @@ def run_index_phase(args: argparse.Namespace) -> int:
         'estimated_cost_usd': index_payload.get('estimated_cost_usd', 0),
         'estimated_paid_calls': index_payload.get('estimated_paid_calls', {}),
         'processing_estimate': index_payload.get('processing_estimate', {}),
-        'bootstrap_records_restore': index_payload.get('bootstrap_records_restore', {}),
+        'local_records_restore': index_payload.get('local_records_restore', {}),
         'people_csv': index_payload.get('people_csv', '.powerpacks/network-import/merged/people.csv'),
         'people_sha256': index_payload.get('people_sha256', ''),
         'duckdb': index_payload.get('duckdb', '.powerpacks/search-index/local-search.duckdb'),
@@ -2208,65 +1491,6 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
     return promoted
 
 
-def matching_bootstrap_bundle(operator_id: str) -> Path | None:
-    for bundle in sorted((ROOT / '.powerpacks/operator-bootstrap/bundles').glob('*.operator-bootstrap.tar.gz')):
-        try:
-            inspected = inspect_bundle(bundle)
-        except Exception:
-            continue
-        if inspected.get('status') == 'ok' and inspected.get('operator_id') == operator_id:
-            return bundle
-    return None
-
-
-def sync_latest_bootstrap_bundle(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    if getattr(args, 'bootstrap_bundle', ''):
-        return {'status': 'skipped', 'reason': 'explicit_bootstrap_bundle'}, 0
-    if getattr(args, 'skip_bootstrap_sync', False):
-        return {'status': 'skipped', 'reason': 'skip_bootstrap_sync'}, 0
-    cmd = [
-        sys.executable,
-        'packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py',
-        'sync',
-        '--operator-id', args.operator_id,
-    ]
-    code, payload, stderr = run_json_command(cmd, timeout=15 * 60)
-    if stderr and isinstance(payload, dict):
-        payload.setdefault('stderr', tail(stderr))
-    payload.setdefault('command', ' '.join(shlex.quote(part) for part in cmd))
-    return payload, code
-
-
-def maybe_apply_bootstrap(args: argparse.Namespace, ledger: dict[str, Any]) -> tuple[dict[str, Any] | None, int]:
-    force = bool(getattr(args, 'force_bootstrap', False))
-    if ledger.get('phases', {}).get('bootstrap', {}).get('status') != 'pending' and not force:
-        return None, 0
-    sync_payload, sync_code = sync_latest_bootstrap_bundle(args)
-    bundle = Path(args.bootstrap_bundle) if getattr(args, 'bootstrap_bundle', '') else matching_bootstrap_bundle(args.operator_id)
-    if not bundle:
-        if sync_code == 20:
-            return {'status': 'blocked_user_action', 'step': 'bootstrap_sync', 'bootstrap_sync': sync_payload}, 20
-        if sync_code != 0:
-            return {'status': 'failed', 'step': 'bootstrap_sync', 'bootstrap_sync': sync_payload}, 1
-        return {'status': 'skipped', 'reason': 'no_matching_bootstrap_bundle', 'bootstrap_sync': sync_payload}, 0
-    inspected = inspect_bundle(bundle)
-    if inspected.get('status') != 'ok':
-        return {'status': 'blocked_user_action', 'step': 'bootstrap', 'inspect': inspected, 'bootstrap_sync': sync_payload}, 20
-    apply_args = argparse.Namespace(
-        bundle=str(bundle),
-        operator_id=args.operator_id,
-        force=force,
-        inspect_file='',
-        setup_ledger=args.setup_ledger,
-        allow_legacy_bootstrap_manifest=False,
-    )
-    payload = apply_bundle(apply_args)
-    payload['bootstrap_sync'] = sync_payload
-    if payload.get('status') != 'ok':
-        return payload, 20 if payload.get('requires_approval') else 1
-    return payload, 0
-
-
 def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts: dict[str, Any], due: dict[str, Any]) -> tuple[dict[str, Any], int]:
     started_at = now()
     before_hash = sha256_file(ROOT / '.powerpacks/network-import/merged/people.csv') if (ROOT / '.powerpacks/network-import/merged/people.csv').exists() else ''
@@ -2342,12 +1566,6 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
 
 def run_setup(args: argparse.Namespace) -> int:
     ledger_path = Path(args.setup_ledger)
-    ledger = load_setup_ledger(ledger_path)
-    bootstrap_payload, bootstrap_code = maybe_apply_bootstrap(args, ledger)
-    if bootstrap_code:
-        emit(bootstrap_payload or {'status': 'failed', 'step': 'bootstrap'})
-        return bootstrap_code
-
     status_args = argparse.Namespace(
         operator_id=args.operator_id,
         accounts=args.accounts,
@@ -2398,7 +1616,7 @@ def run_setup(args: argparse.Namespace) -> int:
             }
             ledger['status'] = refresh_payload.get('status', 'blocked')
             save_setup_ledger(ledger, ledger_path)
-            emit({'status': refresh_payload.get('status'), 'bootstrap': bootstrap_payload, **refresh_payload})
+            emit({'status': refresh_payload.get('status'), **refresh_payload})
             return refresh_code
         refresh = refresh_payload['refresh']
         ledger.setdefault('phases', {})['import'] = {
@@ -2416,7 +1634,6 @@ def run_setup(args: argparse.Namespace) -> int:
         emit({
             'status': index_payload.get('status'),
             'operator_id': args.operator_id,
-            'bootstrap': bootstrap_payload,
             'index': index_payload,
         })
         return index_code
@@ -2426,7 +1643,6 @@ def run_setup(args: argparse.Namespace) -> int:
     emit({
         'status': final_status['setup_ledger'].get('status'),
         'operator_id': args.operator_id,
-        'bootstrap': bootstrap_payload,
         'setup_ledger': final_status['setup_ledger'],
         'search_index_readiness': final_status['search_index_readiness'],
         'next_actions': final_status['next_actions'],
@@ -2451,37 +1667,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.set_defaults(func=run_next)
-
-    s = sub.add_parser('inspect-bootstrap')
-    s.add_argument('--bundle', required=True)
-    s.add_argument('--allow-legacy-bootstrap-manifest', action='store_true')
-    s.set_defaults(func=run_inspect)
-
-    s = sub.add_parser('pull-bootstrap')
-    s.add_argument('--gcs-uri', required=True)
-    s.add_argument('--output', required=True)
-    s.add_argument('--allow-gcs-download', action='store_true')
-    s.add_argument('--download-backend', choices=['auto', 'gcloud', 'python'], default='auto', help='Use gcloud storage cp when available, or google-cloud-storage through uv for the Python backend.')
-    s.set_defaults(func=run_pull)
-
-    s = sub.add_parser('apply-bootstrap')
-    s.add_argument('--bundle', required=True)
-    s.add_argument('--operator-id', required=True)
-    s.add_argument('--force', action='store_true')
-    s.add_argument('--inspect-file', default='')
-    s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
-    s.add_argument('--allow-legacy-bootstrap-manifest', action='store_true')
-    s.set_defaults(func=run_apply)
-
-    s = sub.add_parser('bootstrap')
-    s.add_argument('--operator-id', required=True)
-    s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
-    s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
-    s.add_argument('--bootstrap-bundle', default='')
-    s.add_argument('--force-bootstrap', action='store_true')
-    s.add_argument('--skip-bootstrap-sync', action='store_true', help=argparse.SUPPRESS)
-    s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
-    s.set_defaults(func=run_bootstrap_phase)
 
     s = sub.add_parser('link')
     s.add_argument('--operator-id', required=True)
@@ -2541,9 +1726,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument('--operator-id', required=True)
     s.add_argument('--accounts', default='.powerpacks/ingestion/accounts.json')
     s.add_argument('--setup-ledger', default=str(SETUP_LEDGER))
-    s.add_argument('--bootstrap-bundle', default='')
-    s.add_argument('--force-bootstrap', action='store_true')
-    s.add_argument('--skip-bootstrap-sync', action='store_true', help=argparse.SUPPRESS)
     s.add_argument('--refresh-interval-hours', type=int, default=DEFAULT_REFRESH_INTERVAL_HOURS)
     s.add_argument('--gmail-sync-lookback-days', type=int, default=DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)
     s.add_argument('--gmail-db', default='')

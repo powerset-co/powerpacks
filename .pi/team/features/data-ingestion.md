@@ -10,7 +10,7 @@ contracts/
 primitives/hydrate_people/
 primitives/query_postgres_profiles/
 primitives/contracts/
-primitives/provision_runtime_env/
+primitives/pull_runtime_keys/
 docs/postgres-contract.md
 docs/turbopuffer-contract.md
 tests/test_turbopuffer_primitives.py
@@ -22,7 +22,7 @@ tests/test_enrich_primitives.py
 - data ingestion contracts and schema guards
 - hydration/query primitives
 - postgres and turbopuffer contract docs
-- runtime environment provisioning examples
+- runtime key pull examples
 - reusable validation for app repos that consume data pipeline outputs
 
 ## Invariants
@@ -35,7 +35,7 @@ tests/test_enrich_primitives.py
 ## Regression checks
 
 ```bash
-uv run pytest tests/test_turbopuffer_primitives.py tests/test_enrich_primitives.py tests/test_provision_runtime_env.py
+uv run pytest tests/test_turbopuffer_primitives.py tests/test_enrich_primitives.py tests/test_pull_runtime_keys.py
 bash scripts/test-powerpacks
 ```
 

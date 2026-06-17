@@ -12,18 +12,12 @@ walk the user through gaps one at a time.
 ```bash
 python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
-  --env-file .env \
-  --gcp-project powerset-search
-
-# Optional, only for SDK/client debugging:
-python packs/powerset/primitives/doctor/doctor.py run --check-adc
-
-# Optional, only for env refresh/provisioning debugging when .env is already filled:
-python packs/powerset/primitives/doctor/doctor.py run --check-user-secrets
+  --env-file .env
 ```
 
-`search-core` is the default profile and checks the standard Powerpacks runtime
-secrets.
+`search-core` is the default profile. The doctor checks Auth0, local runtime
+keys pulled from the Powerset API, and MCP registration. Modal handles hosted
+processing for provisioned Powerset users.
 
 ## Checks (in order)
 
@@ -31,13 +25,10 @@ secrets.
 | --- | --- |
 | `python` | Python 3.12 runtime for Powerpacks |
 | `uv_installed` | `uv` on PATH for Python dependency setup and primitive execution |
-| `gcloud_installed` | `gcloud` CLI on PATH |
-| `gcloud_account` | active gcloud account |
-| `gcloud_adc` | application-default credentials are present (opt-in via `--check-adc`; not needed for normal Powerpacks workflows) |
 | `auth0_login` | a valid Auth0 JWT is cached at `~/.powerpacks/credentials.json` |
 | `auth0_role` | the JWT carries a `user` or `admin` role (warn if neither) |
-| `env_file` | `.env` has every key required by the chosen profile |
-| `user_secrets` | the active gcloud account can read its per-user secrets in GCP; checked only when `env_file` is incomplete, or with `--check-user-secrets` |
+| `runtime_keys` | `.env` has the Modal token and OpenAI key needed locally |
+| `mcp_powerset_search` | the `powerset-search` MCP is registered in a local host |
 
 ## Statuses
 
@@ -56,7 +47,6 @@ order, so the agent can offer them sequentially. Each `fix_command` is either
 a string (single command) or an object with platform-specific variants
 (`macos_homebrew`, `linux`, etc.).
 
-TTY-bound commands such as `gcloud auth login --no-launch-browser` may include
-`requires_tty: true` and intentionally omit `fix_args`. In that case,
-`doctor fix --interactive` reports the action but does not run it through a
-captured subprocess; run the command directly in a visible terminal/PTY.
+Browser-based commands such as Auth0 login may include `fix_kind: interactive`.
+In that case, run the command directly in a visible terminal/PTY so the browser
+or code prompt remains visible.

@@ -168,37 +168,35 @@ class CoreLayoutTests(unittest.TestCase):
             )
             self.assertEqual(nested_skill_files, [])
 
-    def test_powerset_login_skill_uses_provisioning_primitives(self) -> None:
+    def test_powerset_login_skill_uses_api_runtime_key_primitives(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
-        self.assertIn("@powerset.co", text)
         # The setup checker is still the diagnosis entrypoint, but the skill's
         # user-facing contract should stay quiet.
         self.assertIn("packs/powerset/primitives/doctor/doctor.py run", text)
         self.assertIn("Updating your credentials...", text)
         self.assertIn("Credentials updated. Please restart Codex", text)
         self.assertIn("do not\nrun nested fix commands", text)
-        # Per-user secret naming.
-        self.assertIn("powerpacks-users-", text)
-        # gcloud login is part of the interactive happy path.
-        self.assertIn("gcloud auth login", text)
-        # Maintainer onboarding command must be discoverable.
-        self.assertIn("provision_user_secrets", text)
+        self.assertIn("packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull", text)
+        self.assertIn("authenticated Powerset API", text)
+        self.assertIn("The Google Cloud CLI remains relevant\nonly to", text)
         # The setup classification must be documented.
         self.assertIn("fix_kind", text)
-        self.assertIn("with `tty: true`", text)
-        self.assertIn("do not wrap `gcloud auth login` in\n`expect`", text)
+        self.assertNotIn("provision_user_secrets", text)
+        self.assertNotIn("provision_runtime_env", text)
+        self.assertNotIn("gcloud auth login", text)
+        self.assertNotIn("Secret Manager", text)
 
     def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()
-        self.assertIn("$powerset setup [--profile <profile>]", text)
-        self.assertIn("$powerset setup                 log in, pull env, sync bootstrap, and install/refresh MCP", text)
+        self.assertIn("$powerset setup", text)
+        self.assertIn("$powerset setup                 log in, pull runtime keys, and install/refresh MCP", text)
         self.assertIn("packs/powerset/primitives/auth/auth.py login", text)
-        self.assertIn("packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull", text)
-        self.assertIn("packs/powerset/primitives/operator_bootstrap/operator_bootstrap.py sync", text)
+        self.assertIn("packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull", text)
         self.assertIn("packs/powerset/primitives/mcp_install/mcp_install.py install --host all", text)
         self.assertIn("Powerset setup complete. Please restart Codex", text)
-        self.assertIn("with `tty: true`", text)
-        self.assertIn("Do not wrap `gcloud auth login` in `expect`", text)
+        self.assertNotIn("provision_runtime_env", text)
+        self.assertNotIn("operator_bootstrap", text)
+        self.assertNotIn("GCP Secret Manager", text)
 
         login_alias = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
         self.assertIn("prefer the unified `$powerset setup`", login_alias)

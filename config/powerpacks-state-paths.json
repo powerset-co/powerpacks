@@ -105,7 +105,7 @@
       "path": ".powerpacks/network-import/profile_cache_v2",
       "kind": "directory",
       "policy": "adopt_newer",
-      "why": "Local profile/enrichment cache; also restorable from bootstrap when available."
+      "why": "Local profile/enrichment cache."
     },
     {
       "id": "network_merged_people",
@@ -113,13 +113,6 @@
       "kind": "file",
       "policy": "adopt_newer",
       "why": "Merged people CSV used by processing/indexing."
-    },
-    {
-      "id": "operator_bootstrap_bundles",
-      "path": ".powerpacks/operator-bootstrap/bundles",
-      "kind": "directory",
-      "policy": "adopt_newer",
-      "why": "Local operator bootstrap bundles."
     },
     {
       "id": "search_index_duckdb",

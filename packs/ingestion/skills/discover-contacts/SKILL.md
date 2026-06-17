@@ -95,10 +95,10 @@ writes to its fixed `.powerpacks/network-import/discover/<source>/` folder. Do
 not approve RapidAPI/Parallel/OpenAI spend confirmations inside workers; return
 those confirmations to the main thread.
 
-## Bootstrap Prior Checkpoints
+## Restore Prior Checkpoints
 
 When existing operator export/checkpoint CSVs are available, first generate a
-Powerpacks bootstrap bundle:
+local restore bundle:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/bootstrap_network_from_exports/bootstrap_network_from_exports.py generate \

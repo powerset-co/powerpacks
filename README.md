@@ -79,7 +79,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: one-command setup (login + env pull + MCP), credential refresh, setup status, Auth0 identity, MCP install, env provisioning, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
+| [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: one-command setup (Auth0 login + Powerset API runtime-key pull + MCP), credential refresh, setup status, Auth0 identity, MCP install, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
 | [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | App-first ingestion/product setup: launches the local onboarding UI for source linking, import, enrichment, and local search-index/DuckDB readiness. `$setup cli` keeps the deterministic primitive runner available. Keeps `$powerset` focused on login/env/MCP. |
 | [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$local-msg-vault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
 
@@ -122,8 +122,7 @@ powerpacks/
 │   │   ├── skills/         powerset (unified commands), powerset-login,
 │   │   │                   powerset-set (backcompat aliases)
 │   │   ├── primitives/     auth/ (Auth0 PKCE),
-│   │   │                   provision_runtime_env/ (best-effort GCP pull),
-│   │   │                   provision_user_secrets/ (admin: per-user GCP),
+│   │   │                   pull_runtime_keys/ (Powerset API key pull),
 │   │   │                   doctor/ (one-shot setup health check),
 │   │   │                   mcp_install/ (powerset-search MCP into
 │   │   │                                 Claude Code / Codex)
@@ -212,7 +211,7 @@ $import-whatsapp                  # isolated WhatsApp sync test via wacli
 | --- | --- |
 | Any skill | `uv`, git. Powerpacks uses uv-managed Python 3.12 from `.python-version`. |
 | `search-network` / `search-company` | `.env` populated with Powerpacks runtime secrets; see [Secrets / env vars](#secrets--env-vars). |
-| `powerset setup` | `gcloud` CLI, `@powerset.co` Google account: `brew install --cask google-cloud-sdk && gcloud auth login` |
+| `powerset setup` | Powerset/Auth0 account. Runtime keys are pulled from the Powerset API when provisioned. |
 | `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, plus optional review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `sales-nav-search` | `$powerset setup` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
 | `build-outbound` | `APOLLO_API_KEY` in `.env` or shell, connected Apollo email account/schedule, and a Sales Nav run or manifest. Node/npx is only needed for MCP setup/status. |
@@ -222,11 +221,9 @@ $import-whatsapp                  # isolated WhatsApp sync test via wacli
 `$powerset setup` is the recommended one-command path: it logs in, runs
 `$powerset env pull`, and installs/refreshes the `powerset-search` MCP.
 `$powerset login` and `$powerset env pull` remain available as smaller
-backcompat/maintenance commands. Env pull populates `.env` from GCP Secret
-Manager for provisioned users. The default `search-core` profile is the normal
-one-shot setup and pulls what is available on a best-effort basis. For narrower
-access, use `search-network` for local search or `import-contacts` for contact
-review/research.
+backcompat/maintenance commands. Env pull populates `.env` from the
+authenticated Powerset API for provisioned users. Hosted processing for
+Powerset users runs on Modal.
 
 | Key | Used by |
 | --- | --- |
@@ -238,8 +235,8 @@ review/research.
 | `POWERPACKS_DEFAULT_SET_ID` | Local default Powerset set selection |
 | `APOLLO_API_KEY` | Apollo.io outbound build; use a Master API key for sequence/campaign, email-account, schedule, enrichment, and contact endpoints |
 
-Additional profiles can pull specialized keys such as RapidAPI LinkedIn/Twitter
-or Supabase admin credentials when a workflow needs them.
+Additional provider keys can still be supplied manually for workflows that run
+locally outside the provisioned Powerset API path.
 
 ## Install
 
@@ -372,7 +369,7 @@ Then, **inside the agent host**, sanity-check each skill family:
 
 | Skill | Test prompt |
 | --- | --- |
-| `powerset setup` | Type `$powerset setup` — the agent should run the doctor, handle missing login, provision env, and finish with `mcp_install`. |
+| `powerset setup` | Type `$powerset setup` — the agent should run the doctor, handle missing login, pull runtime keys, and finish with `mcp_install`. |
 | `search-network` | `$search-network senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
 | `import-contacts` | `$import-contacts` — should show a task checklist, ask once for local metadata import consent, then run until permissions/QR/cost approval are needed. |
@@ -397,24 +394,21 @@ uv run --project . python packs/search/primitives/contracts/contracts.py dump-po
 `dump-postgres` writes a diagnostic artifact. It does not mutate the checked-in
 contracts.
 
-## Runtime Provisioning
+## Runtime Keys
 
-Provisioned users can populate a local `.env` from GCP Secret Manager without
-pasting raw secrets into chat:
+Provisioned users can populate a local `.env` without pasting raw secrets into
+chat:
 
 ```bash
-gcloud auth login
-uv run --project . python packs/powerset/primitives/provision_runtime_env/provision_runtime_env.py pull \
-  --profile search-core \
-  --env-file .env \
-  --confirm
-# search-core writes the standard keys listed in Secrets / env vars
+uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
+  --env-file .env
 ```
 
-The provisioning primitive redacts secret values in output and only writes
-allowlisted keys. Authorization is enforced by GCP IAM on Secret Manager
-resources. For user-scoped keys, create per-user/per-capability secrets and
-grant access on those specific secret resources or groups.
+The primitive redacts secret values in output and only writes the local runtime
+keys returned by the authenticated Powerset API. Modal holds hosted processing
+secrets for provisioned Powerset users. The Google Cloud CLI is still used by
+the separate msgvault/Gmail OAuth app setup flow, not by Powerset runtime-key
+pull.
 
 ## Task Flow
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pull local runtime keys from the Powerset API using the Auth0 login — no GCP.
+"""Pull local runtime keys from the Powerset API using the Auth0 login.
 
 The local machine is a thin dispatcher: heavy work runs on Modal (which holds
 RapidAPI/Parallel/etc. as workspace secrets), so the laptop only needs a Modal
@@ -11,7 +11,7 @@ from the authenticated Powerset API with the user's Auth0 bearer:
 
 Endpoints are read-only and never mint: a 404/403 means "not provisioned for
 this user" (an admin provisions out of band). Pulled values are written to
-.env (upsert, preserving other lines, mode 0600). No gcloud, no Secret Manager.
+.env (upsert, preserving other lines, mode 0600).
 """
 from __future__ import annotations
 

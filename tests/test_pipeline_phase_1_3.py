@@ -602,14 +602,14 @@ class PipelinePhase13Tests(unittest.TestCase):
             args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="")
             with mock.patch.object(setup_gmail, "linked_gmail_accounts", return_value=["ada@example.com"]), \
                 mock.patch.object(setup_gmail, "import_manifest_current", return_value=None), \
-                mock.patch.object(setup_gmail.gmail_import, "gmail_artifacts_from_discovery", return_value={}), \
-                mock.patch.object(setup_gmail.gmail_import, "pending_gmail_parallel_contacts", return_value=12):
+                mock.patch.object(setup_gmail, "_queue_emails", return_value=[f"ada-{idx}@example.com" for idx in range(12)]), \
+                mock.patch.object(setup_gmail, "_directory_emails", return_value=set()):
                 payload = setup_gmail.dry_run(args)
             estimate = payload["parallel_spend_estimate"]
             self.assertEqual(estimate["pending_contacts"], 12)
             self.assertEqual(estimate["cost_per_contact_usd"], 0.05)
             self.assertEqual(estimate["estimated_usd"], 0.6)
-            self.assertTrue(estimate["auto_approved"])
+            self.assertEqual(estimate["processor"], "core2x")
 
     def test_setup_gmail_run_completes_and_auto_approves_parallel(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -621,10 +621,12 @@ class PipelinePhase13Tests(unittest.TestCase):
             accounts.write_text("{}", encoding="utf-8")
             duckdb.write_bytes(b"0" * 2048)
             people_csv.write_text("id\n1\n", encoding="utf-8")
-            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="gmail-happy")
+            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="gmail-happy", approve_spend=True)
             import_payload = {"status": "completed", "outputs": {"people_csv": str(people_csv)}, "stats": {"people": 1}}
             with mock.patch.object(setup_gmail, "RUN_ROOT", run_root), \
                 mock.patch.object(setup_gmail, "linked_gmail_accounts", return_value=["ada@example.com"]), \
+                mock.patch.object(setup_gmail, "_check_gmail_tokens", return_value=[]), \
+                mock.patch.object(setup_gmail, "estimate_parallel_spend", return_value={"pending_contacts": 12, "estimated_usd": 0.6}), \
                 mock.patch.object(setup_gmail.gmail_discovery, "discover", return_value={"status": "completed", "contacts": 3, "selected_accounts": ["ada@example.com"]}), \
                 mock.patch.object(setup_gmail.gmail_import, "run", return_value=import_payload) as import_mock, \
                 mock.patch.object(setup_gmail.index_contacts_pipeline, "run_pipeline", return_value=({"status": "ready", "duckdb": str(duckdb)}, 0)):
@@ -660,10 +662,12 @@ class PipelinePhase13Tests(unittest.TestCase):
             run_root = tmp_path / "runs" / "setup-gmail"
             accounts.write_text("{}", encoding="utf-8")
             people_csv.write_text("id\n1\n", encoding="utf-8")
-            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="gmail-not-ready")
+            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="gmail-not-ready", approve_spend=True)
             import_payload = {"status": "completed", "outputs": {"people_csv": str(people_csv)}, "stats": {"people": 1}}
             with mock.patch.object(setup_gmail, "RUN_ROOT", run_root), \
                 mock.patch.object(setup_gmail, "linked_gmail_accounts", return_value=["ada@example.com"]), \
+                mock.patch.object(setup_gmail, "_check_gmail_tokens", return_value=[]), \
+                mock.patch.object(setup_gmail, "estimate_parallel_spend", return_value={"pending_contacts": 0, "estimated_usd": 0}), \
                 mock.patch.object(setup_gmail.gmail_discovery, "discover", return_value={"status": "completed", "contacts": 3}), \
                 mock.patch.object(setup_gmail.gmail_import, "run", return_value=import_payload), \
                 mock.patch.object(setup_gmail.index_contacts_pipeline, "run_pipeline", return_value=({"status": "not_ready", "reason": "missing_people_csv"}, 0)):

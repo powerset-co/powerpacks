@@ -91,8 +91,8 @@ sandboxes later using the same pattern.
 - Everything is single-process Python + asyncio; no multiprocessing. Memory,
   not core count, is the binding resource.
 - Python 3.12; deps needed in the sandbox: `duckdb`, `openai`,
-  `python-dotenv`, `pyyaml`, `snowballstemmer`, `tiktoken`. (`turbopuffer`,
-  `psycopg2`, `google-cloud-storage` are prod-only, not needed.)
+  `python-dotenv`, `pyyaml`, `snowballstemmer`, `tiktoken`. (`turbopuffer`
+  and `psycopg2` are prod-only, not needed.)
 - Hardcoded `.powerpacks/` defaults exist but `--input`/`--output-dir` are
   explicit args, so the cloud run just passes absolute sandbox paths.
 

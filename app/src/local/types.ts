@@ -223,25 +223,13 @@ export interface SetupStatusResponse {
     email?: string;
     label: string;
   };
-  bootstrap: {
-    status: string;
-    bundle?: string;
-    mode?: string;
-    bundleSha256?: string;
-    peopleRecords?: number;
-    selectedPeople?: number;
-    selectedPositions?: number;
-    linkedinCount?: number;
-    twitterCount?: number;
-    companyRecords?: number;
-  };
   setup: {
     path: string;
     exists: boolean;
     status: string;
     updatedAt?: string | null;
     sizeBytes?: number;
-    phases: Record<"bootstrap" | "link" | "import" | "index", SetupPhaseStatus>;
+    phases: Record<"link" | "import" | "index", SetupPhaseStatus>;
   };
   accounts: {
     path: string;
@@ -296,7 +284,7 @@ export interface SetupStatusResponse {
     readiness?: string;
     reason?: string;
     indexInputSha256?: string;
-    bootstrapRecords?: {
+    localRecords?: {
       recordFiles?: number;
       nonemptyRecordFiles?: number;
     };

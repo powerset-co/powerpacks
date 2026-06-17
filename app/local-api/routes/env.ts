@@ -67,7 +67,7 @@ const ENV_KEY_SPECS: EnvKeySpec[] = [
     key: "DATABASE_URL",
     label: "Database URL",
     provider: "Postgres",
-    description: "Used by cloud-backed search and operator bootstrap exports.",
+    description: "Used by legacy cloud-backed search primitives when local DuckDB is not selected.",
     required: false,
     getUrl: "https://supabase.com/dashboard",
     aliases: ["SUPABASE_DATABASE_URL", "SUPABASE_DB_URL"],

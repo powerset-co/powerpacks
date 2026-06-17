@@ -49,18 +49,12 @@ a working `.env`. Run `$powerset setup` (below) to populate it, or copy
 
 ### `$powerset setup` (recommended setup path)
 
-For provisioned users, pulls allowlisted secrets from GCP Secret Manager into a
-local `.env`, ensures Auth0 login, and installs/refreshes the
-`powerset-search` MCP. The skill runs the needed Auth0 / gcloud login steps
-itself when credentials are missing or expired.
+For provisioned users, pulls local runtime keys from the authenticated Powerset
+API into `.env`, ensures Auth0 login, and installs/refreshes the
+`powerset-search` MCP. Modal handles hosted processing for Powerset users.
 
-```bash
-brew install --cask google-cloud-sdk    # macOS
-# or: curl https://sdk.cloud.google.com | bash
-```
-
-The env pull succeeds only when your active gcloud account has matching
-Secret Manager access for its per-user secrets.
+The Google Cloud CLI is only needed for the separate msgvault/Gmail OAuth app
+setup flow.
 
 ### Messages import prerequisites
 
@@ -157,7 +151,7 @@ scripts/smoke-messages.sh
 
 ## 4. First run, per skill
 
-### `$powerset setup` — bootstrap login, `.env`, and MCP
+### `$powerset setup` — login, `.env`, and MCP
 
 Inside Codex / Claude Code / Pi:
 
@@ -165,21 +159,10 @@ Inside Codex / Claude Code / Pi:
 $powerset setup
 ```
 
-It runs the Powerset doctor, starts Auth0 login if needed, pulls allowlisted
-secrets into `.env` (no values printed), and installs/refreshes the
-`powerset-search` MCP. It does not check gcloud application-default credentials;
-ADC is not needed for normal Powerpacks workflows. `$powerset login` remains
-available as a smaller credential-refresh/backcompat command.
-
-Pick a profile based on what you'll use:
-
-| Profile | Includes |
-| --- | --- |
-| `search-core` | TurboPuffer + Postgres + OpenAI |
-| `messages` | OpenRouter + Parallel |
-| `sales-nav` | RapidAPI |
-| `supabase-admin` | Supabase URL + service role |
-| `all` | every allowlisted key |
+It runs the Powerset doctor, starts Auth0 login if needed, pulls provisioned
+runtime keys into `.env` (no values printed), and installs/refreshes the
+`powerset-search` MCP. `$powerset login` remains available as a smaller
+credential-refresh/backcompat command.
 
 ### `$search-network` — recruiting search
 
@@ -242,8 +225,7 @@ The pack is privacy-first:
 | --- | --- |
 | `extract_imessage_contacts check` reports `chat_db.readable: false` | Grant Full Disk Access to the terminal app and restart it. |
 | `import_whatsapp_wacli run` says `wacli is not installed` | Install it with `brew install steipete/tap/wacli`, then rerun the import. |
-| `provision_runtime_env pull` says "no active gcloud account" | `gcloud auth login` with your `@powerset.co` account. |
-| `provision_runtime_env pull` rejects your account | Switch active accounts: `gcloud config set account you@powerset.co`. |
+| `$powerset env pull` reports `not_provisioned` | Ask a Powerset admin to provision your Modal/OpenAI runtime keys, then rerun `$powerset setup`. |
 | `auth login` browser callback never returns | Make sure nothing else is listening on `127.0.0.1:9876`. |
 | `llm_review_contacts review` says "OPENROUTER_API_KEY not provided" | `export OPENROUTER_API_KEY=sk-or-...` or pass `--api-key`. |
 | Codex / Claude Code / Pi doesn't see the new skills | Restart the host. In Pi, `/reload` also reloads skills. |
