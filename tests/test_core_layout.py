@@ -34,6 +34,7 @@ class CoreLayoutTests(unittest.TestCase):
             ingestion_pack,
             [
                 "discover-contacts",
+                "enrich-email-markers",
                 "import-email",
                 "import-gmail-network",
                 "import-linkedin-network",
