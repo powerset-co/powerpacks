@@ -262,14 +262,14 @@ export function LocalCompaniesPage() {
               <p className="mt-1">
                 Run{" "}
                 <a
-                  href="/setup"
+                  href="/sources/linkedin"
                   className="text-primary hover:underline"
                   onClick={(e) => {
                     e.preventDefault();
-                    navigateLocal("/setup");
+                    navigateLocal("/sources/linkedin");
                   }}
                 >
-                  Setup → Index
+                  import a source
                 </a>{" "}
                 to build <code className="text-xs">.powerpacks/search-index/local-search.duckdb</code> first.
               </p>

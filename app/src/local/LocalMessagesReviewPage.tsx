@@ -355,7 +355,7 @@ export function LocalMessagesReviewPage({ onBackToSetup }: { onBackToSetup: () =
       setActiveJobId(next.job.id);
       await loadStatus();
       if (body.action === "messages-complete-review") {
-        window.location.href = "/setup?tab=enrichment";
+        window.location.href = "/sources/messages";
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start messages action");

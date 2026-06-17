@@ -21,7 +21,6 @@ import { LocalCompanyDetailsPage } from "./LocalCompanyDetailsPage";
 import { LocalSearchLauncher } from "./LocalSearchLauncher";
 import { LocalResultsTable } from "./LocalResultsTable";
 import { LocalRunSidebar } from "./LocalRunSidebar";
-import { LocalSetupPage } from "./LocalSetupPage";
 import type { LocalProfileResponse, LocalRunResultsResponse, LocalRunSummary } from "./types";
 import { toDatabaseRecord } from "./types";
 
@@ -37,7 +36,6 @@ type LocalView =
   | "personDetails"
   | "companies"
   | "companyDetails"
-  | "setup"
   | "onboarding"
   | "onboardingV2"
   | "gmailSource"
@@ -71,7 +69,6 @@ function viewFromPath(): LocalView {
   if (window.location.pathname === "/env") return "env";
   if (window.location.pathname === "/system") return "system";
   if (window.location.pathname === "/setup/imessage/review") return "messagesReview";
-  if (window.location.pathname === "/setup") return "setup";
   return "runs";
 }
 
@@ -256,7 +253,7 @@ export function LocalPowerpacksApp() {
                     ? "contacts"
                     : activeView === "companies" || activeView === "companyDetails"
                       ? "companies"
-                      : "setup"
+                      : "runs"
           }
           runs={filteredRuns}
           operatorEmail={profile?.operator.email || profile?.operator.label}
@@ -272,9 +269,6 @@ export function LocalPowerpacksApp() {
           onSelectCompanies={() => {
             navigate("/companies");
           }}
-          onSelectSetup={() => {
-            navigate("/setup");
-          }}
           onSelectEnv={() => {
             navigate("/env");
           }}
@@ -282,13 +276,13 @@ export function LocalPowerpacksApp() {
             navigate("/system");
           }}
           onSelectLinkSetup={() => {
-            navigate("/setup?tab=link");
+            navigate("/");
           }}
           onSelectSource={(id) => {
             if (id === "gmail") navigate("/sources/gmail");
             else if (id === "linkedin_csv") navigate("/sources/linkedin");
             else if (id === "messages") navigate("/sources/messages");
-            else navigate("/setup?tab=link");
+            else navigate("/");
           }}
           onSelect={(run) => {
             const id = run.conversationId || run.taskId;
@@ -298,23 +292,22 @@ export function LocalPowerpacksApp() {
         />
 
         <main className="min-w-0 flex-1 overflow-y-auto">
-          {/* Update nudge. Always-on for now so placement is visible; gate on
-              updateAvailable once the placement is approved. */}
-          <header className="sticky top-0 z-10 flex items-center justify-end gap-2 bg-background/95 px-6 py-2 backdrop-blur">
-            <button
-              type="button"
-              onClick={() => navigate("/system")}
-              className="transition-opacity hover:opacity-80"
-            >
-              <Badge variant={updateAvailable ? "default" : "secondary"} className="cursor-pointer gap-1">
-                <AlertCircle className="h-3 w-3" /> Newer version available — click to upgrade
-              </Badge>
-            </button>
-          </header>
+          {/* Update nudge — only when a newer commit is actually available. */}
+          {updateAvailable && (
+            <header className="flex items-center justify-end gap-2 px-6 pt-3">
+              <button
+                type="button"
+                onClick={() => navigate("/system")}
+                className="transition-opacity hover:opacity-80"
+              >
+                <Badge variant="default" className="cursor-pointer gap-1">
+                  <AlertCircle className="h-3 w-3" /> Newer version available — click to upgrade
+                </Badge>
+              </button>
+            </header>
+          )}
           <div className="mx-auto max-w-7xl space-y-4 p-6">
-            {activeView === "setup" ? (
-              <LocalSetupPage onOpenMessagesReview={() => navigate("/setup/imessage/review")} />
-            ) : activeView === "onboarding" ? (
+            {activeView === "onboarding" ? (
               <LocalOnboardingPage />
             ) : activeView === "onboardingV2" ? (
               <LocalOnboardingV2Page />
@@ -337,7 +330,7 @@ export function LocalPowerpacksApp() {
             ) : activeView === "companyDetails" ? (
               <LocalCompanyDetailsPage companyId={companyIdFromPath() || ""} />
             ) : activeView === "messagesReview" ? (
-              <LocalMessagesReviewPage onBackToSetup={() => navigate("/setup?tab=enrichment")} />
+              <LocalMessagesReviewPage onBackToSetup={() => navigate("/")} />
             ) : (
               <>
                 <LocalSearchLauncher focusToken={newSearchToken} />

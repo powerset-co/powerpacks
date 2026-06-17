@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import type { LocalProfileResponse, LocalRunSummary } from "./types";
 
 interface LocalRunSidebarProps {
-  activeView: "contacts" | "companies" | "setup" | "env" | "system" | "runs";
+  activeView: "contacts" | "companies" | "env" | "system" | "runs";
   runs: LocalRunSummary[];
   operatorEmail?: string;
   accountSources?: LocalProfileResponse["accounts"]["sources"];
@@ -27,7 +27,6 @@ interface LocalRunSidebarProps {
   onNewSearch: () => void;
   onSelectContacts: () => void;
   onSelectCompanies: () => void;
-  onSelectSetup: () => void;
   onSelectEnv: () => void;
   onSelectSystem: () => void;
   onSelectLinkSetup: () => void;
@@ -97,7 +96,6 @@ export function LocalRunSidebar({
   onNewSearch,
   onSelectContacts,
   onSelectCompanies,
-  onSelectSetup,
   onSelectEnv,
   onSelectSystem,
   onSelectLinkSetup,
@@ -294,10 +292,6 @@ export function LocalRunSidebar({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" side="top" className="w-56">
-            <DropdownMenuItem onClick={onSelectSetup}>
-              <Settings2 className="mr-2 h-4 w-4" />
-              Setup
-            </DropdownMenuItem>
             <DropdownMenuItem onClick={onSelectEnv}>
               <KeyRound className="mr-2 h-4 w-4" />
               Environment

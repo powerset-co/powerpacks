@@ -285,17 +285,19 @@ export function LocalSystemPage() {
             </div>
           )}
 
-          <Button
-            onClick={handleUpdate}
-            disabled={updating || rebooting || upToDate || Boolean(status?.dirty)}
-            className="w-full sm:w-auto"
-          >
-            {updating ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> Updating…</>
-            ) : (
-              <><Download className="h-4 w-4" /> Update &amp; restart</>
-            )}
-          </Button>
+          {!upToDate && (
+            <Button
+              onClick={handleUpdate}
+              disabled={updating || rebooting || Boolean(status?.dirty)}
+              className="w-full sm:w-auto"
+            >
+              {updating ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> Updating…</>
+              ) : (
+                <><Download className="h-4 w-4" /> Update &amp; restart</>
+              )}
+            </Button>
+          )}
         </CardContent>
       </Card>
 
