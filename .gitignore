@@ -12,3 +12,6 @@ install-manifest.json
 # Powerpacks Console
 app/node_modules/
 app/dist/
+app/storybook-static/
+app/.storybook/*.log
+app/.storybook/*.pid
