@@ -54,7 +54,7 @@
       "pack": "sales-nav",
       "primitive": "sales_nav_pipeline",
       "command": "run",
-      "description": "Normal path: create a one-or-more-query search_plan.json, then follow blocked_tool_call responses until completion. Structured fallbacks come before keyword-only fallback: current company, relaxed structured filters, past_company_ids, then keywords last. The orchestrator calls sales_nav_search, get_artifact, enrich_extended_profiles, sales_nav_resolve_member_ids, export, and optional scoring in order."
+      "description": "Normal path: create a one-or-more-query search_plan.json, then follow blocked_tool_call responses until completion. Structured fallbacks come before keyword-only fallback: current company, relaxed structured filters, past_company_ids, then keywords last. The orchestrator calls sales_nav_search, downloads the persisted artifact by artifact_id via the local download-artifact primitive, ingests full content, enriches only new leads, re-downloads after enrichment when needed, resolves mutual member IDs, exports, and optionally scores."
     },
     {
       "id": "run_search",
@@ -80,11 +80,11 @@
     },
     {
       "id": "retrieve_artifact",
-      "kind": "mcp_tool",
-      "tool": "get_artifact",
+      "kind": "local_primitive",
+      "primitive": "sales_nav_artifacts download-artifact",
       "optional": true,
       "defaults": {"include_content": true},
-      "when": "user wants to page back through a previously persisted result set or after search/enrichment to ingest full lead content"
+      "when": "normal pipeline handoff after search/enrichment; user-facing pagination may still inspect artifacts manually"
     },
     {
       "id": "enrich_visible_profiles",

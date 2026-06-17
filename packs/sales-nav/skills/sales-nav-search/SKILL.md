@@ -1,6 +1,6 @@
 ---
 name: sales-nav-search
-description: Run a Sales Navigator search through the Powerset Search MCP. Resolves company / title filters to LinkedIn IDs, runs a paginated lead search with server-side artifact persistence on by default, and offers paginated retrieval via get_artifact.
+description: Run a Sales Navigator search through the Powerset Search MCP. Resolves company / title filters to LinkedIn IDs, runs a paginated lead search with server-side artifact persistence on by default, and downloads persisted artifact JSON directly for local ingest.
 ---
 
 # Sales Nav Search
@@ -21,7 +21,7 @@ It calls these MCP tools served by the remote `powerset-search` MCP at
 - `sales_nav_search` — paginated lead search scoped to the user's set;
   with `conversation_id` + `persist_artifact: true` the server writes a
   Supabase artifact row and returns an `artifact_id`
-- `get_artifact` — paginated retrieval of a persisted artifact
+- `get_artifact` — paginated retrieval of a persisted artifact when explicitly inspecting it; normal local handoff uses `sales_nav_artifacts download-artifact` by artifact UUID
 - `enrich_extended_profiles` — enrich selected lead member IDs with profile
   fields, then persist them back to the latest Sales Nav artifact
 - `sales_nav_resolve_member_ids` — resolve mutual member IDs to LinkedIn URLs
@@ -45,7 +45,7 @@ server.
   guess `set_id`s.
 - **Default to `persist_artifact: true` on every `sales_nav_search` call.**
   Persistence is cheap and lets the user (or the agent in a later turn) page
-  large result sets via `get_artifact`. Only pass `persist_artifact: false`
+  large result sets via direct artifact download or `get_artifact` when explicitly inspecting. Only pass `persist_artifact: false`
   when the user explicitly asks for an ephemeral search.
 - Persistence requires a `conversation_id`. See the conversation_id playbook
   below — without one, persistence is silently skipped server-side and you
@@ -114,7 +114,7 @@ get one:
    that id; they just won't be linked to a webapp conversation.
 
 Always pass the same `conversation_id` to subsequent `sales_nav_search`
-calls and the matching `get_artifact` call.
+calls. The local runner downloads the matching persisted artifact by returned `artifact_id`.
 
 ## Fast path runner
 
@@ -195,9 +195,8 @@ uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_n
 ```
 
 Do not ingest compact MCP preview rows when full artifact content is available.
-After each MCP `sales_nav_search`, save the response for audit, then immediately
-call `get_artifact(include_content=true)` for the returned `artifact_id`, save
-that full artifact response, and ingest with `--prefer-content`:
+After each MCP `sales_nav_search`, save the compact response for audit, then immediately
+download the persisted artifact by returned `artifact_id` without routing the full JSON through MCP/LLM context, and ingest with `--prefer-content`:
 
 ```bash
 uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-page \
@@ -223,7 +222,7 @@ uv run --project powerpacks python powerpacks/packs/sales-nav/primitives/sales_n
   --response .powerpacks/sales-nav/runs/<run>/member_urls.response.json
 ```
 
-After `enrich_extended_profiles`, call `get_artifact(include_content=true)` again
+After `enrich_extended_profiles`, download the same artifact id again
 and ingest with `--prefer-content` so `leads.jsonl` contains the full enriched
 profile fields (`summary`, `experiences`, `education`).
 
@@ -392,8 +391,8 @@ Response shape (with persistence):
 `reconnect_required: true` means the user's Unipile/LinkedIn session
 needs upstream re-auth; tell the user and stop. Do not retry.
 
-Save the MCP response for audit, but ingest the full artifact content: call
-`get_artifact` with `include_content: true`, save that response, then run
+Save the MCP response for audit, but ingest the full artifact content by running
+`sales_nav_artifacts download-artifact --artifact-id <artifact_id> --out ...`, then run
 `sales_nav_artifacts ingest-page --prefer-content` on it. The primitive records
 `artifact_id`, lead rows, mutual edges, and source/operator metadata in local
 handoff files.
@@ -409,12 +408,12 @@ Args: {
 }
 ```
 
-After enrichment, call `get_artifact(include_content=true)` again and ingest
+After enrichment, download the same artifact id again and ingest
 with `--prefer-content`. This is what puts full profile data (`summary`,
 `experiences`, `education`) into `leads.jsonl`.
 
 Every follow-up retrieval (next page, mutual lookup, re-display) should use the
-local state path plus `get_artifact` / `sales_nav_resolve_member_ids` as needed.
+local state path plus direct artifact download / `sales_nav_resolve_member_ids` as needed.
 
 ### Step 3 — Present the first page
 
@@ -426,10 +425,9 @@ local state path plus `get_artifact` / `sales_nav_resolve_member_ids` as needed.
   turns / sessions).
 - If `has_more`, ask if they want page N+1 — do **not** auto-fetch.
 
-### Step 4 — Paginate via get_artifact
+### Step 4 — Paginate or inspect persisted artifacts
 
-Subsequent pages of the same result set should go through
-`get_artifact`, not a fresh `sales_nav_search`. Save each page response and
+Subsequent pages of the same result set should use persisted artifact retrieval, not a fresh `sales_nav_search`. For local full-content ingest, prefer direct `download-artifact` by UUID; for small interactive page inspection, `get_artifact` remains available. Save each page response and
 append it to the same local files with `sales_nav_artifacts ingest-page`:
 
 ```text
@@ -462,7 +460,7 @@ questions like "which of these have real estate exposure", "who is in NYC", or
 
 | User says | What changes |
 | --- | --- |
-| "next page" | `get_artifact` with `offset += 25` |
+| "next page" | persisted artifact retrieval with `offset += 25` (`get_artifact` for interactive page inspection, direct download for local full ingest) |
 | "narrow to NYC" | new `sales_nav_search` with `geography_ids` |
 | "only senior+ folks" | new `sales_nav_search` with `seniority_ids` |
 | "filter to mid-stage companies" | new `sales_nav_search` with `headcount_ids` |
@@ -483,4 +481,4 @@ artifact rather than run a search.
 - It does not promote leads into the Powerset main set. That UI affordance
   is on the web app today.
 - It does not run a sequence of pages on its own. Pagination is always
-  user-confirmed and goes through `get_artifact`.
+  user-confirmed and goes through persisted artifact retrieval, not a fresh search.

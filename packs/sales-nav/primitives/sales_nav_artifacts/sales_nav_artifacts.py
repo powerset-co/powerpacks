@@ -13,8 +13,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
+import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -84,6 +89,151 @@ def read_json(path: Path) -> Any:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def _api_base_from_env() -> str | None:
+    return os.environ.get("NETWORK_SEARCH_API_BASE_URL") or os.environ.get("POWERPACKS_API_BASE_URL")
+
+
+def _credentials_path() -> Path:
+    configured = os.environ.get("POWERPACKS_CREDENTIALS_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".powerpacks" / "credentials.json"
+
+
+def _parse_expires_at(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        try:
+            return float(stripped)
+        except ValueError:
+            pass
+        try:
+            if stripped.endswith("Z"):
+                stripped = stripped[:-1] + "+00:00"
+            parsed = datetime.fromisoformat(stripped)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def load_artifact_download_token(cli_token: str | None = None) -> str:
+    """Load the Auth0 bearer token without ever printing it."""
+    if cli_token:
+        return cli_token
+    env_token = os.environ.get("NETWORK_SEARCH_API_TOKEN")
+    if env_token:
+        return env_token
+
+    credentials_path = _credentials_path()
+    if not credentials_path.exists():
+        raise RuntimeError("artifact download auth token is required; run powerset_auth login")
+    try:
+        credentials = json.loads(credentials_path.read_text())
+    except Exception as exc:
+        raise RuntimeError("artifact download credentials are invalid; run powerset_auth login") from exc
+    if not isinstance(credentials, dict) or not credentials.get("access_token"):
+        raise RuntimeError("artifact download auth token is required; run powerset_auth login")
+    expires_at = _parse_expires_at(credentials.get("expires_at"))
+    if expires_at is not None and expires_at <= time.time():
+        raise RuntimeError("access token expired; run powerset_auth token to refresh")
+    return str(credentials["access_token"])
+
+
+def _artifact_download_url(api_base: str, artifact_id: str, include_content: bool) -> str:
+    base = api_base.rstrip("/")
+    include = "true" if include_content else "false"
+    return f"{base}/v2/artifacts/{artifact_id}/download?include_content={include}&download=true"
+
+
+def _is_local_api_base(api_base: str) -> bool:
+    host = urllib.parse.urlparse(api_base).hostname or ""
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _allow_test_api_key(api_base: str) -> bool:
+    if not os.environ.get("TEST_API_KEY"):
+        return False
+    explicit = str(os.environ.get("POWERPACKS_ALLOW_TEST_API_KEY_ARTIFACT_DOWNLOAD") or "").strip().lower()
+    return _is_local_api_base(api_base) or explicit in {"1", "true", "yes", "on"}
+
+
+def _validate_download_payload(payload: Any) -> int:
+    if not isinstance(payload, dict):
+        raise RuntimeError("response is not a JSON object")
+    leads = (((payload.get("content") or {}).get("extended_results") or {}).get("leads"))
+    if not isinstance(leads, list):
+        raise RuntimeError("missing content.extended_results.leads")
+    return len([lead for lead in leads if isinstance(lead, dict)])
+
+
+def download_artifact_to_file(
+    *,
+    artifact_id: str,
+    output: Path,
+    api_base: str,
+    token: str | None,
+    include_content: bool = True,
+) -> dict[str, Any]:
+    """Download a persisted artifact JSON response and atomically write it."""
+    if not api_base:
+        raise RuntimeError("artifact download API base URL is required; set NETWORK_SEARCH_API_BASE_URL or POWERPACKS_API_BASE_URL or pass --api-base")
+    resolved_token = token
+    if not resolved_token:
+        try:
+            resolved_token = load_artifact_download_token()
+        except RuntimeError as exc:
+            if not (_allow_test_api_key(api_base) and "auth token is required" in str(exc)):
+                raise
+    test_api_key = os.environ.get("TEST_API_KEY") if not resolved_token and _allow_test_api_key(api_base) else None
+    if not resolved_token and not test_api_key:
+        raise RuntimeError("artifact download auth token is required; run powerset_auth login")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp_name: str | None = None
+    try:
+        headers: dict[str, str] = {}
+        if resolved_token:
+            headers["Authorization"] = f"Bearer {resolved_token}"
+        if test_api_key:
+            headers["X-API-Key"] = test_api_key
+        req = urllib.request.Request(_artifact_download_url(api_base, artifact_id, include_content), headers=headers)
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            data = resp.read()
+        with tempfile.NamedTemporaryFile("wb", dir=str(output.parent), prefix=f".{output.name}.", suffix=".tmp", delete=False) as handle:
+            tmp_name = handle.name
+            handle.write(data)
+        try:
+            payload = json.loads(Path(tmp_name).read_text())
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("malformed JSON response") from exc
+        lead_count = _validate_download_payload(payload)
+        os.replace(tmp_name, output)
+        tmp_name = None
+        return {
+            "response": "downloaded",
+            "artifact_id": artifact_id,
+            "output": str(output),
+            "byte_size": len(data),
+            "lead_count": lead_count,
+        }
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"http {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(getattr(exc, "reason", None) or "network error") from exc
+    finally:
+        if tmp_name:
+            try:
+                Path(tmp_name).unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -433,15 +583,22 @@ def cmd_ingest_page(args: argparse.Namespace) -> None:
         raise SystemExit("sales nav response requires reconnect")
 
     existing_leads = read_jsonl(paths["leads_jsonl"])
+    lead_count_before = len(existing_leads)
+    existing_member_ids = {str(row.get("member_id")) for row in existing_leads if row.get("member_id")}
     for row in existing_leads:
         row.pop("source_account_id", None)
     by_member = {str(row.get("member_id")): row for row in existing_leads if row.get("member_id")}
     normalized_leads: list[dict[str, Any]] = []
     normalized_mutuals: list[dict[str, Any]] = []
+    new_member_ids: list[str] = []
+    seen_incoming: set[str] = set()
     for idx, lead in enumerate(leads):
         mid = str(lead.get("member_id") or "")
         if not mid:
             continue
+        if mid not in existing_member_ids and mid not in seen_incoming:
+            new_member_ids.append(mid)
+        seen_incoming.add(mid)
         lead_row = normalize_lead(lead, state=state, page_meta=page_meta, index=idx, existing=by_member.get(mid))
         normalized_leads.append(lead_row)
         normalized_mutuals.extend(mutual_rows_for_lead(lead, lead_row, state=state, page_meta=page_meta))
@@ -463,11 +620,32 @@ def cmd_ingest_page(args: argparse.Namespace) -> None:
         "state": str(state_path),
         "leads_ingested": len(normalized_leads),
         "lead_count": len(all_leads),
+        "lead_count_before": lead_count_before,
+        "lead_count_after": len(all_leads),
+        "new_leads_ingested": len(new_member_ids),
+        "new_member_ids": new_member_ids,
         "mutual_edges_ingested": len(normalized_mutuals),
         "mutual_edge_count": len(all_mutuals),
         "artifact_id": artifact_id,
         "files": state.get("files"),
     }, indent=2, sort_keys=True))
+
+
+def cmd_download_artifact(args: argparse.Namespace) -> None:
+    api_base = args.api_base or _api_base_from_env()
+    if not api_base:
+        raise SystemExit("artifact download failed: artifact download API base URL is required; set NETWORK_SEARCH_API_BASE_URL or POWERPACKS_API_BASE_URL or pass --api-base")
+    try:
+        payload = download_artifact_to_file(
+            artifact_id=args.artifact_id,
+            output=Path(args.out),
+            api_base=api_base,
+            token=args.token,
+            include_content=True,
+        )
+    except Exception as exc:
+        raise SystemExit(f"artifact download failed: {str(exc)[:200]}") from exc
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def cmd_ingest_member_urls(args: argparse.Namespace) -> None:
@@ -627,6 +805,13 @@ def main() -> None:
     init.add_argument("--out-dir")
     init.add_argument("--state")
     init.set_defaults(func=cmd_init)
+
+    download = sub.add_parser("download-artifact")
+    download.add_argument("--artifact-id", required=True)
+    download.add_argument("--out", required=True)
+    download.add_argument("--api-base")
+    download.add_argument("--token")
+    download.set_defaults(func=cmd_download_artifact)
 
     ingest = sub.add_parser("ingest-page")
     ingest.add_argument("--state", required=True)

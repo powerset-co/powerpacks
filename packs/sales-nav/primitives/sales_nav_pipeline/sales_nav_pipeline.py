@@ -69,11 +69,35 @@ PLAN_METADATA_KEYS = {
     "steps",
     "criteria",
     "score_criteria",
+    "min_leads",
+    "stop_after_min_leads",
+    "required",
+    "strategy",
+}
+
+DURATION_EVENTS = {
+    "mcp_round_trip_seconds": ("mcp_call_requested_at", "mcp_response_received_at"),
+    "artifact_download_seconds": ("artifact_download_started_at", "artifact_download_completed_at"),
+    "local_ingest_seconds": ("local_ingest_started_at", "local_ingest_completed_at"),
+    "enrichment_seconds": ("mcp_call_requested_at", "enrichment_completed_at"),
+    "export_seconds": ("export_started_at", "export_completed_at"),
 }
 
 
 def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_time(value: Any) -> float | None:
+    if not value:
+        return None
+    try:
+        text = str(value)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text).timestamp()
+    except Exception:
+        return None
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -200,7 +224,49 @@ def mark(path: Path, ledger: dict[str, Any], step: str, status: str, **kwargs: A
     rec = ledger.setdefault("steps", {}).setdefault(step, {"id": step})
     rec.update(status=status, **kwargs)
     rec["updated_at"] = now()
+    update_durations(rec)
     save(path, ledger)
+
+
+def record_timing(ledger: dict[str, Any], step: str, event: str, timestamp: str | None = None) -> None:
+    rec = ledger.setdefault("steps", {}).setdefault(step, {"id": step})
+    rec[event] = timestamp or now()
+    update_durations(rec)
+
+
+def finish_duration(ledger: dict[str, Any], step: str, name: str, start_event: str, end_event: str) -> None:
+    rec = ledger.setdefault("steps", {}).setdefault(step, {"id": step})
+    start = parse_time(rec.get(start_event))
+    end = parse_time(rec.get(end_event))
+    if start is None or end is None:
+        return
+    rec.setdefault("durations", {})[name] = round(max(0.0, end - start), 3)
+
+
+def update_durations(rec: dict[str, Any]) -> None:
+    for name, (start_event, end_event) in DURATION_EVENTS.items():
+        start = parse_time(rec.get(start_event))
+        end = parse_time(rec.get(end_event))
+        if start is not None and end is not None:
+            rec.setdefault("durations", {})[name] = round(max(0.0, end - start), 3)
+    durations = rec.setdefault("durations", {}) if rec.get("durations") else None
+    if durations and "mcp_round_trip_seconds" in durations:
+        summary = rec.get("summary") if isinstance(rec.get("summary"), dict) else {}
+        server_elapsed = summary.get("elapsed_seconds") or summary.get("server_elapsed_seconds")
+        if summary.get("timing_ms") is not None:
+            try:
+                server_elapsed = float(summary["timing_ms"]) / 1000.0
+            except (TypeError, ValueError):
+                pass
+        try:
+            server = float(server_elapsed) if server_elapsed is not None else None
+        except (TypeError, ValueError):
+            server = None
+        if server is not None:
+            durations["server_elapsed_seconds"] = round(max(0.0, server), 3)
+            durations["agent_handoff_seconds"] = round(max(0.0, durations["mcp_round_trip_seconds"] - server), 3)
+        else:
+            durations["agent_handoff_seconds"] = durations["mcp_round_trip_seconds"]
 
 
 def approved(ledger: dict[str, Any], aid: str) -> bool:
@@ -261,6 +327,7 @@ def block_tool_call(
     if artifact_id:
         block["artifact_id"] = artifact_id
     ledger["current_block"] = block
+    record_timing(ledger, step, "mcp_call_requested_at")
     mark(ledger_path_, ledger, step, "blocked_tool_call", summary=block)
     emit(block)
     return 30
@@ -366,6 +433,8 @@ def normalize_search_plan(raw: Any, *, set_id: str | None, conversation_id: str 
             "label": str(label),
             "args": tool_args,
             "raw_args": raw_args,
+            "required": bool(item.get("required")),
+            "strategy": item.get("strategy"),
         })
     return plan, criteria
 
@@ -400,6 +469,13 @@ def search_plan(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, 
         raise RuntimeError("Search plan is empty")
     artifacts["search_plan"] = plan
     artifacts["search_plan_source"] = source
+    if isinstance(raw, dict):
+        if raw.get("min_leads") is not None:
+            artifacts["min_leads"] = int(raw.get("min_leads") or 0)
+            artifacts["stop_after_min_leads"] = truthy(raw.get("stop_after_min_leads", True))
+        elif raw.get("minimum_lead_threshold") is not None:
+            artifacts["min_leads"] = int(raw.get("minimum_lead_threshold") or 0)
+            artifacts["stop_after_min_leads"] = truthy(raw.get("stop_after_min_leads", True))
     if criteria and not artifacts.get("score_criteria"):
         artifacts["score_criteria"] = criteria
     save(ledger_path_, ledger)
@@ -511,6 +587,54 @@ def ingest_page(state: Path, response: Path, *, prefer_content: bool, step: str,
     return payload
 
 
+def download_and_ingest_artifact(
+    state: Path,
+    artifact_id: str,
+    output: Path,
+    *,
+    step: str,
+    ledger_path_: Path,
+    ledger: dict[str, Any],
+) -> dict[str, Any]:
+    download_cmd = [
+        sys.executable,
+        str(ROOT / ARTIFACTS_REL),
+        "download-artifact",
+        "--artifact-id", str(artifact_id),
+        "--out", str(output),
+    ]
+    record_timing(ledger, step, "artifact_download_started_at")
+    download_payload = require(run(download_cmd, timeout=600), "download-artifact")
+    record_timing(ledger, step, "artifact_download_completed_at")
+
+    ingest_cmd = [
+        sys.executable,
+        str(ROOT / ARTIFACTS_REL),
+        "ingest-page",
+        "--state", str(state),
+        "--response", str(output),
+        "--prefer-content",
+    ]
+    record_timing(ledger, step, "local_ingest_started_at")
+    ingest_payload = require(run(ingest_cmd), "ingest downloaded artifact")
+    record_timing(ledger, step, "local_ingest_completed_at")
+
+    summary = {
+        "artifact_id": artifact_id,
+        "download": download_payload,
+        "ingest": ingest_payload,
+        "new_leads_ingested": ingest_payload.get("new_leads_ingested"),
+        "new_member_ids": ingest_payload.get("new_member_ids"),
+        "lead_count": ingest_payload.get("lead_count"),
+    }
+    command = " && ".join([
+        " ".join(map(shlex.quote, download_cmd)),
+        " ".join(map(shlex.quote, ingest_cmd)),
+    ])
+    mark(ledger_path_, ledger, step, "completed", summary=summary, command=command)
+    return summary
+
+
 def ingest_member_urls(state: Path, response: Path, *, step: str, ledger_path_: Path, ledger: dict[str, Any]) -> dict[str, Any]:
     cmd = [
         sys.executable,
@@ -532,6 +656,8 @@ def process_response(args: argparse.Namespace, ledger_path_: Path, ledger: dict[
     block = ledger.get("current_block") or {}
     step = block.get("step") or ("ingest_full_artifact" if args.prefer_content else "ingest_page")
     tool_name = block.get("tool_name")
+    if step:
+        record_timing(ledger, step, "mcp_response_received_at")
 
     if tool_name == "sales_nav_search":
         summary = response_summary(payload)
@@ -546,6 +672,7 @@ def process_response(args: argparse.Namespace, ledger_path_: Path, ledger: dict[
     elif tool_name == "get_artifact" or args.prefer_content:
         ingest_page(state, response_path, prefer_content=True, step=step, ledger_path_=ledger_path_, ledger=ledger)
     elif tool_name == "enrich_extended_profiles":
+        record_timing(ledger, step, "enrichment_completed_at")
         mark(ledger_path_, ledger, step, "completed", summary=response_summary(payload), response=str(response_path))
     elif tool_name == "sales_nav_resolve_member_ids":
         ingest_member_urls(state, response_path, step=step, ledger_path_=ledger_path_, ledger=ledger)
@@ -568,6 +695,21 @@ def latest_artifact_for_search(ledger: dict[str, Any], search_step: str) -> str 
     return None
 
 
+def step_summary(ledger: dict[str, Any], step: str) -> dict[str, Any]:
+    summary = ledger.get("steps", {}).get(step, {}).get("summary") or {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def local_lead_count(state_path: Path) -> int:
+    return len(load_leads(state_path))
+
+
+def mark_plan_item_skipped(path: Path, ledger: dict[str, Any], steps: list[str], reason: str, **extra: Any) -> None:
+    for step in steps:
+        if not done(ledger, step):
+            mark(path, ledger, step, "completed", summary={"reason": reason, **extra})
+
+
 def advance_searches(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> int | None:
     plan = search_plan(args, ledger_path_, ledger, state)
     run_dir = state.parent
@@ -579,6 +721,26 @@ def advance_searches(args: argparse.Namespace, ledger_path_: Path, ledger: dict[
         artifact_step = f"get_artifact_{index:03d}"
         enrich_step = f"enrich_profiles_{index:03d}"
         enriched_artifact_step = f"get_artifact_after_enrich_{index:03d}"
+
+        artifacts_meta = ledger.get("artifacts") or {}
+        min_leads = artifacts_meta.get("min_leads")
+        stop_after_min = truthy(artifacts_meta.get("stop_after_min_leads", min_leads is not None))
+        if index > 0 and min_leads is not None and stop_after_min and not item.get("required"):
+            try:
+                threshold = int(min_leads)
+            except (TypeError, ValueError):
+                threshold = 0
+            current_count = local_lead_count(state)
+            if threshold and current_count >= threshold:
+                mark_plan_item_skipped(
+                    ledger_path_,
+                    ledger,
+                    [search_step, artifact_step, enrich_step, enriched_artifact_step],
+                    "minimum_lead_threshold_met",
+                    lead_count=current_count,
+                    min_leads=threshold,
+                )
+                continue
 
         if not done(ledger, search_step):
             save_to = str(pages / f"sales-nav-search-{index:03d}.response.json")
@@ -595,22 +757,39 @@ def advance_searches(args: argparse.Namespace, ledger_path_: Path, ledger: dict[
             )
 
         artifact_id = latest_artifact_for_search(ledger, search_step)
-        if artifact_id and not done(ledger, artifact_step):
-            save_to = str(pages / f"artifact-full-{index:03d}.json")
-            payload = {"artifact_id": artifact_id, "offset": 0, "limit": args.artifact_limit, "include_content": True}
-            return block_tool_call(
+        search_summary = step_summary(ledger, search_step)
+        if search_summary.get("results_returned") is not None and int(search_summary.get("results_returned") or 0) == 0:
+            mark_plan_item_skipped(
                 ledger_path_,
                 ledger,
-                step=artifact_step,
-                tool_name="get_artifact",
-                tool_args=payload,
-                save_response_to=save_to,
-                plan_index=index,
+                [artifact_step, enrich_step, enriched_artifact_step],
+                "zero_results_no_new_leads",
                 artifact_id=artifact_id,
-                message="Call get_artifact(include_content=true) for the persisted Sales Nav search, save it, then continue.",
+            )
+            continue
+
+        if artifact_id and not done(ledger, artifact_step):
+            download_and_ingest_artifact(
+                state,
+                artifact_id,
+                pages / f"artifact-full-{index:03d}.json",
+                step=artifact_step,
+                ledger_path_=ledger_path_,
+                ledger=ledger,
             )
         if not artifact_id and not done(ledger, f"ingest_compact_{search_step}"):
             mark(ledger_path_, ledger, artifact_step, "completed", summary={"reason": "no_artifact_id_compact_response_ingested"})
+
+        artifact_summary = step_summary(ledger, artifact_step)
+        if artifact_summary.get("new_leads_ingested") == 0:
+            mark_plan_item_skipped(
+                ledger_path_,
+                ledger,
+                [enrich_step, enriched_artifact_step],
+                "zero_new_leads_after_ingest",
+                artifact_id=artifact_id,
+            )
+            continue
 
         if not args.skip_enrich and not done(ledger, enrich_step):
             member_ids = member_ids_for_enrichment(state, artifact_id=artifact_id, limit=args.enrich_limit)
@@ -636,19 +815,18 @@ def advance_searches(args: argparse.Namespace, ledger_path_: Path, ledger: dict[
             mark(ledger_path_, ledger, enrich_step, "completed", summary={"reason": "no_unenriched_member_ids", "artifact_id": artifact_id})
 
         if not args.skip_enrich and artifact_id and done(ledger, enrich_step) and not done(ledger, enriched_artifact_step):
-            save_to = str(pages / f"artifact-full-after-enrich-{index:03d}.json")
-            payload = {"artifact_id": artifact_id, "offset": 0, "limit": args.artifact_limit, "include_content": True}
-            return block_tool_call(
-                ledger_path_,
-                ledger,
-                step=enriched_artifact_step,
-                tool_name="get_artifact",
-                tool_args=payload,
-                save_response_to=save_to,
-                plan_index=index,
-                artifact_id=artifact_id,
-                message="Reload the enriched Sales Nav artifact with include_content=true, save it, then continue.",
-            )
+            enrich_summary = step_summary(ledger, enrich_step)
+            if int(enrich_summary.get("updated_leads") or 0) <= 0:
+                mark(ledger_path_, ledger, enriched_artifact_step, "completed", summary={"reason": "no_updated_leads", "artifact_id": artifact_id})
+            else:
+                download_and_ingest_artifact(
+                    state,
+                    artifact_id,
+                    pages / f"artifact-full-after-enrich-{index:03d}.json",
+                    step=enriched_artifact_step,
+                    ledger_path_=ledger_path_,
+                    ledger=ledger,
+                )
 
     return None
 
@@ -713,7 +891,9 @@ def export_state(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str,
     if done(ledger, "export") and not args.force:
         return
     cmd = [sys.executable, str(ROOT / ARTIFACTS_REL), "export", "--state", str(state)]
+    record_timing(ledger, "export", "export_started_at")
     payload = require(run(cmd), "export")
+    record_timing(ledger, "export", "export_completed_at")
     ledger.setdefault("artifacts", {}).update({
         "leads_csv": payload.get("leads_csv"),
         "mutuals_csv": payload.get("mutuals_csv"),

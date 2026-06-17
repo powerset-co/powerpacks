@@ -33,9 +33,9 @@ If those are not in place, the skill routes the user through
 
 - `sales-nav-search` — Run a Sales Navigator search through the MCP.
   Resolves company / title filters, runs a resumable multi-query lead search
-  with server-side artifact persistence on by default, enriches loaded leads,
+  with server-side artifact persistence on by default, downloads artifacts directly by UUID for local ingest, enriches loaded leads,
   resolves mutual URLs locally, stores local `leads.jsonl` / `mutuals.jsonl`
-  handoff files, and offers paginated retrieval via `get_artifact`. See
+  handoff files, and offers paginated retrieval via `get_artifact` when explicitly inspecting an artifact. See
   [`skills/sales-nav-search/SKILL.md`](skills/sales-nav-search/SKILL.md).
 
 ## MCP Tools Used
@@ -46,7 +46,7 @@ The skill orchestrates these tools served by the remote MCP:
 | --- | --- |
 | `sales_nav_resolve` | Translate human company / title strings to LinkedIn IDs. |
 | `sales_nav_search` | Paginated lead search; persists an artifact when `persist_artifact=true`. |
-| `get_artifact` | Page back through a persisted result set without re-running the search. |
+| `get_artifact` | Page back through a persisted result set when explicitly inspecting it; normal local handoff uses direct artifact download by UUID. |
 | `enrich_extended_profiles` | Enrich selected lead member IDs with full profile fields and update the latest artifact. |
 | `sales_nav_resolve_member_ids` | Resolve lead/mutual member IDs to LinkedIn URLs from cache/free layers by default. |
 
@@ -65,8 +65,7 @@ agent-facing orchestration layer; it does not duplicate those contracts.
 ## Defaults
 
 - `persist_artifact: true` on every `sales_nav_search` call. Persistence
-  is cheap and lets the agent page large result sets via `get_artifact`
-  in a later turn.
+  is cheap and lets the runner download full artifact JSON directly by UUID without routing it through MCP/LLM context.
 - `count: 25` per page (LinkedIn cap).
 - Do not loop unbounded. Use explicit multi-query search plans for known
   recall gaps (strict search + fallback search, one deliberate extra broad page,
