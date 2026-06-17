@@ -240,7 +240,7 @@ export function LocalPowerpacksApp() {
 
   return (
     <TooltipProvider delayDuration={100} skipDelayDuration={300}>
-      <div className="flex min-h-dvh bg-background text-foreground">
+      <div className="flex h-dvh overflow-hidden bg-background text-foreground">
         <LocalRunSidebar
           activeView={
             activeView === "runs"
