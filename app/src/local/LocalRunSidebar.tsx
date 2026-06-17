@@ -131,9 +131,10 @@ export function LocalRunSidebar({
   const sourceById = new Map(accountSources.map((source) => [source.id, source]));
   const connectionRows = [
     { id: "linkedin_csv", label: "LinkedIn" },
-    { id: "gmail", label: "Gmail" },
-    { id: "messages", label: "Messages" },
-    { id: "twitter", label: "Socials" },
+    // Temporarily hidden until these source pages are fast enough for the sidebar.
+    // { id: "gmail", label: "Gmail" },
+    // { id: "messages", label: "Messages" },
+    // { id: "twitter", label: "Socials" },
   ].map((item) => ({ ...item, source: sourceById.get(item.id) }));
 
   return (
