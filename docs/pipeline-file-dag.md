@@ -16,57 +16,64 @@
 > - 2026-06-16: restructured to a **File Registry** — every IO now carries a
 >   location constant **and** a schema constant, with `exists / 🆕 to-create`
 >   status; added §6 spec for a single `pipeline_files.py` registry module.
+> - 2026-06-16: show **full repo-root paths** for every artifact + `<operator_id>`
+>   / `<gmail_account>` / `<label>` placeholders; clarify `—` = non-CSV contract
+>   (bind `LOCAL_TABLE_CONTRACT` etc.), not "unknown".
 
 ---
 
 ## 0. 📒 File Registry — every input/output = (location constant, schema constant)
 
-Legend: ✅ constant exists · ⚠️ exists but duplicated / stage-scoped · 🆕 must be created.
-"Location" = canonical path/key. "Schema" = expected CSV header (or kind for non-CSV).
+Legend: ✅ constant exists · ⚠️ exists but duplicated / stage-scoped · 🆕 must be created · **`—` = non-CSV artifact** (sqlite / duckdb / json / cache dir) with no column schema — bind its table/manifest contract (e.g. duckdb `LOCAL_TABLE_CONTRACT`) instead, not "unknown". Status badges are inlined next to each constant.
+
+**Placeholders (scoped path segments):**
+- `<gmail_account>` = `source_slug(email)`, e.g. `arthur-powerset.co` (slug, **not** the raw email).
+- `<operator_id>` = `POWERPACKS_OPERATOR_ID`, default `e33a648a-ae5f-432e-83ce-b90d75546ada`.
+- `<label>` = Modal run label, e.g. `gmail-index`, `linkedin-index`.
+- Modal Volume = `powerset-indexing`, mounted at `/data`. All local paths are relative to the repo working dir (e.g. `/Users/arthur/workspace/powerpacks/` + the shown path).
 
 ### Gmail flow
 
-| Artifact | Location constant | Status | Schema constant | Status |
-|---|---|---|---|---|
-| accounts.json | `DEFAULT_ACCOUNTS` (`import_contacts_pipeline/common.py:27`) | ⚠️ dup in `index_contacts_pipeline.py:30` | _(json)_ | — |
-| msgvault.db | `DEFAULT_MSGVAULT_DB` (`discover_contacts_pipeline/common.py:24`) | ✅ | _(sqlite)_ | — |
-| discover/gmail/**contacts.csv** | `DISCOVER_CONTACTS_CSV` (`setup_gmail.py:48`) | ⚠️ defined only in setup_gmail; discover/import re-derive | `GMAIL_DISCOVERY_COLUMNS` (`discover_contacts_pipeline/gmail.py:71`) | ✅ |
-| discover/gmail/**linkedin_resolution_queue.csv** | 🆕 `GMAIL_DISCOVER_QUEUE_CSV` | 🆕 | `LINKEDIN_RESOLUTION_QUEUE_COLUMNS` (`gmail_network_import.py:183`) | ✅ |
-| discover/gmail/**manifest.json** | 🆕 `GMAIL_DISCOVER_MANIFEST` | 🆕 | _(manifest)_ | — |
-| discover/gmail/**`<acct>`/** (per-account dir) | 🆕 `gmail_account_dir(email)` | 🆕 *(the double-nest origin)* | — | — |
-| discover/gmail/`<acct>`/**people.csv** | 🆕 `gmail_account_people_csv(email)` | 🆕 | `PEOPLE_SCHEMA_COLUMNS` (`people_schema.py:19`) | ✅ |
-| import/gmail/**people.csv** | 🆕 `GMAIL_IMPORT_PEOPLE_CSV` (= `DEFAULT_IMPORT_DIR/"gmail"/"people.csv"`) | 🆕 | `PEOPLE_SCHEMA_COLUMNS` | ✅ |
-| **directory.csv** | `DEFAULT_DIRECTORY_CSV` (`discover_contacts_pipeline/common.py:23`) | ✅ | `DIRECTORY_COLUMNS` (`directory.py:44`) | ✅ |
+| Full path | Location constant | Schema |
+|---|---|---|
+| `.powerpacks/ingestion/accounts.json` | `DEFAULT_ACCOUNTS` ⚠️ dup `index_contacts_pipeline.py:30` | _(json)_ — |
+| `~/.msgvault/msgvault.db` | `DEFAULT_MSGVAULT_DB` ✅ | _(sqlite)_ — |
+| `.powerpacks/network-import/discover/gmail/contacts.csv` | `DISCOVER_CONTACTS_CSV` ⚠️ setup-scoped | `GMAIL_DISCOVERY_COLUMNS` ✅ |
+| `.powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv` | 🆕 `GMAIL_DISCOVER_QUEUE_CSV` | `LINKEDIN_RESOLUTION_QUEUE_COLUMNS` ✅ |
+| `.powerpacks/network-import/discover/gmail/manifest.json` | 🆕 `GMAIL_DISCOVER_MANIFEST` | _(manifest json)_ — |
+| `.powerpacks/network-import/discover/gmail/<gmail_account>/` | 🆕 `gmail_account_dir(email)` *(double-nest origin)* | _(dir)_ — |
+| `.powerpacks/network-import/discover/gmail/<gmail_account>/people.csv` | 🆕 `gmail_account_people_csv(email)` | `PEOPLE_SCHEMA_COLUMNS` ✅ |
+| `.powerpacks/network-import/import/gmail/people.csv` | 🆕 `GMAIL_IMPORT_PEOPLE_CSV` | `PEOPLE_SCHEMA_COLUMNS` ✅ |
+| `.powerpacks/network-import/directory.csv` | `DEFAULT_DIRECTORY_CSV` ✅ | `DIRECTORY_COLUMNS` ✅ |
 
 ### LinkedIn flow
 
-| Artifact | Location constant | Status | Schema constant | Status |
-|---|---|---|---|---|
-| Connections.csv (staged) | `DISCOVER_CONNECTIONS_CSV` (`setup_linkedin_csv.py:53`) | ⚠️ setup-scoped | `LINKEDIN_DISCOVERY_COLUMNS` (`discover_contacts_pipeline/linkedin.py:57`) | ✅ |
-| profile_cache_v2/ | `DEFAULT_PROFILE_CACHE_DIR` (`import_contacts_pipeline/common.py:29`) | ⚠️ re-built as string `setup_linkedin_csv.py:235` | _(profile cache)_ | — |
-| import/linkedin/**people.csv** | 🆕 `LINKEDIN_IMPORT_PEOPLE_CSV` | 🆕 | `PEOPLE_SCHEMA_COLUMNS` | ✅ |
-| search-index/**local-search.duckdb** | 🆕 `LOCAL_SEARCH_DUCKDB` | 🆕 *(hand-built `output_dir/"local-search.duckdb"` ~5×)* | _(duckdb)_ | — |
+| Full path | Location constant | Schema |
+|---|---|---|
+| `.powerpacks/network-import/discover/linkedin/Connections.csv` | `DISCOVER_CONNECTIONS_CSV` ⚠️ setup-scoped | `LINKEDIN_DISCOVERY_COLUMNS` ✅ |
+| `.powerpacks/network-import/profile_cache_v2/` | `DEFAULT_PROFILE_CACHE_DIR` ⚠️ re-built as string `setup_linkedin_csv.py:235` | _(profile cache)_ — |
+| `.powerpacks/network-import/import/linkedin/people.csv` | 🆕 `LINKEDIN_IMPORT_PEOPLE_CSV` | `PEOPLE_SCHEMA_COLUMNS` ✅ |
+| `.powerpacks/search-index/local-search.duckdb` | 🆕 `LOCAL_SEARCH_DUCKDB` *(hand-built `output_dir/"local-search.duckdb"` ~5×)* | duckdb `LOCAL_TABLE_CONTRACT` — |
 
 ### Shared join point
 
-| Artifact | Location constant | Status | Schema constant | Status |
-|---|---|---|---|---|
-| **merged/people.csv** | `DEFAULT_PEOPLE_CSV` (`index_contacts_pipeline.py:31`) — also `DEFAULT_OUTPUT_DIR/"people.csv"` (`merge:51`) | ⚠️ two names for one file | `MERGED_COLUMNS` (`merge_network_sources.py:52`) | ✅ |
+| Full path | Location constant | Schema |
+|---|---|---|
+| `.powerpacks/network-import/merged/people.csv` | `DEFAULT_PEOPLE_CSV` ✅ / `DEFAULT_OUTPUT_DIR/"people.csv"` ⚠️ two names | `MERGED_COLUMNS` ✅ |
 
-### Modal handoff (each location has TWO views — write key vs read path)
+### Modal handoff (Volume `powerset-indexing`, mounted at `/data` — each location = write key + read path)
 
-| Artifact | Write **key** constant | Read **path** constant | Status | Schema |
-|---|---|---|---|---|
-| operator root | — | `OPERATOR_ROOT` (`linkedin_modal_pipeline.py:117`) | ✅ | — |
-| operator prefix | 🆕 `OPERATOR_VOLUME_PREFIX` | `OPERATOR_ROOT` | 🆕 *(`op_prefix` hand-built `:421`; fn `:130`)* | — |
-| input/people.csv | 🆕 `OP_INPUT_PEOPLE_KEY` | 🆕 `OP_INPUT_PEOPLE_PATH` | 🆕 | `MERGED_COLUMNS`/`PEOPLE_SCHEMA_COLUMNS` |
-| input/connections.csv | 🆕 `OP_INPUT_CONNECTIONS_KEY` | 🆕 `OP_INPUT_CONNECTIONS_PATH` | 🆕 | `LINKEDIN_DISCOVERY_COLUMNS` |
-| runs/`<label>`/local-search.duckdb | 🆕 `op_run_duckdb_key(label)` | `run_vol_path(label)` (`:127`) | 🆕 key | _(duckdb)_ |
+| Volume **write key** | Sandbox **read path** | Constant(s) | Schema |
+|---|---|---|---|
+| `operators/<operator_id>` | `/data/operators/<operator_id>` | key 🆕 `OPERATOR_VOLUME_PREFIX` · path `OPERATOR_ROOT` ✅ | — |
+| `operators/<operator_id>/input/people.csv` | `/data/operators/<operator_id>/input/people.csv` | 🆕 `OP_INPUT_PEOPLE_KEY` / `OP_INPUT_PEOPLE_PATH` | `MERGED_COLUMNS` ✅ |
+| `operators/<operator_id>/input/connections.csv` | `/data/operators/<operator_id>/input/connections.csv` | 🆕 `OP_INPUT_CONNECTIONS_KEY` / `OP_INPUT_CONNECTIONS_PATH` | `LINKEDIN_DISCOVERY_COLUMNS` ✅ |
+| `operators/<operator_id>/runs/<label>/local-search.duckdb` | `/data/operators/<operator_id>/runs/<label>/local-search.duckdb` | 🆕 `op_run_duckdb_key(label)` · path `run_vol_path(label)` ✅ | duckdb `LOCAL_TABLE_CONTRACT` — |
 
-> **Reading the status column:** every 🆕 and ⚠️ row is a place the pipeline today
-> re-derives a path or schema by hand — i.e. a spot the next wrong-path bug can
-> enter. The schemas mostly already exist; the **bindings** (location↔schema, one
-> owner) do not.
+> **Reading the badges:** every 🆕 and ⚠️ is a place the pipeline today re-derives
+> a path or schema by hand — a spot the next wrong-path bug can enter. The schemas
+> mostly already exist; the **bindings** (full path ↔ location constant ↔ schema,
+> one owner) do not.
 
 ---
 
