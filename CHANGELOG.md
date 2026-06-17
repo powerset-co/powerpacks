@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.7.0...powerpacks-v0.8.0) (2026-06-17)
+
+
+### Features
+
+* add email-context + LinkedIn marker enrichment primitives ([#82](https://github.com/powerset-co/powerpacks/issues/82)) ([1ac0951](https://github.com/powerset-co/powerpacks/commit/1ac0951853f8a215628088e82a3606e08151468f))
+* auto-open markers.csv via --open flag ([#84](https://github.com/powerset-co/powerpacks/issues/84)) ([ae18e6a](https://github.com/powerset-co/powerpacks/commit/ae18e6a41db1d6840aa3beaaa5fc442dce8d42db))
+* seed Gmail Process status on click + add no-spend stub mode ([2f61315](https://github.com/powerset-co/powerpacks/commit/2f61315ba8a75cad6b1e23f8c7b06971009cdc98))
+* seed Gmail Process status on click + no-spend stub mode ([971b834](https://github.com/powerset-co/powerpacks/commit/971b834388c325f9b83a78e8037d50717459ea59))
+
+
+### Bug Fixes
+
+* keep Gmail process on canonical people csv ([390d49b](https://github.com/powerset-co/powerpacks/commit/390d49b4ae92682f1768ed9cc55768dc9887f0f0))
+* remove Gmail Process stub flag (keep seed + 3-stage progress) ([e814ca2](https://github.com/powerset-co/powerpacks/commit/e814ca2329f04eca00193fd24c2740838218e0f1))
+* remove Gmail Process stub flag (kept seed + 3-stage progress) ([03bb5f1](https://github.com/powerset-co/powerpacks/commit/03bb5f1a68f9a7adfdb75ef3c056e172875128c8))
+* remove legacy GCP bootstrap provisioning ([f115be6](https://github.com/powerset-co/powerpacks/commit/f115be67cd3dd72bfe71e7f5b793c267b3fc387f))
+
 ## [0.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.6.0...powerpacks-v0.7.0) (2026-06-16)
 
 
