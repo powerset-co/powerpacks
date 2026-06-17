@@ -24,15 +24,18 @@
 
 ## 0. 📒 File Registry — every input/output = (location constant, schema constant)
 
-Each **Schema** cell names a **format** (CSV / JSON / SQLite / DuckDB / dir) and its bound **contract** constant — there are no "unknown" artifacts. Location/status badges:
+Each **Schema** cell names a **format** (CSV / JSON / SQLite / DuckDB / dir) and its bound **contract** constant — there are no "unknown" artifacts. **Every non-✅ badge is a defect to fix, not an FYI.** Severity:
 
-- **✅** — one shared constant, used by everyone.
-- **🆕** — no constant yet; the path/schema is built by hand today (this is where the next wrong-path bug enters).
-- **⚠️** — a constant *exists* but is **not a single shared owner**. Sub-types:
-  - `dup` — the same value is defined in 2+ files (e.g. `DEFAULT_ACCOUNTS` in **both** `import_contacts_pipeline/common.py:27` and `index_contacts_pipeline.py:30`) → they can silently drift apart.
-  - `setup-scoped` — the constant lives **only inside a `setup_*.py` orchestration script** (e.g. `DISCOVER_CONTACTS_CSV` in `setup_gmail.py:48`), so the discover/import primitives that actually read & write the file **re-derive the path themselves** instead of importing it.
-  - `two names` — one file is reachable via two different constants (`merged/people.csv` = `DEFAULT_PEOPLE_CSV` **and** `DEFAULT_OUTPUT_DIR/"people.csv"`).
-  - `re-derived as string` — a hand-built string literal at a call site duplicates the constant's value.
+- **✅ ok** — one shared owner (or an external dependency); nothing to do.
+- **🔴 must-fix (error)** — no single owner, so the path/schema is decided by hand at the call site. This is where bugs *already* came from. Two forms:
+  - `🔴 create` — no constant at all; built by hand (e.g. the Modal `/data` keys, `local-search.duckdb` ~5×, per-account / import `people.csv`).
+  - `🔴 setup-scoped` — a constant exists but **only inside a `setup_*.py` script**, and the real producer/consumer primitives **bypass it and re-derive the path** (e.g. `DISCOVER_CONTACTS_CSV` in `setup_gmail.py:48`). This is exactly what produced the double-nest bug — it *looked* owned and wasn't.
+- **🟡 drift (should-fix)** — a real constant exists and is used, but there's **more than one source of truth** that can silently diverge:
+  - `🟡 dup` — same value defined in 2+ files (`DEFAULT_ACCOUNTS` in `import_contacts_pipeline/common.py:27` **and** `index_contacts_pipeline.py:30`).
+  - `🟡 two-names` — one file via two constants (`merged/people.csv` = `DEFAULT_PEOPLE_CSV` and `DEFAULT_OUTPUT_DIR/"people.csv"`).
+  - `🟡 re-derived` — a hand-built string literal duplicates the constant's value at a call site.
+
+**Fix tally: ~16 🔴 (no single owner) + 3 🟡 (drift).** The §6 registry collapses every 🔴/🟡 to ✅ — one owner, asserted at the boundary.
 
 **Placeholders (scoped path segments):**
 - `<gmail_account>` = `source_slug(email)`, e.g. `arthur-powerset.co` (slug, **not** the raw email).
@@ -44,39 +47,39 @@ Each **Schema** cell names a **format** (CSV / JSON / SQLite / DuckDB / dir) and
 
 | Full path | Location constant | Schema |
 |---|---|---|
-| `.powerpacks/ingestion/accounts.json` | `DEFAULT_ACCOUNTS` ⚠️ dup `index_contacts_pipeline.py:30` | **JSON** · `read_accounts` shape (`accounts`/`channels` → per-channel) 🆕 |
-| `~/.msgvault/msgvault.db` | `DEFAULT_MSGVAULT_DB` ✅ | **SQLite** · msgvault `{sources, messages}` (external tool owns) |
-| `.powerpacks/network-import/discover/gmail/contacts.csv` | `DISCOVER_CONTACTS_CSV` ⚠️ setup-scoped | **CSV** · `GMAIL_DISCOVERY_COLUMNS` ✅ |
-| `.powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv` | 🆕 `GMAIL_DISCOVER_QUEUE_CSV` | **CSV** · `LINKEDIN_RESOLUTION_QUEUE_COLUMNS` ✅ |
-| `.powerpacks/network-import/discover/gmail/manifest.json` | 🆕 `GMAIL_DISCOVER_MANIFEST` | **JSON** · `write_stage_manifest` shape (`discover/common.py:278`) 🆕 |
-| `.powerpacks/network-import/discover/gmail/<gmail_account>/` | 🆕 `gmail_account_dir(email)` *(double-nest origin)* | **dir** · holds `gmail_network_import msgvault` artifacts (people.csv, queue, manifest) |
-| `.powerpacks/network-import/discover/gmail/<gmail_account>/people.csv` | 🆕 `gmail_account_people_csv(email)` | **CSV** · `PEOPLE_SCHEMA_COLUMNS` ✅ |
-| `.powerpacks/network-import/import/gmail/people.csv` | 🆕 `GMAIL_IMPORT_PEOPLE_CSV` | **CSV** · `PEOPLE_SCHEMA_COLUMNS` ✅ |
+| `.powerpacks/ingestion/accounts.json` | `DEFAULT_ACCOUNTS` 🟡 dup `index_contacts_pipeline.py:30` | **JSON** · `read_accounts` shape (`accounts`/`channels`) 🔴 create |
+| `~/.msgvault/msgvault.db` | `DEFAULT_MSGVAULT_DB` ✅ | **SQLite** · msgvault `{sources, messages}` ✅ external |
+| `.powerpacks/network-import/discover/gmail/contacts.csv` | `DISCOVER_CONTACTS_CSV` 🔴 setup-scoped | **CSV** · `GMAIL_DISCOVERY_COLUMNS` ✅ |
+| `.powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv` | 🔴 create `GMAIL_DISCOVER_QUEUE_CSV` | **CSV** · `LINKEDIN_RESOLUTION_QUEUE_COLUMNS` ✅ |
+| `.powerpacks/network-import/discover/gmail/manifest.json` | 🔴 create `GMAIL_DISCOVER_MANIFEST` | **JSON** · `write_stage_manifest` shape (`discover/common.py:278`) 🔴 create |
+| `.powerpacks/network-import/discover/gmail/<gmail_account>/` | 🔴 create `gmail_account_dir(email)` *(double-nest origin)* | **dir** · holds `gmail_network_import msgvault` artifacts (people.csv, queue, manifest) |
+| `.powerpacks/network-import/discover/gmail/<gmail_account>/people.csv` | 🔴 create `gmail_account_people_csv(email)` | **CSV** · `PEOPLE_SCHEMA_COLUMNS` ✅ |
+| `.powerpacks/network-import/import/gmail/people.csv` | 🔴 create `GMAIL_IMPORT_PEOPLE_CSV` | **CSV** · `PEOPLE_SCHEMA_COLUMNS` ✅ |
 | `.powerpacks/network-import/directory.csv` | `DEFAULT_DIRECTORY_CSV` ✅ | **CSV** · `DIRECTORY_COLUMNS` ✅ |
 
 ### LinkedIn flow
 
 | Full path | Location constant | Schema |
 |---|---|---|
-| `.powerpacks/network-import/discover/linkedin/Connections.csv` | `DISCOVER_CONNECTIONS_CSV` ⚠️ setup-scoped | **CSV** · `LINKEDIN_DISCOVERY_COLUMNS` ✅ |
-| `.powerpacks/network-import/profile_cache_v2/` | `DEFAULT_PROFILE_CACHE_DIR` ⚠️ re-derived as string `setup_linkedin_csv.py:235` | **dir** of `<slug>.json` · profile entry (`rapidapi_response`/`harmonic_response` JSON) 🆕 |
-| `.powerpacks/network-import/import/linkedin/people.csv` | 🆕 `LINKEDIN_IMPORT_PEOPLE_CSV` | **CSV** · `PEOPLE_SCHEMA_COLUMNS` ✅ |
-| `.powerpacks/search-index/local-search.duckdb` | 🆕 `LOCAL_SEARCH_DUCKDB` *(hand-built `output_dir/"local-search.duckdb"` ~5×)* | **DuckDB** · `LOCAL_TABLE_CONTRACT` (`build-local-duckdb-shim.py:159`) ✅ |
+| `.powerpacks/network-import/discover/linkedin/Connections.csv` | `DISCOVER_CONNECTIONS_CSV` 🔴 setup-scoped | **CSV** · `LINKEDIN_DISCOVERY_COLUMNS` ✅ |
+| `.powerpacks/network-import/profile_cache_v2/` | `DEFAULT_PROFILE_CACHE_DIR` 🟡 re-derived `setup_linkedin_csv.py:235` | **dir** of `<slug>.json` · profile entry (`rapidapi_response`/`harmonic_response` JSON) 🔴 create |
+| `.powerpacks/network-import/import/linkedin/people.csv` | 🔴 create `LINKEDIN_IMPORT_PEOPLE_CSV` | **CSV** · `PEOPLE_SCHEMA_COLUMNS` ✅ |
+| `.powerpacks/search-index/local-search.duckdb` | 🔴 create `LOCAL_SEARCH_DUCKDB` *(hand-built `output_dir/"local-search.duckdb"` ~5×)* | **DuckDB** · `LOCAL_TABLE_CONTRACT` (`build-local-duckdb-shim.py:159`) ✅ |
 
 ### Shared join point
 
 | Full path | Location constant | Schema |
 |---|---|---|
-| `.powerpacks/network-import/merged/people.csv` | `DEFAULT_PEOPLE_CSV` ✅ / `DEFAULT_OUTPUT_DIR/"people.csv"` ⚠️ two names | **CSV** · `MERGED_COLUMNS` ✅ |
+| `.powerpacks/network-import/merged/people.csv` | `DEFAULT_PEOPLE_CSV` / `DEFAULT_OUTPUT_DIR/"people.csv"` 🟡 two-names | **CSV** · `MERGED_COLUMNS` ✅ |
 
 ### Modal handoff (Volume `powerset-indexing`, mounted at `/data` — each location = write key + read path)
 
 | Volume **write key** | Sandbox **read path** | Constant(s) | Schema |
 |---|---|---|---|
-| `operators/<operator_id>` | `/data/operators/<operator_id>` | key 🆕 `OPERATOR_VOLUME_PREFIX` · path `OPERATOR_ROOT` ✅ | **dir** (prefix, no payload) |
-| `operators/<operator_id>/input/people.csv` | `/data/operators/<operator_id>/input/people.csv` | 🆕 `OP_INPUT_PEOPLE_KEY` / `OP_INPUT_PEOPLE_PATH` | **CSV** · `MERGED_COLUMNS` ✅ |
-| `operators/<operator_id>/input/connections.csv` | `/data/operators/<operator_id>/input/connections.csv` | 🆕 `OP_INPUT_CONNECTIONS_KEY` / `OP_INPUT_CONNECTIONS_PATH` | **CSV** · `LINKEDIN_DISCOVERY_COLUMNS` ✅ |
-| `operators/<operator_id>/runs/<label>/local-search.duckdb` | `/data/operators/<operator_id>/runs/<label>/local-search.duckdb` | 🆕 `op_run_duckdb_key(label)` · path `run_vol_path(label)` ✅ | **DuckDB** · `LOCAL_TABLE_CONTRACT` ✅ |
+| `operators/<operator_id>` | `/data/operators/<operator_id>` | key 🔴 create `OPERATOR_VOLUME_PREFIX` · path `OPERATOR_ROOT` ✅ | **dir** (prefix, no payload) |
+| `operators/<operator_id>/input/people.csv` | `/data/operators/<operator_id>/input/people.csv` | 🔴 create `OP_INPUT_PEOPLE_KEY` / `OP_INPUT_PEOPLE_PATH` | **CSV** · `MERGED_COLUMNS` ✅ |
+| `operators/<operator_id>/input/connections.csv` | `/data/operators/<operator_id>/input/connections.csv` | 🔴 create `OP_INPUT_CONNECTIONS_KEY` / `OP_INPUT_CONNECTIONS_PATH` | **CSV** · `LINKEDIN_DISCOVERY_COLUMNS` ✅ |
+| `operators/<operator_id>/runs/<label>/local-search.duckdb` | `/data/operators/<operator_id>/runs/<label>/local-search.duckdb` | 🔴 create `op_run_duckdb_key(label)` · path `run_vol_path(label)` ✅ | **DuckDB** · `LOCAL_TABLE_CONTRACT` ✅ |
 
 > **Reading the badges:** every 🆕 and ⚠️ is a place the pipeline today re-derives
 > a path or schema by hand — a spot the next wrong-path bug can enter. The schemas
