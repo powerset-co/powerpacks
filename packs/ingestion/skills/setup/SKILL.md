@@ -1,343 +1,253 @@
 ---
 name: setup
-description: Unified Powerpacks ingestion setup. Use for $setup, one-time setup, account/source linking, import/enrichment fan-out, and local search-index/DuckDB readiness.
+description: Deterministic one-command Powerpacks setup. Use for $setup. Steps through update, Powerset login, runtime-key pull, LinkedIn Connections.csv upload + process, and search-index validation. Always reruns the full checklist; overwrites in place.
 ---
+
+<!--
+Created: 2026-06-17
+Changelog:
+- 2026-06-17: Rewrote setup as a deterministic, rerunnable checklist that steps
+  through update -> login -> pull keys -> upload Connections.csv -> process ->
+  validate index, wired 1:1 to the primitives the local console buttons call.
+  Replaces the prior phase-model/ledger/fan-out skill.
+-->
 
 # setup
 
-Use this skill for `$setup` and first-run Powerpacks ingestion setup. This is
-an ingestion/product setup flow, not a generic `$powerset login` alias.
+`$setup` runs a fixed checklist and **always reruns it end to end**. Every call
+repeats every step against the same fixed paths and lets the primitives
+overwrite. There are no phases to skip, no resume logic, no "already done"
+short-circuits. If the user runs `$setup` again, you run the whole checklist
+again.
 
-## Phase model
+## How to run this skill
 
-1. **link** — run onboarding as source linking only; record non-secret state in
-   `.powerpacks/ingestion/accounts.json`.
-2. **import** — automatically refresh linked sources when setup has not already
-   done a recent live sync, reusing existing artifacts by default.
-3. **index** — after import fan-in, run processing/indexing and local DuckDB
-   materialization when safe or approved.
+**FIRST, before running anything: create a literal, visible checklist with all
+nine steps below and step through it, marking each item complete as you go.**
+This is mandatory, not optional. Use your harness's plan/todo/task tool:
 
-Onboarding must remain link-only. Do not run Gmail metadata import,
-`msgvault sync-full`, LinkedIn RapidAPI enrichment, Twitter crawl,
-`$import-contacts` research/upload, merge, or indexing from the onboarding
-phase. Gmail import workers own `msgvault sync-full` for selected accounts
-before they read the local msgvault DB.
+- **Claude Code:** `TaskCreate` one task per step (0–8), then `TaskUpdate` each
+  to `in_progress` when you start it and `completed` when it finishes.
+- **Codex:** call `update_plan` with the nine steps, and update the plan to mark
+  each step `in_progress` then `completed` as you go.
+- **Any other harness:** use its equivalent todo/plan mechanism so the user can
+  see the checklist and watch each item get checked off.
 
-Sources are optional. The link phase records whatever the user has connected or
-explicitly skipped, but empty/unlinked source entries are not blockers. Setup
-imports and enriches linked sources only, and can use restored or existing local
-network/index artifacts even when no sources are currently linked.
+Seed the checklist with these exact item titles:
 
-Messages onboarding checks iMessage/Contacts permissions and WhatsApp auth/link
-state only. WhatsApp link uses `import_whatsapp_wacli.py auth`; it must not run
-WhatsApp sync or export contacts in the link phase. Messages import workers
-later call `import_contacts_pipeline.py run` with explicit include flags: local
-iMessage/WhatsApp extraction, contact merge, Powerset candidate match, LLM
-ENRICH/SKIP triage, and the reviewed contacts UI. Setup must not include
-messages deep research, retarget research, upload, or datalake sync flags.
-Those setup-only message steps produce a reviewed local `research_review.csv`
-artifact. Network fan-in may use only rows with explicit approval markers such
-as `exclude=no`, `approved=true`, or an include upload decision; bucket defaults
-alone are not approval.
-
-## How to explain setup to the user
-
-Keep the user's view simple. Use plain product language first, and keep internal
-terms like ledgers, fan-out/fan-in, worker jobs, artifacts, and DuckDB out of
-normal updates unless the user asks for technical details.
-
-Good opening summary:
-
-```text
-I’m going to get your local Powerpacks search ready in three steps:
-1. Connect the sources you choose, like Gmail, LinkedIn, Messages, Twitter, or WhatsApp.
-2. Import each connected source in parallel where possible.
-3. Combine everything into one local network and make it searchable on this machine.
-
-I won’t upload anything automatically, and I’ll only stop to ask you when a login,
-QR/device link, or paid provider step needs your approval.
+```
+0. Update Powerpacks (bin/update-codex)
+1. Check Powerset login + credentials
+2. Log in to Powerset (only if not logged in)
+3. Pull runtime keys (Modal + OpenAI)
+4. Ask for the LinkedIn Connections.csv
+5. Import the CSV
+6. Report processing estimate
+7. Process contacts (enrich -> index -> download)
+8. Validate the search index downloaded
 ```
 
-When reporting status, say what changed for the user:
+Then:
 
-```text
-Gmail is connected for 2 accounts. LinkedIn is connected from your Connections.csv.
-Setup will import anything that is stale or missing, reuse what is already current,
-then finish quietly if there is nothing to do.
-```
+1. **Work the checklist in order 0 → 8.** Exactly one item `in_progress` at a
+   time; mark it `completed` before starting the next. Do not batch, reorder, or
+   skip. Report a one-line result per step.
+2. **Run from the canonical repo root.** Resolve it once and `cd` there for
+   every command (see *Repo root* below). All `.powerpacks/...` paths in this
+   doc are relative to that root — e.g. if Powerpacks is installed at
+   `~/powerpacks`, the LinkedIn input lives at
+   `~/powerpacks/.powerpacks/network-import/discover/linkedin/Connections.csv`.
+3. **Deterministic & in-place.** Rely on the primitives to overwrite the fixed
+   paths — `cp` replaces the canonical CSV, and the Modal pipeline replaces
+   `local-search.duckdb`/`manifest.json` on download (it renames the prior copy
+   to `.bkup`, so the canonical file is always fresh). Don't pre-delete with
+   `rm`, and don't invent timestamped files, run ids, or alternate folders.
+   Write only to the fixed paths named here.
 
-Avoid saying this to a normal user:
+### Guardrails (hard rules)
 
-```text
-I will dispatch fan-out workers with isolated ledgers and run fan-in after all jobs complete.
-```
+- **No context pass. Do not go exploring.** This skill is self-contained and
+  authoritative. Do not read agent memory, prior setup state/ledgers, other
+  docs, or the primitive source to re-derive paths or "expected behavior," and
+  do not narrate a "quick context pass." The commands and fixed paths here are
+  the source of truth — build the checklist and execute it directly.
+- **Do not edit code.** Only edit a source file if you find an actual bug that
+  blocks a step, and say so explicitly. Otherwise, only invoke the existing
+  primitives below.
+- **Do not write scripts to do the work.** No glue scripts, no new Python. Reuse
+  the exact primitive commands listed. Plain shell for `cp`/`rm`/`test`/`wc` is
+  fine.
+- **Ask only for consent-bearing steps.** Powerset browser login is the only
+  step that needs a human; pause there. Everything else runs without asking
+  (key pull, upload, link, process, validation).
 
-Instead say:
-
-```text
-I’ll run the independent imports in parallel so setup finishes sooner, then merge the results into one local network.
-```
-
-Use jargon only in hidden/internal notes, command logs, or when asking another
-agent to execute a precise command.
-
-## Canonical install/root rule
-
-Always run setup from the canonical Powerpacks installation directory, not from
-an agent harness checkout such as `~/.codex/powerpacks` or `~/.codex/powerpacks-*`.
-The canonical repo is the first valid non-`.codex` path among:
-
-1. `$POWERPACKS_REPO_ROOT` when it points to a Powerpacks repo;
-2. the current working directory when it is a Powerpacks repo and is not under
-   `.codex`;
-3. `~/powerpacks`;
-4. `~/workspace/powerpacks`.
-
-If useful state was created under a `.codex` checkout, do **not** keep running
-there. Prefer `$fix-powerpacks`, which reads `config/powerpacks-state-paths.json`,
-checks linked source wiring, and copies missing/newer managed state into the
-canonical repo. For a direct one-off adoption, use:
-
-```bash
-cd <canonical-powerpacks-repo>
-uv run --project . python scripts/fix-powerpacks-state.py --json
-```
-
-Use `--backup` or `--quarantine-legacy-state` only when the user explicitly wants
-legacy state to replace existing canonical files or wants stale `.codex` state
-renamed after adoption, for example when an authenticated WhatsApp store was
-accidentally created under `.codex` and the canonical store is just an
-unauthenticated placeholder.
-
-This keeps msgvault DB paths, WhatsApp/wacli stores, setup ledgers, import
-artifacts, and DuckDB/index state repeatable under one `.powerpacks/` root.
-
-## Commands
-
-`$setup` is the product command. By default, launch the local Powerpacks Console
-from the canonical repo on the guided setup page and let the user click through
-linking, import, enrichment, and indexing from the app:
+### Repo root
 
 ```bash
 resolve_powerpacks_root() {
   for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
     [[ -n "$candidate" ]] || continue
     [[ "$candidate" != *"/.codex/"* ]] || continue
-    if [[ -x "$candidate/scripts/run-powerpacks-console.sh" && -d "$candidate/packs" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
+    if [[ -x "$candidate/bin/update-codex" && -d "$candidate/packs" ]]; then
+      printf '%s\n' "$candidate"; return 0
     fi
   done
   return 1
 }
-repo="$(resolve_powerpacks_root)" || {
-  echo "Powerpacks is not installed in a canonical location. Install or copy it to ~/powerpacks, then rerun $setup." >&2
-  exit 1
-}
-cd "$repo"
-scripts/run-powerpacks-console.sh start --path / --open
+REPO="$(resolve_powerpacks_root)" || { echo "Install Powerpacks to ~/powerpacks first." >&2; exit 1; }
+cd "$REPO"
 ```
 
-If the script reports that the app is already running, use the printed `Open:`
-URL. If macOS cannot open the browser from the current shell, tell the user the
-printed URL instead of falling back to `setup.py run`.
+If the only checkout is under `.codex`, stop and ask the user to install/copy
+Powerpacks to `~/powerpacks` (or set `POWERPACKS_REPO_ROOT`).
 
-Do not run `scripts/run-powerpacks-console.sh` relative to an arbitrary Codex
-cwd. If the only available checkout is under `.codex`, stop and ask to install
-or copy Powerpacks to `~/powerpacks` or set `POWERPACKS_REPO_ROOT` to a
-canonical non-`.codex` path. Then adopt any `.codex` state with
-`scripts/adopt-powerpacks-state.py` as shown above.
+---
 
-The app uses the same setup primitives through `/local-api/setup/*`, so this
-still runs the real setup flow. It just avoids one giant Codex-driven chain and
-makes user actions visible.
+## The checklist
 
-Use the setup runner only when the user explicitly asks for `$setup cli`, a
-deterministic CLI run, or a specific phase. It is idempotent: it refreshes
-whatever sources are already linked, then reuses completed recent work. If no
-sources are linked and no local network/index artifacts exist yet, setup may
-suggest linking a source, but it must not require skip markers for every unused
-source. `$setup` does not do Powerset login, env pull, MCP registration, bundle
-sync, or cloud secret access. Modal handles hosted processing for provisioned
-Powerset users.
-
-For debugging, operator testing, or resuming after a blocker, use the
-deterministic phase entrypoints below instead of rerunning the product app flow
-blindly.
-
-`$setup cli`:
+### Step 0 — Update Powerpacks
 
 ```bash
-cd "${POWERPACKS_REPO_ROOT:-$HOME/powerpacks}"
-uv run --project . python packs/ingestion/primitives/setup/setup.py run \
-  --operator-id <operator-id> \
-  --accounts .powerpacks/ingestion/accounts.json \
-  --setup-ledger .powerpacks/setup/setup-run.json
+cd "$REPO" && bin/update-codex
 ```
 
-The read-only next-action command tells agents exactly which phase should run
-next and returns the concrete command to run:
+Refreshes the checkout and reinstalls skills. Proceed when it exits 0.
+
+### Step 1 — Check Powerset login + credentials
 
 ```bash
-cd "${POWERPACKS_REPO_ROOT:-$HOME/powerpacks}"
-uv run --project . python packs/ingestion/primitives/setup/setup.py next \
-  --operator-id <operator-id> \
-  --accounts .powerpacks/ingestion/accounts.json \
-  --setup-ledger .powerpacks/setup/setup-run.json
+test -f "$HOME/.powerpacks/credentials.json" && echo "credentials.json: present" || echo "credentials.json: MISSING"
+cd "$REPO" && uv run --project . python packs/powerset/primitives/auth/auth.py whoami
 ```
 
-Phase entrypoints use the same underlying logic as `run`; they only narrow the
-scope so agents can test or resume one layer at a time:
+- `~/.powerpacks/credentials.json` is the Auth0 token store (home dir, **not**
+  under the repo).
+- `whoami` exits 0 and prints credential metadata when logged in. If the file is
+  missing or `whoami` fails/exits non-zero, treat the user as **not logged in**
+  → go to Step 2. Otherwise mark Step 2 done (no-op) and go to Step 3.
+
+### Step 2 — Log in (only if Step 1 said not logged in)
+
+This is the one consent step. It opens the system browser for the Auth0 flow.
 
 ```bash
-cd "${POWERPACKS_REPO_ROOT:-$HOME/powerpacks}"
-uv run --project . python packs/ingestion/primitives/setup/setup.py link \
-  --operator-id <operator-id> \
-  --accounts .powerpacks/ingestion/accounts.json
-
-uv run --project . python packs/ingestion/primitives/setup/setup.py import \
-  --operator-id <operator-id> \
-  --accounts .powerpacks/ingestion/accounts.json \
-  --setup-ledger .powerpacks/setup/setup-run.json
-
-uv run --project . python packs/ingestion/primitives/setup/setup.py index \
-  --operator-id <operator-id> \
-  --accounts .powerpacks/ingestion/accounts.json \
-  --setup-ledger .powerpacks/setup/setup-run.json
+cd "$REPO" && uv run --project . python packs/powerset/primitives/auth/auth.py login
 ```
 
-Do not change the product behavior by default: when `setup.py run` sees linked
-sources, it should run the setup refresh path for those sources without asking
-about empty optional sources. If no sources are linked and no existing local
-artifacts can be indexed, `setup.py run` can return the next link action as a
-first-source suggestion. Use phase commands to avoid repeating completed or
-unrelated phases during debugging.
+(This is exactly what the console's login button runs via
+`/local-api/powerset/login`.) If the browser cannot open from the shell, the
+command prints a URL — give it to the user. Re-run `auth.py whoami` to confirm
+success before continuing.
 
-For inspection without running refresh work, use local status:
+### Step 3 — Pull provisioned runtime keys (Modal + OpenAI)
 
 ```bash
-cd "${POWERPACKS_REPO_ROOT:-$HOME/powerpacks}"
-uv run --project . python packs/ingestion/primitives/setup/setup.py status \
-  --operator-id <operator-id> \
-  --accounts .powerpacks/ingestion/accounts.json \
-  --setup-ledger .powerpacks/setup/setup-run.json
+cd "$REPO" && uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull --env-file .env
 ```
 
-To link or add sources later:
+Fetches `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, and `OPENAI_API_KEY` from the
+Powerset API and upserts them into `<repo>/.env`. (Same as the console's
+`/local-api/powerset/pull-keys` button.) Requires Step 1/2 login. Verify with:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
-  --accounts .powerpacks/ingestion/accounts.json \
-  --operator-id <operator-id>
+cd "$REPO" && uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py check --env-file .env
 ```
 
-## Gmail/msgvault multi-account linking
+### Step 4 — Ask for the LinkedIn Connections.csv
 
-For Gmail, route through existing msgvault automation. Browser/GCP actions are
-user-action/linking steps, not import steps:
+Ask the user for the path to their LinkedIn `Connections.csv` export. Wait for a
+real path; do not guess. Confirm the file exists before Step 5.
 
-- `packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup`
-  creates/configures the Google OAuth Desktop app and can authorize the first
-  account with `--add-account`.
-- `msgvault_setup.py add-test-users <emails...>` uses browser automation to add
-  more OAuth test users.
-- `msgvault_setup.py add-account --email <email>` authorizes each additional
-  Gmail account.
+### Step 5 — Import the CSV
 
-After msgvault is configured and local accounts are discoverable, ask once:
-
-```text
-Which other Gmail accounts should we link now?
-```
-
-Record selected accounts in `gmail.config.selected_accounts` /
-`gmail.config.account_emails`. Newly requested Gmail accounts stay in
-`gmail.config.pending_accounts` until the returned `--gmail-authorized-email
-<email>` rerun records them as linked. Do not create
-`.powerpacks/network-import/discover/gmail` outputs or run `msgvault sync-full` during
-linking; Gmail sync/import runs later in the import phase for linked accounts.
-
-## Import phase: automatic refresh, then fan-in
-
-Do not ask for a separate "continue import" confirmation after setup has linked
-sources available. `$setup` should run the refresh when it is due, include
-existing artifacts by default, and complete without ceremony when there is no
-new work.
-Use normal user language:
-
-```text
-I’ll refresh the sources you have connected, reuse the current local data, and
-then combine everything into one local network.
-
-I won’t upload anything automatically. I’ll only interrupt you if a browser
-login, QR/device link, overwrite, or paid provider approval is needed.
-```
-
-`setup.py run` is the CLI path. `setup.py handoff` remains available for
-debugging or for agents that need to inspect worker commands:
+Place the CSV at the single canonical input path the console's **"Re-upload
+Connections.csv"** flow ultimately points the pipeline at, overwriting any prior
+copy, then link it.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/setup/setup.py handoff \
-  --operator-id <operator-id> \
-  --accounts .powerpacks/ingestion/accounts.json \
-  --setup-ledger .powerpacks/setup/setup-run.json
+cd "$REPO"
+DEST=".powerpacks/network-import/discover/linkedin/Connections.csv"
+mkdir -p "$(dirname "$DEST")"
+cp -f "<user-csv-path>" "$DEST"     # overwrite canonical input in place
+uv run --project . python packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py link --csv "$DEST"
 ```
 
-If using the handoff output directly, the generated `discover-contacts` commands
-must include `--include-existing-artifacts`. Use the
-`worker_groups.import.jobs` output to spin up parallel worker sub-agents where
-possible:
+`setup_linkedin_csv.py link` writes `csv_path` + `linked=true` into
+`.powerpacks/ingestion/accounts.json` (it does not process). The canonical path
+`.powerpacks/network-import/discover/linkedin/Connections.csv` is the same stable
+input the console uses (`onboarding.ts` `stableConnectionsCsv`).
 
-- Gmail/msgvault workers per selected account; each worker runs
-  `msgvault sync-full <email>` before `gmail_network_import.py msgvault` when
-  msgvault is available.
-- LinkedIn CSV import/enrichment worker.
-- Twitter worker only when explicitly linked/approved.
-- Messages/iMessage/WhatsApp contacts worker using explicit include flags.
-  WhatsApp may require a QR/device-linking approval before contacts exist.
-  Setup should run local match, LLM triage, and the reviewed contacts UI, then
-  stop before deep research, retargeting, upload, or datalake sync. Raw contacts
-  are not fan-in inputs for network DuckDB. If a reviewed messages CSV is
-  present, only explicitly approved rows can join the network fan-in.
+### Step 6 — Tell the user the processing estimate, then auto-continue
 
-Workers must write to the fixed `.powerpacks/network-import/discover/<source>/`
-folders for `--only-source` source jobs and must return blocked approvals to the
-main thread. Merge/network DuckDB fan-in runs only after all selected network
-source workers complete or block; message contact metadata stays outside that
-fan-in until it has passed review.
-
-## Consent boundaries
-
-The main thread owns these approvals. Never let workers approve them silently:
-
-- browser/Gmail OAuth and gcloud login;
-- GCP Desktop OAuth app creation and OAuth test-user additions;
-- adding/authing each extra Gmail account;
-- WhatsApp QR/device linking;
-- RapidAPI, Parallel, OpenAI/TLM, embedding, or other provider spend;
-- `$import-contacts` research/review/upload or any upload/prod write.
-
-Local status, msgvault account listing, discover-contacts dry-run, processing
-`plan`, processing `run --dry-run`, local merge, and local DuckDB
-materialization may run without spend approval.
-
-## Index phase
-
-If `.powerpacks/search-index/local-search.duckdb` exists with verified local
-records, report local search ready. If records exist without DuckDB, run only
-local materialization:
+Count the connections and print a concrete minute estimate, then move straight
+to Step 7 without waiting for confirmation. Always give an actual number — never
+say "a few minutes" without one.
 
 ```bash
-uv run --project . python scripts/build-local-duckdb-shim.py \
-  --records-dir .powerpacks/search-index \
-  --derive-positions-from-person-profiles \
-  --operator-id <operator-id> \
+cd "$REPO"
+rows=$(( $(wc -l < .powerpacks/network-import/discover/linkedin/Connections.csv) - 1 ))
+mins=$(( (100 + rows * 45 / 100) / 60 + 1 ))
+echo "connections: $rows  estimate: ~${mins} min"
+```
+
+Tell the user the number, e.g. "Processing your N connections — estimated
+~M minutes (may finish sooner if cached). I'll keep going." Then proceed.
+
+### Step 7 — Process contacts (enrich → index → download)
+
+Announce this step in one terse line — e.g. "Starting Step 7 — enriching
+contacts and building the search index." Do not explain `--force`,
+determinism, or hashes to the user.
+
+Run the **"Process contacts"** pipeline with `--force` so it reprocesses
+deterministically instead of no-opping on an unchanged-CSV hash. The pipeline
+overwrites the local index itself (renames the prior copy to `.bkup`), so there
+is nothing to delete first.
+
+```bash
+cd "$REPO"
+uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py pipeline \
+  --csv .powerpacks/network-import/discover/linkedin/Connections.csv \
+  --source-user linkedin \
   --force
 ```
 
-If only `.powerpacks/network-import/merged/people.csv` exists,
-`build_processing_pipeline.py plan` is safe for structure inspection, but run
-`build_processing_pipeline.py run --dry-run` before any paid provider flags so
-the user sees the total estimated cost and per-stage cost breakdown. Real
-provider stages require precomputed artifacts or explicit paid/provider approval
-flags.
+**This step can take 5–30 minutes depending on network size — do not assume it
+hung.** Run the pipeline in the background and poll its progress about **every
+60s**, reporting the current phase to the user, until it exits. The pipeline
+writes live status to `.powerpacks/runs/setup-linkedin-modal/status.json` (phase
+`importing` → `indexing` → `completed`):
+
+```bash
+cd "$REPO" && cat .powerpacks/runs/setup-linkedin-modal/status.json 2>/dev/null
+```
+
+Keep Step 7 `in_progress` while polling; only mark it complete when the pipeline
+exits 0. Do not poll faster than 60s.
+
+This is exactly the console's `/local-api/onboarding/linkedin/run` command
+(`onboardingV3PipelineCommand`) plus `--force`. It runs the two Modal stages —
+**Importing contacts** (RapidAPI enrich) then **Building search index** — and
+downloads `local-search.duckdb` + `manifest.json` into
+`.powerpacks/search-index/`. It can take a while (job timeout is generous);
+let it finish.
+
+### Step 8 — Validate the search index downloaded
+
+```bash
+cd "$REPO"
+ls -lh .powerpacks/search-index/local-search.duckdb .powerpacks/search-index/manifest.json
+```
+
+The step passes when both files exist and `local-search.duckdb` is a non-trivial
+size. If `local-search.duckdb` is missing after Step 7 succeeded, surface the
+pipeline output — do not silently retry. Report local search as ready.
+
+---
+
+## Done
+
+Report a terse summary: logged in as <email>, keys pulled, N connections
+processed, index at `.powerpacks/search-index/local-search.duckdb` (size).
+Remind the user that running `$setup` again reruns the entire checklist and
+overwrites in place.
