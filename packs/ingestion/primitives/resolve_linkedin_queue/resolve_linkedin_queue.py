@@ -51,7 +51,7 @@ GENERIC_PREFIXES = {
     "feedback", "enquiries", "inquiries",
     "service", "customerservice", "care", "dispatch",
     "concierge", "reservation", "reservations", "booking", "bookings",
-    "rsvp", "registration", "club", "membership", "memberservices",
+    "rsvp", "registration", "club", "member", "members", "membership", "memberservices",
     "optical", "photos", "equity", "futures",
     "launch", "eat", "pbx", "alumni", "masters", "csi",
     "studentinfo", "fintechsupport", "casasupport",
@@ -147,6 +147,21 @@ X/Twitter matching rules:
 - If evidence is weak, ambiguous, or mostly based on same-name matching, return x_handle = "".
 - It is better to miss a true handle than to attach the wrong handle.
 
+Candidate rules:
+- In `candidates`, list up to 5 plausible LinkedIn profiles, best match first, each with
+  name, headline, location, a match_confidence in [0,1], and a short evidence note.
+- Set `linkedin_url` to candidates[0].linkedin_url (your single best pick). If you are
+  confident in exactly one, candidates may contain just that one.
+- If no reliable match exists, return linkedin_url = "", candidates = [], status = "not_found".
+
+Using the context field:
+- The input may include a `context` string with extra facts mined from the user's own
+  emails (past employers, education, location, phone/handles, a search hint). TREAT IT AS
+  STRONG EVIDENCE about the SAME person, even when their current employer differs from it
+  (people change jobs — a past role like "private equity" still confirms identity).
+- Use it to disambiguate same-name people and to RAISE confidence when a candidate's
+  history matches the context, even if their current title is different from the company field.
+
 Output rules:
 - Return valid JSON matching the schema.
 - Use status = "completed" when you found the LinkedIn person, even if x_handle is empty.
@@ -159,6 +174,7 @@ INPUT_SCHEMA = {
         "full_name": {"type": "string", "description": "Full name of the person"},
         "company": {"type": "string", "description": "Company name where the person works"},
         "email": {"type": "string", "description": "Work email address (for context)"},
+        "context": {"type": "string", "description": "Extra known facts mined from our own emails (past roles, education, location, phone/handles, search hint) to disambiguate and confirm the match. May be empty."},
     },
     "required": ["full_name", "company", "email"],
 }
@@ -166,16 +182,32 @@ INPUT_SCHEMA = {
 OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "linkedin_url": {"type": "string", "description": "LinkedIn profile URL (empty string if not found)"},
+        "linkedin_url": {"type": "string", "description": "Best/top LinkedIn profile URL (empty string if none). Must equal candidates[0].linkedin_url when candidates is non-empty."},
         "x_handle": {"type": "string", "description": "X/Twitter handle (e.g. @username). Empty string unless strong evidence."},
         "status": {"type": "string", "description": "Status: completed, not_found, or error"},
+        "candidates": {
+            "type": "array",
+            "description": "Up to 5 plausible profiles, best first. Empty if none found.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "linkedin_url": {"type": "string"},
+                    "name": {"type": "string"},
+                    "headline": {"type": "string", "description": "Current title/company headline"},
+                    "location": {"type": "string"},
+                    "match_confidence": {"type": "number", "description": "0..1 confidence this candidate is the person"},
+                    "evidence": {"type": "string", "description": "Why this candidate matches the input"},
+                },
+                "required": ["linkedin_url"],
+            },
+        },
     },
     "required": ["linkedin_url", "status"],
 }
 
 OUTPUT_COLUMNS = [
     "email", "full_name", "company", "linkedin_url", "x_handle", "status",
-    "confidence", "reasoning",
+    "confidence", "reasoning", "candidates",
 ]
 
 
@@ -262,6 +294,7 @@ def load_contacts(input_csv: Path) -> list[dict[str, str]]:
             "company": company,
             "email": email.lower().strip(),
             "is_personal": str(is_personal).lower(),
+            "context": (row.get("context") or "").strip(),
         })
     if skipped:
         print(f"[resolve] Filtered {len(skipped)} generic/non-person emails", file=sys.stderr)
@@ -420,7 +453,7 @@ def submit_and_poll(
         batch = contacts[i:i + batch_size]
         inputs = [{
             "task_spec": spec,
-            "input": {"full_name": c["full_name"], "company": c["company"], "email": c["email"]},
+            "input": {"full_name": c["full_name"], "company": c["company"], "email": c["email"], "context": c.get("context", "")},
             "metadata": {"email": c["email"]},
             "processor": processor,
         } for c in batch]
@@ -475,15 +508,24 @@ def submit_and_poll(
                 if isinstance(b, dict) and b.get("field"):
                     basis_by_field[b["field"]] = b
             li_basis = basis_by_field.get("linkedin_url", {})
+            candidates = content.get("candidates") or []
+            if not isinstance(candidates, list):
+                candidates = []
+            top_url = content.get("linkedin_url", "")
+            # Backward-compatible: linkedin_url stays the single top choice. If the
+            # model only populated candidates, fall back to the best one.
+            if not top_url and candidates and isinstance(candidates[0], dict):
+                top_url = candidates[0].get("linkedin_url", "")
             results.append({
                 "email": contact.get("email", ""),
                 "full_name": contact.get("full_name", ""),
                 "company": contact.get("company", ""),
-                "linkedin_url": content.get("linkedin_url", ""),
+                "linkedin_url": top_url,
                 "x_handle": content.get("x_handle", ""),
                 "status": content.get("status", ""),
                 "confidence": li_basis.get("confidence", ""),
                 "reasoning": li_basis.get("reasoning", ""),
+                "candidates": json.dumps(candidates, ensure_ascii=False),
             })
         except Exception as exc:
             print(f"[resolve] Failed to fetch result for {run_id}: {exc}", file=sys.stderr)
@@ -544,7 +586,7 @@ def run_enrichment(input_csv: Path, output_dir: Path, ledger_path: Path, *, prov
         prompts = output_dir / "harness_prompts.jsonl"
         with prompts.open("w", encoding="utf-8") as f:
             for c in to_process:
-                f.write(json.dumps({"instructions": PARALLEL_ENRICH_INSTRUCTIONS, "input": {"full_name": c["full_name"], "company": c["company"], "email": c["email"]}}) + "\n")
+                f.write(json.dumps({"instructions": PARALLEL_ENRICH_INSTRUCTIONS, "input": {"full_name": c["full_name"], "company": c["company"], "email": c["email"], "context": c.get("context", "")}}) + "\n")
         ledger["status"] = "prepared_harness"
         ledger["artifacts"] = {"prompts_jsonl": str(prompts)}
         save_ledger(ledger_path, ledger)

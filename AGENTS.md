@@ -304,6 +304,9 @@ Routes:
   `packs/ingestion/skills/onboard/SKILL.md`
 - `$import-email`, Gmail, email, msgvault metadata import →
   `packs/ingestion/skills/import-email/SKILL.md`
+- `$enrich-email-markers`, gmail LLM enrichment, mine email bodies for LinkedIn
+  markers, preview the context/markers we'd send to an LLM →
+  `packs/ingestion/skills/enrich-email-markers/SKILL.md`
 - `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
   `packs/ingestion/skills/import-twitter/SKILL.md`
 - `$discover-contacts`, local network ingestion orchestration, LinkedIn CSV plus
