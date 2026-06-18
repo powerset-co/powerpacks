@@ -7,9 +7,16 @@ import argparse
 import csv
 import gzip
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 CSV_FIELDS = [
@@ -101,7 +108,7 @@ def rerank_rows(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
     rows: dict[str, dict[str, Any]] = {}
     with Path(str(path)).open(newline="") as handle:
-        for row in csv.DictReader(handle):
+        for row in CsvIO.dict_reader(handle):
             person_id = row.get("person_id")
             if person_id:
                 rows[person_id] = row

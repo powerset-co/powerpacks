@@ -17,9 +17,16 @@ import csv
 import hashlib
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
 
 DEFAULT_REVIEW_CSV = Path(".powerpacks/messages/research_review.csv")
@@ -110,7 +117,7 @@ def load_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open(newline="", encoding="utf-8-sig") as handle:
-        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(handle)]
+        return [{key: value or "" for key, value in row.items()} for row in CsvIO.dict_reader(handle)]
 
 
 def normalize_hint(value: str) -> str:

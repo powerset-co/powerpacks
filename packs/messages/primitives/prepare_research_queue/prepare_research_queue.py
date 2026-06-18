@@ -26,8 +26,15 @@ import argparse
 import csv
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
 
 # Column order matches what research_parallel.py / prepare_phone_contacts.py expect.
@@ -387,7 +394,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "filtered_review_in_network": 0,
     }
     with input_path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         schema_problem = validate_input_headers(input_path, reader.fieldnames)
         if schema_problem:
             emit({

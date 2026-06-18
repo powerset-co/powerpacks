@@ -27,6 +27,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from packs.shared.csv_io import CsvIO
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RERANK_PY = (
@@ -375,8 +377,7 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
             self.assertGreater(token_usage["prompt_tokens_total"], 0)
             self.assertGreater(token_usage["prompt_tokens_per_minute"], 0)
             with Path(artifacts["query_results_csv"]).open(newline="") as handle:
-                import csv
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             row = rows[0]
             self.assertEqual(

@@ -8,10 +8,8 @@ artifacts without LLM or network calls.
 
 from __future__ import annotations
 
-import csv
 import json
 import re
-import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -19,6 +17,7 @@ from typing import Any, Iterable
 from packs.indexing.lib.contracts import contract_attribute_names, load_search_contract
 from packs.indexing.lib.io import write_csv as _write_csv, write_jsonl as _write_jsonl
 from packs.ingestion.schemas.company_identity import extract_company_public_identifier
+from packs.shared.csv_io import CsvIO
 
 try:  # pragma: no cover - exercised by direct script execution paths
     from .identity import canonical_person_key, position_uuid, stable_company_id, stable_person_id_from_key
@@ -88,19 +87,6 @@ PEOPLE_NAMESPACE_COLUMNS = contract_attribute_names(load_search_contract("turbop
 _ZERO_EPOCH = 0
 _DATE_RE = re.compile(r"^(\d{4})(?:[-/](\d{1,2}))?(?:[-/](\d{1,2}))?")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
-
-
-def _raise_csv_field_limit() -> None:
-    limit = sys.maxsize
-    while True:
-        try:
-            csv.field_size_limit(limit)
-            return
-        except OverflowError:
-            limit //= 10
-
-
-_raise_csv_field_limit()
 
 
 def _string(value: Any) -> str:
@@ -463,7 +449,7 @@ def flatten_people(rows: Iterable[dict[str, Any]] | str | Path) -> list[dict[str
 
     if isinstance(rows, (str, Path)):
         with Path(rows).open(newline="", encoding="utf-8") as handle:
-            raw_rows = list(csv.DictReader(handle))
+            raw_rows = list(CsvIO.dict_reader(handle))
     else:
         raw_rows = list(rows)
 

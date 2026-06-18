@@ -8,6 +8,8 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
+from packs.shared.csv_io import CsvIO
+
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/bootstrap_network_from_exports/bootstrap_network_from_exports.py"
 spec = importlib.util.spec_from_file_location("bootstrap_network_from_exports", MODULE_PATH)
 bootstrap_network_from_exports = importlib.util.module_from_spec(spec)
@@ -85,7 +87,7 @@ class BootstrapNetworkFromExportsTests(unittest.TestCase):
             self.assertTrue((output_root / "operators/patrick/inputs/linkedin_candidates/linkedin_candidates_merged_17d602f7.csv").exists())
             self.assertTrue((output_root / "operators/patrick/inputs/linkedin_candidates_manifest.csv").exists())
             with (output_root / "operators/patrick/resolution/directory.csv").open(newline="", encoding="utf-8") as handle:
-                directory_rows = list(csv.DictReader(handle))
+                directory_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(directory_rows[0]["source_key"], "email:pat@example.com")
             self.assertEqual(directory_rows[0]["source_account"], "patrick")
             self.assertEqual(directory_rows[0]["source_channels"], "linkedin_resolution")
@@ -93,7 +95,7 @@ class BootstrapNetworkFromExportsTests(unittest.TestCase):
             self.assertEqual(directory_rows[0]["status"], "found")
             self.assertEqual(directory_rows[0]["public_identifier"], "pat-example")
             with (output_root / "operators/patrick/resolution/linkedin_resolutions_cached.csv").open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["handle"], "pat@example.com")
             self.assertTrue((tmp / "cache/pat-example.json").exists())
 

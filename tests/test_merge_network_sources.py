@@ -9,6 +9,8 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
+from packs.shared.csv_io import CsvIO
+
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py"
 spec = importlib.util.spec_from_file_location("merge_network_sources", MODULE_PATH)
 merge_network_sources = importlib.util.module_from_spec(spec)
@@ -124,7 +126,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 ])
                 self.assertEqual(code, 0)
                 with Path(second["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 artifacts = json.loads(rows[0]["source_artifacts"])
                 self.assertIn("gmail/source-a.csv", artifacts)
                 self.assertIn("gmail/source-b.csv", artifacts)
@@ -150,18 +152,18 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertTrue(Path(payload["network_contact_sources_csv"]).exists())
                 self.assertTrue(Path(payload["network_companies_csv"]).exists())
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["full_name"], "Jane Canonical")
                 with Path(payload["network_contacts_csv"]).open(newline="", encoding="utf-8") as handle:
-                    contacts = list(csv.DictReader(handle))
+                    contacts = list(CsvIO.dict_reader(handle))
                 self.assertEqual(contacts[0]["source_channels"], "linkedin")
                 with Path(payload["network_contact_sources_csv"]).open(newline="", encoding="utf-8") as handle:
-                    sources = list(csv.DictReader(handle))
+                    sources = list(CsvIO.dict_reader(handle))
                 self.assertEqual(sources[0]["source_channel"], "linkedin")
                 self.assertEqual(sources[0]["source_identifier"], "https://www.linkedin.com/in/jane-example")
                 with Path(payload["network_companies_csv"]).open(newline="", encoding="utf-8") as handle:
-                    companies = list(csv.DictReader(handle))
+                    companies = list(CsvIO.dict_reader(handle))
                 self.assertEqual(companies[0]["company_name"], "Acme AI")
                 self.assertEqual(companies[0]["contact_count"], "1")
             finally:
@@ -179,7 +181,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(payload["input_rows"], 0)
                 self.assertEqual(payload["merged_rows"], 0)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                    self.assertEqual(list(csv.DictReader(handle)), [])
+                    self.assertEqual(list(CsvIO.dict_reader(handle)), [])
             finally:
                 os.chdir(old_cwd)
 
@@ -257,7 +259,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(payload["unfiltered_merged_rows"], 1)
                 self.assertEqual(payload["merged_rows"], 1)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(len(rows), 1)
                 emails = set(json.loads(rows[0]["all_emails"]))
                 self.assertEqual(emails, {"alexdoe@example.com", "alex@work-firm.example"})
@@ -298,7 +300,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(payload["merged_rows"], 0)
                 self.assertEqual(payload["filtered_without_rapidapi_payload"], 0)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(rows, [])
             finally:
                 os.chdir(old_cwd)
@@ -336,7 +338,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(payload["merged_rows"], 0)
                 self.assertEqual(payload["filtered_without_rapidapi_payload"], 0)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(rows, [])
             finally:
                 os.chdir(old_cwd)
@@ -398,10 +400,10 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(payload["rapidapi_payload_rows"], 1)
                 self.assertEqual(payload["merged_rows"], 1)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual([row["full_name"] for row in rows], ["Keep Example"])
                 with Path(payload["network_contact_sources_csv"]).open(newline="", encoding="utf-8") as handle:
-                    source_rows = list(csv.DictReader(handle))
+                    source_rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(len(source_rows), 1)
                 self.assertEqual(source_rows[0]["merge_key"], "linkedin:keep-example")
             finally:

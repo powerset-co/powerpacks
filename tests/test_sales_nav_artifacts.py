@@ -1,4 +1,3 @@
-import csv
 import json
 import subprocess
 import sys
@@ -6,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Optional
+
+from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -200,9 +201,9 @@ class SalesNavArtifactsTests(unittest.TestCase):
             self.assertTrue(leads_csv.exists())
             self.assertTrue(mutuals_csv.exists())
             with leads_csv.open(newline="") as handle:
-                lead_rows = list(csv.DictReader(handle))
+                lead_rows = list(CsvIO.dict_reader(handle))
             with mutuals_csv.open(newline="") as handle:
-                mutual_rows = list(csv.DictReader(handle))
+                mutual_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(lead_rows), 3)
             self.assertEqual(len(mutual_rows), 4)
             ada = next(row for row in lead_rows if row["member_id"] == "101")

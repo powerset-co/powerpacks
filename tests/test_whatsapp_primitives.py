@@ -8,7 +8,6 @@ Exercise:
 
 from __future__ import annotations
 
-import csv
 import importlib.util
 import json
 import os
@@ -21,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
+
+from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -328,7 +329,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 self.assertIn("message_counts", result.stderr)
 
                 with csv_path.open(encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 phones = {row["phone"] for row in rows}
                 self.assertIn("+14155550101", phones)
                 self.assertIn("+14155550202", phones)
@@ -464,7 +465,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                     1,
                 )
                 with csv_path.open(encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(rows[0]["message_count"], "500")
         finally:
             server.shutdown()
@@ -524,7 +525,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                     FakeWAHAHandler.request_counts.get("/api/default/groups/987654321%40g.us/participants/v2"),
                 )
                 with csv_path.open(encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(rows, [])
         finally:
             server.shutdown()
@@ -604,7 +605,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                     ),
                 )
                 with csv_path.open(encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(rows, [])
         finally:
             server.shutdown()
@@ -671,7 +672,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 self.assertEqual(manifest["diagnostics"]["group_participants_fallback"], 1)
                 self.assertEqual(manifest["diagnostics"]["errors"][0]["step"], "group_participants")
                 with csv_path.open(encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(rows[0]["phone"], "+14155550101")
                 self.assertEqual(rows[0]["is_in_group_chats"], "true")
         finally:
@@ -741,7 +742,7 @@ class WhatsAppPrimitiveTests(unittest.TestCase):
                 self.assertEqual(second_manifest["diagnostics"]["message_count_total"], 0)
                 self.assertIsNone(FakeWAHAHandler.request_counts.get("/api/default/chats/14155550404%40s.whatsapp.net/messages"))
                 with (tmp / "second.csv").open(encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(rows[0]["message_count"], "7")
         finally:
             server.shutdown()

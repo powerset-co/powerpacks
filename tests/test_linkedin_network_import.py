@@ -1,4 +1,3 @@
-import csv
 import importlib.util
 import json
 import sys
@@ -8,6 +7,8 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
+
+from packs.shared.csv_io import CsvIO
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py"
 spec = importlib.util.spec_from_file_location("linkedin_network_import", MODULE_PATH)
@@ -89,7 +90,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             out = Path(state["artifacts"]["source_people_csv"])
             self.assertTrue(out.exists())
             with out.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["public_identifier"], "jane-example")
             self.assertEqual(rows[0]["source_channels"], "linkedin_csv")
@@ -127,7 +128,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             self.assertEqual(people_path.name, "people.csv")
             self.assertTrue(people_path.exists())
             with people_path.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["full_name"], "Jane Example")
             self.assertEqual(rows[0]["location_raw"], "San Francisco, California, United States")
@@ -209,7 +210,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             self.assertFalse((out_dir / "linkedin" / "second-run").exists())
 
             with (discover_dir / "people.csv").open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["public_identifier"] for row in rows], ["jane-example", "sam-example"])
             self.assertEqual(second_state["steps"]["enrich_people"]["summary"]["cache_hit_count"], 2)
 

@@ -16,6 +16,7 @@ import argparse
 import csv
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -23,6 +24,12 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
 
 CATALOG_HEADERS = [
@@ -386,7 +393,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 def _iter_catalog_rows(path: Path):
     with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         for row in reader:
             yield row
 

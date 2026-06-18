@@ -14,7 +14,6 @@ wrapper owns orchestration and writes a stable stage manifest.
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import shutil
@@ -36,6 +35,7 @@ CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
 ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
 
 from packs.indexing.lib.openai_usage_tiers import openai_usage_tier_profile  # noqa: E402
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -104,7 +104,7 @@ def count_csv_rows(path: str | Path) -> int:
     if not target.exists():
         return 0
     with target.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        reader = csv.reader(handle)
+        reader = CsvIO.reader(handle)
         try:
             next(reader)
         except StopIteration:

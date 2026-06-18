@@ -29,6 +29,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 
 DEFAULT_OUT_DIR = Path(".powerpacks/messages")
 DEFAULT_STORE = DEFAULT_OUT_DIR / "wacli"
@@ -819,7 +825,7 @@ def load_name_fallbacks(path: Path | None) -> dict[str, str]:
         return {}
     out: dict[str, str] = {}
     with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
+        for row in CsvIO.dict_reader(handle):
             phone = canonicalize_phone(row.get("phone"))
             name = clean_name(
                 row.get("name")

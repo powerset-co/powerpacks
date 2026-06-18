@@ -29,6 +29,7 @@ sys.path.insert(0, str(REPO))
 
 from packs.indexing.lib.artifacts import build_company_corpus  # noqa: E402
 from packs.indexing.lib.people import flatten_people  # noqa: E402
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 CLASSIFIED_AT = "2026-06-11T00:00:00Z"
 
@@ -138,7 +139,7 @@ def main() -> int:
     art_out.mkdir(parents=True, exist_ok=True)
 
     with open(args.people_csv, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
+        reader = CsvIO.dict_reader(f)
         fieldnames = reader.fieldnames or []
         rows = list(reader)
 

@@ -22,8 +22,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-csv.field_size_limit(sys.maxsize)
-
 try:
     from packs.ingestion.schemas.people_schema import (
         LIST_VALUE_COLUMNS,
@@ -35,6 +33,7 @@ try:
         extract_public_identifier,
     )
     from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.people_schema import (
@@ -47,6 +46,7 @@ except ModuleNotFoundError:
         extract_public_identifier,
     )
     from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
+    from packs.shared.csv_io import CsvIO
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
 MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources", "merged_row_count", "needs_review"]
@@ -101,7 +101,7 @@ def emit(payload: dict[str, Any]) -> None:
 
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(csv.DictReader(handle))
+        return list(CsvIO.dict_reader(handle))
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:

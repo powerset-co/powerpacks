@@ -10,7 +10,6 @@ shortcuts, and actually gate local DuckDB retrieval.
 from __future__ import annotations
 
 import argparse
-import csv
 import importlib.util
 import json
 import subprocess
@@ -18,6 +17,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -220,7 +221,7 @@ class LocalPipelineSeniorityPinningTests(unittest.TestCase):
 
     def csv_person_ids(self, out: dict) -> list[str]:
         with Path(out["artifacts"]["csv"]).open(newline="") as handle:
-            return [row["person_id"] for row in csv.DictReader(handle)]
+            return [row["person_id"] for row in CsvIO.dict_reader(handle)]
 
     def test_pinned_bands_gate_local_retrieval_and_override_expansion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_raw:

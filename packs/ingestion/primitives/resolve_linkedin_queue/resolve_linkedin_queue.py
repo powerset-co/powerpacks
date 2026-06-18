@@ -24,6 +24,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 DEFAULT_LEDGER = Path(".powerpacks/network-import/linkedin-resolution/import-run.json")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/linkedin-resolution")
 DEFAULT_BASE_URL = os.environ.get("POWERPACKS_PARALLEL_BASE_URL", "https://api.parallel.ai")
@@ -237,7 +243,7 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(csv.DictReader(handle))
+        return list(CsvIO.dict_reader(handle))
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import sys
 from pathlib import Path
 
@@ -33,6 +32,7 @@ try:
         normalize_directory_source_accounts,
         write_manifest,
     )
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
@@ -59,6 +59,7 @@ except ModuleNotFoundError:
         normalize_directory_source_accounts,
         write_manifest,
     )
+    from packs.shared.csv_io import CsvIO
 
 
 def directory_source_keys(path: Path) -> set[str]:
@@ -99,7 +100,7 @@ def people_csv_schema_stale(path: Path) -> bool:
     if not path.exists():
         return False
     with path.open(newline="", encoding="utf-8") as handle:
-        header = next(csv.reader(handle), [])
+        header = next(CsvIO.reader(handle), [])
     return bool(header) and "interaction_counts" not in header
 
 
@@ -108,7 +109,7 @@ def interaction_columns(path: Path) -> dict[str, tuple[str, str]]:
     if not path.exists():
         return out
     with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
+        for row in CsvIO.dict_reader(handle):
             key = (row.get("public_identifier") or row.get("id") or "").strip().lower()
             if key:
                 out[key] = (row.get("interaction_counts") or "", row.get("last_interaction") or "")

@@ -11,6 +11,8 @@ from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
+from packs.shared.csv_io import CsvIO
+
 ROOT = Path(__file__).resolve().parents[1]
 PRIMITIVE = ROOT / "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py"
 
@@ -1192,7 +1194,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertEqual(summary["status"], "cached_results_merged")
             self.assertEqual(summary["mark_completed"]["review_rows_merged"], 1)
             with review_csv.open(newline="", encoding="utf-8-sig") as handle:
-                row = next(csv.DictReader(handle))
+                row = next(CsvIO.dict_reader(handle))
             self.assertEqual(row["retarget_status"], "re_researched")
             self.assertEqual(row["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
 
@@ -1360,7 +1362,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 mod.reapply_previous_review_state(args, ledger_path, ledger)
 
             with review_csv.open(newline="", encoding="utf-8-sig") as handle:
-                row = next(csv.DictReader(handle))
+                row = next(CsvIO.dict_reader(handle))
             self.assertEqual(row["exclude"], "no")
             self.assertEqual(row["enrich_decision"], "yes")
             self.assertEqual(row["retarget_hint"], "https://linkedin.test/rina")
@@ -1403,7 +1405,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 mod.reapply_previous_review_state(args, ledger_path, ledger)
 
             with review_csv.open(newline="", encoding="utf-8-sig") as handle:
-                rows = {row["handle"]: row for row in csv.DictReader(handle)}
+                rows = {row["handle"]: row for row in CsvIO.dict_reader(handle)}
             self.assertEqual(rows["phone-1"]["exclude"], "no")
             self.assertEqual(rows["phone-1"]["retarget_hint"], "new yes")
             self.assertEqual(rows["phone-2"]["exclude"], "no")
@@ -1440,7 +1442,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
                 mod.build_raw_review_csv(args, ledger_path, ledger)
 
             with review_csv.open(newline="", encoding="utf-8-sig") as handle:
-                row = next(csv.DictReader(handle))
+                row = next(CsvIO.dict_reader(handle))
             self.assertEqual(row["bucket"], "yes")
             self.assertEqual(row["exclude"], "no")
             self.assertEqual(row["enrich_decision"], "yes")
@@ -1693,7 +1695,7 @@ class ImportContactsPipelineTests(unittest.TestCase):
             self.assertNotIn("parallel_research", calls)
             self.assertTrue(args.review_csv.exists())
             with args.review_csv.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["full_name"], "Ada Lovelace")
             self.assertEqual(rows[0]["exclude"], "false")
 

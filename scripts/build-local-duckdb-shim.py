@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import array
 from contextlib import contextmanager
-import csv
 import hashlib
 import fcntl
 import json
@@ -43,13 +42,7 @@ DUCKDB_LOCK_NAME = ".local-search-duckdb.lock"
 from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract  # noqa: E402
 from packs.indexing.lib.people import build_people_records, flatten_people  # noqa: E402
 from packs.ingestion.schemas.people_schema import parse_interaction_counts  # noqa: E402
-_limit = sys.maxsize
-while True:
-    try:
-        csv.field_size_limit(_limit)
-        break
-    except OverflowError:
-        _limit //= 10
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_OPERATOR_ID = "e33a648a-ae5f-432e-83ce-b90d75546ada"
 DEFAULT_OPERATOR_EMAIL = "thearthurchen@gmail.com"
@@ -457,9 +450,8 @@ def _word_tokens(text: str) -> list[str]:
 def _load_csv_by_id(path: Path) -> dict[str, dict[str, str]]:
     if not path.exists():
         return {}
-    csv.field_size_limit(sys.maxsize)
     with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         return {row.get("id", ""): row for row in reader if row.get("id")}
 
 

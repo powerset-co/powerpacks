@@ -39,6 +39,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 
 def load_dotenv(path: Path) -> None:
     """Load simple KEY=VALUE lines into os.environ without overriding env."""
@@ -579,7 +585,7 @@ def load_queue(queue_path: Path) -> dict[str, dict[str, str]]:
         return {}
     rows: dict[str, dict[str, str]] = {}
     with queue_path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         for row in reader:
             h = (row.get("handle") or "").strip()
             if h:
@@ -595,7 +601,7 @@ def load_previous_review_decisions(path: Path | None) -> tuple[dict[str, dict[st
     by_phone: dict[str, dict[str, str]] = {}
     carried = 0
     with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         for row in reader:
             decision = {field: (row.get(field) or "").strip() for field in REVIEW_DECISION_FIELDS}
             bucket = (row.get("bucket") or "").strip().lower()

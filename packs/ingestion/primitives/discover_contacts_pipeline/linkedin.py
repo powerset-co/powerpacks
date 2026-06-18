@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import shutil
 import sys
 from pathlib import Path
@@ -31,6 +30,7 @@ try:
         generate_person_id,
         normalize_linkedin_url,
     )
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
@@ -53,6 +53,7 @@ except ModuleNotFoundError:
         generate_person_id,
         normalize_linkedin_url,
     )
+    from packs.shared.csv_io import CsvIO
 
 LINKEDIN_DISCOVERY_COLUMNS = [
     "person_id",
@@ -103,7 +104,7 @@ def parse_connections_csv(path: Path, user: str) -> tuple[list[dict[str, str]], 
                 break
         if not header_line:
             raise ValueError("Could not find LinkedIn export header row containing 'First Name' and 'URL'")
-        reader = csv.DictReader(handle, fieldnames=next(csv.reader([header_line])))
+        reader = CsvIO.dict_reader(handle, fieldnames=next(CsvIO.reader([header_line])))
         for row in reader:
             linkedin_url = normalize_linkedin_url(row.get("URL", ""))
             public_identifier = extract_public_identifier(linkedin_url)

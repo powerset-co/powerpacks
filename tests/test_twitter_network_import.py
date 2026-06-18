@@ -1,5 +1,4 @@
 import contextlib
-import csv
 import importlib.util
 import io
 import os
@@ -8,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from packs.shared.csv_io import CsvIO
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -106,7 +107,7 @@ class TwitterNetworkImportTests(unittest.TestCase):
                 self.assertEqual(people_path.name, "people.csv")
                 self.assertTrue(legacy_path.exists())
                 with people_path.open(newline="", encoding="utf-8") as handle:
-                    rows = list(csv.DictReader(handle))
+                    rows = list(CsvIO.dict_reader(handle))
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["twitter_handle"], "founder")
                 self.assertEqual(rows[0]["public_identifier"], "ada-lovelace")

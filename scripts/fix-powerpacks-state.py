@@ -16,7 +16,6 @@ directories instead of deleting them.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import shutil
@@ -28,6 +27,10 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
+
 CONFIG = ROOT / "config/powerpacks-state-paths.json"
 VERTICAL_STAGE_PATHS = {
     "gmail": {
@@ -125,7 +128,7 @@ def csv_count(path: Path) -> int:
         return 0
     try:
         with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-            return sum(1 for _ in csv.DictReader(handle))
+            return sum(1 for _ in CsvIO.dict_reader(handle))
     except Exception:
         return 0
 

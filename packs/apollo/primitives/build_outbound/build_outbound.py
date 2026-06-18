@@ -9,7 +9,6 @@ campaign with an exact id confirmation.
 from __future__ import annotations
 
 import argparse
-import csv
 import html
 import json
 import os
@@ -24,6 +23,10 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
+
 DEFAULT_RUNS = Path(".powerpacks/sales-nav/runs")
 DEFAULT_OUT = Path(".powerpacks/apollo/build-outbound")
 SOURCE = "powerpacks_build_outbound"
@@ -252,7 +255,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 def read_lead_rows(path: Path) -> list[dict[str, Any]]:
     if path.suffix.lower() == ".csv":
         with path.open(newline="", encoding="utf-8-sig") as handle:
-            return [dict(row) for row in csv.DictReader(handle)]
+            return [dict(row) for row in CsvIO.dict_reader(handle)]
     return read_jsonl(path)
 
 

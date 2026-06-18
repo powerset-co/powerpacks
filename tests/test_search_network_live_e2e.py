@@ -1,4 +1,3 @@
-import csv
 import json
 import os
 import subprocess
@@ -6,6 +5,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -213,7 +214,7 @@ class SearchNetworkLiveE2ETests(unittest.TestCase):
             self.assertEqual(csv_path.name, "query_results.csv")
             self.assertTrue(csv_path.exists())
             with csv_path.open(newline="") as handle:
-                reader = csv.DictReader(handle)
+                reader = CsvIO.dict_reader(handle)
                 rows = list(reader)
                 self.assertEqual(reader.fieldnames, QUERY_RESULTS_FIELDS)
             self.assertEqual(len(rows), reranked["ranked_count"])

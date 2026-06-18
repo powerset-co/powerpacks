@@ -32,6 +32,7 @@ try:
         normalize_linkedin_url,
         normalize_people_row,
     )
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.primitives.enrich_people import enrich_people as people_enrichment
@@ -42,6 +43,7 @@ except ModuleNotFoundError:
         normalize_linkedin_url,
         normalize_people_row,
     )
+    from packs.shared.csv_io import CsvIO
 
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "linkedin"
@@ -128,7 +130,7 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return [{str(key): value or "" for key, value in row.items() if key is not None} for row in csv.DictReader(handle)]
+        return [{str(key): value or "" for key, value in row.items() if key is not None} for row in CsvIO.dict_reader(handle)]
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
@@ -244,7 +246,7 @@ def parse_connections_csv(path: Path, source_user: str, limit: int | None = None
                 break
         if not header_line:
             raise PipelineFailed("Could not find LinkedIn export header row containing 'First Name' and 'URL'")
-        reader = csv.DictReader(handle, fieldnames=next(csv.reader([header_line])))
+        reader = CsvIO.dict_reader(handle, fieldnames=next(CsvIO.reader([header_line])))
         for row in reader:
             url = normalize_linkedin_url(row.get("URL", ""))
             pub_id = extract_public_identifier(url)

@@ -1,4 +1,3 @@
-import csv
 import json
 import subprocess
 import sys
@@ -7,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from packs.indexing.lib.contracts import CANONICAL_PEOPLE_CSV, validate_people_csv
+from packs.shared.csv_io import CsvIO
 from packs.indexing.lib.identity import canonical_person_key
 from packs.indexing.lib.ledger import load_ledger, mark_step, next_pending_step, save_ledger
 from packs.indexing.lib.text import normalize_text, stable_text_hash
@@ -50,7 +50,7 @@ class IndexingScaffoldTests(unittest.TestCase):
 
     def test_identity_and_text_helpers_are_deterministic(self) -> None:
         with FIXTURE_PEOPLE.open(newline="", encoding="utf-8") as handle:
-            rows = list(csv.DictReader(handle))
+            rows = list(CsvIO.dict_reader(handle))
         self.assertEqual(canonical_person_key(rows[0]), "linkedin:founder-example")
         self.assertEqual(canonical_person_key(rows[1]), "id:person-engineer")
         self.assertEqual(normalize_text(" Ada\n Lovelace "), "ada lovelace")

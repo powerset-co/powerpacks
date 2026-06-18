@@ -14,6 +14,7 @@ from packs.ingestion.primitives.import_contacts_pipeline.common import (
     directory_source_account_quality,
     normalize_directory_source_accounts,
 )
+from packs.shared.csv_io import CsvIO
 
 
 def write_directory(path: Path, rows: list[dict[str, str]]) -> None:
@@ -142,7 +143,7 @@ class ImportContactsQualityTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "completed")
             with out.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(json.loads(rows[0]["interaction_counts"]), {"gmail": 5})
             self.assertEqual(rows[0]["last_interaction"], "2026-01-03T00:00:00Z")
@@ -212,7 +213,7 @@ class ImportContactsQualityTests(unittest.TestCase):
             self.assertEqual(repair["updated_rows"], 1)
             self.assertEqual(quality["status"], "ok")
             with directory.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["source_account"], "imessage,whatsapp")
 
     def test_linkedin_direct_import_commits_people_to_directory(self) -> None:
@@ -253,7 +254,7 @@ class ImportContactsQualityTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["directory_checkpoint"]["confirmed_rows"], 1)
             with directory.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["source"], "linkedin_csv")
             self.assertEqual(rows[0]["source_account"], "arthur")

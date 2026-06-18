@@ -12,11 +12,15 @@ network lookups happen here.
 
 from __future__ import annotations
 
-import csv
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "location"
 LOCATION_MAPPING_FILE = DATA_DIR / "location_normalization_map.json"
@@ -177,7 +181,7 @@ def _load_country_mapping() -> dict[str, tuple[str, str]]:
         return _country_cache
     mapping: dict[str, tuple[str, str]] = {}
     with COUNTRY_MACRO_REGION_FILE.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
+        for row in CsvIO.dict_reader(handle):
             country = _clean(row.get("country_name"))
             macro = _clean(row.get("macro_region"))
             if not country:

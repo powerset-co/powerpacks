@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.ingestion.schemas.people_schema import generate_person_id
+from packs.shared.csv_io import CsvIO
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/enrich_people/enrich_people.py"
 spec = importlib.util.spec_from_file_location("enrich_people", MODULE_PATH)
@@ -108,7 +109,7 @@ class EnrichPeopleTests(unittest.TestCase):
             for artifact in ("linkedin_enrichment_queue_csv", "rapidapi_cache_misses_csv", "rapidapi_cache_hits_csv"):
                 self.assertTrue(Path(state["artifacts"][artifact]).exists())
             with Path(state["artifacts"]["rapidapi_cache_misses_csv"]).open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["cache_status"], "miss")
             self.assertIn("cache_reason", rows[0])
 
@@ -122,7 +123,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             output = Path(payload["artifacts"]["people_csv"])
             with output.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["full_name"], "Jane Example")
 
@@ -150,7 +151,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertFalse(any(name.endswith("_enrich") and name != "rapidapi_profile" for name in dir(enrich_people)))
             output = Path(payload["artifacts"]["people_csv"])
             with output.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["enrichment_provider"], "rapidapi")
             self.assertEqual(rows[0]["current_company"], "Acme")
             experiences = json.loads(rows[0]["work_experiences"])
@@ -171,10 +172,10 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(state["paid_call_count"], 0)
             self.assertEqual(state["cache_hit_count"], 1)
             with Path(state["artifacts"]["provider_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
-                provider_rows = list(csv.DictReader(handle))
+                provider_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(provider_rows[0]["rapidapi_from_cache"], "true")
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                output_rows = list(csv.DictReader(handle))
+                output_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(output_rows[0]["current_company"], "Acme")
 
     def test_bad_cache_does_not_bypass_rapidapi_refresh(self):
@@ -207,14 +208,14 @@ class EnrichPeopleTests(unittest.TestCase):
             code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--ledger", str(Path(tmp) / "ledger.json")])
             self.assertEqual(code, 0)
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["id"], generate_person_id("jane-example"))
             people2 = Path(tmp) / "people2.csv"
             self.write_people(people2, rapidapi_response=self.profile(), row_id="existing")
             code, payload = self.invoke(["run", "--input", str(people2), "--output-dir", str(Path(tmp) / "out2"), "--ledger", str(Path(tmp) / "ledger2.json")])
             self.assertEqual(code, 0)
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["id"], "existing")
 
 
@@ -236,10 +237,10 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(state["cache_hit_count"], 1)
             self.assertEqual(state["paid_call_count"], 0)
             with Path(state["artifacts"]["provider_enriched_csv"]).open(newline="", encoding="utf-8") as handle:
-                provider_rows = list(csv.DictReader(handle))
+                provider_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(provider_rows[0]["rapidapi_from_cache"], "true")
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                output_rows = list(csv.DictReader(handle))
+                output_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(output_rows[0]["current_company"], "Acme")
 
     def test_refresh_cache_forces_cache_miss(self):
@@ -294,7 +295,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(mocked.call_count, 1)
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                output_rows = list(csv.DictReader(handle))
+                output_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(output_rows), 2)
 
     def test_old_ledger_use_rapidapi_false_fails_only_for_paid_work(self):
@@ -354,7 +355,7 @@ class EnrichPeopleTests(unittest.TestCase):
             ])
             self.assertEqual(code, 0)
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["current_company_urn"], "legacy-company-id")
             experiences = json.loads(rows[0]["work_experiences"])
             self.assertEqual(experiences[0]["company_name"], "Acme Metadata")
@@ -405,7 +406,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertTrue(Path(state["artifacts"]["rapidapi_recent_failures_csv"]).exists())
             self.assertEqual(payload["status"], "completed")
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                self.assertEqual(list(csv.DictReader(handle)), [])
+                self.assertEqual(list(CsvIO.dict_reader(handle)), [])
 
     def test_old_failed_cache_retries_after_ttl(self):
         with tempfile.TemporaryDirectory() as tmp:

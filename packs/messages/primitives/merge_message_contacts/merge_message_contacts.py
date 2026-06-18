@@ -30,9 +30,16 @@ import argparse
 import csv
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
 
 CSV_HEADERS = [
@@ -300,7 +307,7 @@ def read_input_csv(path: Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
     records: list[dict[str, Any]] = []
     counts = {"input_rows": 0, "kept_rows": 0, "invalid_rows": 0}
     with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         validate_input_headers(path, reader.fieldnames)
         for row in reader:
             counts["input_rows"] += 1

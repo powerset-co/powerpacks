@@ -10,7 +10,6 @@ profile fields instead of reusing older search artifacts.
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import os
@@ -29,6 +28,7 @@ if str(ROOT) not in sys.path:
 
 from packs.ingestion.primitives.enrich_people.enrich_people import normalize_rapidapi, rapidapi_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
+from packs.shared.csv_io import CsvIO
 
 
 DEFAULT_REVIEW_CSV = Path(".powerpacks/messages/research_review.csv")
@@ -90,7 +90,7 @@ def load_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open(newline="", encoding="utf-8-sig") as handle:
-        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(handle)]
+        return [{key: value or "" for key, value in row.items()} for row in CsvIO.dict_reader(handle)]
 
 
 def normalize_hint(value: str) -> str:

@@ -34,6 +34,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 
 DEFAULT_LEDGER = Path(".powerpacks/messages/import-run.json")
 DEFAULT_CONTACTS = Path(".powerpacks/messages/contacts.csv")
@@ -205,7 +211,7 @@ def contact_schema_error(path: Path, fieldnames: list[str] | None) -> str:
 def read_csv_fieldnames(path: Path) -> list[str] | None:
     try:
         with path.open(newline="", encoding="utf-8-sig") as handle:
-            return csv.DictReader(handle).fieldnames
+            return CsvIO.dict_reader(handle).fieldnames
     except OSError:
         return None
 
@@ -813,7 +819,7 @@ def csv_data_rows(path: Path) -> int:
         return 0
     try:
         with path.open("r", encoding="utf-8", newline="") as handle:
-            return sum(1 for _ in csv.DictReader(handle))
+            return sum(1 for _ in CsvIO.dict_reader(handle))
     except OSError:
         return 0
 
@@ -824,7 +830,7 @@ def review_human_state_rows(path: Path) -> int:
         return 0
     try:
         with path.open(newline="", encoding="utf-8-sig") as handle:
-            rows = csv.DictReader(handle)
+            rows = CsvIO.dict_reader(handle)
             total = 0
             for row in rows:
                 explicit = any((row.get(field) or "").strip() for field in ("exclude", "enrich_decision", "retarget_hint"))
@@ -937,7 +943,7 @@ def load_previous_review_state(path: Path | None) -> tuple[dict[str, dict[str, s
     count = 0
     try:
         with path.open(newline="", encoding="utf-8-sig") as handle:
-            for row in csv.DictReader(handle):
+            for row in CsvIO.dict_reader(handle):
                 state = previous_review_state({key: value or "" for key, value in row.items()})
                 if not any(state.values()):
                     continue
@@ -992,7 +998,7 @@ def reapply_previous_review_state(args: argparse.Namespace, ledger_path: Path, l
         return
 
     with review_csv.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         fieldnames = list(reader.fieldnames or REVIEW_CSV_HEADERS)
         rows = [{key: value or "" for key, value in row.items()} for row in reader]
     for column in ("exclude", "enrich_decision", "retarget_hint"):
@@ -1905,7 +1911,7 @@ def load_queue_rows_by_phone(path: Path) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     try:
         with path.open(newline="", encoding="utf-8-sig") as handle:
-            for row in csv.DictReader(handle):
+            for row in CsvIO.dict_reader(handle):
                 phone = digits_only(row.get("phone_e164", ""))
                 if phone:
                     out[phone] = {key: value or "" for key, value in row.items()}
@@ -1948,7 +1954,7 @@ def build_raw_review_csv(args: argparse.Namespace, ledger_path: Path, ledger: di
     previous_feedback_applied = 0
     if contacts_path.exists():
         with contacts_path.open(newline="", encoding="utf-8-sig") as handle:
-            for contact in csv.DictReader(handle):
+            for contact in CsvIO.dict_reader(handle):
                 contact = {key: value or "" for key, value in contact.items()}
                 phone = contact.get("phone", "")
                 name = contact.get("matched_name") or contact.get("name") or ""

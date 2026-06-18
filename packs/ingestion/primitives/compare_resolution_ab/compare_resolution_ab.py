@@ -19,6 +19,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 
 def maybe_open(path: Path, do_open: bool) -> None:
     """Open the CSV in the OS default app when --open is set. macOS only and
@@ -43,7 +49,7 @@ def top_mc(candidates_cell: str) -> float | None:
 
 def load_run(path: Path) -> dict[str, dict[str, Any]]:
     by_email: dict[str, dict[str, Any]] = {}
-    for row in csv.DictReader(path.open(encoding="utf-8")):
+    for row in CsvIO.dict_reader(path.open(encoding="utf-8")):
         email = str(row.get("email", "")).strip().lower()
         if not email:
             continue

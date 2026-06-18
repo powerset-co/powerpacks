@@ -13,7 +13,6 @@ skill.
 """
 from __future__ import annotations
 
-import csv
 import gzip
 import json
 import os
@@ -24,6 +23,8 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -301,7 +302,7 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 self.assertEqual(hydrate_step["output"]["source"]["backend"], "duckdb")
                 self.assertEqual(hydrate_step["output"]["source"]["type"], "local_duckdb")
                 with csv_path.open(newline="") as handle:
-                    self.assertEqual(len(list(csv.DictReader(handle))), 2)
+                    self.assertEqual(len(list(CsvIO.dict_reader(handle))), 2)
 
                 step_ids = [step["id"] for step in state["steps"]]
                 self.assertNotIn("resolve_set_operators", step_ids)

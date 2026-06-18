@@ -42,6 +42,7 @@ try:
         parse_jsonish,
         stable_person_id_from_key,
     )
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
@@ -55,6 +56,7 @@ except ModuleNotFoundError:
         parse_jsonish,
         stable_person_id_from_key,
     )
+    from packs.shared.csv_io import CsvIO
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/enrichment/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
@@ -156,7 +158,7 @@ def write_json(path: Path, value: Any) -> None:
 
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(csv.DictReader(handle))
+        return list(CsvIO.dict_reader(handle))
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
