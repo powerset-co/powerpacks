@@ -41,11 +41,16 @@ REQUIRED_TABLES = (
     "local_companies",
 )
 
-# Expected to exist but may be empty on sparse networks (no education listed,
-# no derived company signals). Empty => warning, not failure.
+# Expected to exist but may be empty on sparse networks (no education listed).
+# Empty => warning, not failure.
 OPTIONAL_TABLES = (
     "local_people_education",
     "local_education",
+)
+
+# Reported for visibility but never warns/fails: this flow does not populate
+# company signals, so an empty local_company_signals is expected and ignored.
+INFO_TABLES = (
     "local_company_signals",
 )
 
@@ -123,6 +128,14 @@ def validate(db_path: Path) -> dict:
                 payload["warnings"].append(f"optional table {table} is missing")
             elif rows == 0:
                 payload["warnings"].append(f"optional table {table} is empty")
+
+        for table in INFO_TABLES:
+            exists = table in present
+            rows = row_count(con, table) if exists else 0
+            payload["tables"].append(
+                {"name": table, "tier": "info", "exists": exists, "rows": rows}
+            )
+            # Informational only: never warns or fails (expected empty here).
     finally:
         con.close()
 

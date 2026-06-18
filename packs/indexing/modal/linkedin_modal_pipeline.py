@@ -690,6 +690,31 @@ def wait_for_status(label: str, timeout_s: int = 7200) -> dict | None:
     return None
 
 
+def pull_volume_file(vol: modal.Volume, remote_key: str, target: Path) -> int:
+    """Stream one volume file to a local path (atomic via .tmp; prior copy -> .bkup).
+
+    Shared by cmd_download (search artifacts) and cmd_import_linkedin (the enriched
+    people.csv). Returns bytes written, or -1 if the remote file is missing.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        backup = target.with_name(target.name + ".bkup")
+        target.replace(backup)
+        print(f"existing {target.name} renamed to {backup.name}")
+    tmp = target.with_name(target.name + ".tmp")
+    written = 0
+    try:
+        with tmp.open("wb") as handle:
+            for chunk in vol.read_file(remote_key):
+                handle.write(chunk)
+                written += len(chunk)
+    except FileNotFoundError:
+        tmp.unlink(missing_ok=True)
+        return -1
+    tmp.replace(target)
+    return written
+
+
 def cmd_download(args: argparse.Namespace) -> int:
     """Pull the search artifacts a local machine actually consumes.
 
@@ -714,25 +739,83 @@ def cmd_download(args: argparse.Namespace) -> int:
     for name in ("local-search.duckdb", "manifest.json"):
         remote = f"{run_prefix}/{name}"
         target = dest / name
-        if target.exists():
-            backup = target.with_name(target.name + ".bkup")
-            target.replace(backup)
-            print(f"existing {target.name} renamed to {backup.name}")
-        tmp = target.with_name(target.name + ".tmp")
-        written = 0
-        try:
-            with tmp.open("wb") as handle:
-                for chunk in vol.read_file(remote):
-                    handle.write(chunk)
-                    written += len(chunk)
-        except FileNotFoundError:
-            tmp.unlink(missing_ok=True)
+        written = pull_volume_file(vol, remote, target)
+        if written < 0:
             print(f"missing on volume (was the run made with --persist-artifacts?): {remote}")
             return 1
-        tmp.replace(target)
         elapsed = max(time.time() - started, 0.001)
         print(f"downloaded {remote} -> {target} ({written / 1e6:.0f} MB, {written / 1e6 / elapsed:.0f} MB/s)")
         started = time.time()
+    return 0
+
+
+def cmd_import_linkedin(args: argparse.Namespace) -> int:
+    """Connections.csv -> enriched people.csv on Modal (import/enrich only).
+
+    Runs the SAME run_linkedin.py RapidAPI enrichment sandbox as `pipeline`'s
+    first stage, but stops before indexing and downloads the enriched people.csv
+    so it can be merged with other sources (e.g. Gmail) ahead of a single
+    `index-people` pass. Default dest is the canonical LinkedIn import path the
+    fan-in merge reads. Enrichment caches on the shared volume keep reruns cheap.
+    """
+    csv_path = Path(args.csv).expanduser()
+    if not csv_path.exists():
+        raise SystemExit(f"missing csv: {csv_path}")
+    rows = csv_connection_rows(csv_path)
+    vol = get_volume()
+    op_prefix = f"operators/{DEFAULT_OPERATOR_ID}"
+    progress = PipelineProgress()
+
+    eta = estimate_seconds(rows)
+    progress.event("importing", f"Uploading {csv_path.name} ({rows} connections, ~{eta // 60 + 1} min estimated)",
+                   payload={"connections": rows, "estimated_seconds": eta})
+    with vol.batch_upload(force=True) as batch:
+        batch.put_file(csv_path, f"{op_prefix}/input/connections.csv")
+
+    app = modal.App.lookup(APP_NAME, create_if_missing=True)
+    import_vol = run_vol_path(IMPORT_LABEL)
+    reset_run_status(vol, IMPORT_LABEL)
+    sb = modal.Sandbox.create(
+        "python", "/repo/packs/indexing/modal/bench_wrapper.py", f"{import_vol}/bench-import.json",
+        "python", "/repo/packs/indexing/modal/run_linkedin.py",
+        "--connections-csv", f"{OPERATOR_ROOT}/input/connections.csv",
+        "--people-out", f"{OPERATOR_ROOT}/input/people.csv",
+        "--cache-root", CACHE_ROOT,
+        "--run-vol", import_vol,
+        "--operator-id", DEFAULT_OPERATOR_ID,
+        "--source-user", args.source_user,
+        app=app,
+        image=build_image(),
+        volumes={"/data": vol},
+        secrets=[rapidapi_secret()],
+        cpu=2,
+        memory=4096,
+        timeout=args.timeout,
+    )
+    progress.event("importing", "Importing and enriching contacts", payload={"sandbox": sb.object_id})
+    payload = watch_run(IMPORT_LABEL, progress, "importing", "Importing")
+    if not payload or payload.get("status") != "completed":
+        progress.event("importing", f"Import failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
+        return 1
+    stats = payload.get("stats") or {}
+    progress.event("importing", f"Imported {stats.get('people')} contacts "
+                   f"({stats.get('cache_hit_count') or 0} cached, {stats.get('paid_call_count') or 0} fetched)",
+                   payload=stats)
+
+    # Pull the enriched people.csv to the canonical LinkedIn import path so the
+    # fan-in merge can pick it up (reuses the shared volume->local file pull).
+    dest = Path(args.dest).expanduser() if args.dest else LOCAL_POWERPACKS / "network-import/import/linkedin/people.csv"
+    written = pull_volume_file(vol, f"{op_prefix}/input/people.csv", dest)
+    if written < 0:
+        progress.event("importing", "Enriched people.csv missing on volume", status="failed")
+        print(json.dumps({"status": "failed", "error": f"people.csv missing on volume for {op_prefix}"}))
+        return 1
+    progress.event("importing", "Enriched people.csv downloaded", status="completed", progress=1.0,
+                   payload={"people_csv": str(dest), "bytes": written})
+    result = {"status": "completed", "csv": str(csv_path), "connections": rows,
+              "people": stats.get("people"), "people_csv": str(dest), "bytes": written}
+    progress.finish(result)
+    print(json.dumps(result))
     return 0
 
 
@@ -915,6 +998,12 @@ def main() -> int:
                       help="0 (default) = uncapped, no estimate pass (internal team default); >0 adds a dry-run estimate gate")
     pipe.add_argument("--force", action="store_true", help="reprocess even if the csv is unchanged")
 
+    imp = sub.add_parser("import-linkedin", help="Connections.csv -> enriched people.csv on Modal (import/enrich only; downloads people.csv for source merge)")
+    imp.add_argument("--csv", required=True, help="path to the LinkedIn Connections.csv export")
+    imp.add_argument("--source-user", default="linkedin")
+    imp.add_argument("--dest", help="download dest for the enriched people.csv; defaults to .powerpacks/network-import/import/linkedin/people.csv")
+    imp.add_argument("--timeout", type=int, default=7200)
+
     idx = sub.add_parser("index-people", help="index an already-enriched people.csv (no import stage) -> searchable duckdb")
     idx.add_argument("--people-csv", required=True, help="path to an enriched people.csv (e.g. the Gmail merged people.csv)")
     idx.add_argument("--dest", help="download destination; defaults to .powerpacks/search-index")
@@ -969,7 +1058,7 @@ def main() -> int:
 
     args = ap.parse_args()
     require_modal_credentials()
-    return {"pipeline": cmd_pipeline, "index-people": cmd_index_people, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
+    return {"pipeline": cmd_pipeline, "import-linkedin": cmd_import_linkedin, "index-people": cmd_index_people, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 
 
 if __name__ == "__main__":

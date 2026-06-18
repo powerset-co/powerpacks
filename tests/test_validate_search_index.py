@@ -110,10 +110,20 @@ class ValidateSearchIndexTest(unittest.TestCase):
 
     def test_empty_optional_table_is_warning_not_failure(self):
         tables = dict(HEALTHY)
+        tables["local_people_education"] = 0
+        payload = self._validate(tables=tables)
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(any("local_people_education" in w for w in payload["warnings"]))
+
+    def test_empty_info_table_does_not_warn(self):
+        # local_company_signals is expected-empty in this flow: report it, never warn.
+        tables = dict(HEALTHY)
         tables["local_company_signals"] = 0
         payload = self._validate(tables=tables)
         self.assertEqual(payload["status"], "ok")
-        self.assertTrue(any("local_company_signals" in w for w in payload["warnings"]))
+        self.assertEqual(payload["warnings"], [])
+        signals = next(t for t in payload["tables"] if t["name"] == "local_company_signals")
+        self.assertEqual(signals["tier"], "info")
 
     def test_missing_optional_table_is_warning_not_failure(self):
         tables = dict(HEALTHY)
