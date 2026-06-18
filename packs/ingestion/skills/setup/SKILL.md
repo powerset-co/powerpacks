@@ -46,7 +46,7 @@ Seed the checklist with these exact item titles:
 6.  Create msgvault OAuth app (browser, if not configured)
 7.  Authorize Gmail accounts
 8.  Sync Gmail archives (msgvault)
-9.  Import Gmail contacts (resolve -> people.csv)
+9.  Import Gmail contacts
 10. Import LinkedIn Connections.csv
 11. Merge all sources
 12. Index the merged network
@@ -79,6 +79,13 @@ Then:
   Otherwise only invoke the primitives below.
 - **Do not write scripts to do the work.** Reuse the exact primitive commands.
   Plain shell for `cp`/`test`/`wc`/`cat` is fine.
+- **Never call `msgvault` (or `msgvault sync-full`) directly.** Gmail syncing
+  happens *only* through Step 8's `gmail.py discover --sync-after "$SYNC_AFTER"`.
+  A bare `msgvault sync-full <email>` has no date bound and pulls the entire
+  mailbox history, ignoring the 3-year default. Do not invent a "repair sync" or
+  fall back to the raw binary. If discover fails, recover by syncing *less* (a
+  narrower `--sync-after` window), never the full mailbox; if that still fails,
+  surface the error and stop.
 - **Consent gates (pause for the user):** Powerset browser login; msgvault
   browser/gcloud OAuth-app creation and Gmail account authorization; and Gmail
   Parallel.ai spend at/above the auto-approve threshold (Step 5). Everything
@@ -202,7 +209,16 @@ default; if the user asks for more/less history, change `-v-3y` (e.g. `-v-5y`)
 or pass a specific `--sync-after YYYY-MM-DD`. A large first sync can take a while;
 msgvault skips already-downloaded messages on reruns.
 
-### Step 9 — Import Gmail contacts (resolve → people.csv)
+**Only sync through this `discover` command.** Do not run `msgvault sync-full`
+(or any raw `msgvault` command) yourself — it has no `--after` bound and will
+pull the entire mailbox (years past the 3-year window). `discover` is what
+passes `--after "$SYNC_AFTER"` to msgvault. If `discover` errors or the sync is
+too slow/large, recover by syncing **less, never more**: pass a more recent
+`--sync-after` (e.g. `-v-1y`, or a specific later date) so it covers a smaller
+window. Never fall back to the raw binary or an unbounded full sync. If a
+narrower window still fails, surface the error and stop.
+
+### Step 9 — Import Gmail contacts
 
 Import resolves contacts to LinkedIn via **Parallel.ai**, then writes
 `.powerpacks/network-import/import/gmail/people.csv`. Run **without** the spend
