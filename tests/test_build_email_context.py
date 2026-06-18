@@ -83,6 +83,26 @@ class CleanTextTests(unittest.TestCase):
         self.assertEqual(bec.clean_text(None), "")
 
 
+class SignalScoreTests(unittest.TestCase):
+    def test_signature_outscores_one_liner(self):
+        sig = "Nadine Choe, Founder at Metagloss. +1 310-779-0107. metagloss.io"
+        self.assertGreater(bec.signal_score(sig), bec.signal_score("Thanks, sounds good!"))
+
+    def test_rewards_phone_title_license(self):
+        self.assertGreaterEqual(bec.signal_score("Realtor, Compass — DRE #01972930, 310-425-9847"), 6)
+        self.assertEqual(bec.signal_score("ok"), 0)
+
+
+class HighestSignalSelectionTests(unittest.TestCase):
+    def test_title_bearing_email_ranks_first(self):
+        con = make_con()
+        self.addCleanup(con.close)
+        rows, _ = bec.recent_emails_for(con, "jane@example.com", per_person=5, snippet_chars=100,
+                                        accounts=bec.account_emails(con))
+        # 'My new role' snippet ("…Staff Engineer") carries a title -> highest signal.
+        self.assertEqual(rows[0]["subject"], "My new role")
+
+
 class AccountEmailsTests(unittest.TestCase):
     def test_lowercases_identifiers(self):
         con = make_con()
