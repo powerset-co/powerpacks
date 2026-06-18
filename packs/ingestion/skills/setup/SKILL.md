@@ -42,10 +42,10 @@ Seed the checklist with these exact item titles:
 2.  Log in to Powerset (only if not logged in)
 3.  Pull runtime keys (Modal + OpenAI)
 4.  Check msgvault status
-5.  Ask which Gmail accounts to link
+5.  Ask which Gmail accounts to link + how far back to sync
 6.  Create msgvault OAuth app (browser, if not configured)
 7.  Authorize Gmail accounts
-8.  Sync Gmail archives (msgvault)
+8.  Sync Gmail archives
 9.  Import Gmail contacts
 10. Import LinkedIn Connections.csv
 11. Merge all sources
@@ -82,8 +82,10 @@ Then:
 - **Never call `msgvault` (or `msgvault sync-full`) directly.** Gmail syncing
   happens *only* through Step 8's `gmail.py discover --sync-after "$SYNC_AFTER"`.
   A bare `msgvault sync-full <email>` has no date bound and pulls the entire
-  mailbox history, ignoring the 3-year default. Do not invent a "repair sync" or
-  fall back to the raw binary. If discover fails, recover by syncing *less* (a
+  mailbox history, ignoring the chosen window. Do not invent a "repair sync" or
+  fall back to the raw binary. **Re-authorizing a lapsed token is
+  `msgvault_setup.py add-account --force-auth` (OAuth only, no sync) — see Step 7;
+  it is never a `sync-full`.** If discover fails, recover by syncing *less* (a
   narrower `--sync-after` window), never the full mailbox; if that still fails,
   surface the error and stop.
 - **Consent gates (pause for the user):** Powerset browser login; msgvault
@@ -155,13 +157,20 @@ The JSON reports `gcloud`, `config.oauth_configured`, `database.exists`, and
 authorized `accounts`. If `oauth_configured` is true and the db exists, Step 6 is
 a no-op.
 
-### Step 5 — Ask which Gmail accounts to link
+### Step 5 — Ask which Gmail accounts to link (and how far back to sync)
 
 Ask the user for **every** Gmail address they want searchable, in one prompt.
 Treat the first as the **primary** (used to create the OAuth app in Step 6); the
 rest are additional accounts authorized in Step 7. Compare against the already
 `accounts` from Step 4 — only accounts not already authorized need Steps 6–7.
 Record the list and carry it into the next two steps. Do not guess emails.
+
+**In the same prompt, ask how far back to sync.** How many years of mail should
+be archived? **Default is 3 years.** The user may answer **`all`** (full mailbox
+history) or any number of years (e.g. **1**, **2**, **5**). Record the answer as
+`$SYNC_YEARS` and carry it into Step 8. A wide window — especially `all` — makes
+the first sync much longer; if the user asks for more than the 3-year default,
+confirm before running Step 8.
 
 ### Step 6 — Create msgvault OAuth app (browser, if not configured)
 
@@ -190,15 +199,37 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setu
 Re-run `msgvault_setup.py status` and confirm every requested account appears
 under `accounts`.
 
-### Step 8 — Sync Gmail archives (msgvault)
+**Re-authorizing a lapsed account.** If Step 4 (or a later sync error) shows an
+account that is *already in the vault* but whose token is **expired, revoked, or
+missing**, re-authorize it the same way — adding `--force-auth` so msgvault
+replaces the stale token with a fresh OAuth grant. This is **OAuth only; it
+downloads no mail**:
 
-For each authorized account, sync the archive and build the discover artifacts.
-**Default the sync window to the last 3 years** via `--sync-after` so the first
-sync is bounded (not the full mailbox history):
+```bash
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <email> --force-auth
+```
+
+The account keeps every previously-synced message; Step 8's bounded `discover`
+then **resumes from the last synced message** (`--after`) and downloads only what
+is new. **Never** re-authorize by running `msgvault sync-full <email>` — it has
+no resume bound and re-pulls the entire mailbox, which is exactly what turns a
+re-auth into an hours-long full sync.
+
+### Step 8 — Sync Gmail archives
+
+For each authorized account, sync the archive and build the discover artifacts,
+using the window chosen in Step 5. Compute `SYNC_AFTER` from `$SYNC_YEARS`
+(default `3`; `all` = full history) and pass it via `--sync-after` so the sync is
+bounded:
 
 ```bash
 cd "$REPO"
-SYNC_AFTER="$(date -v-3y +%Y-%m-%d 2>/dev/null || date -d '3 years ago' +%Y-%m-%d)"
+# $SYNC_YEARS from Step 5: a number (default 3) or the word "all".
+if [ "${SYNC_YEARS:-3}" = "all" ]; then
+  SYNC_AFTER="2004-01-01"   # pre-Gmail = the entire mailbox
+else
+  SYNC_AFTER="$(date -v-${SYNC_YEARS:-3}y +%Y-%m-%d 2>/dev/null || date -d "${SYNC_YEARS:-3} years ago" +%Y-%m-%d)"
+fi
 uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail.py discover \
   --account-email <email> --sync-after "$SYNC_AFTER"
 ```
