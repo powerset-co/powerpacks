@@ -295,13 +295,24 @@ async def infer_one_async(
 
 
 def select_targets(records: list[dict[str, Any]], args: argparse.Namespace, exclude: set[str]) -> list[dict[str, Any]]:
+    """Pick which contacts to mark up.
+
+    - ``--sample-work``/``--sample-personal`` (eval mode): top-N per type by volume.
+    - ``--all``: every candidate.
+    - default: the top ``--limit`` (500) contacts overall, deterministically ordered
+      by message volume then email — same contacts every run, no randomness.
+    """
+    if args.sample_work or args.sample_personal:
+        return select_sample(records, "work", args.sample_work, exclude) + \
+            select_sample(records, "personal", args.sample_personal, exclude)
+    pool = [
+        r for r in records
+        if str(r.get("email", "")).lower() not in exclude and r.get("recent_emails")
+    ]
+    pool.sort(key=lambda r: (-int(r.get("total_messages") or 0), str(r.get("email", "")).lower()))
     if args.all:
-        return [
-            r for r in records
-            if str(r.get("email", "")).lower() not in exclude and r.get("recent_emails")
-        ]
-    return select_sample(records, "work", args.sample_work, exclude) + \
-        select_sample(records, "personal", args.sample_personal, exclude)
+        return pool
+    return pool[: max(0, args.limit)]
 
 
 def already_done_emails(markers_path: Path) -> set[str]:
@@ -424,9 +435,8 @@ async def run_async(args: argparse.Namespace) -> dict[str, Any]:
         markers_path.unlink()
 
     done = already_done_emails(markers_path)
+    # select_targets already applied the default --limit / --all / sample selection.
     todo = [r for r in targets if str(r.get("email")) not in done]
-    if args.limit and args.limit > 0:
-        todo = todo[: args.limit]
 
     concurrency = args.concurrency or env_or_profile_int(
         "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=DEFAULT_OPENAI_CONCURRENCY
@@ -473,10 +483,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--context", default=str(DEFAULT_CONTEXT), help="email_context.jsonl path")
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--sample-work", type=int, default=10)
-    parser.add_argument("--sample-personal", type=int, default=10)
-    parser.add_argument("--all", action="store_true", help="Process every contact in the context (ignores sampling)")
-    parser.add_argument("--limit", type=int, default=0, help="Cap contacts processed this run (0 = no cap)")
+    parser.add_argument("--sample-work", type=int, default=0, help="Eval mode: top-N work contacts by volume (0 = off)")
+    parser.add_argument("--sample-personal", type=int, default=0, help="Eval mode: top-N personal contacts by volume (0 = off)")
+    parser.add_argument("--all", action="store_true", help="Process every contact (overrides --limit)")
+    parser.add_argument("--limit", type=int, default=500, help="Default mode: top-N contacts by message volume (deterministic)")
     parser.add_argument("--exclude", action="append", default=[], help="Email to exclude (repeatable)")
     parser.add_argument("--concurrency", type=int, default=0, help="In-flight slots (0 = tier profile, default 256)")
     parser.add_argument("--max-retries", type=int, default=4, help="Retries per call on transient API errors")

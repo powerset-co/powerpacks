@@ -54,19 +54,19 @@ Writes `.powerpacks/network-import/discover/email-context/email_context.{jsonl,c
 
 ## Step 2 — extract markers (LLM, ~$0.003/contact)
 
-**Always test on a small sample first**, then scale with `--all`.
+By default this marks up the **top 500 contacts by message volume** (deterministic —
+same contacts every run, no randomness), opens `markers.csv`, and is idempotent
+(resumes / skips contacts already done; `--force` to redo).
 
 ```bash
-# sample ~10 to eyeball quality first
-uv run --project . python packs/ingestion/primitives/infer_linkedin_markers/infer_linkedin_markers.py \
-  --sample-work 7 --sample-personal 3
-
-# full network (idempotent: resumes, skips contacts already done; --force to redo)
-# --open pops markers.csv when done (macOS, interactive; omit for headless runs)
-uv run --project . python packs/ingestion/primitives/infer_linkedin_markers/infer_linkedin_markers.py --all --open
+# default: top 500 by volume, auto-opens markers.csv (~$1.50 for ~500 contacts)
+uv run --project . python packs/ingestion/primitives/infer_linkedin_markers/infer_linkedin_markers.py --open
 ```
 
 Useful flags:
+- `--limit 50` — smaller deterministic top-N (e.g. a cheap ~$0.15 preview first).
+- `--all` — every contact in the context (overrides `--limit`).
+- `--sample-work N --sample-personal M` — eval mode: top-N per type (for A/B work).
 - `--owner-context "Went to UCLA; from Palo Alto, CA"` — a prior about the mailbox
   owner; used (gated, low-confidence) to disambiguate friends/classmates.
 - `--concurrency 256` (default from tier profile), `--model gpt-5.2`.
