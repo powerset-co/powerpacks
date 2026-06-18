@@ -42,7 +42,17 @@ Output to review: **`markers.csv`** (one row per contact) and `email_context.csv
 uv run --project . python packs/ingestion/primitives/build_email_context/build_email_context.py
 ```
 
-Defaults: `--source body`, 8 emails/contact, head/tail 300/300, role mailboxes dropped.
+Defaults: `--source body`, **20 emails/contact**, head/tail 300/300, role mailboxes dropped.
+
+Tune how many emails are mined per contact with `--per-person` (more = richer
+identity signal, ~linear cost; the LLM step is ~$0.0003 extra per +1 email per
+contact). E.g. a deeper 50-email pass:
+
+```bash
+uv run --project . python packs/ingestion/primitives/build_email_context/build_email_context.py \
+  --per-person 50
+```
+
 Override the DB or account if needed:
 
 ```bash

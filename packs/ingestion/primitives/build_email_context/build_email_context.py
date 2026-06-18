@@ -57,9 +57,9 @@ import gmail_network_import as gni  # noqa: E402
 from resolve_linkedin_queue import is_generic_or_non_person  # noqa: E402
 
 DEFAULT_OUT_DIR = Path(".powerpacks/network-import/discover/email-context")
-# Pull more emails and the full msgvault snippet (Gmail caps it at ~200 chars), so
-# we don't truncate away employer descriptions, phone/WhatsApp numbers, locations.
-DEFAULT_PER_PERSON = 8
+# Emails read per contact (most recent, sender = contact or you). More = richer
+# identity signal at a small linear cost; tunable via --per-person (e.g. 50).
+DEFAULT_PER_PERSON = 20
 DEFAULT_SNIPPET_CHARS = 200
 # In --source body mode we keep the head + tail of the cleaned body: the head
 # carries the substance ("I'm a founder of…"), the tail carries the signature /
@@ -166,13 +166,18 @@ def recent_emails_for(
     ``source`` = "snippet" uses Gmail's ~200-char snippet; "body" reads the full
     local body and keeps its head + tail (substance + signature), falling back to
     the snippet when no body is stored.
+
+    Selection is signal-dense, not just most-recent: one email per thread
+    (deduped by ``conversation_id``) so the slots are distinct conversations, and
+    the contact's OWN email is preferred as each thread's representative (their
+    signature block carries employer / title / phone). Contact-sent threads are
+    surfaced before account-owner-sent ones.
     """
     rows = con.execute(RECENT_EMAILS_SQL, (email, per_person * FETCH_MULTIPLIER)).fetchall()
-    out: list[dict[str, Any]] = []
     dropped = 0
-    for row in rows:
-        if len(out) >= per_person:
-            break
+    by_thread: dict[Any, dict[str, Any]] = {}
+    order: list[Any] = []
+    for idx, row in enumerate(rows):
         sender = str(row["sender_email"] or "").strip()
         if sender == email:
             from_role = "contact"
@@ -185,14 +190,27 @@ def recent_emails_for(
             text = clean_body(row["body_text"], head_chars, tail_chars) or clean_text(row["snippet"], snippet_chars)
         else:
             text = clean_text(row["snippet"], snippet_chars)
-        out.append({
+        entry = {
             "at": str(row["at"] or "").strip(),
             "from": sender,
             "from_role": from_role,
             "subject": clean_text(row["subject"]),
             "snippet": text,
-        })
-    return out, dropped
+        }
+        # Rows are date-desc, so the first entry seen for a thread is its most
+        # recent message. Keep one per thread; upgrade the representative to the
+        # contact's own email (their signature) if/when we encounter one.
+        cid = row["conversation_id"]
+        key = ("thread", cid) if cid not in (None, "", "None") else ("msg", idx)
+        if key not in by_thread:
+            by_thread[key] = entry
+            order.append(key)
+        elif from_role == "contact" and by_thread[key]["from_role"] != "contact":
+            by_thread[key] = entry
+    reps = [by_thread[k] for k in order]
+    # Stable: contact-sent threads first (richest signal), recency preserved within each group.
+    reps.sort(key=lambda e: 0 if e["from_role"] == "contact" else 1)
+    return reps[:per_person], dropped
 
 
 def derive_candidates(
