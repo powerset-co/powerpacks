@@ -44,7 +44,11 @@ ROOT = Path(__file__).resolve().parents[4]
 SHARED_DIR = ROOT / "packs/search/primitives/shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from probe_artifacts import load_probe_summaries  # noqa: E402
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +101,7 @@ def read_probe_csv(csv_path: Path, probe_id: str) -> list[dict[str, Any]]:
     """Read a single probe result CSV and return enriched row dicts."""
     rows: list[dict[str, Any]] = []
     with csv_path.open(newline="") as fh:
-        reader = csv.DictReader(fh)
+        reader = CsvIO.dict_reader(fh)
         for row_num, row in enumerate(reader, start=1):
             rows.append({
                 "probe_id": probe_id,
@@ -447,7 +451,7 @@ def run(args: argparse.Namespace) -> None:
 
 def _count_csv_rows(csv_path: Path) -> int:
     with csv_path.open(newline="") as fh:
-        return sum(1 for _ in csv.DictReader(fh))
+        return sum(1 for _ in CsvIO.dict_reader(fh))
 
 
 def build_probe_summary(probe_id: str | None, state_path: Path) -> dict[str, Any]:

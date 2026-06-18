@@ -37,7 +37,6 @@ Secrets mounted server-side; they never exist on the laptop.
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import io
 import json
@@ -50,10 +49,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# people.csv embeds large rapidapi_response JSON per row; raise the field cap so
-# csv parsing (row counts) doesn't choke or miscount on multi-line fields.
-csv.field_size_limit(sys.maxsize)
-
 _REPO_FOR_ENV = Path(__file__).resolve().parents[3]
 # MODAL_TOKEN_ID / MODAL_TOKEN_SECRET land in .env via `$powerset env pull`;
 # the modal SDK reads them from the environment, so load before importing.
@@ -65,6 +60,7 @@ load_dotenv(_REPO_FOR_ENV / ".env", override=False)
 sys.path.insert(0, str(_REPO_FOR_ENV))
 
 from packs.ingestion.accounts import update_channel  # noqa: E402
+from packs.shared.csv_io import CsvIO  # noqa: E402
 import modal  # noqa: E402
 
 
@@ -557,7 +553,7 @@ def people_csv_rows(path: Path) -> int:
     overcounts badly; parse with csv to count one row per actual person.
     """
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        reader = csv.reader(handle)
+        reader = CsvIO.reader(handle)
         if next(reader, None) is None:  # header
             return 0
         return sum(1 for _ in reader)

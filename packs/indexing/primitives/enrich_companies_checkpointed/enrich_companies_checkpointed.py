@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import csv
 import json
 import os
 import re
@@ -42,6 +41,7 @@ from packs.indexing.lib.llm_config import (  # noqa: E402
 )
 from packs.indexing.lib.openai_stream import StopStreaming, drain_pool  # noqa: E402
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company  # noqa: E402
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 WORD_RE = re.compile(r"[a-z0-9]+")
@@ -1010,7 +1010,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 candidate_csv = Path(csv_path)
                 if candidate_csv.exists():
                     with open(candidate_csv, newline="", encoding="utf-8") as fh:
-                        for prow in csv.DictReader(fh):
+                        for prow in CsvIO.dict_reader(fh):
                             for exp in json.loads(prow.get("work_experiences", "[]") or "[]"):
                                 if not isinstance(exp, dict):
                                     continue

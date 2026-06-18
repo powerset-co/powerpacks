@@ -4,13 +4,19 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
 
 DEFAULT_OUT_DIR = Path(".powerpacks/messages")
@@ -189,7 +195,7 @@ def read_contacts(path: Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
         "whatsapp_rows": 0,
     }
     with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         for row in reader:
             counts["input_rows"] += 1
             contact = normalize_row(row)

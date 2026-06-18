@@ -9,6 +9,8 @@ from argparse import Namespace
 from pathlib import Path
 from unittest import mock
 
+from packs.shared.csv_io import CsvIO
+
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PEOPLE = ROOT / "tests/fixtures/indexing/people.csv"
 DUCKDB_SHIM = ROOT / "scripts/build-local-duckdb-shim.py"
@@ -31,7 +33,7 @@ def fixture_title_hash(title: str) -> str:
 
 def write_fixture_with_title_hashes(source: Path, dest: Path) -> Path:
     with source.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         fieldnames = reader.fieldnames or []
         rows = list(reader)
     for row in rows:

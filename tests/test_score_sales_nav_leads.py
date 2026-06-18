@@ -1,4 +1,3 @@
-import csv
 import json
 import subprocess
 import sys
@@ -9,6 +8,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,7 +131,7 @@ class ScoreSalesNavLeadsTests(unittest.TestCase):
             self.assertEqual(out["match_count"], 1)
             self.assertEqual(mock.state["calls"], 2)
             with Path(out["outputs"]["matches_csv"]).open(newline="") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["member_id"], "1")
             self.assertIn("Mallory", rows[0]["top_mutuals_json"])

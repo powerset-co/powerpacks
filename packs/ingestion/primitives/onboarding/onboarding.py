@@ -9,7 +9,6 @@ command or user action. Persists non-secret account state to
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import os
@@ -23,9 +22,11 @@ from typing import Any
 
 try:
     from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, now_iso, save_registry, update_channel
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, now_iso, save_registry, update_channel
+    from packs.shared.csv_io import CsvIO
 
 
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
@@ -71,7 +72,7 @@ def csv_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(csv.DictReader(handle))
+        return list(CsvIO.dict_reader(handle))
 
 
 def json_object(path: Path) -> dict[str, Any]:

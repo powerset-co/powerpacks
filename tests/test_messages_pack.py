@@ -16,6 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
+from packs.shared.csv_io import CsvIO
+
 
 ROOT = Path(__file__).resolve().parents[1]
 NORMALIZE = ROOT / "packs/messages/primitives/normalize_message_contacts/normalize_message_contacts.py"
@@ -348,7 +350,7 @@ class MessagesPackTests(unittest.TestCase):
             )
 
             with output_csv.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(
                 [row["phone"] for row in rows],
                 ["+14155550101", "+14155550103", "+14155550102", "+14155550104"],
@@ -576,7 +578,7 @@ class MessagesPackTests(unittest.TestCase):
             self.assertEqual(payload["tab_counts"], {"in_network": 2, "maybe": 1, "no": 0, "yes": 0})
 
             with out.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             by_phone = {row["phone_e164"]: row for row in rows}
             self.assertEqual(by_phone["+14155550101"]["bucket"], "maybe")
             self.assertEqual(by_phone["+14155550101"]["in_network"], "true")
@@ -756,7 +758,7 @@ class MergeMessageContactsTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["rows_written"], 5)
 
             with out.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             by_phone = {r["phone"]: r for r in rows}
 
             jane = by_phone["+14155550101"]
@@ -935,7 +937,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["filtered_low_messages"], 0)
 
             with output.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             self.assertEqual(len(rows), 3)
             # Sorted by message count desc, then name.
             self.assertEqual(rows[0]["display_name"], "Jane Doe")
@@ -1000,7 +1002,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
             manifest = json.loads(result.stdout)
             self.assertEqual(manifest["rows_written"], 10)
             with output.open(newline="") as h:
-                queue = list(csv.DictReader(h))
+                queue = list(CsvIO.dict_reader(h))
             self.assertEqual(len(queue), 10)
             self.assertTrue(all(r["total_messages"] == "200" for r in queue))
 
@@ -1042,7 +1044,7 @@ class PrepareResearchQueueTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["filtered_review_unselected"], 2)
             self.assertEqual(manifest["counts"]["filtered_review_in_network"], 1)
             with output.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["display_name"] for row in rows], ["Grace Hopper", "Ada Lovelace"])
 
 
@@ -1083,7 +1085,7 @@ class PrepareRetargetQueueTests(unittest.TestCase):
             self.assertEqual(first_manifest["rows_written"], 1)
             self.assertEqual(first_manifest["counts"]["with_feedback"], 1)
             with output.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["retarget_source_handle"], "phone-1")
             self.assertIn("__retarget_", rows[0]["handle"])
@@ -1104,7 +1106,7 @@ class PrepareRetargetQueueTests(unittest.TestCase):
             self.assertEqual(third_manifest["rows_written"], 1)
 
             with output.open(newline="") as h:
-                rerun_rows = list(csv.DictReader(h))
+                rerun_rows = list(CsvIO.dict_reader(h))
             retarget_handle = rerun_rows[0]["handle"]
             profile_dir = out_dir / retarget_handle
             profile_dir.mkdir(parents=True)
@@ -1126,7 +1128,7 @@ class PrepareRetargetQueueTests(unittest.TestCase):
             marked_manifest = json.loads(marked.stdout)
             self.assertEqual(marked_manifest["review_rows_merged"], 1)
             with review_csv.open(newline="") as h:
-                reviewed = list(csv.DictReader(h))
+                reviewed = list(CsvIO.dict_reader(h))
             self.assertEqual(reviewed[0]["retarget_status"], "re_researched")
             self.assertEqual(reviewed[0]["retarget_profile_status"], "new_profile")
             self.assertEqual(reviewed[0]["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
@@ -1164,7 +1166,7 @@ class PrepareRetargetQueueTests(unittest.TestCase):
             self.assertEqual(payload["completed_recorded"], 1)
             self.assertEqual(payload["review_rows_merged"], 1)
             with review_csv.open(newline="") as h:
-                row = next(csv.DictReader(h))
+                row = next(CsvIO.dict_reader(h))
             self.assertEqual(row["retarget_status"], "re_researched")
             self.assertEqual(row["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
 
@@ -1397,7 +1399,7 @@ class LlmReviewContactsTests(unittest.TestCase):
             call.assert_called_once()
 
             with contacts.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["skip"], "")
             manifest = json.loads((tmp / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["counts"]["enrich"], 1)
@@ -1957,7 +1959,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertEqual(manifest["bucket_counts"], {"yes": 1, "maybe": 2, "no": 1})
 
             with output.open(newline="") as h:
-                fieldnames = next(csv.reader(h))
+                fieldnames = next(CsvIO.reader(h))
             # The contact-exporter TUI _is_research_csv requires these 4 keys
             required = {"bucket", "full_name", "phone_e164", "top_title_company_pairs", "exclude", "enrich_decision"}
             self.assertTrue(
@@ -1965,7 +1967,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             )
 
             with output.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             by_handle = {r["handle"]: r for r in rows}
 
             jane = by_handle["phone-1111111111"]
@@ -2051,7 +2053,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["scored_via_network_review"], 1)
 
             with output.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             self.assertEqual(rows[0]["bucket"], "yes")
             self.assertEqual(rows[0]["short_reason"], "Sovereign wealth leadership; prioritize despite phone ambiguity.")
             self.assertIn("sovereign wealth", rows[0]["signals"])
@@ -2137,7 +2139,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["previous_review_decisions_applied"], 1)
 
             with output.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             self.assertEqual(rows[0]["bucket"], "maybe")
             self.assertEqual(rows[0]["exclude"], "no")
             self.assertEqual(rows[0]["enrich_decision"], "yes")
@@ -2188,7 +2190,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
                 check=True,
             )
             with output.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             self.assertEqual(rows[0]["exclude"], "yes")
             self.assertEqual(rows[0]["retarget_hint"], "wrong person")
 
@@ -2269,7 +2271,7 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertEqual(network_review["model"], "openai/gpt-4.1")
             self.assertEqual(network_review["review"]["bucket"], "yes")
             with output.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             self.assertEqual(rows[0]["message_source"], "imessage,whatsapp")
             self.assertEqual(rows[0]["total_messages"], "30")
             self.assertEqual(rows[0]["imessage_message_count"], "11")

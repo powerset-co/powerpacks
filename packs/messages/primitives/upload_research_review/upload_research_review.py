@@ -17,6 +17,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 
 DEFAULT_CSV = ".powerpacks/messages/research_review.csv"
 DEFAULT_API_URL = "https://search-api-7wk4uhe77q-uw.a.run.app"
@@ -113,7 +119,7 @@ def load_review_rows(csv_path: Path) -> tuple[list[str], list[dict[str, str]]]:
     if not csv_path.exists():
         raise UploadError(f"review CSV does not exist: {csv_path}")
     with csv_path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         fieldnames = list(reader.fieldnames or [])
         rows = [{key: value or "" for key, value in row.items()} for row in reader]
     if not fieldnames:

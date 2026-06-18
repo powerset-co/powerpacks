@@ -29,7 +29,6 @@ Privacy contract:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import re
@@ -42,6 +41,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
 
 def load_dotenv(path: Path) -> None:
@@ -579,7 +584,7 @@ def load_queue(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         raise SystemExit(f"input CSV not found: {path}")
     with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         return list(reader)
 
 

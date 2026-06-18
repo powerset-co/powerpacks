@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import csv
 import json
 import os
 import re
@@ -28,6 +27,12 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
 DEFAULT_INPUT = Path(".powerpacks/messages/retarget_queue.csv")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/messages/research_retarget")
@@ -47,7 +52,7 @@ def read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return [{k: v or "" for k, v in row.items()} for row in csv.DictReader(handle)]
+        return [{k: v or "" for k, v in row.items()} for row in CsvIO.dict_reader(handle)]
 
 
 def write_json(path: Path, payload: Any) -> None:

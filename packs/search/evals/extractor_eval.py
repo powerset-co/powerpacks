@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import csv
 import json
 import os
 import sys
@@ -35,9 +34,12 @@ DEFAULT_DATASET_DIR = ROOT.parent / "network-search-api" / "tests" / "evals" / "
 REPORT_DIR = SEARCH_ROOT / "evals"
 
 sys.path.insert(0, str(EXTRACTORS_DIR))
+sys.path.insert(0, str(ROOT))
 
 import openai  # noqa: E402
 from parallel_extractors import _extract, _load_prompt, EXTRACTOR_MODELS, ROLE_EXTRACTION_PROMPT  # noqa: E402
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +161,7 @@ async def run_extractor_eval(
 
     # Load CSV
     with open(csv_path) as f:
-        reader = csv.DictReader(f)
+        reader = CsvIO.dict_reader(f)
         rows = list(reader)
     if max_cases:
         rows = rows[:max_cases]

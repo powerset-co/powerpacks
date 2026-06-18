@@ -10,6 +10,7 @@ from io import StringIO
 from pathlib import Path
 
 from packs.ingestion.schemas.people_schema import generate_person_id
+from packs.shared.csv_io import CsvIO
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
 spec = importlib.util.spec_from_file_location("gmail_network_import", MODULE_PATH)
@@ -54,7 +55,7 @@ class GmailNetworkImportTests(unittest.TestCase):
                 self.assertTrue(path.exists())
                 self.assertIn(str(Path(tmp) / "out"), str(path))
             with targeted.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["primary_email"], "jane.example@example.com")
             self.assertEqual(rows[0]["primary_email_type"], "work")
@@ -142,7 +143,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(queue, expected_dir / "linkedin_resolution_queue.csv")
             self.assertNotIn("msgvault-test", str(targeted))
             with targeted.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["primary_email"], "jane@example.com")
             self.assertEqual(rows[0]["display_name"], "Jane Example")
@@ -151,11 +152,11 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(payload["counts"]["one_way_filtered"], 0)
             self.assertNotIn("private subject", targeted.read_text(encoding="utf-8"))
             with people.open(newline="", encoding="utf-8") as handle:
-                people_rows = list(csv.DictReader(handle))
+                people_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(people_rows[0]["primary_email"], "jane@example.com")
             self.assertEqual(people_rows[0]["source_channels"], "gmail_msgvault")
             with queue.open(newline="", encoding="utf-8") as handle:
-                queue_rows = list(csv.DictReader(handle))
+                queue_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(queue_rows[0]["handle"], "jane@example.com")
             self.assertEqual(queue_rows[0]["source"], "gmail_msgvault")
 
@@ -360,10 +361,10 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(second["counts"]["contacts_preserved_existing"], 1)
 
             with Path(second["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                people_rows = list(csv.DictReader(handle))
+                people_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["primary_email"] for row in people_rows], ["jane@example.com", "john@example.com"])
             with Path(second["artifacts"]["targeted_emails_csv"]).open(newline="", encoding="utf-8") as handle:
-                targeted_rows = list(csv.DictReader(handle))
+                targeted_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["primary_email"] for row in targeted_rows], ["jane@example.com", "john@example.com"])
 
     def test_msgvault_import_requires_round_trip_contacts(self):
@@ -416,7 +417,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(payload["counts"]["one_way_filtered"], 2)
             self.assertTrue(payload["counts"]["round_trip_required"])
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                people_rows = list(csv.DictReader(handle))
+                people_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["primary_email"] for row in people_rows], ["jane@example.com"])
 
     def test_msgvault_import_excludes_gmail_category_labels_by_default(self):
@@ -469,7 +470,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(payload["counts"]["excluded_labels"], ["CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES"])
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                people_rows = list(csv.DictReader(handle))
+                people_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["primary_email"] for row in people_rows], ["jane@example.com"])
 
             code, payload = self.invoke([
@@ -481,7 +482,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             ])
             self.assertEqual(code, 0)
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                people_rows = list(csv.DictReader(handle))
+                people_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(sorted(row["primary_email"] for row in people_rows), ["jane@example.com", "promo.person@example.com"])
 
     def test_apply_linkedin_resolutions_to_msgvault_people(self):
@@ -523,7 +524,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(payload["resolved"], 1)
             with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["public_identifier"], "jane-example")
             self.assertEqual(rows[0]["linkedin_url"], "https://www.linkedin.com/in/jane-example")
             self.assertEqual(rows[0]["headline"], "Founder at Example")

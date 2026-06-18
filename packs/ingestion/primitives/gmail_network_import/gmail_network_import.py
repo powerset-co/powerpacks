@@ -31,6 +31,7 @@ try:
         generate_person_id as generate_linkedin_person_id,
         normalize_interaction_timestamp,
     )
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:  # pragma: no cover - direct script fallback
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.people_schema import (
@@ -38,6 +39,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct script fallback
         generate_person_id as generate_linkedin_person_id,
         normalize_interaction_timestamp,
     )
+    from packs.shared.csv_io import CsvIO
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/discover/gmail-one/ledger.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
@@ -421,7 +423,7 @@ def one_person_dir(base_dir: Path, contact: OnePersonInput) -> Path:
 
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(csv.DictReader(handle))
+        return list(CsvIO.dict_reader(handle))
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
@@ -501,7 +503,7 @@ def append_account(contact: OnePersonInput, out_dir: Path) -> Path:
     rows = []
     if path.exists():
         with path.open(newline="", encoding="utf-8") as f:
-            rows = list(csv.DictReader(f))
+            rows = list(CsvIO.dict_reader(f))
     row = {
         "account_id": contact.account_id,
         "account_email": contact.account_email,

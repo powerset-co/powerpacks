@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import os
 import re
 import sys
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
+ROOT = Path(__file__).resolve().parents[4]
 PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
 LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
@@ -19,8 +19,12 @@ LOCAL_DIR = PRIMITIVES_DIR / "local"
 TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
 for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
     sys.path.insert(0, str(_path))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from turbopuffer_search_backend import load_env_file, namespace, namespace_name  # noqa: E402
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -40,7 +44,7 @@ def normalize_tokens(value: str) -> str:
 def read_rows(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with path.open(newline="") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         missing = {"urn", "name", "type", "investment_count"} - set(reader.fieldnames or [])
         if missing:
             raise RuntimeError(f"investor CSV missing required columns: {sorted(missing)}")

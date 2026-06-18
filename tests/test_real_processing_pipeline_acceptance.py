@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from packs.shared.csv_io import CsvIO
+
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PEOPLE = ROOT / "tests/fixtures/indexing/people.csv"
 ROLE_STAGE = ROOT / "packs/indexing/primitives/enrich_roles_checkpointed/enrich_roles_checkpointed.py"
@@ -187,7 +189,7 @@ def role_fixture_rows() -> list[dict]:
 
 def write_five_person_csv(path: Path) -> None:
     with FIXTURE_PEOPLE.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         fieldnames = reader.fieldnames or []
         rows = list(reader)
     for row in rows:

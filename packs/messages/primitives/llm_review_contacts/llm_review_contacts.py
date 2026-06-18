@@ -33,6 +33,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 
 def load_dotenv(path: Path) -> None:
     """Load simple KEY=VALUE lines into os.environ without overriding env."""
@@ -194,7 +200,7 @@ def load_contacts_for_review(
     if not csv_path.exists():
         raise SystemExit(f"contacts CSV not found: {csv_path}")
     with csv_path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         for row in reader:
             name = (row.get("name") or "").strip()
             if not name:
@@ -398,7 +404,7 @@ def update_csv_with_verdicts(
 ) -> dict[str, int]:
     rows: list[dict[str, str]] = []
     with csv_path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         fieldnames = reader.fieldnames or CSV_HEADERS
         for row in reader:
             phone = row.get("phone", "")

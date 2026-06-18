@@ -1,4 +1,3 @@
-import csv
 import importlib.util
 import json
 import io
@@ -6,6 +5,8 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+
+from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,7 +116,7 @@ class AgenticCandidateReviewTests(unittest.TestCase):
             self.assertEqual([row["rank"] for row in rows], [1, 2, 3])
 
             with (root / "review" / "ranked_candidates.csv").open() as handle:
-                csv_rows = list(csv.DictReader(handle))
+                csv_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["person_id"] for row in csv_rows], ["p2", "p3", "p1"])
 
             updated_state = json.loads(state_path.read_text())

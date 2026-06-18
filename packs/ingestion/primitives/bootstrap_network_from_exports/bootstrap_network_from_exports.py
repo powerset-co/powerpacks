@@ -14,15 +14,20 @@ import hashlib
 import json
 import re
 import shutil
+import sys
 import tarfile
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-csv.field_size_limit(1024 * 1024 * 1024)
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
-RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
+RESOLUTION_COLUMNS =["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
 DIRECTORY_COLUMNS = [
     "source",
     "source_key",
@@ -84,7 +89,7 @@ def write_json(path: Path, value: Any) -> None:
 
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(csv.DictReader(handle))
+        return list(CsvIO.dict_reader(handle))
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
@@ -98,12 +103,12 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
 
 def csv_header(path: Path) -> list[str]:
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return next(csv.reader(handle), [])
+        return next(CsvIO.reader(handle), [])
 
 
 def csv_row_count(path: Path) -> int:
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return sum(1 for _ in csv.DictReader(handle))
+        return sum(1 for _ in CsvIO.dict_reader(handle))
 
 
 def parse_jsonish(value: Any, default: Any) -> Any:
@@ -660,10 +665,10 @@ def write_cached_linkedin_subset(linkedin_csv: str, output_path: Path, cached_pu
                 break
         if not header:
             return {"status": "missing_header", "rows": 0, "full_rows": 0, "cache_misses": 0}
-        fieldnames = next(csv.reader([header]))
+        fieldnames = next(CsvIO.reader([header]))
         rows: list[dict[str, str]] = []
         full_rows = 0
-        for row in csv.DictReader(handle, fieldnames=fieldnames):
+        for row in CsvIO.dict_reader(handle, fieldnames=fieldnames):
             public_id = extract_public_identifier(normalize_linkedin_url(row.get("URL", "")))
             if not public_id:
                 continue

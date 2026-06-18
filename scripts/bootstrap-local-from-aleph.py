@@ -38,6 +38,7 @@ sys.path.insert(0, str(ROOT))
 from packs.ingestion.schemas.people_schema import extract_public_identifier, generate_person_id, normalize_linkedin_url  # noqa: E402
 from packs.indexing.lib.identity import position_uuid  # noqa: E402
 from packs.indexing.lib.people import build_profile_contract_records  # noqa: E402
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 SEED_DEFAULT = ROOT / ".powerpacks/aleph-seed/2026-05-08"
 EDU_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
@@ -325,7 +326,7 @@ def load_operator_access(path: Path | None) -> tuple[dict[str, set[str]], dict[s
         return by_operator, emails
     if path.suffix.lower() == ".csv":
         with path.open(newline="", encoding="utf-8") as handle:
-            for row in csv.DictReader(handle):
+            for row in CsvIO.dict_reader(handle):
                 op = clean(row.get("operator_id"))
                 pid = clean(row.get("person_id") or row.get("base_person_id"))
                 if op and pid:
@@ -380,10 +381,9 @@ def load_optional_by_ids(path: Path, ids: set[str], key: str) -> tuple[dict[str,
 
 
 def iter_csv_dicts(path: Path) -> Iterable[dict[str, str]]:
-    csv.field_size_limit(sys.maxsize)
     with path.open("rb") as raw:
         text = (line.decode("utf-8-sig", "replace").replace("\x00", "") for line in raw)
-        for row in csv.DictReader(text):
+        for row in CsvIO.dict_reader(text):
             yield {str(k): (v or "") for k, v in row.items() if k is not None}
 
 

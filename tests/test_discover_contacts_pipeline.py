@@ -17,6 +17,7 @@ from packs.ingestion.primitives.discover_contacts_pipeline import discover_conta
 from packs.ingestion.primitives.discover_contacts_pipeline import gmail as discover_gmail
 from packs.ingestion.primitives.discover_contacts_pipeline import messages as discover_messages
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
+from packs.shared.csv_io import CsvIO
 
 
 def write_msgvault_db(path: Path) -> None:
@@ -231,7 +232,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(manifest["children"][0]["people_csv"], str(account_people))
             self.assertEqual(manifest["children"][0]["linkedin_resolution_queue_csv"], str(account_queue))
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["primary_email"] for row in rows], ["jane@example.com"])
             self.assertEqual(rows[0]["total_messages"], "2")
             self.assertEqual(manifest["calculation_version"], discover_gmail.GMAIL_INTERACTION_CALCULATION_VERSION)
@@ -245,7 +246,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
             self.assertEqual(payload["status"], "completed")
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
-                rerun_rows = list(csv.DictReader(handle))
+                rerun_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["primary_email"] for row in rerun_rows], ["jane@example.com"])
             self.assertEqual(rerun_rows[0]["total_messages"], "2")
             self.assertEqual(rerun_rows[0]["thread_count"], "1")
@@ -291,7 +292,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(manifest["calculation_mode"], "incremental_update")
             self.assertEqual(manifest["calculation_reason"], "children_returned_incremental_deltas")
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
-                incremental_rows = list(csv.DictReader(handle))
+                incremental_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(incremental_rows[0]["total_messages"], "3")
             self.assertEqual(incremental_rows[0]["thread_count"], "2")
             self.assertEqual(incremental_rows[0]["last_interaction"], "2026-01-03T00:00:00Z")
@@ -307,7 +308,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(len(replay_manifest["applied_incremental_inputs"]), 1)
             self.assertEqual(replay_manifest["skipped_incremental_inputs"], replay_manifest["applied_incremental_inputs"])
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
-                replay_rows = list(csv.DictReader(handle))
+                replay_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(replay_rows[0]["total_messages"], "3")
             self.assertEqual(replay_rows[0]["thread_count"], "2")
             self.assertEqual(replay_rows[0]["last_interaction"], "2026-01-03T00:00:00Z")
@@ -441,7 +442,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(len(incremental_payload["applied_incremental_inputs"]), 1)
             first_input = incremental_payload["applied_incremental_inputs"][0]
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
-                incremental_rows = list(csv.DictReader(handle))
+                incremental_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(incremental_rows[0]["total_messages"], "3")
             self.assertEqual(incremental_rows[0]["thread_count"], "2")
 
@@ -454,7 +455,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(replay_payload["status"], "completed")
             self.assertEqual(replay_payload["skipped_incremental_inputs"], [first_input])
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
-                replay_rows = list(csv.DictReader(handle))
+                replay_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(replay_rows[0]["total_messages"], "3")
             self.assertEqual(replay_rows[0]["thread_count"], "2")
 
@@ -477,7 +478,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(stale_replay_payload["status"], "completed")
             self.assertEqual(stale_replay_payload["skipped_incremental_inputs"], [first_input])
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
-                stale_replay_rows = list(csv.DictReader(handle))
+                stale_replay_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(stale_replay_rows[0]["total_messages"], "3")
             self.assertEqual(stale_replay_rows[0]["thread_count"], "2")
 
@@ -569,7 +570,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             summary = discover_messages.materialize_approved_messages_review(review, scratch)
             self.assertEqual(summary["contacts_csv"], str(scratch))
             with scratch.open(newline="", encoding="utf-8") as handle:
-                materialized = list(csv.DictReader(handle))
+                materialized = list(CsvIO.dict_reader(handle))
             self.assertEqual([row["name"] for row in materialized], ["Exclude No", "Approved True", "Upload Include"])
             self.assertEqual([row["phone"] for row in materialized], ["+101", "+102", "+103"])
 
@@ -600,7 +601,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(summary["eligible_rows"], 4)
             self.assertEqual(summary["rows_written"], 3)
             with output.open(newline="", encoding="utf-8") as handle:
-                materialized = list(csv.DictReader(handle))
+                materialized = list(CsvIO.dict_reader(handle))
             by_public = {row["public_identifier"]: row for row in materialized}
             self.assertEqual(set(by_public), {"approved-person", "enrich-person", "network-person"})
             self.assertEqual(json.loads(by_public["network-person"]["all_phones"]), ["+100", "+106"])
@@ -633,7 +634,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             )
             self.assertEqual(checkpoint["imported_rows"], 1)
             with directory.open(newline="", encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["source"], "gmail")
             self.assertEqual(rows[0]["source_account"], "me@example.com")
             self.assertEqual(rows[0]["status"], "found")

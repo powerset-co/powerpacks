@@ -26,9 +26,11 @@ DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CH
 GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
 
 try:
-    csv.field_size_limit(sys.maxsize)
-except OverflowError:
-    csv.field_size_limit(2**31 - 1)
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -78,7 +80,7 @@ def write_json(path: Path, payload: Any) -> None:
 
 def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         fields = list(reader.fieldnames or [])
         rows = [{str(key): value or "" for key, value in row.items() if key is not None} for row in reader]
     return fields, rows

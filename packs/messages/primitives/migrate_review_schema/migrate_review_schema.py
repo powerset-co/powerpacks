@@ -13,9 +13,16 @@ import argparse
 import csv
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
 
 BASE_FIELDS = [
@@ -113,7 +120,7 @@ def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     if not path.exists():
         return [], []
     with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         fieldnames = list(reader.fieldnames or [])
         rows = [{key: value or "" for key, value in row.items()} for row in reader]
     return fieldnames, rows

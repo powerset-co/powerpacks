@@ -10,17 +10,21 @@ Stdlib-only.
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_NAME = os.environ.get("POWERPACKS_APOLLO_MCP_NAME", "apollo")
 DEFAULT_PACKAGE = os.environ.get("POWERPACKS_APOLLO_MCP_PACKAGE", "apollo-mcp@0.2.0")
@@ -404,7 +408,7 @@ def prepare_leads(args: argparse.Namespace) -> None:
     skipped: list[dict[str, Any]] = []
     seen: set[str] = set()
     with input_path.open(newline="") as fh:
-        reader = csv.DictReader(fh)
+        reader = CsvIO.dict_reader(fh)
         mapping = normalized_header_map(reader.fieldnames)
         for idx, row in enumerate(reader, start=2):
             name = pick(row, mapping, NAME_COLUMNS)

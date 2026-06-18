@@ -17,6 +17,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 
 SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
@@ -256,7 +262,7 @@ def read_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     if not path.exists():
         return DEFAULT_COLUMNS[:], []
     with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         fieldnames = list(reader.fieldnames or DEFAULT_COLUMNS)
         rows = [{key: value or "" for key, value in row.items()} for row in reader]
     for column in DEFAULT_COLUMNS:

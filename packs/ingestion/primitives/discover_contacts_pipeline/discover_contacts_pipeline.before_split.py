@@ -37,7 +37,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 try:
     from packs.ingestion.schemas.people_schema import (
@@ -47,6 +47,7 @@ try:
         normalize_linkedin_url,
         normalize_people_row,
     )
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.people_schema import (
@@ -56,6 +57,7 @@ except ModuleNotFoundError:
         normalize_linkedin_url,
         normalize_people_row,
     )
+    from packs.shared.csv_io import CsvIO
 
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover"
@@ -194,7 +196,7 @@ def write_json(path: Path, payload: Any) -> None:
 
 def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         fields = list(reader.fieldnames or [])
         rows = [{str(key): value or "" for key, value in row.items() if key is not None} for row in reader]
     return fields, rows

@@ -18,7 +18,6 @@ run_indexing.py.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import shutil
@@ -30,6 +29,7 @@ sys.path.insert(0, str(REPO))
 
 from packs.indexing.modal.sandbox_common import now_iso, write_status  # noqa: E402
 from packs.ingestion.primitives.linkedin_network_import import linkedin_network_import  # noqa: E402
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 WORK = Path("/tmp/linkedin-import")
 
@@ -120,7 +120,7 @@ def main() -> int:
     people_out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(people_csv, people_out)
     with Path(people_csv).open(newline="", encoding="utf-8-sig") as handle:
-        people_count = sum(1 for _ in csv.DictReader(handle))
+        people_count = sum(1 for _ in CsvIO.dict_reader(handle))
 
     stats = enrichment_stats(ledger) | {"people": people_count, "auto_approvals": approvals}
     (run_vol / "import-stats.json").write_text(json.dumps(stats, indent=2))

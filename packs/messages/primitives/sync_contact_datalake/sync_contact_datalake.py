@@ -9,15 +9,17 @@ Stdlib-only. Does not upload unless `sync --confirm-sync` is passed.
 """
 from __future__ import annotations
 
-import argparse, csv, hashlib, json, os, re, subprocess, sys, urllib.error, urllib.request
+import argparse, hashlib, json, os, re, subprocess, sys, urllib.error, urllib.request
 from pathlib import Path
 from typing import Any
 
 try:
     from packs.ingestion.schemas.people_schema import generate_person_id
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:  # pragma: no cover - direct script fallback
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.people_schema import generate_person_id
+    from packs.shared.csv_io import CsvIO
 
 DEFAULT_API_URL="https://search-api-7wk4uhe77q-uw.a.run.app"
 DEFAULT_CSV=Path(".powerpacks/messages/research_review.csv")
@@ -250,7 +252,7 @@ def row_to_record(row, research_dir, retarget_research_dir):
     }
 def load_records(csv_path, research_dir, retarget_research_dir=DEFAULT_RETARGET_RESEARCH_DIR):
     with csv_path.open(newline='',encoding='utf-8-sig') as f:
-        rows=list(csv.DictReader(f))
+        rows=list(CsvIO.dict_reader(f))
     records=[]
     for row in rows:
         rec=row_to_record(row,research_dir,retarget_research_dir)

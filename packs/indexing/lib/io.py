@@ -8,9 +8,14 @@ from __future__ import annotations
 import csv
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 def ensure_parent(path: str | Path) -> Path:
@@ -25,14 +30,14 @@ def read_csv(path: str | Path) -> list[dict[str, str]]:
     """Read a UTF-8/UTF-8-BOM CSV into dictionaries."""
 
     with Path(path).open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(csv.DictReader(handle))
+        return list(CsvIO.dict_reader(handle))
 
 
 def csv_header(path: str | Path) -> list[str]:
     """Return the CSV header row, or an empty list for an empty file."""
 
     with Path(path).open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return next(csv.reader(handle), [])
+        return next(CsvIO.reader(handle), [])
 
 
 def write_csv(path: str | Path, fieldnames: list[str], rows: Iterable[dict[str, Any]]) -> Path:

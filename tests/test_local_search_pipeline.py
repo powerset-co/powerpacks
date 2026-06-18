@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import importlib.util
 import json
 import os
@@ -9,6 +8,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -555,7 +556,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertTrue(candidate["has_core_regex"])
             self.assertEqual(candidate["bucket"], "good")
             with Path(out["artifacts"]["csv"]).open(newline="") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertIn(PERSON_STANFORD, [row["person_id"] for row in rows])
 
     def test_company_union_uses_static_adjacent_role_ids_against_duckdb(self) -> None:
@@ -614,7 +615,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(prefilters["output"]["company_union_candidate_ids"], [PERSON_ADJACENT])
 
             with Path(out["artifacts"]["csv"]).open(newline="") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             person_ids = [row["person_id"] for row in rows]
             # Base retrieval is no longer hard-gated by non-shortcut role_ids;
             # assert the adjacency union still contributes the adjacent person.
@@ -1053,7 +1054,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertNotIn("POWERPACKS_LOCAL_SEARCH_DB", json.dumps(ledger_doc))
 
             with Path(out["artifacts"]["csv"]).open(newline="") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["person_id"], PERSON_STANFORD)
             self.assertEqual(rows[0]["hydrated"], "True")

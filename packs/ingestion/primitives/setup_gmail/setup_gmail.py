@@ -36,6 +36,7 @@ from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa
     linked_gmail_accounts,
 )
 from packs.indexing.primitives.index_contacts_pipeline import index_contacts_pipeline  # noqa: E402
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 import shutil
 import subprocess
@@ -250,12 +251,11 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, list[str]]:
 def _directory_emails() -> set[str]:
     """Return emails already resolved in directory.csv."""
     try:
-        import csv
         directory_csv = DEFAULT_BASE_DIR / "directory.csv"
         if not directory_csv.exists():
             return set()
         with open(directory_csv) as f:
-            return {row.get("email", "").lower() for row in csv.DictReader(f) if row.get("email")}
+            return {row.get("email", "").lower() for row in CsvIO.dict_reader(f) if row.get("email")}
     except Exception:
         return set()
 
@@ -263,12 +263,11 @@ def _directory_emails() -> set[str]:
 def _queue_emails() -> list[str]:
     """Return emails from the gmail resolution queue."""
     try:
-        import csv
         queue_csv = DISCOVER_DIR / "linkedin_resolution_queue.csv"
         if not queue_csv.exists():
             return []
         with open(queue_csv) as f:
-            return [row.get("primary_email", "").lower() for row in csv.DictReader(f) if row.get("primary_email")]
+            return [row.get("primary_email", "").lower() for row in CsvIO.dict_reader(f) if row.get("primary_email")]
     except Exception:
         return []
 

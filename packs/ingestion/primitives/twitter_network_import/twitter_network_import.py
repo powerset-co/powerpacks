@@ -36,9 +36,11 @@ from typing import Any
 
 try:
     from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, generate_person_id, normalize_people_row
+    from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, generate_person_id, normalize_people_row
+    from packs.shared.csv_io import CsvIO
 
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "twitter"
@@ -147,7 +149,7 @@ def generate_synthetic_id(handle: str) -> str:
 
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(csv.DictReader(handle))
+        return list(CsvIO.dict_reader(handle))
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:

@@ -26,6 +26,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from packs.shared.csv_io import CsvIO
+
 
 ROOT = Path(__file__).resolve().parents[1]
 POWERSET_AUTH = ROOT / "packs/powerset/primitives/auth/auth.py"
@@ -304,7 +306,7 @@ class SyncCandidatesTests(unittest.TestCase):
                 self.assertEqual(payload["rows"], 250)
                 self.assertEqual(payload["diagnostics"]["pages"], 3)
                 with output.open(newline="") as h:
-                    rows = list(csv.DictReader(h))
+                    rows = list(CsvIO.dict_reader(h))
                 self.assertEqual(len(rows), 250)
                 self.assertEqual(rows[0]["id"], "c-0")
                 self.assertEqual(rows[0]["name"], "First0 Last0")
@@ -390,7 +392,7 @@ class MatchLocalTests(unittest.TestCase):
             self.assertEqual(payload["stats"]["unmatched"], 1)
 
             with contacts.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             by_phone = {r["phone"]: r for r in rows}
 
             tanner = by_phone["+18055550101"]
@@ -436,7 +438,7 @@ class MatchLocalTests(unittest.TestCase):
             self.assertEqual(payload["stats"]["total"], 4)
 
             with contacts.open(newline="") as h:
-                rows = list(csv.DictReader(h))
+                rows = list(CsvIO.dict_reader(h))
             by_phone = {r["phone"]: r for r in rows}
             self.assertEqual(by_phone["+14155550101"]["match_status"], "matched")
             self.assertEqual(by_phone["+14155550101"]["matched_person_id"], "p1")
@@ -533,7 +535,7 @@ class LlmReviewTests(unittest.TestCase):
                     self.assertEqual(set(contact), {"idx", "name"})
 
                 with contacts.open(newline="") as h:
-                    rows = list(csv.DictReader(h))
+                    rows = list(CsvIO.dict_reader(h))
                 # Indexes 1 and 3 (Bob, Dan) get SKIP per the fake handler.
                 by_phone = {r["phone"]: r for r in rows}
                 self.assertEqual(by_phone["+141555500001"[:12]]["skip"], "")  # Alice = ENRICH

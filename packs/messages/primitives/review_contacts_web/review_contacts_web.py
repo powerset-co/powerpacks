@@ -16,6 +16,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
+
 
 DEFAULT_COLUMNS = [
     "phone",
@@ -50,7 +56,7 @@ def read_contacts(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     if not path.exists():
         return DEFAULT_COLUMNS[:], []
     with path.open(newline="") as f:
-        reader = csv.DictReader(f)
+        reader = CsvIO.dict_reader(f)
         fieldnames = list(reader.fieldnames or DEFAULT_COLUMNS)
         rows = [{key: value or "" for key, value in row.items()} for row in reader]
     for column in DEFAULT_COLUMNS:

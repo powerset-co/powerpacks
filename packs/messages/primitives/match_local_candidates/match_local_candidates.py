@@ -38,12 +38,19 @@ import argparse
 import csv
 import json
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
+
+try:
+    from packs.shared.csv_io import CsvIO
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.shared.csv_io import CsvIO
 
 
 CSV_HEADERS = [
@@ -149,7 +156,7 @@ def load_candidates(path: Path) -> list[Candidate]:
         return []
     out: list[Candidate] = []
     with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         for row in reader:
             cid = (row.get("id") or "").strip()
             name = (row.get("name") or "").strip()
@@ -177,7 +184,7 @@ def load_review_approvals(path: Path) -> dict[str, bool] | None:
         return None
     approvals: dict[str, bool] = {}
     with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
+        for row in CsvIO.dict_reader(handle):
             approved = (row.get("in_network") or "").strip().lower() in {"true", "yes", "1"}
             for raw in [row.get("phone_e164"), row.get("handle")]:
                 key = email_match_key(raw) or phone_match_key(raw)
@@ -194,7 +201,7 @@ def load_people_candidates(path: Path, known_ids: set[str], known_identifiers: s
         return []
     out: list[Candidate] = []
     with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         for row in reader:
             cid = (row.get("id") or "").strip()
             name = (row.get("full_name") or "").strip()
@@ -483,7 +490,7 @@ def read_contacts(path: Path) -> list[dict[str, str]]:
         raise SystemExit(f"contacts file not found: {path}")
     rows: list[dict[str, str]] = []
     with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
+        reader = CsvIO.dict_reader(handle)
         if not reader.fieldnames:
             return []
         validate_input_headers(path, reader.fieldnames)

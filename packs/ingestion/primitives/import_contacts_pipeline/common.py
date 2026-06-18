@@ -23,15 +23,11 @@ from packs.ingestion.primitives.discover_contacts_pipeline.directory import (
     DIRECTORY_COLUMNS,
     normalized_directory_row,
 )
+from packs.shared.csv_io import CsvIO
 
 DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
 DEFAULT_IMPORT_DIR = DEFAULT_BASE_DIR / "import"
 DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
-
-try:
-    csv.field_size_limit(sys.maxsize)
-except OverflowError:
-    csv.field_size_limit(2**31 - 1)
 
 
 def load_legacy_discover_module() -> Any:
@@ -233,7 +229,7 @@ def csv_count(path_text: str) -> int:
     if not path_text or not path.exists() or not path.is_file():
         return 0
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return sum(1 for _ in csv.DictReader(handle))
+        return sum(1 for _ in CsvIO.dict_reader(handle))
 
 
 def directory_row_matches_source(row: dict[str, str], source: str) -> bool:
@@ -248,7 +244,7 @@ def normalize_directory_source_accounts(source: str, directory_csv: Path = DEFAU
     if not directory_csv.exists():
         return {"status": "skipped", "reason": "directory_csv_missing", "updated_rows": 0}
     with directory_csv.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        rows = list(csv.DictReader(handle))
+        rows = list(CsvIO.dict_reader(handle))
     changed = 0
     normalized_rows: list[dict[str, str]] = []
     for row in rows:
@@ -291,7 +287,7 @@ def directory_source_account_quality(source: str, directory_csv: Path = DEFAULT_
     invalid_source_channels = 0
     samples: list[dict[str, str]] = []
     with directory_csv.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        for row in csv.DictReader(handle):
+        for row in CsvIO.dict_reader(handle):
             row_source = str(row.get("source") or "").strip()
             source_key = str(row.get("source_key") or "").strip()
             if source == "gmail":

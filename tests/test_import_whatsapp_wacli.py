@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import importlib.util
 import io
 import json
@@ -11,6 +10,8 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
+
+from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -251,7 +252,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertEqual(diagnostics["left_groups_skipped"], 1)
 
             with csv_path.open(encoding="utf-8") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = list(CsvIO.dict_reader(handle))
             by_phone = {row["phone"]: row for row in rows}
             self.assertEqual(by_phone["+14155550101"]["message_count"], "2")
             self.assertEqual(by_phone["+14155550101"]["whatsapp_message_count"], "2")
