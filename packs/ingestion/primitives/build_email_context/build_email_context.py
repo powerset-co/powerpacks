@@ -135,6 +135,31 @@ def clean_body(value: Any, head_chars: int, tail_chars: int) -> str:
     return f"{text[:head_chars].strip()} … {text[-tail_chars:].strip()}"
 
 
+# Deterministic "this message carries identity signal" features — the stuff a
+# signature block / intro bio contains. Used to pick the best email per thread
+# (no LLM): a message with a phone + title + license outscores a "thanks!".
+_SIGNAL_FEATURES = [
+    (re.compile(r"\+?\d[\d().\-  ]{7,}\d"), 3),                                  # phone number
+    (re.compile(r"https?://|www\.|linkedin\.com/in/|github\.com/|[a-z0-9-]+\.(?:com|io|co|org|net)\b", re.I), 2),  # url / domain
+    (re.compile(r"(?<![\w.])@[A-Za-z0-9_]{2,}"), 1),                                 # social handle
+    (re.compile(r"\b(?:co-?founder|founder|ceo|cto|coo|cfo|vp|head of|director|principal|"
+                r"engineer|developer|manager|realtor|broker|partner|associate|analyst|"
+                r"consultant|professor|lecturer|recruiter|designer|attorney|architect|scientist)\b", re.I), 2),  # title
+    (re.compile(r"\b(?:DRE|CalBRE|NMLS|License|Lic\.?)\s*#?\s*\d", re.I), 3),         # license / id
+    (re.compile(r"\b(?:at|@)\s+[A-Z][A-Za-z0-9&.\-]+(?:\s+[A-Z][A-Za-z0-9&.\-]+)*"), 1),  # "… at SomeCompany"
+]
+
+
+def signal_score(text: str) -> int:
+    """Deterministic identity-signal score for a message body/snippet (no LLM).
+
+    Rewards signature/bio features (phone, url, title, license, company) plus a
+    small length bonus (intros/signatures are longer than one-liners)."""
+    text = text or ""
+    score = sum(weight for pat, weight in _SIGNAL_FEATURES if pat.search(text))
+    return score + min(len(text) // 200, 3)
+
+
 def account_emails(con: sqlite3.Connection) -> set[str]:
     """Lowercased synced account addresses, used to infer message direction.
 
@@ -169,14 +194,14 @@ def recent_emails_for(
 
     Selection is signal-dense, not just most-recent: one email per thread
     (deduped by ``conversation_id``) so the slots are distinct conversations, and
-    the contact's OWN email is preferred as each thread's representative (their
-    signature block carries employer / title / phone). Contact-sent threads are
-    surfaced before account-owner-sent ones.
+    within each thread we keep the message with the highest deterministic
+    ``signal_score`` (signature / bio features), tie-broken toward the contact's
+    own email then recency. Threads are then ordered by that signal so the
+    richest emails fill the ``per_person`` slots.
     """
     rows = con.execute(RECENT_EMAILS_SQL, (email, per_person * FETCH_MULTIPLIER)).fetchall()
     dropped = 0
-    by_thread: dict[Any, dict[str, Any]] = {}
-    order: list[Any] = []
+    by_thread: dict[Any, tuple[Any, dict[str, Any]]] = {}
     for idx, row in enumerate(rows):
         sender = str(row["sender_email"] or "").strip()
         if sender == email:
@@ -190,27 +215,19 @@ def recent_emails_for(
             text = clean_body(row["body_text"], head_chars, tail_chars) or clean_text(row["snippet"], snippet_chars)
         else:
             text = clean_text(row["snippet"], snippet_chars)
-        entry = {
-            "at": str(row["at"] or "").strip(),
-            "from": sender,
-            "from_role": from_role,
-            "subject": clean_text(row["subject"]),
-            "snippet": text,
-        }
-        # Rows are date-desc, so the first entry seen for a thread is its most
-        # recent message. Keep one per thread; upgrade the representative to the
-        # contact's own email (their signature) if/when we encounter one.
+        at = str(row["at"] or "").strip()
+        # Rank within a thread: most identity signal, then the contact's own email,
+        # then most recent (ISO `at` sorts chronologically).
+        rank = (signal_score(text), 1 if from_role == "contact" else 0, at)
+        entry = {"at": at, "from": sender, "from_role": from_role, "subject": clean_text(row["subject"]), "snippet": text}
         cid = row["conversation_id"]
         key = ("thread", cid) if cid not in (None, "", "None") else ("msg", idx)
-        if key not in by_thread:
-            by_thread[key] = entry
-            order.append(key)
-        elif from_role == "contact" and by_thread[key]["from_role"] != "contact":
-            by_thread[key] = entry
-    reps = [by_thread[k] for k in order]
-    # Stable: contact-sent threads first (richest signal), recency preserved within each group.
-    reps.sort(key=lambda e: 0 if e["from_role"] == "contact" else 1)
-    return reps[:per_person], dropped
+        cur = by_thread.get(key)
+        if cur is None or rank > cur[0]:
+            by_thread[key] = (rank, entry)
+    # Signal-densest threads first so they fill the per_person slots.
+    ranked = sorted(by_thread.values(), key=lambda kv: kv[0], reverse=True)
+    return [entry for _, entry in ranked][:per_person], dropped
 
 
 def derive_candidates(
