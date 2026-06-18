@@ -10,7 +10,7 @@ MANAGED_SKILLS=(
   search-network search-network-jd search-profile search-company search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
-  import-email discover-contacts import-twitter
+  import-email enrich-email-markers discover-contacts import-twitter
   import-messages import-imessage import-contacts-review
 )
 
@@ -115,6 +115,7 @@ install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
 install_skill import-email "$REPO_ROOT/packs/ingestion/skills/import-email/SKILL.md"
+install_skill enrich-email-markers "$REPO_ROOT/packs/ingestion/skills/enrich-email-markers/SKILL.md"
 install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
@@ -128,5 +129,5 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-profile search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email discover-contacts import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-profile search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-email enrich-email-markers discover-contacts import-twitter"
 echo "restart Codex to pick up the skill list"
