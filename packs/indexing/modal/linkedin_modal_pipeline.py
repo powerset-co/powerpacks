@@ -37,6 +37,7 @@ Secrets mounted server-side; they never exist on the laptop.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import io
 import json
@@ -48,6 +49,10 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+# people.csv embeds large rapidapi_response JSON per row; raise the field cap so
+# csv parsing (row counts) doesn't choke or miscount on multi-line fields.
+csv.field_size_limit(sys.maxsize)
 
 _REPO_FOR_ENV = Path(__file__).resolve().parents[3]
 # MODAL_TOKEN_ID / MODAL_TOKEN_SECRET land in .env via `$powerset env pull`;
@@ -546,8 +551,16 @@ GMAIL_INDEX_LABEL = "gmail-index"
 
 
 def people_csv_rows(path: Path) -> int:
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        return max(0, sum(1 for _ in handle) - 1)
+    """Count data rows (real CSV records, not lines).
+
+    people.csv carries multi-line rapidapi_response JSON, so a plain line count
+    overcounts badly; parse with csv to count one row per actual person.
+    """
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        reader = csv.reader(handle)
+        if next(reader, None) is None:  # header
+            return 0
+        return sum(1 for _ in reader)
 
 
 def cmd_index_people(args: argparse.Namespace) -> int:
