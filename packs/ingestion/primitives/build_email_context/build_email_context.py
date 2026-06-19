@@ -562,12 +562,16 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
             recent = recent_by_email.get(email, [])
             if recent:
                 with_context += 1
+            # A domain heuristic on a free provider (gmail.com -> "Gmail") is noise,
+            # not a real employer — only keep the guess for work domains.
+            email_type = entry.get("primary_email_type", "")
+            company_guess = entry.get("company_guess", "") if email_type == "work" else ""
             records.append({
                 # what Parallel currently receives (thin context)
                 "email": email,
                 "full_name": entry.get("full_name", ""),
-                "company_guess": entry.get("company_guess", ""),
-                "primary_email_type": entry.get("primary_email_type", ""),
+                "company_guess": company_guess,
+                "primary_email_type": email_type,
                 "total_messages": entry.get("total_messages", ""),
                 "thread_count": entry.get("thread_count", ""),
                 "last_interaction": entry.get("last_interaction", ""),
