@@ -316,6 +316,30 @@ def account_emails(con: sqlite3.Connection) -> set[str]:
     return {str(r["ident"]).strip() for r in rows if str(r["ident"] or "").strip()}
 
 
+def owner_identity(con: sqlite3.Connection) -> dict[str, Any]:
+    """Who the mailbox owner is, derived entirely from msgvault (no flags needed).
+
+    Emails = every synced ``sources.identifier`` (already what ``account_emails``
+    returns). Name = the most common non-empty ``participants.display_name`` seen
+    for any of those addresses (Gmail leaves ``sources.display_name`` blank, but the
+    owner's name shows up on the participant rows). Used to tell the LLM marker step
+    who 'me' is so it never mints a marker from the owner's own identity."""
+    emails = sorted(account_emails(con))
+    name = ""
+    if emails:
+        placeholders = ",".join("?" for _ in emails)
+        row = con.execute(
+            f"SELECT TRIM(display_name) AS dn, COUNT(*) AS n FROM participants "
+            f"WHERE LOWER(email_address) IN ({placeholders}) "
+            f"AND TRIM(COALESCE(display_name, '')) <> '' "
+            f"GROUP BY TRIM(display_name) ORDER BY n DESC, dn LIMIT 1",
+            emails,
+        ).fetchone()
+        if row:
+            name = str(row["dn"]).strip()
+    return {"name": name, "emails": emails}
+
+
 def select_emails_from_rows(
     rows: Iterable[sqlite3.Row],
     email: str,
@@ -495,6 +519,7 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
             queue = queue[: args.limit]
 
         accounts = account_emails(con)
+        owner = owner_identity(con)
 
         # Candidate emails in queue order (deduped), so output ordering is stable.
         emails_in_order: list[str] = []
@@ -566,6 +591,7 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
         "status": "completed",
         "msgvault_db": str(db_path),
         "account_email": args.account_email or "(all)",
+        "owner": owner,
         "per_person": args.per_person,
         "source": args.source,
         "snippet_chars": args.snippet_chars,

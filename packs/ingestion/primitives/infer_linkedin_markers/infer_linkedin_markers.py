@@ -218,6 +218,38 @@ def _is_retryable(exc: Exception) -> bool:
     return False
 
 
+def load_owner_identity(context_path: Path) -> dict[str, Any]:
+    """Read the mailbox owner (name + emails) that build_email_context recorded in
+    the sibling manifest.json. Derived from msgvault — no flags. Empty if absent."""
+    manifest = context_path.parent / "manifest.json"
+    if not manifest.is_file():
+        return {}
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    owner = data.get("owner")
+    return owner if isinstance(owner, dict) else {}
+
+
+def owner_identity_block(owner: dict[str, Any]) -> str:
+    """Tell the model who 'me' is (name + addresses), so it recognizes the owner in
+    a thread and never attributes the owner's own identity to the contact."""
+    name = str((owner or {}).get("name") or "").strip()
+    emails = [str(e).strip() for e in (owner or {}).get("emails", []) if str(e).strip()]
+    if not name and not emails:
+        return ""
+    who = name or "the account owner"
+    addrs = f" <{', '.join(emails)}>" if emails else ""
+    return (
+        f"\n\nThe mailbox owner -- 'me', the sender of every 'from me' email -- is "
+        f"{who}{addrs}. Those are MY own name and addresses. 'from me' emails are my "
+        "words to the contact, not the contact's. NEVER emit a marker, canonical_name, "
+        "or linkedin_query describing the owner; if a thread only reveals the owner's "
+        "identity (e.g. my name/signature), that is not a marker for the contact."
+    )
+
+
 def owner_prior_block(owner_context: str) -> str:
     """Optional prior about the mailbox owner, used to disambiguate personal contacts."""
     owner_context = (owner_context or "").strip()
@@ -446,7 +478,8 @@ async def run_async(args: argparse.Namespace) -> dict[str, Any]:
     # 256 melted a tier-1 run). To raise it, pass --concurrency explicitly.
     concurrency = args.concurrency or MARKERS_DEFAULT_CONCURRENCY
     encoder = get_encoder()
-    system_prompt = SYSTEM_PROMPT + owner_prior_block(args.owner_context)
+    owner = load_owner_identity(Path(args.context))
+    system_prompt = SYSTEM_PROMPT + owner_identity_block(owner) + owner_prior_block(args.owner_context)
     client = AsyncOpenAI(api_key=api_key, timeout=args.timeout, max_retries=0)
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
