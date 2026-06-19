@@ -79,6 +79,9 @@ Useful flags:
 - `--sample-work N --sample-personal M` — eval mode: top-N per type (for A/B work).
 - `--owner-context "Went to UCLA; from Palo Alto, CA"` — a prior about the mailbox
   owner; used (gated, low-confidence) to disambiguate friends/classmates.
+  (The owner's **identity** — name + all synced email addresses — is auto-derived
+  from msgvault `sources`/`participants` and always passed to the LLM so it knows
+  who "me" is and never mints a marker from the owner's own identity. No flag.)
 - `--concurrency N` (**hardcoded default 12** — safe for tier-1 OpenAI projects
   ~60 RPM). This primitive intentionally ignores the shared
   `POWERPACKS_OPENAI_CONCURRENCY` env var, so to go faster you must pass
@@ -116,4 +119,4 @@ a `candidates` shortlist. To feed these markers into it, build a queue CSV with 
 before running.
 
 ---
-_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS; 2026-06-19 hardcode concurrency default to 12 and stop reading `POWERPACKS_OPENAI_CONCURRENCY` (pass `--concurrency` explicitly to raise)._
+_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS; 2026-06-19 hardcode concurrency default to 12 and stop reading `POWERPACKS_OPENAI_CONCURRENCY` (pass `--concurrency` explicitly to raise); 2026-06-19 auto-derive mailbox-owner identity (name + addresses) from msgvault and pass it to the LLM so owner facts are never attributed to a contact (no flag)._

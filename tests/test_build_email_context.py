@@ -139,6 +139,23 @@ class AccountEmailsTests(unittest.TestCase):
         self.assertEqual(bec.account_emails(con), {"me@gmail.com"})
 
 
+class OwnerIdentityTests(unittest.TestCase):
+    def test_derives_name_and_emails_from_msgvault(self):
+        con = make_con()
+        self.addCleanup(con.close)
+        owner = bec.owner_identity(con)
+        # emails come from sources (lowercased); name from the participant row.
+        self.assertEqual(owner["emails"], ["me@gmail.com"])
+        self.assertEqual(owner["name"], "Me")
+
+    def test_blank_when_no_sources(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript(SCHEMA)
+        self.addCleanup(con.close)
+        self.assertEqual(bec.owner_identity(con), {"name": "", "emails": []})
+
+
 class RecentEmailsTests(unittest.TestCase):
     def setUp(self):
         self.con = make_con()
