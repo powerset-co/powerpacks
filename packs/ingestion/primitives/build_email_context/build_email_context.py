@@ -160,6 +160,27 @@ def signal_score(text: str) -> int:
     return score + min(len(text) // 200, 3)
 
 
+# Near-duplicate threshold: two emails whose word-shingle sets overlap at least
+# this much are treated as the same content (boilerplate, repeated chat blurbs,
+# the same quoted thread). Greedy filtering keeps the higher-signal one.
+NEARDUP_THRESHOLD = 0.6
+
+
+def shingles(text: str, k: int = 3) -> frozenset[str]:
+    """Word k-shingle set for Jaccard near-dup detection (exact MinHash)."""
+    tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+    if len(tokens) < k:
+        return frozenset(tokens)
+    return frozenset(" ".join(tokens[i:i + k]) for i in range(len(tokens) - k + 1))
+
+
+def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    return inter / (len(a) + len(b) - inter)
+
+
 def account_emails(con: sqlite3.Connection) -> set[str]:
     """Lowercased synced account addresses, used to infer message direction.
 
@@ -225,9 +246,21 @@ def recent_emails_for(
         cur = by_thread.get(key)
         if cur is None or rank > cur[0]:
             by_thread[key] = (rank, entry)
-    # Signal-densest threads first so they fill the per_person slots.
+    # Signal-densest threads first, then greedily drop near-duplicate content
+    # (boilerplate / repeated chat blurbs / same quoted thread) so the slots are
+    # genuinely distinct — keeps the higher-signal of any near-dup pair.
     ranked = sorted(by_thread.values(), key=lambda kv: kv[0], reverse=True)
-    return [entry for _, entry in ranked][:per_person], dropped
+    kept: list[dict[str, Any]] = []
+    kept_shingles: list[frozenset[str]] = []
+    for _, entry in ranked:
+        if len(kept) >= per_person:
+            break
+        sh = shingles(entry["snippet"])
+        if any(jaccard(sh, prev) >= NEARDUP_THRESHOLD for prev in kept_shingles):
+            continue
+        kept.append(entry)
+        kept_shingles.append(sh)
+    return kept, dropped
 
 
 def derive_candidates(
