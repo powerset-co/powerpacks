@@ -73,6 +73,7 @@ CSV_FIELDS = [
     "bucket",
     "handle",
     "full_name",
+    "linkedin_url",
     "phone_e164",
     "area_code",
     "total_messages",
@@ -317,10 +318,13 @@ def flatten_row(
     schools = schools_summary(research_packet or {})
 
     full_name = (person.get("full_name") or "").strip() or queue_row.get("display_name", "")
+    social = (research_packet or {}).get("social") or {}
+    linkedin_url = (social.get("linkedin_url") or "").strip()
     return {
         "bucket": bucket_payload.get("bucket", "maybe"),
         "handle": handle,
         "full_name": full_name,
+        "linkedin_url": linkedin_url,
         "phone_e164": queue_row.get("phone_e164", "") or "",
         "area_code": queue_row.get("area_code", "") or "",
         "total_messages": queue_row.get("total_messages", "") or "0",
