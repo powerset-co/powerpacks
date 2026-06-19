@@ -103,6 +103,35 @@ class HighestSignalSelectionTests(unittest.TestCase):
         self.assertEqual(rows[0]["subject"], "My new role")
 
 
+class NearDupTests(unittest.TestCase):
+    def test_jaccard_identical_and_disjoint(self):
+        a = bec.shingles("product designer at Acme Corp in San Francisco")
+        self.assertEqual(bec.jaccard(a, a), 1.0)
+        self.assertEqual(bec.jaccard(bec.shingles("alpha beta gamma delta"),
+                                     bec.shingles("one two three four")), 0.0)
+
+    def test_near_dup_emails_collapsed(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript(SCHEMA)
+        con.executescript("""
+            INSERT INTO sources (id, source_type, identifier) VALUES (1, 'gmail', 'me@gmail.com');
+            INSERT INTO participants (id, email_address) VALUES (1, 'jane@example.com'), (2, 'me@gmail.com');
+            INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at, sender_id, subject, snippet) VALUES
+                (1, 1, 500, 'email', '2026-02-01T00:00:00Z', 1, 'Chat A', 'catching up about the weekend plans and dinner soon'),
+                (2, 1, 501, 'email', '2026-02-02T00:00:00Z', 1, 'Chat B', 'catching up about the weekend plans and dinner soon'),
+                (3, 1, 502, 'email', '2026-02-03T00:00:00Z', 1, 'Bio', 'Founder at Metagloss, phone 310-555-0000, decade in private equity');
+            INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES (1, 2, 'to'), (2, 2, 'to'), (3, 2, 'to');
+        """)
+        con.commit()
+        self.addCleanup(con.close)
+        rows, _ = bec.recent_emails_for(con, "jane@example.com", per_person=5, snippet_chars=200, accounts={"me@gmail.com"})
+        subjects = [r["subject"] for r in rows]
+        self.assertEqual(len(rows), 2)            # 3 distinct threads -> 1 near-dup collapsed
+        self.assertIn("Bio", subjects)            # the distinct, high-signal email kept
+        self.assertTrue(("Chat A" in subjects) ^ ("Chat B" in subjects))  # exactly one of the dup pair
+
+
 class AccountEmailsTests(unittest.TestCase):
     def test_lowercases_identifiers(self):
         con = make_con()
