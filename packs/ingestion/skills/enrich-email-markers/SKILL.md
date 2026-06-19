@@ -14,8 +14,8 @@ Two local-first primitives, run in order:
    each contact (the same set we'd send to LinkedIn resolution) pulls their recent
    emails and writes a per-person context file.
 2. **`infer_linkedin_markers`** — LLM step (OpenAI). Classifies that context into
-   LinkedIn-resolution markers (current/past employer, title, school, location,
-   phone/handles) + a `linkedin_query`, with evidence + confidence per marker.
+   LinkedIn-resolution markers (employers, title, school, location, phone/handles)
+   + a `linkedin_query`, with evidence + confidence per marker.
 
 Output to review: **`markers.csv`** (one row per contact) and `email_context.csv`.
 
@@ -95,9 +95,10 @@ plus a `manifest.json` with token + cost totals.
 ## Review
 
 `markers.csv` has one row per contact, with `linkedin_query` and one column per
-marker category (`current_employer`, `job_title`, `school`, `location`,
+marker category (`employers`, `job_title`, `school`, `location`,
 `professional_affiliation`, `online_identifier`, …), each `value (confidence)`.
-`overall_confidence` ranks how resolvable the contact is.
+The `employers` column lists every company the contact works/worked at, each
+tagged `(current)`/`(past)`. `overall_confidence` ranks how resolvable they are.
 
 Passing `--open` (above) pops it automatically on macOS. To open it manually:
 
@@ -113,16 +114,16 @@ the email context — every claim must come from a row that exists in the output
 
 - **Report findings from `markers.csv`** — it is the flat, schema'd artifact: one
   row per contact; columns are exactly `email, full_name, type, company_guess,
-  is_person, relationship, overall_confidence, canonical_name, linkedin_query,
-  <one column per marker category>, error`. A blank category cell means no marker
-  of that kind — not "unknown", do not fill it in.
+  overall_confidence, canonical_name, linkedin_query, <one column per marker
+  category>, error`. A blank category cell means no marker of that kind — not
+  "unknown", do not fill it in.
 - **Report counts/cost from `manifest.json`** — `people_total`, `new_this_run`,
   `resumed_skipped`, `errors`, `estimated_cost_usd`. If `errors > 0`, say so
   explicitly (rate-limit failures leave error rows; the run is partial).
 - **If you read `markers.jsonl`, mind the nesting.** Each line is
-  `{email, full_name, …, usage, markers: {is_person, relationship, canonical_name,
-  markers: [ {category, value, evidence, confidence}, … ], linkedin_query,
-  overall_confidence}}`. The per-contact schema object is under the `markers` key,
+  `{email, full_name, …, usage, markers: {canonical_name, markers: [ {category,
+  value, evidence, confidence}, … ], linkedin_query, overall_confidence}}`. The
+  per-contact schema object is under the `markers` key,
   and the marker **array** is the inner `markers.markers`. Every marker carries the
   `evidence` phrase it came from — quote that, don't paraphrase a value into a fact.
 - **Trust the phase gate.** Step 2 refuses to run if step 1's `email_context` is
@@ -144,4 +145,4 @@ a `candidates` shortlist. To feed these markers into it, build a queue CSV with 
 before running.
 
 ---
-_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS; 2026-06-19 hardcode concurrency default to 12 and stop reading `POWERPACKS_OPENAI_CONCURRENCY` (pass `--concurrency` explicitly to raise); 2026-06-19 auto-derive mailbox-owner identity (name + addresses) from msgvault and pass it to the LLM so owner facts are never attributed to a contact (no flag); 2026-06-19 add a phase-1 gate (step 2 aborts on missing/empty/incomplete step-1 context) and a "Reading results — use the schema" guardrail so results are reported from `markers.csv`/`manifest.json`, never fabricated._
+_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS; 2026-06-19 hardcode concurrency default to 12 and stop reading `POWERPACKS_OPENAI_CONCURRENCY` (pass `--concurrency` explicitly to raise); 2026-06-19 auto-derive mailbox-owner identity (name + addresses) from msgvault and pass it to the LLM so owner facts are never attributed to a contact (no flag); 2026-06-19 add a phase-1 gate (step 2 aborts on missing/empty/incomplete step-1 context) and a "Reading results — use the schema" guardrail so results are reported from `markers.csv`/`manifest.json`, never fabricated; 2026-06-19 simplify marker schema — drop `is_person`/`relationship`, merge `current_employer`+`past_employer` into one `employers` list column (tagged current/past), and blank `company_guess` for personal/free-provider domains._

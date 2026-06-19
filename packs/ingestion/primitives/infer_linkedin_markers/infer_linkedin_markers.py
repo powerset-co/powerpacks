@@ -3,9 +3,9 @@
 Takes the local-only context produced by ``build_email_context`` (recent email
 subjects + snippets per contact) and asks an LLM to infer the kind of signals a
 human uses to pinpoint someone's LinkedIn profile when there's no photo: what
-school they went to, what city they're from, clubs/affiliations, current and
-past employers, the relationship to me, and associated people -- each with the
-evidence it came from and a confidence.
+school they went to, what city they're from, clubs/affiliations, and their
+employers (current and past) -- each with the evidence it came from and a
+confidence.
 
 This is the spend step. It reads the SAME local context (subjects/snippets) and
 sends it to the configured OpenAI model. It measures token usage with tiktoken
@@ -53,8 +53,7 @@ MARKERS_DEFAULT_CONCURRENCY = 12
 # Closed set of marker categories. ONLY signals that help resolve a LinkedIn
 # profile -- professional, educational, location, and network. No hobbies.
 MARKER_CATEGORIES = [
-    "current_employer",        # company/org they currently work at
-    "past_employer",           # a prior company/org
+    "employers",               # any company/org they work or worked at; note (current)/(past) in the value
     "job_title",               # role / title / occupation / seniority
     "industry",                # sector or field of work
     "school",                  # university / college / high school attended or affiliated
@@ -64,10 +63,6 @@ MARKER_CATEGORIES = [
     "online_identifier",       # personal website, GitHub/X/other handle, phone/WhatsApp number, or alt email/domain
     "canonical_name",          # corrected/fuller real name when context reveals it differs from display name
 ]
-RELATIONSHIPS = [
-    "colleague", "family", "friend", "classmate",
-    "vendor_service", "recruiter", "acquaintance", "unknown",
-]
 
 SYSTEM_PROMPT = (
     "You are helping resolve a contact to their correct LinkedIn profile. You are "
@@ -75,8 +70,9 @@ SYSTEM_PROMPT = (
     "recent email subjects + short snippets from MY mailbox (I am the account owner).\n\n"
     "Extract ONLY signals that materially help identify this person's LinkedIn "
     "profile, and classify each into EXACTLY ONE of these categories:\n"
-    "- current_employer: company/org they currently work at\n"
-    "- past_employer: a prior company/org\n"
+    "- employers: any company/org they work or worked at. Emit a SEPARATE marker "
+    "for each distinct employer, and tag the value with '(current)' or '(past)' "
+    "(e.g. 'Roblox (current)', 'Prysm (past)').\n"
     "- job_title: role, title, occupation, or seniority\n"
     "- industry: sector or field of work\n"
     "- school: university, college, or high school attended/affiliated\n"
@@ -100,7 +96,8 @@ SYSTEM_PROMPT = (
     "empty markers list.\n"
     "- Infer ONLY from the provided context. Do NOT invent facts. Every marker must "
     "cite the evidence (the subject/snippet phrase it came from) and a confidence in [0,1].\n"
-    "- Set is_person=false for automated/newsletter/transactional senders.\n"
+    "- If the sender is automated/newsletter/transactional (not a real resolvable "
+    "individual), return an empty markers list and an empty linkedin_query.\n"
     "- linkedin_query: the single best search to type into LinkedIn to find this exact "
     "person (name plus the strongest professional/education/location disambiguators), "
     "or empty if not resolvable.\n"
@@ -111,8 +108,6 @@ MARKERS_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "is_person": {"type": "boolean", "description": "True if a real resolvable individual (not automated/newsletter)."},
-        "relationship": {"type": "string", "enum": RELATIONSHIPS, "description": "My likely relationship to them."},
         "canonical_name": {"type": "string", "description": "Fuller/corrected real name if context reveals it; else empty."},
         "markers": {
             "type": "array",
@@ -132,7 +127,7 @@ MARKERS_SCHEMA = {
         "linkedin_query": {"type": "string"},
         "overall_confidence": {"type": "number", "description": "Confidence we could pinpoint the LinkedIn profile from these markers, [0,1]."},
     },
-    "required": ["is_person", "relationship", "canonical_name", "markers", "linkedin_query", "overall_confidence"],
+    "required": ["canonical_name", "markers", "linkedin_query", "overall_confidence"],
 }
 
 
@@ -260,8 +255,8 @@ def owner_prior_block(owner_context: str) -> str:
         "Friends, classmates, and family of mine often share my school or hometown. "
         "You MAY use this as a prior to (a) enrich linkedin_query (e.g. add my school or "
         "city when the contact is plausibly a school/hometown connection) and (b) emit a "
-        "school or location marker ONLY for clearly personal contacts (relationship = "
-        "friend/classmate/family), tagging the value with '(hypothesis: shared with mailbox "
+        "school or location marker ONLY for clearly personal contacts (a friend, classmate, "
+        "or family member), tagging the value with '(hypothesis: shared with mailbox "
         "owner)' and confidence <= 0.4. Never present an owner-derived guess as established fact."
     )
 
@@ -419,7 +414,7 @@ def write_markers_csv(markers_path: Path, out_dir: Path) -> Path:
     """Flat one-row-per-person CSV: identity fields + one column per marker category."""
     csv_path = out_dir / "markers.csv"
     header = [
-        "email", "full_name", "type", "company_guess", "is_person", "relationship",
+        "email", "full_name", "type", "company_guess",
         "overall_confidence", "canonical_name", "linkedin_query",
     ] + MARKER_CATEGORIES + ["error"]
     records = [json.loads(l) for l in markers_path.read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -438,8 +433,6 @@ def write_markers_csv(markers_path: Path, out_dir: Path) -> Path:
                 "full_name": rec.get("full_name", ""),
                 "type": rec.get("primary_email_type", ""),
                 "company_guess": rec.get("company_guess", ""),
-                "is_person": m.get("is_person", ""),
-                "relationship": m.get("relationship", ""),
                 "overall_confidence": m.get("overall_confidence", ""),
                 "canonical_name": m.get("canonical_name", ""),
                 "linkedin_query": m.get("linkedin_query", ""),
