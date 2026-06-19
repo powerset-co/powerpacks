@@ -204,5 +204,49 @@ class RecentEmailsTests(unittest.TestCase):
         self.assertIn(" … ", body)                        # middle elided
 
 
+class StreamContactGroupsTests(unittest.TestCase):
+    """The all-contacts windowed/streamed path must match the per-contact path."""
+
+    def setUp(self):
+        self.con = make_con()
+        self.addCleanup(self.con.close)
+        self.accounts = bec.account_emails(self.con)
+
+    def test_streamed_selection_matches_per_contact(self):
+        emails = ["jane@example.com", "bob@example.com"]
+        bec.create_candidate_pid_table(self.con, emails)
+        fetch_limit = 5 * bec.FETCH_MULTIPLIER
+        streamed = {}
+        for cemail, rows in bec.stream_contact_groups(self.con, fetch_limit):
+            kept, _ = bec.select_emails_from_rows(
+                rows, cemail, per_person=5, snippet_chars=100, accounts=self.accounts
+            )
+            streamed[cemail] = [(e["subject"], e["from_role"]) for e in kept]
+        # Jane via the per-contact path — must be identical.
+        per_contact, _ = bec.recent_emails_for(
+            self.con, "jane@example.com", per_person=5, snippet_chars=100, accounts=self.accounts
+        )
+        self.assertEqual(streamed["jane@example.com"],
+                         [(e["subject"], e["from_role"]) for e in per_contact])
+        self.assertEqual(set(s for s, _ in streamed["jane@example.com"]),
+                         {"My new role", "Hello & welcome", "Intro to you"})
+
+    def test_candidate_table_maps_only_known_emails(self):
+        n = bec.create_candidate_pid_table(self.con, ["jane@example.com", "nobody@nowhere.com"])
+        self.assertEqual(n, 1)  # only jane resolves to a participant id
+
+    def test_body_mode_streamed(self):
+        bec.create_candidate_pid_table(self.con, ["jane@example.com"])
+        groups = dict(bec.stream_contact_groups(self.con, 5 * bec.FETCH_MULTIPLIER))
+        kept, _ = bec.select_emails_from_rows(
+            groups["jane@example.com"], "jane@example.com", per_person=5,
+            snippet_chars=200, accounts=self.accounts, source="body", head_chars=200, tail_chars=200,
+        )
+        body = {e["subject"]: e["snippet"] for e in kept}["Hello & welcome"]
+        self.assertIn("product designer at Acme", body)
+        self.assertIn("+1 555-1234", body)
+        self.assertNotIn("quoted history", body)
+
+
 if __name__ == "__main__":
     unittest.main()
