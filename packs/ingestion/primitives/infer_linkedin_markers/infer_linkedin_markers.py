@@ -458,7 +458,35 @@ async def run_async(args: argparse.Namespace) -> dict[str, Any]:
     if not api_key:
         raise SystemExit("OPENAI_API_KEY not found in environment or .env")
 
-    records = [json.loads(l) for l in Path(args.context).read_text(encoding="utf-8").splitlines() if l.strip()]
+    context_path = Path(args.context)
+    if not context_path.is_file():
+        raise SystemExit(
+            f"No email context at {context_path}. Run step 1 (build_email_context) first."
+        )
+    records = [json.loads(l) for l in context_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    # Phase-1 health gate: never run the paid LLM step on a failed/empty context.
+    # A silent 0-row markers file is what lets a caller report fabricated results.
+    if not records:
+        raise SystemExit(
+            f"Email context at {context_path} is empty. Step 1 (build_email_context) "
+            "likely failed or matched no contacts — re-run it before extracting markers."
+        )
+    ctx_manifest = context_path.parent / "manifest.json"
+    if ctx_manifest.is_file():
+        try:
+            cm = json.loads(ctx_manifest.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            cm = {}
+        status = cm.get("status")
+        if status and status != "completed":
+            raise SystemExit(
+                f"Step 1 (build_email_context) manifest status is {status!r}, not 'completed'. "
+                "Re-run step 1 before extracting markers."
+            )
+        if cm.get("people_with_context") == 0:
+            raise SystemExit(
+                "Step 1 produced 0 contacts with context. Re-run step 1 before extracting markers."
+            )
     exclude = {e.strip().lower() for e in (args.exclude or []) if e.strip()}
     targets = select_targets(records, args, exclude)
 
@@ -478,7 +506,7 @@ async def run_async(args: argparse.Namespace) -> dict[str, Any]:
     # 256 melted a tier-1 run). To raise it, pass --concurrency explicitly.
     concurrency = args.concurrency or MARKERS_DEFAULT_CONCURRENCY
     encoder = get_encoder()
-    owner = load_owner_identity(Path(args.context))
+    owner = load_owner_identity(context_path)
     system_prompt = SYSTEM_PROMPT + owner_identity_block(owner) + owner_prior_block(args.owner_context)
     client = AsyncOpenAI(api_key=api_key, timeout=args.timeout, max_retries=0)
     semaphore = asyncio.Semaphore(max(1, concurrency))
