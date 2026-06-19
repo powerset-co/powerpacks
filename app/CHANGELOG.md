@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.7.0...powerpacks-console-v0.8.0) (2026-06-19)
+
+
+### Features
+
+* console System page — self-update, secrets readiness, daemon reboot ([#85](https://github.com/powerset-co/powerpacks/issues/85)) ([6af94d9](https://github.com/powerset-co/powerpacks/commit/6af94d98d16a8eaf55ce16f8daec5441a61c493e))
+* remove the setup page; land on search (/) and gate the update nudge ([#89](https://github.com/powerset-co/powerpacks/issues/89)) ([0eea0b0](https://github.com/powerset-co/powerpacks/commit/0eea0b08f845e36d15b17c0fd5a57b230ecbabe8))
+
+
+### Bug Fixes
+
+* onboarding 'Next — try a search' becomes a primary CTA once indexing completes ([#91](https://github.com/powerset-co/powerpacks/issues/91)) ([ae07cd6](https://github.com/powerset-co/powerpacks/commit/ae07cd690dd482422250731ffcc0f88ad42f6e2b))
+* per-source status loading (sources tab + LinkedIn source status) ([#88](https://github.com/powerset-co/powerpacks/issues/88)) ([20e4ad3](https://github.com/powerset-co/powerpacks/commit/20e4ad3757b307608e301112c66edc260b6a474f))
+* trim System page to update + daemon; pin sidebar so only content scrolls ([#92](https://github.com/powerset-co/powerpacks/issues/92)) ([16376c1](https://github.com/powerset-co/powerpacks/commit/16376c10f703d4168e1f2ab52c6db18256de3e73))
+
 ## [0.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.6.0...powerpacks-console-v0.7.0) (2026-06-17)
 
 

@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.8.0...powerpacks-v0.9.0) (2026-06-19)
+
+
+### Features
+
+* add compare_resolution_ab primitive for A/B resolution diffs ([#96](https://github.com/powerset-co/powerpacks/issues/96)) ([0be8aab](https://github.com/powerset-co/powerpacks/commit/0be8aabf504d3bb223d101acb7eaacecf40d764e))
+* add validate_search_index primitive and use it in $setup Step 8 ([#95](https://github.com/powerset-co/powerpacks/issues/95)) ([aea86e2](https://github.com/powerset-co/powerpacks/commit/aea86e2d8b81b745d9d6b1dbaeb1d560ab0983ac))
+* console System page — self-update, secrets readiness, daemon reboot ([#85](https://github.com/powerset-co/powerpacks/issues/85)) ([6af94d9](https://github.com/powerset-co/powerpacks/commit/6af94d98d16a8eaf55ce16f8daec5441a61c493e))
+* default infer_linkedin_markers to deterministic top-500 by volume ([#99](https://github.com/powerset-co/powerpacks/issues/99)) ([c2da2af](https://github.com/powerset-co/powerpacks/commit/c2da2af3a6ff63872a03a93c30d26856cebb4179))
+* near-duplicate email filtering (Jaccard shingles) ([#107](https://github.com/powerset-co/powerpacks/issues/107)) ([b9fcb4b](https://github.com/powerset-co/powerpacks/commit/b9fcb4b1d7e25fdf2ca965d2c37d2f069dcb1d84))
+* promote $setup to the unified LinkedIn+Gmail multi-source flow ([#97](https://github.com/powerset-co/powerpacks/issues/97)) ([4992e9b](https://github.com/powerset-co/powerpacks/commit/4992e9ba88a4a60993420e0cf6631b2e7f684bbc))
+* remove the setup page; land on search (/) and gate the update nudge ([#89](https://github.com/powerset-co/powerpacks/issues/89)) ([0eea0b0](https://github.com/powerset-co/powerpacks/commit/0eea0b08f845e36d15b17c0fd5a57b230ecbabe8))
+* rewrite $setup as a deterministic, rerunnable checklist ([#94](https://github.com/powerset-co/powerpacks/issues/94)) ([31dc5ee](https://github.com/powerset-co/powerpacks/commit/31dc5ee90d0c0ab7fe1ed4ee6de007d1aa391ccb))
+* **setup:** local-only Messages (iMessage/WhatsApp) ingestion in $setup ([8dbcfa8](https://github.com/powerset-co/powerpacks/commit/8dbcfa85d3c7f8bd4d2f88e1aeb84fbf17cc3a48))
+* signal-scored email selection (deterministic, no LLM) ([#104](https://github.com/powerset-co/powerpacks/issues/104)) ([dabf956](https://github.com/powerset-co/powerpacks/commit/dabf95661a07b2a33721c5921ceb962a358d59d5))
+* simplify marker schema (employers list, drop is_person/relationship) ([77bb7cb](https://github.com/powerset-co/powerpacks/commit/77bb7cb686544e3fa42a3e58c0e59a7c1a52efaf))
+* simplify marker schema (employers list, drop is_person/relationship) ([b583a12](https://github.com/powerset-co/powerpacks/commit/b583a1289ba92a9b1260a19b5ef8ff516d1b769c))
+* smart email-context sampler (thread-dedup + sent-preferred, default 20) ([#103](https://github.com/powerset-co/powerpacks/issues/103)) ([7fe359d](https://github.com/powerset-co/powerpacks/commit/7fe359d132bdd951c9d73adf4acb9d5e67d065b6))
+* tell the marker LLM who the mailbox owner is (from msgvault) ([b0842d7](https://github.com/powerset-co/powerpacks/commit/b0842d71394ca825e54c2e78b24641f7f806664d))
+* tell the marker LLM who the mailbox owner is (from msgvault) ([3ea01b8](https://github.com/powerset-co/powerpacks/commit/3ea01b8cadc2d37e87f412a9c57b6895630f0a68))
+
+
+### Bug Fixes
+
+* bin/launch opens the onboarding wizard for new operators ([#90](https://github.com/powerset-co/powerpacks/issues/90)) ([ec53fb2](https://github.com/powerset-co/powerpacks/commit/ec53fb2bd1aacc616fe76916da2a5aa6fd05d4b3))
+* count real CSV records in people_csv_rows (not lines) ([#98](https://github.com/powerset-co/powerpacks/issues/98)) ([5a51043](https://github.com/powerset-co/powerpacks/commit/5a5104367dc1b2f55e2939a75aaafd33939b1c0b))
+* drop duplicate canonical_name marker category ([813e30c](https://github.com/powerset-co/powerpacks/commit/813e30ca552812115b6b4097d65ff6632347c1ff))
+* drop duplicate canonical_name marker column ([e3cae93](https://github.com/powerset-co/powerpacks/commit/e3cae937f57d4f38f8da4ba0c8e658e842da2ebd))
+* gate marker step on phase-1 success + schema guardrail ([04a4eb8](https://github.com/powerset-co/powerpacks/commit/04a4eb871bc728c31aaf1ea435214fd110ecd9b3))
+* gate marker step on phase-1 success + schema guardrail in skill ([6a52941](https://github.com/powerset-co/powerpacks/commit/6a5294119f029f5a71644671601aa48a6e77847a))
+* hardcode $enrich-email-markers concurrency to 12 ([7565c17](https://github.com/powerset-co/powerpacks/commit/7565c1771971f9449ab782a2a362b3658b7075c5))
+* hydrate local search index when modal pipeline is a noop ([#87](https://github.com/powerset-co/powerpacks/issues/87)) ([b03f18d](https://github.com/powerset-co/powerpacks/commit/b03f18d77c87fda1e606d815c3a45b3bf4faf322))
+* index-direct email lookup + safe default concurrency for $enrich-email-markers ([#108](https://github.com/powerset-co/powerpacks/issues/108)) ([bdce4bf](https://github.com/powerset-co/powerpacks/commit/bdce4bf07fef36c746e55156a490108481eb53aa))
+* onboarding 'Next — try a search' becomes a primary CTA once indexing completes ([#91](https://github.com/powerset-co/powerpacks/issues/91)) ([ae07cd6](https://github.com/powerset-co/powerpacks/commit/ae07cd690dd482422250731ffcc0f88ad42f6e2b))
+* per-source status loading (sources tab + LinkedIn source status) ([#88](https://github.com/powerset-co/powerpacks/issues/88)) ([20e4ad3](https://github.com/powerset-co/powerpacks/commit/20e4ad3757b307608e301112c66edc260b6a474f))
+* route all CSV reads through a central CsvIO to lift the 128KB field limit ([#106](https://github.com/powerset-co/powerpacks/issues/106)) ([09a309e](https://github.com/powerset-co/powerpacks/commit/09a309e39e2ce9f21c7f11dc5e3a83d43c88faf2))
+* **setup:** bound msgvault re-auth and add an explicit sync-window prompt ([#105](https://github.com/powerset-co/powerpacks/issues/105)) ([f21bf79](https://github.com/powerset-co/powerpacks/commit/f21bf799134f4bb740a71c82f9d8baf323b5eed0))
+* trim System page to update + daemon; pin sidebar so only content scrolls ([#92](https://github.com/powerset-co/powerpacks/issues/92)) ([16376c1](https://github.com/powerset-co/powerpacks/commit/16376c10f703d4168e1f2ab52c6db18256de3e73))
+
+
+### Performance Improvements
+
+* **indexing:** pace RapidAPI company fetches at 300 rpm ([ac6990d](https://github.com/powerset-co/powerpacks/commit/ac6990d5f459ec42d31db9d5dd375651bd96ada5))
+* stream msgvault contact aggregation (O(messages) -&gt; O(contacts) memory) ([#100](https://github.com/powerset-co/powerpacks/issues/100)) ([b1b3e21](https://github.com/powerset-co/powerpacks/commit/b1b3e21bfce9abe903d9902e3a1be8aa0061f243))
+* windowed-streamed email-context fetch (2.5x faster, -40% RSS) ([626701b](https://github.com/powerset-co/powerpacks/commit/626701b3af272fbd0faf60043fb298901241e34f))
+* windowed-streamed email-context fetch + hardcode marker concurrency ([8ed8274](https://github.com/powerset-co/powerpacks/commit/8ed827434c272d622e3701f58c05114a7ff6a215))
+
+
+### Documentation
+
+* **setup:** forbid raw msgvault sync; recover by syncing less, not more ([#101](https://github.com/powerset-co/powerpacks/issues/101)) ([bb41c8a](https://github.com/powerset-co/powerpacks/commit/bb41c8a56cd2c706b3e5262e9290294e3a2b8136))
+
 ## [0.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.7.0...powerpacks-v0.8.0) (2026-06-17)
 
 
