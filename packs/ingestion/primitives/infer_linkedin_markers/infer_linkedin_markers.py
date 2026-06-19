@@ -37,7 +37,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from packs.indexing.lib.llm_config import (
     CHAT_MODEL_PRICES_PER_1K_USD,
-    DEFAULT_OPENAI_CONCURRENCY,
     api_call_kwargs,
     openai_price_multiplier,
 )
@@ -47,6 +46,10 @@ from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 DEFAULT_CONTEXT = Path(".powerpacks/network-import/discover/email-context/email_context.jsonl")
 DEFAULT_OUT_DIR = Path(".powerpacks/network-import/discover/email-context/markers")
 DEFAULT_MODEL = "gpt-5.2"
+# Default in-flight concurrency. Deliberately modest: this skill runs on whatever
+# OpenAI project the user has, and tier-1 projects cap at ~60 RPM. High-tier
+# accounts can raise via --concurrency / POWERPACKS_OPENAI_CONCURRENCY.
+MARKERS_DEFAULT_CONCURRENCY = 12
 
 # Closed set of marker categories. ONLY signals that help resolve a LinkedIn
 # profile -- professional, educational, location, and network. No hobbies.
@@ -438,8 +441,11 @@ async def run_async(args: argparse.Namespace) -> dict[str, Any]:
     # select_targets already applied the default --limit / --all / sample selection.
     todo = [r for r in targets if str(r.get("email")) not in done]
 
+    # Conservative default so a fresh/low-tier OpenAI project (e.g. 60 RPM) is not
+    # 429-stormed. Raise with --concurrency or POWERPACKS_OPENAI_CONCURRENCY on a
+    # high-tier account. (The indexing tier-5 default of 256 melted a tier-1 run.)
     concurrency = args.concurrency or env_or_profile_int(
-        "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=DEFAULT_OPENAI_CONCURRENCY
+        "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=MARKERS_DEFAULT_CONCURRENCY
     )
     encoder = get_encoder()
     system_prompt = SYSTEM_PROMPT + owner_prior_block(args.owner_context)
@@ -489,7 +495,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=500, help="Default mode: top-N contacts by message volume (deterministic)")
     parser.add_argument("--exclude", action="append", default=[], help="Email to exclude (repeatable)")
     parser.add_argument("--concurrency", type=int, default=0, help="In-flight slots (0 = tier profile, default 256)")
-    parser.add_argument("--max-retries", type=int, default=4, help="Retries per call on transient API errors")
+    parser.add_argument("--max-retries", type=int, default=8, help="Retries per call on transient API errors (429/5xx)")
     parser.add_argument("--owner-context", default="", help="Prior about the mailbox owner (e.g. 'Went to UCLA; from Palo Alto, CA') to disambiguate personal contacts")
     parser.add_argument("--open", action="store_true", help="Open markers.csv when done (macOS, interactive; off by default for headless runs)")
     parser.add_argument("--force", action="store_true", help="Ignore existing markers.jsonl and re-run from scratch")
