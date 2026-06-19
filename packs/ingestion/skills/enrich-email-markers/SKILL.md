@@ -105,6 +105,31 @@ Passing `--open` (above) pops it automatically on macOS. To open it manually:
 open .powerpacks/network-import/discover/email-context/markers/markers.csv
 ```
 
+## Reading results — use the schema, do not invent
+
+When you report what was found, read it **only** from the generated artifacts.
+Never summarize markers, employers, schools, names, or counts from memory or from
+the email context — every claim must come from a row that exists in the output.
+
+- **Report findings from `markers.csv`** — it is the flat, schema'd artifact: one
+  row per contact; columns are exactly `email, full_name, type, company_guess,
+  is_person, relationship, overall_confidence, canonical_name, linkedin_query,
+  <one column per marker category>, error`. A blank category cell means no marker
+  of that kind — not "unknown", do not fill it in.
+- **Report counts/cost from `manifest.json`** — `people_total`, `new_this_run`,
+  `resumed_skipped`, `errors`, `estimated_cost_usd`. If `errors > 0`, say so
+  explicitly (rate-limit failures leave error rows; the run is partial).
+- **If you read `markers.jsonl`, mind the nesting.** Each line is
+  `{email, full_name, …, usage, markers: {is_person, relationship, canonical_name,
+  markers: [ {category, value, evidence, confidence}, … ], linkedin_query,
+  overall_confidence}}`. The per-contact schema object is under the `markers` key,
+  and the marker **array** is the inner `markers.markers`. Every marker carries the
+  `evidence` phrase it came from — quote that, don't paraphrase a value into a fact.
+- **Trust the phase gate.** Step 2 refuses to run if step 1's `email_context` is
+  missing, empty, or its manifest status is not `completed` / has 0 contacts. So if
+  step 2 produced a `markers.csv`, step 1 succeeded. Do not report markers when a
+  step errored out — re-run the failed step instead.
+
 ## Cost reference
 
 - Step 1: $0 (local).
@@ -119,4 +144,4 @@ a `candidates` shortlist. To feed these markers into it, build a queue CSV with 
 before running.
 
 ---
-_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS; 2026-06-19 hardcode concurrency default to 12 and stop reading `POWERPACKS_OPENAI_CONCURRENCY` (pass `--concurrency` explicitly to raise); 2026-06-19 auto-derive mailbox-owner identity (name + addresses) from msgvault and pass it to the LLM so owner facts are never attributed to a contact (no flag)._
+_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS; 2026-06-19 hardcode concurrency default to 12 and stop reading `POWERPACKS_OPENAI_CONCURRENCY` (pass `--concurrency` explicitly to raise); 2026-06-19 auto-derive mailbox-owner identity (name + addresses) from msgvault and pass it to the LLM so owner facts are never attributed to a contact (no flag); 2026-06-19 add a phase-1 gate (step 2 aborts on missing/empty/incomplete step-1 context) and a "Reading results — use the schema" guardrail so results are reported from `markers.csv`/`manifest.json`, never fabricated._

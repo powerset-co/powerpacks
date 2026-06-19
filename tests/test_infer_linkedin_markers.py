@@ -1,3 +1,5 @@
+import argparse
+import asyncio
 import importlib.util
 import json
 import sys
@@ -51,6 +53,52 @@ class LoadOwnerIdentityTests(unittest.TestCase):
             ctx.write_text("", encoding="utf-8")
             (Path(d) / "manifest.json").write_text(json.dumps({"source": "x"}), encoding="utf-8")
             self.assertEqual(ilm.load_owner_identity(ctx), {})
+
+
+class Phase1GateTests(unittest.TestCase):
+    """Step 2 must refuse to run (before any paid call) on a failed/empty step 1."""
+
+    def _args(self, context, out_dir):
+        return argparse.Namespace(
+            context=str(context), out_dir=str(out_dir), model="gpt-5.2",
+            sample_work=0, sample_personal=0, all=False, limit=500, exclude=[],
+            concurrency=0, max_retries=8, owner_context="", force=False,
+            open=False, timeout=60, open_flag=False,
+        )
+
+    def setUp(self):
+        import os
+        os.environ.setdefault("OPENAI_API_KEY", "sk-test-not-used")  # pass the key check; gate fires before any call
+
+    def test_missing_context_file_aborts(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = self._args(Path(d) / "email_context.jsonl", d)
+            with self.assertRaises(SystemExit):
+                asyncio.run(ilm.run_async(args))
+
+    def test_empty_context_aborts(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = Path(d) / "email_context.jsonl"
+            ctx.write_text("", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                asyncio.run(ilm.run_async(self._args(ctx, d)))
+
+    def test_incomplete_step1_manifest_aborts(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = Path(d) / "email_context.jsonl"
+            ctx.write_text(json.dumps({"email": "a@b.co", "recent_emails": []}) + "\n", encoding="utf-8")
+            (Path(d) / "manifest.json").write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                asyncio.run(ilm.run_async(self._args(ctx, d)))
+
+    def test_zero_context_people_aborts(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = Path(d) / "email_context.jsonl"
+            ctx.write_text(json.dumps({"email": "a@b.co", "recent_emails": []}) + "\n", encoding="utf-8")
+            (Path(d) / "manifest.json").write_text(
+                json.dumps({"status": "completed", "people_with_context": 0}), encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                asyncio.run(ilm.run_async(self._args(ctx, d)))
 
 
 if __name__ == "__main__":
