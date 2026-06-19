@@ -41,7 +41,6 @@ from packs.indexing.lib.llm_config import (
     openai_price_multiplier,
 )
 from packs.indexing.lib.openai_stream import drain_pool
-from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 
 DEFAULT_CONTEXT = Path(".powerpacks/network-import/discover/email-context/email_context.jsonl")
 DEFAULT_OUT_DIR = Path(".powerpacks/network-import/discover/email-context/markers")
@@ -441,12 +440,11 @@ async def run_async(args: argparse.Namespace) -> dict[str, Any]:
     # select_targets already applied the default --limit / --all / sample selection.
     todo = [r for r in targets if str(r.get("email")) not in done]
 
-    # Conservative default so a fresh/low-tier OpenAI project (e.g. 60 RPM) is not
-    # 429-stormed. Raise with --concurrency or POWERPACKS_OPENAI_CONCURRENCY on a
-    # high-tier account. (The indexing tier-5 default of 256 melted a tier-1 run.)
-    concurrency = args.concurrency or env_or_profile_int(
-        "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=MARKERS_DEFAULT_CONCURRENCY
-    )
+    # Hardcoded conservative default so a fresh/low-tier OpenAI project (e.g. 60
+    # RPM) is not 429-stormed. We intentionally do NOT read the shared
+    # POWERPACKS_OPENAI_CONCURRENCY env var here (the indexing tier-5 value of
+    # 256 melted a tier-1 run). To raise it, pass --concurrency explicitly.
+    concurrency = args.concurrency or MARKERS_DEFAULT_CONCURRENCY
     encoder = get_encoder()
     system_prompt = SYSTEM_PROMPT + owner_prior_block(args.owner_context)
     client = AsyncOpenAI(api_key=api_key, timeout=args.timeout, max_retries=0)
@@ -494,7 +492,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--all", action="store_true", help="Process every contact (overrides --limit)")
     parser.add_argument("--limit", type=int, default=500, help="Default mode: top-N contacts by message volume (deterministic)")
     parser.add_argument("--exclude", action="append", default=[], help="Email to exclude (repeatable)")
-    parser.add_argument("--concurrency", type=int, default=0, help="In-flight slots (0 = tier profile, default 256)")
+    parser.add_argument("--concurrency", type=int, default=0, help="In-flight slots (0 = hardcoded default 12; raise explicitly for a high-tier OpenAI account)")
     parser.add_argument("--max-retries", type=int, default=8, help="Retries per call on transient API errors (429/5xx)")
     parser.add_argument("--owner-context", default="", help="Prior about the mailbox owner (e.g. 'Went to UCLA; from Palo Alto, CA') to disambiguate personal contacts")
     parser.add_argument("--open", action="store_true", help="Open markers.csv when done (macOS, interactive; off by default for headless runs)")
