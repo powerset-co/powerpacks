@@ -61,8 +61,8 @@ MARKER_CATEGORIES = [
     "location",                # city / region / country (current or hometown -- note which in value)
     "professional_affiliation",# industry org, conference, hackathon, open-source/community (NOT hobbies)
     "online_identifier",       # personal website, GitHub/X/other handle, phone/WhatsApp number, or alt email/domain
-    "canonical_name",          # corrected/fuller real name when context reveals it differs from display name
 ]
+# Note: canonical_name is a top-level field, not a marker category — see schema.
 
 SYSTEM_PROMPT = (
     "You are helping resolve a contact to their correct LinkedIn profile. You are "
@@ -81,9 +81,10 @@ SYSTEM_PROMPT = (
     "- professional_affiliation: industry org, professional conference, hackathon, or "
     "open-source/technical community\n"
     "- online_identifier: personal website, GitHub/X/other handle, phone or WhatsApp/"
-    "FaceTime number, or an alternate professional domain/email\n"
-    "- canonical_name: a corrected or fuller real name when the context reveals the "
-    "display name is partial/wrong (e.g. 'Amir' -> 'Amirteymour Moazami')\n\n"
+    "FaceTime number, or an alternate professional domain/email\n\n"
+    "Separately, set the top-level canonical_name field to a corrected or fuller real "
+    "name when the context reveals the display name is partial/wrong (e.g. 'Amir' -> "
+    "'Amirteymour Moazami'); otherwise leave it empty. It is NOT a marker.\n\n"
     "Each email is labeled with who sent it: 'from the contact' (their own words) or "
     "'from me' (my words to them). EVERY marker must describe THE CONTACT themselves -- "
     "never another person mentioned in an email. Facts about a third party who appears "
