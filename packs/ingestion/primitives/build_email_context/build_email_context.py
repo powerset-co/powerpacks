@@ -38,13 +38,14 @@ Outputs (one fixed directory, overwrite in place -- manifest + outputs only):
 import argparse
 import csv
 import html
+import itertools
 import json
 import re
 import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 # Reuse the exact candidate-derivation + msgvault helpers from the Gmail import
 # primitive, and the canonical role/service-address detector from the Parallel
@@ -123,7 +124,12 @@ LIMIT ?2
 
 
 def fetch_recent_rows(con: sqlite3.Connection, email: str, fetch_limit: int) -> list[sqlite3.Row]:
-    """Recent sender+recipient messages for a contact, via participant-id indexes."""
+    """Recent sender+recipient messages for a contact, via participant-id indexes.
+
+    Per-contact path, kept for ``recent_emails_for`` and the unit tests. The
+    all-contacts build path uses ``stream_contact_groups`` (one windowed query)
+    instead — see below.
+    """
     ids = [r["id"] for r in con.execute(PARTICIPANT_IDS_SQL, (email.lower(),)).fetchall()]
     if not ids:
         return []
@@ -133,6 +139,100 @@ def fetch_recent_rows(con: sqlite3.Connection, email: str, fetch_limit: int) -> 
         rows.extend(con.execute(RECENT_EMAILS_TO_RECIPIENT_SQL, (pid, fetch_limit)).fetchall())
     rows.sort(key=lambda row: str(row["at"] or ""), reverse=True)
     return rows[:fetch_limit]
+
+
+# --- All-contacts fast path: one windowed query, streamed contact-by-contact ---
+#
+# The per-contact loop above runs ~2 indexed queries per contact. On a large
+# archive that per-contact overhead dominates wall-clock. Instead we resolve all
+# candidate emails to participant ids once (a temp `cand_pid` table), then run a
+# SINGLE windowed query that takes each contact's most-recent `fetch_limit`
+# messages via ROW_NUMBER() OVER (PARTITION BY contact ORDER BY at DESC).
+#
+# Memory stays low two ways:
+#   1. The window/sort carries only lightweight columns (subject + snippet, no
+#      body blobs); `body_text` is LEFT JOINed only AFTER the rn<=K filter, so
+#      bodies are read for the kept rows only — not for every message in the sort.
+#   2. The result is ORDER BY contact, so we stream the cursor with
+#      itertools.groupby and hold just one contact's ~fetch_limit rows at a time.
+def create_candidate_pid_table(con: sqlite3.Connection, emails: Iterable[str]) -> int:
+    """(Re)build temp tables mapping each candidate email -> participant id(s).
+
+    One O(participants) scan up front, instead of a per-contact id lookup. Returns
+    the number of (email, pid) rows mapped."""
+    con.execute("DROP TABLE IF EXISTS cand_pid")
+    con.execute("DROP TABLE IF EXISTS cand_email")
+    con.execute("CREATE TEMP TABLE cand_email(email TEXT PRIMARY KEY)")
+    con.executemany(
+        "INSERT OR IGNORE INTO cand_email(email) VALUES (?)",
+        [(e.strip().lower(),) for e in emails if e and e.strip()],
+    )
+    con.execute(
+        """
+        CREATE TEMP TABLE cand_pid AS
+        SELECT ce.email AS cemail, p.id AS pid
+        FROM cand_email ce
+        JOIN participants p ON LOWER(p.email_address) = ce.email
+        """
+    )
+    con.execute("CREATE INDEX cand_pid_pid ON cand_pid(pid)")
+    return con.execute("SELECT COUNT(*) AS n FROM cand_pid").fetchone()["n"]
+
+
+# Window on lightweight columns only (subject/snippet); join body_text AFTER the
+# rn<=K filter so the big blobs are read for kept rows only. UNION (not UNION ALL)
+# dedupes a message that matches a contact on both the sender and recipient side.
+WINDOWED_CONTEXT_SQL = """
+WITH assoc AS (
+    SELECT cp.cemail AS cemail, m.id AS mid,
+           COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
+           m.conversation_id AS conversation_id, m.sender_id AS sender_id,
+           m.subject AS subject, m.snippet AS snippet
+    FROM cand_pid cp
+    JOIN messages m ON m.sender_id = cp.pid
+    WHERE m.message_type = 'email'
+      AND (m.deleted_at IS NULL OR m.deleted_at = '')
+      AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
+    UNION
+    SELECT cp.cemail, m.id,
+           COALESCE(m.sent_at, m.received_at, m.internal_date),
+           m.conversation_id, m.sender_id, m.subject, m.snippet
+    FROM cand_pid cp
+    JOIN message_recipients mr ON mr.participant_id = cp.pid
+    JOIN messages m ON m.id = mr.message_id
+    WHERE m.message_type = 'email'
+      AND (m.deleted_at IS NULL OR m.deleted_at = '')
+      AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
+),
+ranked AS (
+    SELECT assoc.*,
+           ROW_NUMBER() OVER (PARTITION BY cemail ORDER BY at DESC, mid DESC) AS rn
+    FROM assoc
+)
+SELECT r.cemail AS cemail,
+       r.at AS at,
+       r.conversation_id AS conversation_id,
+       LOWER(sp.email_address) AS sender_email,
+       r.subject AS subject,
+       r.snippet AS snippet,
+       mb.body_text AS body_text
+FROM ranked r
+LEFT JOIN participants sp ON sp.id = r.sender_id
+LEFT JOIN message_bodies mb ON mb.message_id = r.mid
+WHERE r.rn <= ?
+ORDER BY r.cemail, r.at DESC, r.mid DESC
+"""
+
+
+def stream_contact_groups(
+    con: sqlite3.Connection, fetch_limit: int
+) -> Iterator[tuple[str, list[sqlite3.Row]]]:
+    """Yield ``(contact_email, recent_rows)`` from the windowed query, one contact
+    at a time. Requires ``create_candidate_pid_table`` to have run first. Only one
+    contact's rows are materialized at a time, so memory stays bounded."""
+    cur = con.execute(WINDOWED_CONTEXT_SQL, (fetch_limit,))
+    for cemail, group in itertools.groupby(cur, key=lambda r: r["cemail"]):
+        yield cemail, list(group)
 
 
 def clean_text(value: Any, limit: int | None = None) -> str:
@@ -216,8 +316,8 @@ def account_emails(con: sqlite3.Connection) -> set[str]:
     return {str(r["ident"]).strip() for r in rows if str(r["ident"] or "").strip()}
 
 
-def recent_emails_for(
-    con: sqlite3.Connection,
+def select_emails_from_rows(
+    rows: Iterable[sqlite3.Row],
     email: str,
     per_person: int,
     snippet_chars: int,
@@ -226,7 +326,10 @@ def recent_emails_for(
     head_chars: int = DEFAULT_HEAD_CHARS,
     tail_chars: int = DEFAULT_TAIL_CHARS,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Return (emails, dropped_third_party_count).
+    """Pick a contact's context emails from already-fetched recent ``rows``.
+
+    Shared by both fetch paths (per-contact ``recent_emails_for`` and the
+    all-contacts ``stream_contact_groups``) so selection semantics are identical.
 
     Only keep messages whose sender is the contact themselves (``from_role`` =
     "contact" -> their own words) or the account owner (``from_role`` = "me" ->
@@ -245,7 +348,6 @@ def recent_emails_for(
     own email then recency. Threads are then ordered by that signal so the
     richest emails fill the ``per_person`` slots.
     """
-    rows = fetch_recent_rows(con, email, per_person * FETCH_MULTIPLIER)
     dropped = 0
     by_thread: dict[Any, tuple[Any, dict[str, Any]]] = {}
     for idx, row in enumerate(rows):
@@ -286,6 +388,28 @@ def recent_emails_for(
         kept.append(entry)
         kept_shingles.append(sh)
     return kept, dropped
+
+
+def recent_emails_for(
+    con: sqlite3.Connection,
+    email: str,
+    per_person: int,
+    snippet_chars: int,
+    accounts: set[str],
+    source: str = "snippet",
+    head_chars: int = DEFAULT_HEAD_CHARS,
+    tail_chars: int = DEFAULT_TAIL_CHARS,
+) -> tuple[list[dict[str, Any]], int]:
+    """Per-contact wrapper: fetch this contact's recent rows then select from them.
+
+    The all-contacts build path uses ``stream_contact_groups`` +
+    ``select_emails_from_rows`` directly; this wrapper preserves the single-contact
+    API used by callers and tests."""
+    rows = fetch_recent_rows(con, email, per_person * FETCH_MULTIPLIER)
+    return select_emails_from_rows(
+        rows, email, per_person, snippet_chars, accounts,
+        source=source, head_chars=head_chars, tail_chars=tail_chars,
+    )
 
 
 def derive_candidates(
@@ -371,22 +495,46 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
             queue = queue[: args.limit]
 
         accounts = account_emails(con)
-        records: list[dict[str, Any]] = []
-        with_context = 0
-        dropped_third_party = 0
-        total = len(queue)
-        print(f"[build_email_context] building context for {total} contacts…", file=sys.stderr, flush=True)
-        for i, entry in enumerate(queue, 1):
-            if i % 50 == 0 or i == total:
-                print(f"[build_email_context] {i}/{total} contacts processed", file=sys.stderr, flush=True)
+
+        # Candidate emails in queue order (deduped), so output ordering is stable.
+        emails_in_order: list[str] = []
+        entry_by_email: dict[str, dict[str, Any]] = {}
+        for entry in queue:
             email = str(entry.get("primary_email") or entry.get("handle") or "").strip().lower()
-            if not email:
+            if not email or email in entry_by_email:
                 continue
-            recent, dropped = recent_emails_for(
-                con, email, args.per_person, args.snippet_chars, accounts,
+            emails_in_order.append(email)
+            entry_by_email[email] = entry
+
+        total = len(emails_in_order)
+        print(f"[build_email_context] building context for {total} contacts…", file=sys.stderr, flush=True)
+
+        # One windowed query over all contacts; stream it contact-by-contact so
+        # only one contact's rows are in memory at a time.
+        create_candidate_pid_table(con, emails_in_order)
+        fetch_limit = args.per_person * FETCH_MULTIPLIER
+        recent_by_email: dict[str, list[dict[str, Any]]] = {}
+        dropped_third_party = 0
+        processed = 0
+        for cemail, rows in stream_contact_groups(con, fetch_limit):
+            if cemail not in entry_by_email:
+                continue
+            recent, dropped = select_emails_from_rows(
+                rows, cemail, args.per_person, args.snippet_chars, accounts,
                 source=args.source, head_chars=args.head_chars, tail_chars=args.tail_chars,
             )
+            recent_by_email[cemail] = recent
             dropped_third_party += dropped
+            processed += 1
+            if processed % 50 == 0:
+                print(f"[build_email_context] {processed}/{total} contacts processed", file=sys.stderr, flush=True)
+        print(f"[build_email_context] {total}/{total} contacts processed", file=sys.stderr, flush=True)
+
+        records: list[dict[str, Any]] = []
+        with_context = 0
+        for email in emails_in_order:
+            entry = entry_by_email[email]
+            recent = recent_by_email.get(email, [])
             if recent:
                 with_context += 1
             records.append({

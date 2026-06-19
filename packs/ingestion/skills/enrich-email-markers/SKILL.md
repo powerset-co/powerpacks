@@ -79,10 +79,12 @@ Useful flags:
 - `--sample-work N --sample-personal M` — eval mode: top-N per type (for A/B work).
 - `--owner-context "Went to UCLA; from Palo Alto, CA"` — a prior about the mailbox
   owner; used (gated, low-confidence) to disambiguate friends/classmates.
-- `--concurrency N` (default 12 — safe for tier-1 OpenAI projects ~60 RPM; raise
-  to e.g. 128–256 on a high-tier account for speed), `--model gpt-5.2`.
-  If you see OpenAI 429 rate-limit errors, lower `--concurrency` and/or raise
-  `--max-retries` (default 8).
+- `--concurrency N` (**hardcoded default 12** — safe for tier-1 OpenAI projects
+  ~60 RPM). This primitive intentionally ignores the shared
+  `POWERPACKS_OPENAI_CONCURRENCY` env var, so to go faster you must pass
+  `--concurrency` explicitly (e.g. `--concurrency 64` on a higher-tier account).
+  `--model gpt-5.2`. If you see OpenAI 429 rate-limit errors, lower
+  `--concurrency` and/or raise `--max-retries` (default 8).
 
 Writes `.powerpacks/network-import/discover/email-context/markers/markers.{jsonl,csv}`
 plus a `manifest.json` with token + cost totals.
@@ -114,4 +116,4 @@ a `candidates` shortlist. To feed these markers into it, build a queue CSV with 
 before running.
 
 ---
-_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS._
+_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS; 2026-06-19 hardcode concurrency default to 12 and stop reading `POWERPACKS_OPENAI_CONCURRENCY` (pass `--concurrency` explicitly to raise)._
