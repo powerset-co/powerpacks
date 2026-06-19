@@ -20,10 +20,23 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from packs.shared.rate_limiter import StartRateLimiter
+
 
 DEFAULT_HOST = "professional-network-data.p.rapidapi.com"
 DEFAULT_TIMEOUT = 30
 DEFAULT_CACHE_DIR = ".powerpacks/rapidapi-company-cache"
+
+# RapidAPI company-details rate limit. The 50-way fan-out below would otherwise
+# burst and trip RapidAPI's 429s (each one costs a retry + backoff), so we pace
+# request *starts* to a steady rpm via the shared StartRateLimiter — the same
+# pacer profile enrichment uses to sustain a clean 300 rpm.
+# Override with POWERPACKS_RAPIDAPI_COMPANY_MAX_RPM; 0 disables pacing.
+DEFAULT_COMPANY_MAX_RPM = float(os.getenv("POWERPACKS_RAPIDAPI_COMPANY_MAX_RPM", "300"))
+
+# Shared by the id- and slug-based fetches so their combined RapidAPI rate stays
+# within the limit.
+_RATE_LIMITER = StartRateLimiter(DEFAULT_COMPANY_MAX_RPM)
 
 
 def _api_key() -> str:
@@ -159,6 +172,7 @@ def fetch_company_details_batch(
         return results
 
     def _fetch_one(cid: str) -> tuple[str, dict[str, Any]]:
+        _RATE_LIMITER.wait()  # pace the 50-way fan-out to a steady rpm
         return cid, fetch_company_details(cid, api_key=key, host=host, timeout=timeout, cache_dir=cache_dir)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -279,6 +293,7 @@ def fetch_company_details_batch_by_slug(
         return results
 
     def _fetch_one(s: str) -> tuple[str, dict[str, Any]]:
+        _RATE_LIMITER.wait()  # pace the 50-way fan-out to a steady rpm
         return s, fetch_company_details_by_slug(s, api_key=key, host=host, timeout=timeout, cache_dir=cache_dir)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:

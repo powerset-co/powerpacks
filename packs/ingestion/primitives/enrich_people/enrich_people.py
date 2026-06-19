@@ -27,7 +27,6 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import Lock
 from typing import Any, Callable
 
 try:
@@ -43,6 +42,7 @@ try:
         stable_person_id_from_key,
     )
     from packs.shared.csv_io import CsvIO
+    from packs.shared.rate_limiter import StartRateLimiter
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
@@ -57,6 +57,7 @@ except ModuleNotFoundError:
         stable_person_id_from_key,
     )
     from packs.shared.csv_io import CsvIO
+    from packs.shared.rate_limiter import StartRateLimiter
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/enrichment/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
@@ -315,28 +316,6 @@ def indexed_profile_cache_path(cache_dir: Path | str | None, public_identifier: 
                 return Path(cache_dir) / f"{slug}.json"
         return profile_cache_path(cache_dir, public_identifier)
     return profile_cache_path(cache_dir, public_identifier)
-
-
-class StartRateLimiter:
-    def __init__(self, max_rpm: float, extra_sleep_seconds: float = 0.0) -> None:
-        intervals = []
-        if max_rpm and max_rpm > 0:
-            intervals.append(60.0 / max_rpm)
-        if extra_sleep_seconds and extra_sleep_seconds > 0:
-            intervals.append(extra_sleep_seconds)
-        self.interval = max(intervals) if intervals else 0.0
-        self.lock = Lock()
-        self.next_start = 0.0
-
-    def wait(self) -> None:
-        if self.interval <= 0:
-            return
-        with self.lock:
-            now = time.monotonic()
-            wait_for = max(0.0, self.next_start - now)
-            self.next_start = max(now, self.next_start) + self.interval
-        if wait_for > 0:
-            time.sleep(wait_for)
 
 
 def read_usable_cached_profile(cache_path: Path | None) -> dict[str, Any] | None:
