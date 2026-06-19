@@ -79,7 +79,10 @@ Useful flags:
 - `--sample-work N --sample-personal M` — eval mode: top-N per type (for A/B work).
 - `--owner-context "Went to UCLA; from Palo Alto, CA"` — a prior about the mailbox
   owner; used (gated, low-confidence) to disambiguate friends/classmates.
-- `--concurrency 256` (default from tier profile), `--model gpt-5.2`.
+- `--concurrency N` (default 12 — safe for tier-1 OpenAI projects ~60 RPM; raise
+  to e.g. 128–256 on a high-tier account for speed), `--model gpt-5.2`.
+  If you see OpenAI 429 rate-limit errors, lower `--concurrency` and/or raise
+  `--max-retries` (default 8).
 
 Writes `.powerpacks/network-import/discover/email-context/markers/markers.{jsonl,csv}`
 plus a `manifest.json` with token + cost totals.

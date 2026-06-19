@@ -79,11 +79,14 @@ _QUOTE_CUT = re.compile(
     r"from:\s.+|sent from my .+|get outlook for .+)\s*$"
 )
 
-# Pull a person's most recent emails where they are the sender OR a recipient,
-# carrying the actual sender so we can keep only content the contact is genuinely
-# associated with (sent by the contact, or sent by the account owner to them).
-# Indexed on participants.email_address; one small query per candidate email.
-RECENT_EMAILS_SQL = """
+# Resolve a contact's participant id(s) up front so the message lookups can use
+# the sender_id / message_recipients.participant_id indexes directly. The old
+# `sender = ? OR EXISTS(recipients…)` shape made SQLite scan every email per
+# contact (idx_messages_type) and run a correlated subquery per row — minutes
+# per all-contact run on a large archive. Credit: Jake Zeller diagnosed this.
+PARTICIPANT_IDS_SQL = "SELECT id FROM participants WHERE LOWER(email_address) = ?"
+
+_RECENT_EMAILS_SELECT = """
 SELECT
     COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
     m.conversation_id,
@@ -91,23 +94,45 @@ SELECT
     m.subject,
     m.snippet,
     mb.body_text
+"""
+# Emails the contact SENT — index-direct on messages.sender_id.
+RECENT_EMAILS_FROM_SENDER_SQL = _RECENT_EMAILS_SELECT + """
 FROM messages m
 LEFT JOIN participants sp ON sp.id = m.sender_id
 LEFT JOIN message_bodies mb ON mb.message_id = m.id
 WHERE m.message_type = 'email'
   AND (m.deleted_at IS NULL OR m.deleted_at = '')
   AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-  AND (
-        sp.email_address = ?1
-     OR EXISTS (
-          SELECT 1 FROM message_recipients mr
-          JOIN participants rp ON rp.id = mr.participant_id
-          WHERE mr.message_id = m.id AND rp.email_address = ?1
-        )
-  )
+  AND m.sender_id = ?1
 ORDER BY at DESC
 LIMIT ?2
 """
+# Emails the contact RECEIVED — index-direct on message_recipients.participant_id.
+RECENT_EMAILS_TO_RECIPIENT_SQL = _RECENT_EMAILS_SELECT + """
+FROM message_recipients mr
+JOIN messages m ON m.id = mr.message_id
+LEFT JOIN participants sp ON sp.id = m.sender_id
+LEFT JOIN message_bodies mb ON mb.message_id = m.id
+WHERE m.message_type = 'email'
+  AND (m.deleted_at IS NULL OR m.deleted_at = '')
+  AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
+  AND mr.participant_id = ?1
+ORDER BY at DESC
+LIMIT ?2
+"""
+
+
+def fetch_recent_rows(con: sqlite3.Connection, email: str, fetch_limit: int) -> list[sqlite3.Row]:
+    """Recent sender+recipient messages for a contact, via participant-id indexes."""
+    ids = [r["id"] for r in con.execute(PARTICIPANT_IDS_SQL, (email.lower(),)).fetchall()]
+    if not ids:
+        return []
+    rows: list[sqlite3.Row] = []
+    for pid in ids:
+        rows.extend(con.execute(RECENT_EMAILS_FROM_SENDER_SQL, (pid, fetch_limit)).fetchall())
+        rows.extend(con.execute(RECENT_EMAILS_TO_RECIPIENT_SQL, (pid, fetch_limit)).fetchall())
+    rows.sort(key=lambda row: str(row["at"] or ""), reverse=True)
+    return rows[:fetch_limit]
 
 
 def clean_text(value: Any, limit: int | None = None) -> str:
@@ -220,7 +245,7 @@ def recent_emails_for(
     own email then recency. Threads are then ordered by that signal so the
     richest emails fill the ``per_person`` slots.
     """
-    rows = con.execute(RECENT_EMAILS_SQL, (email, per_person * FETCH_MULTIPLIER)).fetchall()
+    rows = fetch_recent_rows(con, email, per_person * FETCH_MULTIPLIER)
     dropped = 0
     by_thread: dict[Any, tuple[Any, dict[str, Any]]] = {}
     for idx, row in enumerate(rows):
@@ -349,7 +374,11 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
         records: list[dict[str, Any]] = []
         with_context = 0
         dropped_third_party = 0
-        for entry in queue:
+        total = len(queue)
+        print(f"[build_email_context] building context for {total} contacts…", file=sys.stderr, flush=True)
+        for i, entry in enumerate(queue, 1):
+            if i % 50 == 0 or i == total:
+                print(f"[build_email_context] {i}/{total} contacts processed", file=sys.stderr, flush=True)
             email = str(entry.get("primary_email") or entry.get("handle") or "").strip().lower()
             if not email:
                 continue
