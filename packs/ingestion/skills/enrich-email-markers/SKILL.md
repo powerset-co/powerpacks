@@ -8,7 +8,7 @@ description: Mine local Gmail/msgvault emails for LinkedIn-resolution markers vi
 Use this for `$enrich-email-markers`, "gmail enrichment via LLM", or "show me the
 markers/context we'd send to an LLM for a contact".
 
-Two local-first primitives, run in order:
+Three steps, run in order:
 
 1. **`build_email_context`** — local only, no spend. Reads your msgvault, and for
    each contact (the same set we'd send to LinkedIn resolution) pulls their recent
@@ -16,8 +16,14 @@ Two local-first primitives, run in order:
 2. **`infer_linkedin_markers`** — LLM step (OpenAI). Classifies that context into
    LinkedIn-resolution markers (employers, title, school, location, phone/handles)
    + a `linkedin_query`, with evidence + confidence per marker.
+3. **A/B resolution** — proves the markers help. Resolves the same contacts on
+   LinkedIn **twice** (without the markers as context, then with) and diffs the two
+   runs, so the lift is attributable to the markers. This is the **paid Parallel
+   step** — it runs as the next step automatically, but you MUST confirm the
+   spend estimate first (see Step 3).
 
-Output to review: **`markers.csv`** (one row per contact) and `email_context.csv`.
+Outputs to review: **`markers.csv`** (markers), then **`ab_comparison.csv`** /
+**`ab_summary.json`** (the resolution lift from attaching those markers).
 
 ## Contract / privacy
 
@@ -136,13 +142,54 @@ the email context — every claim must come from a row that exists in the output
 - Step 1: $0 (local).
 - Step 2: ~$0.003/contact (gpt-5.2, flex). e.g. ~$1.50 for ~500 contacts. The
   manifest reports exact prompt/completion tokens and estimated USD.
+- Step 3: `contacts_queued × 2` Parallel lookups (control + treatment arm) at the
+  processor price (core2x = $0.05/lookup default). e.g. ~$41 for 414 contacts.
+  Confirm this estimate with the user before running — it is the only paid step
+  beyond the LLM in Step 2.
 
-## Optional next step — LinkedIn resolution
+## Step 3 — A/B resolution (runs as the next step; paid)
 
-`resolve_linkedin_queue` accepts a `context` column in its queue CSV and now returns
-a `candidates` shortlist. To feed these markers into it, build a queue CSV with a
-`context` column (the `linkedin_query` + key markers) — paid Parallel.ai step, ask
-before running.
+After markers are written, continue automatically into the A/B resolution. It
+isolates one variable — whether the mined markers are attached as `context` — so
+any change in resolution is attributable to the markers.
+
+**3a. Build the two queues (local, free).** One row per contact with usable
+markers; control gets a blank `context`, treatment gets the markers.
+
+```bash
+uv run --project . python packs/ingestion/primitives/build_resolution_queue/build_resolution_queue.py
+```
+
+Writes `…/email-context/ab/queue_control.csv` and `queue_context.csv` (+ manifest
+with `contacts_queued`).
+
+**3b. Confirm the spend, then resolve both arms.** This is the only paid part.
+Estimate first and confirm with the user before running — `contacts_queued × 2`
+Parallel lookups at the processor price (core $0.025, core2x $0.05, pro $0.10 per
+lookup). E.g. 414 contacts × 2 = 828 lookups ≈ $41 on core2x. Do **not** pass
+`--approve-spend` until the user has approved the estimate.
+
+```bash
+# control arm (no markers)
+uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
+  --input  .powerpacks/network-import/discover/email-context/ab/queue_control.csv \
+  --output-dir .powerpacks/network-import/discover/email-context/ab/control
+# treatment arm (with markers as context)
+uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
+  --input  .powerpacks/network-import/discover/email-context/ab/queue_context.csv \
+  --output-dir .powerpacks/network-import/discover/email-context/ab/treatment
+```
+
+**3c. Diff the arms (local, free).**
+
+```bash
+uv run --project . python packs/ingestion/primitives/compare_resolution_ab/compare_resolution_ab.py \
+  --baseline .powerpacks/network-import/discover/email-context/ab/control/linkedin_resolutions.csv \
+  --context  .powerpacks/network-import/discover/email-context/ab/treatment/linkedin_resolutions.csv --open
+```
+
+Report the lift from `ab_summary.json` (newly_found / lost / url_changed /
+confidence deltas) — the proof that the markers improved resolution.
 
 ---
-_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS; 2026-06-19 hardcode concurrency default to 12 and stop reading `POWERPACKS_OPENAI_CONCURRENCY` (pass `--concurrency` explicitly to raise); 2026-06-19 auto-derive mailbox-owner identity (name + addresses) from msgvault and pass it to the LLM so owner facts are never attributed to a contact (no flag); 2026-06-19 add a phase-1 gate (step 2 aborts on missing/empty/incomplete step-1 context) and a "Reading results — use the schema" guardrail so results are reported from `markers.csv`/`manifest.json`, never fabricated; 2026-06-19 simplify marker schema — drop `is_person`/`relationship`, merge `current_employer`+`past_employer` into one `employers` list column (tagged current/past), and blank `company_guess` for personal/free-provider domains; 2026-06-19 drop the duplicate `canonical_name` marker category (it stays a single top-level column)._
+_Created 2026-06-16. Changelog: 2026-06-16 initial version (body-mode default, role-mailbox filter, owner-context prior); 2026-06-17 add `--open` to auto-open markers.csv on macOS; 2026-06-19 hardcode concurrency default to 12 and stop reading `POWERPACKS_OPENAI_CONCURRENCY` (pass `--concurrency` explicitly to raise); 2026-06-19 auto-derive mailbox-owner identity (name + addresses) from msgvault and pass it to the LLM so owner facts are never attributed to a contact (no flag); 2026-06-19 add a phase-1 gate (step 2 aborts on missing/empty/incomplete step-1 context) and a "Reading results — use the schema" guardrail so results are reported from `markers.csv`/`manifest.json`, never fabricated; 2026-06-19 simplify marker schema — drop `is_person`/`relationship`, merge `current_employer`+`past_employer` into one `employers` list column (tagged current/past), and blank `company_guess` for personal/free-provider domains; 2026-06-19 drop the duplicate `canonical_name` marker category (it stays a single top-level column); 2026-06-20 add Step 3 — the A/B resolution now runs automatically as the next step (build_resolution_queue builds control+treatment queues, resolve_linkedin_queue runs both arms, compare_resolution_ab reports the lift), gated by a one-time Parallel spend confirmation._
