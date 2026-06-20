@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.8.0...powerpacks-console-v0.9.0) (2026-06-20)
+
+
+### Features
+
+* **console:** settings page + per-source Gmail status ([b3984d4](https://github.com/powerset-co/powerpacks/commit/b3984d4f8722ddd1d3394b5cde6ac1cc7aaee2ae))
+
 ## [0.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.7.0...powerpacks-console-v0.8.0) (2026-06-19)
 
 
