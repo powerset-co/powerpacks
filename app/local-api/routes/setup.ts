@@ -211,6 +211,76 @@ function linkedinSourceStatus() {
   };
 }
 
+// Cheap Gmail source status — the twin of linkedinSourceStatus(). Reads only the
+// discover/import manifest.json files plus the accounts.json record. NO DuckDB
+// opens, NO people.csv scans, NO msgvault subprocess. Modal owns the heavy index
+// math; this endpoint just surfaces "connected + manifest counts" or "not linked".
+function gmailSourceStatus() {
+  const accounts = readJsonSync(accountsPath) || {};
+  const record = accountRecords(accounts).gmail || {};
+  const config = record.config && typeof record.config === "object" ? record.config as Record<string, any> : {};
+  const linked = Boolean(record.linked || record.status === "linked");
+  const skipped = Boolean(record.skipped || record.status === "skipped");
+  const artifacts = Array.isArray(record.artifacts) ? record.artifacts.map(String) : [];
+  const discoverManifestPath = path.join(powerpacksStateRoot, "network-import", "discover", "gmail", "manifest.json");
+  const importManifestPath = path.join(powerpacksStateRoot, "network-import", "import", "gmail", "manifest.json");
+  const discoverManifest = readJsonSync(discoverManifestPath) || {};
+  const importState = readJsonSync(importManifestPath) || {};
+
+  const children = Array.isArray(discoverManifest.children) ? discoverManifest.children : [];
+  const accountsList = children
+    .filter((child: any) => child && typeof child === "object")
+    .map((child: any) => ({
+      email: String(child.account_email || ""),
+      contacts: numberValue(child.contacts),
+      status: String(child.status || ""),
+    }))
+    .filter((child: { email: string }) => child.email);
+
+  const contacts = firstNumber(
+    discoverManifest.contacts,
+    accountsList.reduce((sum: number, account: { contacts: number }) => sum + account.contacts, 0),
+  );
+  const candidates = firstNumber(importState.stats?.candidates, contacts);
+  const enriched = firstNumber(importState.stats?.people);
+
+  return {
+    source: {
+      id: "gmail",
+      label: SETUP_SOURCE_LABELS.gmail,
+      status: skipped ? "skipped" : linked ? "linked" : String(record.status || "unlinked"),
+      linked,
+      skipped,
+      usernames: Array.isArray(record.usernames) ? record.usernames.map(String) : [],
+      artifacts,
+      notes: record.notes || "",
+      lastCheckedAt: record.last_checked_at || record.lastCheckedAt || null,
+      lastSuccessAt: record.last_success_at || record.lastSuccessAt || null,
+      config,
+    },
+    discovery: {
+      status: String(discoverManifest.status || (linked ? "ready" : "not_linked")),
+      contacts,
+      accounts: accountsList,
+      updatedAt: discoverManifest.updated_at || fileSummary(discoverManifestPath).updatedAt || null,
+      artifactDir: ".powerpacks/network-import/discover/gmail",
+    },
+    enrichment: {
+      id: "gmail",
+      label: SETUP_SOURCE_LABELS.gmail,
+      status: String(importState.status || "unknown"),
+      candidates,
+      enriched,
+      skipped: firstNumber(importState.stats?.not_found, importState.stats?.skipped, importState.stats?.failed),
+      matched: 0,
+      unresolved: 0,
+      estimatedCostUsd: null,
+      blocked: String(importState.status || "").startsWith("blocked"),
+      updatedAt: skipped ? null : importState.updated_at || null,
+    },
+  };
+}
+
 function ledgerStatus(filePath: string, fallback: string) {
   const ledger = readJsonSync(filePath) || {};
   const block = ledger.current_block && typeof ledger.current_block === "object" ? ledger.current_block : null;
@@ -1310,6 +1380,11 @@ export async function handleSetupRoutes(req: any, res: any, url: URL): Promise<b
 
   if (url.pathname === "/local-api/sources/linkedin/status") {
     sendJson(res, linkedinSourceStatus());
+    return true;
+  }
+
+  if (url.pathname === "/local-api/sources/gmail/status") {
+    sendJson(res, gmailSourceStatus());
     return true;
   }
 
