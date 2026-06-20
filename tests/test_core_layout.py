@@ -30,6 +30,13 @@ class CoreLayoutTests(unittest.TestCase):
             path.name for path in (ROOT / "packs/indexing/skills").iterdir() if path.is_dir()
         )
         self.assertEqual(indexing_pack, ["build-local-search-index"])
+        ingestion_pack = sorted(
+            path.name for path in (ROOT / "packs/ingestion/skills").iterdir() if path.is_dir()
+        )
+        self.assertEqual(
+            ingestion_pack,
+            ["import-gmail-network", "import-linkedin-network", "import-twitter-network", "ingestion-onboarding", "linkedin-sync-csv", "linkedin-sync-mcp", "local-msg-vault", "msgvault", "onboard", "setup"],
+        )
 
     def test_pack_skills_have_codex_frontmatter(self) -> None:
         for path in sorted((ROOT / "packs").glob("*/skills/*/SKILL.md")):
@@ -65,6 +72,7 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "search-network" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())
             self.assertTrue((skills_dir / "search-network" / "powerpacks" / "pyproject.toml").exists())
             self.assertIn(

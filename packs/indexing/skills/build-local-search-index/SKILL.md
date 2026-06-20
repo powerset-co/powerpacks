@@ -1,55 +1,51 @@
 ---
 name: build-local-search-index
-description: Build deterministic local search-index artifacts from the canonical network-import people.csv. Use when the user asks to prepare or inspect a local indexing pipeline without uploads, embeddings, LLM, Postgres, Supabase, or TurboPuffer calls.
+description: Build deterministic local search-index artifacts from the canonical Powerpacks pipeline files. Use when the user asks to prepare or inspect a local indexing pipeline without uploads, embeddings, LLM, Postgres, Supabase, or TurboPuffer calls.
 ---
 
 # Build Local Search Index
 
-Build local indexing artifacts from canonical Powerpacks people data.
+Build local indexing artifacts from the canonical Powerpacks people data.
+
+The file DAG source of truth is `docs/pipeline-file-dag.md` and
+`packs/ingestion/pipeline_paths.py`. Do not invent alternate index input/output
+paths.
 
 ## Canonical input
 
-Use only:
+The indexer automatically uses:
 
-```text
-.powerpacks/network-import/merged/people.csv
-```
+1. `.powerpacks/network-import/enrichment/current/people_enriched.csv` when present
+2. `.powerpacks/network-import/merged/people.csv` otherwise
 
-If the file is missing, create it with the ingestion merge primitive:
+If both are missing, create the merge output first:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run
 ```
 
-Do not use legacy merged filenames for indexing.
-
 ## Run locally
 
-Plan:
+Plan (read-only):
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --run-id local-run
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan
 ```
 
-Run:
+Run the canonical current index build:
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --run-id local-run
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --force
 ```
 
-Continue a partial run:
+Continue/status use the canonical current ledger by default:
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue --ledger .powerpacks/search-index/<run-id>/ledger.json
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py status
 ```
 
-Status:
-
-```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py status --ledger .powerpacks/search-index/<run-id>/ledger.json
-```
-
-Artifacts are written under `.powerpacks/search-index/<run-id>/`.
+Artifacts are written under `.powerpacks/search-index/current/`.
 
 ## Constraints
 

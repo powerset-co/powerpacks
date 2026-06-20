@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from packs.ingestion.pipeline_paths import ENRICHMENT_LEDGER_JSON, ENRICHMENT_RUN_ID, MERGED_PEOPLE_CSV, NETWORK_IMPORT_DIR, PROFILE_CACHE_DIR
     from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
     from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
     from packs.ingestion.schemas.people_schema import (
@@ -38,6 +39,7 @@ try:
     )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.ingestion.pipeline_paths import ENRICHMENT_LEDGER_JSON, ENRICHMENT_RUN_ID, MERGED_PEOPLE_CSV, NETWORK_IMPORT_DIR, PROFILE_CACHE_DIR
     from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
     from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
     from packs.ingestion.schemas.people_schema import (
@@ -48,8 +50,8 @@ except ModuleNotFoundError:
         parse_jsonish,
     )
 
-DEFAULT_LEDGER = Path(".powerpacks/network-import/enrichment/import-run.json")
-DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
+DEFAULT_LEDGER = ENRICHMENT_LEDGER_JSON
+DEFAULT_BASE_DIR = NETWORK_IMPORT_DIR
 RAPIDAPI_BASE_URL = "https://professional-network-data.p.rapidapi.com"
 PIPELINE_STEPS = ["prepare_queue", "enrich_linkedin", "merge_people"]
 
@@ -648,7 +650,8 @@ def run_until_blocked_or_done(ledger_path: Path) -> int:
 
 
 def command_run(args: argparse.Namespace) -> int:
-    run_id = args.run_id or f"enrich-{sha(str(args.input) + ':' + now_iso())}"
+    input_csv = Path(args.input or MERGED_PEOPLE_CSV)
+    run_id = args.run_id or ENRICHMENT_RUN_ID
     run_dir = Path(args.output_dir) / "enrichment" / run_id
     ledger_path = Path(args.ledger)
     if ledger_path.exists() and not args.force_ledger:
@@ -666,7 +669,7 @@ def command_run(args: argparse.Namespace) -> int:
         "run_dir": str(run_dir),
         "ledger": str(ledger_path),
         "input": {
-            "input_csv": str(Path(args.input)),
+            "input_csv": str(input_csv),
             "limit": args.limit,
             "force": args.force,
             "profile_cache_dir": str(Path(args.profile_cache_dir)),
@@ -736,15 +739,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified people enrichment flow for shared people schema CSVs")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
-    run.add_argument("--input", required=True, help="Input shared people schema CSV, e.g. merged people CSV")
-    run.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
-    run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    run.add_argument("--run-id")
+    run.add_argument("--input", default=str(MERGED_PEOPLE_CSV), help=argparse.SUPPRESS)
+    run.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR), help=argparse.SUPPRESS)
+    run.add_argument("--ledger", default=str(DEFAULT_LEDGER), help=argparse.SUPPRESS)
+    run.add_argument("--run-id", help=argparse.SUPPRESS)
     run.add_argument("--force", action="store_true", help="Re-enrich rows even if they appear complete")
     run.add_argument("--force-ledger", action="store_true", help="Overwrite an active ledger")
-    run.add_argument("--profile-cache-dir", default=str(DEFAULT_BASE_DIR / "profile_cache_v2"))
+    run.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR), help=argparse.SUPPRESS)
     run.add_argument("--refresh-cache", action="store_true", help="Force RapidAPI calls even when a successful local cache entry exists")
-    run.add_argument("--company-corpus-jsonl", action="append", default=[])
+    run.add_argument("--company-corpus-jsonl", action="append", default=[], help=argparse.SUPPRESS)
     run.add_argument("--sleep-seconds", type=float, default=0.0)
     run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
     run.set_defaults(func=command_run)

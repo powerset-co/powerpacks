@@ -28,6 +28,13 @@ from packs.indexing.lib.io import emit_json, read_jsonl, write_json, write_jsonl
 from packs.indexing.lib.ledger import load_ledger, mark_step, save_ledger  # noqa: E402
 from packs.indexing.lib.people import build_people_records, build_unified_profiles, flatten_people  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
+from packs.ingestion.pipeline_paths import (  # noqa: E402
+    INDEX_LEDGER_JSON,
+    INDEX_RUN_ID,
+    INDEX_INPUT_CANDIDATES,
+    SEARCH_INDEX_DIR,
+    canonical_index_input,
+)
 
 STEPS = [
     "flatten_people",
@@ -279,31 +286,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd")
     plan = sub.add_parser("plan")
-    plan.add_argument("--input", required=True)
-    plan.add_argument("--output-dir", required=True)
-    plan.add_argument("--run-id", required=True)
+    plan.add_argument("--input", default=None, help=argparse.SUPPRESS)
+    plan.add_argument("--output-dir", default=str(SEARCH_INDEX_DIR), help=argparse.SUPPRESS)
+    plan.add_argument("--run-id", default=INDEX_RUN_ID, help=argparse.SUPPRESS)
     run = sub.add_parser("run")
-    run.add_argument("--input", required=True)
-    run.add_argument("--output-dir", required=True)
-    run.add_argument("--run-id", required=True)
+    run.add_argument("--input", default=None, help=argparse.SUPPRESS)
+    run.add_argument("--output-dir", default=str(SEARCH_INDEX_DIR), help=argparse.SUPPRESS)
+    run.add_argument("--run-id", default=INDEX_RUN_ID, help=argparse.SUPPRESS)
     run.add_argument("--default-operator-id", default=None)
     run.add_argument("--limit", type=int)
     run.add_argument("--force", action="store_true")
     cont = sub.add_parser("continue")
-    cont.add_argument("--ledger", required=True)
+    cont.add_argument("--ledger", default=str(INDEX_LEDGER_JSON), help=argparse.SUPPRESS)
     status = sub.add_parser("status")
-    status.add_argument("--ledger", required=True)
+    status.add_argument("--ledger", default=str(INDEX_LEDGER_JSON), help=argparse.SUPPRESS)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     if args.cmd == "plan":
+        input_path = Path(args.input) if args.input else canonical_index_input()
         rd = run_dir(Path(args.output_dir), args.run_id)
         ps = paths(rd)
         emit_json(
             {
                 "run_dir": str(rd),
+                "input": str(input_path),
+                "canonical_input_candidates": [str(path) for path in INDEX_INPUT_CANDIDATES],
                 "artifacts": {key: str(value) for key, value in ps.items()},
                 "steps": STEPS,
                 "dvc_scope_matrix": "ported local deterministic stages only",
@@ -312,6 +322,7 @@ def main() -> None:
         )
         return
     if args.cmd == "run":
+        input_path = Path(args.input) if args.input else canonical_index_input()
         rd = run_dir(Path(args.output_dir), args.run_id)
         if rd.exists():
             if args.force:
@@ -320,7 +331,7 @@ def main() -> None:
                 ledger_path = paths(rd)["ledger"]
                 raise SystemExit(f"run directory already exists: {rd}. Use continue --ledger {ledger_path} or rerun with --force.")
         rd.mkdir(parents=True, exist_ok=True)
-        ledger = default_ledger(Path(args.input), rd, args.run_id, args.default_operator_id, args.limit)
+        ledger = default_ledger(input_path, rd, args.run_id, args.default_operator_id, args.limit)
         ledger_path = paths(rd)["ledger"]
         save_ledger(ledger_path, ledger)
         ledger = execute(ledger_path)

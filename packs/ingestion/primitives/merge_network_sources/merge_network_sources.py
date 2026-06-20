@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from packs.ingestion.pipeline_paths import MERGE_MANIFEST_JSON, MERGE_REVIEW_CSV, MERGED_DIR, MERGED_PEOPLE_CSV, POWERPACKS_DIR
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         normalize_people_row,
@@ -30,6 +31,7 @@ try:
     )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.ingestion.pipeline_paths import MERGE_MANIFEST_JSON, MERGE_REVIEW_CSV, MERGED_DIR, MERGED_PEOPLE_CSV, POWERPACKS_DIR
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         normalize_people_row,
@@ -37,7 +39,7 @@ except ModuleNotFoundError:
         extract_public_identifier,
     )
 
-DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
+DEFAULT_OUTPUT_DIR = MERGED_DIR
 MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources", "merged_row_count", "needs_review"]
 REVIEW_COLUMNS = ["left_id", "right_id", "left_name", "right_name", "similarity", "left_sources", "right_sources", "reason"]
 
@@ -62,6 +64,11 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
         writer.writeheader()
         for row in rows:
             writer.writerow({col: row.get(col, "") for col in fieldnames})
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def sha(value: str, n: int = 12) -> str:
@@ -238,8 +245,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         merged_rows.append(normalized)
     review = similar_pairs(merged_rows, args.name_threshold)
     output_dir = Path(args.output_dir)
-    output = output_dir / "people.csv"
+    output = output_dir / MERGED_PEOPLE_CSV.name
+    review_output = output_dir / MERGE_REVIEW_CSV.name
+    manifest_output = output_dir / MERGE_MANIFEST_JSON.name
     write_csv(output, MERGED_COLUMNS, merged_rows)
+    write_csv(review_output, REVIEW_COLUMNS, review)
     manifest_payload = {
         "created_at": now_iso(),
         "inputs": per_file,
@@ -248,7 +258,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         "linkedin_groups": len(groups),
         "review_pairs": len(review),
         "output": str(output),
+        "review_output": str(review_output),
     }
+    write_json(manifest_output, manifest_payload)
+    manifest_payload["manifest"] = str(manifest_output)
     emit({"status": "completed", **manifest_payload})
     return 0
 
@@ -257,9 +270,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Merge/dedupe local network import people artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
-    run.add_argument("--input", action="append", help="Input provider-neutral people.csv or messages contacts.csv; repeatable. Defaults to discovery under .powerpacks")
-    run.add_argument("--base-dir", default=".powerpacks")
-    run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    run.add_argument("--input", action="append", help=argparse.SUPPRESS)
+    run.add_argument("--base-dir", default=str(POWERPACKS_DIR), help=argparse.SUPPRESS)
+    run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help=argparse.SUPPRESS)
     run.add_argument("--name-threshold", type=float, default=0.92)
     run.set_defaults(func=cmd_run)
     return parser

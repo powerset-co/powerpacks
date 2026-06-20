@@ -44,12 +44,13 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 | [`search-network`](packs/search/skills/search-network/SKILL.md) | `$search-network <query>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. |
 | [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
 | [`extract-search-query`](packs/search/skills/extract-search-query/SKILL.md) | called by `search-network` | Sub-skill for headless query decomposition. |
-| [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds deterministic local indexing artifacts from `.powerpacks/network-import/merged/people.csv` under `.powerpacks/search-index/<run-id>/` with no remote calls. |
+| [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds deterministic local indexing artifacts from canonical `.powerpacks` pipeline inputs under `.powerpacks/search-index/current/` with no remote calls. |
 
 ### Setup
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
+| [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | Full local onboarding/setup flow using the canonical `.powerpacks` pipeline DAG: source setup, merge, optional enrichment, and local index build. |
 | [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: login, setup status, Auth0 identity, MCP install, env provisioning, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
 | [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$local-msg-vault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
 
@@ -167,6 +168,7 @@ codex mcp get powerset-search
 # 5. Inside the agent, run what you need:
 $search-network senior infra eng at fintech
 $search-company stripe-like fintech infra companies
+$setup                           # full local ingestion/index setup
 $powerset login                   # provisions .env from GCP Secret Manager
 $import-contacts                  # guided iMessage + WhatsApp import harness
 $import-whatsapp                  # isolated WhatsApp sync test via wacli

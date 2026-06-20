@@ -36,5 +36,7 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py pl
 
 It tracks non-secret state in `.powerpacks/ingestion/accounts.json`.
 
+Pipeline file paths are centralized in `docs/pipeline-file-dag.md` and `packs/ingestion/pipeline_paths.py`. Use the canonical `.powerpacks/` paths there; do not invent alternate stage artifact paths.
+
 Never store tokens/passwords/cookies there. Only store usernames, linked status,
 artifact paths, and notes.

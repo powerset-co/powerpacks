@@ -144,10 +144,12 @@ exist unless explicitly asked.
     on demand, not on every bootup.
   - Powerset login: required for `sync_powerset_candidates`, `upload`. Check
     via `uv run --project . python packs/powerset/primitives/auth/auth.py whoami`.
-- **Indexing pack** (build-local-search-index): local files only. It consumes
-  `.powerpacks/network-import/merged/people.csv` and writes
-  `.powerpacks/search-index/<run-id>/`; do not run LLM, network, Supabase,
-  Postgres, or TurboPuffer calls for this workflow.
+- **Setup/indexing packs** (`setup`, `build-local-search-index`): local files
+  only. Use `docs/pipeline-file-dag.md` / `packs/ingestion/pipeline_paths.py`
+  as the path source of truth. Normal runs consume canonical `.powerpacks`
+  inputs and write `.powerpacks/search-index/current/`; do not invent
+  `--input`, `--output-dir`, `--ledger`, or `--run-id` paths, and do not run
+  LLM, network, Supabase, Postgres, or TurboPuffer calls for the index build.
 - **Search pack** (search-network, search-company): requires `.env` with
   TurboPuffer + Postgres credentials. If `.env` is present, run the search
   primitive directly and use its error to diagnose; use the doctor only if env

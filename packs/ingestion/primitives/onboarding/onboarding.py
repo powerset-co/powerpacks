@@ -17,9 +17,23 @@ from typing import Any
 
 try:
     from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, update_channel
+    from packs.ingestion.pipeline_paths import (
+        ENRICHED_PEOPLE_CSV,
+        MERGED_PEOPLE_CSV,
+        MESSAGES_CONTACTS_CSV,
+        NETWORK_IMPORT_DIR,
+        ONBOARDING_LEDGER_JSON,
+    )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.accounts import DEFAULT_ACCOUNTS_PATH, load_registry, update_channel
+    from packs.ingestion.pipeline_paths import (
+        ENRICHED_PEOPLE_CSV,
+        MERGED_PEOPLE_CSV,
+        MESSAGES_CONTACTS_CSV,
+        NETWORK_IMPORT_DIR,
+        ONBOARDING_LEDGER_JSON,
+    )
 
 
 def emit(payload: Any) -> None:
@@ -110,13 +124,13 @@ def cmd_check(args: argparse.Namespace) -> int:
                 updates.append(f"gmail:{email}")
 
     # Messages: mark linked if local contacts artifact exists.
-    if artifact_exists(".powerpacks/messages/contacts.csv"):
-        update_channel("messages", path=path, success=True, artifact=".powerpacks/messages/contacts.csv")
+    if artifact_exists(str(MESSAGES_CONTACTS_CSV)):
+        update_channel("messages", path=path, success=True, artifact=str(MESSAGES_CONTACTS_CSV))
         updates.append("messages:contacts.csv")
 
     # LinkedIn CSV / Twitter: infer from provider-neutral local import artifacts.
     for channel_dir, registry_channel in (("linkedin", "linkedin_csv"), ("twitter", "twitter")):
-        for run_dir in Path(f".powerpacks/network-import/{channel_dir}").glob("*"):
+        for run_dir in (NETWORK_IMPORT_DIR / channel_dir).glob("*"):
             p = run_dir / "people.csv"
             if p.exists():
                 update_channel(registry_channel, path=path, success=True, artifact=str(p))
@@ -136,7 +150,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 
-DEFAULT_ONBOARDING_LEDGER = Path(".powerpacks/ingestion/onboarding-run.json")
+DEFAULT_ONBOARDING_LEDGER = ONBOARDING_LEDGER_JSON
 ONBOARDING_FLOW = ["messages", "gmail", "linkedin_csv", "linkedin_mcp", "twitter", "merge", "enrich"]
 YES = {"y", "yes", "true", "1", "ok", "sure"}
 NO = {"n", "no", "false", "0", "skip", "s"}
@@ -284,14 +298,14 @@ def next_prompt(state: dict[str, Any], accounts_path: Path, ledger_path: Path) -
 def action_for_yes(step: str, state: dict[str, Any], accounts_path: Path, ledger_path: Path) -> dict[str, Any]:
     state["answers"][step] = "yes"
     if step == "messages":
-        if artifact_exists(".powerpacks/messages/contacts.csv"):
-            update_channel("messages", path=accounts_path, success=True, artifact=".powerpacks/messages/contacts.csv")
+        if artifact_exists(str(MESSAGES_CONTACTS_CSV)):
+            update_channel("messages", path=accounts_path, success=True, artifact=str(MESSAGES_CONTACTS_CSV))
             advance(state)
             payload = next_prompt(state, accounts_path, ledger_path)
             payload["completed_action"] = {
                 "step": "messages",
                 "message": "Messages contacts already imported.",
-                "artifact": ".powerpacks/messages/contacts.csv",
+                "artifact": str(MESSAGES_CONTACTS_CSV),
             }
             return payload
         state["phase"] = "awaiting_done"
@@ -346,7 +360,7 @@ def action_for_yes(step: str, state: dict[str, Any], accounts_path: Path, ledger
         return {
             "status": "needs_user_input",
             "step": step,
-            "message": "Paste the people CSV to enrich, usually .powerpacks/network-import/merged/people_harmonic_all.merged.csv",
+            "message": f"Run enrichment from canonical merge output {MERGED_PEOPLE_CSV}? Reply yes to use it, or skip.",
         }
     raise ValueError(f"unknown step: {step}")
 
@@ -377,8 +391,8 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
     if phase == "awaiting_done":
         if low not in {"done", "yes", "y", "ok"}:
             return {"status": "needs_user_input", "step": step, "message": "Reply done when finished, or skip.", "ledger": str(ledger_path)}
-        if step == "messages" and artifact_exists(".powerpacks/messages/contacts.csv"):
-            update_channel("messages", path=accounts_path, success=True, artifact=".powerpacks/messages/contacts.csv")
+        if step == "messages" and artifact_exists(str(MESSAGES_CONTACTS_CSV)):
+            update_channel("messages", path=accounts_path, success=True, artifact=str(MESSAGES_CONTACTS_CSV))
         elif step == "gmail":
             gmail = run_json(["uv", "run", "--project", ".", "python", "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py", "accounts"])
             if gmail and gmail.get("status") == "ok":
@@ -389,7 +403,7 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
             else:
                 update_channel("gmail", path=accounts_path, linked=True, notes="User reported Gmail OAuth completed; account check did not confirm.")
         elif step == "merge":
-            update_channel("messages", path=accounts_path, artifact=".powerpacks/network-import/merged/people_harmonic_all.merged.csv", notes="Merge step run/requested.")
+            update_channel("messages", path=accounts_path, artifact=str(MERGED_PEOPLE_CSV), notes="Merge step run/requested.")
         advance(state)
         return next_prompt(state, accounts_path, ledger_path)
 
@@ -430,15 +444,30 @@ def handle_continue(state: dict[str, Any], user_input: str, accounts_path: Path,
         return payload
 
     if phase == "awaiting_enrich_input":
-        csv_path = Path(reply).expanduser()
+        if low in NO:
+            state["answers"][step] = "skip"
+            state.setdefault("skipped", []).append(step)
+            advance(state)
+            return next_prompt(state, accounts_path, ledger_path)
+        if low not in YES:
+            return {"status": "needs_user_input", "step": step, "message": "Reply yes to enrich the canonical merge output, or skip.", "ledger": str(ledger_path)}
+        csv_path = MERGED_PEOPLE_CSV
         if not csv_path.exists():
-            return {"status": "needs_user_input", "step": step, "message": "That file does not exist. Paste a valid people CSV path or skip.", "ledger": str(ledger_path)}
+            return {
+                "status": "needs_agent_action",
+                "step": step,
+                "message": f"Canonical merge output is missing: {MERGED_PEOPLE_CSV}. Run merge first.",
+                "command": "uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run",
+                "continue_command": f"uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --ledger {ledger_path} --input yes",
+                "ledger": str(ledger_path),
+            }
         advance(state)
         payload = next_prompt(state, accounts_path, ledger_path)
         payload["completed_action"] = {
             "step": "enrich",
             "message": "Run this enrichment command when ready. Provider calls pause for approval.",
-            "command": f"uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run --input {csv_path}",
+            "command": "uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run",
+            "canonical_output": str(ENRICHED_PEOPLE_CSV),
         }
         return payload
 

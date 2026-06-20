@@ -15,7 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_ACCOUNTS_PATH = Path(".powerpacks/ingestion/accounts.json")
+from packs.ingestion.pipeline_paths import ACCOUNTS_JSON
+
+DEFAULT_ACCOUNTS_PATH = ACCOUNTS_JSON
 CHANNELS = ["messages", "gmail", "linkedin_csv", "linkedin_mcp", "twitter"]
 
 

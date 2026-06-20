@@ -205,6 +205,8 @@ $import-contacts              # iMessage + WhatsApp → merge → match → revi
 
 Use the underlying primitives directly for advanced/debug subflows.
 
+The end-to-end local ingestion/index file DAG is documented in `docs/pipeline-file-dag.md`; use those `.powerpacks/` paths as the source of truth for setup/pipeline work.
+
 Artifacts land under `.powerpacks/messages/`:
 
 ```text

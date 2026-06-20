@@ -2,9 +2,14 @@
 
 Local pipeline for turning canonical Powerpacks people CSVs into durable search-index inputs without remote service calls.
 
+The file DAG source of truth is `docs/pipeline-file-dag.md` and
+`packs/ingestion/pipeline_paths.py`.
+
 ## Canonical input
 
-Indexing consumes only `.powerpacks/network-import/merged/people.csv`, produced by:
+Indexing automatically consumes `.powerpacks/network-import/enrichment/current/people_enriched.csv` when present, otherwise `.powerpacks/network-import/merged/people.csv`.
+
+Create the merge output with:
 
 ```bash
 uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run
@@ -13,21 +18,14 @@ uv run --project . python packs/ingestion/primitives/merge_network_sources/merge
 ## Build local search index artifacts
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan \
-  --input .powerpacks/network-import/merged/people.csv \
-  --output-dir .powerpacks/search-index \
-  --run-id local-run
-
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run \
-  --input .powerpacks/network-import/merged/people.csv \
-  --output-dir .powerpacks/search-index \
-  --run-id local-run
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py plan
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run --force
 ```
 
 Artifacts are written under:
 
 ```text
-.powerpacks/search-index/<run-id>/
+.powerpacks/search-index/current/
 ├── ledger.json
 ├── unified/
 │   ├── flattened_people.jsonl
@@ -52,13 +50,11 @@ Artifacts are written under:
 └── stats/*.json
 ```
 
-Resume/status commands use the ledger file:
+Resume/status commands use the canonical current ledger by default:
 
 ```bash
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue \
-  --ledger .powerpacks/search-index/local-run/ledger.json
-uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py status \
-  --ledger .powerpacks/search-index/local-run/ledger.json
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py continue
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py status
 ```
 
 All indexing code is stdlib-only/local-file only: no LLM, network, Supabase, Postgres, or TurboPuffer calls.

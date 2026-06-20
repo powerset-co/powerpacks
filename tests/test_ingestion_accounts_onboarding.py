@@ -111,6 +111,31 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             self.assertEqual(payload["step"], "messages")
             self.assertIn("import_contacts_pipeline.py run", payload["command"])
 
+    def test_enrich_step_uses_canonical_pathless_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            accounts_path = Path(tmp) / "accounts.json"
+            ledger = Path(tmp) / "onboarding-run.json"
+            merged = Path(tmp) / "people.csv"
+            merged.write_text("id,full_name\n1,Jane Example\n", encoding="utf-8")
+            onboarding.write_json(ledger, {
+                "version": 1,
+                "created_at": onboarding.now_iso(),
+                "updated_at": onboarding.now_iso(),
+                "index": onboarding.ONBOARDING_FLOW.index("enrich"),
+                "phase": "awaiting_enrich_input",
+                "answers": {},
+                "skipped": [],
+                "context": {},
+            })
+            with mock.patch.object(onboarding, "MERGED_PEOPLE_CSV", merged):
+                code, payload = self.invoke(onboarding, [
+                    "continue", "--accounts", str(accounts_path), "--ledger", str(ledger), "--input", "yes",
+                ])
+            self.assertEqual(code, 0)
+            command = payload["completed_action"]["command"]
+            self.assertEqual(command, "uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run")
+            self.assertNotIn("--input", command)
+
     def test_linkedin_mcp_instructions_and_mark(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "accounts.json"
