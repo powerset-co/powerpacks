@@ -237,6 +237,22 @@ export function fetchLinkedInSourceStatus(): Promise<LinkedInSourceStatusRespons
   return getJson<LinkedInSourceStatusResponse>("/local-api/sources/linkedin/status");
 }
 
+export interface GmailSourceStatusResponse {
+  source: SetupSourceStatus;
+  discovery: {
+    status: string;
+    contacts: number;
+    accounts: Array<{ email: string; contacts: number; status: string }>;
+    updatedAt?: string | null;
+    artifactDir: string;
+  };
+  enrichment: SetupEnrichmentSource;
+}
+
+export function fetchGmailSourceStatus(): Promise<GmailSourceStatusResponse> {
+  return getJson<GmailSourceStatusResponse>("/local-api/sources/gmail/status");
+}
+
 export function runOnboardingLinkedIn(
   body: Record<string, unknown>
 ): Promise<{ job: SetupJob; status: Record<string, unknown> }> {

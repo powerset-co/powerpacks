@@ -13,8 +13,7 @@ import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
 import { LocalOnboardingPage } from "./LocalOnboardingPage";
 import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
 import { GmailSourcePage, LinkedInSourcePage, MessagesSourcePage } from "./LocalSourcePage";
-import { LocalEnvPage } from "./LocalEnvPage";
-import { LocalSystemPage } from "./LocalSystemPage";
+import { LocalSettingsPage, type SettingsSection } from "./LocalSettingsPage";
 import { LocalPersonDetailsPage } from "./LocalPersonDetailsPage";
 import { LocalCompaniesPage } from "./LocalCompaniesPage";
 import { LocalCompanyDetailsPage } from "./LocalCompanyDetailsPage";
@@ -42,9 +41,15 @@ type LocalView =
   | "linkedinSource"
   | "messagesSource"
   | "messagesReview"
-  | "env"
-  | "system"
+  | "settings"
   | "runs";
+
+function settingsSectionFromPath(): SettingsSection {
+  const pathname = window.location.pathname;
+  if (pathname === "/system" || pathname === "/settings/system") return "system";
+  if (pathname === "/env" || pathname === "/settings/environment") return "environment";
+  return "integrations";
+}
 
 function companyIdFromPath(): string | null {
   const match = window.location.pathname.match(/^\/companies\/([^/]+)/);
@@ -66,8 +71,8 @@ function viewFromPath(): LocalView {
   if (window.location.pathname === "/contacts") return "contacts";
   if (companyIdFromPath()) return "companyDetails";
   if (window.location.pathname === "/companies") return "companies";
-  if (window.location.pathname === "/env") return "env";
-  if (window.location.pathname === "/system") return "system";
+  if (window.location.pathname === "/env" || window.location.pathname === "/system") return "settings";
+  if (window.location.pathname.startsWith("/settings")) return "settings";
   if (window.location.pathname === "/setup/imessage/review") return "messagesReview";
   return "runs";
 }
@@ -137,7 +142,9 @@ export function LocalPowerpacksApp() {
     try {
       const nextRuns = await fetchRuns();
       setRuns(nextRuns);
-      setSelectedTaskId((current) => current || nextRuns.find((run) => run.hasArtifacts)?.conversationId || nextRuns.find((run) => run.hasArtifacts)?.taskId || nextRuns[0]?.conversationId || nextRuns[0]?.taskId || null);
+      // Honor the URL/selection only — do NOT auto-select the latest run, so the
+      // bare "/" route stays a clean search landing instead of jumping into a run.
+      setSelectedTaskId((current) => current || taskIdFromPath());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load runs");
     } finally {
@@ -245,19 +252,16 @@ export function LocalPowerpacksApp() {
           activeView={
             activeView === "runs"
               ? "runs"
-              : activeView === "env"
-                ? "env"
-                : activeView === "system"
-                  ? "system"
-                  : activeView === "contacts" || activeView === "personDetails"
-                    ? "contacts"
-                    : activeView === "companies" || activeView === "companyDetails"
-                      ? "companies"
-                      : "runs"
+              : activeView === "settings"
+                ? "settings"
+                : activeView === "contacts" || activeView === "personDetails"
+                  ? "contacts"
+                  : activeView === "companies" || activeView === "companyDetails"
+                    ? "companies"
+                    : "runs"
           }
           runs={filteredRuns}
           operatorEmail={profile?.operator.email || profile?.operator.label}
-          accountSources={profile?.accounts.sources}
           selectedTaskId={selectedTaskId}
           isLoading={runsLoading}
           search={search}
@@ -269,20 +273,8 @@ export function LocalPowerpacksApp() {
           onSelectCompanies={() => {
             navigate("/companies");
           }}
-          onSelectEnv={() => {
-            navigate("/env");
-          }}
-          onSelectSystem={() => {
-            navigate("/system");
-          }}
-          onSelectLinkSetup={() => {
-            navigate("/");
-          }}
-          onSelectSource={(id) => {
-            if (id === "gmail") navigate("/sources/gmail");
-            else if (id === "linkedin_csv") navigate("/sources/linkedin");
-            else if (id === "messages") navigate("/sources/messages");
-            else navigate("/");
+          onSelectSettings={() => {
+            navigate("/settings");
           }}
           onSelect={(run) => {
             const id = run.conversationId || run.taskId;
@@ -297,7 +289,7 @@ export function LocalPowerpacksApp() {
             <header className="flex items-center justify-end gap-2 px-6 pt-3">
               <button
                 type="button"
-                onClick={() => navigate("/system")}
+                onClick={() => navigate("/settings/system")}
                 className="transition-opacity hover:opacity-80"
               >
                 <Badge variant="default" className="cursor-pointer gap-1">
@@ -306,6 +298,13 @@ export function LocalPowerpacksApp() {
               </button>
             </header>
           )}
+          {activeView === "settings" ? (
+            <LocalSettingsPage
+              section={settingsSectionFromPath()}
+              sources={profile?.accounts.sources || []}
+              navigate={navigate}
+            />
+          ) : (
           <div className="mx-auto max-w-7xl space-y-4 p-6">
             {activeView === "onboarding" ? (
               <LocalOnboardingPage />
@@ -317,10 +316,6 @@ export function LocalPowerpacksApp() {
               <LinkedInSourcePage />
             ) : activeView === "messagesSource" ? (
               <MessagesSourcePage />
-            ) : activeView === "env" ? (
-              <LocalEnvPage />
-            ) : activeView === "system" ? (
-              <LocalSystemPage />
             ) : activeView === "contacts" ? (
               <LocalContactsPage />
             ) : activeView === "personDetails" ? (
@@ -331,17 +326,23 @@ export function LocalPowerpacksApp() {
               <LocalCompanyDetailsPage companyId={companyIdFromPath() || ""} />
             ) : activeView === "messagesReview" ? (
               <LocalMessagesReviewPage onBackToSetup={() => navigate("/")} />
+            ) : !selectedRun ? (
+              <div className="flex min-h-[calc(100dvh-7rem)] items-center justify-center">
+                <div className="w-full max-w-2xl">
+                  <LocalSearchLauncher focusToken={newSearchToken} />
+                </div>
+              </div>
             ) : (
               <>
                 <LocalSearchLauncher focusToken={newSearchToken} />
                 <div className="min-w-0">
-              <h2 className="truncate text-2xl font-semibold">{selectedRun?.query || "Select a search run"}</h2>
-              {selectedRun?.updatedAt && (
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Updated {format(new Date(selectedRun.updatedAt), "MMM d, yyyy h:mm a")}
-                </p>
-              )}
-            </div>
+                  <h2 className="truncate text-2xl font-semibold">{selectedRun.query || "Untitled search"}</h2>
+                  {selectedRun.updatedAt && (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Updated {format(new Date(selectedRun.updatedAt), "MMM d, yyyy h:mm a")}
+                    </p>
+                  )}
+                </div>
 
             {error && (
               <Card className="border-destructive/40 bg-destructive/5">
@@ -375,22 +376,17 @@ export function LocalPowerpacksApp() {
                   )}
                 </div>
               </>
-            ) : selectedRun ? (
-              <Card>
-                <CardContent className="py-10 text-center text-muted-foreground">
-                  No result artifact found yet for this run.
-                </CardContent>
-              </Card>
             ) : (
               <Card>
                 <CardContent className="py-10 text-center text-muted-foreground">
-                  Select a run from the sidebar to view results.
+                  No result artifact found yet for this run.
                 </CardContent>
               </Card>
             )}
               </>
             )}
           </div>
+          )}
         </main>
       </div>
     </TooltipProvider>

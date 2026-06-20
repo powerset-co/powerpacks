@@ -125,7 +125,7 @@ export function LocalSearchLauncher({ focusToken = 0 }: LocalSearchLauncherProps
               ref={inputRef}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search your local index, e.g. software engineers in SF"
+              placeholder="Software engineers in SF"
               className="pl-9"
               disabled={isRunning}
               aria-label="Local search query"
@@ -137,15 +137,10 @@ export function LocalSearchLauncher({ focusToken = 0 }: LocalSearchLauncherProps
                 <Loader2 className="h-4 w-4 animate-spin" /> Searching...
               </span>
             ) : (
-              "Search local index"
+              "Search"
             )}
           </Button>
         </form>
-
-        <p className="text-xs text-muted-foreground">
-          Retrieval runs fully on the local index (no TurboPuffer or Postgres). Each search uses
-          ~1 OpenAI query-expansion call, plus LLM filter/rerank over the local candidates.
-        </p>
 
         {isRunning && (
           <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
