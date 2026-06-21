@@ -271,9 +271,9 @@ Routes:
 - `$build-local-search-index`, local indexing, build local search index,
   prepare `.powerpacks/search-index` artifacts →
   `packs/indexing/skills/build-local-search-index/SKILL.md`
-- `$setup`, one-time setup, end-to-end local ingestion setup, systematic
-  Gmail/msgvault setup, account/source linking, unified LinkedIn+Gmail
-  merge/index orchestration →
+- `$setup`, one-time LinkedIn-only setup: import LinkedIn Connections.csv +
+  fan-in merge + Modal index + validate (for Gmail use `$import-gmail`; for
+  iMessage/WhatsApp use `$import-messages`) →
   `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
@@ -285,15 +285,18 @@ Routes:
   `packs/powerset/skills/update-powerpacks/SKILL.md`
 - `$fix-powerpacks`, diagnose/fix local Powerpacks state paths, copy newer `.powerpacks` state into canonical repo, validate linked source wiring →
   `packs/powerset/skills/fix-powerpacks/SKILL.md`
-- `$import-contacts`, iMessage, WhatsApp, contact import/review/upload/retarget →
-  `packs/messages/skills/import-contacts/SKILL.md`
+- `$import-messages`, iMessage/WhatsApp, message-contact local import (discover →
+  match vs LinkedIn/Gmail → deep-research → mandatory review → import) + fan-in
+  merge + Modal index; local only, never uploads to Powerset →
+  `packs/messages/skills/import-messages/SKILL.md`
 - `$msgvault`, `$local-msg-vault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
   `packs/ingestion/skills/msgvault/SKILL.md`
 - `$onboard`, `$ingestion-onboarding`, local ingestion onboarding, link/export
   local network sources →
   `packs/ingestion/skills/onboard/SKILL.md`
-- `$import-email`, Gmail, email, msgvault metadata import →
-  `packs/ingestion/skills/import-email/SKILL.md`
+- `$import-gmail`, Gmail, email, msgvault setup + sync + import + fan-in merge +
+  Modal index →
+  `packs/ingestion/skills/import-gmail/SKILL.md`
 - `$enrich-email-markers`, gmail LLM enrichment, mine email bodies for LinkedIn
   markers, preview the context/markers we'd send to an LLM →
   `packs/ingestion/skills/enrich-email-markers/SKILL.md`
