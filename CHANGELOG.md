@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.10.0...powerpacks-v0.11.0) (2026-06-21)
+
+
+### Features
+
+* run the A/B resolution as the next step of $enrich-email-markers ([0ea9162](https://github.com/powerset-co/powerpacks/commit/0ea91628e162ac32a44e11634fb0806c39a59731))
+* run the A/B resolution as the next step of $enrich-email-markers ([dfb4d91](https://github.com/powerset-co/powerpacks/commit/dfb4d9129ca6c05637d69c771b09dd496ab03096))
+* split $setup into per-source ingestion skills ([25b84d9](https://github.com/powerset-co/powerpacks/commit/25b84d95a41b6a0911cb0eb5c7920720dd20b0e4))
+
 ## [0.10.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.9.0...powerpacks-v0.10.0) (2026-06-20)
 
 
