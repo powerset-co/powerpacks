@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Thin runner for the deep-context dossier pipeline.
+#
+# Run this DIRECTLY in your own terminal (e.g. Ghostty with Full Disk Access).
+# It only chains the existing primitives in order — no logic of its own — so the
+# work runs under your terminal's TCC grant and can actually read chat.db. The
+# Claude Code Bash tool spawns commands under a helper process that does NOT
+# inherit your terminal's Full Disk Access, which is why iMessage reads fail there.
+#
+# Usage:
+#   bin/deep-context dry           # collect (free) + synthesize --dry-run (cost estimate)
+#   bin/deep-context run           # full pipeline: collect -> synthesize -> compose -> cluster
+#   bin/deep-context run --limit 20    # cap people (passed to collect)
+#   bin/deep-context lookup --name "Jane Doe"
+#   bin/deep-context lookup --phone "+1 415 555 1234"
+#
+# Reads message BODIES (Gmail + iMessage/WhatsApp DMs) — that deep inspection is
+# the whole point. DMs only; raw bundles are ephemeral + gitignored.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+PY=(uv run --project . python -m)
+PKG="packs.ingestion.primitives.deep_context"
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  check)
+    "${PY[@]}" "$PKG.check_readiness" "$@"
+    ;;
+  dry)
+    "${PY[@]}" "$PKG.collect_person_context" "$@"
+    "${PY[@]}" "$PKG.synthesize_person_context" --dry-run
+    echo "↑ review estimated_cost_floor_usd / ceiling, then run: bin/deep-context run" >&2
+    ;;
+  collect)
+    "${PY[@]}" "$PKG.collect_person_context" "$@"
+    ;;
+  synthesize)
+    "${PY[@]}" "$PKG.synthesize_person_context" "$@"
+    ;;
+  run)
+    "${PY[@]}" "$PKG.collect_person_context" "$@"
+    "${PY[@]}" "$PKG.synthesize_person_context"
+    "${PY[@]}" "$PKG.compose_dossier"
+    "${PY[@]}" "$PKG.cluster_merge_candidates"
+    "${PY[@]}" "$PKG.build_parents"
+    "${PY[@]}" "$PKG.validate_dossiers"
+    echo "✅ dossiers + parents/ in .powerpacks/deep-context/ — completeness in validation.md — look up: bin/deep-context lookup --name ..." >&2
+    ;;
+  parents)
+    "${PY[@]}" "$PKG.build_parents" "$@"
+    ;;
+  validate)
+    "${PY[@]}" "$PKG.validate_dossiers" "$@"
+    ;;
+  compose)
+    "${PY[@]}" "$PKG.compose_dossier" "$@"
+    ;;
+  cluster)
+    "${PY[@]}" "$PKG.cluster_merge_candidates" "$@"
+    ;;
+  lookup)
+    "${PY[@]}" "$PKG.lookup_person" "$@"
+    ;;
+  probe)
+    # Definitive chat.db readability check (Full Disk Access diagnosis).
+    uv run --project . python -c "from packs.ingestion.primitives.deep_context import sources; import json, pathlib; print(json.dumps(sources.probe_chat_db(pathlib.Path.home()/'Library'/'Messages'/'chat.db'), indent=2))"
+    ;;
+  purge-raw)
+    rm -rf .powerpacks/deep-context/raw
+    echo "🧹 purged raw message bundles" >&2
+    ;;
+  *)
+    echo "usage: bin/deep-context {check|dry|run|collect|synthesize|compose|cluster|parents|validate|lookup|probe|purge-raw} [args]" >&2
+    exit 2
+    ;;
+esac

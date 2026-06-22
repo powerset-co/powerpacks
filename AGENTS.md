@@ -300,6 +300,10 @@ Routes:
 - `$enrich-email-markers`, gmail LLM enrichment, mine email bodies for LinkedIn
   markers, preview the context/markers we'd send to an LLM →
   `packs/ingestion/skills/enrich-email-markers/SKILL.md`
+- `$deep-context`, build deep context, per-person dossier from message bodies
+  (Gmail + iMessage/WhatsApp DMs), "context/dossier on a person", "who is
+  <phone/name> in my messages", find same-person/merge candidates →
+  `packs/ingestion/skills/deep-context/SKILL.md`
 - `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
   `packs/ingestion/skills/import-twitter/SKILL.md`
 - `$discover-contacts`, local network ingestion orchestration, LinkedIn CSV plus
@@ -333,7 +337,12 @@ the primitive blocks/fails or the user asks for implementation details.
 - **Apollo outbound safety**: `$build-outbound` uses `packs/apollo/primitives/build_outbound/build_outbound.py` for Sales Nav resolution, preview, inactive sequence/contact builds, and exact-id activation. Preview/resolve are safe; enrichment, contact writes, sequence/campaign creation, enrollment, and activation are spend-bearing or mutating. Require explicit confirmation before build unless the user clearly asked to build now, and require exact `campaign_id` confirmation before activation. Do not run live activation tests.
 - **Privacy contract**: no message bodies are ever read or sent. Only
   contact metadata (phone, name, source, group flags, message counts,
-  last_message). Carry this through any new primitive.
+  last_message). Carry this through any new primitive. **Scoped exception:** the
+  `$deep-context` skill reads message bodies (Gmail + iMessage/WhatsApp DMs) to
+  build per-person dossiers — deep body inspection is its whole purpose. DMs only;
+  group bodies are never read; raw bodies are ephemeral/gitignored; dossiers store
+  synthesized facts, not verbatim text. This exception applies ONLY to
+  `$deep-context` — every other primitive stays metadata-only.
 - **Artifacts under `.powerpacks/`** are derivable. The agent can rebuild
   any of them from the source data; never paste full datasets into chat.
 

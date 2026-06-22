@@ -1,0 +1,273 @@
+---
+name: deep-context
+description: Build the richest per-person markdown dossier from local message bodies (Gmail + iMessage DMs + WhatsApp DMs) and retrieve it by name/phone/email; surface likely same-person merge candidates. Use for $deep-context, "build deep context", "context/dossier on a person", "who is <phone/name> in my messages", "find duplicate people to merge".
+---
+
+<!--
+Created: 2026-06-21
+Changelog:
+- 2026-06-21: Initial skill — two-phase flow (deep per-person dossiers → LLM-judge
+  merge into parents). Incremental confidence-gated synthesis, deep 1600-msg pools,
+  owner.json shared-context inference, high-reasoning holistic merge judge,
+  parent/child layer (confirmed core + needs-review), validate_dossiers, group NAMES
+  as context, opt-in --include-groups for group bodies, gated check→ask→collect→
+  dry-run→confirm→run task flow (mirrors $setup).
+-->
+
+# deep-context
+
+Use this for `$deep-context`, "build a dossier on the people I message", "what
+context do we have on <name/phone>", or "find people I should merge".
+
+It builds one **markdown dossier per person** from the actual bodies of your
+Gmail threads and iMessage/WhatsApp **DMs**, then lets you **look a person up by
+name and/or phone (or email)** and flags **likely same-person merge candidates**.
+
+Heavy reasoning runs on OpenAI (parallel, medium reasoning); the local box only
+streams SQLite row-by-row and writes files, so it stays well under 1 GB RAM on a
+weak CPU.
+
+## Reads message bodies (by design)
+
+Deep inspection of message bodies is the whole point of this skill — it reads
+Gmail threads and iMessage/WhatsApp DM bodies to build the dossier. This is a
+scoped exception to the repo's otherwise metadata-only contract; it applies ONLY
+to `$deep-context`.
+
+- iMessage / WhatsApp: **DM bodies only**. Group-chat **bodies are never read** —
+  only group **names** (metadata) are collected, as a relationship signal.
+- Raw sampled message text lands in `.powerpacks/deep-context/raw/` — **ephemeral,
+  gitignored**. Purge it after dossiers are built (see Step 5).
+- Dossiers store **synthesized facts, not verbatim message bodies**.
+- Synthesis (Step 2) sends the sampled text to **OpenAI** for fact extraction —
+  the same trust boundary as `$enrich-email-markers`.
+- iMessage needs macOS **Full Disk Access** for the process that runs it. The
+  Claude Code Bash tool runs under a helper that does NOT inherit your terminal's
+  FDA, so run the pipeline in your own terminal (e.g. `bin/deep-context run`).
+
+## Prerequisites
+
+- A merged network: `.powerpacks/network-import/merged/people.csv` (run `$setup`
+  / `$discover-contacts` first).
+- msgvault synced (`$import-email`); macOS **Full Disk Access** for iMessage
+  (`chat.db`); WhatsApp via `$import-whatsapp` if you want that channel.
+- `OPENAI_API_KEY` in `.env`; `.venv/` ready (`bin/setup-python`).
+
+## How to run this skill
+
+**FIRST, before running anything: create a literal, visible checklist with all
+the steps below and step through it, marking each complete as you go.** Mandatory.
+Use your harness's plan/task tool:
+
+- **Claude Code:** `TaskCreate` one task per step (P1.1–P2.2), then `TaskUpdate`
+  each to `in_progress` then `completed`.
+- **Codex:** `update_plan` with the steps, updating status as you go.
+- **Any other harness:** its equivalent todo/plan mechanism.
+
+Seed the checklist with these exact item titles, in two phases:
+
+```
+Phase 1 — Build one deep dossier per person
+P1.1  Check connections (bin/deep-context check)
+P1.2  Ask group opt-in + confirm per-person message cap
+P1.3  Collect deep pools per chosen settings
+P1.4  Dry-run cost estimate from those settings
+P1.5  Confirm estimated cost with the user (explicit go before spend)
+P1.6  Synthesize + compose dossiers
+P1.7  Validate completeness
+Phase 2 — Merge people via the LLM judge
+P2.1  Cluster candidates with the LLM judge
+P2.2  Build parent dossiers (confirmed core + needs-review)
+```
+
+Do not drop steps; mark inapplicable ones complete as a no-op. **Never run a
+paid step (P1.6 / P2.1 onward) before P1.4–P1.5.**
+
+### Phase 1 — Build ONE deep dossier per person
+
+Each person gets a single child dossier from up to `--deep-cap` (1600) messages,
+pooled across **Gmail bodies + iMessage DMs + WhatsApp DMs**, plus iMessage
+**group-chat names** (metadata) as relationship context.
+
+- **P1.1 Check connections** — `bin/deep-context check`. Per-source readiness +
+  `ready`. If iMessage is `unreadable_full_disk_access`, run in a terminal with
+  Full Disk Access (not the Claude Code Bash tool).
+- **P1.2 Ask the user two things, and get answers before collecting:**
+  1. **Group opt-in** — by default we read **DM bodies only** + group *names*.
+     Offer `--include-groups` to also read **iMessage group-chat bodies** from
+     small shared groups (`--max-group-size`, default 25). Tell them this **costs
+     more** (more messages → more synthesis tokens) and pulls in other group
+     members' messages.
+  2. **Message cap** — we hard-cap at **1600 messages/person** (`--deep-cap`).
+     They can raise it for deeper history on heavy relationships, but make sure
+     they understand **a higher cap costs more**.
+- **P1.3 Collect** (free, local) — `bin/deep-context collect` with the chosen flags
+  (e.g. `--include-groups --deep-cap 1600`). `people_capped` flags high-volume contacts.
+- **P1.4 Dry-run cost estimate from those settings** — `bin/deep-context dry`
+  (re-uses the just-collected pools) → "based on your settings, this is the cost"
+  (floor/ceiling + wall). The estimate reflects groups/cap because it reads the
+  actual collected bundles.
+- **P1.5 Confirm with the user** — present the estimate; get an explicit go. No spend
+  before this.
+- **P1.6 Synthesize + compose** — incremental confidence-gated synthesis, then
+  deterministic dossiers + lookup index.
+- **P1.7 Validate completeness** — `bin/deep-context validate` → `validation.md`
+  (completeness score + flags). Act on `capped_underconfident` by raising `--deep-cap`.
+
+### Phase 2 — Merge people via the LLM judge
+
+- **P2.1 Cluster (LLM judge)** — `bin/deep-context cluster`. Blocking proposes pairs; a
+  high-reasoning judge decides same-person holistically. Writes `merge-candidates.csv`
+  + `merge-verdicts.csv` (audit, incl. rejections).
+- **P2.2 Parents** — `bin/deep-context parents`. One canonical parent per cluster:
+  merges only judge-CONFIRMED children (≥`--confirm-threshold` 0.85), lists borderline
+  ones under "Needs review", backrefs each child. Repeatable (parent = f(confirmed children)).
+
+`bin/deep-context run [--include-groups] [--deep-cap N]` chains everything once P1.5 is
+confirmed. Full surface: `check|dry|run|collect|synthesize|compose|cluster|parents|
+validate|lookup|probe|purge-raw`.
+
+### Step 1 — collect (local, free, reads bodies)
+
+```bash
+uv run --project . python \
+  packs/ingestion/primitives/deep_context/collect_person_context.py
+```
+
+Streams each person's Gmail + iMessage-DM + WhatsApp-DM messages into one ephemeral
+bundle per person (≥1 message). Pools up to `--deep-cap` (1600) recent messages and
+records the TRUE total (`messages_available`) so `people_capped` is honest. Test with
+`--limit 5` or `--person <id>`. Idempotent: re-runs skip existing bundles (`--force`).
+
+### Step 1.5 — owner context (optional, free, big relationship win)
+
+Drop a `.powerpacks/deep-context/owner.json` with YOUR bio timeline (name, emails,
+education + work with year ranges). Synthesis injects it as a reasoning anchor so the
+model infers **shared context** — same school/employer/place/era — from message
+content, rendered as a "Shared context with you" dossier section. Example:
+
+```json
+{"name": "Jane Doe", "emails": ["jane@x.com"],
+ "education": [{"school": "MIT", "start": 2008, "end": 2012}],
+ "work": [{"company": "Stripe", "title": "Eng", "start": 2014, "end": 2019}]}
+```
+
+Overlaps are only asserted when message content supports them (not date-matching
+alone). Run `synthesize --no-owner` to skip it. Get exact LinkedIn dates via
+`packs/search/primitives/fetch_person_profile/fetch_person_profile.py --linkedin-url <you>`
+(checks local cache first; RapidAPI only on a cache miss).
+
+### Step 2 — synthesize (paid OpenAI; confirm cost)
+
+```bash
+# dry-run shows estimated_cost_usd, then drop --dry-run to spend
+uv run --project . python \
+  packs/ingestion/primitives/deep_context/synthesize_person_context.py --dry-run
+```
+
+Fans out parallel Responses calls (gpt-5.2, medium reasoning). Per person it
+**groks incrementally** — refining one running profile batch-by-batch (newest
+first) and stopping at `--target-confidence` (0.85), `--saturation-rounds` (2)
+stale batches, exhaustion, or `--max-batches` (20). Checkpointed per person
+(`facts/<id>.jsonl`) — resumes after interruption. `--dry-run` prints the cost
+floor/ceiling. Tune with `--reasoning-effort high`, `--deep-cap` (collection),
+`--concurrency`, `--no-owner`.
+
+### Step 3 — compose (local, free)
+
+```bash
+uv run --project . python \
+  packs/ingestion/primitives/deep_context/compose_dossier.py
+```
+
+Deterministically merges each person's facts into `dossiers/<slug>.md` and writes
+the lookup `index.json` + `index.md`. To enrich the `## Summary` prose, optionally
+spawn a Claude **sub-agent** per dossier afterward (keeps compose itself free/fast).
+
+### Step 4 — merge candidates (LLM judge; small spend)
+
+```bash
+uv run --project . python \
+  packs/ingestion/primitives/deep_context/cluster_merge_candidates.py
+```
+
+Blocking (shared phone/email/email-local-part/name) + a name-similarity gate only
+pick which pairs are worth judging — the DECISION is always a **high-reasoning LLM
+judge** that weighs ALL evidence holistically (identity, role in your life,
+content/behavior, and tone where available). Writes `merge-candidates.csv` (+ a
+full `merge-verdicts.csv` audit log incl. rejections) and injects a "Possible same
+person" section with the judge's reason. ~$0.004/pair (only ambiguous pairs are
+judged). `--no-llm` is an offline/test fallback only. **Suggestions only — never
+auto-merges.**
+
+### Step 5 — purge raw bodies (recommended)
+
+```bash
+rm -rf .powerpacks/deep-context/raw
+```
+
+### Lookup (the user-facing query)
+
+```bash
+uv run --project . python packs/ingestion/primitives/deep_context/lookup_person.py \
+  --name "Jane Doe"
+uv run --project . python packs/ingestion/primitives/deep_context/lookup_person.py \
+  --phone "+1 415 555 1234"
+```
+
+Pure local index read (no DB, no network). `--email` and `--json` also supported;
+name falls back to an all-tokens fuzzy match.
+
+## Outputs
+
+```
+.powerpacks/deep-context/
+├── raw/<person_id>.json        ephemeral sampled bodies (gitignored; purge)
+├── facts/<person_id>.jsonl     structured facts per chunk (checkpoint)
+├── dossiers/<slug>.md          one dossier per person
+├── index.json / index.md       name/phone/email -> slug lookup + catalog
+└── merge-candidates.csv / .md   likely same-person clusters
+```
+
+## Performance & scale (measured)
+
+Benchmarked on ~300 contacts (4.6 GB msgvault + 165k-message chat.db), Apple silicon:
+
+| Stage | Speed | Peak RAM | Cost |
+|---|---|---|---|
+| collect | ~250 contacts/s (~1,800 msgs/s) | **74 MB** | free |
+| synthesize | ~10 chunks/s (high concurrency) | **187 MB** | ~$0.005/contact |
+| compose + cluster | <1 s total | <100 MB | free |
+
+**Cold start (~300 contacts): ≈30 s, ≈$1.40.** Scales ~linearly:
+~1k → ≈$5 / ~2 min · ~3k → ≈$14 / ~4 min · ~10k → ≈$48 / ~14 min. Memory stays
+**flat (~200 MB)** regardless of contact count — it's bounded by `--concurrency`,
+not corpus size (every source query is per-person `LIMIT`-bounded; one person's
+window in memory at a time). `synthesize --dry-run` prints `estimated_cost_usd`
+and `estimated_wall_seconds` before any spend.
+
+**Incremental deepening:** collection pools up to `--deep-cap` (default 1600)
+recent messages per person and reports the TRUE total (`messages_available`), so
+`people_capped` honestly flags high-volume contacts (a spouse can have 100k+
+DMs). Synthesis then **groks incrementally**: it refines ONE running profile
+batch-by-batch (newest first) and stops when the profile reaches
+`--target-confidence` (0.85), OR `--saturation-rounds` (2) batches add nothing
+new, OR it runs out of pooled messages, OR it hits `--max-batches` (20). Each
+dossier reports what happened: _"grokked 1600 of 101558 messages over 4 batches
+(stopped: exhausted)."_ Most contacts finish in one batch; only deep
+relationships spend more.
+
+**Richness (message-derived only):** relationship 99%, employer ~73%, title ~29%,
+location ~28%, school ~5%, ~4 topics, ~2.5 timeline events (iMessage people
+average ~4.4 events). Career fields (title/school) are low because message bodies
+rarely state them — they live in `people.csv` (LinkedIn) and are intentionally
+NOT fused here, so the dossier reflects pure message inspection.
+
+## Notes
+
+- Single fixed output dir, overwrite-in-place; manifest + outputs only (no ledgers,
+  no run ids).
+- People with **0 messages produce no dossier** — cost scales with real interaction.
+- **Incremental re-runs:** collect skips people whose bundle exists; synthesize skips
+  people whose facts exist. Only *new* people are processed. To pull *new messages*
+  for an existing person, re-run with `--force`.
