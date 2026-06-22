@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.11.0...powerpacks-v0.12.0) (2026-06-22)
+
+
+### Features
+
+* add $deep-context skill — per-person dossiers + LLM-judge merge ([0d410b5](https://github.com/powerset-co/powerpacks/commit/0d410b538e1a97cffc07ed0a685a35a6cb9142bd))
+
 ## [0.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.10.0...powerpacks-v0.11.0) (2026-06-21)
 
 
