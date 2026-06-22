@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.13.0...powerpacks-v0.14.0) (2026-06-22)
+
+
+### Features
+
+* always promote unmerged people to canonical parents ([007ab62](https://github.com/powerset-co/powerpacks/commit/007ab625d625b16956170cec21d52ea32772a3b2))
+
+
+### Bug Fixes
+
+* register $deep-context skill in the Codex installer ([f797632](https://github.com/powerset-co/powerpacks/commit/f7976325a3bb08a1f029629c331d6a7b8e5cd0aa))
+
 ## [0.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.12.0...powerpacks-v0.13.0) (2026-06-22)
 
 
