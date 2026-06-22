@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.12.0...powerpacks-v0.13.0) (2026-06-22)
+
+
+### Features
+
+* complete canonical parent layer + idempotent dedup ([2b49128](https://github.com/powerset-co/powerpacks/commit/2b49128b01dffa6c45118c977a08008db184fac6))
+
 ## [0.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.11.0...powerpacks-v0.12.0) (2026-06-22)
 
 
