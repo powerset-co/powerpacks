@@ -18,7 +18,7 @@ Safety notes:
 
 ## Manual live smoke
 
-This primitive has a manual-only live Apollo smoke path for now; do not wire it into CI or a weekly schedule until we add a dedicated cleanup wrapper. Use a one-lead fake Sales Nav run shaped like real exports (`state.json` with `files.final_leads_csv: "exports/leads.csv"`, or `files.leads_jsonl`) and target only Arthur (`arthur@powerset.co`, LinkedIn `https://www.linkedin.com/in/arthur-chen-78566519/`).
+This primitive has a manual-only live Apollo smoke path for now; do not wire it into CI or a weekly schedule until we add a dedicated cleanup wrapper. Use a one-lead fake Sales Nav run shaped like real exports (`state.json` with `files.final_leads_csv: "exports/leads.csv"`, or `files.leads_jsonl`) and target only a synthetic test contact (`operator@example.com`, LinkedIn `https://www.linkedin.com/in/example-test-contact/`).
 
 Expected live-smoke flow:
 

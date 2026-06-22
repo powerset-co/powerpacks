@@ -17,8 +17,8 @@ spec.loader.exec_module(ilm)
 
 class OwnerIdentityBlockTests(unittest.TestCase):
     def test_block_names_owner_and_addresses(self):
-        block = ilm.owner_identity_block({"name": "Arthur Chen", "emails": ["a@x.co", "a@y.co"]})
-        self.assertIn("Arthur Chen", block)
+        block = ilm.owner_identity_block({"name": "Test Contact", "emails": ["a@x.co", "a@y.co"]})
+        self.assertIn("Test Contact", block)
         self.assertIn("a@x.co, a@y.co", block)
         self.assertIn("NEVER emit a marker", block)
 
@@ -37,7 +37,7 @@ class LoadOwnerIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ctx = Path(d) / "email_context.jsonl"
             ctx.write_text("", encoding="utf-8")
-            owner = {"name": "Arthur Chen", "emails": ["a@x.co"]}
+            owner = {"name": "Test Contact", "emails": ["a@x.co"]}
             (Path(d) / "manifest.json").write_text(json.dumps({"owner": owner}), encoding="utf-8")
             self.assertEqual(ilm.load_owner_identity(ctx), owner)
 

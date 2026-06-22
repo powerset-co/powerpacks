@@ -43,8 +43,8 @@ SEARCH_ROOT = Path(__file__).resolve().parents[1]
 PRIMITIVES = SEARCH_ROOT / "primitives"
 PIPELINE = PRIMITIVES / "search_network_pipeline" / "search_network_pipeline.py"
 EXPAND = PRIMITIVES / "expand_search_request" / "expand_search_request.py"
-DEFAULT_APP_DIR = Path("/Users/arthur/workspace/network-search-api")
-DEFAULT_RECALL_DIR = DEFAULT_APP_DIR / "tests" / "recall"
+DEFAULT_APP_DIR = Path(os.environ.get("POWERPACKS_APP_DIR", str(ROOT)))
+DEFAULT_RECALL_DIR = Path(os.environ.get("POWERPACKS_RECALL_DIR", str(DEFAULT_APP_DIR / "tests" / "recall")))
 REPORT_PATH = SEARCH_ROOT / "evals" / "pipeline_eval.md"
 RESULT_LIMIT_CAP = 10000
 

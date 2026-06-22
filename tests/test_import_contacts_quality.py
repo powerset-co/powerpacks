@@ -34,7 +34,7 @@ class ImportContactsQualityTests(unittest.TestCase):
             discover_gmail.mkdir(parents=True)
             contacts = discover_gmail / "contacts.csv"
             queue = discover_gmail / "linkedin_resolution_queue.csv"
-            account_dir = discover_gmail / "arthur-powerset.co"
+            account_dir = discover_gmail / "operator-example-com"
             account_people = account_dir / "people.csv"
             account_queue = account_dir / "linkedin_resolution_queue.csv"
             contacts.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
@@ -54,7 +54,7 @@ class ImportContactsQualityTests(unittest.TestCase):
                 "contacts_csv": str(contacts),
                 "linkedin_resolution_queue_csv": str(queue),
                 "children": [{
-                    "account_email": "arthur@powerset.co",
+                    "account_email": "operator@example.com",
                     "artifacts": {
                         "linkedin_resolution_queue_csv": str(account_queue),
                         "people_csv": str(account_people),
@@ -67,15 +67,15 @@ class ImportContactsQualityTests(unittest.TestCase):
 
             self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csv"], str(queue))
             self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csvs"], [{
-                "account_email": "arthur@powerset.co",
+                "account_email": "operator@example.com",
                 "queue_csv": str(account_queue),
                 "people_csv": str(account_people),
-                "slug": "arthur-powerset.co",
+                "slug": "operator-example.com",
             }])
             self.assertEqual(artifacts["gmail_people_records"], [{
-                "account_email": "arthur@powerset.co",
+                "account_email": "operator@example.com",
                 "people_csv": str(account_people),
-                "slug": "arthur-powerset.co",
+                "slug": "operator-example.com",
             }])
 
     def test_gmail_import_rejects_stale_child_people_without_counts(self) -> None:
@@ -94,7 +94,7 @@ class ImportContactsQualityTests(unittest.TestCase):
                 "contacts_csv": str(contacts),
                 "linkedin_resolution_queue_csv": str(queue),
                 "children": [{
-                    "account_email": "arthur@powerset.co",
+                    "account_email": "operator@example.com",
                     "artifacts": {
                         "linkedin_resolution_queue_csv": str(queue),
                         "people_csv": str(stale_people),

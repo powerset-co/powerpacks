@@ -1,7 +1,7 @@
 """Validate pipeline eval harness without running agent or primitives.
 
 Tests:
-- Case loading from network-search-api recall YAMLs
+- Case loading from external recall YAMLs
 - Bucket filtering (founders, date_range, education)
 - Dry-run query listing
 - Skip-LLM env var handling
@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SEARCH_EVALS = ROOT / "packs" / "search" / "evals"
-RECALL_DIR = Path("/Users/arthur/workspace/network-search-api/tests/recall")
+RECALL_DIR = Path(os.environ.get("POWERPACKS_RECALL_DIR", str(ROOT / "tests" / "recall")))
 
 
 def load_module(name: str, path: Path):
@@ -34,7 +34,7 @@ def load_module(name: str, path: Path):
 pipeline_eval = load_module("pipeline_eval", SEARCH_EVALS / "run_pipeline_eval.py")
 
 
-@unittest.skipUnless(RECALL_DIR.exists(), "network-search-api recall dir not present")
+@unittest.skipUnless(RECALL_DIR.exists(), "recall fixture dir not present; set POWERPACKS_RECALL_DIR to run these tests")
 class PipelineEvalCaseLoadTests(unittest.TestCase):
     def test_loads_founder_cases(self) -> None:
         cases = pipeline_eval.select_cases(RECALL_DIR, "founders", None, False)
@@ -63,7 +63,7 @@ class PipelineEvalCaseLoadTests(unittest.TestCase):
         self.assertTrue(all(c.bucket != "staging" for c in cases))
 
 
-@unittest.skipUnless(RECALL_DIR.exists(), "network-search-api recall dir not present")
+@unittest.skipUnless(RECALL_DIR.exists(), "recall fixture dir not present; set POWERPACKS_RECALL_DIR to run these tests")
 class PipelineEvalDryRunShapeTests(unittest.TestCase):
     def test_case_metadata_contains_query(self) -> None:
         cases = pipeline_eval.select_cases(RECALL_DIR, "founders", None, False)
@@ -86,7 +86,7 @@ class PipelineEvalSkipLlmTests(unittest.TestCase):
         self.assertFalse(pipeline_eval.skip_llm({"POWERPACKS_PIPELINE_SKIP_LLM": "0"}))
 
 
-@unittest.skipUnless(RECALL_DIR.exists(), "network-search-api recall dir not present")
+@unittest.skipUnless(RECALL_DIR.exists(), "recall fixture dir not present; set POWERPACKS_RECALL_DIR to run these tests")
 class PipelineEvalDryRunTests(unittest.TestCase):
     def test_dry_run_founders(self) -> None:
         proc = subprocess.run(

@@ -45,7 +45,7 @@ Cross-channel:
   feedback hints, skipping hints already attempted for the same person
 - `deep_research_contacts`: run Parallel.ai deep research over the queue and
   write per-handle `01_research_parallel.json` artifacts; native HTTP port of
-  aleph-mvp's `research_parallel.py` so Powerpacks does not depend on the
+  the legacy `research_parallel.py` so Powerpacks does not depend on the
   `parallel` SDK
 - `build_research_review_csv`: flatten the per-handle research artifacts into
   a single CSV in the shape `contact-exporter`'s research-review TUI consumes

@@ -1,6 +1,6 @@
 # twitter_network_import
 
-Powerpacks-local Twitter/X network import orchestrator. This ports the legacy `aleph-mvp` Twitter pipeline into the local `run` / `approve` / `continue` workflow style.
+Powerpacks-local Twitter/X network import orchestrator. This ports the legacy Twitter pipeline into the local `run` / `approve` / `continue` workflow style.
 
 All artifacts stay under `.powerpacks/network-import/discover/twitter/<handle>/`. The primitive does not write to Postgres and does not use local CSV input for production ingestion: Twitter source data comes from RapidAPI.
 

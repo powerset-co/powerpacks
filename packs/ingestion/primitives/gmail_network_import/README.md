@@ -4,7 +4,7 @@ Resumable local Gmail network-import orchestrator.
 
 V1 supports both a one-person local seed and a local msgvault metadata import.
 It ports the legacy Gmail contact CSV contracts and header parsing/normalization
-logic into Powerpacks, with no runtime dependency on `../aleph-mvp`.
+logic into Powerpacks, with no runtime dependency on an external app repo.
 
 It writes `.powerpacks/` artifacts and exits complete. The msgvault import reads
 only local SQLite metadata (`sources`, `participants`, `messages`,

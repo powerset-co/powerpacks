@@ -132,8 +132,8 @@ class PipelinePhase13Tests(unittest.TestCase):
                 "input": {
                     "operator_id": "arthur",
                     "from_accounts": str(Path(tmp) / "accounts.json"),
-                    "gmail_account_email": "arthur@powerset.co",
-                    "msgvault_db": ".powerpacks/msgvault/arthur-powerset.co/msgvault.metadata.db",
+                    "gmail_account_email": "operator@example.com",
+                    "msgvault_db": ".powerpacks/msgvault/operator-example-com/msgvault.metadata.db",
                     "skip_msgvault_sync": True,
                     "linkedin_csv": ".powerpacks/network-import/discover/linkedin/Connections.csv",
                     "linkedin_source_user": "arthur",
@@ -143,8 +143,8 @@ class PipelinePhase13Tests(unittest.TestCase):
             }
 
             def fake_gmail(**kwargs):
-                self.assertEqual(kwargs["msgvault_db"], ".powerpacks/msgvault/arthur-powerset.co/msgvault.metadata.db")
-                self.assertEqual(kwargs["selected_accounts"], ["arthur@powerset.co"])
+                self.assertEqual(kwargs["msgvault_db"], ".powerpacks/msgvault/operator-example-com/msgvault.metadata.db")
+                self.assertEqual(kwargs["selected_accounts"], ["operator@example.com"])
                 self.assertTrue(kwargs["skip_msgvault_sync"])
                 return {"status": "completed", "contacts_csv": "gmail.csv", "linkedin_resolution_queue_csv": "queue.csv"}
 
@@ -336,7 +336,7 @@ class PipelinePhase13Tests(unittest.TestCase):
             accounts = {
                 "accounts": {
                     "linkedin_csv": {
-                        "config": {"csv_path": "/Users/arthur/Downloads/missing/Connections.csv"},
+                        "config": {"csv_path": "/path/to/Downloads/missing/Connections.csv"},
                     }
                 }
             }

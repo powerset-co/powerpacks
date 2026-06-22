@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deep-research a contacts research queue via Parallel.ai. Stdlib-only.
 
-Drop-in replacement for `aleph-mvp/data_pipeline_v2/pipelines/synthetic/research_parallel.py`,
+Drop-in replacement for the legacy research-parallel pipeline,
 re-implemented against the Parallel HTTP API directly so Powerpacks does not
 depend on the `parallel` SDK or pydantic.
 
@@ -12,7 +12,7 @@ Subcommands:
     status     One-shot status check on a task group.
     run        submit + poll (the common case).
 
-Artifacts produced under --output-dir (matching aleph-mvp's layout):
+Artifacts produced under --output-dir (matching the legacy layout):
     <handle>/00_parallel_raw.json       - raw Parallel output `content`
     <handle>/01_research_parallel.json  - transformed `01_research.json` shape
     _taskgroup.json                     - submission state for resumability
@@ -103,7 +103,7 @@ DEFAULT_RESULT_WORKERS = 4
 
 
 # ---------------------------------------------------------------------------
-# Research instructions + JSON schemas (port from aleph-mvp/research_parallel)
+# Research instructions + JSON schemas (port from legacy research-parallel flow)
 # ---------------------------------------------------------------------------
 
 RESEARCH_INSTRUCTIONS = """You are a professional investigator building a comprehensive profile for a person based on their online presence.
@@ -401,7 +401,7 @@ def task_spec() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 01_research_parallel.json transform (port from aleph-mvp)
+# 01_research_parallel.json transform (port from legacy flow)
 # ---------------------------------------------------------------------------
 
 def parallel_to_research_json(

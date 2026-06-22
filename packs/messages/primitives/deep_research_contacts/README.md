@@ -3,7 +3,7 @@
 Deep-research the unmatched-but-named contacts via Parallel.ai. Stdlib-only.
 
 Native port of
-`aleph-mvp/data_pipeline_v2/pipelines/synthetic/research_parallel.py`,
+the legacy research-parallel pipeline,
 re-implemented against the Parallel HTTP API directly so Powerpacks does not
 depend on the `parallel` SDK or `pydantic`.
 
@@ -72,7 +72,7 @@ after partial failures or to incrementally add new candidates.
 <output-dir>/
 ├── <handle>/
 │   ├── 00_parallel_raw.json        Raw Parallel `output.content`
-│   └── 01_research_parallel.json   Transformed shape compatible with aleph-mvp
+│   └── 01_research_parallel.json   Transformed shape compatible with the legacy pipeline
 ├── _taskgroup.json                 Persisted state (taskgroup_id, run_ids, rows)
 └── _manifest.json                  Final summary (counts, errors, group status)
 ```

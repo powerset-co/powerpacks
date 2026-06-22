@@ -87,7 +87,7 @@ APP_NAME = os.environ.get("POWERPACKS_MODAL_APP", "powerset-indexing")
 # for an isolated volume (recommended once multiple operators run concurrently,
 # since input/ and runs/ paths are not yet per-operator prefixed).
 VOLUME_NAME = os.environ.get("POWERPACKS_MODAL_VOLUME", "powerset-indexing")
-DEFAULT_OPERATOR_ID = os.environ.get("POWERPACKS_OPERATOR_ID", "e33a648a-ae5f-432e-83ce-b90d75546ada")
+DEFAULT_OPERATOR_ID = os.environ.get("POWERPACKS_OPERATOR_ID", "00000000-0000-0000-0000-000000000000")
 
 REPO = Path(__file__).resolve().parents[3]
 # .powerpacks lives at the main checkout root; walk up when running from a

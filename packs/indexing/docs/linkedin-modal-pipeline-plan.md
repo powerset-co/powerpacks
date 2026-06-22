@@ -3,7 +3,7 @@
 **Created:** 2026-06-12
 
 **Changelog:**
-- 2026-06-12: Initial plan (Claude/Arthur session).
+- 2026-06-12: Initial plan.
 
 ## Goal
 
@@ -17,7 +17,7 @@ no spend gates on this path.
 ## What already exists (reuse, don't rebuild)
 
 - `packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py` —
-  Arthur's onboarding-v2 end-to-end pipeline: inspect → discover → enrich →
+  the onboarding-v2 end-to-end pipeline: inspect → discover → enrich →
   source_people → merge_network → network_duckdb → index_estimate →
   index_records → search_duckdb, with `RunContext.event()` writing atomic
   `status.json` + `events.jsonl` under `.powerpacks/runs/setup-linkedin-csv/`.
@@ -100,9 +100,9 @@ the estimate. POST `/local-api/onboarding-v3/linkedin/run` spawns
 `linkedin_modal_pipeline.py pipeline --csv <path>`; GET `.../status` reads the
 local status.json. v2 page stays untouched.
 
-## Test protocol (Arthur's direction)
+## Test protocol
 
-1. **Half csv**: split Arthur's real Connections.csv in half → `pipeline` e2e
+1. **Half csv**: split a sample Connections.csv in half → `pipeline` e2e
    → query downloaded DuckDB: people count ≈ half, spot-check names.
 2. **Full csv**: rerun e2e → count ≈ full; only the delta hit RapidAPI.
 3. **Third drop (same csv)**: no-op, near-instant.

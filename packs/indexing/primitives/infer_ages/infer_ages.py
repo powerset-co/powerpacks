@@ -6,7 +6,7 @@ education and work experience timelines, and writes inferred_ages.jsonl.
 The processing pipeline then reads that artifact and applies inferred_birth_year
 to people records.
 
-Ported from aleph-mvp/data_pipeline_v2/pipelines/people/processing/infer_ages.py
+Ported from legacy data_pipeline_v2/pipelines/people/processing/infer_ages.py
 Adapted to read from local flattened_people.jsonl instead of Supabase.
 """
 from __future__ import annotations

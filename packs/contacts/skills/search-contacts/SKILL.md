@@ -84,7 +84,7 @@ If the user gives no sort preference:
 
 Only use the search syntax supported by the app contacts routes:
 
-- plain text → name search, e.g. `search: "arthur chen"`
+- plain text → name search, e.g. `search: "alex chen"`
 - `email:<text>` for email/domain filtering, e.g. `email:@powerset.co`
 - `phone:<digits>` for phone filtering, or `phone:` for contacts with phones
 - `headline:<text>` for title/headline filtering

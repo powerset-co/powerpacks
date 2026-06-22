@@ -1251,19 +1251,19 @@ class RefreshRetargetLinkedInProfilesTests(unittest.TestCase):
             review_csv = tmp / "research_review.csv"
             ledger = tmp / "retarget_attempts.json"
             out_dir = tmp / "research_retarget"
-            hint = "https://www.linkedin.com/in/arthur-lam/"
+            hint = "https://www.linkedin.com/in/test-contact/"
             with review_csv.open("w", newline="", encoding="utf-8") as h:
                 writer = csv.DictWriter(h, fieldnames=["handle", "full_name", "retarget_hint"])
                 writer.writeheader()
-                writer.writerow({"handle": "phone-2", "full_name": "Arthur Lam", "retarget_hint": hint})
+                writer.writerow({"handle": "phone-2", "full_name": "Test Contact", "retarget_hint": hint})
 
             hsh = hashlib.sha256(hint.lower().encode("utf-8")).hexdigest()[:16]
             retarget_handle = f"phone-2__retarget_{hsh[:10]}"
             profile_dir = out_dir / retarget_handle
             profile_dir.mkdir(parents=True)
             cached = {
-                "person": {"full_name": "Cached Arthur", "confidence": 0.8},
-                "social": {"linkedin_url": "https://www.linkedin.com/in/cached-arthur"},
+                "person": {"full_name": "Cached Contact", "confidence": 0.8},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/cached-contact"},
                 "positions": [{"title": "Founder", "company_name": "CachedCo"}],
                 "metadata": {"research_method": "parallel-core2x"},
             }

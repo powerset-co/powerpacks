@@ -1,6 +1,6 @@
 # Extractor Eval
 
-Dataset: `/Users/arthur/workspace/network-search-api/tests/evals/query_expansion/datasets`
+Dataset: `/path/to/network-search-api/tests/evals/query_expansion/datasets`
 
 | Extractor | Cases | Accuracy | Key Fields | Time |
 |---|---:|---:|---|---:|

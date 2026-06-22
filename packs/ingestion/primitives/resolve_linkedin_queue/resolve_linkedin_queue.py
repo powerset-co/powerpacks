@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resolve queued email→LinkedIn via Parallel.ai.
 
-Ported from aleph-mvp data_pipeline_v2/step_parallel_enrich. Sends
+Ported from the legacy step_parallel_enrich flow. Sends
 (full_name, company, email) to Parallel and writes results to a CSV.
 
 Dedup: reads any existing output CSV to skip already-resolved emails.

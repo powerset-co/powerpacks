@@ -10,8 +10,8 @@ Example:
 
   uv run --project . python scripts/build-local-duckdb-shim.py \
     --source people_harmonic_all.csv \
-    --operator-id e33a648a-ae5f-432e-83ce-b90d75546ada \
-    --operator-email thearthurchen@gmail.com \
+    --operator-id 00000000-0000-0000-0000-000000000000 \
+    --operator-email operator@example.com \
     --force
 
 Then test local search with:
@@ -44,8 +44,8 @@ from packs.indexing.lib.people import build_people_records, flatten_people  # no
 from packs.ingestion.schemas.people_schema import parse_interaction_counts  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
-DEFAULT_OPERATOR_ID = "e33a648a-ae5f-432e-83ce-b90d75546ada"
-DEFAULT_OPERATOR_EMAIL = "thearthurchen@gmail.com"
+DEFAULT_OPERATOR_ID = "00000000-0000-0000-0000-000000000000"
+DEFAULT_OPERATOR_EMAIL = "operator@example.com"
 DEFAULT_SOURCE = Path("people_harmonic_all.csv")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 

@@ -10,7 +10,7 @@ chat or command arguments.
 
 Powerpacks hydrates directly from the checked-in Postgres/Supabase contract.
 It reads canonical `persons.hydrated_context` and normalizes that into the
-Powerpacks profile shape. It does not import `aleph-mvp` and does not use
+Powerpacks profile shape. It does not import any external app repo and does not use
 Supabase MCP.
 
 Hydrate the full frontier before `llm_filter_candidates`:

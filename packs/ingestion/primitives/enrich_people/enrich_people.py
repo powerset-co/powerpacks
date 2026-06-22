@@ -2,7 +2,7 @@
 """Unified local people enrichment flow.
 
 Self-contained Powerpacks RapidAPI enrichment implementation. No imports from
-aleph-mvp or network-search-api.
+the legacy app or hosted search API.
 
 Input: a shared people schema CSV, usually merge_network_sources output.
 Output: enriched people schema CSV plus raw provider responses.

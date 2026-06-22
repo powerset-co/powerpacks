@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PRIMITIVES = ROOT / "primitives"
 TASK_STATE = PRIMITIVES / "task_state" / "task_state.py"
 DEFAULT_CASES = ROOT / "evals" / "company-search" / "cases.json"
-DEFAULT_APP_DIR = Path("/Users/arthur/workspace/aleph-mvp")
+DEFAULT_APP_DIR = Path(os.environ.get("POWERPACKS_APP_DIR", str(REPO_ROOT)))
 REPORT_PATH = ROOT / "evals" / "company_search.md"
 
 sys.path.insert(0, str(PRIMITIVES / "lib"))

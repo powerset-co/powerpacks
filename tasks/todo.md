@@ -43,7 +43,7 @@ existing primitives:
 ## Query operators (mirror `$search-contacts` contract, extend for local)
 From `packs/contacts/skills/search-contacts/SKILL.md`: plain text → name;
 `email:`, `phone:` (bare `phone:` = has phone), `headline:`, `company:`.
-Local additions Arthur asked for: `twitter:` (bare = has handle), plus cheap
+Local additions requested: `twitter:` (bare = has handle), plus cheap
 wins `city:`/`location:`. Tokenizer: split on spaces outside `key:` prefixes;
 multiple terms AND together.
 
@@ -96,7 +96,7 @@ Done (uncommitted, working tree):
 - [x] Phase 1 My Contacts: `GET /local-api/contacts` mirrors prod
       `_parse_contact_search` (network-search-api contacts.py) — name/email:/
       phone:/headline:/company: + local twitter:/city:; ContactsV2-style table,
-      URL-driven q/sort/dir/page. Verified: arthur→4, email:@gmail.com→82,
+      URL-driven q/sort/dir/page. Verified: sample-user→4, email:@gmail.com→82,
       company:roblox→68, phone:→69.
 - [x] Phase 2 Profile: `GET /local-api/contacts/person/:id` (profile+positions
       joined to local_companies+education+summary); PersonDetails-mirrored page
@@ -199,7 +199,7 @@ stage stays on the one shared schema.
 
 ### Phase 2 — phone/email match tiers (Jake's fix) ✅ implemented 2026-06-12
 
-- [x] **Approval gate (Arthur's rule: matching never expands the approved
+- [x] **Approval gate (matching never expands the approved
       set).** `matched` auto-derives `in_network=true` downstream, so every
       tier is gated on `research_review.csv`: `matched` only for approved
       contacts; reviewed-but-unapproved contacts are skipped by identifier

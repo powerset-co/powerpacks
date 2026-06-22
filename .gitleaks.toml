@@ -4,7 +4,19 @@ title = "Powerpacks gitleaks configuration"
 useDefault = true
 
 [[allowlists]]
-description = "Public Auth0 PKCE client ID default used by Powerpacks auth primitives"
+description = "Public Auth0 PKCE client ID in explicit Powerset-hosted env example"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''packs/powerset/templates/env\.powerset\.example''',
+]
+regexes = [
+  '''POWERPACKS_AUTH0_CLIENT_ID=U7p09NWeJ0jy9M4GiaWa4cz0YVCdDVBl''',
+]
+
+[[allowlists]]
+description = "Historical public Auth0 PKCE client ID defaults removed from code"
 targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "line"

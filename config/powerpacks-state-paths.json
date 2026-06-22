@@ -10,7 +10,7 @@
   "legacy_state_sources": [
     "~/.codex/powerpacks",
     "~/.codex/powerpacks-main",
-    "~/.codex/powerpacks-arthur"
+    "~/.codex/powerpacks-operator"
   ],
   "external_paths": {
     "msgvault_default_db": "~/.msgvault/msgvault.db"

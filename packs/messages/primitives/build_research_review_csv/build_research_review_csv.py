@@ -17,7 +17,7 @@ Buckets are `yes | maybe | no`. Legacy cached buckets are normalized as
 `confident -> yes`, `medium|review -> maybe`.
 
 By default, each researched contact is scored by the network-review LLM
-(OpenRouter, mirrors aleph-mvp's review_phone_research.py SYSTEM_PROMPT).
+(OpenRouter, mirrors the legacy review-phone-research SYSTEM_PROMPT).
 The score is cached per handle at
 `<output-dir>/<handle>/03_network_review.json` so re-running is idempotent and
 incremental.
@@ -127,7 +127,7 @@ REVIEW_DECISION_FIELDS = ("exclude", "enrich_decision", "retarget_hint")
 
 
 # ---------------------------------------------------------------------------
-# LLM scoring (mirrors aleph-mvp/review_phone_research.py SYSTEM_PROMPT)
+# LLM scoring (mirrors the legacy review-phone-research SYSTEM_PROMPT)
 # ---------------------------------------------------------------------------
 
 DEFAULT_SCORE_MODEL = "openai/gpt-4.1"

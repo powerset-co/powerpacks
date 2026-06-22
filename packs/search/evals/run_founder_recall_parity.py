@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run Powerpacks search primitives against aleph founder recall cases.
+"""Run Powerpacks search primitives against legacy founder recall cases.
 
-This is a harness for parity, not a replacement for aleph's recall suite. It
+This is a harness for parity, not a replacement for the legacy recall suite. It
 uses the same packaged primitives the search-network skill calls and records a
 compact markdown ledger.
 """
@@ -478,7 +478,7 @@ def write_report(results: list[dict[str, Any]], app_dir: Path, run_dir: Path, lo
         "",
         f"Last run: `{now}`",
         "",
-        "Scope: founder recall YAMLs from aleph-mvp, executed through Powerpacks `search-network` primitives.",
+        "Scope: founder recall YAMLs executed through Powerpacks `search-network` primitives.",
         "",
         f"App dir: `{app_dir}`",
         f"Run dir: `{run_dir}`",
@@ -486,7 +486,7 @@ def write_report(results: list[dict[str, Any]], app_dir: Path, run_dir: Path, lo
         "",
         "Execution notes:",
         "",
-        "- Uses packaged Powerpacks primitives, not aleph-mvp application code.",
+        "- Uses packaged Powerpacks primitives, not external application code.",
         f"- Retrieval and hydration respect recall case limits up to `{RESULT_LIMIT_CAP}` people.",
         "- LLM scoring/filtering and company signal summaries are disabled.",
         "- `resolve_investors` resolves firm and person investors from the Powerpacks TurboPuffer investors namespace.",
@@ -535,7 +535,7 @@ def write_report(results: list[dict[str, Any]], app_dir: Path, run_dir: Path, lo
 
 
 def main() -> None:
-    app_dir = Path(os.environ.get("POWERPACKS_APP_DIR", "/Users/arthur/workspace/aleph-mvp"))
+    app_dir = Path(os.environ.get("POWERPACKS_APP_DIR", str(REPO_ROOT)))
     run_dir = app_dir / ".powerpacks" / "runs" / "founder-parity"
     log_dir = app_dir / ".powerpacks" / "runs" / "founder-parity-logs"
     env = os.environ.copy()

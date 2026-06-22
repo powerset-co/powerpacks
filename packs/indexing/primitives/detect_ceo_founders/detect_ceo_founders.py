@@ -6,7 +6,7 @@ Reads flattened_people.jsonl, finds CEO/CTO positions that do NOT already have
 founder_enrichment.jsonl. The processing pipeline then reads that artifact and
 injects "founder" into d2q_tokens + role_ids for detected founders.
 
-Ported from aleph-mvp/data_pipeline_v2/pipelines/people/processing/detect_ceo_founders.py
+Ported from legacy data_pipeline_v2/pipelines/people/processing/detect_ceo_founders.py
 """
 from __future__ import annotations
 

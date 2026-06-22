@@ -1,8 +1,7 @@
 # prepare_research_queue
 
 Filter + reshape the unified `contacts.csv` into the input CSV that
-Powerpacks `deep_research_contacts` and the legacy
-`aleph-mvp/data_pipeline_v2/pipelines/synthetic/research_parallel.py`
+Powerpacks `deep_research_contacts` and the legacy research-parallel pipeline
 consume. Stdlib-only.
 
 This primitive does **not** call the deep-research pipeline. It only
