@@ -151,6 +151,31 @@ def render_parent(name: str, parent_id: str, slug: str, emails: list[str], phone
     return "\n".join(lines) + "\n"
 
 
+def render_singleton(name: str, parent_id: str, slug: str, child_slug: str,
+                     emails: list[str], phones: list[str], headline: str) -> str:
+    """Thin pointer parent for an UNMERGED person — canonical, links to its one child."""
+    lines = [
+        "---",
+        f"parent_id: {parent_id}",
+        f"name: {json.dumps(name, ensure_ascii=False)}",
+        f"slug: {slug}",
+        "kind: parent",
+        "singleton: true",
+        f"children: {compose._yaml_list([child_slug])}",
+        f"emails: {compose._yaml_list(emails)}",
+        f"phones: {compose._yaml_list(phones)}",
+        f"generated_at: {now_iso()}",
+        "---",
+        "",
+        f"# {name} (canonical)",
+        "",
+        f"Single identity — no duplicates detected. Full context in [[{child_slug}]].",
+    ]
+    if headline:
+        lines += ["", headline]
+    return "\n".join(lines) + "\n"
+
+
 def inject_parent_backref(dossier_dir: Path, child_slug: str, parent_slug: str, parent_name: str) -> None:
     """Add/refresh a 'Part of <parent>' line right after the child's H1."""
     path = dossier_dir / f"{child_slug}.md"
@@ -181,9 +206,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     facts_dir = Path(args.facts_dir)
     raw_dir = Path(args.raw_dir)
 
-    index.setdefault("parents", {})
+    index["parents"] = {}  # authoritative for this run (don't accumulate stale clusters)
     written = 0
+    singletons = 0
     written_slugs: set[str] = set()
+    clustered_slugs: set[str] = set()
+
+    def index_parent(pslug: str, name: str, emails: list[str], phones: list[str]) -> None:
+        for e in emails:
+            index.setdefault("by_email", {}).setdefault(e.lower(), [])
+            if pslug not in index["by_email"][e.lower()]:
+                index["by_email"][e.lower()].append(pslug)
+        for ph in phones:
+            d = phone_digits(ph)
+            if d:
+                index.setdefault("by_phone", {}).setdefault(d, [])
+                if pslug not in index["by_phone"][d]:
+                    index["by_phone"][d].append(pslug)
+        nk = normalize_name(name)
+        if nk:
+            index.setdefault("by_name", {}).setdefault(nk, [])
+            if pslug not in index["by_name"][nk]:
+                index["by_name"][nk].append(pslug)
+
     def _pscore(row: dict[str, Any]) -> float:
         return float(row.get("confidence") or row.get("score") or 0)
 
@@ -242,27 +287,45 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         for c in confirmed + review:
             inject_parent_backref(dossier_dir, c["slug"], slug, name)
+            clustered_slugs.add(c["slug"])
 
-        rel_path = f"parents/{slug}.md"
-        index["parents"][slug] = {"parent_id": parent_id, "name": name, "path": rel_path,
+        index["parents"][slug] = {"parent_id": parent_id, "name": name, "path": f"parents/{slug}.md",
                                   "children": [c["slug"] for c in confirmed],
                                   "needs_review": [c["slug"] for c in review]}
-        # Make parents resolvable by lookup too.
-        for e in emails:
-            index.setdefault("by_email", {}).setdefault(e.lower(), [])
-            if slug not in index["by_email"][e.lower()]:
-                index["by_email"][e.lower()].append(slug)
-        for ph in phones:
-            d = phone_digits(ph)
-            if d:
-                index.setdefault("by_phone", {}).setdefault(d, [])
-                if slug not in index["by_phone"][d]:
-                    index["by_phone"][d].append(slug)
-        nk = normalize_name(name)
-        if nk:
-            index.setdefault("by_name", {}).setdefault(nk, [])
-            if slug not in index["by_name"][nk]:
-                index["by_name"][nk].append(slug)
+        index_parent(slug, name, emails, phones)
+
+    # Promote every UNMERGED person to a thin singleton parent (a pointer to its one
+    # child), so `parents/` is the COMPLETE canonical layer: exactly one parent per
+    # real person. Idempotent — singleton parent_id is a stable hash of [person_id].
+    if not args.no_singletons:
+        for child_slug, info in slugs_info.items():
+            if child_slug in clustered_slugs:
+                continue
+            pid = info["person_id"]
+            bundle = _read_json(raw_dir / f"{pid}.json")
+            name = info.get("name", child_slug)
+            emails = bundle.get("emails") or []
+            phones = bundle.get("phones") or []
+            parent_id = parent_id_for([pid])
+            pslug = slugify(name, parent_id)
+            (parents_dir / f"{pslug}.md").write_text(
+                render_singleton(name, parent_id, pslug, child_slug, emails, phones, info.get("headline", "")),
+                encoding="utf-8")
+            written += 1
+            singletons += 1
+            written_slugs.add(pslug)
+            inject_parent_backref(dossier_dir, child_slug, pslug, name)
+            index["parents"][pslug] = {"parent_id": parent_id, "name": name, "path": f"parents/{pslug}.md",
+                                       "children": [child_slug], "needs_review": [], "singleton": True}
+            index_parent(pslug, name, emails, phones)
+
+    # Remove orphan parent files from earlier cluster runs (slug set changes when
+    # clusters change); the dossier compose does the same for child dossiers.
+    orphans = 0
+    for md in parents_dir.glob("*.md"):
+        if md.stem not in written_slugs:
+            md.unlink()
+            orphans += 1
 
     write_json(Path(args.index_json), index)
     manifest = {
@@ -270,6 +333,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "status": "completed",
         "clusters": len(clusters),
         "parents_written": written,
+        "merged_parents": written - singletons,
+        "singleton_parents": singletons,
+        "orphans_removed": orphans,
         "parents_dir": str(parents_dir),
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "updated_at": now_iso(),
@@ -303,6 +369,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--parents-dir", default=str(PARENTS_DIR))
     p.add_argument("--confirm-threshold", type=float, default=0.85,
                    help="Min judge confidence to merge a child into the parent (else listed as needs-review)")
+    p.add_argument("--no-singletons", action="store_true",
+                   help="Don't promote unmerged people to pointer parents (parents/ = merged clusters only)")
     return p
 
 

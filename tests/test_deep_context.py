@@ -298,12 +298,23 @@ class TestEndToEnd(unittest.TestCase):
             # Parent layer: the duplicate pair becomes one canonical parent that
             # links both children, and each child backrefs the parent.
             par_dir = base / "parents"
-            pman = parents.run(_ns(merge_csv=merge_csv, index_json=index_json, dossier_dir=dossiers,
-                                   facts_dir=facts, raw_dir=raw, parents_dir=par_dir, confirm_threshold=0.85))
+            base_ns = dict(merge_csv=merge_csv, index_json=index_json, dossier_dir=dossiers,
+                           facts_dir=facts, raw_dir=raw, parents_dir=par_dir, confirm_threshold=0.85)
+            # Merge-only (no singletons): the duplicate pair -> 1 merged parent.
+            pman = parents.run(_ns(**base_ns, no_singletons=True))
             self.assertEqual(pman["parents_written"], 1)
+            self.assertEqual(pman["merged_parents"], 1)
             parent_md = next(par_dir.glob("*.md")).read_text()
             self.assertIn("Confirmed children", parent_md)  # shared phone -> 0.95 -> confirmed
             self.assertIn("[[" + p1_slug + "]]", parent_md)
+
+            # Default (promote singletons): 1 merged + 1 pointer parent for the unique p3.
+            pman2 = parents.run(_ns(**base_ns, no_singletons=False))
+            self.assertEqual(pman2["merged_parents"], 1)
+            self.assertEqual(pman2["singleton_parents"], 1)  # Maria, unmerged -> pointer parent
+            idx3 = json.loads(index_json.read_text())
+            self.assertEqual(len(idx3["parents"]), 2)
+            self.assertTrue(any(p.get("singleton") for p in idx3["parents"].values()))
             self.assertIn("Part of [[", (dossiers / f"{p1_slug}.md").read_text())
             # Parent is now resolvable by the shared phone.
             idx2 = json.loads(index_json.read_text())
