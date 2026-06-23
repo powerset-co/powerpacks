@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.16.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.15.0...powerpacks-v0.16.0) (2026-06-23)
+
+
+### Features
+
+* contact consolidation + single summary + review gate for deep-context self-heal ([#132](https://github.com/powerset-co/powerpacks/issues/132)) ([a3a41e7](https://github.com/powerset-co/powerpacks/commit/a3a41e79160e2f6f3a304259b316d24267f6c791))
+* one editable decisions file — fold review items into the override, retire review-queue ([#133](https://github.com/powerset-co/powerpacks/issues/133)) ([c879402](https://github.com/powerset-co/powerpacks/commit/c87940211aa0e910d84d3a42fcc7d3092b61c2a1))
+
+
+### Bug Fixes
+
+* add oss community basics ([#122](https://github.com/powerset-co/powerpacks/issues/122)) ([4623517](https://github.com/powerset-co/powerpacks/commit/4623517913d8d2a91e52ba7b9e4882207c9081a1))
+* **deep-context:** run echo points at summary.md + decisions table (not retired review-queue) ([#134](https://github.com/powerset-co/powerpacks/issues/134)) ([91ba97d](https://github.com/powerset-co/powerpacks/commit/91ba97deca50dd41882c28bae521a8a81fad4e94))
+* require explicit hosted config ([305dbd4](https://github.com/powerset-co/powerpacks/commit/305dbd415655ec25944f9f615758da97d13cc3b9))
+* scrub internal release references ([#121](https://github.com/powerset-co/powerpacks/issues/121)) ([7736e2b](https://github.com/powerset-co/powerpacks/commit/7736e2b2f9e5fa5238395997452521e2ed79a183))
+
+
+### Documentation
+
+* **deep-context:** phase-tag the checklist + fix stale P3.3 'backed up' line ([#129](https://github.com/powerset-co/powerpacks/issues/129)) ([96b212a](https://github.com/powerset-co/powerpacks/commit/96b212a239fcf693354a88b3d2641110049ccdff))
+
 ## [0.15.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.14.0...powerpacks-v0.15.0) (2026-06-23)
 
 

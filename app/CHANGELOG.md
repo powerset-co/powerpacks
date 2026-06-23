@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.9.0...powerpacks-console-v0.9.1) (2026-06-23)
+
+
+### Bug Fixes
+
+* add oss community basics ([#122](https://github.com/powerset-co/powerpacks/issues/122)) ([4623517](https://github.com/powerset-co/powerpacks/commit/4623517913d8d2a91e52ba7b9e4882207c9081a1))
+* require explicit hosted config ([305dbd4](https://github.com/powerset-co/powerpacks/commit/305dbd415655ec25944f9f615758da97d13cc3b9))
+
 ## [0.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-console-v0.8.0...powerpacks-console-v0.9.0) (2026-06-20)
 
 
