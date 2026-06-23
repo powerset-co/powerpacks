@@ -70,12 +70,12 @@ to `$deep-context`.
 the steps below and step through it, marking each complete as you go.** Mandatory.
 Use your harness's plan/task tool:
 
-- **Claude Code:** `TaskCreate` one task per step (P1.1–P2.2), then `TaskUpdate`
+- **Claude Code:** `TaskCreate` one task per step (P1.1–P3.6), then `TaskUpdate`
   each to `in_progress` then `completed`.
 - **Codex:** `update_plan` with the steps, updating status as you go.
 - **Any other harness:** its equivalent todo/plan mechanism.
 
-Seed the checklist with these exact item titles, in two phases:
+Seed the checklist with these exact item titles, across three phases:
 
 ```
 Phase 1 — Build one deep dossier per person
