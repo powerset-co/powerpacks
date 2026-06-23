@@ -703,12 +703,23 @@ class TestReconcileDeepResearch(unittest.TestCase):
 
     def test_eligible_subset_filters(self):
         verdicts = [
-            {"verdict": _verdict("wrong_person", 0.95, dr=True)},                 # eligible
-            {"verdict": _verdict("wrong_person", 0.95, dr=True, absent=True)},    # excluded: no LinkedIn
-            {"verdict": _verdict("wrong_person", 0.5, dr=True)},                  # excluded: low conf
-            {"verdict": _verdict("wrong_person", 0.95, dr=False)},               # excluded: not recommended
-            {"verdict": _verdict("confirmed", 0.99, dr=True)}]                    # excluded: not wrong
+            {"parent_slug": "a", "verdict": _verdict("wrong_person", 0.95, dr=True)},                 # eligible
+            {"parent_slug": "b", "verdict": _verdict("wrong_person", 0.95, dr=True, absent=True)},    # excluded: no LinkedIn
+            {"parent_slug": "c", "verdict": _verdict("wrong_person", 0.5, dr=True)},                  # excluded: low conf
+            {"parent_slug": "d", "verdict": _verdict("wrong_person", 0.95, dr=False)},               # excluded: not recommended
+            {"parent_slug": "e", "verdict": _verdict("confirmed", 0.99, dr=True)}]                    # excluded: not wrong
         self.assertEqual(len(dresearch.eligible_subset(verdicts, 0.85)), 1)
+
+    def test_eligible_subset_skips_detaches_whose_parent_kept_a_link(self):
+        # Conflict-resolved: parent "x" kept a confirmed LinkedIn AND detached a sibling.
+        # The detached sibling is the same person -> no need to research it.
+        verdicts = [
+            {"parent_slug": "x", "verdict": _verdict("confirmed", 0.92)},                 # kept link
+            {"parent_slug": "x", "verdict": _verdict("wrong_person", 0.95, dr=True)},     # sibling -> SKIP
+            {"parent_slug": "y", "verdict": _verdict("wrong_person", 0.95, dr=True)}]     # parent has no kept link -> research
+        elig = dresearch.eligible_subset(verdicts, 0.85)
+        self.assertEqual(len(elig), 1)
+        self.assertEqual(elig[0]["parent_slug"], "y")
 
     def test_cost_gate_blocks_over_budget(self):
         with tempfile.TemporaryDirectory() as d:

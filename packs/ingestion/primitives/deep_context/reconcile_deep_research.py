@@ -83,14 +83,25 @@ def load_people_rows(people_csv: Path) -> dict[str, dict[str, str]]:
 
 
 def eligible_subset(verdicts: list[dict[str, Any]], threshold: float) -> list[dict[str, Any]]:
-    """High-confidence wrong_person detaches that external research could resolve."""
+    """High-confidence wrong_person detaches that external research could resolve.
+
+    Excludes detaches whose PARENT already kept a confirmed LinkedIn (the conflict-resolved
+    case): those siblings are the same person as the kept one, so we already know the correct
+    LinkedIn and re-researching them is wasteful. Only research people whose parent ended up
+    with NO LinkedIn."""
+    parents_with_kept = {
+        r.get("parent_slug") for r in verdicts
+        if (r.get("verdict") or {}).get("verdict") == "confirmed"
+        and float((r.get("verdict") or {}).get("confidence") or 0) >= threshold
+    }
     out = []
     for r in verdicts:
         v = r.get("verdict") or {}
         if (v.get("verdict") == "wrong_person"
                 and float(v.get("confidence") or 0) >= threshold
                 and v.get("recommend_deep_research")
-                and not v.get("linkedin_plausibly_absent")):
+                and not v.get("linkedin_plausibly_absent")
+                and r.get("parent_slug") not in parents_with_kept):
             out.append(r)
     return out
 
@@ -230,9 +241,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "elapsed_ms": int((time.monotonic() - started) * 1000)}
 
     # Delegate the spend to the existing Parallel.ai primitive (reuse, don't rebuild).
+    # STREAM its output live to our stderr (the primitive prints `[deep_research_contacts]
+    # poll status ...` every poll) so the run isn't a silent black box — Parallel.ai jobs can
+    # take minutes. Keep our own stdout clean for the final JSON manifest.
+    print(f"[deep-research] researching {len(subset)} people via Parallel.ai ({args.processor}); "
+          "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
     cmd = [sys.executable, "-m", "packs.messages.primitives.deep_research_contacts.deep_research_contacts",
            "run", "--input", str(QUEUE_CSV), "--output-dir", str(DR_OUT_DIR), "--processor", args.processor]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, text=True)
+    print(f"[deep-research] research process exited ({proc.returncode}).", file=sys.stderr, flush=True)
     # Propose retargets (pending) for any correct LinkedIn the research found.
     proposals = {"proposed": 0}
     if proc.returncode == 0:
@@ -241,7 +258,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         **base, "status": "ran" if proc.returncode == 0 else "failed",
         "queue_csv": str(QUEUE_CSV), "output_dir": str(DR_OUT_DIR),
         "retargets_proposed": proposals.get("proposed", 0),
-        "returncode": proc.returncode, "stderr_tail": (proc.stderr or "")[-400:],
+        "returncode": proc.returncode, "progress": "streamed live to stderr",
         "elapsed_ms": int((time.monotonic() - started) * 1000),
     }
 
