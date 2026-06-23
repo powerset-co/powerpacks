@@ -95,6 +95,7 @@ P3.2  Confirm cost → run the reconcile judge
 P3.3  Auto-apply high-confidence verdicts (summary; people.csv backed up)
 P3.4  Surface the review queue; get user feedback on low-confidence rows
 P3.5  Deep-research wrong_person detaches (auto if ≤ $25, else ask)
+P3.6  Open files to review (applied.csv + review-queue.csv)
 ```
 
 Do not drop steps; mark inapplicable ones complete as a no-op. **Never run a
@@ -180,6 +181,10 @@ case this catches).
   user the cost** (`reconcile-deep-research`); **if > $25, stop and ask for approval**
   (`reconcile-deep-research --approve` once they agree). Needs `PARALLEL_API_KEY`. People
   flagged `linkedin_plausibly_absent` are excluded.
+- **P3.6 Open files to review** — open both review artifacts for the user:
+  `open .powerpacks/deep-context/reconcile/applied.csv .powerpacks/deep-context/reconcile/review-queue.csv`
+  (`applied.csv` = what auto-applied to review; `review-queue.csv` = the rows awaiting their
+  yes/no). On non-macOS use the platform open command, or print the top rows inline.
 
 `bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once P1.5 is
 confirmed (Phase 3 is run separately, after parents exist). Full surface:
