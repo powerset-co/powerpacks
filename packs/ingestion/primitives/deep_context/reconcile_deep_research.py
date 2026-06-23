@@ -44,9 +44,9 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import upsert_retargets
 from packs.ingestion.schemas.people_schema import extract_public_identifier
+# Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
+from packs.messages.primitives.deep_research_contacts.deep_research_contacts import PROCESSOR_PRICING_USD
 
-# Mirror packs/messages/primitives/deep_research_contacts PROCESSOR_PRICING_USD.
-PROCESSOR_PRICING_USD = {"core": 0.025, "core2x": 0.05, "pro": 0.10}
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 25.0
 DR_OUT_DIR = RECONCILE_DIR / "deep-research"
