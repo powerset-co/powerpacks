@@ -18,6 +18,11 @@ Changelog:
   people.csv (confirmed→verified, wrong_person→detach with backup), low-confidence →
   review queue; never forces a LinkedIn (linkedin_plausibly_absent). Deep-research
   escalation (Parallel.ai) on wrong_person detaches, $25 auto-approve cost gate.
+- 2026-06-22: Conflict auto-resolution — a parent with multiple attached links where
+  exactly one is high-confidence confirmed and the rest high-confidence wrong_person is
+  resolved automatically (keep the confirmed, detach the wrong); ambiguous conflicts still
+  defer to review. All auto-actions logged to reconcile/applied.csv; `reconcile --reapply`
+  re-decides/applies from existing verdicts with no OpenAI spend.
 -->
 
 # deep-context
@@ -151,12 +156,21 @@ case this catches).
   Writes `reconcile/verdicts.csv` (+ `.jsonl` audit) and injects a `## LinkedIn identity`
   section into each parent (verdict + supporting/contradicting evidence).
 - **P3.3 Auto-apply (high-confidence)** — happens in the same run unless `--no-apply`.
-  `people.csv` is backed up to `people.csv.bkup` first, then: `confirmed ≥ threshold` →
-  `linkedin_verified=confirmed`; `wrong_person ≥ threshold` → **detach** (stash into
-  `linkedin_url_rejected`, clear `linkedin_url`/`public_identifier`). Report the summary:
-  "✅ N verified, 🔧 M detached, ❓ K need feedback". `--confirm-threshold` defaults to 0.85.
+  `people.csv` is backed up to `people.csv.bkup` first (pristine copy preserved across
+  re-runs), then: `confirmed ≥ threshold` → `linkedin_verified=confirmed`; `wrong_person ≥
+  threshold` → **detach** (stash into `linkedin_url_rejected`, clear
+  `linkedin_url`/`public_identifier`). **Conflict auto-resolution:** when one parent has
+  several different attached links and exactly one is high-confidence `confirmed` while the
+  rest are high-confidence `wrong_person`, keep the confirmed and detach the wrong (one
+  right link, the rest wrong). Everything auto-done is logged to **`reconcile/applied.csv`**
+  (parent, person, kept/detached, via=normal|conflict_resolved, confidence, reason) so the
+  user can review what changed. Report the summary: "✅ N verified, 🔧 M detached
+  (incl. R conflict-resolved), ❓ K need feedback". `--confirm-threshold` defaults to 0.85.
+  Re-run idempotently with `reconcile --reapply` (re-decides/applies from existing verdicts,
+  no OpenAI spend).
 - **P3.4 Review queue (low-confidence)** — `reconcile/review-queue.csv` holds everything
-  below threshold + `needs_review` + link conflicts, with a blank `user_decision` column.
+  not auto-applied: below threshold + `needs_review` + **ambiguous** link conflicts (e.g.
+  two confirmed, or a needs_review in the mix), with a blank `user_decision` column.
   Surface these rows to the user and apply their yes/no calls. Some people legitimately
   have **no LinkedIn** (flagged `linkedin_plausibly_absent`) — never force a match.
 - **P3.5 Deep research (default, $25 gate)** — for high-confidence `wrong_person`
@@ -275,7 +289,8 @@ name falls back to an all-tokens fuzzy match.
 ├── parents/<slug>.md            canonical person (one per real person)
 └── reconcile/                   Phase 3 LinkedIn self-heal
     ├── verdicts.csv / .jsonl     same-human verdict per attached profile
-    ├── review-queue.csv          low-confidence rows needing your feedback
+    ├── applied.csv               what auto-applied (kept/detached) — for review
+    ├── review-queue.csv          low-confidence + ambiguous-conflict rows needing your feedback
     └── deep-research/            Parallel.ai re-research of wrong_person detaches
 ```
 

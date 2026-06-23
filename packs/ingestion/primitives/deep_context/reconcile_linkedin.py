@@ -413,29 +413,73 @@ def inject_section(path: Path, body: str) -> None:
     path.write_text(f"{head}\n\n{SECTION_ANCHOR}\n\n{body}\n", encoding="utf-8")
 
 
+# --- decide what auto-applies (incl. conflict auto-resolution) --------------
+
+def decide_actions(tasks: list[dict[str, Any]], threshold: float) -> None:
+    """Annotate each task with `action` ∈ {confirm, detach, review} and `via`.
+
+    Non-conflict parent: high-confidence confirmed → confirm, wrong_person → detach;
+    anything else → review.
+
+    Conflict parent (one canonical person, MULTIPLE different attached LinkedIns):
+    auto-RESOLVE only the unambiguous shape — exactly ONE high-confidence `confirmed`
+    and EVERY other candidate a high-confidence `wrong_person` (one right link, the rest
+    wrong). Keep the confirmed, detach the wrong (via=conflict_resolved). Any other
+    conflict shape (two confirmed, a needs_review, a low-confidence one) stays → review,
+    so a human decides."""
+    def hi(task: dict[str, Any], verdict: str) -> bool:
+        v = task.get("verdict") or {}
+        return v.get("verdict") == verdict and float(v.get("confidence") or 0) >= threshold
+
+    by_parent: dict[str, list[dict[str, Any]]] = {}
+    for t in tasks:
+        t["action"], t["via"] = "review", ""
+        by_parent.setdefault(t["parent_slug"], []).append(t)
+
+    for group in by_parent.values():
+        judged = [t for t in group if not t.get("no_link")]
+        if any(t.get("conflict") for t in group):
+            confirmed_hi = [t for t in judged if hi(t, "confirmed")]
+            wrong_hi = [t for t in judged if hi(t, "wrong_person")]
+            if len(confirmed_hi) == 1 and len(wrong_hi) == len(judged) - 1 and len(judged) >= 2:
+                confirmed_hi[0]["action"], confirmed_hi[0]["via"] = "confirm", "conflict_resolved"
+                for t in wrong_hi:
+                    t["action"], t["via"] = "detach", "conflict_resolved"
+            continue  # ambiguous conflicts stay as review
+        for t in judged:
+            if hi(t, "confirmed"):
+                t["action"], t["via"] = "confirm", "normal"
+            elif hi(t, "wrong_person"):
+                t["action"], t["via"] = "detach", "normal"
+
+
 # --- auto-apply to people.csv -----------------------------------------------
 
 APPLY_COLUMNS = ["linkedin_verified", "linkedin_verified_confidence",
                  "linkedin_verified_reason", "linkedin_url_rejected"]
 
 
-def apply_verdicts(people_csv: Path, results: list[dict[str, Any]], threshold: float) -> dict[str, Any]:
-    """High-confidence verdicts heal people.csv in place (after a .bkup backup).
+def apply_verdicts(people_csv: Path, tasks: list[dict[str, Any]], threshold: float) -> dict[str, Any]:
+    """Apply the decided actions to people.csv in place (after a .bkup backup).
 
-    confirmed  >= threshold -> annotate linkedin_verified=confirmed (non-destructive).
-    wrong_person >= threshold -> detach: stash linkedin_url into linkedin_url_rejected,
-    clear linkedin_url + public_identifier. Reversible + auditable. Everything else is
-    left untouched (it stays in the review queue)."""
-    decisions: dict[str, dict[str, Any]] = {}  # person_id -> verdict to apply
-    for r in results:
-        v = r.get("verdict") or {}
-        verdict, conf = v.get("verdict"), float(v.get("confidence") or 0)
-        if conf < threshold or verdict not in ("confirmed", "wrong_person") or r.get("conflict"):
+    confirm -> annotate linkedin_verified=confirmed (non-destructive).
+    detach  -> stash linkedin_url into linkedin_url_rejected, clear linkedin_url +
+    public_identifier. Reversible + auditable. Idempotent: re-applying a detach keeps the
+    already-stashed rejected url, and the pristine .bkup (pre-Phase-3) is never clobbered.
+    Returns counts + a per-row report of exactly what was done."""
+    decide_actions(tasks, threshold)
+    decisions: dict[str, dict[str, Any]] = {}  # person_id -> action to apply
+    for t in tasks:
+        if t.get("action") not in ("confirm", "detach"):
             continue
-        for pid in r["person_ids"]:
-            decisions[pid] = {"verdict": verdict, "confidence": conf, "reason": v.get("reason", "")}
-    if not people_csv.exists():
-        return {"applied": 0, "confirmed": 0, "detached": 0, "backup": ""}
+        v = t.get("verdict") or {}
+        for pid in t["person_ids"]:
+            decisions[pid] = {"action": t["action"], "via": t.get("via", ""),
+                              "confidence": float(v.get("confidence") or 0), "reason": v.get("reason", ""),
+                              "parent_slug": t.get("parent_slug", ""), "name": t.get("name", "")}
+    empty = {"applied": 0, "confirmed": 0, "detached": 0, "conflict_resolved": 0, "backup": "", "rows": []}
+    if not people_csv.exists() or not decisions:
+        return empty
 
     with people_csv.open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
@@ -445,32 +489,56 @@ def apply_verdicts(people_csv: Path, results: list[dict[str, Any]], threshold: f
         if col not in fieldnames:
             fieldnames.append(col)
 
-    confirmed = detached = 0
+    confirmed = detached = resolved = 0
+    report: list[dict[str, Any]] = []
     for row in rows:
-        decision = decisions.get(str(row.get("id") or "").strip())
-        if not decision:
+        d = decisions.get(str(row.get("id") or "").strip())
+        if not d:
             continue
-        row["linkedin_verified"] = decision["verdict"]
-        row["linkedin_verified_confidence"] = f"{decision['confidence']:.3f}"
-        row["linkedin_verified_reason"] = decision["reason"]
-        if decision["verdict"] == "confirmed":
+        if d["via"] == "conflict_resolved":
+            resolved += 1
+        entry = {"parent_slug": d["parent_slug"], "name": d["name"], "person_id": row.get("id", ""),
+                 "via": d["via"], "confidence": round(d["confidence"], 3), "reason": d["reason"]}
+        if d["action"] == "confirm":
+            row["linkedin_verified"] = "confirmed"
+            row["linkedin_verified_confidence"] = f"{d['confidence']:.3f}"
+            row["linkedin_verified_reason"] = d["reason"]
             confirmed += 1
-        else:  # wrong_person -> detach, preserving the rejected url
-            row["linkedin_url_rejected"] = row.get("linkedin_url") or ""
-            row["linkedin_url"] = ""
-            row["public_identifier"] = ""
+            report.append({**entry, "action": "verified_kept", "linkedin_url": row.get("linkedin_url", "")})
+        else:  # detach (idempotent: only stash a real current url)
+            current = (row.get("linkedin_url") or "").strip()
+            rejected = current or row.get("linkedin_url_rejected", "")
+            if current:
+                row["linkedin_url_rejected"] = current
+                row["linkedin_url"] = ""
+                row["public_identifier"] = ""
+            row["linkedin_verified"] = "wrong_person"
+            row["linkedin_verified_confidence"] = f"{d['confidence']:.3f}"
+            row["linkedin_verified_reason"] = d["reason"]
             detached += 1
+            report.append({**entry, "action": "detached", "linkedin_url": rejected})
 
-    backup = ""
-    if confirmed or detached:
-        backup = str(people_csv) + ".bkup"
-        shutil.copy2(people_csv, backup)  # NEVER overwrite source without a backup
-        with people_csv.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(fh, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in rows:
-                writer.writerow({k: row.get(k, "") for k in fieldnames})
-    return {"applied": confirmed + detached, "confirmed": confirmed, "detached": detached, "backup": backup}
+    backup = str(people_csv) + ".bkup"
+    if not Path(backup).exists():           # preserve the FIRST (pristine) copy only
+        shutil.copy2(people_csv, backup)
+    with people_csv.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
+    return {"applied": confirmed + detached, "confirmed": confirmed, "detached": detached,
+            "conflict_resolved": resolved, "backup": backup, "rows": report}
+
+
+def write_applied(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Audit report of what auto-applied — so the user can review what was done."""
+    fields = ["parent_slug", "name", "person_id", "action", "via", "confidence", "linkedin_url", "reason"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        w.writeheader()
+        for r in sorted(rows, key=lambda r: (r.get("via") != "conflict_resolved", r.get("action", ""))):
+            w.writerow({k: r.get(k, "") for k in fields})
 
 
 # --- output writers ---------------------------------------------------------
@@ -507,17 +575,18 @@ def write_verdicts(jsonl_path: Path, csv_path: Path, results: list[dict[str, Any
             w.writerow(_flat(r))
 
 
-def write_review_queue(path: Path, results: list[dict[str, Any]], threshold: float) -> int:
+def write_review_queue(path: Path, tasks: list[dict[str, Any]], threshold: float) -> int:
+    """Everything NOT auto-applied (action == review): med/low-confidence verdicts,
+    needs_review, no-link, and ambiguous conflicts — for the user to decide on."""
+    decide_actions(tasks, threshold)
     fields = ["parent_slug", "name", "linkedin_url", "verdict", "confidence", "conflict",
               "reason", "user_decision"]
     queued = []
-    for r in results:
-        v = r.get("verdict") or {}
-        conf = float(v.get("confidence") or 0)
-        low_conf = conf < threshold or v.get("verdict") == "needs_review"
-        if r.get("no_link") or r.get("conflict") or low_conf:
-            row = _flat(r)
-            queued.append({k: row.get(k, "") for k in fields[:-1]} | {"user_decision": ""})
+    for t in tasks:
+        if t.get("action") != "review":
+            continue
+        row = _flat(t)
+        queued.append({k: row.get(k, "") for k in fields[:-1]} | {"user_decision": ""})
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()
@@ -527,9 +596,27 @@ def write_review_queue(path: Path, results: list[dict[str, Any]], threshold: flo
 
 # --- driver -----------------------------------------------------------------
 
+def load_tasks_from_verdicts(path: Path) -> list[dict[str, Any]]:
+    """Reload already-judged tasks from verdicts.jsonl (for --reapply, no LLM spend)."""
+    tasks = []
+    for rec in _read_jsonl(path):
+        rec.setdefault("verdict", {})
+        rec.setdefault("linkedin", {})
+        tasks.append(rec)
+    return tasks
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     index = _read_json(Path(args.index_json))
+
+    # --reapply: re-decide/apply from the existing verdicts (e.g. after changing the
+    # auto-resolution rule) without re-judging — no OpenAI spend.
+    if getattr(args, "reapply", False):
+        tasks = load_tasks_from_verdicts(Path(args.verdicts_jsonl))
+        return _finalize(args, tasks, index, usage_total={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
+                         use_llm=False, judged=sum(1 for t in tasks if not t.get("no_link")), started=started)
+
     people = load_people_rows(Path(args.people_csv))
     tasks = build_tasks(index, people, Path(args.facts_dir), Path(args.raw_dir), Path(args.profile_cache_dir))
     judgeable = [t for t in tasks if not t.get("no_link") and t["linkedin"].get("has_profile")]
@@ -588,25 +675,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             task["verdict"] = deterministic_verdict(task)
             task["error"] = ""
 
-    # Outputs.
+    return _finalize(args, tasks, index, usage_total=usage_total, use_llm=use_llm,
+                     judged=len(judgeable), started=started)
+
+
+def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict[str, Any], *,
+              usage_total: dict[str, int], use_llm: bool, judged: int, started: float) -> dict[str, Any]:
+    """Shared tail: decide -> verdicts/review/applied outputs -> parent injection -> manifest."""
     out_dir = Path(args.verdicts_jsonl).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     write_verdicts(Path(args.verdicts_jsonl), Path(args.verdicts_csv), tasks)
+
+    decide_actions(tasks, args.confirm_threshold)   # one authoritative decision pass
     queued = write_review_queue(Path(args.review_queue), tasks, args.confirm_threshold)
     parents_dir = Path(args.parents_dir)
     for task in tasks:
         if task.get("verdict") and not task.get("no_link"):
             inject_section(parents_dir / f"{task['parent_slug']}.md", render_section(task["verdict"], task["linkedin"]))
 
-    apply_stats = {"applied": 0, "confirmed": 0, "detached": 0, "backup": ""}
+    apply_stats = {"applied": 0, "confirmed": 0, "detached": 0, "conflict_resolved": 0, "backup": "", "rows": []}
     if not args.no_apply:
         apply_stats = apply_verdicts(Path(args.people_csv), tasks, args.confirm_threshold)
+    write_applied(out_dir / "applied.csv", apply_stats.get("rows", []))
 
     counts = {v: 0 for v in VERDICTS}
     for task in tasks:
         v = (task.get("verdict") or {}).get("verdict")
         if v in counts:
             counts[v] += 1
+    conflict_tasks = [t for t in tasks if t.get("conflict")]
     dr_subset = [t for t in tasks
                  if (t.get("verdict") or {}).get("verdict") == "wrong_person"
                  and float((t.get("verdict") or {}).get("confidence") or 0) >= args.confirm_threshold
@@ -617,11 +714,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     manifest = {
         "source": "reconcile_linkedin", "status": "completed",
         "judge": "llm" if use_llm else "deterministic",
-        "parents": len(index.get("parents", {})), "tasks": len(tasks), "judged": len(judgeable),
-        "verdicts": counts, "conflicts": sum(1 for t in tasks if t.get("conflict")),
+        "parents": len(index.get("parents", {})), "tasks": len(tasks), "judged": judged,
+        "verdicts": counts, "conflicts": len(conflict_tasks),
+        "conflicts_auto_resolved": sum(1 for t in conflict_tasks if t.get("via") == "conflict_resolved"),
+        "conflicts_to_review": sum(1 for t in conflict_tasks if t.get("action") == "review"),
         "no_link": sum(1 for t in tasks if t.get("no_link")),
         "errors": sum(1 for t in tasks if t.get("error")),
-        "applied": apply_stats, "review_queued": queued,
+        "applied": {k: apply_stats[k] for k in ("applied", "confirmed", "detached", "conflict_resolved", "backup")},
+        "applied_csv": str(out_dir / "applied.csv"), "review_queued": queued,
         "deep_research_eligible": len(dr_subset),
         "deep_research_est_usd": round(len(dr_subset) * DR_COST_PER_PERSON, 2),
         "tokens": usage_total,
@@ -653,6 +753,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="Estimate cost only; no spend, no writes")
     p.add_argument("--no-apply", action="store_true", help="Write verdicts but do NOT touch people.csv")
     p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")
+    p.add_argument("--reapply", action="store_true",
+                   help="Re-decide/apply from existing verdicts.jsonl (no re-judging, no OpenAI spend)")
     return p
 
 

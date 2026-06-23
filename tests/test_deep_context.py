@@ -400,9 +400,9 @@ class TestReconcileLinkedIn(unittest.TestCase):
                 {"id": "pb", "public_identifier": "bobceo", "linkedin_url": "https://www.linkedin.com/in/bobceo"},
                 {"id": "pc", "public_identifier": "carol", "linkedin_url": "https://www.linkedin.com/in/carol"}])
             results = [
-                {"person_ids": ["pa"], "conflict": False, "verdict": _verdict("confirmed", 0.95)},
-                {"person_ids": ["pb"], "conflict": False, "verdict": _verdict("wrong_person", 0.92, reason="CEO != plumber")},
-                {"person_ids": ["pc"], "conflict": False, "verdict": _verdict("wrong_person", 0.50)},  # below threshold
+                {"parent_slug": "a", "name": "A", "person_ids": ["pa"], "conflict": False, "verdict": _verdict("confirmed", 0.95)},
+                {"parent_slug": "b", "name": "B", "person_ids": ["pb"], "conflict": False, "verdict": _verdict("wrong_person", 0.92, reason="CEO != plumber")},
+                {"parent_slug": "c", "name": "C", "person_ids": ["pc"], "conflict": False, "verdict": _verdict("wrong_person", 0.50)},  # below threshold
             ]
             stats = reconcile.apply_verdicts(people_csv, results, 0.85)
             self.assertEqual(stats["confirmed"], 1)
@@ -418,6 +418,48 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self.assertEqual(rows["pb"]["public_identifier"], "")
             self.assertEqual(rows["pb"]["linkedin_url_rejected"], "https://www.linkedin.com/in/bobceo")
             self.assertEqual(rows["pc"]["linkedin_verified"], "")  # low-confidence: not applied
+
+    def test_conflict_auto_resolves_one_confirmed_rest_wrong(self):
+        # One parent, two different attached links: one confirmed, one wrong -> auto-resolve
+        # (keep the confirmed, detach the wrong) instead of deferring to review.
+        tasks = [
+            {"parent_slug": "herman", "name": "Herman", "person_ids": ["good"], "conflict": True,
+             "no_link": False, "verdict": _verdict("confirmed", 0.92)},
+            {"parent_slug": "herman", "name": "Herman", "person_ids": ["bad"], "conflict": True,
+             "no_link": False, "verdict": _verdict("wrong_person", 0.98)}]
+        reconcile.decide_actions(tasks, 0.85)
+        by_pid = {t["person_ids"][0]: t for t in tasks}
+        self.assertEqual(by_pid["good"]["action"], "confirm")
+        self.assertEqual(by_pid["good"]["via"], "conflict_resolved")
+        self.assertEqual(by_pid["bad"]["action"], "detach")
+        self.assertEqual(by_pid["bad"]["via"], "conflict_resolved")
+
+    def test_ambiguous_conflict_stays_in_review(self):
+        # Two confirmed under one parent: not the clean shape -> all review, no mutation.
+        tasks = [
+            {"parent_slug": "x", "name": "X", "person_ids": ["p1"], "conflict": True,
+             "no_link": False, "verdict": _verdict("confirmed", 0.9)},
+            {"parent_slug": "x", "name": "X", "person_ids": ["p2"], "conflict": True,
+             "no_link": False, "verdict": _verdict("confirmed", 0.9)}]
+        reconcile.decide_actions(tasks, 0.85)
+        self.assertTrue(all(t["action"] == "review" for t in tasks))
+
+    def test_detach_is_idempotent_and_preserves_backup(self):
+        with tempfile.TemporaryDirectory() as d:
+            people_csv = Path(d) / "people.csv"
+            self._people_csv(people_csv, [
+                {"id": "pb", "public_identifier": "bobceo", "linkedin_url": "https://www.linkedin.com/in/bobceo"}])
+            results = [{"parent_slug": "b", "name": "B", "person_ids": ["pb"], "conflict": False,
+                        "verdict": _verdict("wrong_person", 0.95)}]
+            reconcile.apply_verdicts(people_csv, results, 0.85)
+            backup_bytes = Path(str(people_csv) + ".bkup").read_bytes()  # pristine (has the url)
+            reconcile.apply_verdicts(people_csv, results, 0.85)          # second run
+            import csv as _csv
+            with people_csv.open() as fh:
+                row = next(_csv.DictReader(fh))
+            self.assertEqual(row["linkedin_url"], "")                                  # still detached
+            self.assertEqual(row["linkedin_url_rejected"], "https://www.linkedin.com/in/bobceo")  # NOT wiped
+            self.assertEqual(Path(str(people_csv) + ".bkup").read_bytes(), backup_bytes)  # backup NOT clobbered
 
     def test_review_queue_routes_low_confidence_and_conflicts(self):
         with tempfile.TemporaryDirectory() as d:
