@@ -187,24 +187,24 @@ class TestIncrementalSynthesis(unittest.TestCase):
 class TestOwnerContext(unittest.TestCase):
     def test_owner_background_block(self):
         block = common.owner_background_block({
-            "name": "Arthur Chen",
-            "education": [{"school": "UCLA", "end": 2010, "note": "undergrad"}],
-            "work": [{"company": "Intel", "title": "Engineer", "start": 2012, "end": 2016}],
-            "locations": ["LA"],
+            "name": "Jane Doe",
+            "education": [{"school": "MIT", "end": 2010, "note": "undergrad"}],
+            "work": [{"company": "Acme", "title": "Engineer", "start": 2012, "end": 2016}],
+            "locations": ["NYC"],
         })
-        self.assertIn("Arthur Chen", block)
-        self.assertIn("UCLA [until 2010]", block)
-        self.assertIn("Intel as Engineer [2012-2016]", block)
+        self.assertIn("Jane Doe", block)
+        self.assertIn("MIT [until 2010]", block)
+        self.assertIn("Acme as Engineer [2012-2016]", block)
 
     def test_shared_context_merges_and_dedupes(self):
         chunks = [
-            {"facts": _facts(shared_context=[{"overlap": "school", "detail": "USC overlap", "evidence": "e1"}])},
-            {"facts": _facts(shared_context=[{"overlap": "school", "detail": "USC overlap", "evidence": "e1"},
-                                             {"overlap": "employer", "detail": "Intel", "evidence": "e2"}])},
+            {"facts": _facts(shared_context=[{"overlap": "school", "detail": "Stanford overlap", "evidence": "e1"}])},
+            {"facts": _facts(shared_context=[{"overlap": "school", "detail": "Stanford overlap", "evidence": "e1"},
+                                             {"overlap": "employer", "detail": "Globex", "evidence": "e2"}])},
         ]
         merged = compose.merge_facts(chunks)
         details = {s["detail"] for s in merged["shared_context"]}
-        self.assertEqual(details, {"USC overlap", "Intel"})
+        self.assertEqual(details, {"Stanford overlap", "Globex"})
 
 
 def _facts(**over):
@@ -487,9 +487,9 @@ class TestReconcileLinkedIn(unittest.TestCase):
         # One parent, two different attached links: one confirmed, one wrong -> auto-resolve
         # (keep the confirmed, detach the wrong) instead of deferring to review.
         tasks = [
-            {"parent_slug": "herman", "name": "Herman", "person_ids": ["good"], "conflict": True,
+            {"parent_slug": "sam", "name": "Sam", "person_ids": ["good"], "conflict": True,
              "no_link": False, "verdict": _verdict("confirmed", 0.92)},
-            {"parent_slug": "herman", "name": "Herman", "person_ids": ["bad"], "conflict": True,
+            {"parent_slug": "sam", "name": "Sam", "person_ids": ["bad"], "conflict": True,
              "no_link": False, "verdict": _verdict("wrong_person", 0.98)}]
         reconcile.decide_actions(tasks, 0.85)
         by_pid = {t["person_ids"][0]: t for t in tasks}
@@ -517,15 +517,15 @@ class TestReconcileLinkedIn(unittest.TestCase):
             with people.open("w", newline="") as fh:
                 w = __import__("csv").DictWriter(fh, fieldnames=cols)
                 w.writeheader()
-                w.writerow({"id": "pid-keep", "public_identifier": "chrissyhu",
-                            "primary_email": "c@gmail.com", "all_emails": '["c@gmail.com"]',
+                w.writerow({"id": "pid-keep", "public_identifier": "patlee",
+                            "primary_email": "pat@gmail.com", "all_emails": '["pat@gmail.com"]',
                             "interaction_counts": '{"gmail": 5}', "source_channels": "gmail_msgvault"})
-                w.writerow({"id": "pid-sib", "public_identifier": "chrissy-hu",
-                            "primary_email": "c@jpmorgan.com", "all_emails": '["c@jpmorgan.com"]',
+                w.writerow({"id": "pid-sib", "public_identifier": "pat-lee",
+                            "primary_email": "pat@work.com", "all_emails": '["pat@work.com"]',
                             "interaction_counts": '{"imessage": 9}', "source_channels": "imessage"})
             tasks = [
-                self._task("chrissy", "chrissyhu", "confirmed", 0.95, conflict=True),
-                self._task("chrissy", "chrissy-hu", "wrong_person", 0.95, conflict=True)]
+                self._task("pat", "patlee", "confirmed", 0.95, conflict=True),
+                self._task("pat", "pat-lee", "wrong_person", 0.95, conflict=True)]
             tasks[0]["person_ids"] = ["pid-keep"]
             tasks[1]["person_ids"] = ["pid-sib"]
             reconcile.decide_actions(tasks, 0.85)
@@ -535,24 +535,24 @@ class TestReconcileLinkedIn(unittest.TestCase):
             import csv as _csv
             with out.open() as fh:
                 row = next(_csv.DictReader(fh))
-            self.assertEqual(row["public_identifier"], "chrissyhu")     # folded onto the KEPT link
-            self.assertIn("c@gmail.com", row["all_emails"])
-            self.assertIn("c@jpmorgan.com", row["all_emails"])          # sibling email carried
+            self.assertEqual(row["public_identifier"], "patlee")     # folded onto the KEPT link
+            self.assertIn("pat@gmail.com", row["all_emails"])
+            self.assertIn("pat@work.com", row["all_emails"])          # sibling email carried
             self.assertEqual(json.loads(row["interaction_counts"]), {"gmail": 5, "imessage": 9})  # per-channel kept
             self.assertEqual(row["rapidapi_response"], "")              # contact-only (no profile pollution)
 
     def test_conflict_resolution_writes_one_verify_and_rest_detach(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "ov.csv"
-            tasks = [self._task("herman", "herman-au-7a04927", "confirmed", 0.92, conflict=True),
-                     self._task("herman", "hermanau", "wrong_person", 0.98, conflict=True)]
+            tasks = [self._task("sam", "samroe-7a04927", "confirmed", 0.92, conflict=True),
+                     self._task("sam", "samroe", "wrong_person", 0.98, conflict=True)]
             reconcile.decide_actions(tasks, 0.85)
             reconcile.write_overrides(path, tasks)
             import csv as _csv
             with path.open() as fh:
                 rows = {r["public_identifier"]: r["action"] for r in _csv.DictReader(fh)}
-            self.assertEqual(rows["herman-au-7a04927"], "verify")
-            self.assertEqual(rows["hermanau"], "detach")
+            self.assertEqual(rows["samroe-7a04927"], "verify")
+            self.assertEqual(rows["samroe"], "detach")
 
     def test_override_holds_auto_and_pending_in_one_file(self):
         # Everything judged lands in the ONE decisions table: high-conf -> auto, low-conf -> pending.
