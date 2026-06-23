@@ -10,7 +10,7 @@ Powerpacks.
 
 V1 scope is intentionally narrow: `.powerpacks/` artifacts only, backed by
 local msgvault metadata. Do not use Powerset-hosted Gmail OAuth/sync helpers,
-task JSON, or `../aleph-mvp`; code must live inside Powerpacks.
+task JSON, or an external legacy app checkout; code must live inside Powerpacks.
 
 ## Consent / approval model
 

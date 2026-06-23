@@ -56,13 +56,12 @@ def default_nanoclaw_dir() -> Path:
 
     candidates = [
         POWERPACKS_ROOT.parent,
-        Path("/Users/arthur/workspace/nanoclaw-powerpacks"),
-        Path("/Users/arthur/workspace/nanoclaw-e2b"),
+        Path.cwd(),
     ]
     for candidate in candidates:
         if (candidate / "nanoclaw.sh").exists():
             return candidate
-    return candidates[1]
+    return POWERPACKS_ROOT.parent
 
 
 DEFAULT_NANOCLAW_DIR = default_nanoclaw_dir()

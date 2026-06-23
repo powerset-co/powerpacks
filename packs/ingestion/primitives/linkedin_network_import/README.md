@@ -14,7 +14,7 @@ default. No database writes or uploads occur.
 ```bash
 uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run \
   --csv ~/Downloads/Connections.csv \
-  --source-user arthur \
+  --source-user operator-a \
   --operator-id local
 ```
 

@@ -3,7 +3,7 @@
 
 Stdlib-only. Filters the message-contacts CSV to the rows that are worth
 deep-researching (named, LLM-ENRICH, not already matched in Powerset) and
-reshapes them into the column set consumed by aleph-mvp's
+reshapes them into the column set consumed by the legacy
 `data_pipeline_v2.pipelines.synthetic.research_parallel`.
 
 This primitive does not call the deep-research pipeline itself. It only
@@ -89,7 +89,7 @@ RESEARCH_COLUMNS = [
 # Single-token names (no last name) and short tokens are essentially
 # un-LinkedIn-searchable from a phone+area-code prior alone, so we filter
 # them out before paying for deep research. The thresholds match
-# aleph-mvp's `looks_like_real_name`:
+# Legacy `looks_like_real_name`:
 #   - >= 2 alpha-only tokens of >= 2 chars each
 #   - >= 5 total alpha characters across the name
 MIN_NAME_TOKENS = 2
@@ -231,8 +231,8 @@ def is_eligible(row: dict[str, str], include_skipped: bool, include_matched: boo
 def has_searchable_name(name: str) -> bool:
     """True when a name looks plausibly LinkedIn-searchable.
 
-    Mirrors aleph-mvp's `looks_like_real_name` so the same filter applies
-    whether the deep-research stage runs natively here or via aleph-mvp.
+    Mirrors the legacy `looks_like_real_name` so the same filter applies
+    whether the deep-research stage runs natively here or via the legacy pipeline.
     """
     cleaned = normalize_name(name)
     if not cleaned:

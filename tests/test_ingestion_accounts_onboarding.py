@@ -543,7 +543,7 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
                 code, payload = self.invoke(onboarding, [
                     "step",
                     "--accounts", str(path),
-                    "--twitter-handle", "arthurchen",
+                    "--twitter-handle", "examplehandle",
                 ])
             finally:
                 os.chdir(old_cwd)
@@ -555,8 +555,8 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
             twitter = registry["accounts"]["twitter"]
             self.assertTrue(twitter["linked"])
             self.assertFalse(twitter["skipped"])
-            self.assertEqual(twitter["usernames"], ["arthurchen"])
-            self.assertEqual(twitter["config"]["handle"], "arthurchen")
+            self.assertEqual(twitter["usernames"], ["examplehandle"])
+            self.assertEqual(twitter["config"]["handle"], "examplehandle")
 
     def test_onboarding_messages_check_bypasses_unresolved_gmail(self):
         old_cwd = Path.cwd()

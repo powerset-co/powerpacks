@@ -3,6 +3,29 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SEARCH_EVALS="$ROOT/packs/search/evals"
+DEFAULT_APP_DIR="${APP_DIR:-$ROOT}"
+DEFAULT_RECALL_DIR="${RECALL_DIR:-$DEFAULT_APP_DIR/tests/recall}"
+DEFAULT_QUERY_DATASET_DIR="${QUERY_DATASET_DIR:-$DEFAULT_APP_DIR/tests/evals/query_expansion/datasets}"
+
+require_recall_dir() {
+  if [[ ! -d "$DEFAULT_RECALL_DIR" ]]; then
+    cat >&2 <<EOF
+error: recall fixtures not found: $DEFAULT_RECALL_DIR
+Set RECALL_DIR=/path/to/tests/recall, or set APP_DIR=/path/to/repo that contains tests/recall.
+EOF
+    exit 2
+  fi
+}
+
+require_query_dataset_dir() {
+  if [[ ! -d "$DEFAULT_QUERY_DATASET_DIR" ]]; then
+    cat >&2 <<EOF
+error: query expansion dataset not found: $DEFAULT_QUERY_DATASET_DIR
+Set QUERY_DATASET_DIR=/path/to/tests/evals/query_expansion/datasets, or set APP_DIR=/path/to/repo that contains it.
+EOF
+    exit 2
+  fi
+}
 
 usage() {
   cat <<'EOF'
@@ -47,9 +70,9 @@ Commands:
       Backward-compatible alias for component.
 
 Environment:
-  APP_DIR                           Defaults to /Users/arthur/workspace/aleph-mvp (primitive recall)
-                                    or /Users/arthur/workspace/network-search-api (pipeline-eval).
-  RECALL_DIR                        Defaults to $APP_DIR/tests/recall.
+  APP_DIR                           Defaults to the Powerpacks repo root. Set this when using external fixtures.
+  RECALL_DIR                        Defaults to $APP_DIR/tests/recall; recall/eval commands fail clearly if absent.
+  QUERY_DATASET_DIR                 Defaults to $APP_DIR/tests/evals/query_expansion/datasets.
   ENV_FILE                          Retrieval primitive env file. Defaults to .env.
   LIMIT_CAP                         Defaults to 1000.
   POWERPACKS_PIPELINE_SKIP_LLM      Set to true/1 to skip LLM filter/rerank in pipeline-eval. Default: true.
@@ -62,7 +85,7 @@ run_company_harness() {
   shift
   local args=(
     uv run python "$SEARCH_EVALS/run_company_search_harness.py"
-    --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}"
+    --app-dir "$DEFAULT_APP_DIR"
     --env-file "${ENV_FILE:-.env}"
   )
   if [[ "$mode" == "live" ]]; then
@@ -82,8 +105,9 @@ case "$command" in
     "$ROOT/install.sh" codex
     "$ROOT/scripts/lint-powerpacks"
     "$ROOT/scripts/test-powerpacks"
+    require_recall_dir
     uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
-      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
+      --recall-dir "$DEFAULT_RECALL_DIR" \
       --env-file "${ENV_FILE:-.env}" \
       --limit-cap "${LIMIT_CAP:-10000}" \
       --dry-run --bucket education --max-cases 1
@@ -96,31 +120,35 @@ case "$command" in
     run_company_harness live "$@"
     ;;
   primitive-recall)
+    require_recall_dir
     uv run python "$SEARCH_EVALS/run_recall_parity.py" \
-      --app-dir "${APP_DIR:-/Users/arthur/workspace/aleph-mvp}" \
-      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/aleph-mvp}/tests/recall}" \
+      --app-dir "$DEFAULT_APP_DIR" \
+      --recall-dir "$DEFAULT_RECALL_DIR" \
       --env-file "${ENV_FILE:-.env}" \
       --limit-cap "${LIMIT_CAP:-10000}" \
       "$@"
     ;;
   pipeline-eval)
+    require_recall_dir
     uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
-      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
+      --recall-dir "$DEFAULT_RECALL_DIR" \
       --env-file "${ENV_FILE:-.env}" \
       --limit-cap "${LIMIT_CAP:-10000}" \
       "$@"
     ;;
   pipeline-eval-dry-run)
+    require_recall_dir
     uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
-      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
+      --recall-dir "$DEFAULT_RECALL_DIR" \
       --env-file "${ENV_FILE:-.env}" \
       --limit-cap "${LIMIT_CAP:-10000}" \
       --dry-run \
       "$@"
     ;;
   pipeline-eval-list)
+    require_recall_dir
     uv run python "$SEARCH_EVALS/run_pipeline_eval.py" \
-      --recall-dir "${RECALL_DIR:-${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/recall}" \
+      --recall-dir "$DEFAULT_RECALL_DIR" \
       --list \
       "$@"
     ;;
@@ -136,8 +164,9 @@ case "$command" in
     "$py" -m unittest tests.test_search_network_mock_openai -v "$@"
     ;;
   extractor-eval)
+    require_query_dataset_dir
     uv run --env-file "${ENV_FILE:-.env}" python "$SEARCH_EVALS/extractor_eval.py" \
-      --dataset-dir "${APP_DIR:-/Users/arthur/workspace/network-search-api}/tests/evals/query_expansion/datasets" \
+      --dataset-dir "$DEFAULT_QUERY_DATASET_DIR" \
       --env-file "${ENV_FILE:-.env}" \
       "$@"
     ;;

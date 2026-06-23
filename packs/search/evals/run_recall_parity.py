@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run bucketed aleph recall cases through Powerpacks primitives.
+"""Run bucketed recall cases through Powerpacks primitives.
 
-This harness intentionally bypasses aleph's /expand and /execute endpoints. It
+This harness intentionally bypasses hosted /expand and /execute endpoints. It
 uses deterministic Powerpacks-style decomposition heuristics so failures point
 at primitive coverage, contracts, or missing expansion rules.
 """
@@ -27,8 +27,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PRIMITIVES = ROOT / "primitives"
 TASK_STATE = PRIMITIVES / "task_state" / "task_state.py"
 REPORT_PATH = ROOT / "evals" / "recall_parity.md"
-DEFAULT_APP_DIR = Path("/Users/arthur/workspace/aleph-mvp")
-DEFAULT_RECALL_DIR = DEFAULT_APP_DIR / "tests" / "recall"
+DEFAULT_APP_DIR = Path(os.environ.get("POWERPACKS_APP_DIR", str(REPO_ROOT)))
+DEFAULT_RECALL_DIR = Path(os.environ.get("POWERPACKS_RECALL_DIR", str(DEFAULT_APP_DIR / "tests" / "recall")))
 RESULT_LIMIT_CAP = 1000
 
 ROLE_SPECS: dict[str, dict[str, Any]] = {
@@ -880,7 +880,7 @@ def write_report(results: list[dict[str, Any]], app_dir: Path, run_dir: Path, lo
         "",
         f"Last run: `{now}`",
         "",
-        "Scope: aleph recall YAMLs executed through Powerpacks primitives with deterministic decomposition.",
+        "Scope: legacy recall YAMLs executed through Powerpacks primitives with deterministic decomposition.",
         "",
         f"App dir: `{app_dir}`",
         f"Run dir: `{run_dir}`",
@@ -888,7 +888,7 @@ def write_report(results: list[dict[str, Any]], app_dir: Path, run_dir: Path, lo
         "",
         "Execution notes:",
         "",
-        "- Does not call aleph `/expand` or `/execute`.",
+        "- Does not call hosted `/expand` or `/execute`.",
         "- Ignores UUIDv4 expected IDs because those are staging/non-comparable to current UUIDv5 person IDs.",
         "- Uses Powerpacks primitives for company, investor, education, prefilter, count, retrieval, hydration, and persistence.",
         "- Failures are primitive/decomposition parity gaps, not LLM reranker failures.",

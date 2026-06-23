@@ -170,11 +170,11 @@ class BuildOutboundTests(unittest.TestCase):
                 writer = csv.DictWriter(handle, fieldnames=["name", "title", "company", "location", "linkedin_url"])
                 writer.writeheader()
                 writer.writerow({
-                    "name": "Arthur Chen",
+                    "name": "Test Contact",
                     "title": "Founder",
                     "company": "Powerset",
                     "location": "San Francisco Bay Area",
-                    "linkedin_url": "[https://www.linkedin.com/in/arthur-chen-78566519/,https://media.licdn.com/photo.jpg",
+                    "linkedin_url": "[https://www.linkedin.com/in/example-test-contact/,https://media.licdn.com/photo.jpg",
                 })
             write_json(run / "state.json", {
                 "query": "Powerpacks Apollo live smoke test target",
@@ -189,19 +189,19 @@ class BuildOutboundTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(leads, [{
-            "name": "Arthur Chen",
-            "first_name": "Arthur",
-            "last_name": "Chen",
+            "name": "Test Contact",
+            "first_name": "Test",
+            "last_name": "Contact",
             "title": "Founder",
             "company": "Powerset",
-            "linkedin_url": "https://www.linkedin.com/in/arthur-chen-78566519",
+            "linkedin_url": "https://www.linkedin.com/in/example-test-contact",
             "location": "San Francisco Bay Area",
             "source": {
-                "name": "Arthur Chen",
+                "name": "Test Contact",
                 "title": "Founder",
                 "company": "Powerset",
                 "location": "San Francisco Bay Area",
-                "linkedin_url": "[https://www.linkedin.com/in/arthur-chen-78566519/,https://media.licdn.com/photo.jpg",
+                "linkedin_url": "[https://www.linkedin.com/in/example-test-contact/,https://media.licdn.com/photo.jpg",
             },
         }])
 

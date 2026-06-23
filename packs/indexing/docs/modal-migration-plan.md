@@ -3,7 +3,7 @@
 **Created:** 2026-06-11
 
 **Changelog:**
-- 2026-06-11: Initial plan + PoC scope (Claude/Arthur session).
+- 2026-06-11: Initial plan + PoC scope.
 - 2026-06-11: PoC executed + benchmark results + streaming memory refactor (see Results).
 
 ## ✅ Results (PoC executed 2026-06-11)
@@ -113,7 +113,7 @@ local (aggregator)                      Modal (powerset-co workspace)
 ```
 
 - **Modal Volume** (`powerpacks-indexing-poc`) carries inputs and outputs —
-  artifacts are ~200MB at Arthur scale and multi-GB at Jake scale, so no
+  artifacts are ~200MB at single-operator scale and multi-GB at multi-operator scale, so no
   inline image baking for data.
 - **Sandbox** runs the unmodified repo CLI (`exec`), so the ledger/checkpoint
   machinery keeps working; an interrupted cloud run resumes with `continue`
@@ -123,7 +123,7 @@ local (aggregator)                      Modal (powerset-co workspace)
 
 ## PoC scope (this branch)
 
-1. **Plumbing proof at 1x (Arthur's real data, $0):** upload
+1. **Plumbing proof at 1x (sample operator data, $0):** upload
    `people.csv` + the existing precomputed role/company/summary artifacts,
    pre-seed `founder_enrichment.jsonl` / `inferred_ages.jsonl` (their steps
    checkpoint on the output file and skip covered ids), run the full 15-step

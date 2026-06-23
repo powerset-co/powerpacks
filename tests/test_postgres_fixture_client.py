@@ -46,7 +46,7 @@ class PostgresFixtureClientTests(unittest.TestCase):
                 {
                     "id": OUT_OF_SCOPE_OPERATOR_ID,
                     "user_id": "auth0|stranger",
-                    "email": "eric@ef7.co",
+                    "email": "employee@example.com",
                     "name": "",
                 },
             ],
@@ -136,7 +136,7 @@ class PostgresFixtureClientTests(unittest.TestCase):
         )
 
         self.assertEqual(scoped[PERSON_1]["operators"], ["Owner User"])
-        self.assertNotIn("eric@ef7.co", scoped[PERSON_1]["operators"])
+        self.assertNotIn("employee@example.com", scoped[PERSON_1]["operators"])
         self.assertEqual(scoped[PERSON_1]["primary_operator"], "Owner User")
         self.assertNotIn("imessage", scoped[PERSON_1]["channels"])
 
@@ -145,7 +145,7 @@ class PostgresFixtureClientTests(unittest.TestCase):
         # without scope, the out-of-scope operator's email leaks in.
         unscoped = postgres_client.fetch_source_attribution([PERSON_1])
 
-        self.assertIn("eric@ef7.co", unscoped[PERSON_1]["operators"])
+        self.assertIn("employee@example.com", unscoped[PERSON_1]["operators"])
 
 
 if __name__ == "__main__":

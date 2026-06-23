@@ -63,9 +63,9 @@ def make_con() -> sqlite3.Connection:
             (20, 2, 'to', 'Me'),
             (30, 1, 'to', 'Jane Example');
         INSERT INTO message_bodies (message_id, body_text) VALUES
-            (10, 'Hi Arthur, I am a product designer at Acme.' || char(10) ||
+            (10, 'Hi Test, I am a product designer at Acme.' || char(10) ||
                  'Best, Jane' || char(10) || 'Product Designer, Acme' || char(10) || '+1 555-1234' || char(10) ||
-                 'On Dec 31, 2025, Arthur Chen wrote:' || char(10) || '> quoted history that must be cut' || char(10) || '> more quoted'),
+                 'On Dec 31, 2025, Test Contact wrote:' || char(10) || '> quoted history that must be cut' || char(10) || '> more quoted'),
             (20, 'STARTMARK ' || replace(hex(zeroblob(150)),'0','x') || ' ENDMARK');
     """)
     con.commit()

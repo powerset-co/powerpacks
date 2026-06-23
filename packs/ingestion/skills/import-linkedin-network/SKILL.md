@@ -7,7 +7,7 @@ description: Import a LinkedIn Connections.csv export into Powerpacks-local peop
 
 Use this skill when the user wants to import LinkedIn connections.
 
-Do not depend on `../aleph-mvp`. All code and artifacts live in Powerpacks.
+Do not depend on an external legacy app checkout. All code and artifacts live in Powerpacks.
 External API enrichment via the shared RapidAPI-only `enrich_people` primitive is spend-bearing only for cache misses and must be approved after the local CSV conversion step. Seed `--profile-cache-dir` to avoid paid calls when possible. A hidden row cap exists only for tiny local smoke tests; do not use caps in real workflows.
 
 ## Main loop

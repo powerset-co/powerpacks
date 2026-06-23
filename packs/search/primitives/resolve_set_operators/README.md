@@ -16,7 +16,7 @@ Example:
 
 ```bash
 python packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
-  --set-id 2663f70d-2ab7-4371-b871-2cedab5b582f \
+  --set-id 00000000-0000-0000-0000-000000000000 \
   --env-file .env
 ```
 

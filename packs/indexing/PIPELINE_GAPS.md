@@ -2,7 +2,7 @@
 
 This document tracks known gaps between the Powerpacks local processing pipeline
 (`packs/indexing/primitives/build_processing_pipeline/`) and the production Aleph
-pipeline (`aleph-mvp/data_pipeline_v2/`).
+pipeline (`legacy data_pipeline_v2/`).
 
 Last updated: 2026-06-02
 
@@ -44,7 +44,7 @@ Both pipelines follow the same core shape:
 
 ### CEO/Founder detection ✅
 
-Ported from `aleph-mvp/data_pipeline_v2/pipelines/people/processing/detect_ceo_founders.py`.
+Ported from `legacy data_pipeline_v2/pipelines/people/processing/detect_ceo_founders.py`.
 
 Local primitive: `packs/indexing/primitives/detect_ceo_founders/detect_ceo_founders.py`
 
@@ -56,7 +56,7 @@ positions without "founder" in title, calls LLM to classify, writes
 
 ### Inferred birth year / age ✅
 
-Ported from `aleph-mvp/data_pipeline_v2/pipelines/people/processing/infer_ages.py`.
+Ported from `legacy data_pipeline_v2/pipelines/people/processing/infer_ages.py`.
 LLM-only (no rule-based fallback).
 
 Local primitive: `packs/indexing/primitives/infer_ages/infer_ages.py`

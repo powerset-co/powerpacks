@@ -35,8 +35,8 @@ The live mode creates task state, resolves investors when needed, runs
 `resolve_companies`, and writes primitive logs under:
 
 ```text
-/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/company-search/
-/Users/arthur/workspace/aleph-mvp/.powerpacks/runs/company-search-logs/
+/path/to/app-repo/.powerpacks/runs/company-search/
+/path/to/app-repo/.powerpacks/runs/company-search-logs/
 ```
 
 The rollup report is:
@@ -121,7 +121,7 @@ EXPAND_SEARCH_MODEL=gpt-5.4-mini scripts/test-search-network pipeline-eval --cas
 Environment knobs:
 
 - `EXPAND_SEARCH_MODEL`: optional model override for parallel expansion.
-- `APP_DIR`: defaults to `/Users/arthur/workspace/network-search-api` for
+- `APP_DIR`: defaults to `/path/to/network-search-api` for
   pipeline eval.
 - `RECALL_DIR`: defaults to `$APP_DIR/tests/recall`.
 - `ENV_FILE`: retrieval primitive env file. Defaults to `.env` relative to

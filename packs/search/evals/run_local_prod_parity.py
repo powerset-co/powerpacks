@@ -29,21 +29,13 @@ DEFAULT_PAYLOAD = ROOT / "packs/search/evals/cases/stanford_sf_engineers.payload
 DEFAULT_OUTPUT_ROOT = ROOT / ".powerpacks/search/local-prod-parity"
 DEFAULT_MCP_URL = "https://search-api-7wk4uhe77q-uw.a.run.app/mcp/"
 DEFAULT_OPERATORS = {
-    "arthur": {
-        "repo": "/Users/arthur/workspace/powerpacks-arthur",
-        "aliases": ["personal connections", "arthur chen", "arthur c"],
+    "operator-a": {
+        "repo": "/path/to/powerpacks-operator-a",
+        "aliases": ["operator a", "operator-a"],
     },
-    "jake": {
-        "repo": "/Users/arthur/workspace/powerpacks-jake",
-        "aliases": ["jake zeller", "jake"],
-    },
-    "jonathan": {
-        "repo": "/Users/arthur/workspace/powerpacks-jonathan",
-        "aliases": ["jonathan swanson", "jonathan"],
-    },
-    "patrick": {
-        "repo": "/Users/arthur/workspace/powerpacks-patrick",
-        "aliases": ["patrick devivo", "patrick"],
+    "operator-b": {
+        "repo": "/path/to/powerpacks-operator-b",
+        "aliases": ["operator b", "operator-b"],
     },
 }
 FILTER_KEY_MAP = {
@@ -223,7 +215,7 @@ def parse_operator_specs(raw_specs: list[str]) -> dict[str, dict[str, Any]]:
         elif ":" in raw:
             slug, repo = raw.split(":", 1)
         else:
-            slug, repo = raw, f"/Users/arthur/workspace/powerpacks-{raw}"
+            slug, repo = raw, f"/path/to/powerpacks-{raw}"
         slug = slug.strip()
         if not slug:
             continue
@@ -855,7 +847,7 @@ def main() -> None:
     parser.add_argument("--payload-json", default=str(DEFAULT_PAYLOAD))
     parser.add_argument("--filter-source", choices=["prod-expand", "payload"], default="payload",
                         help="Use prod MCP expand_query as the canonical filter source, or use --payload-json")
-    parser.add_argument("--operators", default="arthur,jake,jonathan,patrick", help="Comma-separated operator slugs")
+    parser.add_argument("--operators", default="operator-a,operator-b", help="Comma-separated operator slugs")
     parser.add_argument("--operator", action="append", default=[], help="Override operator repo as slug=/path/to/repo")
     parser.add_argument("--set-id", action="append", default=[], help="Override prod set as slug=set_id")
     parser.add_argument("--mcp-url", default=os.environ.get("POWERPACKS_MCP_URL", DEFAULT_MCP_URL))

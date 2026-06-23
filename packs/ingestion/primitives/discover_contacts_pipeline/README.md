@@ -58,13 +58,13 @@ Optional email LinkedIn resolution/enrichment bridge:
 # first applies .powerpacks/network-import/directory.csv;
 # then prepares local harness prompts only for still-unresolved rows, no spend/network
 uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run \
-  --gmail-account-email arthur@powerset.co \
+  --gmail-account-email operator@example.com \
   --gmail-linkedin-provider harness
 
 # or add an existing linkedin_resolutions.csv to the same apply/enrich pass
 uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run \
-  --gmail-account-email arthur@powerset.co \
-  --gmail-resolutions-csv .powerpacks/network-import/discover/gmail/arthur-powerset-co/linkedin-resolution/linkedin_resolutions.csv
+  --gmail-account-email operator@example.com \
+  --gmail-resolutions-csv .powerpacks/network-import/discover/gmail/operator-example-com/linkedin-resolution/linkedin_resolutions.csv
 ```
 
 The bridge maintains `.powerpacks/network-import/directory.csv`, a reusable

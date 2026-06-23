@@ -18,7 +18,7 @@ The UI has tabs for:
 - `Matched`: rows already linked to a Powerset person
 - `Suggested`: local matcher suggestions that need confirmation
 - `Unmatched`: unresolved contacts with searchable names, using the same
-  `looks_like_real_name` rule ported from `aleph-mvp`
+  `looks_like_real_name` rule ported from the legacy implementation
 - `Low signal`: no-name or weak-name rows that should not become paid research
   work by default
 - `Skipped`: rows marked out of scope

@@ -202,12 +202,12 @@ a haystack. YAML should scope tighter.
 
 ```bash
 # Uses expand_search_request parallel extractors (gpt-4.1)
-POWERPACKS_PIPELINE_SET_ID=2663f70d-2ab7-4371-b871-2cedab5b582f \
+POWERPACKS_PIPELINE_SET_ID=00000000-0000-0000-0000-000000000000 \
   scripts/test-search-network pipeline-eval --bucket founders
 
 # All buckets:
 for b in founders date_range education role; do
-  POWERPACKS_PIPELINE_SET_ID=2663f70d-2ab7-4371-b871-2cedab5b582f \
+  POWERPACKS_PIPELINE_SET_ID=00000000-0000-0000-0000-000000000000 \
     scripts/test-search-network pipeline-eval --bucket $b
 done
 
