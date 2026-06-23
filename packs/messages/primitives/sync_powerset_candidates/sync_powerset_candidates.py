@@ -56,8 +56,11 @@ CONTACTS_INCLUDE_FIELDS = ",".join(
 )
 
 
-DEFAULT_API_BASE_URL = os.environ.get(
-    "POWERPACKS_API_BASE_URL", "https://search-api-7wk4uhe77q-uw.a.run.app"
+API_BASE_ENV_KEYS = (
+    "POWERPACKS_API_BASE_URL",
+    "POWERPACKS_API_URL",
+    "POWERSET_API_URL",
+    "POWERPACKS_SEARCH_API_URL",
 )
 DEFAULT_LOCAL_API_BASE_URL = os.environ.get(
     "POWERPACKS_LOCAL_API_BASE_URL", "http://localhost:8000"
@@ -82,6 +85,26 @@ def now_iso() -> str:
 
 def emit(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
+
+
+def missing_api_base_message() -> str:
+    keys = ", ".join(API_BASE_ENV_KEYS)
+    return (
+        f"missing required Powerset API config: set one of {keys}. "
+        "Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use."
+    )
+
+
+def resolve_api_base_url(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    if args.local:
+        return DEFAULT_LOCAL_API_BASE_URL.rstrip("/"), None
+    if args.api_base_url:
+        return args.api_base_url.rstrip("/"), None
+    for key in API_BASE_ENV_KEYS:
+        candidate = (os.environ.get(key) or "").strip()
+        if candidate:
+            return candidate.rstrip("/"), None
+    return None, missing_api_base_message()
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -245,11 +268,10 @@ def write_catalog(path: Path, rows: list[dict[str, Any]]) -> int:
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    api_base_url = (args.api_base_url or DEFAULT_LOCAL_API_BASE_URL if args.local else args.api_base_url) or DEFAULT_API_BASE_URL
+    api_base_url, api_base_error = resolve_api_base_url(args)
     catalog_path = Path(args.output)
     manifest_path = Path(args.manifest) if args.manifest else catalog_path.with_suffix(catalog_path.suffix + ".manifest.json")
 
-    access_token, creds, token_error = _load_access_token(args.credentials_path)
     started = time.time()
 
     if args.use_cached:
@@ -275,6 +297,36 @@ def cmd_sync(args: argparse.Namespace) -> int:
         write_json(manifest_path, manifest)
         emit(manifest)
         return 0
+
+    if api_base_error:
+        if catalog_path.exists():
+            existing_rows = list(_iter_catalog_rows(catalog_path))
+            manifest = {
+                "primitive": "sync_powerset_candidates",
+                "command": "sync",
+                "status": "cached_after_config_error",
+                "config_error": api_base_error,
+                "api_base_url": api_base_url,
+                "catalog_path": str(catalog_path),
+                "rows": len(existing_rows),
+                "manifest_path": str(manifest_path),
+            }
+            write_json(manifest_path, manifest)
+            emit(manifest)
+            return 0
+        manifest = {
+            "primitive": "sync_powerset_candidates",
+            "command": "sync",
+            "status": "failed",
+            "error": api_base_error,
+            "api_base_url": api_base_url,
+            "manifest_path": str(manifest_path),
+        }
+        write_json(manifest_path, manifest)
+        emit(manifest)
+        return 2
+
+    access_token, creds, token_error = _load_access_token(args.credentials_path)
 
     if not access_token:
         # Fall back to cache when present.
@@ -404,7 +456,7 @@ def main() -> None:
 
     sync = sub.add_parser("sync", help="Refresh local candidate CSV from /v2/contacts")
     sync.add_argument("--credentials-path", type=Path, default=DEFAULT_CREDENTIALS_PATH)
-    sync.add_argument("--api-base-url", default=DEFAULT_API_BASE_URL)
+    sync.add_argument("--api-base-url")
     sync.add_argument("--local", action="store_true", help=f"Use {DEFAULT_LOCAL_API_BASE_URL}")
     sync.add_argument("--operator-id", help="Operator id (admin only)")
     sync.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE)

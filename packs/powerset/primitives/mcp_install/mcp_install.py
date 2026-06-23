@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Install / status / remove the Powerset Search MCP for Claude Code or Codex.
 
-The MCP server lives at https://search-api-7wk4uhe77q-uw.a.run.app/mcp and
-exposes `expand_query`, `list_sets`, `count`, `search`, `query_results`,
+The MCP server URL is supplied explicitly through `POWERPACKS_MCP_URL` or
+`--url`. It exposes `expand_query`, `list_sets`, `count`, `search`, `query_results`,
 `sales_nav_resolve`, `sales_nav_search`, and artifact/extended lead tools to
 any MCP-aware host on the machine.
 
@@ -46,10 +46,7 @@ DEFAULT_NAME = os.environ.get("POWERPACKS_MCP_NAME", "powerset-search")
 # `/mcp` -> `/mcp/`, and many MCP host clients (Claude Code, Codex) do not
 # re-POST after a 307. Always register with `/mcp/` so initialization is a
 # single round-trip.
-DEFAULT_URL = os.environ.get(
-    "POWERPACKS_MCP_URL",
-    "https://search-api-7wk4uhe77q-uw.a.run.app/mcp/",
-)
+DEFAULT_URL = os.environ.get("POWERPACKS_MCP_URL")
 DEFAULT_CLAUDE_SCOPE = os.environ.get("POWERPACKS_MCP_SCOPE", "user")
 DEFAULT_TOKEN_ENV_VAR = os.environ.get("POWERPACKS_TOKEN_ENV_VAR", "POWERPACKS_POWERSET_TOKEN")
 DEFAULT_CODEX_HOME = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
@@ -88,6 +85,19 @@ def now_iso() -> str:
 def emit(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
 
+
+
+def missing_mcp_url_message() -> str:
+    return (
+        "missing required Powerset MCP config: set POWERPACKS_MCP_URL or pass --url. "
+        "Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use."
+    )
+
+
+def require_mcp_url(value: str | None) -> str:
+    if value:
+        return value
+    raise SystemExit(missing_mcp_url_message())
 
 def run(cmd: list[str], *, timeout: int = 30) -> tuple[int, str, str]:
     try:
@@ -354,6 +364,17 @@ def resolve_hosts(host: str) -> list[str]:
 
 
 def cmd_install(args: argparse.Namespace) -> int:
+    try:
+        args.url = require_mcp_url(args.url)
+    except SystemExit as exc:
+        emit({
+            "primitive": "mcp_install",
+            "command": "install",
+            "status": "failed",
+            "error": str(exc),
+        })
+        return 2
+
     hosts = resolve_hosts(args.host)
     if not hosts:
         emit({

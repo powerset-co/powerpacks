@@ -125,6 +125,7 @@ export interface Education {
 }
 
 export interface DatabaseRecord {
+  score?: number | null;
   name: string;
   personId: string;
   title: string;

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_PATH="$ROOT_DIR/scripts/$(basename "${BASH_SOURCE[0]}")"
 APP_DIR="$ROOT_DIR/app"
-HOST="${HOST:-0.0.0.0}"
+HOST="${HOST:-localhost}"
 PORT="${PORT:-5177}"
 ACTION="start"
 APP_PATH="${APP_PATH:-/}"

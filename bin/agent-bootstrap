@@ -43,7 +43,6 @@ ENV_MEMORY_PATH = MEMORY_DIR / "env_summary.json"
 SETS_MEMORY_PATH = MEMORY_DIR / "set_ids.json"
 BOOT_MEMORY_PATH = MEMORY_DIR / "agent_bootstrap.json"
 AUTH_PY = ROOT / "packs" / "powerset" / "primitives" / "auth" / "auth.py"
-DEFAULT_API_BASE = "https://search-api-7wk4uhe77q-uw.a.run.app"
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", ".powerpacks", "__pycache__"}
 
 
@@ -255,16 +254,27 @@ def load_dotenv_values() -> dict[str, str]:
     return values
 
 
-def api_base_from_env(values: dict[str, str]) -> str:
-    for key in ("POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL"):
+API_BASE_ENV_KEYS = ("POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL")
+
+
+def missing_api_base_message() -> str:
+    keys = ", ".join((*API_BASE_ENV_KEYS, "POWERPACKS_MCP_URL"))
+    return (
+        f"missing required Powerset API config: set one of {keys}. "
+        "Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use."
+    )
+
+
+def api_base_from_env(values: dict[str, str]) -> tuple[str | None, str | None]:
+    for key in API_BASE_ENV_KEYS:
         if values.get(key):
-            return values[key].rstrip("/")
+            return values[key].rstrip("/"), None
     mcp_url = values.get("POWERPACKS_MCP_URL")
     if mcp_url:
         parsed = urllib.parse.urlparse(mcp_url)
         if parsed.scheme and parsed.netloc:
-            return f"{parsed.scheme}://{parsed.netloc}"
-    return DEFAULT_API_BASE
+            return f"{parsed.scheme}://{parsed.netloc}", None
+    return None, missing_api_base_message()
 
 
 def get_token(timeout: int = 30) -> tuple[str | None, str | None]:
@@ -332,7 +342,7 @@ def choose_default_set(sets: list[dict[str, Any]], env_summary: dict[str, Any]) 
 def refresh_sets(env_summary: dict[str, Any], *, no_network: bool) -> dict[str, Any]:
     existing = safe_json_load(SETS_MEMORY_PATH)
     values = load_dotenv_values()
-    api_base = api_base_from_env(values)
+    api_base, api_base_error = api_base_from_env(values)
     payload: dict[str, Any] = {
         "generated_at": now_iso(),
         "api_base": api_base,
@@ -344,6 +354,11 @@ def refresh_sets(env_summary: dict[str, Any], *, no_network: bool) -> dict[str, 
 
     if no_network:
         payload["error"] = "network refresh skipped (--no-network)"
+        write_json(SETS_MEMORY_PATH, payload)
+        return payload
+
+    if api_base_error:
+        payload["error"] = api_base_error
         write_json(SETS_MEMORY_PATH, payload)
         return payload
 

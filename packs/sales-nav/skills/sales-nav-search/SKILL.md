@@ -13,8 +13,8 @@ The skill is in its own pack (`packs/sales-nav`) but **depends on
 `packs/powerset`** for Auth0 login and MCP install. If those aren't ready,
 route the user to `$powerset setup` first.
 
-It calls these MCP tools served by the remote `powerset-search` MCP at
-`https://search-api-7wk4uhe77q-uw.a.run.app/mcp`:
+It calls these MCP tools served by the remote `powerset-search` MCP configured in
+`POWERPACKS_MCP_URL`:
 
 - `sales_nav_resolve` — turn company names + titles into LinkedIn
   `company_ids` / canonical title strings

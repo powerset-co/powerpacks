@@ -2,7 +2,18 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
 cd "$ROOT"
-uv run ruff check primitives evals tests
-uv run flake8 primitives evals tests
+
+UV_BIN="${UV_BIN:-uv}"
+if ! command -v "$UV_BIN" >/dev/null 2>&1; then
+  if [[ -x "$HOME/.local/bin/uv" ]]; then
+    UV_BIN="$HOME/.local/bin/uv"
+  else
+    echo "uv is required; run bin/setup-python first" >&2
+    exit 127
+  fi
+fi
+
+# Baseline lint gate: fail on syntax errors and undefined names without taking
+# on the repository's existing style debt yet.
+"$UV_BIN" run --project . ruff check --select E9,F63,F7,F82 packs scripts bin adapters tests

@@ -38,13 +38,9 @@ from typing import Any
 # Configuration (env-overridable so the primitive can target staging clients)
 # ---------------------------------------------------------------------------
 
-DEFAULT_AUTH0_DOMAIN = os.environ.get("POWERPACKS_AUTH0_DOMAIN", "aleph-mvp.us.auth0.com")
-DEFAULT_AUTH0_CLIENT_ID = os.environ.get(
-    "POWERPACKS_AUTH0_CLIENT_ID", "U7p09NWeJ0jy9M4GiaWa4cz0YVCdDVBl"
-)
-DEFAULT_AUTH0_AUDIENCE = os.environ.get(
-    "POWERPACKS_AUTH0_AUDIENCE", "https://api.powerset.dev"
-)
+DEFAULT_AUTH0_DOMAIN = os.environ.get("POWERPACKS_AUTH0_DOMAIN")
+DEFAULT_AUTH0_CLIENT_ID = os.environ.get("POWERPACKS_AUTH0_CLIENT_ID")
+DEFAULT_AUTH0_AUDIENCE = os.environ.get("POWERPACKS_AUTH0_AUDIENCE")
 DEFAULT_AUTH0_SCOPES = os.environ.get(
     "POWERPACKS_AUTH0_SCOPES", "openid profile email offline_access"
 )
@@ -75,6 +71,27 @@ def now_iso() -> str:
 def emit(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
 
+
+
+def _missing_config_message(keys: list[str]) -> str:
+    joined = ", ".join(keys)
+    return (
+        f"missing required Powerset hosted config: {joined}. "
+        "Copy packs/powerset/templates/env.powerset.example to .env, or set the variables explicitly."
+    )
+
+
+def require_config_value(value: str | None, key: str) -> str:
+    if value:
+        return value
+    raise SystemExit(_missing_config_message([key]))
+
+
+def require_config_values(pairs: list[tuple[str, str | None]]) -> dict[str, str]:
+    missing = [key for key, value in pairs if not value]
+    if missing:
+        raise SystemExit(_missing_config_message(missing))
+    return {key: value or "" for key, value in pairs}
 
 def _auth0_url(domain: str, path: str) -> str:
     """Resolve a URL for an Auth0-shaped host.
@@ -259,6 +276,13 @@ def _credentials_with_fresh_token(
     if not creds:
         raise SystemExit("not logged in; run login")
     if time.time() > float(creds.get("expires_at", 0)) - 60:
+        if not domain or not client_id:
+            missing = []
+            if not domain:
+                missing.append("POWERPACKS_AUTH0_DOMAIN")
+            if not client_id:
+                missing.append("POWERPACKS_AUTH0_CLIENT_ID")
+            raise SystemExit(_missing_config_message(missing))
         creds = _refresh_credentials(creds, domain, client_id)
         _save_credentials(path, creds)
     return creds
@@ -334,6 +358,24 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def cmd_login(args: argparse.Namespace) -> int:
+    try:
+        config = require_config_values([
+            ("POWERPACKS_AUTH0_DOMAIN", args.auth0_domain),
+            ("POWERPACKS_AUTH0_CLIENT_ID", args.client_id),
+            ("POWERPACKS_AUTH0_AUDIENCE", args.audience),
+        ])
+    except SystemExit as exc:
+        emit({
+            "primitive": "powerset_auth",
+            "command": "login",
+            "status": "failed",
+            "error": str(exc),
+        })
+        return 2
+    args.auth0_domain = config["POWERPACKS_AUTH0_DOMAIN"]
+    args.client_id = config["POWERPACKS_AUTH0_CLIENT_ID"]
+    args.audience = config["POWERPACKS_AUTH0_AUDIENCE"]
+
     verifier, challenge = _generate_pkce()
     state = secrets.token_urlsafe(32)
     callback_url = f"http://{args.callback_host}:{args.callback_port}/callback"

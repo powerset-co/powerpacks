@@ -25,5 +25,5 @@ paths = [
   '''packs/powerset/primitives/auth/auth\.py''',
 ]
 regexes = [
-  '''POWERPACKS_AUTH0_CLIENT_ID", "U7p09NWeJ0jy9M4GiaWa4cz0YVCdDVBl"''',
+  '''POWERPACKS_AUTH0_CLIENT_ID", "U7p09NWeJ0jy9M4GiaWa4cz0YVCdDVBl''',
 ]

@@ -368,3 +368,5 @@ export function saveMessageReviewHint(index: number, hint: string): Promise<Mess
 export function bulkToggleMessageReview(tab: "in_network", selected: boolean): Promise<MessageReviewResponse> {
   return postJson<MessageReviewResponse>("/local-api/messages/review/bulk-toggle", { tab, selected });
 }
+
+export type { SetupJob } from "./types";

@@ -1,5 +1,7 @@
 import type { DatabaseRecord, Education, TraitScore, WorkExperience } from "@/types/search";
 
+export type JsonObject = Record<string, unknown>;
+
 export interface LocalRunSummary {
   taskId: string;
   conversationId?: string;
@@ -26,7 +28,7 @@ export interface LocalRunDetail extends LocalRunSummary {
     output?: Record<string, unknown>;
   }>;
   artifacts?: Record<string, unknown>;
-  resultCount: number;
+  resultCount?: number;
 }
 
 export interface RawPowerpackResult {
@@ -117,7 +119,7 @@ export interface SetupJob {
   actionKey?: string;
   source?: string;
   stages?: Array<{ label: string; index: number; total: number }>;
-  status: "running" | "completed" | "failed" | "blocked";
+  status: "pending" | "running" | "completed" | "failed" | "blocked";
   startedAt: string;
   completedAt?: string | null;
   command: string[];

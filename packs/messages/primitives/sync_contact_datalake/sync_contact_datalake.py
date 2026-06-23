@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct script fallback
     from packs.ingestion.schemas.people_schema import generate_person_id
     from packs.shared.csv_io import CsvIO
 
-DEFAULT_API_URL="https://search-api-7wk4uhe77q-uw.a.run.app"
+API_URL_ENV_KEYS=("POWERPACKS_API_URL","POWERSET_API_URL","POWERPACKS_SEARCH_API_URL")
 DEFAULT_CSV=Path(".powerpacks/messages/research_review.csv")
 DEFAULT_RESEARCH_DIR=Path(".powerpacks/messages/research")
 DEFAULT_RETARGET_RESEARCH_DIR=Path(".powerpacks/messages/research_retarget")
@@ -31,6 +31,15 @@ INCLUDE_DECISIONS={"include","approved","approve","yes","true","1"}
 EXCLUDE_DECISIONS={"exclude","excluded","skip","skipped","no","false","0"}
 
 def emit(x): print(json.dumps(x,indent=2,sort_keys=True))
+def missing_api_url_message():
+    keys=", ".join(API_URL_ENV_KEYS)
+    return f"missing required Powerset API config: set one of {keys}. Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use."
+def resolve_api_url(value=None):
+    if value: return value.rstrip("/")
+    for key in API_URL_ENV_KEYS:
+        candidate=(os.getenv(key) or "").strip()
+        if candidate: return candidate.rstrip("/")
+    raise ValueError(missing_api_url_message())
 def read_json(p:Path,default=None):
     if not p.exists(): return default
     return json.loads(p.read_text())
@@ -291,8 +300,12 @@ def cmd_build(args):
 def cmd_sync(args):
     if not args.confirm_sync:
         emit({"primitive":"sync_contact_datalake","command":"sync","status":"blocked","error":"pass --confirm-sync after explicit approval"}); return 2
+    try:
+        api_url=resolve_api_url(args.api_url)
+    except ValueError as exc:
+        emit({"primitive":"sync_contact_datalake","command":"sync","status":"failed","error":str(exc)}); return 2
     recs=load_records(Path(args.csv),Path(args.research_dir),Path(args.retarget_research_dir))
-    status,body=post_json(args.api_url, args.token or auth_token(), {"records":recs,"source":"messages_research_review","dry_run":False}, timeout=args.timeout)
+    status,body=post_json(api_url, args.token or auth_token(), {"records":recs,"source":"messages_research_review","dry_run":False}, timeout=args.timeout)
     emit({"primitive":"sync_contact_datalake","command":"sync","status":"ok","status_code":status,**summarize_sync_response(body)})
     return 0
 def main():
@@ -300,6 +313,6 @@ def main():
     for name in ['build','sync']:
         s=sub.add_parser(name); s.add_argument('--csv',default=str(DEFAULT_CSV)); s.add_argument('--research-dir',default=str(DEFAULT_RESEARCH_DIR)); s.add_argument('--retarget-research-dir',default=str(DEFAULT_RETARGET_RESEARCH_DIR)); s.set_defaults(func=cmd_build if name=='build' else cmd_sync)
         if name=='build': s.add_argument('--output'); s.add_argument('--dry-run',action='store_true')
-        else: s.add_argument('--api-url',default=os.getenv('POWERPACKS_API_URL') or os.getenv('POWERSET_API_URL') or DEFAULT_API_URL); s.add_argument('--token'); s.add_argument('--timeout',type=int,default=120); s.add_argument('--confirm-sync',action='store_true')
+        else: s.add_argument('--api-url'); s.add_argument('--token'); s.add_argument('--timeout',type=int,default=120); s.add_argument('--confirm-sync',action='store_true')
     a=p.parse_args(); raise SystemExit(a.func(a))
 if __name__=='__main__': main()

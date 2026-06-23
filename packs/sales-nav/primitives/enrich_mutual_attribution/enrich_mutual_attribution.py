@@ -33,6 +33,27 @@ from pathlib import Path
 from typing import Any
 
 
+API_BASE_ENV_KEYS = ("POWERSET_API_BASE", "POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL")
+
+
+def missing_api_base_message() -> str:
+    keys = ", ".join(API_BASE_ENV_KEYS)
+    return (
+        f"missing required Powerset API config: set one of {keys}. "
+        "Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use."
+    )
+
+
+def resolve_api_base(value: str | None = None) -> str:
+    if value:
+        return value.rstrip("/")
+    for key in API_BASE_ENV_KEYS:
+        candidate = (os.environ.get(key) or "").strip()
+        if candidate:
+            return candidate.rstrip("/")
+    raise SystemExit(missing_api_base_message())
+
+
 def now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -363,7 +384,11 @@ def main() -> None:
         print(json.dumps({"status": "failed", "error": "No set_id provided or found in state/env"}))
         raise SystemExit(1)
 
-    base_url = args.api_base or os.environ.get("POWERSET_API_BASE") or "https://search-api-7wk4uhe77q-uw.a.run.app"
+    try:
+        base_url = resolve_api_base(args.api_base)
+    except SystemExit as exc:
+        print(json.dumps({"status": "failed", "error": str(exc)}))
+        raise SystemExit(2) from exc
     token = get_auth_token()
 
     if args.mode == "attribution":

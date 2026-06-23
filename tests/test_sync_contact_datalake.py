@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 MODULE = Path(__file__).resolve().parents[1] / "packs/messages/primitives/sync_contact_datalake/sync_contact_datalake.py"
@@ -136,6 +137,21 @@ class SyncContactDatalakeTests(unittest.TestCase):
         self.assertEqual(network_record["linkedin_url"], "https://www.linkedin.com/in/network-approved")
         self.assertNotIn("include", records[0])
         self.assertNotIn("upload_decision", records[0])
+
+    def test_sync_requires_explicit_api_url_before_auth_or_network(self):
+        args = SimpleNamespace(
+            confirm_sync=True,
+            api_url=None,
+            token="test-token",
+            csv="missing.csv",
+            research_dir="missing-research",
+            retarget_research_dir="missing-retarget",
+            timeout=1,
+        )
+
+        code = sync_contact_datalake.cmd_sync(args)
+
+        self.assertEqual(code, 2)
 
 
 if __name__ == "__main__":

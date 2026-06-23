@@ -3,28 +3,29 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { powerpacksLocalApiPlugin } from "./local-api/powerpacksLocalApiPlugin";
 
-export default defineConfig(() => ({
-  server: {
-    host: "0.0.0.0",
-    allowedHosts: [".preview.us1.vorflux.com"],
-    port: 5177,
-    strictPort: false,
-    watch: {
-      ignored: ["**/.powerpacks/**"],
+export default defineConfig(() => {
+  const host = process.env.POWERPACKS_CONSOLE_HOST || "localhost";
+
+  return {
+    server: {
+      host,
+      allowedHosts: [".preview.us1.vorflux.com"],
+      port: 5177,
+      strictPort: false,
+      watch: {
+        ignored: ["**/.powerpacks/**"],
+      },
     },
-  },
-  plugins: [
-    react(),
-    powerpacksLocalApiPlugin(),
-  ].filter(Boolean),
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
+    plugins: [react(), powerpacksLocalApiPlugin()].filter(Boolean),
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "./src"),
+      },
     },
-  },
-  build: {
-    commonjsOptions: {
-      ignoreTryCatch: false,
+    build: {
+      commonjsOptions: {
+        ignoreTryCatch: false,
+      },
     },
-  },
-}));
+  };
+});
