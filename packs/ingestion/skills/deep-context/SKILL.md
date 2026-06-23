@@ -212,6 +212,16 @@ case this catches).
   contact's emails/phones/interaction. The fan-in merge **auto-ingests** that file (old wrong
   link detached → dropped; correct enriched row kept). Realize on the next merge + index rebuild.
 
+**ALWAYS end the run with a summary of what changed and why.** After Phase 3, present a short
+report to the user, every time:
+- **Verified:** N links confirmed.
+- **Detached:** M wrong links removed — list a few with the one-line reason (e.g. "Herman Au:
+  LinkedIn is a Canada software lead, but your contact is a Pasadena wedding photographer").
+- **Retargeted:** R people re-attached to a correct LinkedIn (+ the new URL).
+- **Needs your input:** K rows in `review-queue.csv` / pending `retarget` rows to approve.
+Pull the reasons from `reconcile/applied.csv` + `verdicts.csv`. Keep it scannable; the user is
+running this repeatedly to fix things, so make the "what changed and why" obvious each time.
+
 `bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once P1.5 is
 confirmed (Phase 3 is run separately, after parents exist). Full surface:
 `check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|

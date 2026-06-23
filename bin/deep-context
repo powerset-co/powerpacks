@@ -43,13 +43,20 @@ case "$cmd" in
     "${PY[@]}" "$PKG.synthesize_person_context" "$@"
     ;;
   run)
+    # Full pipeline incl. the Phase 3 self-heal (reconcile writes the durable override).
+    # Spends OpenAI (synthesis + reconcile). Deep research / apply-retargets stay separate
+    # (they need PARALLEL_API_KEY / your approval).
     "${PY[@]}" "$PKG.collect_person_context" "$@"
     "${PY[@]}" "$PKG.synthesize_person_context"
     "${PY[@]}" "$PKG.compose_dossier"
     "${PY[@]}" "$PKG.cluster_merge_candidates"
     "${PY[@]}" "$PKG.build_parents"
     "${PY[@]}" "$PKG.validate_dossiers"
-    echo "✅ dossiers + parents/ in .powerpacks/deep-context/ — completeness in validation.md — look up: bin/deep-context lookup --name ..." >&2
+    "${PY[@]}" "$PKG.reconcile_linkedin"
+    echo "✅ dossiers + parents/ + reconcile self-heal in .powerpacks/deep-context/" >&2
+    echo "   what changed: .powerpacks/deep-context/reconcile/applied.csv (verified/detached + reasons)" >&2
+    echo "   needs review: .powerpacks/deep-context/reconcile/review-queue.csv" >&2
+    echo "   realize the heal on your next fan-in merge + Modal index rebuild (auto-reads the override)." >&2
     ;;
   parents)
     "${PY[@]}" "$PKG.build_parents" "$@"
