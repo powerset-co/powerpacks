@@ -38,7 +38,7 @@ PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to ch
 RECONCILE_DIR = ROOT / "reconcile"
 VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"   # full per-candidate judge record
 VERDICTS_CSV = RECONCILE_DIR / "verdicts.csv"       # flat review table
-REVIEW_QUEUE_CSV = RECONCILE_DIR / "review-queue.csv"  # low-confidence rows needing feedback
+SUMMARY_MD = RECONCILE_DIR / "summary.md"           # the ONE report to read (what changed + review)
 
 DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 # RapidAPI LinkedIn lookup cache (one JSON per public_identifier) — the "linkedin lookups".
