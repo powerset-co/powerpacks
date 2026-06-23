@@ -52,6 +52,7 @@ DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
 # Durable self-heal override written by $deep-context reconcile, re-applied every merge.
 DEFAULT_OVERRIDES = Path(".powerpacks/network-import/overrides/linkedin-reconcile.csv")
 DEFAULT_RETARGET_PEOPLE = Path(".powerpacks/network-import/overrides/retarget-people.csv")
+DEFAULT_CONSOLIDATE_PEOPLE = Path(".powerpacks/network-import/overrides/consolidate-people.csv")
 MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources",
     "merged_row_count", "needs_review", "linkedin_verified", "linkedin_verified_confidence",
     "linkedin_verified_reason"]
@@ -605,10 +606,22 @@ def similar_pairs(rows: list[dict[str, Any]], threshold: float) -> list[dict[str
 
 def cmd_run(args: argparse.Namespace) -> int:
     inputs = [Path(p) for p in args.input] if args.input else []
-    # Auto-ingest enriched retarget rows (correct re-attached LinkedIns) if present.
-    retarget_people = Path(args.retarget_people) if args.retarget_people else None
-    if retarget_people and retarget_people.exists() and retarget_people not in inputs:
-        inputs.append(retarget_people)
+    # Self-heal artifacts live in the overrides/ dir SIBLING to the merged output-dir, so they
+    # resolve correctly regardless of cwd (a passed path wins; "" disables; None -> derive).
+    overrides_dir = Path(args.output_dir).parent / "overrides"
+
+    def _resolve(value: str | None, name: str) -> Path | None:
+        if value is None:
+            return overrides_dir / name
+        return Path(value) if value else None
+
+    override_path = _resolve(args.overrides, "linkedin-reconcile.csv")
+    # Auto-ingest extra people rows produced by the self-heal: retarget re-attachments and
+    # consolidation rows (a parent's children's contacts folded onto its kept LinkedIn).
+    for extra in (_resolve(args.retarget_people, "retarget-people.csv"),
+                  _resolve(args.consolidate_people, "consolidate-people.csv")):
+        if extra and extra.exists() and extra not in inputs:
+            inputs.append(extra)
     all_rows: list[dict[str, str]] = []
     per_file: dict[str, int] = {}
     for path in inputs:
@@ -639,7 +652,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         source_rows.extend(source_fact_rows(normalized, [normalized]))
     # Re-apply the durable self-heal override BEFORE the LinkedIn keep-filter: a `detach`
     # clears the wrong link so that person drops out here; a `verify` annotates the row.
-    overrides = load_overrides(Path(args.overrides) if args.overrides else None)
+    overrides = load_overrides(override_path)
     override_stats = apply_overrides(merged_rows, overrides)
     unfiltered_merged_rows = len(merged_rows)
     filtered_without_linkedin = sum(1 for row in merged_rows if not stable_linkedin_key(row))
@@ -700,10 +713,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--input", action="append", help="Input people.csv, people_harmonic_all.csv, or messages contacts.csv; repeatable. No filesystem discovery is performed.")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     run.add_argument("--name-threshold", type=float, default=0.92)
-    run.add_argument("--overrides", default=str(DEFAULT_OVERRIDES),
-                     help="Self-heal override CSV (detach/verify/retarget per public_identifier); auto-read if present, '' to disable.")
-    run.add_argument("--retarget-people", default=str(DEFAULT_RETARGET_PEOPLE),
-                     help="Enriched re-attach rows from apply-retargets; auto-ingested if present, '' to disable.")
+    # Defaults are None -> resolved to <output-dir>/../overrides/<file> at run time; '' disables.
+    run.add_argument("--overrides", default=None,
+                     help="Self-heal override CSV (detach/verify/retarget per public_identifier); defaults to the overrides/ sibling of --output-dir, '' to disable.")
+    run.add_argument("--retarget-people", default=None,
+                     help="Enriched re-attach rows from apply-retargets; defaults to the overrides/ sibling of --output-dir, '' to disable.")
+    run.add_argument("--consolidate-people", default=None,
+                     help="Contact-only rows folding parent children onto the kept LinkedIn; defaults to the overrides/ sibling of --output-dir, '' to disable.")
     run.set_defaults(func=cmd_run)
     return parser
 

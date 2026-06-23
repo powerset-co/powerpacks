@@ -33,6 +33,14 @@ Changelog:
   `retarget` action. Deep research proposes a correct LinkedIn (pending); `apply-retargets`
   enriches it (cache-first RapidAPI) into overrides/retarget-people.csv, which the merge
   auto-ingests so the person re-appears with the correct profile (old wrong link dropped).
+- 2026-06-23: Contact consolidation — when a parent keeps one link and detaches siblings,
+  reconcile folds every child's emails/phones/per-channel interaction_counts onto the kept
+  LinkedIn via overrides/consolidate-people.csv (contact-only, auto-ingested + unioned by the
+  merge). The surviving person keeps the correct profile AND all sibling contacts; per-channel
+  counts stay per-channel. Trusts Phase 2's grouping (fix over-merges upstream).
+- 2026-06-23: One summary (reconcile/summary.md) instead of three CSVs; hard-stop "WAIT for the
+  user to finish reviewing" step before apply-retargets. Merge self-heal inputs resolve relative
+  to the output-dir's overrides/ sibling (cwd-independent).
 -->
 
 # deep-context
@@ -104,7 +112,8 @@ Seed the checklist with these exact item titles. Each is tagged by phase —
 [Self-heal] Write the durable override (detach/verify, approved) — people.csv NOT mutated
 [Self-heal] Surface review queue + decisions table for feedback
 [Self-heal] Deep-research detaches (≤ $25 auto, else ask) — proposes retargets
-[Self-heal] Open files to review (applied.csv + review-queue + decisions table)
+[Self-heal] Open the summary (reconcile/summary.md) and present what changed + what needs review
+[Self-heal] WAIT for the user — ask "let me know when you're done reviewing", do not proceed until they reply
 [Self-heal] Apply approved retargets (enrich correct LinkedIn) → retarget-people.csv
 ```
 
@@ -188,6 +197,12 @@ case this catches).
   from existing verdicts with no OpenAI spend. **Realize the heal** by re-running the
   fan-in merge + index rebuild (Modal rebuilds the whole index) — the merge auto-reads the
   override file.
+  **Contact consolidation:** when a parent has a kept link + detached siblings, reconcile also
+  writes `overrides/consolidate-people.csv` — contact-only rows that fold EVERY child's
+  emails/phones/per-channel `interaction_counts` onto the kept LinkedIn (trusting Phase 2's
+  grouping). The merge auto-ingests it and unions onto the surviving row (the real row supplies
+  the profile), so the kept person keeps the correct profile AND all the siblings' contacts,
+  while the wrong-link rows drop. Per-channel counts stay per-channel (never summed).
 - **[Self-heal] Review queue (low-confidence)** — `reconcile/review-queue.csv` holds everything
   not auto-applied: below threshold + `needs_review` + **ambiguous** link conflicts (e.g.
   two confirmed, or a needs_review in the mix), with a blank `user_decision` column.
@@ -201,10 +216,17 @@ case this catches).
   (`reconcile-deep-research --approve` once they agree). Needs `PARALLEL_API_KEY`. People
   flagged `linkedin_plausibly_absent` are excluded. When research finds a **correct
   LinkedIn**, it adds a `retarget` row (pending) to the decisions table for the user to approve.
-- **[Self-heal] Open files to review** — open the review artifacts for the user:
-  `open .powerpacks/deep-context/reconcile/applied.csv .powerpacks/deep-context/reconcile/review-queue.csv .powerpacks/network-import/overrides/linkedin-reconcile.csv`
-  (`applied.csv` = what auto-applied; `review-queue.csv` = rows awaiting yes/no; the decisions
-  table = the durable override incl. `retarget` proposals to approve). Non-macOS: platform open, or print inline.
+- **[Self-heal] Open the summary** — open **one** file, not three:
+  `open .powerpacks/deep-context/reconcile/summary.md`. It's the high-level report — what was
+  applied (detached with reasons, consolidated, verified count) and what needs review (pending
+  retargets + low-confidence rows). Present its contents to the user. (The detailed
+  `applied.csv` / `review-queue.csv` / decisions table still exist for drill-down, but don't
+  fan three files open.)
+- **[Self-heal] WAIT for the user to finish reviewing** — this is a **hard stop**. Tell the
+  user the summary is open and say *"let me know when you're done reviewing / approving and
+  I'll continue."* Do **not** proceed to apply-retargets until they reply. They approve/reject
+  by setting the `approved` column in `overrides/linkedin-reconcile.csv` (sticky). Opening a
+  file is not the same as the user having reviewed it — never auto-advance past this step.
 - **[Self-heal] Apply approved retargets** — `bin/deep-context apply-retargets`. For each decisions
   row with `action=retarget` and `approved` ∈ {auto,yes}, it enriches the correct LinkedIn
   (cache-first; RapidAPI only on a miss — auto, effectively free) and writes an enriched
@@ -220,9 +242,9 @@ report to the user, every time (do NOT list the verified/unchanged links — onl
   reason** (why the new profile is the right person, e.g. "matched the wedding-photography
   business + SoCal location from your messages").
 - **Needs your input:** K rows in `review-queue.csv` / pending `retarget` rows to approve.
-Pull reasons from `reconcile/applied.csv` + `verdicts.csv` (detaches) and the `reason` column of
-the decisions table (retargets). Keep it scannable; the user runs this repeatedly to fix things,
-so make "what changed and why" obvious each time.
+This is exactly what **`reconcile/summary.md`** already contains — present that (don't re-derive
+it from scratch). Keep it scannable; the user runs this repeatedly to fix things, so make "what
+changed and why" obvious each time.
 
 `bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once the cost is
 confirmed (Phase 3 is run separately, after parents exist). Full surface:
@@ -331,14 +353,16 @@ name falls back to an all-tokens fuzzy match.
 ├── merge-candidates.csv / .md   likely same-person clusters
 ├── parents/<slug>.md            canonical person (one per real person)
 └── reconcile/                   Phase 3 LinkedIn self-heal
+    ├── summary.md                ⭐ the ONE file to open: what changed + what needs review
     ├── verdicts.csv / .jsonl     same-human verdict per attached profile
-    ├── applied.csv               preview of what the override will do (kept/detached) — for review
+    ├── applied.csv               preview of what the override will do (kept/detached) — drill-down
     ├── review-queue.csv          low-confidence + ambiguous-conflict rows needing your feedback
     └── deep-research/            Parallel.ai re-research of wrong_person detaches
 
 # durable self-heal decisions (fan-in MERGE inputs, re-applied every merge):
 .powerpacks/network-import/overrides/linkedin-reconcile.csv   detach|verify|retarget + approved
 .powerpacks/network-import/overrides/retarget-people.csv      enriched re-attach rows
+.powerpacks/network-import/overrides/consolidate-people.csv   children's contacts folded onto kept link
 ```
 
 ## Performance & scale (measured)
