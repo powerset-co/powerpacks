@@ -80,37 +80,37 @@ to `$deep-context`.
 the steps below and step through it, marking each complete as you go.** Mandatory.
 Use your harness's plan/task tool:
 
-- **Claude Code:** `TaskCreate` one task per step (P1.1–P3.7), then `TaskUpdate`
+- **Claude Code:** `TaskCreate` one task per item below, then `TaskUpdate`
   each to `in_progress` then `completed`.
 - **Codex:** `update_plan` with the steps, updating status as you go.
 - **Any other harness:** its equivalent todo/plan mechanism.
 
-Seed the checklist with these exact item titles, across three phases:
+Seed the checklist with these exact item titles. Each is tagged by phase —
+`[Dossiers]` build per-person dossiers, `[Merge]` cluster into canonical parents,
+`[Self-heal]` verify/fix the attached LinkedIn:
 
 ```
-Phase 1 — Build one deep dossier per person
-P1.1  Check connections (bin/deep-context check)
-P1.2  Ask group opt-in + confirm per-person message cap
-P1.3  Collect deep pools per chosen settings
-P1.4  Dry-run cost estimate from those settings
-P1.5  Confirm estimated cost with the user (explicit go before spend)
-P1.6  Synthesize + compose dossiers
-P1.7  Validate completeness
-Phase 2 — Merge people via the LLM judge
-P2.1  Cluster candidates with the LLM judge
-P2.2  Build parent dossiers (confirmed core + needs-review)
-Phase 3 — Verify each person's attached LinkedIn (self-heal)
-P3.1  Dry-run reconcile cost estimate (free)
-P3.2  Confirm cost → run the reconcile judge
-P3.3  Auto-apply high-confidence verdicts (summary; people.csv backed up)
-P3.4  Surface the review queue; get user feedback on low-confidence rows
-P3.5  Deep-research wrong_person detaches (auto if ≤ $25, else ask) — proposes retargets
-P3.6  Open files to review (applied.csv + review-queue.csv + the decisions table)
-P3.7  Apply approved retargets (enrich correct LinkedIn) → retarget-people.csv
+[Dossiers]  Check connections (bin/deep-context check)
+[Dossiers]  Ask group opt-in + confirm per-person message cap
+[Dossiers]  Collect deep pools per chosen settings
+[Dossiers]  Dry-run cost estimate from those settings
+[Dossiers]  Confirm estimated cost with the user (explicit go before spend)
+[Dossiers]  Synthesize + compose dossiers
+[Dossiers]  Validate completeness
+[Merge]     Cluster candidates with the LLM judge
+[Merge]     Build parent dossiers (confirmed core + needs-review)
+[Self-heal] Dry-run reconcile cost estimate (free)
+[Self-heal] Confirm cost → run the reconcile judge
+[Self-heal] Write the durable override (detach/verify, approved) — people.csv NOT mutated
+[Self-heal] Surface review queue + decisions table for feedback
+[Self-heal] Deep-research detaches (≤ $25 auto, else ask) — proposes retargets
+[Self-heal] Open files to review (applied.csv + review-queue + decisions table)
+[Self-heal] Apply approved retargets (enrich correct LinkedIn) → retarget-people.csv
 ```
 
-Do not drop steps; mark inapplicable ones complete as a no-op. **Never run a
-paid step (P1.6 / P2.1 / P3.2 onward) before its dry-run + confirm.**
+Do not drop steps; mark inapplicable ones complete as a no-op. **Never spend before
+its dry-run + explicit confirm** — the paid steps are `[Dossiers]` synthesize,
+`[Merge]` cluster, and `[Self-heal]` run-the-judge.
 
 ### Phase 1 — Build ONE deep dossier per person
 
@@ -118,10 +118,10 @@ Each person gets a single child dossier from up to `--deep-cap` (1600) messages,
 pooled across **Gmail bodies + iMessage DMs + WhatsApp DMs**, plus iMessage
 **group-chat names** (metadata) as relationship context.
 
-- **P1.1 Check connections** — `bin/deep-context check`. Per-source readiness +
+- **[Dossiers] Check connections** — `bin/deep-context check`. Per-source readiness +
   `ready`. If iMessage is `unreadable_full_disk_access`, run in a terminal with
   Full Disk Access (not the Claude Code Bash tool).
-- **P1.2 Ask the user two things, and get answers before collecting:**
+- **[Dossiers] Ask the user two things, and get answers before collecting:**
   1. **Group opt-in** — by default we read **DM bodies only** + group *names*.
      Offer `--include-groups` to also read **iMessage group-chat bodies** from
      small shared groups (`--max-group-size`, default 25). Tell them this **costs
@@ -130,25 +130,25 @@ pooled across **Gmail bodies + iMessage DMs + WhatsApp DMs**, plus iMessage
   2. **Message cap** — we hard-cap at **1600 messages/person** (`--deep-cap`).
      They can raise it for deeper history on heavy relationships, but make sure
      they understand **a higher cap costs more**.
-- **P1.3 Collect** (free, local) — `bin/deep-context collect` with the chosen flags
+- **[Dossiers] Collect** (free, local) — `bin/deep-context collect` with the chosen flags
   (e.g. `--include-groups --deep-cap 1600`). `people_capped` flags high-volume contacts.
-- **P1.4 Dry-run cost estimate from those settings** — `bin/deep-context dry`
+- **[Dossiers] Dry-run cost estimate from those settings** — `bin/deep-context dry`
   (re-uses the just-collected pools) → "based on your settings, this is the cost"
   (floor/ceiling + wall). The estimate reflects groups/cap because it reads the
   actual collected bundles.
-- **P1.5 Confirm with the user** — present the estimate; get an explicit go. No spend
+- **[Dossiers] Confirm with the user** — present the estimate; get an explicit go. No spend
   before this.
-- **P1.6 Synthesize + compose** — incremental confidence-gated synthesis, then
+- **[Dossiers] Synthesize + compose** — incremental confidence-gated synthesis, then
   deterministic dossiers + lookup index.
-- **P1.7 Validate completeness** — `bin/deep-context validate` → `validation.md`
+- **[Dossiers] Validate completeness** — `bin/deep-context validate` → `validation.md`
   (completeness score + flags). Act on `capped_underconfident` by raising `--deep-cap`.
 
 ### Phase 2 — Merge people via the LLM judge
 
-- **P2.1 Cluster (LLM judge)** — `bin/deep-context cluster`. Blocking proposes pairs; a
+- **[Merge] Cluster (LLM judge)** — `bin/deep-context cluster`. Blocking proposes pairs; a
   high-reasoning judge decides same-person holistically. Writes `merge-candidates.csv`
   + `merge-verdicts.csv` (audit, incl. rejections).
-- **P2.2 Parents** — `bin/deep-context parents`. One canonical parent per cluster:
+- **[Merge] Parents** — `bin/deep-context parents`. One canonical parent per cluster:
   merges only judge-CONFIRMED children (≥`--confirm-threshold` 0.85), lists borderline
   ones under "Needs review", backrefs each child. Repeatable (parent = f(confirmed children)).
 
@@ -161,13 +161,13 @@ each `(parent dossier ↔ attached LinkedIn)` pair: same human or not? It uses c
 the name alone (a big-company CEO profile stapled to your plumber of the same name is the
 case this catches).
 
-- **P3.1 Dry-run cost estimate (free)** — `bin/deep-context reconcile --dry-run`. Prints
+- **[Self-heal] Dry-run cost estimate (free)** — `bin/deep-context reconcile --dry-run`. Prints
   task count, link conflicts, and a cost floor/ceiling. No spend, no writes.
-- **P3.2 Confirm → run the judge** — present the estimate, get an explicit go, then
+- **[Self-heal] Confirm → run the judge** — present the estimate, get an explicit go, then
   `bin/deep-context reconcile`. gpt-5.2, high reasoning, one call per attached profile.
   Writes `reconcile/verdicts.csv` (+ `.jsonl` audit) and injects a `## LinkedIn identity`
   section into each parent (verdict + supporting/contradicting evidence).
-- **P3.3 Write the durable override (high-confidence)** — `reconcile` does NOT mutate
+- **[Self-heal] Write the durable override (high-confidence)** — `reconcile` does NOT mutate
   `people.csv`. It writes a **durable override table**,
   `.powerpacks/network-import/overrides/linkedin-reconcile.csv`, that the **fan-in merge
   re-applies every run** (so the heal survives re-merges). High-confidence verdicts become
@@ -188,12 +188,12 @@ case this catches).
   from existing verdicts with no OpenAI spend. **Realize the heal** by re-running the
   fan-in merge + index rebuild (Modal rebuilds the whole index) — the merge auto-reads the
   override file.
-- **P3.4 Review queue (low-confidence)** — `reconcile/review-queue.csv` holds everything
+- **[Self-heal] Review queue (low-confidence)** — `reconcile/review-queue.csv` holds everything
   not auto-applied: below threshold + `needs_review` + **ambiguous** link conflicts (e.g.
   two confirmed, or a needs_review in the mix), with a blank `user_decision` column.
   Surface these rows to the user and apply their yes/no calls. Some people legitimately
   have **no LinkedIn** (flagged `linkedin_plausibly_absent`) — never force a match.
-- **P3.5 Deep research (default, $25 gate)** — for high-confidence `wrong_person`
+- **[Self-heal] Deep research (default, $25 gate)** — for high-confidence `wrong_person`
   detaches that external research could resolve, find the *correct* identity:
   `bin/deep-context reconcile-deep-research --dry-run` to size it, then estimate the
   Parallel.ai cost (~$0.05/person). **If ≤ $25, run it automatically and just tell the
@@ -201,11 +201,11 @@ case this catches).
   (`reconcile-deep-research --approve` once they agree). Needs `PARALLEL_API_KEY`. People
   flagged `linkedin_plausibly_absent` are excluded. When research finds a **correct
   LinkedIn**, it adds a `retarget` row (pending) to the decisions table for the user to approve.
-- **P3.6 Open files to review** — open the review artifacts for the user:
+- **[Self-heal] Open files to review** — open the review artifacts for the user:
   `open .powerpacks/deep-context/reconcile/applied.csv .powerpacks/deep-context/reconcile/review-queue.csv .powerpacks/network-import/overrides/linkedin-reconcile.csv`
   (`applied.csv` = what auto-applied; `review-queue.csv` = rows awaiting yes/no; the decisions
   table = the durable override incl. `retarget` proposals to approve). Non-macOS: platform open, or print inline.
-- **P3.7 Apply approved retargets** — `bin/deep-context apply-retargets`. For each decisions
+- **[Self-heal] Apply approved retargets** — `bin/deep-context apply-retargets`. For each decisions
   row with `action=retarget` and `approved` ∈ {auto,yes}, it enriches the correct LinkedIn
   (cache-first; RapidAPI only on a miss — auto, effectively free) and writes an enriched
   re-attach row to `.powerpacks/network-import/overrides/retarget-people.csv`, carrying the
@@ -224,7 +224,7 @@ Pull reasons from `reconcile/applied.csv` + `verdicts.csv` (detaches) and the `r
 the decisions table (retargets). Keep it scannable; the user runs this repeatedly to fix things,
 so make "what changed and why" obvious each time.
 
-`bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once P1.5 is
+`bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once the cost is
 confirmed (Phase 3 is run separately, after parents exist). Full surface:
 `check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|
 reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw`.
