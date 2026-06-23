@@ -244,6 +244,12 @@ def gmail_account_from_source_key(source_key: str) -> str:
     return parts[1].strip().lower()
 
 
+def gmail_directory_source_key(account: str, email: str) -> str:
+    account_key = (account or "").strip().lower()
+    email_key = (email or "").strip().lower()
+    return f"gmail:{account_key}:email:{email_key}"
+
+
 def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", source: str = "", updated_at: str = "") -> dict[str, str]:
     linkedin_url = normalize_linkedin_url(str(row.get("linkedin_url") or ""))
     public_identifier = extract_public_identifier(linkedin_url)

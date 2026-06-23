@@ -27,7 +27,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[4]
 AUTH_SCRIPT = REPO / "packs/powerset/primitives/auth/auth.py"
 
-DEFAULT_API_BASE = "https://search-api-7wk4uhe77q-uw.a.run.app"
 API_BASE_ENV_KEYS = ("POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL")
 
 # env var -> (endpoint path, response field). The only keys the local machine
@@ -44,12 +43,20 @@ def emit(payload: dict) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def missing_api_base_message() -> str:
+    keys = ", ".join(API_BASE_ENV_KEYS)
+    return (
+        f"missing required Powerset API config: set one of {keys}. "
+        "Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use."
+    )
+
+
 def api_base() -> str:
     for key in API_BASE_ENV_KEYS:
         value = (os.environ.get(key) or "").strip()
         if value:
             return value.rstrip("/")
-    return DEFAULT_API_BASE
+    raise SystemExit(missing_api_base_message())
 
 
 def bearer_token() -> str:
@@ -114,7 +121,16 @@ def write_env(path: Path, updates: dict[str, str]) -> list[str]:
 
 
 def cmd_pull(args: argparse.Namespace) -> int:
-    base = api_base()
+    try:
+        base = api_base()
+    except SystemExit as exc:
+        emit({
+            "primitive": "pull_runtime_keys",
+            "command": "pull",
+            "status": "failed",
+            "error": str(exc),
+        })
+        return 2
     token = bearer_token()
     # Group keys by endpoint so each is fetched once.
     by_path: dict[str, list[str]] = {}

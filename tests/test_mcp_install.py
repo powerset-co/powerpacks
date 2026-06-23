@@ -74,6 +74,33 @@ class McpInstallCodexAuthTests(unittest.TestCase):
 
         self.assertEqual(state["auth_status"], "missing_authorization_header")
 
+    def test_install_requires_explicit_mcp_url(self):
+        module = load_module()
+        args = type("Args", (), {
+            "url": None,
+            "host": "claude",
+            "name": "powerset-search",
+            "scope": "user",
+            "credentials_path": Path("missing.json"),
+            "auth0_domain": None,
+            "client_id": None,
+        })()
+
+        code = module.cmd_install(args)
+
+        self.assertEqual(code, 2)
+
+    def test_status_and_remove_do_not_require_mcp_url(self):
+        module = load_module()
+        args = type("Args", (), {
+            "url": None,
+            "host": "claude",
+            "name": "powerset-search",
+            "scope": "user",
+        })()
+        self.assertIn(module.cmd_status(args), (0, 1))
+        self.assertIn(module.cmd_remove(args), (0, 1))
+
 
 if __name__ == "__main__":
     unittest.main()

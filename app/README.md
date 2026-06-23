@@ -19,7 +19,7 @@ Direct npm usage is supported:
 ```bash
 cd app
 npm install
-npm run dev -- --host 0.0.0.0 --port 5177
+npm run dev
 ```
 
 Start the console in the background from the repo root:
@@ -48,7 +48,7 @@ clones can each run their own daemon on different ports):
 PORT=5178 bash scripts/run-powerpacks-console.sh daemon-install
 ```
 
-`HOST`/`PORT` are baked into the plist at install time (defaults `0.0.0.0` /
+`HOST`/`PORT` are baked into the plist at install time (defaults `localhost` /
 `5177`); re-run `daemon-install` to change them. Manage it with:
 
 ```bash
@@ -60,3 +60,6 @@ The daemon runs `scripts/run-powerpacks-console.sh run` (foreground vite with
 `--strictPort`) and logs to `.powerpacks/servers/powerpacks-console.launchd.log`.
 The plist lives in `~/Library/LaunchAgents/`. The `start`/`stop` background mode
 above still works, but don't mix it with the daemon on the same port.
+
+
+To expose the console beyond localhost for an explicit sharing/preview workflow, run `npm run dev:share` or `npm run preview:share`.

@@ -5,6 +5,6 @@ export interface SourceIdentifier {
   source_account?: string | null;
 }
 
-export async function fetchSourceIdentifiers(): Promise<SourceIdentifier[]> {
+export async function fetchSourceIdentifiers(_setId?: string, _personId?: string, _sourceChannel?: string): Promise<SourceIdentifier[]> {
   return [];
 }

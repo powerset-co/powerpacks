@@ -30,9 +30,12 @@ python packs/messages/primitives/powerset_auth/powerset_auth.py logout
 
 | Variable | Default |
 | --- | --- |
-| `POWERPACKS_AUTH0_DOMAIN` | `aleph-mvp.us.auth0.com` |
-| `POWERPACKS_AUTH0_CLIENT_ID` | `U7p09NWeJ0jy9M4GiaWa4cz0YVCdDVBl` |
-| `POWERPACKS_AUTH0_AUDIENCE` | `https://api.powerset.dev` |
+| `POWERPACKS_AUTH0_DOMAIN` | required for `login` / token refresh |
+| `POWERPACKS_AUTH0_CLIENT_ID` | required for `login` / token refresh |
+| `POWERPACKS_AUTH0_AUDIENCE` | required for `login` |
 | `POWERPACKS_AUTH0_SCOPES` | `openid profile email offline_access` |
 | `POWERPACKS_AUTH_CALLBACK_PORT` | `9876` |
 | `POWERPACKS_CREDENTIALS_PATH` | `~/.powerpacks/credentials.json` |
+
+
+For Powerset-hosted use, copy `packs/powerset/templates/env.powerset.example` to `.env` or export the listed variables explicitly.

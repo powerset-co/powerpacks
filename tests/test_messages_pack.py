@@ -444,6 +444,33 @@ class MessagesPackTests(unittest.TestCase):
             self.assertNotIn("bucket_default_count", payload)
             self.assertNotIn("row_count", payload)
 
+
+    def test_upload_research_review_requires_explicit_api_url(self) -> None:
+        env = os.environ.copy()
+        for key in ("POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL"):
+            env.pop(key, None)
+        result = subprocess.run(
+            [
+                "python3",
+                str(UPLOAD_REVIEW),
+                "upload",
+                "--token",
+                "test-token",
+                "--confirm-upload",
+            ],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("POWERPACKS_API_URL", payload["error"])
+        self.assertIn("env.powerset.example", payload["error"])
+
     def test_upload_research_review_posts_multipart_csv(self) -> None:
         observed: dict[str, object] = {}
 

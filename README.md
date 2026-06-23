@@ -59,7 +59,9 @@ Direct app commands are also supported:
 ```bash
 cd app
 npm install
-npm run dev -- --host 0.0.0.0 --port 5177
+npm run dev
+# Explicit sharing/preview only:
+npm run dev:share
 ```
 
 ## Skills
@@ -465,3 +467,8 @@ NanoClaw-specific pieces now live under `adapters/nanoclaw/`:
 - `primitives/view_search_results/` is the legacy NanoClaw TUI
 
 Those pieces are not part of the portable primitive surface.
+
+
+## Powerset-hosted config
+
+Hosted Powerset commands require explicit API/MCP/Auth0 config. Copy `packs/powerset/templates/env.powerset.example` to `.env` for Powerset-hosted use.

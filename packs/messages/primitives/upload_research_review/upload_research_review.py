@@ -25,7 +25,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct script fallback
 
 
 DEFAULT_CSV = ".powerpacks/messages/research_review.csv"
-DEFAULT_API_URL = "https://search-api-7wk4uhe77q-uw.a.run.app"
+API_URL_ENV_KEYS = ("POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL")
 VALID_BUCKETS = {
     "confident": "yes",
     "medium": "maybe",
@@ -50,6 +50,24 @@ def emit(payload: dict[str, Any]) -> None:
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
+
+
+def missing_api_url_message() -> str:
+    keys = ", ".join(API_URL_ENV_KEYS)
+    return (
+        f"missing required Powerset API config: set one of {keys}. "
+        "Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use."
+    )
+
+
+def resolve_api_url(value: str | None = None) -> str:
+    if value:
+        return value.rstrip("/")
+    for key in API_URL_ENV_KEYS:
+        candidate = (os.getenv(key) or "").strip()
+        if candidate:
+            return candidate.rstrip("/")
+    raise UploadError(missing_api_url_message())
 
 
 def normalize_bucket(value: str) -> str:
@@ -305,8 +323,8 @@ def cmd_upload(args: argparse.Namespace) -> int:
             "error": "pass --confirm-upload after the user explicitly approves uploading approved contacts",
         })
         return 2
-    api_url = args.api_url or os.getenv("POWERPACKS_API_URL") or os.getenv("POWERSET_API_URL") or DEFAULT_API_URL
     try:
+        api_url = resolve_api_url(args.api_url)
         token = args.token or auth_token_from_powerpacks()
         result = upload_review_csv(csv_path=Path(args.csv), api_url=api_url, token=token, timeout=args.timeout)
     except UploadError as exc:

@@ -1,4 +1,5 @@
 import argparse
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,7 +34,8 @@ class PullRuntimeKeysTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            with mock.patch.object(stage, "bearer_token", return_value="tok"), \
+            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}), \
+                 mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
                 code = stage.cmd_pull(self._args(env))
             text = env.read_text()
@@ -45,7 +47,8 @@ class PullRuntimeKeysTests(unittest.TestCase):
     def test_pull_handles_not_provisioned(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            with mock.patch.object(stage, "bearer_token", return_value="tok"), \
+            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}), \
+                 mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", return_value=("not_provisioned", None)):
                 code = stage.cmd_pull(self._args(env))
             self.assertEqual(code, 2)              # nothing written -> non-zero
@@ -59,13 +62,31 @@ class PullRuntimeKeysTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            with mock.patch.object(stage, "bearer_token", return_value="tok"), \
+            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}), \
+                 mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
                 code = stage.cmd_pull(self._args(env))
             text = env.read_text()
             self.assertEqual(code, 0)               # wrote modal keys
             self.assertIn("MODAL_TOKEN_ID=ak-1", text)
             self.assertNotIn("OPENAI_API_KEY", text)
+
+    def test_api_base_requires_explicit_env(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(SystemExit) as cm:
+                stage.api_base()
+        self.assertIn("POWERPACKS_API_URL", str(cm.exception))
+        self.assertIn("env.powerset.example", str(cm.exception))
+
+    def test_cmd_pull_reports_missing_api_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                 mock.patch.object(stage, "bearer_token", return_value="tok") as bearer:
+                code = stage.cmd_pull(self._args(env))
+            self.assertEqual(code, 2)
+            bearer.assert_not_called()
+            self.assertFalse(env.exists())
 
 
 if __name__ == "__main__":

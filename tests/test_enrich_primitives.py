@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import socket
 import subprocess
 import tempfile
@@ -257,6 +258,56 @@ class PowersetAuthTests(unittest.TestCase):
             server.server_close()
 
 
+
+    def test_login_requires_explicit_auth0_config(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            for key in ("POWERPACKS_AUTH0_DOMAIN", "POWERPACKS_AUTH0_CLIENT_ID", "POWERPACKS_AUTH0_AUDIENCE"):
+                env.pop(key, None)
+            result = subprocess.run(
+                [
+                    "python3", str(POWERSET_AUTH), "login",
+                    "--no-browser",
+                    "--credentials-path", str(Path(td) / "creds.json"),
+                    "--timeout", "1",
+                ],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("POWERPACKS_AUTH0_DOMAIN", payload["error"])
+        self.assertIn("env.powerset.example", payload["error"])
+
+    def test_whoami_and_logout_do_not_require_auth0_config(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            creds_path = Path(td) / "creds.json"
+            creds_path.write_text(json.dumps({
+                "access_token": _make_jwt({"email": "cached@example.com"}),
+                "expires_at": time.time() + 3600,
+                "email": "cached@example.com",
+            }))
+            env = os.environ.copy()
+            for key in ("POWERPACKS_AUTH0_DOMAIN", "POWERPACKS_AUTH0_CLIENT_ID", "POWERPACKS_AUTH0_AUDIENCE"):
+                env.pop(key, None)
+            whoami = subprocess.run(
+                ["python3", str(POWERSET_AUTH), "whoami", "--credentials-path", str(creds_path)],
+                cwd=ROOT, env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(whoami.returncode, 0, whoami.stderr)
+            self.assertEqual(json.loads(whoami.stdout)["email"], "cached@example.com")
+            logout = subprocess.run(
+                ["python3", str(POWERSET_AUTH), "logout", "--credentials-path", str(creds_path)],
+                cwd=ROOT, env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(logout.returncode, 0, logout.stderr)
+            self.assertFalse(creds_path.exists())
+
+
 class SyncCandidatesTests(unittest.TestCase):
     def test_sync_paginates_and_writes_csv(self) -> None:
         port = _free_port()
@@ -328,6 +379,7 @@ class SyncCandidatesTests(unittest.TestCase):
                 [
                     "python3", str(SYNC_CANDIDATES), "sync",
                     "--credentials-path", str(tmp / "missing.json"),
+                    "--api-base-url", "https://api.example.test",
                     "--output", str(cache),
                 ],
                 cwd=ROOT, capture_output=True, text=True, timeout=10,
@@ -336,6 +388,54 @@ class SyncCandidatesTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload["status"], "cached_after_auth_error")
             self.assertEqual(payload["rows"], 1)
+
+
+    def test_sync_candidates_requires_explicit_api_config_before_auth(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            env = os.environ.copy()
+            for key in ("POWERPACKS_API_BASE_URL", "POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL"):
+                env.pop(key, None)
+            result = subprocess.run(
+                [
+                    "python3", str(SYNC_CANDIDATES), "sync",
+                    "--credentials-path", str(tmp / "missing.json"),
+                    "--output", str(tmp / "powerset_contacts.csv"),
+                    "--manifest", str(tmp / "manifest.json"),
+                ],
+                cwd=ROOT, env=env, capture_output=True, text=True, timeout=10,
+            )
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("POWERPACKS_API_URL", payload["error"])
+        self.assertIn("env.powerset.example", payload["error"])
+
+    def test_sync_candidates_use_cached_does_not_need_api_or_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cache = tmp / "powerset_contacts.csv"
+            cache.write_text(
+                "id,name,linkedin_url,phone_number,emails,public_identifier\n"
+                "c1,Cached User,,,,cached-user\n"
+            )
+            env = os.environ.copy()
+            for key in ("POWERPACKS_API_BASE_URL", "POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL"):
+                env.pop(key, None)
+            result = subprocess.run(
+                [
+                    "python3", str(SYNC_CANDIDATES), "sync",
+                    "--credentials-path", str(tmp / "missing.json"),
+                    "--output", str(cache),
+                    "--manifest", str(tmp / "manifest.json"),
+                    "--use-cached",
+                ],
+                cwd=ROOT, env=env, capture_output=True, text=True, timeout=10,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "cached")
+        self.assertEqual(payload["rows"], 1)
 
 
 class MatchLocalTests(unittest.TestCase):

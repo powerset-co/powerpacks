@@ -5,10 +5,13 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "dev:local": "vite --host 0.0.0.0",
+    "dev": "vite --host localhost",
+    "dev:local": "vite --host localhost",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host localhost",
+    "dev:share": "vite --host 0.0.0.0",
+    "typecheck": "tsc -b",
+    "preview:share": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.0",

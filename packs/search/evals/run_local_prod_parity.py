@@ -27,7 +27,6 @@ ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_QUERY = "software engineers in sf that went to stanford"
 DEFAULT_PAYLOAD = ROOT / "packs/search/evals/cases/stanford_sf_engineers.payload.json"
 DEFAULT_OUTPUT_ROOT = ROOT / ".powerpacks/search/local-prod-parity"
-DEFAULT_MCP_URL = "https://search-api-7wk4uhe77q-uw.a.run.app/mcp/"
 DEFAULT_OPERATORS = {
     "operator-a": {
         "repo": "/path/to/powerpacks-operator-a",
@@ -850,7 +849,8 @@ def main() -> None:
     parser.add_argument("--operators", default="operator-a,operator-b", help="Comma-separated operator slugs")
     parser.add_argument("--operator", action="append", default=[], help="Override operator repo as slug=/path/to/repo")
     parser.add_argument("--set-id", action="append", default=[], help="Override prod set as slug=set_id")
-    parser.add_argument("--mcp-url", default=os.environ.get("POWERPACKS_MCP_URL", DEFAULT_MCP_URL))
+    parser.add_argument("--mcp-url", default=os.environ.get("POWERPACKS_MCP_URL"),
+                        help="MCP URL. Required; set POWERPACKS_MCP_URL or pass --mcp-url.")
     parser.add_argument("--output-dir")
     parser.add_argument("--max-results", type=int, default=1000)
     parser.add_argument("--top-k", type=int, default=1000)
@@ -863,6 +863,8 @@ def main() -> None:
     parser.add_argument("--min-recall", type=float, default=0.95)
     parser.add_argument("--resolve-prod-education", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
+    if not args.mcp_url:
+        raise SystemExit("missing required Powerset MCP config: set POWERPACKS_MCP_URL or pass --mcp-url")
     try:
         report = run(args)
         print(json.dumps({
