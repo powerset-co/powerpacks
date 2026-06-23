@@ -24,11 +24,12 @@ Mirrors `verify_gmail_resolution` (verdict semantics) and `cluster_merge_candida
 (Responses-API + drain_pool mechanics). ``--no-llm`` is a deterministic offline stub
 for tests.
 
-Outputs (under .powerpacks/deep-context/reconcile/):
-  verdicts.jsonl     full per-candidate record (verdict + evidence + usage)
-  verdicts.csv       flat review table
-  review-queue.csv   low-confidence rows + conflicts (blank user_decision column)
-  manifest.json      counts per verdict + conflicts + tokens + cost
+Outputs:
+  reconcile/summary.md   the ONE report to read (what changed + what needs review)
+  reconcile/verdicts.*   full per-candidate audit (jsonl + flat csv)
+  reconcile/applied.csv  what auto-applied (drill-down)
+  reconcile/manifest.json
+  overrides/linkedin-reconcile.csv  the ONE file to EDIT (approved column; every judged row)
   (a "## LinkedIn identity" section injected into each parent markdown)
 """
 from __future__ import annotations
@@ -65,7 +66,6 @@ from packs.ingestion.primitives.deep_context.common import (
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
     RAW_DIR,
-    REVIEW_QUEUE_CSV,
     VERDICTS_CSV,
     VERDICTS_JSONL,
     emit,
@@ -510,19 +510,25 @@ def _write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
             w.writerow({k: rows[pub].get(k, "") for k in OVERRIDE_COLUMNS})
 
 
-def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    """Upsert decided actions into the durable, approval-aware decisions table the fan-in
-    merge re-applies.
+# A low-confidence verdict still suggests an action, written PENDING for the user to approve.
+_VERDICT_TO_ACTION = {"wrong_person": "detach", "confirmed": "verify", "needs_review": "verify"}
 
-    confirm -> action=verify, detach -> action=detach, both `approved=auto` (high-confidence,
-    applied at merge). review -> omitted. Idempotent + INCREMENTAL: keyed by public_identifier,
-    other rows are preserved, and a row the USER has touched (approved in {yes,no}) is NEVER
-    overwritten — their decision is sticky across re-runs. people.csv is NOT touched."""
+
+def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Upsert EVERY judged row into the single durable, approval-aware decisions table — the
+    one file the user edits and the fan-in merge re-applies.
+
+    High-confidence (action confirm/detach) -> `approved=auto` (applied at merge).
+    Everything else (low-confidence / needs_review / ambiguous conflict) -> `approved=` PENDING,
+    with a suggested action mapped from the verdict (wrong_person->detach, confirmed/needs_review
+    ->verify). The merge applies only approved ∈ {auto,yes}; pending rows wait for the user to set
+    `yes` (or flip the action). Idempotent + INCREMENTAL: keyed by public_identifier, a row the
+    USER has touched (approved ∈ {yes,no}) is NEVER overwritten — sticky across re-runs. people.csv
+    is NOT touched. no-LinkedIn people have no row (nothing to act on)."""
     existing = load_override_rows(path)
-    detach = verify = preserved = 0
+    detach = verify = pending = preserved = 0
     for t in tasks:
-        action = t.get("action")
-        if action not in ("confirm", "detach"):
+        if t.get("no_link"):
             continue
         pub = (t.get("candidate_key") or "").strip().lower()
         if not pub:
@@ -531,9 +537,15 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
             preserved += 1
             continue  # sticky: never overwrite a user decision
         v = t.get("verdict") or {}
-        ov_action = "verify" if action == "confirm" else "detach"
+        action = t.get("action")
+        if action == "confirm":
+            ov_action, approved = "verify", "auto"
+        elif action == "detach":
+            ov_action, approved = "detach", "auto"
+        else:  # review -> pending, suggest an action from the verdict
+            ov_action, approved = _VERDICT_TO_ACTION.get(v.get("verdict", ""), "verify"), ""
         existing[pub] = {
-            "public_identifier": pub, "action": ov_action, "approved": "auto",
+            "public_identifier": pub, "action": ov_action, "approved": approved,
             "new_linkedin_url": "", "new_public_identifier": "",
             "linkedin_url": (t.get("linkedin") or {}).get("linkedin_url", ""),
             "match_emails": "|".join(t.get("match_emails") or []),
@@ -542,12 +554,21 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
             "reason": v.get("reason", ""), "person_id": (t.get("person_ids") or [""])[0],
             "source": "deep-context-reconcile", "updated_at": now_iso(),
         }
-        detach += ov_action == "detach"
-        verify += ov_action == "verify"
+        if approved == "auto":
+            detach += ov_action == "detach"
+            verify += ov_action == "verify"
+        else:
+            pending += 1
 
     _write_override_rows(path, existing)
-    return {"path": str(path), "detached": detach, "verified": verify,
+    return {"path": str(path), "detached": detach, "verified": verify, "pending": pending,
             "preserved_user_rows": preserved, "total_rows": len(existing)}
+
+
+def count_pending(path: Path) -> int:
+    """Rows awaiting the user's decision (pending or rejected-but-revisitable)."""
+    return sum(1 for r in load_override_rows(path).values()
+               if (r.get("approved") or "").strip().lower() not in ("auto", "yes", "no"))
 
 
 def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, Any]:
@@ -671,22 +692,26 @@ def decided_report(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def write_summary(path: Path, tasks: list[dict[str, Any]], override_path: Path,
-                  consolidation: dict[str, Any], review_queued: int) -> None:
-    """ONE human-readable summary — what changed + what needs review — for the user to open."""
+                  consolidation: dict[str, Any]) -> None:
+    """ONE human-readable report — what changed + what needs review. The user reads this and
+    edits ONE file (the decisions table) to approve/reject."""
     detached = [t for t in tasks if t.get("action") == "detach"]
     verified = sum(1 for t in tasks if t.get("action") == "confirm")
-    review = [t for t in tasks if t.get("action") == "review" and not t.get("no_link")]
     no_link = sum(1 for t in tasks if t.get("no_link"))
     ov = load_override_rows(override_path)
-    pending_retargets = [r for r in ov.values() if (r.get("action") or "") == "retarget"
-                         and (r.get("approved") or "").strip().lower() not in ("yes", "auto")]
+
+    def _is_pending(r: dict[str, Any]) -> bool:
+        return (r.get("approved") or "").strip().lower() not in ("auto", "yes", "no")
+
+    pending_retargets = [r for r in ov.values() if (r.get("action") or "") == "retarget" and _is_pending(r)]
+    pending_other = [r for r in ov.values() if (r.get("action") or "") != "retarget" and _is_pending(r)]
 
     def _line(t: dict[str, Any]) -> str:
         v = t.get("verdict") or {}
         url = (t.get("linkedin") or {}).get("linkedin_url", "")
         return f"- **{t.get('name', '?')}** ({float(v.get('confidence') or 0):.2f}) — _{v.get('reason', '')}_  ·  {url}"
 
-    lines = [f"# Deep-context self-heal — what changed", "", f"_Generated {now_iso()}._", "",
+    lines = ["# Deep-context self-heal — what changed", "", f"_Generated {now_iso()}._", "",
              "Applied automatically (lands on your next fan-in merge + index rebuild):", ""]
     lines.append(f"- 🔧 **Detached {len(detached)}** wrong LinkedIn link(s)")
     lines.append(f"- 🔁 **Consolidated {consolidation.get('consolidated_parents', 0)}** "
@@ -696,24 +721,28 @@ def write_summary(path: Path, tasks: list[dict[str, Any]], override_path: Path,
         lines += ["", "## 🔧 Detached (wrong link removed)", ""]
         lines += [_line(t) for t in sorted(detached, key=lambda t: -(float((t.get('verdict') or {}).get('confidence') or 0)))]
 
-    lines += ["", f"## ❓ Needs your review ({review_queued + no_link + len(pending_retargets)})", ""]
+    total_review = len(pending_retargets) + len(pending_other) + no_link
+    lines += ["", f"## ❓ Needs your review ({total_review})",
+              "_Edit the `approved` column in the decisions table to act — set `yes` to apply, "
+              "`no` to reject (your edit is sticky). The merge applies only `auto`/`yes`._", ""]
     if pending_retargets:
-        lines.append(f"- **{len(pending_retargets)} retarget(s) to approve** — set `approved=yes` in "
-                     "`overrides/linkedin-reconcile.csv` to re-attach the correct LinkedIn, then run apply-retargets.")
-    if review or no_link:
-        lines.append(f"- **{review_queued + no_link} low-confidence / no-link row(s)** in `reconcile/review-queue.csv` "
-                     "(set `approved` in the decisions table to act on them).")
-        for t in review[:15]:
-            v = t.get("verdict") or {}
-            lines.append(f"  - **{t.get('name', '?')}** — {v.get('verdict', '')} ({float(v.get('confidence') or 0):.2f}) — _{v.get('reason', '')}_")
-        if len(review) > 15:
-            lines.append(f"  - …and {len(review) - 15} more (see review-queue.csv)")
-    if not (pending_retargets or review or no_link):
-        lines.append("_Nothing — all decisions were high-confidence._")
+        lines.append(f"- **{len(pending_retargets)} retarget(s)** — a correct LinkedIn was found; "
+                     "set `approved=yes` then run apply-retargets to re-attach.")
+    if pending_other:
+        lines.append(f"- **{len(pending_other)} low-confidence row(s)** to confirm/reject:")
+        for r in sorted(pending_other, key=lambda r: -(float(r.get("confidence") or 0)))[:15]:
+            lines.append(f"  - **{r.get('person_id', '')[:8]}** {r.get('action', '')} "
+                         f"({float(r.get('confidence') or 0):.2f}) — _{r.get('reason', '')}_  ·  {r.get('linkedin_url', '')}")
+        if len(pending_other) > 15:
+            lines.append(f"  - …and {len(pending_other) - 15} more (in the decisions table)")
+    if no_link:
+        lines.append(f"- **{no_link} person(s) with no LinkedIn** — nothing to act on (left as-is).")
+    if not total_review:
+        lines.append("_Nothing — every decision was high-confidence._")
 
-    lines += ["", "---", "_Approve/reject by editing the `approved` column of "
-              "`.powerpacks/network-import/overrides/linkedin-reconcile.csv` (your edits are sticky). "
-              "Drill-down: `reconcile/applied.csv`, `reconcile/review-queue.csv`._"]
+    lines += ["", "---", "_The one file to edit: "
+              "`.powerpacks/network-import/overrides/linkedin-reconcile.csv` (`approved` column, sticky). "
+              "Drill-down: `reconcile/applied.csv`._"]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -762,25 +791,6 @@ def write_verdicts(jsonl_path: Path, csv_path: Path, results: list[dict[str, Any
         w.writeheader()
         for r in sorted(results, key=lambda r: float((r.get("verdict") or {}).get("confidence") or 0), reverse=True):
             w.writerow(_flat(r))
-
-
-def write_review_queue(path: Path, tasks: list[dict[str, Any]], threshold: float) -> int:
-    """Everything NOT auto-applied (action == review): med/low-confidence verdicts,
-    needs_review, no-link, and ambiguous conflicts — for the user to decide on."""
-    decide_actions(tasks, threshold)
-    fields = ["parent_slug", "name", "linkedin_url", "verdict", "confidence", "conflict",
-              "reason", "user_decision"]
-    queued = []
-    for t in tasks:
-        if t.get("action") != "review":
-            continue
-        row = _flat(t)
-        queued.append({k: row.get(k, "") for k in fields[:-1]} | {"user_decision": ""})
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
-        w.writeheader()
-        w.writerows(queued)
-    return len(queued)
 
 
 # --- driver -----------------------------------------------------------------
@@ -876,20 +886,19 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
     write_verdicts(Path(args.verdicts_jsonl), Path(args.verdicts_csv), tasks)
 
     decide_actions(tasks, args.confirm_threshold)   # one authoritative decision pass
-    queued = write_review_queue(Path(args.review_queue), tasks, args.confirm_threshold)
     parents_dir = Path(args.parents_dir)
     for task in tasks:
         if task.get("verdict") and not task.get("no_link"):
             inject_section(parents_dir / f"{task['parent_slug']}.md", render_section(task["verdict"], task["linkedin"]))
 
-    override_stats = {"path": str(args.overrides_csv), "detached": 0, "verified": 0, "total_rows": 0}
+    override_stats = {"path": str(args.overrides_csv), "detached": 0, "verified": 0, "pending": 0, "total_rows": 0}
     consolidation = {"consolidated_parents": 0}
     if not args.no_overrides:
         override_stats = write_overrides(Path(args.overrides_csv), tasks)
         # Fold each parent's children's contacts onto its kept LinkedIn (trust Phase 2).
         consolidation = write_consolidations(Path(args.consolidate_people_csv), tasks, Path(args.people_csv))
     write_applied(out_dir / "applied.csv", decided_report(tasks))
-    write_summary(out_dir / "summary.md", tasks, Path(args.overrides_csv), consolidation, queued)
+    write_summary(out_dir / "summary.md", tasks, Path(args.overrides_csv), consolidation)
 
     counts = {v: 0 for v in VERDICTS}
     for task in tasks:
@@ -915,7 +924,8 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
         "errors": sum(1 for t in tasks if t.get("error")),
         "overrides": override_stats, "consolidation": consolidation,
         "summary_md": str(out_dir / "summary.md"),
-        "applied_csv": str(out_dir / "applied.csv"), "review_queued": queued,
+        "applied_csv": str(out_dir / "applied.csv"),
+        "needs_review": override_stats.get("pending", 0) + sum(1 for t in tasks if t.get("no_link")),
         "deep_research_eligible": len(dr_subset),
         "deep_research_est_usd": round(len(dr_subset) * DR_COST_PER_PERSON, 2),
         "tokens": usage_total,
@@ -936,9 +946,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--parents-dir", default=str(PARENTS_DIR))
     p.add_argument("--verdicts-jsonl", default=str(VERDICTS_JSONL))
     p.add_argument("--verdicts-csv", default=str(VERDICTS_CSV))
-    p.add_argument("--review-queue", default=str(REVIEW_QUEUE_CSV))
     p.add_argument("--confirm-threshold", type=float, default=DEFAULT_CONFIRM,
-                   help="Min judge confidence to auto-apply a verdict (else -> review queue)")
+                   help="Min judge confidence to auto-apply (else written PENDING in the decisions table)")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--reasoning-effort", default="high", choices=["minimal", "low", "medium", "high"])
     p.add_argument("--concurrency", type=int, default=0)

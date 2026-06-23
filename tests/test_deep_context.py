@@ -406,7 +406,7 @@ class TestReconcileLinkedIn(unittest.TestCase):
             tasks = [
                 self._task("a", "alice", "confirmed", 0.95, emails=["a@x.com"]),
                 self._task("b", "bobceo", "wrong_person", 0.92, emails=["bob@x.com"], reason="CEO != plumber"),
-                self._task("c", "carol", "wrong_person", 0.50),  # below threshold -> review, omitted
+                self._task("c", "carol", "wrong_person", 0.50),  # below threshold -> pending in same file
             ]
             reconcile.decide_actions(tasks, 0.85)
             stats = reconcile.write_overrides(path, tasks)
@@ -418,7 +418,8 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self.assertEqual(rows["alice"]["action"], "verify")
             self.assertEqual(rows["alice"]["match_emails"], "a@x.com")
             self.assertEqual(rows["bobceo"]["action"], "detach")
-            self.assertNotIn("carol", rows)  # low-confidence never reaches the durable override
+            self.assertEqual(rows["alice"]["approved"], "auto")
+            self.assertEqual(rows["carol"]["approved"], "")   # low-confidence -> PENDING in the same file
 
     def test_write_overrides_upsert_is_idempotent(self):
         with tempfile.TemporaryDirectory() as d:
@@ -553,24 +554,28 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self.assertEqual(rows["herman-au-7a04927"], "verify")
             self.assertEqual(rows["hermanau"], "detach")
 
-    def test_review_queue_routes_low_confidence_and_conflicts(self):
+    def test_override_holds_auto_and_pending_in_one_file(self):
+        # Everything judged lands in the ONE decisions table: high-conf -> auto, low-conf -> pending.
         with tempfile.TemporaryDirectory() as d:
-            qpath = Path(d) / "review.csv"
+            path = Path(d) / "ov.csv"
             tasks = [
-                {"parent_slug": "a", "name": "A", "linkedin": {"linkedin_url": "u"}, "conflict": False,
-                 "no_link": False, "verdict": _verdict("confirmed", 0.95)},     # NOT queued
-                {"parent_slug": "b", "name": "B", "linkedin": {"linkedin_url": "u"}, "conflict": False,
-                 "no_link": False, "verdict": _verdict("needs_review", 0.4)},   # queued
-                {"parent_slug": "c", "name": "C", "linkedin": {"linkedin_url": "u"}, "conflict": True,
-                 "no_link": False, "verdict": _verdict("confirmed", 0.95)},     # queued (conflict)
-                {"parent_slug": "d", "name": "D", "linkedin": {}, "conflict": False,
-                 "no_link": True, "verdict": _verdict("needs_review", 0.0, absent=True)}]  # queued (no link)
-            n = reconcile.write_review_queue(qpath, tasks, 0.85)
-            self.assertEqual(n, 3)
+                self._task("a", "alice", "confirmed", 0.95),        # auto verify
+                self._task("b", "bobceo", "wrong_person", 0.95),    # auto detach
+                self._task("c", "carol", "wrong_person", 0.50),     # pending (low conf) -> detach
+                self._task("e", "erin", "needs_review", 0.40)]      # pending -> verify (keep)
+            reconcile.decide_actions(tasks, 0.85)
+            stats = reconcile.write_overrides(path, tasks)
+            self.assertEqual(stats["verified"], 1)
+            self.assertEqual(stats["detached"], 1)
+            self.assertEqual(stats["pending"], 2)
             import csv as _csv
-            with qpath.open() as _fh:
-                slugs = {r["parent_slug"] for r in _csv.DictReader(_fh)}
-            self.assertEqual(slugs, {"b", "c", "d"})
+            with path.open() as fh:
+                rows = {r["public_identifier"]: r for r in _csv.DictReader(fh)}
+            self.assertEqual(rows["alice"]["approved"], "auto")
+            self.assertEqual(rows["carol"]["approved"], "")          # pending, in the SAME file
+            self.assertEqual(rows["carol"]["action"], "detach")      # suggested action from verdict
+            self.assertEqual(rows["erin"]["action"], "verify")       # needs_review -> keep, pending
+            self.assertEqual(reconcile.count_pending(path), 2)
 
     def test_inject_section_is_idempotent(self):
         with tempfile.TemporaryDirectory() as d:
@@ -608,7 +613,7 @@ class TestReconcileLinkedIn(unittest.TestCase):
                 index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
                 facts_dir=facts, raw_dir=raw, parents_dir=pdir,
                 verdicts_jsonl=rdir / "verdicts.jsonl", verdicts_csv=rdir / "verdicts.csv",
-                review_queue=rdir / "review-queue.csv", overrides_csv=rdir / "linkedin-reconcile.csv",
+                overrides_csv=rdir / "linkedin-reconcile.csv",
                 consolidate_people_csv=rdir / "consolidate-people.csv",
                 confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
                 timeout=10, max_retries=0, dry_run=False, no_overrides=False, no_llm=True))
@@ -639,7 +644,7 @@ class TestReconcileLinkedIn(unittest.TestCase):
             man = reconcile.run(_ns(index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
                 facts_dir=facts, raw_dir=base / "raw", parents_dir=base / "parents",
                 verdicts_jsonl=base / "r" / "v.jsonl", verdicts_csv=base / "r" / "v.csv",
-                review_queue=base / "r" / "q.csv", overrides_csv=base / "r" / "ov.csv",
+                overrides_csv=base / "r" / "ov.csv",
                 consolidate_people_csv=base / "r" / "consolidate.csv",
                 confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
                 timeout=10, max_retries=0, dry_run=True, no_overrides=True, no_llm=True))

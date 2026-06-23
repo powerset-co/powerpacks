@@ -41,6 +41,10 @@ Changelog:
 - 2026-06-23: One summary (reconcile/summary.md) instead of three CSVs; hard-stop "WAIT for the
   user to finish reviewing" step before apply-retargets. Merge self-heal inputs resolve relative
   to the output-dir's overrides/ sibling (cwd-independent).
+- 2026-06-23: One editable file. Every judged row (incl. low-confidence/needs_review/ambiguous)
+  now lands in overrides/linkedin-reconcile.csv — high-confidence as approved=auto, the rest as
+  pending with a suggested action. Retired the separate review-queue.csv; the user reads
+  summary.md and edits the single decisions table (approved column, sticky).
 -->
 
 # deep-context
@@ -110,7 +114,7 @@ Seed the checklist with these exact item titles. Each is tagged by phase —
 [Self-heal] Dry-run reconcile cost estimate (free)
 [Self-heal] Confirm cost → run the reconcile judge
 [Self-heal] Write the durable override (detach/verify, approved) — people.csv NOT mutated
-[Self-heal] Surface review queue + decisions table for feedback
+[Self-heal] Fold low-confidence rows into the decisions table as pending
 [Self-heal] Deep-research detaches (≤ $25 auto, else ask) — proposes retargets
 [Self-heal] Open the summary (reconcile/summary.md) and present what changed + what needs review
 [Self-heal] WAIT for the user — ask "let me know when you're done reviewing", do not proceed until they reply
@@ -203,11 +207,12 @@ case this catches).
   grouping). The merge auto-ingests it and unions onto the surviving row (the real row supplies
   the profile), so the kept person keeps the correct profile AND all the siblings' contacts,
   while the wrong-link rows drop. Per-channel counts stay per-channel (never summed).
-- **[Self-heal] Review queue (low-confidence)** — `reconcile/review-queue.csv` holds everything
-  not auto-applied: below threshold + `needs_review` + **ambiguous** link conflicts (e.g.
-  two confirmed, or a needs_review in the mix), with a blank `user_decision` column.
-  Surface these rows to the user and apply their yes/no calls. Some people legitimately
-  have **no LinkedIn** (flagged `linkedin_plausibly_absent`) — never force a match.
+- **[Self-heal] Low-confidence rows (one file)** — every judged row, including the
+  low-confidence / `needs_review` / ambiguous-conflict ones, lives in the SAME decisions table
+  `overrides/linkedin-reconcile.csv` as `approved=` **pending** (with a suggested `action`). The
+  user acts by setting `approved=yes`/`no` there (sticky) — there is no separate review-queue
+  file. Some people legitimately have **no LinkedIn** (flagged `linkedin_plausibly_absent`) —
+  they get no row and are left as-is; never force a match.
 - **[Self-heal] Deep research (default, $25 gate)** — for high-confidence `wrong_person`
   detaches that external research could resolve, find the *correct* identity:
   `bin/deep-context reconcile-deep-research --dry-run` to size it, then estimate the
@@ -220,8 +225,7 @@ case this catches).
   `open .powerpacks/deep-context/reconcile/summary.md`. It's the high-level report — what was
   applied (detached with reasons, consolidated, verified count) and what needs review (pending
   retargets + low-confidence rows). Present its contents to the user. (The detailed
-  `applied.csv` / `review-queue.csv` / decisions table still exist for drill-down, but don't
-  fan three files open.)
+  `applied.csv` + the decisions table still exist for drill-down, but don't fan files open.)
 - **[Self-heal] WAIT for the user to finish reviewing** — this is a **hard stop**. Tell the
   user the summary is open and say *"let me know when you're done reviewing / approving and
   I'll continue."* Do **not** proceed to apply-retargets until they reply. They approve/reject
@@ -241,7 +245,7 @@ report to the user, every time (do NOT list the verified/unchanged links — onl
 - **Retargeted:** R people re-attached to a correct LinkedIn — for each, the new URL **and the
   reason** (why the new profile is the right person, e.g. "matched the wedding-photography
   business + SoCal location from your messages").
-- **Needs your input:** K rows in `review-queue.csv` / pending `retarget` rows to approve.
+- **Needs your input:** K pending rows in the decisions table (`overrides/linkedin-reconcile.csv`) — low-confidence verdicts + `retarget` proposals to approve.
 This is exactly what **`reconcile/summary.md`** already contains — present that (don't re-derive
 it from scratch). Keep it scannable; the user runs this repeatedly to fix things, so make "what
 changed and why" obvious each time.
@@ -353,10 +357,9 @@ name falls back to an all-tokens fuzzy match.
 ├── merge-candidates.csv / .md   likely same-person clusters
 ├── parents/<slug>.md            canonical person (one per real person)
 └── reconcile/                   Phase 3 LinkedIn self-heal
-    ├── summary.md                ⭐ the ONE file to open: what changed + what needs review
+    ├── summary.md                ⭐ the ONE file to READ: what changed + what needs review
     ├── verdicts.csv / .jsonl     same-human verdict per attached profile
     ├── applied.csv               preview of what the override will do (kept/detached) — drill-down
-    ├── review-queue.csv          low-confidence + ambiguous-conflict rows needing your feedback
     └── deep-research/            Parallel.ai re-research of wrong_person detaches
 
 # durable self-heal decisions (fan-in MERGE inputs, re-applied every merge):
