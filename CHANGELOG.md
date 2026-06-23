@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.17.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.16.0...powerpacks-v0.17.0) (2026-06-23)
+
+
+### Features
+
+* **deep-context:** cluster --dry-run (count pairs + cost) so the merge step has a real estimate ([#138](https://github.com/powerset-co/powerpacks/issues/138)) ([67afd0c](https://github.com/powerset-co/powerpacks/commit/67afd0c19ec3fbbf1403255f7b5b3a3cba7939d9))
+* **deep-context:** owner profile as step 0 + Phase 4 (realize via fan-in + Modal index) ([#141](https://github.com/powerset-co/powerpacks/issues/141)) ([b22e68c](https://github.com/powerset-co/powerpacks/commit/b22e68c4cefde530bc215fa2dd8b0981900ee484))
+* **deep-context:** scope deep research to parents with no kept link + stream live progress ([#139](https://github.com/powerset-co/powerpacks/issues/139)) ([091a3f6](https://github.com/powerset-co/powerpacks/commit/091a3f69ff025fb0d5105eedb11e53596984b0cf))
+
+
+### Bug Fixes
+
+* scrub real names/bio from test fixtures + skill examples ([#140](https://github.com/powerset-co/powerpacks/issues/140)) ([f447c0e](https://github.com/powerset-co/powerpacks/commit/f447c0e3011b174088127d04b2d40e5dd7f15683))
+
+
+### Performance Improvements
+
+* **deep-context:** default judge concurrency 16 -&gt; 64 (latency-bound, not CPU-bound) ([#142](https://github.com/powerset-co/powerpacks/issues/142)) ([9cfd8f8](https://github.com/powerset-co/powerpacks/commit/9cfd8f864b058ad5ca7d647093c2e5957060269a))
+
+
+### Documentation
+
+* **deep-context:** plain-language checklist (Dossiers-&gt;Context) + de-jargon step titles ([#136](https://github.com/powerset-co/powerpacks/issues/136)) ([8c6c108](https://github.com/powerset-co/powerpacks/commit/8c6c108a0f3212ffcb305494d8c6b25f4d958252))
+
 ## [0.16.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.15.0...powerpacks-v0.16.0) (2026-06-23)
 
 
