@@ -242,8 +242,9 @@ case this catches).
 
 **ALWAYS end the run with a summary of what changed and why.** After Phase 3, present a short
 report to the user, every time (do NOT list the verified/unchanged links — only what changed):
-- **Detached:** M wrong links removed — list them with the one-line reason (e.g. "Herman Au:
-  LinkedIn is a Canada software lead, but your contact is a Pasadena wedding photographer").
+- **Detached:** M wrong links removed — list them with the one-line reason (e.g. "<name>:
+  the attached LinkedIn is a big-company exec, but your contact is a local tradesperson of the
+  same name").
 - **Retargeted:** R people re-attached to a correct LinkedIn — for each, the new URL **and the
   reason** (why the new profile is the right person, e.g. "matched the wedding-photography
   business + SoCal location from your messages").

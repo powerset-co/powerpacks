@@ -66,9 +66,9 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.write_people_row(bad, {"id": "id-bad", "public_identifier": "bobceo",
                     "linkedin_url": "https://www.linkedin.com/in/bobceo", "full_name": "Bob Plumber",
                     "primary_email": "bob@x.com", "source_channels": "gmail_msgvault"})
-                self.write_people_row(good, {"id": "id-good", "public_identifier": "chrissyhu",
-                    "linkedin_url": "https://www.linkedin.com/in/chrissyhu", "full_name": "Chrissy Hu",
-                    "primary_email": "chrissy@x.com", "source_channels": "gmail_msgvault"})
+                self.write_people_row(good, {"id": "id-good", "public_identifier": "patlee",
+                    "linkedin_url": "https://www.linkedin.com/in/patlee", "full_name": "Pat Lee",
+                    "primary_email": "pat@x.com", "source_channels": "gmail_msgvault"})
                 overrides = Path(".powerpacks/network-import/overrides/review.csv")
                 overrides.parent.mkdir(parents=True, exist_ok=True)
                 with overrides.open("w", newline="", encoding="utf-8") as fh:
@@ -77,7 +77,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                     w.writeheader()
                     w.writerow({"public_identifier": "bobceo", "action": "detach", "approved": "auto",
                                 "match_emails": "bob@x.com", "confidence": "0.98", "reason": "CEO != plumber"})
-                    w.writerow({"public_identifier": "chrissyhu", "action": "verify", "approved": "auto",
+                    w.writerow({"public_identifier": "patlee", "action": "verify", "approved": "auto",
                                 "match_emails": "", "confidence": "0.92", "reason": "JPM IB match"})
 
                 out_dir = Path(tmp) / "merged"
@@ -90,9 +90,9 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 with (out_dir / "people.csv").open() as fh:
                     rows = {r["full_name"]: r for r in csv.DictReader(fh)}
                 self.assertNotIn("Bob Plumber", rows)                     # detached -> dropped
-                self.assertIn("Chrissy Hu", rows)
-                self.assertEqual(rows["Chrissy Hu"]["linkedin_verified"], "confirmed")
-                self.assertEqual(rows["Chrissy Hu"]["linkedin_verified_confidence"], "0.92")
+                self.assertIn("Pat Lee", rows)
+                self.assertEqual(rows["Pat Lee"]["linkedin_verified"], "confirmed")
+                self.assertEqual(rows["Pat Lee"]["linkedin_verified_confidence"], "0.92")
             finally:
                 os.chdir(old_cwd)
 
@@ -185,28 +185,28 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             try:
                 # Real kept row (correct LinkedIn + profile) + a sibling being detached.
                 src = Path(".powerpacks/network-import/gmail/run-1/src.csv")
-                self.write_people_row(src, {"id": "id-keep", "public_identifier": "chrissyhu",
-                    "linkedin_url": "https://www.linkedin.com/in/chrissyhu", "full_name": "Chrissy Hu",
-                    "headline": "Director of Investments", "primary_email": "c@gmail.com",
+                self.write_people_row(src, {"id": "id-keep", "public_identifier": "patlee",
+                    "linkedin_url": "https://www.linkedin.com/in/patlee", "full_name": "Pat Lee",
+                    "headline": "Director of Eng", "primary_email": "pat@gmail.com",
                     "source_channels": "gmail_msgvault"})
-                self.write_people_row(src.with_name("sib.csv"), {"id": "id-sib", "public_identifier": "chrissy-hu",
-                    "linkedin_url": "https://www.linkedin.com/in/chrissy-hu", "full_name": "Chrissy Hu",
-                    "headline": "Autonomous Fleet @ Nvidia", "primary_email": "c@jpmorgan.com",
+                self.write_people_row(src.with_name("sib.csv"), {"id": "id-sib", "public_identifier": "pat-lee",
+                    "linkedin_url": "https://www.linkedin.com/in/pat-lee", "full_name": "Pat Lee",
+                    "headline": "Field Ops @ Globex", "primary_email": "pat@work.com",
                     "source_channels": "gmail_msgvault"})
                 overrides = Path(".powerpacks/network-import/overrides/review.csv")
                 overrides.parent.mkdir(parents=True, exist_ok=True)
                 with overrides.open("w", newline="") as fh:
                     w = csv.DictWriter(fh, fieldnames=["public_identifier", "action", "approved"])
                     w.writeheader()
-                    w.writerow({"public_identifier": "chrissy-hu", "action": "detach", "approved": "auto"})
+                    w.writerow({"public_identifier": "pat-lee", "action": "detach", "approved": "auto"})
                 # Consolidation row: CONTACT-ONLY (no profile/rapidapi), keyed by the kept LinkedIn.
                 consol = Path(".powerpacks/network-import/overrides/consolidate-people.csv")
                 cols = merge_network_sources.PEOPLE_SCHEMA_COLUMNS
                 crow = {c: "" for c in cols}
-                crow.update({"public_identifier": "chrissyhu",
-                             "linkedin_url": "https://www.linkedin.com/in/chrissyhu",
-                             "primary_email": "c@jpmorgan.com",
-                             "all_emails": '["c@gmail.com", "c@jpmorgan.com"]'})
+                crow.update({"public_identifier": "patlee",
+                             "linkedin_url": "https://www.linkedin.com/in/patlee",
+                             "primary_email": "pat@work.com",
+                             "all_emails": '["pat@gmail.com", "pat@work.com"]'})
                 with consol.open("w", newline="") as fh:
                     w = csv.DictWriter(fh, fieldnames=cols)
                     w.writeheader(); w.writerow(crow)
@@ -216,10 +216,10 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                     "--input", str(src), "--input", str(src.with_name("sib.csv"))])
                 with (out_dir / "people.csv").open() as fh:
                     merged = {r["public_identifier"]: r for r in csv.DictReader(fh)}
-                self.assertNotIn("chrissy-hu", merged)                       # sibling detached -> dropped
-                self.assertIn("c@jpmorgan.com", merged["chrissyhu"]["all_emails"])  # sibling email folded in
-                self.assertIn("c@gmail.com", merged["chrissyhu"]["all_emails"])
-                self.assertEqual(merged["chrissyhu"]["headline"], "Director of Investments")  # profile NOT polluted
+                self.assertNotIn("pat-lee", merged)                       # sibling detached -> dropped
+                self.assertIn("pat@work.com", merged["patlee"]["all_emails"])  # sibling email folded in
+                self.assertIn("pat@gmail.com", merged["patlee"]["all_emails"])
+                self.assertEqual(merged["patlee"]["headline"], "Director of Eng")  # profile NOT polluted
             finally:
                 os.chdir(old_cwd)
 
