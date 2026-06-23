@@ -50,7 +50,7 @@ except ModuleNotFoundError:
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
 # Durable self-heal override written by $deep-context reconcile, re-applied every merge.
-DEFAULT_OVERRIDES = Path(".powerpacks/network-import/overrides/linkedin-reconcile.csv")
+DEFAULT_OVERRIDES = Path(".powerpacks/network-import/overrides/review.csv")
 DEFAULT_RETARGET_PEOPLE = Path(".powerpacks/network-import/overrides/retarget-people.csv")
 DEFAULT_CONSOLIDATE_PEOPLE = Path(".powerpacks/network-import/overrides/consolidate-people.csv")
 MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources",
@@ -615,7 +615,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             return overrides_dir / name
         return Path(value) if value else None
 
-    override_path = _resolve(args.overrides, "linkedin-reconcile.csv")
+    override_path = _resolve(args.overrides, "review.csv")
     # Auto-ingest extra people rows produced by the self-heal: retarget re-attachments and
     # consolidation rows (a parent's children's contacts folded onto its kept LinkedIn).
     for extra in (_resolve(args.retarget_people, "retarget-people.csv"),

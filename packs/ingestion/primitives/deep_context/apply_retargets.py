@@ -1,6 +1,6 @@
 """[Phase 3, retarget] Re-attach the CORRECT LinkedIn to people whose link was detached.
 
-The decisions table (linkedin-reconcile.csv) can carry `retarget` rows: the wrong link is
+The decisions table (review.csv) can carry `retarget` rows: the wrong link is
 detached AND a `new_linkedin_url` is the correct person. people.csv is LinkedIn-only and
 requires a RapidAPI profile, so re-attaching means ENRICHING the new link and producing a
 valid people-schema row. This step does exactly that for every approved retarget:

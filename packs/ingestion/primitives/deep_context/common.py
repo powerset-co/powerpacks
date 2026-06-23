@@ -46,7 +46,7 @@ PROFILE_CACHE_DIR = Path(".powerpacks/network-import/profile_cache_v2")
 # Durable self-heal override: reconcile writes it, the fan-in merge re-applies it every run
 # (a merge INPUT, not a deep-context output — so it survives re-merges/index rebuilds).
 OVERRIDES_DIR = Path(".powerpacks/network-import/overrides")
-LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "linkedin-reconcile.csv"
+LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
 # Enriched re-attach rows (retargets), auto-ingested by the fan-in merge.
 RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"
 # Contact-only rows that fold a parent's children onto its kept LinkedIn (auto-ingested).

@@ -24,7 +24,7 @@ Changelog:
   defer to review. All auto-actions logged to reconcile/applied.csv; `reconcile --reapply`
   re-decides/applies from existing verdicts with no OpenAI spend.
 - 2026-06-23: Inverted the self-heal to be durable — reconcile no longer mutates people.csv.
-  It writes a durable override table (network-import/overrides/linkedin-reconcile.csv) that
+  It writes a durable override table (network-import/overrides/review.csv) that
   the fan-in merge (merge_network_sources) re-applies every run: detach clears the wrong link
   (LinkedIn-only people.csv then drops that person), verify annotates linkedin_verified.
   Survives re-merges + Modal index rebuilds.
@@ -42,7 +42,7 @@ Changelog:
   user to finish reviewing" step before apply-retargets. Merge self-heal inputs resolve relative
   to the output-dir's overrides/ sibling (cwd-independent).
 - 2026-06-23: One editable file. Every judged row (incl. low-confidence/needs_review/ambiguous)
-  now lands in overrides/linkedin-reconcile.csv — high-confidence as approved=auto, the rest as
+  now lands in overrides/review.csv — high-confidence as approved=auto, the rest as
   pending with a suggested action. Retired the separate review-queue.csv; the user reads
   summary.md and edits the single decisions table (approved column, sticky).
 -->
@@ -182,7 +182,7 @@ case this catches).
   section into each parent (verdict + supporting/contradicting evidence).
 - **[Self-heal] Write the durable override (high-confidence)** — `reconcile` does NOT mutate
   `people.csv`. It writes a **durable override table**,
-  `.powerpacks/network-import/overrides/linkedin-reconcile.csv`, that the **fan-in merge
+  `.powerpacks/network-import/overrides/review.csv`, that the **fan-in merge
   re-applies every run** (so the heal survives re-merges). High-confidence verdicts become
   entries: `confirmed ≥ threshold` → `action=verify` (merge annotates `linkedin_verified`
   on the kept row); `wrong_person ≥ threshold` → `action=detach` (merge clears the wrong
@@ -209,7 +209,7 @@ case this catches).
   while the wrong-link rows drop. Per-channel counts stay per-channel (never summed).
 - **[Self-heal] Low-confidence rows (one file)** — every judged row, including the
   low-confidence / `needs_review` / ambiguous-conflict ones, lives in the SAME decisions table
-  `overrides/linkedin-reconcile.csv` as `approved=` **pending** (with a suggested `action`). The
+  `overrides/review.csv` as `approved=` **pending** (with a suggested `action`). The
   user acts by setting `approved=yes`/`no` there (sticky) — there is no separate review-queue
   file. Some people legitimately have **no LinkedIn** (flagged `linkedin_plausibly_absent`) —
   they get no row and are left as-is; never force a match.
@@ -229,7 +229,7 @@ case this catches).
 - **[Self-heal] WAIT for the user to finish reviewing** — this is a **hard stop**. Tell the
   user the summary is open and say *"let me know when you're done reviewing / approving and
   I'll continue."* Do **not** proceed to apply-retargets until they reply. They approve/reject
-  by setting the `approved` column in `overrides/linkedin-reconcile.csv` (sticky). Opening a
+  by setting the `approved` column in `overrides/review.csv` (sticky). Opening a
   file is not the same as the user having reviewed it — never auto-advance past this step.
 - **[Self-heal] Apply approved retargets** — `bin/deep-context apply-retargets`. For each decisions
   row with `action=retarget` and `approved` ∈ {auto,yes}, it enriches the correct LinkedIn
@@ -245,7 +245,7 @@ report to the user, every time (do NOT list the verified/unchanged links — onl
 - **Retargeted:** R people re-attached to a correct LinkedIn — for each, the new URL **and the
   reason** (why the new profile is the right person, e.g. "matched the wedding-photography
   business + SoCal location from your messages").
-- **Needs your input:** K pending rows in the decisions table (`overrides/linkedin-reconcile.csv`) — low-confidence verdicts + `retarget` proposals to approve.
+- **Needs your input:** K pending rows in the decisions table (`overrides/review.csv`) — low-confidence verdicts + `retarget` proposals to approve.
 This is exactly what **`reconcile/summary.md`** already contains — present that (don't re-derive
 it from scratch). Keep it scannable; the user runs this repeatedly to fix things, so make "what
 changed and why" obvious each time.
@@ -363,7 +363,7 @@ name falls back to an all-tokens fuzzy match.
     └── deep-research/            Parallel.ai re-research of wrong_person detaches
 
 # durable self-heal decisions (fan-in MERGE inputs, re-applied every merge):
-.powerpacks/network-import/overrides/linkedin-reconcile.csv   detach|verify|retarget + approved
+.powerpacks/network-import/overrides/review.csv   detach|verify|retarget + approved
 .powerpacks/network-import/overrides/retarget-people.csv      enriched re-attach rows
 .powerpacks/network-import/overrides/consolidate-people.csv   children's contacts folded onto kept link
 ```
