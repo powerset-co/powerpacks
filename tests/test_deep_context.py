@@ -392,32 +392,52 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self.assertTrue(all(t["conflict"] for t in by_parent["bob-p"]))
             self.assertTrue(by_parent["carol-p"][0]["no_link"])
 
-    def test_apply_verdicts_confirms_detaches_and_backs_up(self):
+    def _task(self, parent, pub, action_verdict, conf, **kw):
+        return {"parent_slug": parent, "name": parent, "candidate_key": pub,
+                "person_ids": [f"pid-{pub}"], "conflict": kw.get("conflict", False), "no_link": False,
+                "linkedin": {"linkedin_url": f"https://www.linkedin.com/in/{pub}"},
+                "match_emails": kw.get("emails", []), "match_phones": kw.get("phones", []),
+                "verdict": _verdict(action_verdict, conf, reason=kw.get("reason", ""))}
+
+    def test_write_overrides_emits_detach_and_verify(self):
         with tempfile.TemporaryDirectory() as d:
-            people_csv = Path(d) / "people.csv"
-            self._people_csv(people_csv, [
-                {"id": "pa", "public_identifier": "alice", "linkedin_url": "https://www.linkedin.com/in/alice"},
-                {"id": "pb", "public_identifier": "bobceo", "linkedin_url": "https://www.linkedin.com/in/bobceo"},
-                {"id": "pc", "public_identifier": "carol", "linkedin_url": "https://www.linkedin.com/in/carol"}])
-            results = [
-                {"parent_slug": "a", "name": "A", "person_ids": ["pa"], "conflict": False, "verdict": _verdict("confirmed", 0.95)},
-                {"parent_slug": "b", "name": "B", "person_ids": ["pb"], "conflict": False, "verdict": _verdict("wrong_person", 0.92, reason="CEO != plumber")},
-                {"parent_slug": "c", "name": "C", "person_ids": ["pc"], "conflict": False, "verdict": _verdict("wrong_person", 0.50)},  # below threshold
+            path = Path(d) / "ov.csv"
+            tasks = [
+                self._task("a", "alice", "confirmed", 0.95, emails=["a@x.com"]),
+                self._task("b", "bobceo", "wrong_person", 0.92, emails=["bob@x.com"], reason="CEO != plumber"),
+                self._task("c", "carol", "wrong_person", 0.50),  # below threshold -> review, omitted
             ]
-            stats = reconcile.apply_verdicts(people_csv, results, 0.85)
-            self.assertEqual(stats["confirmed"], 1)
+            reconcile.decide_actions(tasks, 0.85)
+            stats = reconcile.write_overrides(path, tasks)
+            self.assertEqual(stats["verified"], 1)
             self.assertEqual(stats["detached"], 1)
-            self.assertTrue(Path(stats["backup"]).exists())  # .bkup made before mutating
             import csv as _csv
-            with people_csv.open() as _fh:
-                rows = {r["id"]: r for r in _csv.DictReader(_fh)}
-            self.assertEqual(rows["pa"]["linkedin_verified"], "confirmed")
-            self.assertEqual(rows["pa"]["linkedin_url"], "https://www.linkedin.com/in/alice")  # untouched
-            self.assertEqual(rows["pb"]["linkedin_verified"], "wrong_person")
-            self.assertEqual(rows["pb"]["linkedin_url"], "")                                   # detached
-            self.assertEqual(rows["pb"]["public_identifier"], "")
-            self.assertEqual(rows["pb"]["linkedin_url_rejected"], "https://www.linkedin.com/in/bobceo")
-            self.assertEqual(rows["pc"]["linkedin_verified"], "")  # low-confidence: not applied
+            with path.open() as fh:
+                rows = {r["public_identifier"]: r for r in _csv.DictReader(fh)}
+            self.assertEqual(rows["alice"]["action"], "verify")
+            self.assertEqual(rows["alice"]["match_emails"], "a@x.com")
+            self.assertEqual(rows["bobceo"]["action"], "detach")
+            self.assertNotIn("carol", rows)  # low-confidence never reaches the durable override
+
+    def test_write_overrides_upsert_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "ov.csv"
+            tasks = [self._task("b", "bobceo", "wrong_person", 0.95)]
+            reconcile.decide_actions(tasks, 0.85)
+            reconcile.write_overrides(path, tasks)
+            first = path.read_text()
+            reconcile.write_overrides(path, tasks)  # same decision again
+            import csv as _csv
+            with path.open() as fh:
+                rows = list(_csv.DictReader(fh))
+            self.assertEqual(len(rows), 1)          # one row per public_identifier, no dupes
+            # A pre-existing unrelated override row is preserved across re-runs.
+            with path.open("a", newline="") as fh:
+                fh.write("zzz,,detach,,,0.9,,,manual,\n")
+            reconcile.write_overrides(path, tasks)
+            with path.open() as fh:
+                pubs = {r["public_identifier"] for r in _csv.DictReader(fh)}
+            self.assertEqual(pubs, {"bobceo", "zzz"})
 
     def test_conflict_auto_resolves_one_confirmed_rest_wrong(self):
         # One parent, two different attached links: one confirmed, one wrong -> auto-resolve
@@ -444,22 +464,18 @@ class TestReconcileLinkedIn(unittest.TestCase):
         reconcile.decide_actions(tasks, 0.85)
         self.assertTrue(all(t["action"] == "review" for t in tasks))
 
-    def test_detach_is_idempotent_and_preserves_backup(self):
+    def test_conflict_resolution_writes_one_verify_and_rest_detach(self):
         with tempfile.TemporaryDirectory() as d:
-            people_csv = Path(d) / "people.csv"
-            self._people_csv(people_csv, [
-                {"id": "pb", "public_identifier": "bobceo", "linkedin_url": "https://www.linkedin.com/in/bobceo"}])
-            results = [{"parent_slug": "b", "name": "B", "person_ids": ["pb"], "conflict": False,
-                        "verdict": _verdict("wrong_person", 0.95)}]
-            reconcile.apply_verdicts(people_csv, results, 0.85)
-            backup_bytes = Path(str(people_csv) + ".bkup").read_bytes()  # pristine (has the url)
-            reconcile.apply_verdicts(people_csv, results, 0.85)          # second run
+            path = Path(d) / "ov.csv"
+            tasks = [self._task("herman", "herman-au-7a04927", "confirmed", 0.92, conflict=True),
+                     self._task("herman", "hermanau", "wrong_person", 0.98, conflict=True)]
+            reconcile.decide_actions(tasks, 0.85)
+            reconcile.write_overrides(path, tasks)
             import csv as _csv
-            with people_csv.open() as fh:
-                row = next(_csv.DictReader(fh))
-            self.assertEqual(row["linkedin_url"], "")                                  # still detached
-            self.assertEqual(row["linkedin_url_rejected"], "https://www.linkedin.com/in/bobceo")  # NOT wiped
-            self.assertEqual(Path(str(people_csv) + ".bkup").read_bytes(), backup_bytes)  # backup NOT clobbered
+            with path.open() as fh:
+                rows = {r["public_identifier"]: r["action"] for r in _csv.DictReader(fh)}
+            self.assertEqual(rows["herman-au-7a04927"], "verify")
+            self.assertEqual(rows["hermanau"], "detach")
 
     def test_review_queue_routes_low_confidence_and_conflicts(self):
         with tempfile.TemporaryDirectory() as d:
@@ -516,14 +532,18 @@ class TestReconcileLinkedIn(unittest.TestCase):
                 index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
                 facts_dir=facts, raw_dir=raw, parents_dir=pdir,
                 verdicts_jsonl=rdir / "verdicts.jsonl", verdicts_csv=rdir / "verdicts.csv",
-                review_queue=rdir / "review-queue.csv", confirm_threshold=0.85,
-                model="m", reasoning_effort="high", concurrency=1, timeout=10, max_retries=0,
-                dry_run=False, no_apply=False, no_llm=True))
+                review_queue=rdir / "review-queue.csv", overrides_csv=rdir / "linkedin-reconcile.csv",
+                confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
+                timeout=10, max_retries=0, dry_run=False, no_overrides=False, no_llm=True))
             self.assertEqual(man["judge"], "deterministic")
             self.assertEqual(man["no_link"], 1)                      # Carol
             self.assertEqual(man["verdicts"]["confirmed"], 1)        # Alice (offline stub)
-            self.assertEqual(man["applied"]["confirmed"], 1)
+            self.assertEqual(man["overrides"]["verified"], 1)        # Alice -> verify in the override
             self.assertTrue((rdir / "verdicts.csv").exists())
+            self.assertTrue((rdir / "applied.csv").exists())
+            # people.csv is NOT mutated by reconcile anymore (the merge applies the override).
+            with people_csv.open() as fh:
+                self.assertNotIn("linkedin_verified", next(__import__("csv").reader(fh)))
             self.assertIn("LinkedIn identity", (pdir / "alice-p.md").read_text())
 
     def test_dry_run_estimates_without_writing(self):
@@ -542,9 +562,9 @@ class TestReconcileLinkedIn(unittest.TestCase):
             man = reconcile.run(_ns(index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
                 facts_dir=facts, raw_dir=base / "raw", parents_dir=base / "parents",
                 verdicts_jsonl=base / "r" / "v.jsonl", verdicts_csv=base / "r" / "v.csv",
-                review_queue=base / "r" / "q.csv", confirm_threshold=0.85, model="m",
-                reasoning_effort="high", concurrency=1, timeout=10, max_retries=0,
-                dry_run=True, no_apply=True, no_llm=True))
+                review_queue=base / "r" / "q.csv", overrides_csv=base / "r" / "ov.csv",
+                confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
+                timeout=10, max_retries=0, dry_run=True, no_overrides=True, no_llm=True))
             self.assertEqual(man["status"], "dry_run")
             self.assertEqual(man["judgeable"], 1)
             self.assertFalse((base / "r").exists())  # dry-run writes nothing

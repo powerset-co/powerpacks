@@ -56,6 +56,71 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             writer.writeheader()
             writer.writerow(out)
 
+    def test_overrides_detach_drops_person_and_verify_annotates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                bad = Path(".powerpacks/network-import/gmail/run-1/bad.csv")
+                good = Path(".powerpacks/network-import/gmail/run-1/good.csv")
+                self.write_people_row(bad, {"id": "id-bad", "public_identifier": "bobceo",
+                    "linkedin_url": "https://www.linkedin.com/in/bobceo", "full_name": "Bob Plumber",
+                    "primary_email": "bob@x.com", "source_channels": "gmail_msgvault"})
+                self.write_people_row(good, {"id": "id-good", "public_identifier": "chrissyhu",
+                    "linkedin_url": "https://www.linkedin.com/in/chrissyhu", "full_name": "Chrissy Hu",
+                    "primary_email": "chrissy@x.com", "source_channels": "gmail_msgvault"})
+                overrides = Path(".powerpacks/network-import/overrides/linkedin-reconcile.csv")
+                overrides.parent.mkdir(parents=True, exist_ok=True)
+                with overrides.open("w", newline="", encoding="utf-8") as fh:
+                    w = csv.DictWriter(fh, fieldnames=["public_identifier", "linkedin_url", "action",
+                        "match_emails", "match_phones", "confidence", "reason", "person_id", "source", "updated_at"])
+                    w.writeheader()
+                    w.writerow({"public_identifier": "bobceo", "action": "detach", "match_emails": "bob@x.com",
+                                "confidence": "0.98", "reason": "CEO != plumber"})
+                    w.writerow({"public_identifier": "chrissyhu", "action": "verify", "match_emails": "",
+                                "confidence": "0.92", "reason": "JPM IB match"})
+
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke(["run", "--output-dir", str(out_dir),
+                    "--input", str(bad), "--input", str(good), "--overrides", str(overrides)])
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["overrides_detached"], 1)
+                self.assertEqual(payload["overrides_verified"], 1)
+                with (out_dir / "people.csv").open() as fh:
+                    rows = {r["full_name"]: r for r in csv.DictReader(fh)}
+                self.assertNotIn("Bob Plumber", rows)                     # detached -> dropped
+                self.assertIn("Chrissy Hu", rows)
+                self.assertEqual(rows["Chrissy Hu"]["linkedin_verified"], "confirmed")
+                self.assertEqual(rows["Chrissy Hu"]["linkedin_verified_confidence"], "0.92")
+            finally:
+                os.chdir(old_cwd)
+
+    def test_override_scope_mismatch_is_ignored(self):
+        # An override scoped to a different email must NOT detach a same-public_id row.
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                p = Path(".powerpacks/network-import/gmail/run-1/p.csv")
+                self.write_people_row(p, {"id": "id-1", "public_identifier": "jane-example",
+                    "linkedin_url": "https://www.linkedin.com/in/jane-example", "full_name": "Jane Right",
+                    "primary_email": "jane@x.com", "source_channels": "gmail_msgvault"})
+                overrides = Path(tmp) / "ov.csv"
+                with overrides.open("w", newline="", encoding="utf-8") as fh:
+                    w = csv.DictWriter(fh, fieldnames=["public_identifier", "action", "match_emails", "match_phones"])
+                    w.writeheader()
+                    w.writerow({"public_identifier": "jane-example", "action": "detach",
+                                "match_emails": "someone-else@x.com", "match_phones": ""})
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke(["run", "--output-dir", str(out_dir),
+                    "--input", str(p), "--overrides", str(overrides)])
+                self.assertEqual(payload["overrides_detached"], 0)       # scope mismatch -> ignored
+                with (out_dir / "people.csv").open() as fh:
+                    names = [r["full_name"] for r in csv.DictReader(fh)]
+                self.assertIn("Jane Right", names)
+            finally:
+                os.chdir(old_cwd)
+
     def test_large_profile_payload_fields_do_not_break_csv_merge(self):
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()

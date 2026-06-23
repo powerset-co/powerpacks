@@ -43,6 +43,10 @@ REVIEW_QUEUE_CSV = RECONCILE_DIR / "review-queue.csv"  # low-confidence rows nee
 DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 # RapidAPI LinkedIn lookup cache (one JSON per public_identifier) — the "linkedin lookups".
 PROFILE_CACHE_DIR = Path(".powerpacks/network-import/profile_cache_v2")
+# Durable self-heal override: reconcile writes it, the fan-in merge re-applies it every run
+# (a merge INPUT, not a deep-context output — so it survives re-merges/index rebuilds).
+OVERRIDES_DIR = Path(".powerpacks/network-import/overrides")
+LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "linkedin-reconcile.csv"
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 
 # Channel labels as they appear in people.csv `source_channels`.

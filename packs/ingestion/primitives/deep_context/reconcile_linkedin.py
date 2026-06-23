@@ -37,7 +37,6 @@ import argparse
 import asyncio
 import csv
 import json
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -61,6 +60,7 @@ from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     FACTS_DIR,
     INDEX_JSON,
+    LINKEDIN_OVERRIDES_CSV,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
     RAW_DIR,
@@ -70,8 +70,11 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     load_env,
     load_owner,
+    normalize_email,
+    normalize_phone,
     now_iso,
     owner_background_block,
+    parse_list,
     write_json,
 )
 from packs.ingestion.primitives.enrich_people.enrich_people import (
@@ -296,12 +299,32 @@ def build_tasks(index: dict[str, Any], people: dict[str, dict[str, str]],
             continue
         for key, pids in by_key.items():
             row = people[pids[0]]
+            emails, phones = _contact_keys(pids, people)
             tasks.append({
                 "parent_slug": pslug, "name": pinfo.get("name", pslug),
                 "candidate_key": key, "person_ids": pids, "conflict": conflict,
                 "no_link": False, "dossier": dossier, "linkedin": linkedin_view(row, cache_dir),
+                "match_emails": emails, "match_phones": phones,
             })
     return tasks
+
+
+def _contact_keys(pids: list[str], people: dict[str, dict[str, str]]) -> tuple[list[str], list[str]]:
+    """Normalized emails/phones across a candidate's person rows — used to scope the
+    override to the right person group at merge time."""
+    emails: list[str] = []
+    phones: list[str] = []
+    for pid in pids:
+        row = people.get(pid, {})
+        for e in [row.get("primary_email", ""), *parse_list(row.get("all_emails"))]:
+            ne = normalize_email(e)
+            if ne and "@" in ne and ne not in emails:
+                emails.append(ne)
+        for p in [row.get("primary_phone", ""), *parse_list(row.get("all_phones"))]:
+            npn = normalize_phone(p)
+            if npn and npn not in phones:
+                phones.append(npn)
+    return emails, phones
 
 
 # --- LLM judge --------------------------------------------------------------
@@ -453,85 +476,82 @@ def decide_actions(tasks: list[dict[str, Any]], threshold: float) -> None:
                 t["action"], t["via"] = "detach", "normal"
 
 
-# --- auto-apply to people.csv -----------------------------------------------
+# --- durable override (consumed by the fan-in merge) ------------------------
 
-APPLY_COLUMNS = ["linkedin_verified", "linkedin_verified_confidence",
-                 "linkedin_verified_reason", "linkedin_url_rejected"]
+OVERRIDE_COLUMNS = ["public_identifier", "linkedin_url", "action", "match_emails",
+                    "match_phones", "confidence", "reason", "person_id", "source", "updated_at"]
 
 
-def apply_verdicts(people_csv: Path, tasks: list[dict[str, Any]], threshold: float) -> dict[str, Any]:
-    """Apply the decided actions to people.csv in place (after a .bkup backup).
+def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Upsert decided actions into the durable override table the fan-in merge re-applies.
 
-    confirm -> annotate linkedin_verified=confirmed (non-destructive).
-    detach  -> stash linkedin_url into linkedin_url_rejected, clear linkedin_url +
-    public_identifier. Reversible + auditable. Idempotent: re-applying a detach keeps the
-    already-stashed rejected url, and the pristine .bkup (pre-Phase-3) is never clobbered.
-    Returns counts + a per-row report of exactly what was done."""
-    decide_actions(tasks, threshold)
-    decisions: dict[str, dict[str, Any]] = {}  # person_id -> action to apply
+    confirm -> action=verify (merge annotates the kept row); detach -> action=detach (merge
+    clears the wrong link so the LinkedIn-only people.csv drops that person). review -> omitted.
+    Idempotent: keyed by public_identifier — re-running replaces same-key rows, never
+    duplicates, and other rows in the file are preserved. people.csv is NOT touched."""
+    existing: dict[str, dict[str, str]] = {}
+    if path.exists():
+        with path.open(newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                pub = (row.get("public_identifier") or "").strip().lower()
+                if pub:
+                    existing[pub] = row
+
+    detach = verify = 0
     for t in tasks:
-        if t.get("action") not in ("confirm", "detach"):
+        action = t.get("action")
+        if action not in ("confirm", "detach"):
+            continue
+        pub = (t.get("candidate_key") or "").strip().lower()
+        if not pub:
             continue
         v = t.get("verdict") or {}
-        for pid in t["person_ids"]:
-            decisions[pid] = {"action": t["action"], "via": t.get("via", ""),
-                              "confidence": float(v.get("confidence") or 0), "reason": v.get("reason", ""),
-                              "parent_slug": t.get("parent_slug", ""), "name": t.get("name", "")}
-    empty = {"applied": 0, "confirmed": 0, "detached": 0, "conflict_resolved": 0, "backup": "", "rows": []}
-    if not people_csv.exists() or not decisions:
-        return empty
+        ov_action = "verify" if action == "confirm" else "detach"
+        existing[pub] = {
+            "public_identifier": pub,
+            "linkedin_url": (t.get("linkedin") or {}).get("linkedin_url", ""),
+            "action": ov_action,
+            "match_emails": "|".join(t.get("match_emails") or []),
+            "match_phones": "|".join(t.get("match_phones") or []),
+            "confidence": f"{float(v.get('confidence') or 0):.3f}",
+            "reason": v.get("reason", ""),
+            "person_id": (t.get("person_ids") or [""])[0],
+            "source": "deep-context-reconcile",
+            "updated_at": now_iso(),
+        }
+        detach += ov_action == "detach"
+        verify += ov_action == "verify"
 
-    with people_csv.open(newline="", encoding="utf-8") as fh:
-        reader = csv.DictReader(fh)
-        fieldnames = list(reader.fieldnames or [])
-        rows = list(reader)
-    for col in APPLY_COLUMNS:
-        if col not in fieldnames:
-            fieldnames.append(col)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=OVERRIDE_COLUMNS)
+        w.writeheader()
+        for pub in sorted(existing):
+            w.writerow({k: existing[pub].get(k, "") for k in OVERRIDE_COLUMNS})
+    return {"path": str(path), "detached": detach, "verified": verify, "total_rows": len(existing)}
 
-    confirmed = detached = resolved = 0
-    report: list[dict[str, Any]] = []
-    for row in rows:
-        d = decisions.get(str(row.get("id") or "").strip())
-        if not d:
+
+def decided_report(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per-row preview of what the override will do at the next merge (for applied.csv)."""
+    rows: list[dict[str, Any]] = []
+    for t in tasks:
+        action = t.get("action")
+        if action not in ("confirm", "detach"):
             continue
-        if d["via"] == "conflict_resolved":
-            resolved += 1
-        entry = {"parent_slug": d["parent_slug"], "name": d["name"], "person_id": row.get("id", ""),
-                 "via": d["via"], "confidence": round(d["confidence"], 3), "reason": d["reason"]}
-        if d["action"] == "confirm":
-            row["linkedin_verified"] = "confirmed"
-            row["linkedin_verified_confidence"] = f"{d['confidence']:.3f}"
-            row["linkedin_verified_reason"] = d["reason"]
-            confirmed += 1
-            report.append({**entry, "action": "verified_kept", "linkedin_url": row.get("linkedin_url", "")})
-        else:  # detach (idempotent: only stash a real current url)
-            current = (row.get("linkedin_url") or "").strip()
-            rejected = current or row.get("linkedin_url_rejected", "")
-            if current:
-                row["linkedin_url_rejected"] = current
-                row["linkedin_url"] = ""
-                row["public_identifier"] = ""
-            row["linkedin_verified"] = "wrong_person"
-            row["linkedin_verified_confidence"] = f"{d['confidence']:.3f}"
-            row["linkedin_verified_reason"] = d["reason"]
-            detached += 1
-            report.append({**entry, "action": "detached", "linkedin_url": rejected})
-
-    backup = str(people_csv) + ".bkup"
-    if not Path(backup).exists():           # preserve the FIRST (pristine) copy only
-        shutil.copy2(people_csv, backup)
-    with people_csv.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k, "") for k in fieldnames})
-    return {"applied": confirmed + detached, "confirmed": confirmed, "detached": detached,
-            "conflict_resolved": resolved, "backup": backup, "rows": report}
+        v = t.get("verdict") or {}
+        rows.append({
+            "parent_slug": t.get("parent_slug", ""), "name": t.get("name", ""),
+            "person_id": (t.get("person_ids") or [""])[0],
+            "action": "verified_kept" if action == "confirm" else "detached",
+            "via": t.get("via", ""), "confidence": round(float(v.get("confidence") or 0), 3),
+            "linkedin_url": (t.get("linkedin") or {}).get("linkedin_url", ""),
+            "reason": v.get("reason", ""),
+        })
+    return rows
 
 
 def write_applied(path: Path, rows: list[dict[str, Any]]) -> None:
-    """Audit report of what auto-applied — so the user can review what was done."""
+    """Audit report of what the override will apply — so the user can review what was done."""
     fields = ["parent_slug", "name", "person_id", "action", "via", "confidence", "linkedin_url", "reason"]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
@@ -564,7 +584,8 @@ def write_verdicts(jsonl_path: Path, csv_path: Path, results: list[dict[str, Any
     with jsonl_path.open("w", encoding="utf-8") as fh:
         for r in results:
             fh.write(json.dumps({k: r[k] for k in ("parent_slug", "name", "candidate_key",
-                     "person_ids", "conflict", "no_link", "linkedin", "verdict", "error")
+                     "person_ids", "conflict", "no_link", "linkedin", "match_emails",
+                     "match_phones", "verdict", "error")
                      if k in r}, ensure_ascii=False) + "\n")
     fields = ["parent_slug", "name", "linkedin_url", "verdict", "confidence", "conflict",
               "linkedin_plausibly_absent", "recommend_deep_research", "supporting", "contradicting", "reason"]
@@ -693,10 +714,10 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
         if task.get("verdict") and not task.get("no_link"):
             inject_section(parents_dir / f"{task['parent_slug']}.md", render_section(task["verdict"], task["linkedin"]))
 
-    apply_stats = {"applied": 0, "confirmed": 0, "detached": 0, "conflict_resolved": 0, "backup": "", "rows": []}
-    if not args.no_apply:
-        apply_stats = apply_verdicts(Path(args.people_csv), tasks, args.confirm_threshold)
-    write_applied(out_dir / "applied.csv", apply_stats.get("rows", []))
+    override_stats = {"path": str(args.overrides_csv), "detached": 0, "verified": 0, "total_rows": 0}
+    if not args.no_overrides:
+        override_stats = write_overrides(Path(args.overrides_csv), tasks)
+    write_applied(out_dir / "applied.csv", decided_report(tasks))
 
     counts = {v: 0 for v in VERDICTS}
     for task in tasks:
@@ -720,8 +741,8 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
         "conflicts_to_review": sum(1 for t in conflict_tasks if t.get("action") == "review"),
         "no_link": sum(1 for t in tasks if t.get("no_link")),
         "errors": sum(1 for t in tasks if t.get("error")),
-        "applied": {k: apply_stats[k] for k in ("applied", "confirmed", "detached", "conflict_resolved", "backup")},
-        "applied_csv": str(out_dir / "applied.csv"), "review_queued": queued,
+        "overrides": override_stats, "applied_csv": str(out_dir / "applied.csv"),
+        "review_queued": queued,
         "deep_research_eligible": len(dr_subset),
         "deep_research_est_usd": round(len(dr_subset) * DR_COST_PER_PERSON, 2),
         "tokens": usage_total,
@@ -750,11 +771,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--concurrency", type=int, default=0)
     p.add_argument("--timeout", type=int, default=120)
     p.add_argument("--max-retries", type=int, default=6)
+    p.add_argument("--overrides-csv", default=str(LINKEDIN_OVERRIDES_CSV),
+                   help="Durable override the fan-in merge re-applies (detach/verify per public_identifier)")
     p.add_argument("--dry-run", action="store_true", help="Estimate cost only; no spend, no writes")
-    p.add_argument("--no-apply", action="store_true", help="Write verdicts but do NOT touch people.csv")
+    p.add_argument("--no-overrides", action="store_true", help="Write verdicts but do NOT update the override table")
     p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")
     p.add_argument("--reapply", action="store_true",
-                   help="Re-decide/apply from existing verdicts.jsonl (no re-judging, no OpenAI spend)")
+                   help="Re-decide/write overrides from existing verdicts.jsonl (no re-judging, no OpenAI spend)")
     return p
 
 

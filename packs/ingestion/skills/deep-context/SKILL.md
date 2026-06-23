@@ -23,6 +23,11 @@ Changelog:
   resolved automatically (keep the confirmed, detach the wrong); ambiguous conflicts still
   defer to review. All auto-actions logged to reconcile/applied.csv; `reconcile --reapply`
   re-decides/applies from existing verdicts with no OpenAI spend.
+- 2026-06-23: Inverted the self-heal to be durable — reconcile no longer mutates people.csv.
+  It writes a durable override table (network-import/overrides/linkedin-reconcile.csv) that
+  the fan-in merge (merge_network_sources) re-applies every run: detach clears the wrong link
+  (LinkedIn-only people.csv then drops that person), verify annotates linkedin_verified.
+  Survives re-merges + Modal index rebuilds.
 -->
 
 # deep-context
@@ -156,19 +161,23 @@ case this catches).
   `bin/deep-context reconcile`. gpt-5.2, high reasoning, one call per attached profile.
   Writes `reconcile/verdicts.csv` (+ `.jsonl` audit) and injects a `## LinkedIn identity`
   section into each parent (verdict + supporting/contradicting evidence).
-- **P3.3 Auto-apply (high-confidence)** — happens in the same run unless `--no-apply`.
-  `people.csv` is backed up to `people.csv.bkup` first (pristine copy preserved across
-  re-runs), then: `confirmed ≥ threshold` → `linkedin_verified=confirmed`; `wrong_person ≥
-  threshold` → **detach** (stash into `linkedin_url_rejected`, clear
-  `linkedin_url`/`public_identifier`). **Conflict auto-resolution:** when one parent has
-  several different attached links and exactly one is high-confidence `confirmed` while the
-  rest are high-confidence `wrong_person`, keep the confirmed and detach the wrong (one
-  right link, the rest wrong). Everything auto-done is logged to **`reconcile/applied.csv`**
-  (parent, person, kept/detached, via=normal|conflict_resolved, confidence, reason) so the
-  user can review what changed. Report the summary: "✅ N verified, 🔧 M detached
-  (incl. R conflict-resolved), ❓ K need feedback". `--confirm-threshold` defaults to 0.85.
-  Re-run idempotently with `reconcile --reapply` (re-decides/applies from existing verdicts,
-  no OpenAI spend).
+- **P3.3 Write the durable override (high-confidence)** — `reconcile` does NOT mutate
+  `people.csv`. It writes a **durable override table**,
+  `.powerpacks/network-import/overrides/linkedin-reconcile.csv`, that the **fan-in merge
+  re-applies every run** (so the heal survives re-merges). High-confidence verdicts become
+  entries: `confirmed ≥ threshold` → `action=verify` (merge annotates `linkedin_verified`
+  on the kept row); `wrong_person ≥ threshold` → `action=detach` (merge clears the wrong
+  link → since `people.csv` is LinkedIn-only, that person drops out). **Conflict
+  auto-resolution:** when one parent has several attached links and exactly one is
+  high-confidence `confirmed` while the rest are high-confidence `wrong_person`, the
+  confirmed becomes `verify` and the rest `detach`. Entries are keyed by `public_identifier`
+  (idempotent upsert). Everything decided is previewed in **`reconcile/applied.csv`**
+  (parent, person, kept/detached, via=normal|conflict_resolved, confidence, reason) for
+  review. Report: "✅ N verify, 🔧 M detach (incl. R conflict-resolved), ❓ K need feedback".
+  `--confirm-threshold` defaults to 0.85. `reconcile --reapply` regenerates the override
+  from existing verdicts with no OpenAI spend. **Realize the heal** by re-running the
+  fan-in merge + index rebuild (Modal rebuilds the whole index) — the merge auto-reads the
+  override file.
 - **P3.4 Review queue (low-confidence)** — `reconcile/review-queue.csv` holds everything
   not auto-applied: below threshold + `needs_review` + **ambiguous** link conflicts (e.g.
   two confirmed, or a needs_review in the mix), with a blank `user_decision` column.
@@ -294,9 +303,12 @@ name falls back to an all-tokens fuzzy match.
 ├── parents/<slug>.md            canonical person (one per real person)
 └── reconcile/                   Phase 3 LinkedIn self-heal
     ├── verdicts.csv / .jsonl     same-human verdict per attached profile
-    ├── applied.csv               what auto-applied (kept/detached) — for review
+    ├── applied.csv               preview of what the override will do (kept/detached) — for review
     ├── review-queue.csv          low-confidence + ambiguous-conflict rows needing your feedback
     └── deep-research/            Parallel.ai re-research of wrong_person detaches
+
+# durable self-heal override (a fan-in MERGE input, re-applied every merge):
+.powerpacks/network-import/overrides/linkedin-reconcile.csv
 ```
 
 ## Performance & scale (measured)
