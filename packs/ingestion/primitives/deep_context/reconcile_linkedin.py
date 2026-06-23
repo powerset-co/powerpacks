@@ -841,7 +841,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     if use_llm and judgeable:
         load_env()
-        concurrency = args.concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=16)
+        # Wall-time is bound by per-call high-reasoning latency, not local CPU — so parallelize hard.
+        concurrency = args.concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64)
         effort = reasoning_effort(args.reasoning_effort)
 
         async def driver() -> None:
