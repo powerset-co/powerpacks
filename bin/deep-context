@@ -43,13 +43,20 @@ case "$cmd" in
     "${PY[@]}" "$PKG.synthesize_person_context" "$@"
     ;;
   run)
+    # Full pipeline incl. the Phase 3 self-heal (reconcile writes the durable override).
+    # Spends OpenAI (synthesis + reconcile). Deep research / apply-retargets stay separate
+    # (they need PARALLEL_API_KEY / your approval).
     "${PY[@]}" "$PKG.collect_person_context" "$@"
     "${PY[@]}" "$PKG.synthesize_person_context"
     "${PY[@]}" "$PKG.compose_dossier"
     "${PY[@]}" "$PKG.cluster_merge_candidates"
     "${PY[@]}" "$PKG.build_parents"
     "${PY[@]}" "$PKG.validate_dossiers"
-    echo "✅ dossiers + parents/ in .powerpacks/deep-context/ — completeness in validation.md — look up: bin/deep-context lookup --name ..." >&2
+    "${PY[@]}" "$PKG.reconcile_linkedin"
+    echo "✅ dossiers + parents/ + reconcile self-heal in .powerpacks/deep-context/" >&2
+    echo "   what changed: .powerpacks/deep-context/reconcile/applied.csv (verified/detached + reasons)" >&2
+    echo "   needs review: .powerpacks/deep-context/reconcile/review-queue.csv" >&2
+    echo "   realize the heal on your next fan-in merge + Modal index rebuild (auto-reads the override)." >&2
     ;;
   parents)
     "${PY[@]}" "$PKG.build_parents" "$@"
@@ -63,6 +70,21 @@ case "$cmd" in
   cluster)
     "${PY[@]}" "$PKG.cluster_merge_candidates" "$@"
     ;;
+  reconcile)
+    # Phase 3: verify each parent against its attached LinkedIn (self-heal).
+    # Use `reconcile --dry-run` for a free cost estimate first.
+    "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
+    ;;
+  reconcile-deep-research)
+    # Find the right identity for high-confidence wrong_person detaches (Parallel.ai,
+    # $25 auto-approve gate). Reads reconcile verdicts written by `reconcile`.
+    "${PY[@]}" "$PKG.reconcile_deep_research" "$@"
+    ;;
+  apply-retargets)
+    # Enrich + build re-attach rows for approved `retarget` decisions -> retarget-people.csv,
+    # which the fan-in merge auto-ingests. Cache-first (RapidAPI only on a miss).
+    "${PY[@]}" "$PKG.apply_retargets" "$@"
+    ;;
   lookup)
     "${PY[@]}" "$PKG.lookup_person" "$@"
     ;;
@@ -75,7 +97,7 @@ case "$cmd" in
     echo "🧹 purged raw message bundles" >&2
     ;;
   *)
-    echo "usage: bin/deep-context {check|dry|run|collect|synthesize|compose|cluster|parents|validate|lookup|probe|purge-raw} [args]" >&2
+    echo "usage: bin/deep-context {check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw} [args]" >&2
     exit 2
     ;;
 esac

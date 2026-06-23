@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: Build the richest per-person markdown dossier from local message bodies (Gmail + iMessage DMs + WhatsApp DMs) and retrieve it by name/phone/email; surface likely same-person merge candidates. Use for $deep-context, "build deep context", "context/dossier on a person", "who is <phone/name> in my messages", "find duplicate people to merge".
+description: Build the richest per-person markdown dossier from local message bodies (Gmail + iMessage DMs + WhatsApp DMs) and retrieve it by name/phone/email; surface likely same-person merge candidates; verify each person's attached LinkedIn is really them (self-heal). Use for $deep-context, "build deep context", "context/dossier on a person", "who is <phone/name> in my messages", "find duplicate people to merge", "check the LinkedIn we attached is the right person".
 ---
 
 <!--
@@ -12,6 +12,27 @@ Changelog:
   parent/child layer (confirmed core + needs-review), validate_dossiers, group NAMES
   as context, opt-in --include-groups for group bodies, gated check→ask→collect→
   dry-run→confirm→run task flow (mirrors $setup).
+- 2026-06-22: Phase 3 — reconcile each parent against its attached LinkedIn profile
+  (self-heal). High-reasoning judge (confirmed / wrong_person / needs_review) over the
+  message-derived dossier vs the LinkedIn lookup; high-confidence verdicts auto-apply to
+  people.csv (confirmed→verified, wrong_person→detach with backup), low-confidence →
+  review queue; never forces a LinkedIn (linkedin_plausibly_absent). Deep-research
+  escalation (Parallel.ai) on wrong_person detaches, $25 auto-approve cost gate.
+- 2026-06-22: Conflict auto-resolution — a parent with multiple attached links where
+  exactly one is high-confidence confirmed and the rest high-confidence wrong_person is
+  resolved automatically (keep the confirmed, detach the wrong); ambiguous conflicts still
+  defer to review. All auto-actions logged to reconcile/applied.csv; `reconcile --reapply`
+  re-decides/applies from existing verdicts with no OpenAI spend.
+- 2026-06-23: Inverted the self-heal to be durable — reconcile no longer mutates people.csv.
+  It writes a durable override table (network-import/overrides/linkedin-reconcile.csv) that
+  the fan-in merge (merge_network_sources) re-applies every run: detach clears the wrong link
+  (LinkedIn-only people.csv then drops that person), verify annotates linkedin_verified.
+  Survives re-merges + Modal index rebuilds.
+- 2026-06-23: Retargeting + approval-aware decisions table. The override gains an `approved`
+  column (auto = high-confidence applies; yes/no = user decision, sticky across re-runs) and a
+  `retarget` action. Deep research proposes a correct LinkedIn (pending); `apply-retargets`
+  enriches it (cache-first RapidAPI) into overrides/retarget-people.csv, which the merge
+  auto-ingests so the person re-appears with the correct profile (old wrong link dropped).
 -->
 
 # deep-context
@@ -59,12 +80,12 @@ to `$deep-context`.
 the steps below and step through it, marking each complete as you go.** Mandatory.
 Use your harness's plan/task tool:
 
-- **Claude Code:** `TaskCreate` one task per step (P1.1–P2.2), then `TaskUpdate`
+- **Claude Code:** `TaskCreate` one task per step (P1.1–P3.7), then `TaskUpdate`
   each to `in_progress` then `completed`.
 - **Codex:** `update_plan` with the steps, updating status as you go.
 - **Any other harness:** its equivalent todo/plan mechanism.
 
-Seed the checklist with these exact item titles, in two phases:
+Seed the checklist with these exact item titles, across three phases:
 
 ```
 Phase 1 — Build one deep dossier per person
@@ -78,10 +99,18 @@ P1.7  Validate completeness
 Phase 2 — Merge people via the LLM judge
 P2.1  Cluster candidates with the LLM judge
 P2.2  Build parent dossiers (confirmed core + needs-review)
+Phase 3 — Verify each person's attached LinkedIn (self-heal)
+P3.1  Dry-run reconcile cost estimate (free)
+P3.2  Confirm cost → run the reconcile judge
+P3.3  Auto-apply high-confidence verdicts (summary; people.csv backed up)
+P3.4  Surface the review queue; get user feedback on low-confidence rows
+P3.5  Deep-research wrong_person detaches (auto if ≤ $25, else ask) — proposes retargets
+P3.6  Open files to review (applied.csv + review-queue.csv + the decisions table)
+P3.7  Apply approved retargets (enrich correct LinkedIn) → retarget-people.csv
 ```
 
 Do not drop steps; mark inapplicable ones complete as a no-op. **Never run a
-paid step (P1.6 / P2.1 onward) before P1.4–P1.5.**
+paid step (P1.6 / P2.1 / P3.2 onward) before its dry-run + confirm.**
 
 ### Phase 1 — Build ONE deep dossier per person
 
@@ -123,9 +152,82 @@ pooled across **Gmail bodies + iMessage DMs + WhatsApp DMs**, plus iMessage
   merges only judge-CONFIRMED children (≥`--confirm-threshold` 0.85), lists borderline
   ones under "Needs review", backrefs each child. Repeatable (parent = f(confirmed children)).
 
-`bin/deep-context run [--include-groups] [--deep-cap N]` chains everything once P1.5 is
-confirmed. Full surface: `check|dry|run|collect|synthesize|compose|cluster|parents|
-validate|lookup|probe|purge-raw`.
+### Phase 3 — Verify each person's attached LinkedIn (self-heal)
+
+Every person in `people.csv` already has a `linkedin_url` stapled on during ingestion —
+often resolved on thin same-name evidence. Phase 3 throws a **high-reasoning judge** at
+each `(parent dossier ↔ attached LinkedIn)` pair: same human or not? It uses corroboration
+(employer / school / location / role / behavior) and especially **contradictions** — never
+the name alone (a big-company CEO profile stapled to your plumber of the same name is the
+case this catches).
+
+- **P3.1 Dry-run cost estimate (free)** — `bin/deep-context reconcile --dry-run`. Prints
+  task count, link conflicts, and a cost floor/ceiling. No spend, no writes.
+- **P3.2 Confirm → run the judge** — present the estimate, get an explicit go, then
+  `bin/deep-context reconcile`. gpt-5.2, high reasoning, one call per attached profile.
+  Writes `reconcile/verdicts.csv` (+ `.jsonl` audit) and injects a `## LinkedIn identity`
+  section into each parent (verdict + supporting/contradicting evidence).
+- **P3.3 Write the durable override (high-confidence)** — `reconcile` does NOT mutate
+  `people.csv`. It writes a **durable override table**,
+  `.powerpacks/network-import/overrides/linkedin-reconcile.csv`, that the **fan-in merge
+  re-applies every run** (so the heal survives re-merges). High-confidence verdicts become
+  entries: `confirmed ≥ threshold` → `action=verify` (merge annotates `linkedin_verified`
+  on the kept row); `wrong_person ≥ threshold` → `action=detach` (merge clears the wrong
+  link → since `people.csv` is LinkedIn-only, that person drops out). **Conflict
+  auto-resolution:** when one parent has several attached links and exactly one is
+  high-confidence `confirmed` while the rest are high-confidence `wrong_person`, the
+  confirmed becomes `verify` and the rest `detach`. Entries are keyed by `public_identifier`
+  (idempotent upsert) and carry an **`approved` column**: high-confidence rows are written
+  `approved=auto` (applied at merge); a user may set `yes`/`no` on any row. **A user-touched
+  row (`approved` ∈ {yes,no}) is sticky** — re-runs never overwrite it, so the table is the
+  durable, incrementally-curated record of decisions; the merge applies only `approved` ∈
+  {auto,yes}. Everything decided is previewed in **`reconcile/applied.csv`**
+  (parent, person, kept/detached, via=normal|conflict_resolved, confidence, reason) for
+  review. Report: "✅ N verify, 🔧 M detach (incl. R conflict-resolved), ❓ K need feedback".
+  `--confirm-threshold` defaults to 0.85. `reconcile --reapply` regenerates the override
+  from existing verdicts with no OpenAI spend. **Realize the heal** by re-running the
+  fan-in merge + index rebuild (Modal rebuilds the whole index) — the merge auto-reads the
+  override file.
+- **P3.4 Review queue (low-confidence)** — `reconcile/review-queue.csv` holds everything
+  not auto-applied: below threshold + `needs_review` + **ambiguous** link conflicts (e.g.
+  two confirmed, or a needs_review in the mix), with a blank `user_decision` column.
+  Surface these rows to the user and apply their yes/no calls. Some people legitimately
+  have **no LinkedIn** (flagged `linkedin_plausibly_absent`) — never force a match.
+- **P3.5 Deep research (default, $25 gate)** — for high-confidence `wrong_person`
+  detaches that external research could resolve, find the *correct* identity:
+  `bin/deep-context reconcile-deep-research --dry-run` to size it, then estimate the
+  Parallel.ai cost (~$0.05/person). **If ≤ $25, run it automatically and just tell the
+  user the cost** (`reconcile-deep-research`); **if > $25, stop and ask for approval**
+  (`reconcile-deep-research --approve` once they agree). Needs `PARALLEL_API_KEY`. People
+  flagged `linkedin_plausibly_absent` are excluded. When research finds a **correct
+  LinkedIn**, it adds a `retarget` row (pending) to the decisions table for the user to approve.
+- **P3.6 Open files to review** — open the review artifacts for the user:
+  `open .powerpacks/deep-context/reconcile/applied.csv .powerpacks/deep-context/reconcile/review-queue.csv .powerpacks/network-import/overrides/linkedin-reconcile.csv`
+  (`applied.csv` = what auto-applied; `review-queue.csv` = rows awaiting yes/no; the decisions
+  table = the durable override incl. `retarget` proposals to approve). Non-macOS: platform open, or print inline.
+- **P3.7 Apply approved retargets** — `bin/deep-context apply-retargets`. For each decisions
+  row with `action=retarget` and `approved` ∈ {auto,yes}, it enriches the correct LinkedIn
+  (cache-first; RapidAPI only on a miss — auto, effectively free) and writes an enriched
+  re-attach row to `.powerpacks/network-import/overrides/retarget-people.csv`, carrying the
+  contact's emails/phones/interaction. The fan-in merge **auto-ingests** that file (old wrong
+  link detached → dropped; correct enriched row kept). Realize on the next merge + index rebuild.
+
+**ALWAYS end the run with a summary of what changed and why.** After Phase 3, present a short
+report to the user, every time (do NOT list the verified/unchanged links — only what changed):
+- **Detached:** M wrong links removed — list them with the one-line reason (e.g. "Herman Au:
+  LinkedIn is a Canada software lead, but your contact is a Pasadena wedding photographer").
+- **Retargeted:** R people re-attached to a correct LinkedIn — for each, the new URL **and the
+  reason** (why the new profile is the right person, e.g. "matched the wedding-photography
+  business + SoCal location from your messages").
+- **Needs your input:** K rows in `review-queue.csv` / pending `retarget` rows to approve.
+Pull reasons from `reconcile/applied.csv` + `verdicts.csv` (detaches) and the `reason` column of
+the decisions table (retargets). Keep it scannable; the user runs this repeatedly to fix things,
+so make "what changed and why" obvious each time.
+
+`bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once P1.5 is
+confirmed (Phase 3 is run separately, after parents exist). Full surface:
+`check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|
+reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw`.
 
 ### Step 1 — collect (local, free, reads bodies)
 
@@ -226,7 +328,17 @@ name falls back to an all-tokens fuzzy match.
 ├── facts/<person_id>.jsonl     structured facts per chunk (checkpoint)
 ├── dossiers/<slug>.md          one dossier per person
 ├── index.json / index.md       name/phone/email -> slug lookup + catalog
-└── merge-candidates.csv / .md   likely same-person clusters
+├── merge-candidates.csv / .md   likely same-person clusters
+├── parents/<slug>.md            canonical person (one per real person)
+└── reconcile/                   Phase 3 LinkedIn self-heal
+    ├── verdicts.csv / .jsonl     same-human verdict per attached profile
+    ├── applied.csv               preview of what the override will do (kept/detached) — for review
+    ├── review-queue.csv          low-confidence + ambiguous-conflict rows needing your feedback
+    └── deep-research/            Parallel.ai re-research of wrong_person detaches
+
+# durable self-heal decisions (fan-in MERGE inputs, re-applied every merge):
+.powerpacks/network-import/overrides/linkedin-reconcile.csv   detach|verify|retarget + approved
+.powerpacks/network-import/overrides/retarget-people.csv      enriched re-attach rows
 ```
 
 ## Performance & scale (measured)

@@ -49,7 +49,12 @@ except ModuleNotFoundError:
     from packs.shared.csv_io import CsvIO
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
-MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources", "merged_row_count", "needs_review"]
+# Durable self-heal override written by $deep-context reconcile, re-applied every merge.
+DEFAULT_OVERRIDES = Path(".powerpacks/network-import/overrides/linkedin-reconcile.csv")
+DEFAULT_RETARGET_PEOPLE = Path(".powerpacks/network-import/overrides/retarget-people.csv")
+MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merge_sources",
+    "merged_row_count", "needs_review", "linkedin_verified", "linkedin_verified_confidence",
+    "linkedin_verified_reason"]
 # Merged channel-wise (max) / by recency instead of first-non-empty choose().
 INTERACTION_MERGE_COLUMNS = {"interaction_counts", "last_interaction"}
 REVIEW_COLUMNS = ["left_id", "right_id", "left_name", "right_name", "similarity", "left_sources", "right_sources", "reason"]
@@ -219,6 +224,87 @@ def normalize_phone(value: str) -> str:
         return ""
     digits = re.sub(r"\D+", "", phone)
     return f"+{digits}" if phone.startswith("+") and digits else digits
+
+
+# --- self-heal override (from $deep-context reconcile) ----------------------
+
+def _phone10(value: str) -> str:
+    """Loose phone key (last 10 digits) so +1 / country-code variants still match."""
+    digits = re.sub(r"\D+", "", value or "")
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def _row_emails(row: dict[str, Any]) -> set[str]:
+    return {normalize_email(e) for e in [row.get("primary_email", ""), *listish_values(row.get("all_emails", ""))]
+            if normalize_email(e)}
+
+
+def _row_phones(row: dict[str, Any]) -> set[str]:
+    return {_phone10(p) for p in [row.get("primary_phone", ""), *listish_values(row.get("all_phones", ""))]
+            if _phone10(p)}
+
+
+def row_public_identifier(row: dict[str, Any]) -> str:
+    pub = (row.get("public_identifier") or "").strip().lower()
+    return pub or extract_public_identifier(row.get("linkedin_url") or "").lower()
+
+
+def load_overrides(path: Path | None) -> dict[str, dict[str, Any]]:
+    """public_identifier -> {action, emails, phones, confidence, reason} from the override CSV."""
+    overrides: dict[str, dict[str, Any]] = {}
+    if not path or not Path(path).exists():
+        return overrides
+    with Path(path).open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            pub = (row.get("public_identifier") or "").strip().lower()
+            if not pub:
+                continue
+            overrides[pub] = {
+                "action": (row.get("action") or "").strip().lower(),
+                "approved": (row.get("approved") or "").strip().lower(),
+                "emails": {normalize_email(e) for e in (row.get("match_emails") or "").split("|") if normalize_email(e)},
+                "phones": {_phone10(p) for p in (row.get("match_phones") or "").split("|") if _phone10(p)},
+                "confidence": row.get("confidence", ""),
+                "reason": row.get("reason", ""),
+            }
+    return overrides
+
+
+# Decisions apply only when high-confidence (auto) or the user approved (yes).
+APPLIED_APPROVALS = {"auto", "yes"}
+
+
+def _scope_matches(ov: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Scope the override to the right person: an unscoped override matches by
+    public_identifier alone; a scoped one needs an email/phone in common."""
+    if not ov["emails"] and not ov["phones"]:
+        return True
+    return bool(ov["emails"] & _row_emails(row)) or bool(ov["phones"] & _row_phones(row))
+
+
+def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, Any]]) -> dict[str, int]:
+    """Re-apply reconcile's self-heal during the fan-in, but ONLY for approved decisions
+    (auto = high-confidence, or a user `yes`): `detach`/`retarget` clear the wrong LinkedIn
+    (so the LinkedIn-only people.csv drops that old row — for a retarget the correct enriched
+    row arrives via retarget-people.csv); `verify` annotates the surviving row. Idempotent."""
+    detached = verified = retargeted = 0
+    if not overrides:
+        return {"detached": 0, "verified": 0, "retargeted": 0}
+    for row in rows:
+        ov = overrides.get(row_public_identifier(row))
+        if not ov or ov["approved"] not in APPLIED_APPROVALS or not _scope_matches(ov, row):
+            continue
+        if ov["action"] in ("detach", "retarget"):
+            row["linkedin_url"] = ""
+            row["public_identifier"] = ""
+            detached += ov["action"] == "detach"
+            retargeted += ov["action"] == "retarget"
+        elif ov["action"] == "verify":
+            row["linkedin_verified"] = "confirmed"
+            row["linkedin_verified_confidence"] = ov["confidence"]
+            row["linkedin_verified_reason"] = ov["reason"]
+            verified += 1
+    return {"detached": detached, "verified": verified, "retargeted": retargeted}
 
 
 def stable_source_key(row: dict[str, str]) -> str:
@@ -519,6 +605,10 @@ def similar_pairs(rows: list[dict[str, Any]], threshold: float) -> list[dict[str
 
 def cmd_run(args: argparse.Namespace) -> int:
     inputs = [Path(p) for p in args.input] if args.input else []
+    # Auto-ingest enriched retarget rows (correct re-attached LinkedIns) if present.
+    retarget_people = Path(args.retarget_people) if args.retarget_people else None
+    if retarget_people and retarget_people.exists() and retarget_people not in inputs:
+        inputs.append(retarget_people)
     all_rows: list[dict[str, str]] = []
     per_file: dict[str, int] = {}
     for path in inputs:
@@ -547,6 +637,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             normalized["id"] = f"merged:{sha(normalized['merge_key'])}"
         merged_rows.append(normalized)
         source_rows.extend(source_fact_rows(normalized, [normalized]))
+    # Re-apply the durable self-heal override BEFORE the LinkedIn keep-filter: a `detach`
+    # clears the wrong link so that person drops out here; a `verify` annotates the row.
+    overrides = load_overrides(Path(args.overrides) if args.overrides else None)
+    override_stats = apply_overrides(merged_rows, overrides)
     unfiltered_merged_rows = len(merged_rows)
     filtered_without_linkedin = sum(1 for row in merged_rows if not stable_linkedin_key(row))
     filtered_without_rapidapi_payload = sum(1 for row in merged_rows if not has_rapidapi_profile(row))
@@ -577,6 +671,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         "filtered_without_linkedin": filtered_without_linkedin,
         "filtered_without_rapidapi_payload": filtered_without_rapidapi_payload,
         "filtered_people_csv_rows": unfiltered_merged_rows - len(merged_rows),
+        "overrides_detached": override_stats["detached"],
+        "overrides_verified": override_stats["verified"],
+        "overrides_retargeted": override_stats["retargeted"],
         "merged_rows": len(merged_rows),
         "rapidapi_payload_rows": len(merged_rows),
         "linkedin_groups": len(groups),
@@ -603,6 +700,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--input", action="append", help="Input people.csv, people_harmonic_all.csv, or messages contacts.csv; repeatable. No filesystem discovery is performed.")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     run.add_argument("--name-threshold", type=float, default=0.92)
+    run.add_argument("--overrides", default=str(DEFAULT_OVERRIDES),
+                     help="Self-heal override CSV (detach/verify/retarget per public_identifier); auto-read if present, '' to disable.")
+    run.add_argument("--retarget-people", default=str(DEFAULT_RETARGET_PEOPLE),
+                     help="Enriched re-attach rows from apply-retargets; auto-ingested if present, '' to disable.")
     run.set_defaults(func=cmd_run)
     return parser
 

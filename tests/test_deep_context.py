@@ -18,6 +18,9 @@ from packs.ingestion.primitives.deep_context import (
     common,
     compose_dossier as compose,
     lookup_person as lookup,
+    apply_retargets as retargets,
+    reconcile_deep_research as dresearch,
+    reconcile_linkedin as reconcile,
     sources,
     synthesize_person_context as synth,
 )
@@ -315,6 +318,371 @@ class TestEndToEnd(unittest.TestCase):
             idx2 = json.loads(index_json.read_text())
             self.assertTrue(any(s.endswith(pman_slug := list(idx2["parents"])[0]) or s == pman_slug
                                 for s in idx2["by_phone"]["4155551234"]))
+
+
+def _verdict(verdict, conf, **kw):
+    return {"verdict": verdict, "confidence": conf, "supporting_evidence": kw.get("sup", []),
+            "contradicting_evidence": kw.get("con", []),
+            "linkedin_plausibly_absent": kw.get("absent", False),
+            "recommend_deep_research": kw.get("dr", False), "reason": kw.get("reason", "")}
+
+
+class TestReconcileLinkedIn(unittest.TestCase):
+    """Phase 3: verify each parent's attached LinkedIn (pairing, apply, queue, inject)."""
+
+    def _facts(self, facts_dir, pid, name, employer="Acme", title="Engineer", location="SF"):
+        (facts_dir / f"{pid}.jsonl").write_text(json.dumps({
+            "chunk_index": 0, "facts": {"canonical_name": name, "aliases": [],
+                "employers": [{"name": employer, "role": "Eng", "status": "current"}],
+                "title": title, "school": "", "field_of_study": "", "location": location,
+                "relationship_to_owner": "friend", "topics": ["climbing"], "notable_events": [],
+                "identifiers": [], "shared_context": [], "confidence": 0.8}, "usage": {}}) + "\n", encoding="utf-8")
+
+    def _people_csv(self, path, rows):
+        cols = ["id", "public_identifier", "linkedin_url", "full_name", "headline",
+                "work_experiences", "education", "current_title", "current_company",
+                "city", "state", "country", "primary_email", "all_emails", "primary_phone", "all_phones"]
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            import csv as _csv
+            w = _csv.DictWriter(fh, fieldnames=cols)
+            w.writeheader()
+            for r in rows:
+                w.writerow({c: r.get(c, "") for c in cols})
+
+    def test_linkedin_view_falls_back_to_people_csv(self):
+        row = {"public_identifier": "janedoe", "linkedin_url": "https://www.linkedin.com/in/janedoe",
+               "full_name": "Jane Doe", "headline": "Eng at X",
+               "work_experiences": json.dumps([{"title": "Eng", "company_name": "Stripe",
+                                                 "starts_at": {"year": 2018}, "ends_at": {"year": 2022}}]),
+               "education": json.dumps([{"school": "MIT", "degree": "BS", "field": "CS"}]),
+               "city": "SF", "state": "CA", "country": "USA"}
+        with tempfile.TemporaryDirectory() as d:
+            view = reconcile.linkedin_view(row, Path(d))  # empty cache dir -> fallback
+        self.assertEqual(view["source"], "people_csv")
+        self.assertTrue(view["has_profile"])
+        self.assertIn("Eng @ Stripe (2018–2022)", view["experiences"][0])
+        self.assertIn("MIT", view["education"][0])
+
+    def test_build_tasks_pairs_conflicts_and_no_link(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts, raw, cache = base / "facts", base / "raw", base / "cache"
+            facts.mkdir(); raw.mkdir(); cache.mkdir()
+            for pid, name in [("pa", "Alice"), ("pb1", "Bob"), ("pb2", "Bob"), ("pc", "Carol")]:
+                self._facts(facts, pid, name)
+            index = {"slugs": {"alice-c": {"person_id": "pa"}, "bob-c1": {"person_id": "pb1"},
+                               "bob-c2": {"person_id": "pb2"}, "carol-c": {"person_id": "pc"}},
+                     "parents": {
+                         "alice-p": {"name": "Alice", "children": ["alice-c"]},
+                         "bob-p": {"name": "Bob", "children": ["bob-c1", "bob-c2"]},   # conflict
+                         "carol-p": {"name": "Carol", "children": ["carol-c"]}}}        # no link
+            people = {
+                "pa": {"id": "pa", "public_identifier": "alice", "linkedin_url": "https://www.linkedin.com/in/alice",
+                       "headline": "Eng", "work_experiences": "[]", "education": "[]"},
+                "pb1": {"id": "pb1", "public_identifier": "bobx", "linkedin_url": "https://www.linkedin.com/in/bobx",
+                        "headline": "PM", "work_experiences": "[]", "education": "[]"},
+                "pb2": {"id": "pb2", "public_identifier": "bobceo", "linkedin_url": "https://www.linkedin.com/in/bobceo",
+                        "headline": "CEO", "work_experiences": "[]", "education": "[]"},
+                "pc": {"id": "pc", "public_identifier": "", "linkedin_url": ""}}
+            tasks = reconcile.build_tasks(index, people, facts, raw, cache)
+            by_parent = {}
+            for t in tasks:
+                by_parent.setdefault(t["parent_slug"], []).append(t)
+            self.assertEqual(len(by_parent["alice-p"]), 1)
+            self.assertEqual(len(by_parent["bob-p"]), 2)             # two distinct linkedins
+            self.assertTrue(all(t["conflict"] for t in by_parent["bob-p"]))
+            self.assertTrue(by_parent["carol-p"][0]["no_link"])
+
+    def _task(self, parent, pub, action_verdict, conf, **kw):
+        return {"parent_slug": parent, "name": parent, "candidate_key": pub,
+                "person_ids": [f"pid-{pub}"], "conflict": kw.get("conflict", False), "no_link": False,
+                "linkedin": {"linkedin_url": f"https://www.linkedin.com/in/{pub}"},
+                "match_emails": kw.get("emails", []), "match_phones": kw.get("phones", []),
+                "verdict": _verdict(action_verdict, conf, reason=kw.get("reason", ""))}
+
+    def test_write_overrides_emits_detach_and_verify(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "ov.csv"
+            tasks = [
+                self._task("a", "alice", "confirmed", 0.95, emails=["a@x.com"]),
+                self._task("b", "bobceo", "wrong_person", 0.92, emails=["bob@x.com"], reason="CEO != plumber"),
+                self._task("c", "carol", "wrong_person", 0.50),  # below threshold -> review, omitted
+            ]
+            reconcile.decide_actions(tasks, 0.85)
+            stats = reconcile.write_overrides(path, tasks)
+            self.assertEqual(stats["verified"], 1)
+            self.assertEqual(stats["detached"], 1)
+            import csv as _csv
+            with path.open() as fh:
+                rows = {r["public_identifier"]: r for r in _csv.DictReader(fh)}
+            self.assertEqual(rows["alice"]["action"], "verify")
+            self.assertEqual(rows["alice"]["match_emails"], "a@x.com")
+            self.assertEqual(rows["bobceo"]["action"], "detach")
+            self.assertNotIn("carol", rows)  # low-confidence never reaches the durable override
+
+    def test_write_overrides_upsert_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "ov.csv"
+            tasks = [self._task("b", "bobceo", "wrong_person", 0.95)]
+            reconcile.decide_actions(tasks, 0.85)
+            reconcile.write_overrides(path, tasks)
+            first = path.read_text()
+            reconcile.write_overrides(path, tasks)  # same decision again
+            import csv as _csv
+            with path.open() as fh:
+                rows = list(_csv.DictReader(fh))
+            self.assertEqual(len(rows), 1)          # one row per public_identifier, no dupes
+            # A pre-existing unrelated override row is preserved across re-runs.
+            with path.open("a", newline="") as fh:
+                w = _csv.DictWriter(fh, fieldnames=reconcile.OVERRIDE_COLUMNS)
+                w.writerow({"public_identifier": "zzz", "action": "detach", "approved": "auto"})
+            reconcile.write_overrides(path, tasks)
+            with path.open() as fh:
+                pubs = {r["public_identifier"] for r in _csv.DictReader(fh)}
+            self.assertEqual(pubs, {"bobceo", "zzz"})
+
+    def test_write_overrides_preserves_user_approved_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "ov.csv"
+            # Seed a user decision: bobceo manually approved=no (don't detach).
+            with path.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=reconcile.OVERRIDE_COLUMNS)
+                w.writeheader()
+                w.writerow({"public_identifier": "bobceo", "action": "detach", "approved": "no",
+                            "reason": "user says keep"})
+            tasks = [self._task("b", "bobceo", "wrong_person", 0.99)]  # judge again says detach
+            reconcile.decide_actions(tasks, 0.85)
+            stats = reconcile.write_overrides(path, tasks)
+            self.assertEqual(stats["preserved_user_rows"], 1)
+            import csv as _csv
+            with path.open() as fh:
+                row = next(_csv.DictReader(fh))
+            self.assertEqual(row["approved"], "no")          # sticky: user decision NOT overwritten
+            self.assertEqual(row["reason"], "user says keep")
+
+    def test_upsert_retargets_proposes_pending_and_is_sticky(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "ov.csv"
+            r = reconcile.upsert_retargets(path, [{"old_public_identifier": "bobceo",
+                "new_linkedin_url": "https://www.linkedin.com/in/bob-real", "reason": "found"}])
+            self.assertEqual(r["proposed"], 1)
+            import csv as _csv
+            with path.open() as fh:
+                row = next(_csv.DictReader(fh))
+            self.assertEqual(row["action"], "retarget")
+            self.assertEqual(row["approved"], "")            # pending by default
+            self.assertEqual(row["new_public_identifier"], "bob-real")
+            # User approves; a later proposal must NOT clobber it.
+            rows = reconcile.load_override_rows(path); rows["bobceo"]["approved"] = "yes"
+            reconcile._write_override_rows(path, rows)
+            reconcile.upsert_retargets(path, [{"old_public_identifier": "bobceo",
+                "new_linkedin_url": "https://www.linkedin.com/in/someone-else"}])
+            with path.open() as fh:
+                row = next(_csv.DictReader(fh))
+            self.assertEqual(row["approved"], "yes")
+            self.assertEqual(row["new_public_identifier"], "bob-real")  # preserved
+
+    def test_conflict_auto_resolves_one_confirmed_rest_wrong(self):
+        # One parent, two different attached links: one confirmed, one wrong -> auto-resolve
+        # (keep the confirmed, detach the wrong) instead of deferring to review.
+        tasks = [
+            {"parent_slug": "herman", "name": "Herman", "person_ids": ["good"], "conflict": True,
+             "no_link": False, "verdict": _verdict("confirmed", 0.92)},
+            {"parent_slug": "herman", "name": "Herman", "person_ids": ["bad"], "conflict": True,
+             "no_link": False, "verdict": _verdict("wrong_person", 0.98)}]
+        reconcile.decide_actions(tasks, 0.85)
+        by_pid = {t["person_ids"][0]: t for t in tasks}
+        self.assertEqual(by_pid["good"]["action"], "confirm")
+        self.assertEqual(by_pid["good"]["via"], "conflict_resolved")
+        self.assertEqual(by_pid["bad"]["action"], "detach")
+        self.assertEqual(by_pid["bad"]["via"], "conflict_resolved")
+
+    def test_ambiguous_conflict_stays_in_review(self):
+        # Two confirmed under one parent: not the clean shape -> all review, no mutation.
+        tasks = [
+            {"parent_slug": "x", "name": "X", "person_ids": ["p1"], "conflict": True,
+             "no_link": False, "verdict": _verdict("confirmed", 0.9)},
+            {"parent_slug": "x", "name": "X", "person_ids": ["p2"], "conflict": True,
+             "no_link": False, "verdict": _verdict("confirmed", 0.9)}]
+        reconcile.decide_actions(tasks, 0.85)
+        self.assertTrue(all(t["action"] == "review" for t in tasks))
+
+    def test_conflict_resolution_writes_one_verify_and_rest_detach(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "ov.csv"
+            tasks = [self._task("herman", "herman-au-7a04927", "confirmed", 0.92, conflict=True),
+                     self._task("herman", "hermanau", "wrong_person", 0.98, conflict=True)]
+            reconcile.decide_actions(tasks, 0.85)
+            reconcile.write_overrides(path, tasks)
+            import csv as _csv
+            with path.open() as fh:
+                rows = {r["public_identifier"]: r["action"] for r in _csv.DictReader(fh)}
+            self.assertEqual(rows["herman-au-7a04927"], "verify")
+            self.assertEqual(rows["hermanau"], "detach")
+
+    def test_review_queue_routes_low_confidence_and_conflicts(self):
+        with tempfile.TemporaryDirectory() as d:
+            qpath = Path(d) / "review.csv"
+            tasks = [
+                {"parent_slug": "a", "name": "A", "linkedin": {"linkedin_url": "u"}, "conflict": False,
+                 "no_link": False, "verdict": _verdict("confirmed", 0.95)},     # NOT queued
+                {"parent_slug": "b", "name": "B", "linkedin": {"linkedin_url": "u"}, "conflict": False,
+                 "no_link": False, "verdict": _verdict("needs_review", 0.4)},   # queued
+                {"parent_slug": "c", "name": "C", "linkedin": {"linkedin_url": "u"}, "conflict": True,
+                 "no_link": False, "verdict": _verdict("confirmed", 0.95)},     # queued (conflict)
+                {"parent_slug": "d", "name": "D", "linkedin": {}, "conflict": False,
+                 "no_link": True, "verdict": _verdict("needs_review", 0.0, absent=True)}]  # queued (no link)
+            n = reconcile.write_review_queue(qpath, tasks, 0.85)
+            self.assertEqual(n, 3)
+            import csv as _csv
+            with qpath.open() as _fh:
+                slugs = {r["parent_slug"] for r in _csv.DictReader(_fh)}
+            self.assertEqual(slugs, {"b", "c", "d"})
+
+    def test_inject_section_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            md = Path(d) / "p.md"
+            md.write_text("---\nname: X\n---\n\n# X (canonical)\n\nbody\n", encoding="utf-8")
+            sec = reconcile.render_section(_verdict("confirmed", 0.9, reason="lines up"),
+                                           {"linkedin_url": "u", "headline": "Eng"})
+            reconcile.inject_section(md, sec)
+            reconcile.inject_section(md, sec)  # second run must REPLACE, not duplicate
+            self.assertEqual(md.read_text().count(reconcile.SECTION_ANCHOR), 1)
+            self.assertIn("✅ confirmed", md.read_text())
+
+    def test_run_no_llm_end_to_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts, raw, cache, pdir, rdir = (base / "facts", base / "raw", base / "cache",
+                                             base / "parents", base / "reconcile")
+            for p in (facts, raw, cache, pdir, rdir):
+                p.mkdir()
+            self._facts(facts, "pa", "Alice")
+            self._facts(facts, "pc", "Carol")
+            (pdir / "alice-p.md").write_text("---\nname: Alice\n---\n\n# Alice (canonical)\n\nbody\n", encoding="utf-8")
+            (pdir / "carol-p.md").write_text("---\nname: Carol\n---\n\n# Carol (canonical)\n\nbody\n", encoding="utf-8")
+            index_json = base / "index.json"
+            index = {"slugs": {"alice-c": {"person_id": "pa"}, "carol-c": {"person_id": "pc"}},
+                     "parents": {"alice-p": {"name": "Alice", "children": ["alice-c"]},
+                                 "carol-p": {"name": "Carol", "children": ["carol-c"]}}}
+            index_json.write_text(json.dumps(index), encoding="utf-8")
+            people_csv = base / "people.csv"
+            self._people_csv(people_csv, [
+                {"id": "pa", "public_identifier": "alice", "linkedin_url": "https://www.linkedin.com/in/alice",
+                 "headline": "Eng", "work_experiences": json.dumps([{"title": "Eng", "company_name": "Acme"}])},
+                {"id": "pc", "public_identifier": "", "linkedin_url": ""}])  # Carol has no link
+            man = reconcile.run(_ns(
+                index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
+                facts_dir=facts, raw_dir=raw, parents_dir=pdir,
+                verdicts_jsonl=rdir / "verdicts.jsonl", verdicts_csv=rdir / "verdicts.csv",
+                review_queue=rdir / "review-queue.csv", overrides_csv=rdir / "linkedin-reconcile.csv",
+                confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
+                timeout=10, max_retries=0, dry_run=False, no_overrides=False, no_llm=True))
+            self.assertEqual(man["judge"], "deterministic")
+            self.assertEqual(man["no_link"], 1)                      # Carol
+            self.assertEqual(man["verdicts"]["confirmed"], 1)        # Alice (offline stub)
+            self.assertEqual(man["overrides"]["verified"], 1)        # Alice -> verify in the override
+            self.assertTrue((rdir / "verdicts.csv").exists())
+            self.assertTrue((rdir / "applied.csv").exists())
+            # people.csv is NOT mutated by reconcile anymore (the merge applies the override).
+            with people_csv.open() as fh:
+                self.assertNotIn("linkedin_verified", next(__import__("csv").reader(fh)))
+            self.assertIn("LinkedIn identity", (pdir / "alice-p.md").read_text())
+
+    def test_dry_run_estimates_without_writing(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts, cache = base / "facts", base / "cache"
+            facts.mkdir(); cache.mkdir()
+            self._facts(facts, "pa", "Alice")
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({"slugs": {"alice-c": {"person_id": "pa"}},
+                "parents": {"alice-p": {"name": "Alice", "children": ["alice-c"]}}}), encoding="utf-8")
+            people_csv = base / "people.csv"
+            self._people_csv(people_csv, [{"id": "pa", "public_identifier": "alice",
+                "linkedin_url": "https://www.linkedin.com/in/alice", "headline": "Eng",
+                "work_experiences": json.dumps([{"title": "Eng", "company_name": "Acme"}])}])
+            man = reconcile.run(_ns(index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
+                facts_dir=facts, raw_dir=base / "raw", parents_dir=base / "parents",
+                verdicts_jsonl=base / "r" / "v.jsonl", verdicts_csv=base / "r" / "v.csv",
+                review_queue=base / "r" / "q.csv", overrides_csv=base / "r" / "ov.csv",
+                confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
+                timeout=10, max_retries=0, dry_run=True, no_overrides=True, no_llm=True))
+            self.assertEqual(man["status"], "dry_run")
+            self.assertEqual(man["judgeable"], 1)
+            self.assertFalse((base / "r").exists())  # dry-run writes nothing
+
+
+class TestApplyRetargets(unittest.TestCase):
+    """Re-attach a correct LinkedIn: enrich (stubbed) + carry the contact's identity."""
+
+    def test_builds_enriched_row_carrying_contact(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            ov = base / "ov.csv"
+            with ov.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=reconcile.OVERRIDE_COLUMNS)
+                w.writeheader()
+                w.writerow({"public_identifier": "bobceo", "action": "retarget", "approved": "yes",
+                            "new_linkedin_url": "https://www.linkedin.com/in/bob-real",
+                            "new_public_identifier": "bob-real", "person_id": "pid-bob"})
+                w.writerow({"public_identifier": "carol", "action": "retarget", "approved": "",  # pending -> skip
+                            "new_linkedin_url": "https://www.linkedin.com/in/carol-real"})
+            people = base / "people.csv"
+            cols = ["id", "public_identifier", "linkedin_url", "full_name", "primary_email",
+                    "all_emails", "primary_phone", "all_phones", "interaction_counts",
+                    "last_interaction", "source_channels"]
+            with people.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=cols)
+                w.writeheader()
+                w.writerow({"id": "pid-bob", "public_identifier": "bobceo", "full_name": "Bob",
+                            "primary_email": "bob@x.com", "interaction_counts": '{"gmail": 9}',
+                            "source_channels": "gmail_msgvault"})
+            fake = {"data": {"raw": 1}, "normalized_profile": {"success": True}, "from_cache": True, "error": ""}
+            with mock.patch.object(retargets, "rapidapi_profile", return_value=fake), \
+                 mock.patch.object(retargets, "normalize_rapidapi", return_value={}), \
+                 mock.patch.object(retargets, "merge_provider_profile",
+                                   return_value={"public_identifier": "bob-real", "full_name": "Bob Right",
+                                                 "rapidapi_response": '{"raw":1}'}):
+                man = retargets.run(_ns(overrides_csv=ov, people_csv=people,
+                    profile_cache_dir=base / "cache", out_csv=base / "retarget-people.csv"))
+            self.assertEqual(man["enriched"], 1)        # only the approved one
+            self.assertEqual(man["cache_hits"], 1)
+            import csv as _csv
+            with (base / "retarget-people.csv").open() as fh:
+                rows = list(_csv.DictReader(fh))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["public_identifier"], "bob-real")
+            self.assertEqual(rows[0]["primary_email"], "bob@x.com")     # contact identity carried
+            self.assertEqual(rows[0]["interaction_counts"], '{"gmail": 9}')
+
+
+class TestReconcileDeepResearch(unittest.TestCase):
+    """Phase 3 escalation: subset selection + $25 cost gate (no Parallel.ai spend)."""
+
+    def test_eligible_subset_filters(self):
+        verdicts = [
+            {"verdict": _verdict("wrong_person", 0.95, dr=True)},                 # eligible
+            {"verdict": _verdict("wrong_person", 0.95, dr=True, absent=True)},    # excluded: no LinkedIn
+            {"verdict": _verdict("wrong_person", 0.5, dr=True)},                  # excluded: low conf
+            {"verdict": _verdict("wrong_person", 0.95, dr=False)},               # excluded: not recommended
+            {"verdict": _verdict("confirmed", 0.99, dr=True)}]                    # excluded: not wrong
+        self.assertEqual(len(dresearch.eligible_subset(verdicts, 0.85)), 1)
+
+    def test_cost_gate_blocks_over_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            vj = base / "verdicts.jsonl"
+            recs = [{"parent_slug": f"p{i}", "name": f"N{i}", "person_ids": [f"x{i}"],
+                     "linkedin": {"linkedin_url": "u"},
+                     "verdict": _verdict("wrong_person", 0.95, dr=True, reason="wrong")} for i in range(600)]
+            vj.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
+            man = dresearch.run(_ns(verdicts_jsonl=vj, people_csv=base / "nope.csv",
+                facts_dir=base / "f", raw_dir=base / "r", processor="core2x",
+                confirm_threshold=0.85, budget=25.0, approve=False, dry_run=False))
+            self.assertEqual(man["status"], "needs_approval")   # 600 * $0.05 = $30 > $25
+            self.assertGreater(man["estimated_usd"], 25)
 
 
 class _ns:
