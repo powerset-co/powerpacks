@@ -63,6 +63,16 @@ case "$cmd" in
   cluster)
     "${PY[@]}" "$PKG.cluster_merge_candidates" "$@"
     ;;
+  reconcile)
+    # Phase 3: verify each parent against its attached LinkedIn (self-heal).
+    # Use `reconcile --dry-run` for a free cost estimate first.
+    "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
+    ;;
+  reconcile-deep-research)
+    # Find the right identity for high-confidence wrong_person detaches (Parallel.ai,
+    # $25 auto-approve gate). Reads reconcile verdicts written by `reconcile`.
+    "${PY[@]}" "$PKG.reconcile_deep_research" "$@"
+    ;;
   lookup)
     "${PY[@]}" "$PKG.lookup_person" "$@"
     ;;
@@ -75,7 +85,7 @@ case "$cmd" in
     echo "🧹 purged raw message bundles" >&2
     ;;
   *)
-    echo "usage: bin/deep-context {check|dry|run|collect|synthesize|compose|cluster|parents|validate|lookup|probe|purge-raw} [args]" >&2
+    echo "usage: bin/deep-context {check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|reconcile-deep-research|validate|lookup|probe|purge-raw} [args]" >&2
     exit 2
     ;;
 esac

@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: Build the richest per-person markdown dossier from local message bodies (Gmail + iMessage DMs + WhatsApp DMs) and retrieve it by name/phone/email; surface likely same-person merge candidates. Use for $deep-context, "build deep context", "context/dossier on a person", "who is <phone/name> in my messages", "find duplicate people to merge".
+description: Build the richest per-person markdown dossier from local message bodies (Gmail + iMessage DMs + WhatsApp DMs) and retrieve it by name/phone/email; surface likely same-person merge candidates; verify each person's attached LinkedIn is really them (self-heal). Use for $deep-context, "build deep context", "context/dossier on a person", "who is <phone/name> in my messages", "find duplicate people to merge", "check the LinkedIn we attached is the right person".
 ---
 
 <!--
@@ -12,6 +12,12 @@ Changelog:
   parent/child layer (confirmed core + needs-review), validate_dossiers, group NAMES
   as context, opt-in --include-groups for group bodies, gated check→ask→collect→
   dry-run→confirm→run task flow (mirrors $setup).
+- 2026-06-22: Phase 3 — reconcile each parent against its attached LinkedIn profile
+  (self-heal). High-reasoning judge (confirmed / wrong_person / needs_review) over the
+  message-derived dossier vs the LinkedIn lookup; high-confidence verdicts auto-apply to
+  people.csv (confirmed→verified, wrong_person→detach with backup), low-confidence →
+  review queue; never forces a LinkedIn (linkedin_plausibly_absent). Deep-research
+  escalation (Parallel.ai) on wrong_person detaches, $25 auto-approve cost gate.
 -->
 
 # deep-context
@@ -78,10 +84,16 @@ P1.7  Validate completeness
 Phase 2 — Merge people via the LLM judge
 P2.1  Cluster candidates with the LLM judge
 P2.2  Build parent dossiers (confirmed core + needs-review)
+Phase 3 — Verify each person's attached LinkedIn (self-heal)
+P3.1  Dry-run reconcile cost estimate (free)
+P3.2  Confirm cost → run the reconcile judge
+P3.3  Auto-apply high-confidence verdicts (summary; people.csv backed up)
+P3.4  Surface the review queue; get user feedback on low-confidence rows
+P3.5  Deep-research wrong_person detaches (auto if ≤ $25, else ask)
 ```
 
 Do not drop steps; mark inapplicable ones complete as a no-op. **Never run a
-paid step (P1.6 / P2.1 onward) before P1.4–P1.5.**
+paid step (P1.6 / P2.1 / P3.2 onward) before its dry-run + confirm.**
 
 ### Phase 1 — Build ONE deep dossier per person
 
@@ -123,9 +135,42 @@ pooled across **Gmail bodies + iMessage DMs + WhatsApp DMs**, plus iMessage
   merges only judge-CONFIRMED children (≥`--confirm-threshold` 0.85), lists borderline
   ones under "Needs review", backrefs each child. Repeatable (parent = f(confirmed children)).
 
-`bin/deep-context run [--include-groups] [--deep-cap N]` chains everything once P1.5 is
-confirmed. Full surface: `check|dry|run|collect|synthesize|compose|cluster|parents|
-validate|lookup|probe|purge-raw`.
+### Phase 3 — Verify each person's attached LinkedIn (self-heal)
+
+Every person in `people.csv` already has a `linkedin_url` stapled on during ingestion —
+often resolved on thin same-name evidence. Phase 3 throws a **high-reasoning judge** at
+each `(parent dossier ↔ attached LinkedIn)` pair: same human or not? It uses corroboration
+(employer / school / location / role / behavior) and especially **contradictions** — never
+the name alone (a big-company CEO profile stapled to your plumber of the same name is the
+case this catches).
+
+- **P3.1 Dry-run cost estimate (free)** — `bin/deep-context reconcile --dry-run`. Prints
+  task count, link conflicts, and a cost floor/ceiling. No spend, no writes.
+- **P3.2 Confirm → run the judge** — present the estimate, get an explicit go, then
+  `bin/deep-context reconcile`. gpt-5.2, high reasoning, one call per attached profile.
+  Writes `reconcile/verdicts.csv` (+ `.jsonl` audit) and injects a `## LinkedIn identity`
+  section into each parent (verdict + supporting/contradicting evidence).
+- **P3.3 Auto-apply (high-confidence)** — happens in the same run unless `--no-apply`.
+  `people.csv` is backed up to `people.csv.bkup` first, then: `confirmed ≥ threshold` →
+  `linkedin_verified=confirmed`; `wrong_person ≥ threshold` → **detach** (stash into
+  `linkedin_url_rejected`, clear `linkedin_url`/`public_identifier`). Report the summary:
+  "✅ N verified, 🔧 M detached, ❓ K need feedback". `--confirm-threshold` defaults to 0.85.
+- **P3.4 Review queue (low-confidence)** — `reconcile/review-queue.csv` holds everything
+  below threshold + `needs_review` + link conflicts, with a blank `user_decision` column.
+  Surface these rows to the user and apply their yes/no calls. Some people legitimately
+  have **no LinkedIn** (flagged `linkedin_plausibly_absent`) — never force a match.
+- **P3.5 Deep research (default, $25 gate)** — for high-confidence `wrong_person`
+  detaches that external research could resolve, find the *correct* identity:
+  `bin/deep-context reconcile-deep-research --dry-run` to size it, then estimate the
+  Parallel.ai cost (~$0.05/person). **If ≤ $25, run it automatically and just tell the
+  user the cost** (`reconcile-deep-research`); **if > $25, stop and ask for approval**
+  (`reconcile-deep-research --approve` once they agree). Needs `PARALLEL_API_KEY`. People
+  flagged `linkedin_plausibly_absent` are excluded.
+
+`bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once P1.5 is
+confirmed (Phase 3 is run separately, after parents exist). Full surface:
+`check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|
+reconcile-deep-research|validate|lookup|probe|purge-raw`.
 
 ### Step 1 — collect (local, free, reads bodies)
 
@@ -226,7 +271,12 @@ name falls back to an all-tokens fuzzy match.
 ├── facts/<person_id>.jsonl     structured facts per chunk (checkpoint)
 ├── dossiers/<slug>.md          one dossier per person
 ├── index.json / index.md       name/phone/email -> slug lookup + catalog
-└── merge-candidates.csv / .md   likely same-person clusters
+├── merge-candidates.csv / .md   likely same-person clusters
+├── parents/<slug>.md            canonical person (one per real person)
+└── reconcile/                   Phase 3 LinkedIn self-heal
+    ├── verdicts.csv / .jsonl     same-human verdict per attached profile
+    ├── review-queue.csv          low-confidence rows needing your feedback
+    └── deep-research/            Parallel.ai re-research of wrong_person detaches
 ```
 
 ## Performance & scale (measured)

@@ -34,7 +34,15 @@ MERGE_CSV = ROOT / "merge-candidates.csv"
 MERGE_MD = ROOT / "merge-candidates.md"
 PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to children)
 
+# Phase 3 — reconcile parents against their attached LinkedIn profile ("self-heal").
+RECONCILE_DIR = ROOT / "reconcile"
+VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"   # full per-candidate judge record
+VERDICTS_CSV = RECONCILE_DIR / "verdicts.csv"       # flat review table
+REVIEW_QUEUE_CSV = RECONCILE_DIR / "review-queue.csv"  # low-confidence rows needing feedback
+
 DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
+# RapidAPI LinkedIn lookup cache (one JSON per public_identifier) — the "linkedin lookups".
+PROFILE_CACHE_DIR = Path(".powerpacks/network-import/profile_cache_v2")
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 
 # Channel labels as they appear in people.csv `source_channels`.
