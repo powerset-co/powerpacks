@@ -59,6 +59,7 @@ from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
     FACTS_DIR,
+    CONSOLIDATE_PEOPLE_CSV,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     PARENTS_DIR,
@@ -82,7 +83,9 @@ from packs.ingestion.primitives.enrich_people.enrich_people import (
     read_usable_cached_profile,
 )
 from packs.ingestion.schemas.people_schema import (
+    PEOPLE_SCHEMA_COLUMNS,
     extract_public_identifier,
+    merge_interaction_counts,
     normalize_linkedin_url,
     parse_jsonish,
 )
@@ -580,6 +583,74 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
     return {"path": str(path), "proposed": proposed, "preserved_user_rows": preserved, "total_rows": len(existing)}
 
 
+def write_consolidations(path: Path, tasks: list[dict[str, Any]], people_csv: Path) -> dict[str, Any]:
+    """Fold a parent's children onto its KEPT LinkedIn (trust Phase 2's grouping).
+
+    For each parent with a kept (`confirm`) link AND ≥1 detached sibling, emit ONE contact-only
+    people row keyed by the kept `public_identifier` carrying the UNION of every child's emails /
+    phones / per-channel interaction_counts / source_channels. The fan-in merge auto-ingests it;
+    because it shares the kept LinkedIn key it unions onto the real row (which supplies the
+    profile), so the surviving person keeps the correct profile AND all the contacts of its
+    siblings — while the sibling rows still detach/drop. Per-channel counts are preserved
+    (merge_interaction_counts is channel-wise, never summed)."""
+    people = load_people_rows(people_csv)
+    by_parent: dict[str, list[dict[str, Any]]] = {}
+    for t in tasks:
+        by_parent.setdefault(t["parent_slug"], []).append(t)
+
+    rows: list[dict[str, str]] = []
+    for group in by_parent.values():
+        kept = next((t for t in group if t.get("action") == "confirm"), None)
+        detached = [t for t in group if t.get("action") == "detach"]
+        if not kept or not detached:
+            continue
+        pub = (kept.get("candidate_key") or "").strip().lower()
+        if not pub:
+            continue
+        pids: list[str] = []
+        for t in group:
+            pids.extend(t.get("person_ids") or [])
+        emails: list[str] = []
+        phones: list[str] = []
+        ic_values: list[str] = []
+        channels: set[str] = set()
+        for pid in dict.fromkeys(pids):
+            r = people.get(pid)
+            if not r:
+                continue
+            for e in [r.get("primary_email", ""), *parse_list(r.get("all_emails"))]:
+                ne = normalize_email(e)
+                if ne and "@" in ne and ne not in emails:
+                    emails.append(ne)
+            for ph in [r.get("primary_phone", ""), *parse_list(r.get("all_phones"))]:
+                npn = normalize_phone(ph)
+                if npn and npn not in phones:
+                    phones.append(npn)
+            if r.get("interaction_counts"):
+                ic_values.append(r["interaction_counts"])
+            for c in (r.get("source_channels") or "").split(","):
+                if c.strip():
+                    channels.add(c.strip())
+        ic = merge_interaction_counts(*ic_values)
+        row = {c: "" for c in PEOPLE_SCHEMA_COLUMNS}
+        row["public_identifier"] = pub
+        row["linkedin_url"] = (kept.get("linkedin") or {}).get("linkedin_url", "")
+        row["primary_email"] = emails[0] if emails else ""
+        row["all_emails"] = json.dumps(emails) if emails else ""
+        row["primary_phone"] = phones[0] if phones else ""
+        row["all_phones"] = json.dumps(phones) if phones else ""
+        row["interaction_counts"] = json.dumps(ic) if ic else ""
+        row["source_channels"] = ",".join(sorted(channels))
+        rows.append(row)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=PEOPLE_SCHEMA_COLUMNS)
+        w.writeheader()
+        w.writerows(rows)
+    return {"path": str(path), "consolidated_parents": len(rows)}
+
+
 def decided_report(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Per-row preview of what the override will do at the next merge (for applied.csv)."""
     rows: list[dict[str, Any]] = []
@@ -597,6 +668,54 @@ def decided_report(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "reason": v.get("reason", ""),
         })
     return rows
+
+
+def write_summary(path: Path, tasks: list[dict[str, Any]], override_path: Path,
+                  consolidation: dict[str, Any], review_queued: int) -> None:
+    """ONE human-readable summary — what changed + what needs review — for the user to open."""
+    detached = [t for t in tasks if t.get("action") == "detach"]
+    verified = sum(1 for t in tasks if t.get("action") == "confirm")
+    review = [t for t in tasks if t.get("action") == "review" and not t.get("no_link")]
+    no_link = sum(1 for t in tasks if t.get("no_link"))
+    ov = load_override_rows(override_path)
+    pending_retargets = [r for r in ov.values() if (r.get("action") or "") == "retarget"
+                         and (r.get("approved") or "").strip().lower() not in ("yes", "auto")]
+
+    def _line(t: dict[str, Any]) -> str:
+        v = t.get("verdict") or {}
+        url = (t.get("linkedin") or {}).get("linkedin_url", "")
+        return f"- **{t.get('name', '?')}** ({float(v.get('confidence') or 0):.2f}) — _{v.get('reason', '')}_  ·  {url}"
+
+    lines = [f"# Deep-context self-heal — what changed", "", f"_Generated {now_iso()}._", "",
+             "Applied automatically (lands on your next fan-in merge + index rebuild):", ""]
+    lines.append(f"- 🔧 **Detached {len(detached)}** wrong LinkedIn link(s)")
+    lines.append(f"- 🔁 **Consolidated {consolidation.get('consolidated_parents', 0)}** "
+                 "people — folded siblings' emails/phones onto the kept LinkedIn")
+    lines.append(f"- ✅ **Verified {verified}** link(s) (not listed)")
+    if detached:
+        lines += ["", "## 🔧 Detached (wrong link removed)", ""]
+        lines += [_line(t) for t in sorted(detached, key=lambda t: -(float((t.get('verdict') or {}).get('confidence') or 0)))]
+
+    lines += ["", f"## ❓ Needs your review ({review_queued + no_link + len(pending_retargets)})", ""]
+    if pending_retargets:
+        lines.append(f"- **{len(pending_retargets)} retarget(s) to approve** — set `approved=yes` in "
+                     "`overrides/linkedin-reconcile.csv` to re-attach the correct LinkedIn, then run apply-retargets.")
+    if review or no_link:
+        lines.append(f"- **{review_queued + no_link} low-confidence / no-link row(s)** in `reconcile/review-queue.csv` "
+                     "(set `approved` in the decisions table to act on them).")
+        for t in review[:15]:
+            v = t.get("verdict") or {}
+            lines.append(f"  - **{t.get('name', '?')}** — {v.get('verdict', '')} ({float(v.get('confidence') or 0):.2f}) — _{v.get('reason', '')}_")
+        if len(review) > 15:
+            lines.append(f"  - …and {len(review) - 15} more (see review-queue.csv)")
+    if not (pending_retargets or review or no_link):
+        lines.append("_Nothing — all decisions were high-confidence._")
+
+    lines += ["", "---", "_Approve/reject by editing the `approved` column of "
+              "`.powerpacks/network-import/overrides/linkedin-reconcile.csv` (your edits are sticky). "
+              "Drill-down: `reconcile/applied.csv`, `reconcile/review-queue.csv`._"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def write_applied(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -764,9 +883,13 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
             inject_section(parents_dir / f"{task['parent_slug']}.md", render_section(task["verdict"], task["linkedin"]))
 
     override_stats = {"path": str(args.overrides_csv), "detached": 0, "verified": 0, "total_rows": 0}
+    consolidation = {"consolidated_parents": 0}
     if not args.no_overrides:
         override_stats = write_overrides(Path(args.overrides_csv), tasks)
+        # Fold each parent's children's contacts onto its kept LinkedIn (trust Phase 2).
+        consolidation = write_consolidations(Path(args.consolidate_people_csv), tasks, Path(args.people_csv))
     write_applied(out_dir / "applied.csv", decided_report(tasks))
+    write_summary(out_dir / "summary.md", tasks, Path(args.overrides_csv), consolidation, queued)
 
     counts = {v: 0 for v in VERDICTS}
     for task in tasks:
@@ -790,8 +913,9 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
         "conflicts_to_review": sum(1 for t in conflict_tasks if t.get("action") == "review"),
         "no_link": sum(1 for t in tasks if t.get("no_link")),
         "errors": sum(1 for t in tasks if t.get("error")),
-        "overrides": override_stats, "applied_csv": str(out_dir / "applied.csv"),
-        "review_queued": queued,
+        "overrides": override_stats, "consolidation": consolidation,
+        "summary_md": str(out_dir / "summary.md"),
+        "applied_csv": str(out_dir / "applied.csv"), "review_queued": queued,
         "deep_research_eligible": len(dr_subset),
         "deep_research_est_usd": round(len(dr_subset) * DR_COST_PER_PERSON, 2),
         "tokens": usage_total,
@@ -822,6 +946,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-retries", type=int, default=6)
     p.add_argument("--overrides-csv", default=str(LINKEDIN_OVERRIDES_CSV),
                    help="Durable override the fan-in merge re-applies (detach/verify per public_identifier)")
+    p.add_argument("--consolidate-people-csv", default=str(CONSOLIDATE_PEOPLE_CSV),
+                   help="Contact-only rows folding each parent's children onto its kept LinkedIn")
     p.add_argument("--dry-run", action="store_true", help="Estimate cost only; no spend, no writes")
     p.add_argument("--no-overrides", action="store_true", help="Write verdicts but do NOT update the override table")
     p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")

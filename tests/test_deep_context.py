@@ -507,6 +507,39 @@ class TestReconcileLinkedIn(unittest.TestCase):
         reconcile.decide_actions(tasks, 0.85)
         self.assertTrue(all(t["action"] == "review" for t in tasks))
 
+    def test_consolidation_folds_children_onto_kept_link(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            people = base / "people.csv"
+            cols = ["id", "public_identifier", "linkedin_url", "primary_email", "all_emails",
+                    "primary_phone", "all_phones", "interaction_counts", "source_channels"]
+            with people.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=cols)
+                w.writeheader()
+                w.writerow({"id": "pid-keep", "public_identifier": "chrissyhu",
+                            "primary_email": "c@gmail.com", "all_emails": '["c@gmail.com"]',
+                            "interaction_counts": '{"gmail": 5}', "source_channels": "gmail_msgvault"})
+                w.writerow({"id": "pid-sib", "public_identifier": "chrissy-hu",
+                            "primary_email": "c@jpmorgan.com", "all_emails": '["c@jpmorgan.com"]',
+                            "interaction_counts": '{"imessage": 9}', "source_channels": "imessage"})
+            tasks = [
+                self._task("chrissy", "chrissyhu", "confirmed", 0.95, conflict=True),
+                self._task("chrissy", "chrissy-hu", "wrong_person", 0.95, conflict=True)]
+            tasks[0]["person_ids"] = ["pid-keep"]
+            tasks[1]["person_ids"] = ["pid-sib"]
+            reconcile.decide_actions(tasks, 0.85)
+            out = base / "consolidate.csv"
+            stats = reconcile.write_consolidations(out, tasks, people)
+            self.assertEqual(stats["consolidated_parents"], 1)
+            import csv as _csv
+            with out.open() as fh:
+                row = next(_csv.DictReader(fh))
+            self.assertEqual(row["public_identifier"], "chrissyhu")     # folded onto the KEPT link
+            self.assertIn("c@gmail.com", row["all_emails"])
+            self.assertIn("c@jpmorgan.com", row["all_emails"])          # sibling email carried
+            self.assertEqual(json.loads(row["interaction_counts"]), {"gmail": 5, "imessage": 9})  # per-channel kept
+            self.assertEqual(row["rapidapi_response"], "")              # contact-only (no profile pollution)
+
     def test_conflict_resolution_writes_one_verify_and_rest_detach(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "ov.csv"
@@ -576,6 +609,7 @@ class TestReconcileLinkedIn(unittest.TestCase):
                 facts_dir=facts, raw_dir=raw, parents_dir=pdir,
                 verdicts_jsonl=rdir / "verdicts.jsonl", verdicts_csv=rdir / "verdicts.csv",
                 review_queue=rdir / "review-queue.csv", overrides_csv=rdir / "linkedin-reconcile.csv",
+                consolidate_people_csv=rdir / "consolidate-people.csv",
                 confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
                 timeout=10, max_retries=0, dry_run=False, no_overrides=False, no_llm=True))
             self.assertEqual(man["judge"], "deterministic")
@@ -606,6 +640,7 @@ class TestReconcileLinkedIn(unittest.TestCase):
                 facts_dir=facts, raw_dir=base / "raw", parents_dir=base / "parents",
                 verdicts_jsonl=base / "r" / "v.jsonl", verdicts_csv=base / "r" / "v.csv",
                 review_queue=base / "r" / "q.csv", overrides_csv=base / "r" / "ov.csv",
+                consolidate_people_csv=base / "r" / "consolidate.csv",
                 confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
                 timeout=10, max_retries=0, dry_run=True, no_overrides=True, no_llm=True))
             self.assertEqual(man["status"], "dry_run")

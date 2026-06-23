@@ -49,6 +49,8 @@ OVERRIDES_DIR = Path(".powerpacks/network-import/overrides")
 LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "linkedin-reconcile.csv"
 # Enriched re-attach rows (retargets), auto-ingested by the fan-in merge.
 RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"
+# Contact-only rows that fold a parent's children onto its kept LinkedIn (auto-ingested).
+CONSOLIDATE_PEOPLE_CSV = OVERRIDES_DIR / "consolidate-people.csv"
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 
 # Channel labels as they appear in people.csv `source_channels`.

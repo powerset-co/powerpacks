@@ -167,7 +167,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                     w.writeheader()
                     w.writerow({"public_identifier": "bobceo", "action": "retarget", "approved": "yes",
                                 "new_linkedin_url": "https://www.linkedin.com/in/bob-real", "match_emails": "bob@x.com"})
-                out_dir = Path(tmp) / "merged"
+                out_dir = Path(".powerpacks/network-import/merged")  # so overrides/ sibling resolves
                 _, payload = self.invoke(["run", "--output-dir", str(out_dir), "--input", str(old)])
                 self.assertEqual(payload["overrides_retargeted"], 1)
                 with (out_dir / "people.csv").open() as fh:
@@ -175,6 +175,51 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertNotIn("bobceo", rows)     # old wrong link dropped
                 self.assertIn("bob-real", rows)       # correct enriched row kept (auto-ingested)
                 self.assertEqual(rows["bob-real"]["full_name"], "Bob Right")
+            finally:
+                os.chdir(old_cwd)
+
+    def test_consolidation_row_folds_emails_without_polluting_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                # Real kept row (correct LinkedIn + profile) + a sibling being detached.
+                src = Path(".powerpacks/network-import/gmail/run-1/src.csv")
+                self.write_people_row(src, {"id": "id-keep", "public_identifier": "chrissyhu",
+                    "linkedin_url": "https://www.linkedin.com/in/chrissyhu", "full_name": "Chrissy Hu",
+                    "headline": "Director of Investments", "primary_email": "c@gmail.com",
+                    "source_channels": "gmail_msgvault"})
+                self.write_people_row(src.with_name("sib.csv"), {"id": "id-sib", "public_identifier": "chrissy-hu",
+                    "linkedin_url": "https://www.linkedin.com/in/chrissy-hu", "full_name": "Chrissy Hu",
+                    "headline": "Autonomous Fleet @ Nvidia", "primary_email": "c@jpmorgan.com",
+                    "source_channels": "gmail_msgvault"})
+                overrides = Path(".powerpacks/network-import/overrides/linkedin-reconcile.csv")
+                overrides.parent.mkdir(parents=True, exist_ok=True)
+                with overrides.open("w", newline="") as fh:
+                    w = csv.DictWriter(fh, fieldnames=["public_identifier", "action", "approved"])
+                    w.writeheader()
+                    w.writerow({"public_identifier": "chrissy-hu", "action": "detach", "approved": "auto"})
+                # Consolidation row: CONTACT-ONLY (no profile/rapidapi), keyed by the kept LinkedIn.
+                consol = Path(".powerpacks/network-import/overrides/consolidate-people.csv")
+                cols = merge_network_sources.PEOPLE_SCHEMA_COLUMNS
+                crow = {c: "" for c in cols}
+                crow.update({"public_identifier": "chrissyhu",
+                             "linkedin_url": "https://www.linkedin.com/in/chrissyhu",
+                             "primary_email": "c@jpmorgan.com",
+                             "all_emails": '["c@gmail.com", "c@jpmorgan.com"]'})
+                with consol.open("w", newline="") as fh:
+                    w = csv.DictWriter(fh, fieldnames=cols)
+                    w.writeheader(); w.writerow(crow)
+
+                out_dir = Path(".powerpacks/network-import/merged")  # so overrides/ sibling resolves
+                _, payload = self.invoke(["run", "--output-dir", str(out_dir),
+                    "--input", str(src), "--input", str(src.with_name("sib.csv"))])
+                with (out_dir / "people.csv").open() as fh:
+                    merged = {r["public_identifier"]: r for r in csv.DictReader(fh)}
+                self.assertNotIn("chrissy-hu", merged)                       # sibling detached -> dropped
+                self.assertIn("c@jpmorgan.com", merged["chrissyhu"]["all_emails"])  # sibling email folded in
+                self.assertIn("c@gmail.com", merged["chrissyhu"]["all_emails"])
+                self.assertEqual(merged["chrissyhu"]["headline"], "Director of Investments")  # profile NOT polluted
             finally:
                 os.chdir(old_cwd)
 
