@@ -359,6 +359,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     people = load_people(index, dossier_dir, Path(args.raw_dir), Path(args.facts_dir))
     pairs = sorted(generate_pairs(people))
 
+    if getattr(args, "dry_run", False):
+        # Blocking is free; only the ambiguous pairs below would be judged (small spend).
+        per_lo, per_hi = 0.004, 0.02
+        return {
+            "source": "cluster_merge_candidates", "status": "dry_run",
+            "people": len(people), "candidate_pairs_to_judge": len(pairs),
+            "estimated_cost_usd_low": round(len(pairs) * per_lo, 2),
+            "estimated_cost_usd_high": round(len(pairs) * per_hi, 2),
+            "model": args.model, "reasoning_effort": args.reasoning_effort,
+            "elapsed_ms": int((time.monotonic() - started) * 1000), "updated_at": now_iso(),
+        }
+
     verdicts: list[dict[str, Any]] = []
     usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     use_llm = not getattr(args, "no_llm", False)
@@ -494,6 +506,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--concurrency", type=int, default=0)
     p.add_argument("--timeout", type=int, default=120)
     p.add_argument("--max-retries", type=int, default=6)
+    p.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")
     p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")
     return p
 

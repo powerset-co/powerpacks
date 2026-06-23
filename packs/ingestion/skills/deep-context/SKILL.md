@@ -158,9 +158,11 @@ pooled across **Gmail bodies + iMessage DMs + WhatsApp DMs**, plus iMessage
 
 ### Phase 2 — Merge people via the LLM judge
 
-- **[Merge] Find people who look like duplicates** — `bin/deep-context cluster`. Blocking proposes pairs; a
-  high-reasoning judge decides same-person holistically. Writes `merge-candidates.csv`
-  + `merge-verdicts.csv` (audit, incl. rejections).
+- **[Merge] Find people who look like duplicates** — first `bin/deep-context cluster --dry-run`
+  for the count + cost (free): only genuinely ambiguous same/similar-name pairs are judged, so
+  this is a **small, bounded spend** (typically tens of pairs, well under $1) — don't improvise
+  an estimate or run an offline pass. Then `bin/deep-context cluster`: a high-reasoning judge
+  decides same-person holistically. Writes `merge-candidates.csv` + `merge-verdicts.csv` (audit).
 - **[Merge] Combine each set of duplicates into one person** — `bin/deep-context parents`. One canonical parent per cluster:
   merges only judge-CONFIRMED children (≥`--confirm-threshold` 0.85), lists borderline
   ones under "Needs review", backrefs each child. Repeatable (parent = f(confirmed children)).
