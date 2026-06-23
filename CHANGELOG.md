@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.14.0...powerpacks-v0.15.0) (2026-06-23)
+
+
+### Features
+
+* deep-context Phase 3 — LinkedIn self-heal (verify/detach/retarget, durable override) ([#126](https://github.com/powerset-co/powerpacks/issues/126)) ([e50b104](https://github.com/powerset-co/powerpacks/commit/e50b10421de448d2380e394e63bee5460645fa9e))
+
 ## [0.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.13.0...powerpacks-v0.14.0) (2026-06-22)
 
 
