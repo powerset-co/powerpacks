@@ -29,7 +29,7 @@ Outputs:
   reconcile/verdicts.*   full per-candidate audit (jsonl + flat csv)
   reconcile/applied.csv  what auto-applied (drill-down)
   reconcile/manifest.json
-  overrides/linkedin-reconcile.csv  the ONE file to EDIT (approved column; every judged row)
+  overrides/review.csv  the ONE file to EDIT (approved column; every judged row)
   (a "## LinkedIn identity" section injected into each parent markdown)
 """
 from __future__ import annotations
@@ -741,7 +741,7 @@ def write_summary(path: Path, tasks: list[dict[str, Any]], override_path: Path,
         lines.append("_Nothing — every decision was high-confidence._")
 
     lines += ["", "---", "_The one file to edit: "
-              "`.powerpacks/network-import/overrides/linkedin-reconcile.csv` (`approved` column, sticky). "
+              "`.powerpacks/network-import/overrides/review.csv` (`approved` column, sticky). "
               "Drill-down: `reconcile/applied.csv`._"]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

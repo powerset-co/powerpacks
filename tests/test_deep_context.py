@@ -613,7 +613,7 @@ class TestReconcileLinkedIn(unittest.TestCase):
                 index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
                 facts_dir=facts, raw_dir=raw, parents_dir=pdir,
                 verdicts_jsonl=rdir / "verdicts.jsonl", verdicts_csv=rdir / "verdicts.csv",
-                overrides_csv=rdir / "linkedin-reconcile.csv",
+                overrides_csv=rdir / "review.csv",
                 consolidate_people_csv=rdir / "consolidate-people.csv",
                 confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
                 timeout=10, max_retries=0, dry_run=False, no_overrides=False, no_llm=True))

@@ -69,7 +69,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.write_people_row(good, {"id": "id-good", "public_identifier": "chrissyhu",
                     "linkedin_url": "https://www.linkedin.com/in/chrissyhu", "full_name": "Chrissy Hu",
                     "primary_email": "chrissy@x.com", "source_channels": "gmail_msgvault"})
-                overrides = Path(".powerpacks/network-import/overrides/linkedin-reconcile.csv")
+                overrides = Path(".powerpacks/network-import/overrides/review.csv")
                 overrides.parent.mkdir(parents=True, exist_ok=True)
                 with overrides.open("w", newline="", encoding="utf-8") as fh:
                     w = csv.DictWriter(fh, fieldnames=["public_identifier", "action", "approved",
@@ -160,7 +160,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.write_people_row(retarget_people, {"id": "id-new", "public_identifier": "bob-real",
                     "linkedin_url": "https://www.linkedin.com/in/bob-real", "full_name": "Bob Right",
                     "primary_email": "bob@x.com", "source_channels": "gmail_msgvault"})
-                overrides = Path(".powerpacks/network-import/overrides/linkedin-reconcile.csv")
+                overrides = Path(".powerpacks/network-import/overrides/review.csv")
                 with overrides.open("w", newline="", encoding="utf-8") as fh:
                     w = csv.DictWriter(fh, fieldnames=["public_identifier", "action", "approved",
                         "new_linkedin_url", "match_emails"])
@@ -193,7 +193,7 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                     "linkedin_url": "https://www.linkedin.com/in/chrissy-hu", "full_name": "Chrissy Hu",
                     "headline": "Autonomous Fleet @ Nvidia", "primary_email": "c@jpmorgan.com",
                     "source_channels": "gmail_msgvault"})
-                overrides = Path(".powerpacks/network-import/overrides/linkedin-reconcile.csv")
+                overrides = Path(".powerpacks/network-import/overrides/review.csv")
                 overrides.parent.mkdir(parents=True, exist_ok=True)
                 with overrides.open("w", newline="") as fh:
                     w = csv.DictWriter(fh, fieldnames=["public_identifier", "action", "approved"])
