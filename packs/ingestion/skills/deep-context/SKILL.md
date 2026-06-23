@@ -45,6 +45,10 @@ Changelog:
   now lands in overrides/review.csv — high-confidence as approved=auto, the rest as
   pending with a suggested action. Retired the separate review-queue.csv; the user reads
   summary.md and edits the single decisions table (approved column, sticky).
+- 2026-06-23: Owner profile is now the FIRST step — `bin/deep-context owner --linkedin-url <you>`
+  builds owner.json from the RapidAPI cache (never WebFetch). Added Phase 4 `[Realize]`
+  (`bin/deep-context realize` = fan-in merge applying review.csv/consolidate/retarget, then the
+  $setup Modal index-people rebuild). Scrubbed real names from test fixtures/skill examples.
 -->
 
 # deep-context
@@ -99,9 +103,11 @@ Use your harness's plan/task tool:
 
 Seed the checklist with these exact item titles. Each is tagged by phase —
 `[Context]` builds a profile of each person from your messages, `[Merge]` combines
-duplicates of the same person, `[Self-heal]` checks & fixes each person's LinkedIn:
+duplicates of the same person, `[Self-heal]` checks & fixes each person's LinkedIn,
+`[Realize]` applies it all and rebuilds the search index:
 
 ```
+[Context]   Ask for YOUR LinkedIn and build your own profile (so we can spot what you share with each person)
 [Context]   See which message sources are connected (Gmail, iMessage, WhatsApp)
 [Context]   Ask whether to include group chats, and how far back to read per person
 [Context]   Gather each person's messages
@@ -119,6 +125,8 @@ duplicates of the same person, `[Self-heal]` checks & fixes each person's Linked
 [Self-heal] Show you a summary of what changed and what needs your review
 [Self-heal] Wait for you to finish reviewing before continuing
 [Self-heal] Re-attach the correct LinkedIns you approved
+[Realize]   Apply your decisions to the network (fan-in merge — uses your review.csv)
+[Realize]   Rebuild the search index on Modal so the fixes show up in search (~5–30 min)
 ```
 
 Do not drop steps; mark inapplicable ones complete as a no-op. **Never spend money before
@@ -131,6 +139,14 @@ Each person gets a single child dossier from up to `--deep-cap` (1600) messages,
 pooled across **Gmail bodies + iMessage DMs + WhatsApp DMs**, plus iMessage
 **group-chat names** (metadata) as relationship context.
 
+- **[Context] Ask for YOUR LinkedIn and build your own profile** — FIRST, ask the user for their
+  own LinkedIn URL, then `bin/deep-context owner --linkedin-url <their-url> --email <their-email>`.
+  This writes `.powerpacks/deep-context/owner.json` (their schools/jobs/locations with year ranges)
+  from the **RapidAPI cache** (a cache hit is free; NEVER WebFetch linkedin.com — it hallucinates).
+  Confirm the schools/employers it found look right. This owner profile is injected into synthesis
+  and the LinkedIn judge so they infer **shared context** (same school/employer/era) with each
+  contact — skipping it loses that whole signal. If `owner.json` already exists, it reports the
+  current values; `--force` to rebuild. (owner.json is gitignored — it's local only, never committed.)
 - **[Context] See which message sources are connected** — `bin/deep-context check`. Per-source readiness +
   `ready`. If iMessage is `unreadable_full_disk_access`, run in a terminal with
   Full Disk Access (not the Claude Code Bash tool).
@@ -253,10 +269,29 @@ This is exactly what **`reconcile/summary.md`** already contains — present tha
 it from scratch). Keep it scannable; the user runs this repeatedly to fix things, so make "what
 changed and why" obvious each time.
 
+### Phase 4 — Realize the fixes (rebuild people.csv + the Modal search index)
+
+The self-heal writes decisions to `overrides/review.csv` (+ consolidate/retarget files) but does
+NOT change `people.csv` directly — the fixes land only when you re-run the **fan-in merge** (which
+auto-applies those files) and **rebuild the index**. This reuses `$setup`'s exact steps. Run it
+AFTER the user is done reviewing/approving.
+
+- **[Realize] Apply your decisions (fan-in merge)** — `bin/deep-context realize` (or directly:
+  `uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in --people-csv .powerpacks/network-import/merged/people.csv`).
+  This goes through `merge_network_sources`, which auto-reads `overrides/review.csv` (applies the
+  `auto`/`yes` detach/verify rows), `consolidate-people.csv`, and `retarget-people.csv` — so wrong
+  links drop, contacts consolidate, and approved retargets re-attach, all in the rebuilt
+  `merged/people.csv`. Free + local.
+- **[Realize] Rebuild the search index on Modal** — `uv run --project . python
+  packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv`.
+  Server-side on Modal (needs Powerset runtime keys; spend-bearing). **Expect 5–30+ min, mostly
+  quiet** — run it in the background, keep the step `in_progress` until it exits 0, and reassure
+  the user while it runs (don't panic at the silence). This is the same indexer `$setup` uses.
+
 `bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once the cost is
-confirmed (Phase 3 is run separately, after parents exist). Full surface:
-`check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|
-reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw`.
+confirmed (Phases 3–4 are run separately, after parents exist). Full surface:
+`owner|check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|
+reconcile-deep-research|apply-retargets|realize|validate|lookup|probe|purge-raw`.
 
 ### Step 1 — collect (local, free, reads bodies)
 
@@ -270,21 +305,18 @@ bundle per person (≥1 message). Pools up to `--deep-cap` (1600) recent message
 records the TRUE total (`messages_available`) so `people_capped` is honest. Test with
 `--limit 5` or `--person <id>`. Idempotent: re-runs skip existing bundles (`--force`).
 
-### Step 1.5 — owner context (optional, free, big relationship win)
+### Step 0 — owner context (now the FIRST step, free on a cache hit)
 
-Drop a `.powerpacks/deep-context/owner.json` with YOUR bio timeline (name, emails,
-education + work with year ranges). Synthesis injects it as a reasoning anchor so the
-model infers **shared context** — same school/employer/place/era — from message
-content, rendered as a "Shared context with you" dossier section. Example:
-
-```json
-{"name": "Jane Doe", "emails": ["jane@x.com"],
- "education": [{"school": "MIT", "start": 2008, "end": 2012}],
- "work": [{"company": "Stripe", "title": "Eng", "start": 2014, "end": 2019}]}
-```
+`bin/deep-context owner --linkedin-url <you> --email <you>` builds
+`.powerpacks/deep-context/owner.json` (YOUR bio timeline) from the RapidAPI cache — name,
+emails, education + work with year ranges. Synthesis injects it as a reasoning anchor so the
+model infers **shared context** — same school/employer/place/era — from message content,
+rendered as a "Shared context with you" dossier section. It's `{name, emails, education:
+[{school,start,end}], work:[{company,title,start,end}], locations, notes}`.
 
 Overlaps are only asserted when message content supports them (not date-matching
-alone). Run `synthesize --no-owner` to skip it. Get exact LinkedIn dates via
+alone). Run `synthesize --no-owner` to skip it. (owner.json is gitignored — local only.)
+You can also get exact LinkedIn dates via
 `packs/search/primitives/fetch_person_profile/fetch_person_profile.py --linkedin-url <you>`
 (checks local cache first; RapidAPI only on a cache miss).
 

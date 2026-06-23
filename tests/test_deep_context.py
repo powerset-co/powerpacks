@@ -184,6 +184,25 @@ class TestIncrementalSynthesis(unittest.TestCase):
         self.assertIn("PROFILE SO FAR", synth.render_batch(person, batch, {"title": "CTO"}))
 
 
+class TestBuildOwner(unittest.TestCase):
+    def test_owner_from_profile_maps_schools_and_jobs(self):
+        from packs.ingestion.primitives.deep_context import build_owner
+        normalized = {
+            "full_name": "Jane Doe", "headline": "Eng",
+            "location_str": "NYC",
+            "education": [{"school": "MIT", "degree": "BS", "field": "CS",
+                           "starts_at": {"year": 2006}, "ends_at": {"year": 2010}}],
+            "experiences": [{"company_name": "Acme", "title": "Engineer",
+                             "starts_at": {"year": 2012}, "ends_at": {"year": 2016}}],
+        }
+        owner = build_owner.owner_from_profile(normalized, email="jane@x.com")
+        self.assertEqual(owner["name"], "Jane Doe")
+        self.assertEqual(owner["emails"], ["jane@x.com"])
+        self.assertEqual(owner["education"][0], {"school": "MIT", "start": 2006, "end": 2010, "note": "BS CS"})
+        self.assertEqual(owner["work"][0], {"company": "Acme", "title": "Engineer", "start": 2012, "end": 2016})
+        self.assertEqual(owner["locations"], ["NYC"])
+
+
 class TestOwnerContext(unittest.TestCase):
     def test_owner_background_block(self):
         block = common.owner_background_block({

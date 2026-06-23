@@ -28,6 +28,11 @@ PKG="packs.ingestion.primitives.deep_context"
 cmd="${1:-}"; shift || true
 
 case "$cmd" in
+  owner)
+    # Step 0: build owner.json (YOUR bio) from your LinkedIn, cache-first. Run this FIRST so
+    # synthesis + the LinkedIn judge can infer shared school/employer/era with each contact.
+    "${PY[@]}" "$PKG.build_owner" "$@"
+    ;;
   check)
     "${PY[@]}" "$PKG.check_readiness" "$@"
     ;;
@@ -85,6 +90,15 @@ case "$cmd" in
     # which the fan-in merge auto-ingests. Cache-first (RapidAPI only on a miss).
     "${PY[@]}" "$PKG.apply_retargets" "$@"
     ;;
+  realize)
+    # Phase 4 (free, local): fan-in merge -> rebuilds merged/people.csv, auto-applying your
+    # decisions (overrides/review.csv + consolidate/retarget). Borrows $setup's fan-in.
+    # Then rebuild search on Modal yourself: linkedin_modal_pipeline.py index-people (spend, ~5-30m).
+    uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
+      --people-csv .powerpacks/network-import/merged/people.csv "$@"
+    echo "✅ people.csv rebuilt with your decisions applied. Now rebuild search on Modal:" >&2
+    echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
+    ;;
   lookup)
     "${PY[@]}" "$PKG.lookup_person" "$@"
     ;;
@@ -97,7 +111,7 @@ case "$cmd" in
     echo "🧹 purged raw message bundles" >&2
     ;;
   *)
-    echo "usage: bin/deep-context {check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw} [args]" >&2
+    echo "usage: bin/deep-context {owner|check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw} [args]" >&2
     exit 2
     ;;
 esac
