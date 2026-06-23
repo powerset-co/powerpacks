@@ -18,6 +18,7 @@ from packs.ingestion.primitives.deep_context import (
     common,
     compose_dossier as compose,
     lookup_person as lookup,
+    apply_retargets as retargets,
     reconcile_deep_research as dresearch,
     reconcile_linkedin as reconcile,
     sources,
@@ -433,11 +434,53 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self.assertEqual(len(rows), 1)          # one row per public_identifier, no dupes
             # A pre-existing unrelated override row is preserved across re-runs.
             with path.open("a", newline="") as fh:
-                fh.write("zzz,,detach,,,0.9,,,manual,\n")
+                w = _csv.DictWriter(fh, fieldnames=reconcile.OVERRIDE_COLUMNS)
+                w.writerow({"public_identifier": "zzz", "action": "detach", "approved": "auto"})
             reconcile.write_overrides(path, tasks)
             with path.open() as fh:
                 pubs = {r["public_identifier"] for r in _csv.DictReader(fh)}
             self.assertEqual(pubs, {"bobceo", "zzz"})
+
+    def test_write_overrides_preserves_user_approved_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "ov.csv"
+            # Seed a user decision: bobceo manually approved=no (don't detach).
+            with path.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=reconcile.OVERRIDE_COLUMNS)
+                w.writeheader()
+                w.writerow({"public_identifier": "bobceo", "action": "detach", "approved": "no",
+                            "reason": "user says keep"})
+            tasks = [self._task("b", "bobceo", "wrong_person", 0.99)]  # judge again says detach
+            reconcile.decide_actions(tasks, 0.85)
+            stats = reconcile.write_overrides(path, tasks)
+            self.assertEqual(stats["preserved_user_rows"], 1)
+            import csv as _csv
+            with path.open() as fh:
+                row = next(_csv.DictReader(fh))
+            self.assertEqual(row["approved"], "no")          # sticky: user decision NOT overwritten
+            self.assertEqual(row["reason"], "user says keep")
+
+    def test_upsert_retargets_proposes_pending_and_is_sticky(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "ov.csv"
+            r = reconcile.upsert_retargets(path, [{"old_public_identifier": "bobceo",
+                "new_linkedin_url": "https://www.linkedin.com/in/bob-real", "reason": "found"}])
+            self.assertEqual(r["proposed"], 1)
+            import csv as _csv
+            with path.open() as fh:
+                row = next(_csv.DictReader(fh))
+            self.assertEqual(row["action"], "retarget")
+            self.assertEqual(row["approved"], "")            # pending by default
+            self.assertEqual(row["new_public_identifier"], "bob-real")
+            # User approves; a later proposal must NOT clobber it.
+            rows = reconcile.load_override_rows(path); rows["bobceo"]["approved"] = "yes"
+            reconcile._write_override_rows(path, rows)
+            reconcile.upsert_retargets(path, [{"old_public_identifier": "bobceo",
+                "new_linkedin_url": "https://www.linkedin.com/in/someone-else"}])
+            with path.open() as fh:
+                row = next(_csv.DictReader(fh))
+            self.assertEqual(row["approved"], "yes")
+            self.assertEqual(row["new_public_identifier"], "bob-real")  # preserved
 
     def test_conflict_auto_resolves_one_confirmed_rest_wrong(self):
         # One parent, two different attached links: one confirmed, one wrong -> auto-resolve
@@ -568,6 +611,51 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self.assertEqual(man["status"], "dry_run")
             self.assertEqual(man["judgeable"], 1)
             self.assertFalse((base / "r").exists())  # dry-run writes nothing
+
+
+class TestApplyRetargets(unittest.TestCase):
+    """Re-attach a correct LinkedIn: enrich (stubbed) + carry the contact's identity."""
+
+    def test_builds_enriched_row_carrying_contact(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            ov = base / "ov.csv"
+            with ov.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=reconcile.OVERRIDE_COLUMNS)
+                w.writeheader()
+                w.writerow({"public_identifier": "bobceo", "action": "retarget", "approved": "yes",
+                            "new_linkedin_url": "https://www.linkedin.com/in/bob-real",
+                            "new_public_identifier": "bob-real", "person_id": "pid-bob"})
+                w.writerow({"public_identifier": "carol", "action": "retarget", "approved": "",  # pending -> skip
+                            "new_linkedin_url": "https://www.linkedin.com/in/carol-real"})
+            people = base / "people.csv"
+            cols = ["id", "public_identifier", "linkedin_url", "full_name", "primary_email",
+                    "all_emails", "primary_phone", "all_phones", "interaction_counts",
+                    "last_interaction", "source_channels"]
+            with people.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=cols)
+                w.writeheader()
+                w.writerow({"id": "pid-bob", "public_identifier": "bobceo", "full_name": "Bob",
+                            "primary_email": "bob@x.com", "interaction_counts": '{"gmail": 9}',
+                            "source_channels": "gmail_msgvault"})
+            fake = {"data": {"raw": 1}, "normalized_profile": {"success": True}, "from_cache": True, "error": ""}
+            with mock.patch.object(retargets, "rapidapi_profile", return_value=fake), \
+                 mock.patch.object(retargets, "normalize_rapidapi", return_value={}), \
+                 mock.patch.object(retargets, "merge_provider_profile",
+                                   return_value={"public_identifier": "bob-real", "full_name": "Bob Right",
+                                                 "rapidapi_response": '{"raw":1}'}):
+                man = retargets.run(_ns(overrides_csv=ov, people_csv=people,
+                    profile_cache_dir=base / "cache", out_csv=base / "retarget-people.csv"))
+            self.assertEqual(man["enriched"], 1)        # only the approved one
+            self.assertEqual(man["cache_hits"], 1)
+            import csv as _csv
+            with (base / "retarget-people.csv").open() as fh:
+                rows = list(_csv.DictReader(fh))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["public_identifier"], "bob-real")
+            self.assertEqual(rows[0]["primary_email"], "bob@x.com")     # contact identity carried
+            self.assertEqual(rows[0]["interaction_counts"], '{"gmail": 9}')
 
 
 class TestReconcileDeepResearch(unittest.TestCase):

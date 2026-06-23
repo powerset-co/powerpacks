@@ -33,6 +33,7 @@ from packs.ingestion.primitives.deep_context import compose_dossier as compose
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     FACTS_DIR,
+    LINKEDIN_OVERRIDES_CSV,
     RAW_DIR,
     RECONCILE_DIR,
     VERDICTS_JSONL,
@@ -41,6 +42,8 @@ from packs.ingestion.primitives.deep_context.common import (
     parse_list,
     write_json,
 )
+from packs.ingestion.primitives.deep_context.reconcile_linkedin import upsert_retargets
+from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 # Mirror packs/messages/primitives/deep_research_contacts PROCESSOR_PRICING_USD.
 PROCESSOR_PRICING_USD = {"core": 0.025, "core2x": 0.05, "pro": 0.10}
@@ -141,6 +144,39 @@ def build_queue(subset: list[dict[str, Any]], people: dict[str, dict[str, str]],
     return queue
 
 
+def _find_linkedin(profile: dict[str, Any]) -> str:
+    """Defensively pull a linkedin_url from the deep-research result (top-level or nested)."""
+    if not isinstance(profile, dict):
+        return ""
+    for loc in (profile, profile.get("research") or {}, profile.get("profile") or {}):
+        url = (loc or {}).get("linkedin_url") if isinstance(loc, dict) else None
+        if url:
+            return str(url)
+    return ""
+
+
+def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
+                                  overrides_csv: Path) -> dict[str, Any]:
+    """After deep research, propose a `retarget` (pending) for each detached person whose
+    research found a correct LinkedIn — into the same decisions table (sticky upsert)."""
+    proposals = []
+    for r in subset:
+        handle = r.get("parent_slug", "")
+        profile = _read_json(out_dir / handle / "01_research_parallel.json")
+        new_url = _find_linkedin(profile)
+        old_pub = (r.get("candidate_key") or extract_public_identifier((r.get("linkedin") or {}).get("linkedin_url", ""))).lower()
+        if not new_url or not old_pub:
+            continue
+        proposals.append({
+            "old_public_identifier": old_pub, "new_linkedin_url": new_url,
+            "linkedin_url": (r.get("linkedin") or {}).get("linkedin_url", ""),
+            "match_emails": r.get("match_emails") or [], "match_phones": r.get("match_phones") or [],
+            "person_id": (r.get("person_ids") or [""])[0], "confidence": 0.0,
+            "reason": "deep research found a correct LinkedIn", "source": "deep-research",
+        })
+    return upsert_retargets(overrides_csv, proposals)
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     verdicts = _read_jsonl(Path(args.verdicts_jsonl))
@@ -184,9 +220,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     cmd = [sys.executable, "-m", "packs.messages.primitives.deep_research_contacts.deep_research_contacts",
            "run", "--input", str(QUEUE_CSV), "--output-dir", str(DR_OUT_DIR), "--processor", args.processor]
     proc = subprocess.run(cmd, capture_output=True, text=True)
+    # Propose retargets (pending) for any correct LinkedIn the research found.
+    proposals = {"proposed": 0}
+    if proc.returncode == 0:
+        proposals = propose_retargets_from_output(DR_OUT_DIR, subset, Path(args.overrides_csv))
     return {
         **base, "status": "ran" if proc.returncode == 0 else "failed",
         "queue_csv": str(QUEUE_CSV), "output_dir": str(DR_OUT_DIR),
+        "retargets_proposed": proposals.get("proposed", 0),
         "returncode": proc.returncode, "stderr_tail": (proc.stderr or "")[-400:],
         "elapsed_ms": int((time.monotonic() - started) * 1000),
     }
@@ -195,6 +236,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Deep-research the correct identity for wrong_person detaches (cost-gated).")
     p.add_argument("--verdicts-jsonl", default=str(VERDICTS_JSONL))
+    p.add_argument("--overrides-csv", default=str(LINKEDIN_OVERRIDES_CSV))
     p.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     p.add_argument("--facts-dir", default=str(FACTS_DIR))
     p.add_argument("--raw-dir", default=str(RAW_DIR))

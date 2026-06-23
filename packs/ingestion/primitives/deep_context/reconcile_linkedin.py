@@ -83,6 +83,7 @@ from packs.ingestion.primitives.enrich_people.enrich_people import (
 )
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
+    normalize_linkedin_url,
     parse_jsonish,
 )
 
@@ -478,26 +479,44 @@ def decide_actions(tasks: list[dict[str, Any]], threshold: float) -> None:
 
 # --- durable override (consumed by the fan-in merge) ------------------------
 
-OVERRIDE_COLUMNS = ["public_identifier", "linkedin_url", "action", "match_emails",
-                    "match_phones", "confidence", "reason", "person_id", "source", "updated_at"]
+OVERRIDE_COLUMNS = ["public_identifier", "action", "approved", "new_linkedin_url",
+                    "new_public_identifier", "linkedin_url", "match_emails", "match_phones",
+                    "confidence", "reason", "person_id", "source", "updated_at"]
+# A user-touched approval is sticky — re-runs never overwrite these rows.
+USER_APPROVED = {"yes", "no"}
 
 
-def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    """Upsert decided actions into the durable override table the fan-in merge re-applies.
-
-    confirm -> action=verify (merge annotates the kept row); detach -> action=detach (merge
-    clears the wrong link so the LinkedIn-only people.csv drops that person). review -> omitted.
-    Idempotent: keyed by public_identifier — re-running replaces same-key rows, never
-    duplicates, and other rows in the file are preserved. people.csv is NOT touched."""
-    existing: dict[str, dict[str, str]] = {}
+def load_override_rows(path: Path) -> dict[str, dict[str, str]]:
+    """Existing decisions keyed by public_identifier (tolerates a pre-approval-column file)."""
+    rows: dict[str, dict[str, str]] = {}
     if path.exists():
         with path.open(newline="", encoding="utf-8") as fh:
             for row in csv.DictReader(fh):
                 pub = (row.get("public_identifier") or "").strip().lower()
                 if pub:
-                    existing[pub] = row
+                    rows[pub] = row
+    return rows
 
-    detach = verify = 0
+
+def _write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=OVERRIDE_COLUMNS)
+        w.writeheader()
+        for pub in sorted(rows):
+            w.writerow({k: rows[pub].get(k, "") for k in OVERRIDE_COLUMNS})
+
+
+def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Upsert decided actions into the durable, approval-aware decisions table the fan-in
+    merge re-applies.
+
+    confirm -> action=verify, detach -> action=detach, both `approved=auto` (high-confidence,
+    applied at merge). review -> omitted. Idempotent + INCREMENTAL: keyed by public_identifier,
+    other rows are preserved, and a row the USER has touched (approved in {yes,no}) is NEVER
+    overwritten — their decision is sticky across re-runs. people.csv is NOT touched."""
+    existing = load_override_rows(path)
+    detach = verify = preserved = 0
     for t in tasks:
         action = t.get("action")
         if action not in ("confirm", "detach"):
@@ -505,30 +524,60 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
         pub = (t.get("candidate_key") or "").strip().lower()
         if not pub:
             continue
+        if (existing.get(pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:
+            preserved += 1
+            continue  # sticky: never overwrite a user decision
         v = t.get("verdict") or {}
         ov_action = "verify" if action == "confirm" else "detach"
         existing[pub] = {
-            "public_identifier": pub,
+            "public_identifier": pub, "action": ov_action, "approved": "auto",
+            "new_linkedin_url": "", "new_public_identifier": "",
             "linkedin_url": (t.get("linkedin") or {}).get("linkedin_url", ""),
-            "action": ov_action,
             "match_emails": "|".join(t.get("match_emails") or []),
             "match_phones": "|".join(t.get("match_phones") or []),
             "confidence": f"{float(v.get('confidence') or 0):.3f}",
-            "reason": v.get("reason", ""),
-            "person_id": (t.get("person_ids") or [""])[0],
-            "source": "deep-context-reconcile",
-            "updated_at": now_iso(),
+            "reason": v.get("reason", ""), "person_id": (t.get("person_ids") or [""])[0],
+            "source": "deep-context-reconcile", "updated_at": now_iso(),
         }
         detach += ov_action == "detach"
         verify += ov_action == "verify"
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=OVERRIDE_COLUMNS)
-        w.writeheader()
-        for pub in sorted(existing):
-            w.writerow({k: existing[pub].get(k, "") for k in OVERRIDE_COLUMNS})
-    return {"path": str(path), "detached": detach, "verified": verify, "total_rows": len(existing)}
+    _write_override_rows(path, existing)
+    return {"path": str(path), "detached": detach, "verified": verify,
+            "preserved_user_rows": preserved, "total_rows": len(existing)}
+
+
+def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, Any]:
+    """Add/refresh `retarget` rows (the CORRECT LinkedIn for a detached person) into the same
+    decisions table. Default `approved=` pending (re-attaching a wrong identity is worse than
+    dropping, so it needs a `yes`) unless a proposal sets it. Same sticky upsert: a row the user
+    already decided (approved in {yes,no}) is preserved. Used by deep research + manual edits."""
+    existing = load_override_rows(path)
+    proposed = preserved = 0
+    for p in proposals:
+        old_pub = (p.get("old_public_identifier") or "").strip().lower()
+        new_url = normalize_linkedin_url(p.get("new_linkedin_url") or "")
+        if not old_pub or not new_url:
+            continue
+        if (existing.get(old_pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:
+            preserved += 1
+            continue
+        prior = existing.get(old_pub, {})
+        existing[old_pub] = {
+            "public_identifier": old_pub, "action": "retarget",
+            "approved": (p.get("approved") or "").strip().lower(),
+            "new_linkedin_url": new_url,
+            "new_public_identifier": (p.get("new_public_identifier") or extract_public_identifier(new_url)).lower(),
+            "linkedin_url": p.get("linkedin_url") or prior.get("linkedin_url", ""),
+            "match_emails": "|".join(p.get("match_emails") or []) or prior.get("match_emails", ""),
+            "match_phones": "|".join(p.get("match_phones") or []) or prior.get("match_phones", ""),
+            "confidence": f"{float(p.get('confidence') or 0):.3f}",
+            "reason": p.get("reason", ""), "person_id": p.get("person_id", prior.get("person_id", "")),
+            "source": p.get("source", "deep-research"), "updated_at": now_iso(),
+        }
+        proposed += 1
+    _write_override_rows(path, existing)
+    return {"path": str(path), "proposed": proposed, "preserved_user_rows": preserved, "total_rows": len(existing)}
 
 
 def decided_report(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -28,6 +28,11 @@ Changelog:
   the fan-in merge (merge_network_sources) re-applies every run: detach clears the wrong link
   (LinkedIn-only people.csv then drops that person), verify annotates linkedin_verified.
   Survives re-merges + Modal index rebuilds.
+- 2026-06-23: Retargeting + approval-aware decisions table. The override gains an `approved`
+  column (auto = high-confidence applies; yes/no = user decision, sticky across re-runs) and a
+  `retarget` action. Deep research proposes a correct LinkedIn (pending); `apply-retargets`
+  enriches it (cache-first RapidAPI) into overrides/retarget-people.csv, which the merge
+  auto-ingests so the person re-appears with the correct profile (old wrong link dropped).
 -->
 
 # deep-context
@@ -75,7 +80,7 @@ to `$deep-context`.
 the steps below and step through it, marking each complete as you go.** Mandatory.
 Use your harness's plan/task tool:
 
-- **Claude Code:** `TaskCreate` one task per step (P1.1–P3.6), then `TaskUpdate`
+- **Claude Code:** `TaskCreate` one task per step (P1.1–P3.7), then `TaskUpdate`
   each to `in_progress` then `completed`.
 - **Codex:** `update_plan` with the steps, updating status as you go.
 - **Any other harness:** its equivalent todo/plan mechanism.
@@ -99,8 +104,9 @@ P3.1  Dry-run reconcile cost estimate (free)
 P3.2  Confirm cost → run the reconcile judge
 P3.3  Auto-apply high-confidence verdicts (summary; people.csv backed up)
 P3.4  Surface the review queue; get user feedback on low-confidence rows
-P3.5  Deep-research wrong_person detaches (auto if ≤ $25, else ask)
-P3.6  Open files to review (applied.csv + review-queue.csv)
+P3.5  Deep-research wrong_person detaches (auto if ≤ $25, else ask) — proposes retargets
+P3.6  Open files to review (applied.csv + review-queue.csv + the decisions table)
+P3.7  Apply approved retargets (enrich correct LinkedIn) → retarget-people.csv
 ```
 
 Do not drop steps; mark inapplicable ones complete as a no-op. **Never run a
@@ -171,7 +177,11 @@ case this catches).
   auto-resolution:** when one parent has several attached links and exactly one is
   high-confidence `confirmed` while the rest are high-confidence `wrong_person`, the
   confirmed becomes `verify` and the rest `detach`. Entries are keyed by `public_identifier`
-  (idempotent upsert). Everything decided is previewed in **`reconcile/applied.csv`**
+  (idempotent upsert) and carry an **`approved` column**: high-confidence rows are written
+  `approved=auto` (applied at merge); a user may set `yes`/`no` on any row. **A user-touched
+  row (`approved` ∈ {yes,no}) is sticky** — re-runs never overwrite it, so the table is the
+  durable, incrementally-curated record of decisions; the merge applies only `approved` ∈
+  {auto,yes}. Everything decided is previewed in **`reconcile/applied.csv`**
   (parent, person, kept/detached, via=normal|conflict_resolved, confidence, reason) for
   review. Report: "✅ N verify, 🔧 M detach (incl. R conflict-resolved), ❓ K need feedback".
   `--confirm-threshold` defaults to 0.85. `reconcile --reapply` regenerates the override
@@ -189,16 +199,23 @@ case this catches).
   Parallel.ai cost (~$0.05/person). **If ≤ $25, run it automatically and just tell the
   user the cost** (`reconcile-deep-research`); **if > $25, stop and ask for approval**
   (`reconcile-deep-research --approve` once they agree). Needs `PARALLEL_API_KEY`. People
-  flagged `linkedin_plausibly_absent` are excluded.
-- **P3.6 Open files to review** — open both review artifacts for the user:
-  `open .powerpacks/deep-context/reconcile/applied.csv .powerpacks/deep-context/reconcile/review-queue.csv`
-  (`applied.csv` = what auto-applied to review; `review-queue.csv` = the rows awaiting their
-  yes/no). On non-macOS use the platform open command, or print the top rows inline.
+  flagged `linkedin_plausibly_absent` are excluded. When research finds a **correct
+  LinkedIn**, it adds a `retarget` row (pending) to the decisions table for the user to approve.
+- **P3.6 Open files to review** — open the review artifacts for the user:
+  `open .powerpacks/deep-context/reconcile/applied.csv .powerpacks/deep-context/reconcile/review-queue.csv .powerpacks/network-import/overrides/linkedin-reconcile.csv`
+  (`applied.csv` = what auto-applied; `review-queue.csv` = rows awaiting yes/no; the decisions
+  table = the durable override incl. `retarget` proposals to approve). Non-macOS: platform open, or print inline.
+- **P3.7 Apply approved retargets** — `bin/deep-context apply-retargets`. For each decisions
+  row with `action=retarget` and `approved` ∈ {auto,yes}, it enriches the correct LinkedIn
+  (cache-first; RapidAPI only on a miss — auto, effectively free) and writes an enriched
+  re-attach row to `.powerpacks/network-import/overrides/retarget-people.csv`, carrying the
+  contact's emails/phones/interaction. The fan-in merge **auto-ingests** that file (old wrong
+  link detached → dropped; correct enriched row kept). Realize on the next merge + index rebuild.
 
 `bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once P1.5 is
 confirmed (Phase 3 is run separately, after parents exist). Full surface:
 `check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|
-reconcile-deep-research|validate|lookup|probe|purge-raw`.
+reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw`.
 
 ### Step 1 — collect (local, free, reads bodies)
 
@@ -307,8 +324,9 @@ name falls back to an all-tokens fuzzy match.
     ├── review-queue.csv          low-confidence + ambiguous-conflict rows needing your feedback
     └── deep-research/            Parallel.ai re-research of wrong_person detaches
 
-# durable self-heal override (a fan-in MERGE input, re-applied every merge):
-.powerpacks/network-import/overrides/linkedin-reconcile.csv
+# durable self-heal decisions (fan-in MERGE inputs, re-applied every merge):
+.powerpacks/network-import/overrides/linkedin-reconcile.csv   detach|verify|retarget + approved
+.powerpacks/network-import/overrides/retarget-people.csv      enriched re-attach rows
 ```
 
 ## Performance & scale (measured)

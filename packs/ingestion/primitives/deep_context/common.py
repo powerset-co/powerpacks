@@ -47,6 +47,8 @@ PROFILE_CACHE_DIR = Path(".powerpacks/network-import/profile_cache_v2")
 # (a merge INPUT, not a deep-context output — so it survives re-merges/index rebuilds).
 OVERRIDES_DIR = Path(".powerpacks/network-import/overrides")
 LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "linkedin-reconcile.csv"
+# Enriched re-attach rows (retargets), auto-ingested by the fan-in merge.
+RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 
 # Channel labels as they appear in people.csv `source_channels`.

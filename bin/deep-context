@@ -73,6 +73,11 @@ case "$cmd" in
     # $25 auto-approve gate). Reads reconcile verdicts written by `reconcile`.
     "${PY[@]}" "$PKG.reconcile_deep_research" "$@"
     ;;
+  apply-retargets)
+    # Enrich + build re-attach rows for approved `retarget` decisions -> retarget-people.csv,
+    # which the fan-in merge auto-ingests. Cache-first (RapidAPI only on a miss).
+    "${PY[@]}" "$PKG.apply_retargets" "$@"
+    ;;
   lookup)
     "${PY[@]}" "$PKG.lookup_person" "$@"
     ;;
@@ -85,7 +90,7 @@ case "$cmd" in
     echo "🧹 purged raw message bundles" >&2
     ;;
   *)
-    echo "usage: bin/deep-context {check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|reconcile-deep-research|validate|lookup|probe|purge-raw} [args]" >&2
+    echo "usage: bin/deep-context {check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw} [args]" >&2
     exit 2
     ;;
 esac
