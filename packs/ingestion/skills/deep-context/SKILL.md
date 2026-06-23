@@ -213,14 +213,16 @@ case this catches).
   link detached → dropped; correct enriched row kept). Realize on the next merge + index rebuild.
 
 **ALWAYS end the run with a summary of what changed and why.** After Phase 3, present a short
-report to the user, every time:
-- **Verified:** N links confirmed.
-- **Detached:** M wrong links removed — list a few with the one-line reason (e.g. "Herman Au:
+report to the user, every time (do NOT list the verified/unchanged links — only what changed):
+- **Detached:** M wrong links removed — list them with the one-line reason (e.g. "Herman Au:
   LinkedIn is a Canada software lead, but your contact is a Pasadena wedding photographer").
-- **Retargeted:** R people re-attached to a correct LinkedIn (+ the new URL).
+- **Retargeted:** R people re-attached to a correct LinkedIn — for each, the new URL **and the
+  reason** (why the new profile is the right person, e.g. "matched the wedding-photography
+  business + SoCal location from your messages").
 - **Needs your input:** K rows in `review-queue.csv` / pending `retarget` rows to approve.
-Pull the reasons from `reconcile/applied.csv` + `verdicts.csv`. Keep it scannable; the user is
-running this repeatedly to fix things, so make the "what changed and why" obvious each time.
+Pull reasons from `reconcile/applied.csv` + `verdicts.csv` (detaches) and the `reason` column of
+the decisions table (retargets). Keep it scannable; the user runs this repeatedly to fix things,
+so make "what changed and why" obvious each time.
 
 `bin/deep-context run [--include-groups] [--deep-cap N]` chains Phases 1–2 once P1.5 is
 confirmed (Phase 3 is run separately, after parents exist). Full surface:

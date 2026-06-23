@@ -144,15 +144,28 @@ def build_queue(subset: list[dict[str, Any]], people: dict[str, dict[str, str]],
     return queue
 
 
-def _find_linkedin(profile: dict[str, Any]) -> str:
-    """Defensively pull a linkedin_url from the deep-research result (top-level or nested)."""
+def _dig(profile: dict[str, Any], key: str) -> str:
+    """Defensively pull a field from the deep-research result (top-level or nested)."""
     if not isinstance(profile, dict):
         return ""
     for loc in (profile, profile.get("research") or {}, profile.get("profile") or {}):
-        url = (loc or {}).get("linkedin_url") if isinstance(loc, dict) else None
-        if url:
-            return str(url)
+        val = (loc or {}).get(key) if isinstance(loc, dict) else None
+        if val:
+            return str(val)
     return ""
+
+
+def _find_linkedin(profile: dict[str, Any]) -> str:
+    return _dig(profile, "linkedin_url")
+
+
+def _find_reason(profile: dict[str, Any]) -> str:
+    """Best-effort justification for the retarget, from common research fields."""
+    for key in ("research_notes", "reasoning", "rationale", "summary", "headline"):
+        val = _dig(profile, key)
+        if val:
+            return f"deep research: {val}"[:300]
+    return "deep research found a correct LinkedIn"
 
 
 def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
@@ -172,7 +185,7 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
             "linkedin_url": (r.get("linkedin") or {}).get("linkedin_url", ""),
             "match_emails": r.get("match_emails") or [], "match_phones": r.get("match_phones") or [],
             "person_id": (r.get("person_ids") or [""])[0], "confidence": 0.0,
-            "reason": "deep research found a correct LinkedIn", "source": "deep-research",
+            "reason": _find_reason(profile), "source": "deep-research",
         })
     return upsert_retargets(overrides_csv, proposals)
 
