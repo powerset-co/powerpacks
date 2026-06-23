@@ -54,8 +54,8 @@ case "$cmd" in
     "${PY[@]}" "$PKG.validate_dossiers"
     "${PY[@]}" "$PKG.reconcile_linkedin"
     echo "✅ dossiers + parents/ + reconcile self-heal in .powerpacks/deep-context/" >&2
-    echo "   what changed: .powerpacks/deep-context/reconcile/applied.csv (verified/detached + reasons)" >&2
-    echo "   needs review: .powerpacks/deep-context/reconcile/review-queue.csv" >&2
+    echo "   READ:  .powerpacks/deep-context/reconcile/summary.md  (what changed + what needs review)" >&2
+    echo "   EDIT:  .powerpacks/network-import/overrides/linkedin-reconcile.csv  (approved column — yes/no, sticky)" >&2
     echo "   realize the heal on your next fan-in merge + Modal index rebuild (auto-reads the override)." >&2
     ;;
   parents)
