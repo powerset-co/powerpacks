@@ -350,8 +350,30 @@ def build_tasks(index: dict[str, Any], people: dict[str, dict[str, str]],
                 "candidate_key": key, "person_ids": pids, "conflict": conflict,
                 "no_link": False, "dossier": dossier, "linkedin": linkedin_view(row, cache_dir),
                 "match_emails": emails, "match_phones": phones,
+                # Ground truth: this LinkedIn came from your own Connections export — you're
+                # connected, so it IS them. No LLM needed (see CONNECTION_VERDICT).
+                "from_connections": _from_connections(pids, people),
             })
     return tasks
+
+
+CONNECTION_CHANNEL = "linkedin_csv"  # source_channels marker for a row imported from LinkedIn Connections.csv
+
+
+def _from_connections(pids: list[str], people: dict[str, dict[str, str]]) -> bool:
+    """True if any of the candidate's rows came from your LinkedIn Connections import."""
+    return any(CONNECTION_CHANNEL in (people.get(pid, {}).get("source_channels") or "") for pid in pids)
+
+
+def connection_verdict() -> dict[str, Any]:
+    """Deterministic ground-truth verdict for a contact who is one of your LinkedIn connections."""
+    return {
+        "verdict": "confirmed", "confidence": 1.0,
+        "supporting_evidence": ["This LinkedIn is one of your own connections (from your LinkedIn "
+                                "Connections import) — you are connected, so it is the same person."],
+        "contradicting_evidence": [], "linkedin_plausibly_absent": False, "recommend_deep_research": False,
+        "reason": "Ground truth: you're connected to this person on LinkedIn (linkedin_csv import).",
+    }
 
 
 def _contact_keys(pids: list[str], people: dict[str, dict[str, str]]) -> tuple[list[str], list[str]]:
@@ -862,15 +884,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     index = _read_json(Path(args.index_json))
 
     # --reapply: re-decide/apply from the existing verdicts (e.g. after changing the
-    # auto-resolution rule) without re-judging — no OpenAI spend.
+    # auto-resolution rule) without re-judging — no OpenAI spend. Still overlays the
+    # deterministic connection ground-truth, so it's free to fold in your LinkedIn connections.
     if getattr(args, "reapply", False):
         tasks = load_tasks_from_verdicts(Path(args.verdicts_jsonl))
+        people = load_people_rows(Path(args.people_csv))
+        for t in tasks:
+            if not t.get("no_link") and _from_connections(t.get("person_ids") or [], people):
+                t["from_connections"], t["verdict"], t["error"] = True, connection_verdict(), ""
         return _finalize(args, tasks, index, usage_total={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
                          use_llm=False, judged=sum(1 for t in tasks if not t.get("no_link")), started=started)
 
     people = load_people_rows(Path(args.people_csv))
     tasks = build_tasks(index, people, Path(args.facts_dir), Path(args.raw_dir), Path(args.profile_cache_dir))
-    judgeable = [t for t in tasks if not t.get("no_link") and t["linkedin"].get("has_profile")]
+    # Ground truth first: contacts who ARE your LinkedIn connections are confirmed without the LLM.
+    connections = [t for t in tasks if t.get("from_connections") and not t.get("no_link")]
+    for t in connections:
+        t["verdict"], t["error"] = connection_verdict(), ""
+    judgeable = [t for t in tasks if not t.get("no_link") and t["linkedin"].get("has_profile")
+                 and not t.get("from_connections")]
 
     if args.dry_run:
         # ~ cost bracket: judgeable tasks * (rich-context floor/ceiling) — no spend.
@@ -879,6 +911,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "source": "reconcile_linkedin", "status": "dry_run",
             "parents": len(index.get("parents", {})), "tasks": len(tasks),
             "judgeable": len(judgeable), "no_link": sum(1 for t in tasks if t.get("no_link")),
+            "ground_truth_connections": len(connections),
             "conflicts": sum(1 for t in tasks if t.get("conflict")),
             "estimated_cost_usd_low": round(len(judgeable) * per_lo, 2),
             "estimated_cost_usd_high": round(len(judgeable) * per_hi, 2),
@@ -970,6 +1003,7 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
         "source": "reconcile_linkedin", "status": "completed",
         "judge": "llm" if use_llm else "deterministic",
         "parents": len(index.get("parents", {})), "tasks": len(tasks), "judged": judged,
+        "ground_truth_connections": sum(1 for t in tasks if t.get("from_connections") and not t.get("no_link")),
         "verdicts": counts, "conflicts": len(conflict_tasks),
         "conflicts_auto_resolved": sum(1 for t in conflict_tasks if t.get("via") == "conflict_resolved"),
         "conflicts_to_review": sum(1 for t in conflict_tasks if t.get("action") == "review"),

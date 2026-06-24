@@ -6,6 +6,10 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-24: LinkedIn Connections are GROUND TRUTH. A contact imported from your LinkedIn
+  Connections (source_channels contains linkedin_csv) is auto-confirmed at 1.0 WITHOUT the LLM
+  — you're connected, so it's them. Skips ~26% of judge calls and fixes the few connections the
+  judge hesitated on. `reconcile --reapply` overlays it for free.
 - 2026-06-24: Keep-biased self-heal. The judge now DEFAULTS TO CONFIRMING — name + any one
   corroborating signal (employer/school/location/era/social context) and no hard contradiction
   → confirmed; absence of work talk for personal contacts no longer deflates confidence (was

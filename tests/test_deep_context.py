@@ -413,6 +413,30 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self.assertTrue(all(t["conflict"] for t in by_parent["bob-p"]))
             self.assertTrue(by_parent["carol-p"][0]["no_link"])
 
+    def test_linkedin_connections_are_ground_truth(self):
+        """A contact imported from your LinkedIn Connections (linkedin_csv) is auto-confirmed."""
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts, raw, cache = base / "facts", base / "raw", base / "cache"
+            facts.mkdir(); raw.mkdir(); cache.mkdir()
+            self._facts(facts, "pa", "Alice")
+            self._facts(facts, "pb", "Bob")
+            index = {"slugs": {"alice-c": {"person_id": "pa"}, "bob-c": {"person_id": "pb"}},
+                     "parents": {"alice-p": {"name": "Alice", "children": ["alice-c"]},
+                                 "bob-p": {"name": "Bob", "children": ["bob-c"]}}}
+            people = {
+                "pa": {"id": "pa", "public_identifier": "alice", "linkedin_url": "https://www.linkedin.com/in/alice",
+                       "headline": "Eng", "work_experiences": "[]", "education": "[]",
+                       "source_channels": "gmail_msgvault,linkedin_csv"},   # a connection
+                "pb": {"id": "pb", "public_identifier": "bobx", "linkedin_url": "https://www.linkedin.com/in/bobx",
+                       "headline": "PM", "work_experiences": "[]", "education": "[]",
+                       "source_channels": "imessage"}}                       # not a connection
+            tasks = {t["parent_slug"]: t for t in reconcile.build_tasks(index, people, facts, raw, cache)}
+            self.assertTrue(tasks["alice-p"]["from_connections"])
+            self.assertFalse(tasks["bob-p"]["from_connections"])
+            v = reconcile.connection_verdict()
+            self.assertEqual((v["verdict"], v["confidence"]), ("confirmed", 1.0))
+
     def _task(self, parent, pub, action_verdict, conf, **kw):
         return {"parent_slug": parent, "name": parent, "candidate_key": pub,
                 "person_ids": [f"pid-{pub}"], "conflict": kw.get("conflict", False), "no_link": False,
