@@ -6,6 +6,11 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-24: Owner-alias EXCLUSION (the downstream half of is_owner detection). build_parents now
+  skips any person flagged is_owner (you on another email — e.g. arthur.chen@spot2.mx) so you stop
+  appearing as your own contact, and folds those alias emails into owner.json (so your addresses
+  aggregate + future runs know them directly). `reconcile --reapply` drops verdicts for parents that
+  no longer exist, so the excluded owner falls out of the review table/UI for FREE (no re-judge).
 - 2026-06-24: Deep-research recovery now also honors USER detaches. reconcile-deep-research's
   eligible set was model-only (high-confidence wrong_person verdicts); it now ALSO includes links
   the user marked detach in review.csv (action=detach, approved=yes), so running it AFTER review

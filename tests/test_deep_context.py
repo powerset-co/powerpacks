@@ -937,6 +937,21 @@ class TestDeepResearchEligibility(unittest.TestCase):
         self.assertEqual(self.keys({"wronglink": {"action": "retarget", "approved": "yes"}}), set())
 
 
+class TestOwnerExclusion(unittest.TestCase):
+    """The mailbox owner on another email (is_owner) is excluded from the parent layer."""
+
+    def test_is_owner_reads_the_flag(self):
+        with tempfile.TemporaryDirectory() as d:
+            facts = Path(d)
+            (facts / "owner-pid.jsonl").write_text(
+                json.dumps({"facts": {"canonical_name": "Arthur Chen", "is_owner": True}}) + "\n", encoding="utf-8")
+            (facts / "contact-pid.jsonl").write_text(
+                json.dumps({"facts": {"canonical_name": "Arthur Lam", "is_owner": False}}) + "\n", encoding="utf-8")
+            self.assertTrue(parents._is_owner("owner-pid", facts))
+            self.assertFalse(parents._is_owner("contact-pid", facts))
+            self.assertFalse(parents._is_owner("missing-pid", facts))
+
+
 class _ns:
     """Lightweight argparse.Namespace stand-in for run() calls."""
 

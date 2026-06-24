@@ -971,6 +971,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # deterministic connection ground-truth, so it's free to fold in your LinkedIn connections.
     if getattr(args, "reapply", False):
         tasks = load_tasks_from_verdicts(Path(args.verdicts_jsonl))
+        # Drop verdicts for parents that no longer exist (e.g. an owner-alias parent that
+        # build_parents now excludes) so they fall out of the review table/UI for free.
+        valid_parents = set(index.get("parents", {}))
+        if valid_parents:
+            tasks = [t for t in tasks if t.get("parent_slug") in valid_parents]
         people = load_people_rows(Path(args.people_csv))
         facts_dir = Path(args.facts_dir)
         for t in tasks:

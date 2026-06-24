@@ -32,9 +32,12 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     INDEX_JSON,
     MERGE_CSV,
+    OWNER_JSON,
     PARENTS_DIR,
     RAW_DIR,
     emit,
+    load_owner,
+    normalize_email,
     normalize_name,
     now_iso,
     phone_digits,
@@ -43,6 +46,27 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 
 PARENT_ANCHOR = "<!-- parent-link -->"
+
+
+def fold_owner_aliases(owner_slugs: set[str], slugs_info: dict[str, Any], raw_dir: Path) -> list[str]:
+    """Union the owner's alias emails (from the excluded is_owner people) into owner.json, so the
+    owner's own addresses are known directly on future runs. Returns the newly-added emails."""
+    owner = load_owner() or {}
+    if not owner:
+        return []
+    existing = [normalize_email(e) for e in (owner.get("emails") or [])]
+    added: list[str] = []
+    for slug in owner_slugs:
+        pid = slugs_info.get(slug, {}).get("person_id", "")
+        bundle = _read_json(raw_dir / f"{pid}.json") if pid else {}
+        for e in bundle.get("emails") or []:
+            ne = normalize_email(e)
+            if ne and "@" in ne and ne not in existing and ne not in added:
+                added.append(ne)
+    if added:
+        owner["emails"] = (owner.get("emails") or []) + added
+        write_json(OWNER_JSON, owner)
+    return added
 
 
 def load_pairs(csv_path: Path) -> list[dict[str, Any]]:
@@ -211,6 +235,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     singletons = 0
     written_slugs: set[str] = set()
     clustered_slugs: set[str] = set()
+    # The mailbox owner shows up as a "contact" when they email from another address (synthesis
+    # flags it is_owner). They are YOU, not a contact — never make them a parent.
+    owner_slugs = {slug for slug, info in slugs_info.items()
+                   if _is_owner(info.get("person_id", ""), facts_dir)}
+    owner_aliases_added = fold_owner_aliases(owner_slugs, slugs_info, raw_dir) if owner_slugs else []
+    owner_excluded = 0
 
     def index_parent(pslug: str, name: str, emails: list[str], phones: list[str]) -> None:
         for e in emails:
@@ -233,7 +263,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return float(row.get("confidence") or row.get("score") or 0)
 
     for cluster in clusters:
-        members = [s for s in cluster if s in slugs_info]
+        members = [s for s in cluster if s in slugs_info and s not in owner_slugs]
         if len(members) < 2:
             continue
 
@@ -302,6 +332,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     for child_slug, info in slugs_info.items():
         if child_slug in clustered_slugs:
             continue
+        if child_slug in owner_slugs:   # you on another email — not a contact
+            owner_excluded += 1
+            continue
         pid = info["person_id"]
         bundle = _read_json(raw_dir / f"{pid}.json")
         name = info.get("name", child_slug)
@@ -336,6 +369,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "parents_written": written,
         "merged_parents": written - singletons,
         "singleton_parents": singletons,
+        "owner_excluded": owner_excluded,
+        "owner_aliases_added": owner_aliases_added,
         "orphans_removed": orphans,
         "parents_dir": str(parents_dir),
         "elapsed_ms": int((time.monotonic() - started) * 1000),
@@ -349,6 +384,14 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def _is_owner(person_id: str, facts_dir: Path) -> bool:
+    """True if synthesis flagged this person as the mailbox owner on another email address."""
+    if not person_id:
+        return False
+    recs = _read_jsonl(facts_dir / f"{person_id}.jsonl")
+    return any((r.get("facts") or {}).get("is_owner") for r in recs)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
