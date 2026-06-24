@@ -51,8 +51,15 @@ case "$cmd" in
     # Full pipeline incl. the Phase 3 self-heal (reconcile writes the durable override).
     # Spends OpenAI (synthesis + reconcile). Deep research / apply-retargets stay separate
     # (they need PARALLEL_API_KEY / your approval).
+    #
+    # collect + synthesize are INCREMENTAL: they skip people who already have a
+    # bundle/facts. To re-process EVERYONE (e.g. to pick up new prompt/collection
+    # changes), pass --force — it propagates to BOTH collect and synthesize here
+    # (a bare `synthesize` would otherwise skip every existing person).
+    SYNTH_FORCE=()
+    [[ " $* " == *" --force "* ]] && SYNTH_FORCE+=(--force)
     "${PY[@]}" "$PKG.collect_person_context" "$@"
-    "${PY[@]}" "$PKG.synthesize_person_context"
+    "${PY[@]}" "$PKG.synthesize_person_context" "${SYNTH_FORCE[@]}"
     "${PY[@]}" "$PKG.compose_dossier"
     "${PY[@]}" "$PKG.cluster_merge_candidates"
     "${PY[@]}" "$PKG.build_parents"
