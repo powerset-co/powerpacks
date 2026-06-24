@@ -159,9 +159,9 @@ class ImportContactsQualityTests(unittest.TestCase):
             out = tmp / "people.gmail.csv"
             base = {column: "" for column in PEOPLE_SCHEMA_COLUMNS}
             for path, email in [
-                (one, "amir@eneacap.com"),
-                (two, "amir@ethos.vc"),
-                (three, "amir@caspar.ai"),
+                (one, "jordan@acme.com"),
+                (two, "jordan@acme.vc"),
+                (three, "jordan@acme.ai"),
             ]:
                 with path.open("w", newline="", encoding="utf-8") as handle:
                     writer = csv.DictWriter(handle, fieldnames=PEOPLE_SCHEMA_COLUMNS)
@@ -169,9 +169,9 @@ class ImportContactsQualityTests(unittest.TestCase):
                     writer.writerow({
                         **base,
                         "id": f"gmail:{path.stem}:{email}",
-                        "linkedin_url": "https://www.linkedin.com/in/amir-example",
-                        "public_identifier": "amir-example",
-                        "full_name": "Amir Example",
+                        "linkedin_url": "https://www.linkedin.com/in/jordan-acme",
+                        "public_identifier": "jordan-acme",
+                        "full_name": "Jordan Reyes",
                         "primary_email": email,
                         "all_emails": json.dumps([email]),
                         "source_channels": "gmail_msgvault",
@@ -187,10 +187,10 @@ class ImportContactsQualityTests(unittest.TestCase):
             all_emails = json.loads(rows[0]["all_emails"])
             self.assertEqual(
                 sorted(all_emails),
-                ["amir@caspar.ai", "amir@eneacap.com", "amir@ethos.vc"],
+                ["jordan@acme.ai", "jordan@acme.com", "jordan@acme.vc"],
             )
             # primary_email stays one of the resolved addresses (first-seen).
-            self.assertEqual(rows[0]["primary_email"], "amir@eneacap.com")
+            self.assertEqual(rows[0]["primary_email"], "jordan@acme.com")
 
     def test_gmail_directory_rows_require_source_account(self) -> None:
         with tempfile.TemporaryDirectory() as td:
