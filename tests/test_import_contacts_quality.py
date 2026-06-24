@@ -148,6 +148,50 @@ class ImportContactsQualityTests(unittest.TestCase):
             self.assertEqual(json.loads(rows[0]["interaction_counts"]), {"gmail": 5})
             self.assertEqual(rows[0]["last_interaction"], "2026-01-03T00:00:00Z")
 
+    def test_gmail_account_people_merge_unions_resolved_emails(self) -> None:
+        # Multiple work emails that resolve to the SAME LinkedIn person must
+        # union into one row carrying every address, not drop all but the first.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            one = tmp / "one.csv"
+            two = tmp / "two.csv"
+            three = tmp / "three.csv"
+            out = tmp / "people.gmail.csv"
+            base = {column: "" for column in PEOPLE_SCHEMA_COLUMNS}
+            for path, email in [
+                (one, "jordan@acme.com"),
+                (two, "jordan@acme.vc"),
+                (three, "jordan@acme.ai"),
+            ]:
+                with path.open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=PEOPLE_SCHEMA_COLUMNS)
+                    writer.writeheader()
+                    writer.writerow({
+                        **base,
+                        "id": f"gmail:{path.stem}:{email}",
+                        "linkedin_url": "https://www.linkedin.com/in/jordan-acme",
+                        "public_identifier": "jordan-acme",
+                        "full_name": "Jordan Reyes",
+                        "primary_email": email,
+                        "all_emails": json.dumps([email]),
+                        "source_channels": "gmail_msgvault",
+                    })
+
+            legacy = gmail_import.load_legacy_discover_module()
+            result = legacy.materialize_gmail_merged_people_csv([str(one), str(two), str(three)], out)
+
+            self.assertEqual(result["status"], "completed")
+            with out.open(newline="", encoding="utf-8") as handle:
+                rows = list(CsvIO.dict_reader(handle))
+            self.assertEqual(len(rows), 1)
+            all_emails = json.loads(rows[0]["all_emails"])
+            self.assertEqual(
+                sorted(all_emails),
+                ["jordan@acme.ai", "jordan@acme.com", "jordan@acme.vc"],
+            )
+            # primary_email stays one of the resolved addresses (first-seen).
+            self.assertEqual(rows[0]["primary_email"], "jordan@acme.com")
+
     def test_gmail_directory_rows_require_source_account(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td) / "directory.csv"
