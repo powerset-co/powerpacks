@@ -310,8 +310,8 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
     picked_html = (f"<a href='{esc(picked)}' target='_blank' rel='noreferrer'>{esc(picked)}</a>"
                    if picked else "<span class='nopick'>no link chosen</span>")
     open_attr = " open" if (expanded or multi) else ""
-    banner = (f"<div class='conflictbanner'>⚠ {n_cand} different LinkedIns are attached to this one "
-              f"person — keep the right one and detach the rest.</div>" if multi else "")
+    banner = (f"<div class='conflictbanner'>⚠ Merged person — {n_cand} different LinkedIns ended up on "
+              f"this one person. Keep the right one and detach the rest.</div>" if multi else "")
     cands = "".join(render_candidate(i, n_cand, c) for i, c in enumerate(cands_list))
     parent_cls = "parent multi" if multi else "parent"
     return f"""
@@ -335,9 +335,9 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
 
 def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
               review_path: Path) -> bytes:
-    tab = (params.get("tab") or ["all"])[0].strip().lower()
+    tab = (params.get("tab") or ["review"])[0].strip().lower()  # default to the Needs-review pile
     if tab not in VALID_TABS:
-        tab = "all"
+        tab = "review"
     q = (params.get("q") or [""])[0].strip()
     sort = (params.get("sort") or ["risk"])[0].strip().lower()
     summary = summarize(parents)
@@ -351,10 +351,10 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         visible.sort(key=lambda p: (parent_status(p) != "review", min_confidence(p)))
 
     def tab_href(name: str) -> str:
+        # Always set tab explicitly — "/" with no param now defaults to the review pile.
         qp = {k: v[0] for k, v in params.items() if k not in {"tab"} and v and v[0]}
-        if name != "all":
-            qp["tab"] = name
-        return "/?" + urllib.parse.urlencode(qp) if qp else "/"
+        qp["tab"] = name
+        return "/?" + urllib.parse.urlencode(qp)
 
     def tab_link(name: str, label: str, key: str) -> str:
         klass = "tab active" if tab == name else "tab"
@@ -381,12 +381,12 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         tab_link("review", "Needs review", "review"),
         tab_link("verified", "Verified", "verified"),
         tab_link("detached", "Detached", "detached"),
-        tab_link("conflict", "Conflicts", "conflict"),
+        tab_link("conflict", "Merged", "conflict"),
         tab_link("fixed", "Fixed", "fixed"),
         tab_link("decided", "My decisions", "decided"),
         "</nav>",
         "<form class='filters' method='get' action='/'>",
-        f"<input type='hidden' name='tab' value='{esc(tab if tab != 'all' else '')}'>",
+        f"<input type='hidden' name='tab' value='{esc(tab)}'>",
         f"<input name='q' placeholder='Search name, company, email, LinkedIn' value='{esc(q)}'>",
         "<select name='sort'>",
     ]
