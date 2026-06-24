@@ -59,8 +59,7 @@ case "$cmd" in
     "${PY[@]}" "$PKG.validate_dossiers"
     "${PY[@]}" "$PKG.reconcile_linkedin"
     echo "✅ dossiers + parents/ + reconcile self-heal in .powerpacks/deep-context/" >&2
-    echo "   READ:  .powerpacks/deep-context/reconcile/summary.md  (what changed + what needs review)" >&2
-    echo "   EDIT:  .powerpacks/network-import/overrides/review.csv  (approved column — yes/no, sticky)" >&2
+    echo "   REVIEW: bin/deep-context review   (opens the self-heal review UI — keep / detach / fix each link)" >&2
     echo "   realize the heal on your next fan-in merge + Modal index rebuild (auto-reads the override)." >&2
     ;;
   parents)
@@ -79,6 +78,13 @@ case "$cmd" in
     # Phase 3: verify each parent against its attached LinkedIn (self-heal).
     # Use `reconcile --dry-run` for a free cost estimate first.
     "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
+    ;;
+  review)
+    # Phase 3 review UI (local, free): a parent-grouped web view of the self-heal —
+    # each row is a person; expand to see the LinkedIn(s) we matched, the reasoning, and
+    # who got verified/detached. Keep / detach / fix each link; autosaves straight into
+    # overrides/review.csv (the same table the fan-in merge re-applies). Opens your browser.
+    "${PY[@]}" "$PKG.reconcile_review_web" serve --open "$@"
     ;;
   reconcile-deep-research)
     # Find the right identity for high-confidence wrong_person detaches (Parallel.ai,
@@ -111,7 +117,7 @@ case "$cmd" in
     echo "🧹 purged raw message bundles" >&2
     ;;
   *)
-    echo "usage: bin/deep-context {owner|check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw} [args]" >&2
+    echo "usage: bin/deep-context {owner|check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|review|reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw} [args]" >&2
     exit 2
     ;;
 esac

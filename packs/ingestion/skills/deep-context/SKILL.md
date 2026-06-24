@@ -6,6 +6,22 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-24: Keep-biased self-heal. The judge now DEFAULTS TO CONFIRMING — name + any one
+  corroborating signal (employer/school/location/era/social context) and no hard contradiction
+  → confirmed; absence of work talk for personal contacts no longer deflates confidence (was
+  manufacturing false negatives). Asymmetric thresholds: confirmed auto-VERIFIES at 0.70 (the
+  user fixes the rare mismatch), wrong_person auto-DETACHES only at 0.85 (dropping a real person
+  is costly). `--detach-threshold` added; `reconcile --reapply` re-decides for free. Review UI
+  shows direction-aware judgments (a high-% wrong_person reads as a strong MISMATCH, not a strong
+  match) and groups multi-LinkedIn ("conflict") people as labelled Option 1/2 under one banner.
+- 2026-06-24: Review UI (`bin/deep-context review` → reconcile_review_web, local web, free).
+  review.csv is keyed only on the candidate LinkedIn, so it's un-reviewable alone; the UI JOINS
+  it with reconcile/verdicts.jsonl (parent, profile, judge reasoning) + parents/*.md to show one
+  expandable row per PERSON — the LinkedIn(s) matched, picked link, verified/detached/pending
+  state, supporting/contradicting evidence. Keep / Detach / Fix-LinkedIn autosave into review.csv
+  (the merge's durable table); Fix writes a retarget row applied by apply-retargets. Filters
+  (needs-review/verified/detached/conflicts/fixed/my-decisions), search, riskiest-first sort.
+  This is now the review surface (replaces "open summary.md"; summary.md kept as a text fallback).
 - 2026-06-21: Initial skill — two-phase flow (deep per-person dossiers → LLM-judge
   merge into parents). Incremental confidence-gated synthesis, deep 1600-msg pools,
   owner.json shared-context inference, high-reasoning holistic merge judge,
@@ -122,8 +138,8 @@ duplicates of the same person, `[Self-heal]` checks & fixes each person's Linked
 [Self-heal] Record the fixes (remove wrong LinkedIns, keep the right ones)
 [Self-heal] Add the unsure ones to your review list
 [Self-heal] Look up the correct person for any wrong LinkedIn we removed
-[Self-heal] Show you a summary of what changed and what needs your review
-[Self-heal] Wait for you to finish reviewing before continuing
+[Self-heal] Open the review page to see each person, the LinkedIn we picked, and why
+[Self-heal] Wait for you to finish reviewing (keep / detach / fix each link) before continuing
 [Self-heal] Re-attach the correct LinkedIns you approved
 [Realize]   Apply your decisions to the network (fan-in merge — uses your review.csv)
 [Realize]   Rebuild the search index on Modal so the fixes show up in search (~5–30 min)
@@ -239,16 +255,21 @@ case this catches).
   (`reconcile-deep-research --approve` once they agree). Needs `PARALLEL_API_KEY`. People
   flagged `linkedin_plausibly_absent` are excluded. When research finds a **correct
   LinkedIn**, it adds a `retarget` row (pending) to the decisions table for the user to approve.
-- **[Self-heal] Show you a summary of what changed and what needs your review** — open **one** file, not three:
-  `open .powerpacks/deep-context/reconcile/summary.md`. It's the high-level report — what was
-  applied (detached with reasons, consolidated, verified count) and what needs review (pending
-  retargets + low-confidence rows). Present its contents to the user. (The detailed
-  `applied.csv` + the decisions table still exist for drill-down, but don't fan files open.)
+- **[Self-heal] Open the review page to see each person, the LinkedIn we picked, and why** —
+  `bin/deep-context review` (opens a local web UI in the browser; free). This is the review
+  surface — it JOINS `reconcile/verdicts.jsonl` (parent, profile, the judge's reasoning) with
+  `overrides/review.csv` (decisions), so the user sees **one row per person**, expandable to the
+  LinkedIn(s) we matched, the verified/detached/pending state, the supporting/contradicting
+  evidence, and the message dossier. Quick filters (needs-review / verified / detached /
+  conflicts / fixed / my decisions), search, and a riskiest-first sort surface the low-confidence
+  ones. Every **Keep / Detach / Fix LinkedIn** click autosaves straight into `overrides/review.csv`
+  (the same durable table the merge re-applies) — no CSV editing by hand. (`reconcile/summary.md`
+  + `applied.csv` still exist as a text fallback, but the UI is the review surface now.)
 - **[Self-heal] Wait for you to finish reviewing before continuing** — this is a **hard stop**. Tell the
-  user the summary is open and say *"let me know when you're done reviewing / approving and
-  I'll continue."* Do **not** proceed to apply-retargets until they reply. They approve/reject
-  by setting the `approved` column in `overrides/review.csv` (sticky). Opening a
-  file is not the same as the user having reviewed it — never auto-advance past this step.
+  user the review page is open and say *"keep / detach / fix the links you want, then let me know
+  when you're done and I'll continue."* Do **not** proceed to apply-retargets until they reply.
+  Decisions are saved as they click (sticky `approved` rows in `overrides/review.csv`). Opening
+  the page is not the same as the user having reviewed it — never auto-advance past this step.
 - **[Self-heal] Re-attach the correct LinkedIns you approved** — `bin/deep-context apply-retargets`. For each decisions
   row with `action=retarget` and `approved` ∈ {auto,yes}, it enriches the correct LinkedIn
   (cache-first; RapidAPI only on a miss — auto, effectively free) and writes an enriched
@@ -265,9 +286,10 @@ report to the user, every time (do NOT list the verified/unchanged links — onl
   reason** (why the new profile is the right person, e.g. "matched the wedding-photography
   business + SoCal location from your messages").
 - **Needs your input:** K pending rows in the decisions table (`overrides/review.csv`) — low-confidence verdicts + `retarget` proposals to approve.
-This is exactly what **`reconcile/summary.md`** already contains — present that (don't re-derive
-it from scratch). Keep it scannable; the user runs this repeatedly to fix things, so make "what
-changed and why" obvious each time.
+The interactive version of this is **`bin/deep-context review`** (the UI — present that to the
+user). `reconcile/summary.md` carries the same content as text if you need to quote it inline.
+Keep it scannable; the user runs this repeatedly to fix things, so make "what changed and why"
+obvious each time.
 
 ### Phase 4 — Realize the fixes (rebuild people.csv + the Modal search index)
 
@@ -392,10 +414,11 @@ name falls back to an all-tokens fuzzy match.
 ├── merge-candidates.csv / .md   likely same-person clusters
 ├── parents/<slug>.md            canonical person (one per real person)
 └── reconcile/                   Phase 3 LinkedIn self-heal
-    ├── summary.md                ⭐ the ONE file to READ: what changed + what needs review
-    ├── verdicts.csv / .jsonl     same-human verdict per attached profile
+    ├── verdicts.jsonl / .csv     ⭐ the review UI's display source (parent + profile + reasoning)
+    ├── summary.md                text fallback of what changed + what needs review
     ├── applied.csv               preview of what the override will do (kept/detached) — drill-down
     └── deep-research/            Parallel.ai re-research of wrong_person detaches
+#   review it interactively:  bin/deep-context review  (joins verdicts.jsonl ⨝ review.csv)
 
 # durable self-heal decisions (fan-in MERGE inputs, re-applied every merge):
 .powerpacks/network-import/overrides/review.csv   detach|verify|retarget + approved

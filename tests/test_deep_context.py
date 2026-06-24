@@ -21,6 +21,7 @@ from packs.ingestion.primitives.deep_context import (
     apply_retargets as retargets,
     reconcile_deep_research as dresearch,
     reconcile_linkedin as reconcile,
+    reconcile_review_web as web,
     sources,
     synthesize_person_context as synth,
 )
@@ -753,6 +754,92 @@ class TestReconcileDeepResearch(unittest.TestCase):
                 confirm_threshold=0.85, budget=25.0, approve=False, dry_run=False))
             self.assertEqual(man["status"], "needs_approval")   # 600 * $0.05 = $30 > $25
             self.assertGreater(man["estimated_usd"], 25)
+
+
+class TestReviewWeb(unittest.TestCase):
+    """The parent-grouped review UI: join verdicts.jsonl + review.csv, and decision writes."""
+
+    def _fixture(self, d: Path) -> tuple[Path, Path]:
+        verdicts = d / "verdicts.jsonl"
+        review = d / "review.csv"
+        recs = [
+            {"parent_slug": "jane-doe-p1", "name": "Jane Doe", "candidate_key": "janedoe",
+             "person_ids": ["pid-1"], "conflict": False, "no_link": False,
+             "linkedin": {"public_identifier": "janedoe", "linkedin_url": "https://www.linkedin.com/in/janedoe",
+                          "full_name": "Jane Doe", "headline": "VP at Acme", "experiences": ["VP @ Acme"],
+                          "education": ["MIT"], "location": "SF", "has_profile": True},
+             "match_emails": ["jane@acme.com"], "match_phones": [],
+             "verdict": {"verdict": "needs_review", "confidence": 0.55, "supporting_evidence": ["same company"],
+                         "contradicting_evidence": [], "reason": "plausible but unconfirmed",
+                         "linkedin_plausibly_absent": False, "recommend_deep_research": False}, "error": ""},
+            {"parent_slug": "pat-lee-p2", "name": "Pat Lee", "candidate_key": "patlee",
+             "person_ids": ["pid-2"], "conflict": False, "no_link": False,
+             "linkedin": {"public_identifier": "patlee", "linkedin_url": "https://www.linkedin.com/in/patlee",
+                          "full_name": "Pat Lee", "headline": "Driver", "experiences": [], "education": [],
+                          "location": "", "has_profile": True},
+             "match_emails": ["pat@globex.com"], "match_phones": [],
+             "verdict": {"verdict": "confirmed", "confidence": 0.95, "supporting_evidence": ["exact match"],
+                         "contradicting_evidence": [], "reason": "strong", "linkedin_plausibly_absent": False,
+                         "recommend_deep_research": False}, "error": ""},
+        ]
+        verdicts.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
+        # review.csv as reconcile would write it: jane pending, pat verified/auto
+        reconcile._write_override_rows(review, {
+            "janedoe": {"public_identifier": "janedoe", "action": "verify", "approved": "",
+                        "linkedin_url": "https://www.linkedin.com/in/janedoe", "confidence": "0.550"},
+            "patlee": {"public_identifier": "patlee", "action": "verify", "approved": "auto",
+                       "linkedin_url": "https://www.linkedin.com/in/patlee", "confidence": "0.950"},
+        })
+        return verdicts, review
+
+    def test_build_parents_joins_and_states(self):
+        with tempfile.TemporaryDirectory() as dd:
+            d = Path(dd)
+            verdicts, review = self._fixture(d)
+            ps, _ = web.build_parents(verdicts, review)
+            by = {p["name"]: p for p in ps}
+            self.assertEqual(set(by), {"Jane Doe", "Pat Lee"})
+            self.assertEqual(web.parent_status(by["Jane Doe"]), "review")
+            self.assertEqual(web.parent_status(by["Pat Lee"]), "verified")
+            self.assertEqual(web.picked_link(by["Pat Lee"]), "https://www.linkedin.com/in/patlee")
+            # reasoning + profile carried through for display
+            cand = by["Jane Doe"]["candidates"][0]
+            self.assertEqual(cand["headline"], "VP at Acme")
+            self.assertEqual(cand["supporting"], ["same company"])
+
+    def test_decisions_keep_detach_fix_reset(self):
+        with tempfile.TemporaryDirectory() as dd:
+            d = Path(dd)
+            verdicts, review = self._fixture(d)
+            TH = reconcile.DEFAULT_CONFIRM
+
+            r = web.apply_decision(review, verdicts, "janedoe", "keep", "", TH)
+            self.assertEqual((r["action"], r["approved"]), ("verify", "yes"))
+
+            r = web.apply_decision(review, verdicts, "janedoe", "detach", "", TH)
+            self.assertEqual((r["action"], r["approved"]), ("detach", "yes"))
+
+            r = web.apply_decision(review, verdicts, "janedoe", "fix",
+                                   "linkedin.com/in/jane-real", TH)
+            self.assertEqual(r["action"], "retarget")
+            self.assertEqual(r["new_url"], "https://www.linkedin.com/in/jane-real")
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual(rows["janedoe"]["new_public_identifier"], "jane-real")
+
+            # reset a high-confidence confirmed -> restores auto/verify (re-applies at merge)
+            web.apply_decision(review, verdicts, "patlee", "detach", "", TH)
+            r = web.apply_decision(review, verdicts, "patlee", "reset", "", TH)
+            self.assertEqual((r["action"], r["approved"]), ("verify", "auto"))
+
+            # no duplicate rows introduced (still exactly the two pubs)
+            self.assertEqual(set(reconcile.load_override_rows(review)), {"janedoe", "patlee"})
+
+    def test_fix_requires_url(self):
+        with tempfile.TemporaryDirectory() as dd:
+            d = Path(dd)
+            verdicts, review = self._fixture(d)
+            with self.assertRaises(ValueError):
+                web.apply_decision(review, verdicts, "janedoe", "fix", "", reconcile.DEFAULT_CONFIRM)
 
 
 class _ns:

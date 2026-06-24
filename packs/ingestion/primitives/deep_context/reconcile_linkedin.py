@@ -90,7 +90,8 @@ from packs.ingestion.schemas.people_schema import (
     parse_jsonish,
 )
 
-DEFAULT_CONFIRM = 0.85         # auto-apply only at/above this judge confidence
+DEFAULT_CONFIRM = 0.70         # auto-VERIFY a `confirmed` link at/above this (keep-biased — the user fixes the rare mismatch)
+DEFAULT_DETACH = 0.85          # auto-DETACH a `wrong_person` link only at/above this (dropping a real person is the costly error)
 SECTION_ANCHOR = "## LinkedIn identity"
 SAMPLE_PER_DIRECTION = 4
 SAMPLE_CHARS = 200
@@ -105,16 +106,56 @@ SYSTEM_PROMPT = (
     "actually interact — my relationship to them, what we discuss, their employer/school/"
     "location as it shows up in our messages, and sample messages — and (B) the LinkedIn "
     "profile currently attached to them (name, headline, company, education, location).\n\n"
-    "Reason HOLISTICALLY. A shared NAME ALONE is never enough. Decide using corroboration "
-    "and contradiction:\n"
-    "- confirmed: the profile's employer / school / location / role / seniority clearly "
-    "lines up with the dossier (people change jobs, so a PAST employer or school match still "
-    "counts as corroboration).\n"
-    "- wrong_person: the profile CONTRADICTS the dossier — a different industry, city, era, "
-    "or career stage that cannot be the same human (e.g. the dossier shows a local friend / "
-    "tradesperson but the profile is a big-company CEO with the same name), OR the ONLY thing "
-    "linking them is the name with no corroborating evidence.\n"
-    "- needs_review: there is too little evidence either way to be confident.\n\n"
+    "DEFAULT TO CONFIRMING. This link was attached because the names already matched — your "
+    "job is to catch the GENUINE mismatches (a different human who happens to share the name), "
+    "NOT to demand extra proof. A matching name PLUS any ONE corroborating signal — employer "
+    "(current OR past), school, city/region, era/timeline, or shared social context — and NO "
+    "hard contradiction means it is the same person: confirmed.\n\n"
+    "MOST of my contacts are PERSONAL / SOCIAL, where we almost never discuss work, titles, or "
+    "employers. Do NOT lower confidence or withhold a confirm just because the messages don't "
+    "name their company/role or some 'unique identifier' — that absence is EXPECTED and is not "
+    "evidence against a match. For these, geography, school, mutual-friend / social context, or "
+    "a plausible timeline IS sufficient corroboration.\n\n"
+    "For WORK contacts: a contact EMAIL whose DOMAIN matches the LinkedIn employer — current OR "
+    "past — (e.g. mmasse@riotgames.com against a Riot Games profile) is NEAR-DECISIVE identity "
+    "proof: confirmed, high confidence (0.9+). A work email at a company means they work/worked "
+    "there. And do NOT withhold a confirm or lower confidence because a GRANULAR sub-detail from "
+    "my messages (a specific internal team, project, product line, or exact title) isn't on the "
+    "profile — people don't list every team and titles roll up; a missing sub-detail is NOT a "
+    "contradiction. Only an actual conflict (different company/city/era/career that can't be the "
+    "same human) is.\n\n"
+    "REASON FROM BASE RATES. Two DIFFERENT people who share an EXACT full name AND the same "
+    "employer (or the same school, or the same small region + era) is RARE — on the order of "
+    "1-in-100. So a name + one such anchor, with no hard contradiction, is already STRONG "
+    "evidence of the same person — confirmed at 0.85+. Start from 'this is them' and only back "
+    "off for a genuine contradiction, not for small mismatches. The cost of losing a real match "
+    "(recall) is high; do NOT nickel-and-dime confidence for trivia.\n\n"
+    "These do NOT count as contradictions and must NOT lower confidence:\n"
+    "  • a different/missing internal TEAM, project, or product line (people don't list every team)\n"
+    "  • a TITLE that differs in wording or seniority at the same org (Founder vs CEO vs Exec "
+    "Chairman vs Manager — same person, different hat)\n"
+    "  • imprecise, rounded, or non-overlapping LinkedIn DATE RANGES (LinkedIn dates are routinely "
+    "wrong/missing; a date gap at a MATCHING employer is not a contradiction)\n"
+    "  • the messages not naming their employer/role (expected, esp. for personal contacts)\n"
+    "  • extra impressive CREDENTIALS on the profile (awards, prior roles, prof/PhD/fellowships) "
+    "not visible in casual messages — accomplished people simply have more on LinkedIn than shows "
+    "up in logistics texts; this is NOT grounds for doubt.\n\n"
+    "- confirmed: the name matches and at least one of {employer, school, location, era, shared "
+    "context} lines up, with no real contradiction. THIS IS THE COMMON CASE. (people change "
+    "jobs — a PAST employer or school still counts.)\n"
+    "- wrong_person: there is an ACTIVE, HARD CONTRADICTION making them a different human — e.g. "
+    "the dossier is a local friend / tradesperson but the profile is a big-company exec of the "
+    "same name, or a clearly different city + industry + era that cannot reconcile. This is "
+    "name-shared-WITH-a-contradicting-profile, not merely name-without-extra-proof, and NOT the "
+    "small-stuff list above.\n"
+    "- needs_review: ONLY when the name matches but there is genuinely ZERO corroboration AND "
+    "something is mildly off, so you truly cannot tell. Use this SPARINGLY — if there is any "
+    "reasonable corroboration and no contradiction, choose confirmed.\n\n"
+    "CONFIDENCE CALIBRATION: name + a strong anchor (same employer, matching email domain, same "
+    "school, or same city + plausible role) → 0.85–0.95, even if small details differ. "
+    "Softer-but-consistent signals (location + social context, no contradiction) → 0.75–0.85. Go "
+    "below 0.70 only when you are ACTUALLY unsure (zero corroboration) — never deflate a real "
+    "match for lack of a 'unique identifier' or for the small-stuff above.\n\n"
     "Some people legitimately have NO LinkedIn. If the dossier suggests this person plausibly "
     "would not have a (matching) profile, set linkedin_plausibly_absent=true rather than "
     "forcing a verdict. Set recommend_deep_research=true only when EXTERNAL research could "
@@ -352,6 +393,10 @@ def judge_prompt(task: dict[str, Any], owner_block: str) -> str:
         dossier_lines.append(f"  we discuss: {', '.join(d['topics'])}")
     if d["shared_context"]:
         dossier_lines.append(f"  shared context with me: {'; '.join(d['shared_context'])}")
+    contact_ids = ", ".join((task.get("match_emails") or []) + (task.get("match_phones") or []))
+    if contact_ids:
+        dossier_lines.append(f"  my address-book contact handles for them: {contact_ids}")
+        dossier_lines.append("    (a work-email DOMAIN matching the profile's employer is strong identity proof)")
     dossier_block = "\n".join(dossier_lines) or "  (sparse dossier)"
     me = _bullets(d["from_me"], "(no messages from me)")
     them = _bullets(d["from_them"], "(no messages from them)")
@@ -442,21 +487,28 @@ def inject_section(path: Path, body: str) -> None:
 
 # --- decide what auto-applies (incl. conflict auto-resolution) --------------
 
-def decide_actions(tasks: list[dict[str, Any]], threshold: float) -> None:
+def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
+                   detach_threshold: float | None = None) -> None:
     """Annotate each task with `action` ∈ {confirm, detach, review} and `via`.
 
-    Non-conflict parent: high-confidence confirmed → confirm, wrong_person → detach;
-    anything else → review.
+    ASYMMETRIC, keep-biased thresholds: a `confirmed` link auto-VERIFIES at the (low)
+    confirm_threshold — keeping a slightly-wrong link is cheap because the user fixes it
+    in review — while a `wrong_person` link auto-DETACHES only at the (higher)
+    detach_threshold, since wrongly dropping a real person removes them from people.csv.
+
+    Non-conflict parent: confirmed≥confirm_threshold → confirm, wrong_person≥detach_threshold
+    → detach; anything else → review.
 
     Conflict parent (one canonical person, MULTIPLE different attached LinkedIns):
-    auto-RESOLVE only the unambiguous shape — exactly ONE high-confidence `confirmed`
-    and EVERY other candidate a high-confidence `wrong_person` (one right link, the rest
-    wrong). Keep the confirmed, detach the wrong (via=conflict_resolved). Any other
-    conflict shape (two confirmed, a needs_review, a low-confidence one) stays → review,
-    so a human decides."""
+    auto-RESOLVE only the unambiguous shape — exactly ONE confirmed (≥confirm_threshold)
+    and EVERY other candidate a wrong_person (≥detach_threshold). Keep the confirmed,
+    detach the wrong (via=conflict_resolved). Any other conflict shape stays → review."""
+    detach_threshold = confirm_threshold if detach_threshold is None else detach_threshold
+
     def hi(task: dict[str, Any], verdict: str) -> bool:
         v = task.get("verdict") or {}
-        return v.get("verdict") == verdict and float(v.get("confidence") or 0) >= threshold
+        bar = detach_threshold if verdict == "wrong_person" else confirm_threshold
+        return v.get("verdict") == verdict and float(v.get("confidence") or 0) >= bar
 
     by_parent: dict[str, list[dict[str, Any]]] = {}
     for t in tasks:
@@ -886,7 +938,7 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
     out_dir.mkdir(parents=True, exist_ok=True)
     write_verdicts(Path(args.verdicts_jsonl), Path(args.verdicts_csv), tasks)
 
-    decide_actions(tasks, args.confirm_threshold)   # one authoritative decision pass
+    decide_actions(tasks, args.confirm_threshold, getattr(args, "detach_threshold", DEFAULT_DETACH))   # one authoritative decision pass
     parents_dir = Path(args.parents_dir)
     for task in tasks:
         if task.get("verdict") and not task.get("no_link"):
@@ -909,7 +961,7 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
     conflict_tasks = [t for t in tasks if t.get("conflict")]
     dr_subset = [t for t in tasks
                  if (t.get("verdict") or {}).get("verdict") == "wrong_person"
-                 and float((t.get("verdict") or {}).get("confidence") or 0) >= args.confirm_threshold
+                 and float((t.get("verdict") or {}).get("confidence") or 0) >= getattr(args, "detach_threshold", DEFAULT_DETACH)
                  and (t.get("verdict") or {}).get("recommend_deep_research")
                  and not (t.get("verdict") or {}).get("linkedin_plausibly_absent")]
 
@@ -948,7 +1000,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verdicts-jsonl", default=str(VERDICTS_JSONL))
     p.add_argument("--verdicts-csv", default=str(VERDICTS_CSV))
     p.add_argument("--confirm-threshold", type=float, default=DEFAULT_CONFIRM,
-                   help="Min judge confidence to auto-apply (else written PENDING in the decisions table)")
+                   help="Min judge confidence to auto-VERIFY a confirmed link (else PENDING). Keep-biased (low).")
+    p.add_argument("--detach-threshold", type=float, default=DEFAULT_DETACH,
+                   help="Min judge confidence to auto-DETACH a wrong_person link (else PENDING). Strict (high).")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--reasoning-effort", default="high", choices=["minimal", "low", "medium", "high"])
     p.add_argument("--concurrency", type=int, default=0)
