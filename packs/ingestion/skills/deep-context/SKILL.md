@@ -6,6 +6,10 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-24: Deep-research recovery now also honors USER detaches. reconcile-deep-research's
+  eligible set was model-only (high-confidence wrong_person verdicts); it now ALSO includes links
+  the user marked detach in review.csv (action=detach, approved=yes), so running it AFTER review
+  recovers what you detached. Skips links that already have a retarget; idempotent across re-runs.
 - 2026-06-24: Pass thread-level participants + detect owner aliases. collect now captures each
   email thread's full from/to/cc roster (Name <email>) from msgvault (was dropped — we only kept
   subject/body/direction); synthesis gets it plus an owner-identity declaration + heuristic and a
@@ -279,14 +283,15 @@ case this catches).
   user acts by setting `approved=yes`/`no` there (sticky) — there is no separate review-queue
   file. Some people legitimately have **no LinkedIn** (flagged `linkedin_plausibly_absent`) —
   they get no row and are left as-is; never force a match.
-- **[Self-heal] Look up the correct person for any wrong LinkedIn we removed** — for high-confidence `wrong_person`
-  detaches that external research could resolve, find the *correct* identity:
-  `bin/deep-context reconcile-deep-research --dry-run` to size it, then estimate the
-  Parallel.ai cost (~$0.05/person). **If ≤ $25, run it automatically and just tell the
-  user the cost** (`reconcile-deep-research`); **if > $25, stop and ask for approval**
-  (`reconcile-deep-research --approve` once they agree). Needs `PARALLEL_API_KEY`. People
-  flagged `linkedin_plausibly_absent` are excluded. When research finds a **correct
-  LinkedIn**, it adds a `retarget` row (pending) to the decisions table for the user to approve.
+- **[Self-heal] Look up the correct person for any wrong LinkedIn we removed** — find the *correct*
+  identity for detaches via `bin/deep-context reconcile-deep-research`. Eligible = high-confidence
+  `wrong_person` detaches the judge flagged **PLUS any link the USER marked detach in
+  `review.csv`** (`action=detach, approved=yes`) — so this step **also runs AFTER the user reviews**
+  to recover what they detached. `--dry-run` to size it, then the Parallel.ai cost (~$0.05/person):
+  **if ≤ $25 run it automatically and tell the user the cost**; **if > $25 stop and ask** (`--approve`).
+  Needs `PARALLEL_API_KEY`. Skipped: links flagged `linkedin_plausibly_absent`, or that already have a
+  `retarget`. When research finds a **correct LinkedIn**, it adds a `retarget` row (pending) for the
+  user to approve. (Idempotent — safe to re-run after review; it only researches what's still unresolved.)
 - **[Self-heal] Open the review page to see each person, the LinkedIn we picked, and why** —
   `bin/deep-context review` (opens a local web UI in the browser; free). This is the review
   surface — it JOINS `reconcile/verdicts.jsonl` (parent, profile, the judge's reasoning) with

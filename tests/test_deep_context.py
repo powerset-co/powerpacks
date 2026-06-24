@@ -774,6 +774,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                      "verdict": _verdict("wrong_person", 0.95, dr=True, reason="wrong")} for i in range(600)]
             vj.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
             man = dresearch.run(_ns(verdicts_jsonl=vj, people_csv=base / "nope.csv",
+                overrides_csv=base / "nope_ov.csv",
                 facts_dir=base / "f", raw_dir=base / "r", processor="core2x",
                 confirm_threshold=0.85, budget=25.0, approve=False, dry_run=False))
             self.assertEqual(man["status"], "needs_approval")   # 600 * $0.05 = $30 > $25
@@ -900,6 +901,40 @@ class TestSelfReportedRetarget(unittest.TestCase):
     def test_no_retarget_without_self_reported(self):
         t = {"no_link": False, "name": "X", "candidate_key": "x", "person_ids": ["p"], "dossier": {}}
         self.assertEqual(reconcile.self_reported_retargets([t]), [])
+
+
+class TestDeepResearchEligibility(unittest.TestCase):
+    """Deep-research recovers BOTH model wrong_person detaches and USER-marked detaches."""
+
+    VERDICTS = [
+        {"parent_slug": "p1", "candidate_key": "goodlink",
+         "verdict": {"verdict": "confirmed", "confidence": 0.9}},
+        {"parent_slug": "p2", "candidate_key": "wronglink",
+         "verdict": {"verdict": "wrong_person", "confidence": 0.9, "recommend_deep_research": True}},
+        {"parent_slug": "p3", "candidate_key": "absentlink",
+         "verdict": {"verdict": "wrong_person", "confidence": 0.9, "recommend_deep_research": True,
+                     "linkedin_plausibly_absent": True}},
+    ]
+
+    def keys(self, overrides):
+        return {r["candidate_key"] for r in dresearch.eligible_subset(self.VERDICTS, 0.85, overrides)}
+
+    def test_model_path_unchanged(self):
+        # model wrong_person+recommend eligible; the plausibly-absent one excluded
+        self.assertEqual(self.keys({}), {"wronglink"})
+
+    def test_user_detach_adds_a_confirmed_link(self):
+        # user detaches a link the model had CONFIRMED -> now eligible for recovery
+        self.assertEqual(self.keys({"goodlink": {"action": "detach", "approved": "yes"}}),
+                         {"wronglink", "goodlink"})
+
+    def test_pending_user_detach_not_eligible(self):
+        # a detach the user hasn't approved (still pending) does NOT trigger research
+        self.assertEqual(self.keys({"goodlink": {"action": "detach", "approved": ""}}), {"wronglink"})
+
+    def test_existing_retarget_skipped(self):
+        # already has a correct link -> don't research it
+        self.assertEqual(self.keys({"wronglink": {"action": "retarget", "approved": "yes"}}), set())
 
 
 class _ns:

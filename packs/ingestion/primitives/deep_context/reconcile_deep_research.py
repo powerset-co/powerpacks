@@ -1,9 +1,10 @@
-"""[Phase 3, escalation] Re-research people whose attached LinkedIn was judged WRONG.
+"""[Phase 3, escalation] Re-research people whose attached LinkedIn was WRONG.
 
-After `reconcile_linkedin` detaches a high-confidence `wrong_person` link, we may want
-to find the person's *correct* identity. This step leans on local history first (the
-dossier we already built), then hands the still-unresolved subset to the existing
-Parallel.ai deep-research primitive to find the right profile.
+Recovers the correct identity for detaches from BOTH sources: a high-confidence
+`wrong_person` the judge flagged, AND a link the user marked DETACH in the review table
+(`review.csv` action=detach, approved=yes) — so running this AFTER you review picks up
+your decisions too. It leans on local history first (the dossier we already built), then
+hands the still-unresolved subset to the existing Parallel.ai deep-research primitive.
 
 Cost-gated, NOT opt-in: estimate the Parallel.ai spend; if it is within the budget
 (default $25) it runs automatically; above the budget it stops and asks for approval
@@ -42,7 +43,7 @@ from packs.ingestion.primitives.deep_context.common import (
     parse_list,
     write_json,
 )
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import upsert_retargets
+from packs.ingestion.primitives.deep_context.reconcile_linkedin import load_override_rows, upsert_retargets
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
 from packs.messages.primitives.deep_research_contacts.deep_research_contacts import PROCESSOR_PRICING_USD
@@ -82,26 +83,45 @@ def load_people_rows(people_csv: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
-def eligible_subset(verdicts: list[dict[str, Any]], threshold: float) -> list[dict[str, Any]]:
-    """High-confidence wrong_person detaches that external research could resolve.
+def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
+                    overrides: dict[str, dict[str, str]] | None = None) -> list[dict[str, Any]]:
+    """Detaches that external research could resolve — from BOTH the model and the user.
 
-    Excludes detaches whose PARENT already kept a confirmed LinkedIn (the conflict-resolved
-    case): those siblings are the same person as the kept one, so we already know the correct
-    LinkedIn and re-researching them is wasteful. Only research people whose parent ended up
-    with NO LinkedIn."""
+    Two ways a link becomes eligible:
+      * MODEL: a high-confidence `wrong_person` detach the judge flagged `recommend_deep_research`,
+        whose PARENT did not already keep a confirmed link (conflict-resolved siblings already know
+        the correct LinkedIn — re-researching them is wasteful).
+      * USER: a link the user marked DETACH in the review table (`action=detach, approved=yes`).
+        We honor that regardless of the judge's recommendation — if you say it's the wrong person,
+        we try to find the right one.
+
+    Skipped either way: a link that already has a `retarget` (we know the correct one), or one the
+    judge flagged `linkedin_plausibly_absent` (some people legitimately have no profile)."""
+    overrides = overrides or {}
+    has_retarget = {pub for pub, r in overrides.items()
+                    if (r.get("action") or "").strip().lower() == "retarget"}
+    user_detached = {pub for pub, r in overrides.items()
+                     if (r.get("action") or "").strip().lower() == "detach"
+                     and (r.get("approved") or "").strip().lower() == "yes"}
     parents_with_kept = {
         r.get("parent_slug") for r in verdicts
         if (r.get("verdict") or {}).get("verdict") == "confirmed"
         and float((r.get("verdict") or {}).get("confidence") or 0) >= threshold
     }
-    out = []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for r in verdicts:
         v = r.get("verdict") or {}
-        if (v.get("verdict") == "wrong_person"
-                and float(v.get("confidence") or 0) >= threshold
-                and v.get("recommend_deep_research")
-                and not v.get("linkedin_plausibly_absent")
-                and r.get("parent_slug") not in parents_with_kept):
+        pub = (r.get("candidate_key") or "").strip().lower()
+        if v.get("linkedin_plausibly_absent") or (pub and (pub in seen or pub in has_retarget)):
+            continue
+        model_ok = (v.get("verdict") == "wrong_person"
+                    and float(v.get("confidence") or 0) >= threshold
+                    and v.get("recommend_deep_research")
+                    and r.get("parent_slug") not in parents_with_kept)
+        if model_ok or (pub and pub in user_detached):
+            if pub:
+                seen.add(pub)
             out.append(r)
     return out
 
@@ -204,7 +224,12 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     verdicts = _read_jsonl(Path(args.verdicts_jsonl))
-    subset = eligible_subset(verdicts, args.confirm_threshold)
+    overrides = load_override_rows(Path(args.overrides_csv))
+    subset = eligible_subset(verdicts, args.confirm_threshold, overrides)
+    user_detached_eligible = sum(
+        1 for r in subset
+        if (overrides.get((r.get("candidate_key") or "").strip().lower(), {}).get("action") or "").lower() == "detach"
+        and (overrides.get((r.get("candidate_key") or "").strip().lower(), {}).get("approved") or "").lower() == "yes")
     people = load_people_rows(Path(args.people_csv))
     cost_per = PROCESSOR_PRICING_USD.get(args.processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR])
     est_usd = round(len(subset) * cost_per, 2)
@@ -212,6 +237,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     base = {
         "source": "reconcile_deep_research",
         "eligible": len(subset),
+        "eligible_from_user_detach": user_detached_eligible,
         "processor": args.processor,
         "cost_per_person_usd": cost_per,
         "estimated_usd": est_usd,
@@ -220,7 +246,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
 
     if not subset:
-        return {**base, "status": "noop", "reason": "no high-confidence wrong_person detaches to research"}
+        return {**base, "status": "noop", "reason": "no wrong_person detaches to research (model or user)"}
 
     DR_OUT_DIR.mkdir(parents=True, exist_ok=True)
     queue = build_queue(subset, people, Path(args.facts_dir), Path(args.raw_dir))
