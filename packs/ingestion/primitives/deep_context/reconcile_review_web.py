@@ -40,6 +40,7 @@ from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     LINKEDIN_OVERRIDES_CSV,
     PARENTS_DIR,
+    PROFILE_CACHE_DIR,
     VERDICTS_JSONL,
     now_iso,
     read_jsonl,
@@ -107,6 +108,25 @@ def is_decided(parent: dict[str, Any]) -> bool:
     return any((c.get("approved") or "").strip().lower() in USER_APPROVED for c in parent["candidates"])
 
 
+def _cached_profile_pic(pub: str) -> str:
+    """Best-effort LinkedIn avatar URL from the local RapidAPI profile cache.
+
+    Lets older verdicts.jsonl (written before linkedin_view captured the avatar)
+    still render pictures without a re-judge. Cache files are named <pub>.json.
+    """
+    pub = (pub or "").strip().lower()
+    if not pub:
+        return ""
+    path = PROFILE_CACHE_DIR / f"{pub}.json"
+    if not path.exists():
+        return ""
+    try:
+        np = (json.loads(path.read_text(encoding="utf-8")) or {}).get("normalized_profile") or {}
+    except (json.JSONDecodeError, OSError):
+        return ""
+    return str(np.get("profile_pic_url") or "")
+
+
 def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
     overrides = load_override_rows(review_path)
     parents: dict[str, dict[str, Any]] = {}
@@ -128,6 +148,7 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
             "url": li.get("linkedin_url", ""),
             "full_name": li.get("full_name", ""),
             "headline": li.get("headline", ""),
+            "profile_pic_url": li.get("profile_pic_url") or _cached_profile_pic(pub),
             "experiences": li.get("experiences") or [],
             "education": li.get("education") or [],
             "location": li.get("location", ""),
@@ -311,9 +332,13 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any]) -> str:
     if cand["recommend_dr"]:
         flags.append("<span class='flag'>deep-research suggested</span>")
     fixed_note = f"<div class='fixednote'>→ re-targeted to <a href='{esc(cand['new_url'])}' target='_blank' rel='noreferrer'>{esc(cand['new_url'])}</a></div>" if st == "fixed" and cand["new_url"] else ""
+    pic = cand.get("profile_pic_url") or ""
+    avatar = (f"<img class='avatar' src='{esc(pic)}' alt='' loading='lazy' referrerpolicy='no-referrer' "
+              f"onerror='this.style.display=&quot;none&quot;'>" if pic else "<span class='avatar avatar-empty'></span>")
     return f"""
     <div class='cand cand-{st}' data-pub='{esc(cand['pub'])}'>
       <div class='cand-top'>
+        {avatar}
         <div class='cand-id'>
           {option}
           <a href='{esc(cand['url'])}' target='_blank' rel='noreferrer'>{esc(cand['url'] or cand['pub'])}</a>
@@ -348,15 +373,22 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
     multi = n_cand > 1
     picked_html = (f"<a href='{esc(picked)}' target='_blank' rel='noreferrer'>{esc(picked)}</a>"
                    if picked else "<span class='nopick'>no link chosen</span>")
-    open_attr = " open" if (expanded or multi) else ""
+    # Collapse by default; only honor an explicit expand request. A multi-candidate
+    # (Merged) row no longer force-opens — the user wants those collapsed first.
+    open_attr = " open" if expanded else ""
     banner = (f"<div class='conflictbanner'>⚠ Merged person — {n_cand} different LinkedIns ended up on "
               f"this one person. Keep the right one and detach the rest.</div>" if multi else "")
     cands = "".join(render_candidate(i, n_cand, c) for i, c in enumerate(cands_list))
     parent_cls = "parent multi" if multi else "parent"
+    summary_pic = next((c.get("profile_pic_url") for c in cands_list if c.get("profile_pic_url")), "")
+    summary_avatar = (f"<img class='avatar avatar-sm' src='{esc(summary_pic)}' alt='' loading='lazy' "
+                      f"referrerpolicy='no-referrer' onerror='this.style.display=&quot;none&quot;'>"
+                      if summary_pic else "")
     return f"""
     <details class='{parent_cls} p-{status}{decided}' data-slug='{esc(parent['slug'])}' data-idx='{idx}'{open_attr}>
       <summary>
         <span class='chip chip-{status}'>{esc(STATUS_LABEL.get(status, status))}</span>
+        {summary_avatar}
         <span class='pname'>{esc(parent['name'])}</span>
         {"<span class='multibadge'>" + str(n_cand) + " LinkedIns</span>" if multi else f"<span class='picked'>{picked_html}</span>"}
         <span class='pmeta'>{n_people} message cluster{'s' if n_people != 1 else ''} · conf {conf}</span>
@@ -433,8 +465,9 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
     if not visible:
         parts.append("<div class='empty'>Nothing matches this view.</div>")
     else:
-        # expand parents automatically when the user is in a focused (non-all) tab and the set is small
-        expand = tab in {"conflict", "fixed"} and len(visible) <= 40
+        # Expand automatically only on the already-resolved "fixed" pile. The Merged
+        # (conflict) tab stays collapsed first so the user scans the list, then opens rows.
+        expand = tab == "fixed" and len(visible) <= 40
         parts.append("<section class='list'>")
         idx_by_slug = {p["slug"]: i for i, p in enumerate(parents)}
         for p in visible[:600]:
@@ -510,7 +543,10 @@ summary::-webkit-details-marker{display:none}
 .cand-detached{border-color:#e6b0a6;background:#fdf6f4}
 .cand-fixed{border-color:#c3b1e6;background:#f8f5fd}
 .cand-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:7px}
-.cand-id{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+.avatar{width:44px;height:44px;border-radius:50%;object-fit:cover;background:var(--soft);border:1px solid var(--line);flex:0 0 auto}
+.avatar-empty{display:inline-block;background:repeating-linear-gradient(45deg,#eef1f5,#eef1f5 6px,#e7ebf0 6px,#e7ebf0 12px)}
+.avatar-sm{width:26px;height:26px;border-radius:50%;object-fit:cover;border:1px solid var(--line);flex:0 0 auto}
+.cand-id{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;flex:1}
 .cand-id a{color:#0a58ca;text-decoration:none;font-weight:600}.cand-id a:hover{text-decoration:underline}
 .verdict{font-size:11px;border-radius:999px;padding:2px 7px;background:var(--soft);color:#334155}
 .v-confirmed{background:var(--okbg);color:var(--ok)}.v-wrong_person{background:var(--badbg);color:var(--bad)}.v-needs_review{background:var(--warnbg);color:var(--warn)}
