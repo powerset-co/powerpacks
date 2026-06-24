@@ -243,10 +243,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         for o in members if o != slug and tuple(sorted((slug, o))) in score_by_pair), default=0.0)
 
         member_conf = {s: best_conf(s) for s in members}
-        confirmed_slugs = [s for s in members if member_conf[s] >= args.confirm_threshold]
-        if len(confirmed_slugs) < 2:  # not enough strong links -> treat the cluster as the core
-            confirmed_slugs = list(members)
-        review_slugs = [s for s in members if s not in confirmed_slugs]
+        # No needs_review limbo. Every clustered member is folded into the parent as a child
+        # (defaulted in), carrying its merge confidence — a human rejects the rare wrong one in
+        # the review UI. The old split hid low-confidence members entirely: they appeared in no
+        # parent's children, so reconcile never judged them and they vanished from the UI.
+        confirmed_slugs = list(members)
+        review_slugs: list[str] = []
 
         def child_entry(slug: str, status: str) -> dict[str, Any]:
             info = slugs_info[slug]

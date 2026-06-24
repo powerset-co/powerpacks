@@ -6,6 +6,12 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-24: No needs_review limbo in parent clustering. build_parents now folds EVERY
+  clustered member into the parent as a child (defaulted in, carrying its merge confidence)
+  instead of splitting low-confidence members into a needs_review bucket that nothing surfaced
+  — those members appeared in no parent's children, so reconcile never judged them and they
+  vanished (e.g. a 3rd 'Chrissy Hu' that turned out to be a different person). A human rejects
+  the rare wrong one in the review UI.
 - 2026-06-24: Feed the judge the FULL LinkedIn work history (was truncated to 6). A PAST
   employer is often the identity anchor — e.g. Clara Ma's profile leads with founder roles but
   lists 'Venture Hacker @ AngelList' at position 9, matching her help@alist.co contact; the cap
