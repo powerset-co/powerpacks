@@ -252,10 +252,10 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any]) -> str:
     if cand["location"]:
         profile.append(f"<div class='loc'>{esc(cand['location'])}</div>")
     if cand["experiences"]:
-        exp = "".join(f"<li>{esc(e)}</li>" for e in cand["experiences"][:5])
+        exp = "".join(f"<li>{esc(e)}</li>" for e in cand["experiences"])
         profile.append(f"<ul class='exp'>{exp}</ul>")
     if cand["education"]:
-        profile.append(f"<div class='edu'>🎓 {esc('; '.join(cand['education'][:3]))}</div>")
+        profile.append(f"<div class='edu'>🎓 {esc('; '.join(cand['education']))}</div>")
     if not cand["has_profile"]:
         profile.append("<div class='loc'>no enriched profile on file</div>")
     evid = []

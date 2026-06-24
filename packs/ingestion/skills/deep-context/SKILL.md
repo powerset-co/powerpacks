@@ -6,6 +6,10 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-24: Feed the judge the FULL LinkedIn work history (was truncated to 6). A PAST
+  employer is often the identity anchor — e.g. Clara Ma's profile leads with founder roles but
+  lists 'Venture Hacker @ AngelList' at position 9, matching her help@alist.co contact; the cap
+  hid it and manufactured a false miss. No cap now, in the judge prompt and the review UI.
 - 2026-06-24: LinkedIn Connections are GROUND TRUTH. A contact imported from your LinkedIn
   Connections (source_channels contains linkedin_csv) is auto-confirmed at 1.0 WITHOUT the LLM
   — you're connected, so it's them. Skips ~26% of judge calls and fixes the few connections the

@@ -251,14 +251,17 @@ def linkedin_view(row: dict[str, str], cache_dir: Path) -> dict[str, Any]:
         headline = row.get("headline") or ""
         source = "people_csv"
     experiences = []
-    for e in exps[:6]:
+    # Feed the judge the FULL work history — a PAST employer is often the anchor that confirms
+    # identity (e.g. an old AngelList role matching a help@alist.co contact). Any truncation
+    # silently hides those and manufactures false misses, so we cap nothing.
+    for e in exps:
         title = e.get("title") or ""
         company = e.get("company_name") or e.get("company") or ""
         span = _fmt_span(e)
         line = " @ ".join(x for x in [title, company] if x) or company or title
         experiences.append(f"{line}{f' ({span})' if span else ''}".strip())
     education = []
-    for ed in edus[:4]:
+    for ed in edus:
         school = ed.get("school") or ed.get("school_name") or ""
         degree = ", ".join(x for x in [ed.get("degree"), ed.get("field")] if x)
         education.append(f"{degree + ' — ' if degree else ''}{school}".strip(" —"))
