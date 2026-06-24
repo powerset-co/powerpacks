@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import sys
 import urllib.parse
 import webbrowser
@@ -36,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.common import (
+    DOSSIER_DIR,
     LINKEDIN_OVERRIDES_CSV,
     PARENTS_DIR,
     VERDICTS_JSONL,
@@ -219,6 +221,43 @@ def apply_decision(review_path: Path, verdicts_path: Path, pub: str, decision: s
     rows[pub] = row
     _write_override_rows(review_path, rows)
     return {"action": row["action"], "approved": row["approved"], "new_url": row.get("new_linkedin_url", "")}
+
+
+# --- dossier rendering (show the rich CHILD dossiers, not the thin parent stub) --
+
+_CHILDREN_RE = re.compile(r"^children:\s*\[(.*?)\]", re.MULTILINE)
+
+
+def _strip_frontmatter(md: str) -> str:
+    if md.startswith("---"):
+        end = md.find("\n---", 3)
+        if end != -1:
+            return md[end + 4:].lstrip("\n")
+    return md
+
+
+def render_dossier(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
+    """The message dossier for a person = its CHILD dossiers concatenated. The parent .md is a
+    thin canonical stub (for singletons just a pointer), so reading it alone looks 'chopped off' —
+    the real per-person context (summary, topics, timeline, identifiers) lives in the children."""
+    pmd = parents_dir / f"{Path(slug).name}.md"
+    if not pmd.exists():
+        return "(no dossier on file)"
+    ptext = pmd.read_text(encoding="utf-8")
+    m = _CHILDREN_RE.search(ptext)
+    children = re.findall(r'"([^"]+)"', m.group(1)) if m else []
+    chunks = []
+    for cs in children:
+        cd = dossier_dir / f"{Path(cs).name}.md"
+        if cd.exists():
+            body = _strip_frontmatter(cd.read_text(encoding="utf-8"))
+            body = "\n".join(ln for ln in body.splitlines() if "<!-- parent-link -->" not in ln)
+            chunks.append(body.strip())
+    if not chunks:
+        return _strip_frontmatter(ptext).strip()
+    sep = "\n\n" + "─" * 56 + "\n\n"
+    header = f"This person was merged from {len(chunks)} message cluster(s):\n\n" if len(chunks) > 1 else ""
+    return header + sep.join(chunks)
 
 
 # --- rendering --------------------------------------------------------------
@@ -556,7 +595,7 @@ document.querySelectorAll('details.dossier').forEach(d=>d.addEventListener('togg
 
 # --- server -----------------------------------------------------------------
 
-def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path,
+def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, dossier_dir: Path,
                  confirm_threshold: float, detach_threshold: float):
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, body: bytes, content_type: str = "text/html; charset=utf-8", status: int = 200) -> None:
@@ -573,8 +612,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path,
                 return
             if parsed.path == "/api/dossier":
                 slug = (urllib.parse.parse_qs(parsed.query).get("slug") or [""])[0]
-                md = parents_dir / f"{Path(slug).name}.md"
-                text = md.read_text(encoding="utf-8") if md.exists() else "(no dossier on file)"
+                text = render_dossier(parents_dir, dossier_dir, slug)
                 self.send_bytes(text.encode("utf-8"), "text/plain; charset=utf-8")
                 return
             if parsed.path != "/":
@@ -621,7 +659,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         return
     parents, _ = build_parents(verdicts_path, review_path)
     server = ThreadingHTTPServer((args.host, args.port),
-                                 make_handler(review_path, verdicts_path, parents_dir,
+                                 make_handler(review_path, verdicts_path, parents_dir, Path(args.dossier_dir),
                                               args.confirm_threshold, args.detach_threshold))
     host, port = server.server_address
     url = f"http://{host}:{port}/"
@@ -643,6 +681,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--review", default=str(LINKEDIN_OVERRIDES_CSV))
     serve.add_argument("--verdicts", default=str(VERDICTS_JSONL))
     serve.add_argument("--parents-dir", default=str(PARENTS_DIR))
+    serve.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
     serve.add_argument("--confirm-threshold", type=float, default=DEFAULT_CONFIRM)
     serve.add_argument("--detach-threshold", type=float, default=DEFAULT_DETACH)
     serve.add_argument("--host", default="127.0.0.1")
