@@ -422,6 +422,11 @@ def self_reported_retargets(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]
     for t in tasks:
         if t.get("no_link"):
             continue
+        # Only recover a WRONG attachment. If the attached link is already right — a ground-truth
+        # connection, or a confirmed verdict — keep it; a LinkedIn merely mentioned in the messages
+        # must not override it (that's how Ben Taft, a real connection, got a third party's URL).
+        if t.get("from_connections") or (t.get("verdict") or {}).get("verdict") == "confirmed":
+            continue
         d = t.get("dossier") or {}
         self_pub = (d.get("self_linkedin_pub") or "").lower()
         self_url = d.get("self_linkedin_url") or ""
