@@ -156,6 +156,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 max_group_size=args.max_group_size,
             )
             groups = sources.read_imessage_groups(person, chat_db) if person.phones else []
+            thread_participants = (sources.gmail_thread_participants(person, msgvault_con)
+                                   if msgvault_con is not None and person.emails else [])
             if not messages and not groups:
                 continue
             with_context += 1
@@ -173,6 +175,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 "phones": person.phones,
                 "source_channels": person.source_channels,
                 "groups": groups,
+                "thread_participants": thread_participants,
                 "messages": messages,
                 "messages_available": available,
                 "capped": available > len(messages),

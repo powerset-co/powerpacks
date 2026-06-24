@@ -6,6 +6,14 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-24: Pass thread-level participants + detect owner aliases. collect now captures each
+  email thread's full from/to/cc roster (Name <email>) from msgvault (was dropped — we only kept
+  subject/body/direction); synthesis gets it plus an owner-identity declaration + heuristic and a
+  new is_owner output. So a 'contact' that is really YOU on another address (e.g. arthur.chen@spot2.mx,
+  with your gmail CC'd and the same name) is flagged is_owner=true. Validated: 3 real aliases → true,
+  a genuine namesake (Arthur Lam, whose threads also include your gmail) → false. Richer co-participant
+  context also improves every dossier. (Downstream: exclude is_owner from parents/network + fold the
+  alias into owner.json — follow-up.)
 - 2026-06-24: Free recovery from a self-reported LinkedIn. When a contact SHARED their own
   LinkedIn in their messages (synthesis captures it in facts `identifiers`), reconcile now feeds
   it to the judge AND auto-proposes a retarget to it when the attached link differs — no Parallel

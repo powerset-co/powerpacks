@@ -138,13 +138,30 @@ FACT_SCHEMA: dict[str, Any] = {
             },
         },
         "confidence": {"type": "number"},
+        "is_owner": {"type": "boolean", "description": "True if this 'contact' is actually the mailbox owner on another email address."},
     },
     "required": [
         "canonical_name", "aliases", "employers", "title", "school", "field_of_study",
         "location", "relationship_to_owner", "topics", "notable_events", "identifiers",
-        "shared_context", "confidence",
+        "shared_context", "confidence", "is_owner",
     ],
 }
+
+
+def owner_identity_block(owner: dict[str, Any]) -> str:
+    """Tell the model who I am, so it can flag a 'contact' that is really ME on another address."""
+    name = owner.get("name") or ""
+    emails = owner.get("emails") or []
+    if not name and not emails:
+        return ""
+    return (
+        f"\n\nMAILBOX OWNER (ME): {name} <{', '.join(emails) or 'unknown email'}>. You are profiling ONE "
+        "OTHER person, not me. OWNER-ALIAS CHECK: if the CONTACT shares MY name AND one of my email "
+        "addresses above appears among the thread participants (or anywhere in the messages), then this "
+        "'contact' is almost certainly ME using a different email — set is_owner=true and "
+        "relationship_to_owner='This is the mailbox owner (me) on another email address.' Do NOT flag a "
+        "mere namesake whose threads do NOT include one of my own addresses. Default is_owner=false.\n"
+    )
 
 
 def chunk_messages(messages: list[dict[str, Any]], chunk_chars: int) -> list[list[dict[str, Any]]]:
@@ -175,6 +192,12 @@ def render_chunk(person: dict[str, Any], chunk: list[dict[str, Any]]) -> str:
     if groups:
         # Group-chat NAMES are a relationship signal (e.g. "Family", "College Crew").
         lines.append(f"Shared group chats (names only): {', '.join(groups)}")
+    threads = person.get("thread_participants") or []
+    if threads:
+        lines.append("")
+        lines.append("EMAIL THREADS & WHO WAS ON THEM (from/to/cc — shared colleagues, teams, and my own address if I'm a participant):")
+        for t in threads[:25]:
+            lines.append(f"- {t.get('subject') or '(no subject)'} — {', '.join(t.get('participants') or [])}")
     lines += ["", "MESSAGES (most relevant, chronological):"]
     for msg in chunk:
         date = (msg.get("at") or "")[:10]
@@ -353,7 +376,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     encoder = tiktoken.get_encoding("o200k_base")
 
     owner = load_owner() if not args.no_owner else None
-    system_prompt = SYSTEM_PROMPT + (OWNER_PROMPT_SUFFIX + owner_background_block(owner) if owner else "")
+    system_prompt = SYSTEM_PROMPT + (
+        owner_identity_block(owner) + OWNER_PROMPT_SUFFIX + owner_background_block(owner) if owner else "")
 
     # Only the path list is held in memory; bundle bodies are loaded one chunk at a
     # time, so peak RAM is bounded by --chunk-people, not the network size.

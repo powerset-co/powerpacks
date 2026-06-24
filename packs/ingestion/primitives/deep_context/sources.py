@@ -80,6 +80,47 @@ def read_gmail(person: Person, con: sqlite3.Connection, accounts: set[str]) -> l
     return out
 
 
+def gmail_thread_participants(person: Person, con: sqlite3.Connection, max_threads: int = 25) -> list[dict[str, Any]]:
+    """Per-thread participant rosters (full from/to/cc as ``Name <email>``) for the person's email
+    threads. Surfaces co-recipients we'd otherwise drop — shared colleagues, the team, and the
+    OWNER's own address CC'd next to a same-named contact (the owner-alias signal)."""
+    emails = [e.lower() for e in person.emails if e]
+    if not emails:
+        return []
+    pids = [r[0] for r in con.execute(
+        f"SELECT id FROM participants WHERE LOWER(email_address) IN ({','.join('?' * len(emails))})", emails)]
+    if not pids:
+        return []
+    pq = ",".join("?" * len(pids))
+    convs = con.execute(
+        f"""SELECT m.conversation_id,
+                   MAX(COALESCE(m.sent_at, m.received_at, m.internal_date)) AS at,
+                   MAX(m.subject) AS subject
+            FROM messages m
+            WHERE m.message_type='email' AND m.conversation_id IS NOT NULL
+              AND (m.sender_id IN ({pq})
+                   OR m.id IN (SELECT message_id FROM message_recipients WHERE participant_id IN ({pq})))
+            GROUP BY m.conversation_id ORDER BY at DESC LIMIT ?""",
+        (*pids, *pids, max_threads)).fetchall()
+    threads: list[dict[str, Any]] = []
+    for conv_id, _at, subject in convs:
+        rows = con.execute(
+            """SELECT DISTINCT LOWER(p.email_address) AS email,
+                      COALESCE(NULLIF(p.display_name, ''), NULLIF(mr.display_name, ''), '') AS name
+               FROM messages m
+               JOIN message_recipients mr ON mr.message_id = m.id
+               JOIN participants p ON p.id = mr.participant_id
+               WHERE m.conversation_id = ?""", (conv_id,)).fetchall()
+        roster, seen = [], set()
+        for email, name in rows:
+            if email and email not in seen:
+                seen.add(email)
+                roster.append(f"{name} <{email}>" if name else email)
+        if roster:
+            threads.append({"subject": (subject or "(no subject)")[:120], "participants": roster})
+    return threads
+
+
 # --- iMessage (chat.db), DM-only -------------------------------------------
 
 def probe_chat_db(chat_db: Path) -> dict[str, Any]:
