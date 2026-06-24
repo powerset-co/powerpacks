@@ -10,6 +10,7 @@ from typing import Any
 
 try:
     from packs.ingestion.schemas.people_schema import (
+        LIST_VALUE_COLUMNS,
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
         latest_interaction,
@@ -22,6 +23,7 @@ except ModuleNotFoundError:
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.ingestion.schemas.people_schema import (
+        LIST_VALUE_COLUMNS,
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
         latest_interaction,
@@ -721,6 +723,30 @@ def merge_jsonish_lists(current: str, incoming: str) -> str:
     return json.dumps(sorted(set(values)), ensure_ascii=False) if values else ""
 
 
+def union_alias_list(current: str, incoming: str, primary_current: str = "", primary_incoming: str = "") -> str:
+    """Set-union an all_emails/all_phones column, preserving first-seen order.
+
+    Distinct work emails that resolve to the same LinkedIn person must accumulate
+    here rather than overwrite each other (the resolved Gmail address used to be
+    discarded when two rows collapsed onto one public_identifier). The matching
+    primary_email/primary_phone values are folded in so a single-email row that
+    only populated primary_* still contributes its address to the union.
+    """
+    seen: list[str] = []
+    for value in (primary_current, primary_incoming):
+        value = (value or "").strip()
+        if value and value not in seen:
+            seen.append(value)
+    for blob in (current, incoming):
+        parsed = parse_jsonish(blob, None)
+        values = parsed if isinstance(parsed, list) else [part for part in re.split(r"[,;]", str(blob or "")) if part.strip()]
+        for value in values:
+            value = str(value).strip()
+            if value and value not in seen:
+                seen.append(value)
+    return json.dumps(seen, ensure_ascii=False) if seen else ""
+
+
 def materialize_source_merged_people_csv(input_csvs: list[str], output_csv: Path, *, default_source_channels: str) -> dict[str, Any]:
     """Write one stable source people artifact from one or more run outputs."""
     merged: dict[str, dict[str, str]] = {}
@@ -740,7 +766,13 @@ def materialize_source_merged_people_csv(input_csvs: list[str], output_csv: Path
             row["source_channels"] = row.get("source_channels") or default_source_channels
             row["source_artifacts"] = merge_jsonish_lists(row.get("source_artifacts", ""), str(path))
             if key not in merged:
-                merged[key] = {col: row.get(col, "") for col in PEOPLE_SCHEMA_COLUMNS}
+                current = {col: row.get(col, "") for col in PEOPLE_SCHEMA_COLUMNS}
+                # Seed the alias lists from this row's primary value so a single
+                # row already carries its email/phone in all_emails/all_phones.
+                for col in LIST_VALUE_COLUMNS:
+                    primary_col = "primary_email" if col == "all_emails" else "primary_phone"
+                    current[col] = union_alias_list(row.get(col, ""), "", row.get(primary_col, ""))
+                merged[key] = current
                 continue
             current = merged[key]
             for col in PEOPLE_SCHEMA_COLUMNS:
@@ -748,6 +780,9 @@ def materialize_source_merged_people_csv(input_csvs: list[str], output_csv: Path
                     current[col] = ",".join(unique_strings((current.get(col, "").split(",") if current.get(col) else []) + (row.get(col, "").split(",") if row.get(col) else [])))
                 elif col == "source_artifacts":
                     current[col] = merge_jsonish_lists(current.get(col, ""), row.get(col, ""))
+                elif col in LIST_VALUE_COLUMNS:
+                    primary_col = "primary_email" if col == "all_emails" else "primary_phone"
+                    current[col] = union_alias_list(current.get(col, ""), row.get(col, ""), current.get(primary_col, ""), row.get(primary_col, ""))
                 elif col == "interaction_counts":
                     counts = merge_interaction_counts(current.get(col, ""), row.get(col, ""))
                     current[col] = json.dumps(counts, ensure_ascii=False) if counts else ""
@@ -755,6 +790,14 @@ def materialize_source_merged_people_csv(input_csvs: list[str], output_csv: Path
                     current[col] = latest_interaction(current.get(col, ""), row.get(col, ""))
                 else:
                     current[col] = merge_people_values(current.get(col, ""), row.get(col, ""))
+            # Keep primary_email/primary_phone consistent with the union: keep the
+            # existing primary, else promote the first aliased value.
+            for col in LIST_VALUE_COLUMNS:
+                primary_col = "primary_email" if col == "all_emails" else "primary_phone"
+                if not current.get(primary_col):
+                    aliases = parse_jsonish(current.get(col, ""), [])
+                    if isinstance(aliases, list) and aliases:
+                        current[primary_col] = str(aliases[0])
     rows = [merged[key] for key in sorted(merged)]
     if not rows:
         return {"status": "skipped", "people_csv": str(output_csv), "rows": 0, "input_csvs": input_csvs}
