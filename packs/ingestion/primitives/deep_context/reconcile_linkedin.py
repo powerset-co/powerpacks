@@ -243,6 +243,7 @@ def linkedin_view(row: dict[str, str], cache_dir: Path) -> dict[str, Any]:
             x for x in [np.get("city"), np.get("state"), np.get("country")] if x)
         full_name = np.get("full_name") or ""
         headline = np.get("headline") or ""
+        profile_pic_url = np.get("profile_pic_url") or ""
         source = "cache"
     else:  # fall back to people.csv columns (same RapidAPI fetch, fewer descriptions)
         exps = parse_jsonish(row.get("work_experiences"), []) or []
@@ -250,6 +251,7 @@ def linkedin_view(row: dict[str, str], cache_dir: Path) -> dict[str, Any]:
         location = ", ".join(x for x in [row.get("city"), row.get("state"), row.get("country")] if x)
         full_name = row.get("full_name") or ""
         headline = row.get("headline") or ""
+        profile_pic_url = row.get("profile_picture_url") or ""
         source = "people_csv"
     experiences = []
     # Feed the judge the FULL work history — a PAST employer is often the anchor that confirms
@@ -271,6 +273,7 @@ def linkedin_view(row: dict[str, str], cache_dir: Path) -> dict[str, Any]:
         "linkedin_url": row.get("linkedin_url") or "",
         "full_name": full_name,
         "headline": headline,
+        "profile_pic_url": profile_pic_url,
         "experiences": [x for x in experiences if x],
         "education": [x for x in education if x],
         "location": location,
