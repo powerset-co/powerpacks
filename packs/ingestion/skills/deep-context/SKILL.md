@@ -6,6 +6,16 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-24: Free recovery from a self-reported LinkedIn. When a contact SHARED their own
+  LinkedIn in their messages (synthesis captures it in facts `identifiers`), reconcile now feeds
+  it to the judge AND auto-proposes a retarget to it when the attached link differs — no Parallel
+  deep-research needed (e.g. ankita-goyal recovered from a wrong namesake). Name-compatibility
+  guard: auto only when the URL's slug matches the contact's name, else pending (a shared URL can
+  be a third party they mentioned). Runs free on `reconcile --reapply` too.
+- 2026-06-24: Don't truncate LLM output. Raised synthesis max_output_tokens 4000->8000 (a ceiling,
+  billed only if used) and warn on a truncated (incomplete) completion. The dossier one-line
+  Summary now trims at a word boundary with an ellipsis (full text still in Relationship & cadence).
+- 2026-06-24: Review UI dossier shows the rich CHILD dossier(s), not the thin parent stub.
 - 2026-06-24: No needs_review limbo in parent clustering. build_parents now folds EVERY
   clustered member into the parent as a child (defaulted in, carrying its merge confidence)
   instead of splitting low-confidence members into a needs_review bucket that nothing surfaced

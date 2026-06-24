@@ -38,6 +38,7 @@ import argparse
 import asyncio
 import csv
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -293,6 +294,26 @@ def _sample(messages: list[dict[str, Any]], direction: str) -> list[str]:
     return out
 
 
+def _self_linkedin(identifiers: list[Any] | None) -> tuple[str, str]:
+    """The LinkedIn URL the contact shared THEMSELVES in messages (recruiters, intros, sig lines),
+    captured by synthesis in facts `identifiers`. Near-ground-truth for who they are. Returns
+    (normalized_url, public_identifier) or ('', '')."""
+    for ident in identifiers or []:
+        if "linkedin.com/in/" in str(ident).lower():
+            pub = extract_public_identifier(str(ident)).lower()
+            if pub:
+                return normalize_linkedin_url(str(ident)), pub
+    return "", ""
+
+
+def self_linkedin_from_facts(person_ids: list[str], facts_dir: Path) -> tuple[str, str]:
+    """Self-reported LinkedIn for a candidate, recomputed from facts (used by --reapply, no LLM)."""
+    records: list[dict[str, Any]] = []
+    for pid in person_ids:
+        records.extend(_read_jsonl(facts_dir / f"{pid}.jsonl"))
+    return _self_linkedin((compose.merge_facts(records) if records else {}).get("identifiers"))
+
+
 def dossier_view(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> dict[str, Any]:
     """Merge the confirmed children's facts + a few message samples for the judge."""
     records: list[dict[str, Any]] = []
@@ -301,6 +322,7 @@ def dossier_view(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> dict[
         records.extend(_read_jsonl(facts_dir / f"{pid}.jsonl"))
         msgs.extend(_read_json(raw_dir / f"{pid}.json").get("messages") or [])
     merged = compose.merge_facts(records) if records else {}
+    self_url, self_url_pub = _self_linkedin(merged.get("identifiers"))
     return {
         "relationship": str(merged.get("relationship_to_owner") or ""),
         "title": str(merged.get("title") or ""),
@@ -310,6 +332,8 @@ def dossier_view(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> dict[
         "topics": list(merged.get("topics") or [])[:10],
         "shared_context": [f"{s.get('overlap', 'other')}: {s.get('detail', '')}"
                            for s in (merged.get("shared_context") or []) if s.get("detail")],
+        "self_linkedin_url": self_url,
+        "self_linkedin_pub": self_url_pub,
         "from_me": _sample(msgs, "from_me"),
         "from_them": _sample(msgs, "from_them"),
         "has_messages": bool(msgs),
@@ -379,6 +403,45 @@ def connection_verdict() -> dict[str, Any]:
     }
 
 
+def _name_compatible(name: str, pub: str) -> bool:
+    """True if a LinkedIn slug shares a real name token with the contact — guards against a
+    THIRD party's URL the contact merely mentioned (e.g. an intro: 'meet Brandon, /brandonmoak')."""
+    name_tokens = {t for t in re.findall(r"[a-z]+", (name or "").lower()) if len(t) >= 3}
+    pub_tokens = {t for t in re.findall(r"[a-z]+", (pub or "").lower()) if len(t) >= 3}
+    return bool(name_tokens & pub_tokens)
+
+
+def self_reported_retargets(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recover the CORRECT LinkedIn for free: when the contact shared their own profile in our
+    messages (dossier `self_linkedin`) and it DIFFERS from the attached link, propose a retarget
+    to the URL they gave — no Parallel deep-research needed. Auto-apply only when the URL's slug
+    is NAME-COMPATIBLE with the contact (their own); otherwise propose it PENDING, since a shared
+    URL can occasionally be a third party they mentioned (re-attaching a wrong identity is worse
+    than leaving it detached)."""
+    proposals = []
+    for t in tasks:
+        if t.get("no_link"):
+            continue
+        d = t.get("dossier") or {}
+        self_pub = (d.get("self_linkedin_pub") or "").lower()
+        self_url = d.get("self_linkedin_url") or ""
+        attached = (t.get("candidate_key") or "").lower()
+        if not self_pub or not self_url or self_pub == attached:
+            continue  # nothing to recover (no self-URL, or the attached link already matches it)
+        own = _name_compatible(t.get("name", ""), self_pub)
+        proposals.append({
+            "old_public_identifier": attached, "new_linkedin_url": self_url,
+            "new_public_identifier": self_pub, "linkedin_url": (t.get("linkedin") or {}).get("linkedin_url", ""),
+            "match_emails": t.get("match_emails") or [], "match_phones": t.get("match_phones") or [],
+            "confidence": 0.95 if own else 0.5, "person_id": (t.get("person_ids") or [""])[0],
+            "reason": ("The contact shared this LinkedIn themselves in your messages — retargeting to their own URL."
+                       if own else "A LinkedIn URL appeared in this contact's messages but the name doesn't match — "
+                       "possibly a third party they mentioned; approve if it's really them."),
+            "source": "dossier-self-reported", "approved": "auto" if own else "",
+        })
+    return proposals
+
+
 def _contact_keys(pids: list[str], people: dict[str, dict[str, str]]) -> tuple[list[str], list[str]]:
     """Normalized emails/phones across a candidate's person rows — used to scope the
     override to the right person group at merge time."""
@@ -418,6 +481,15 @@ def judge_prompt(task: dict[str, Any], owner_block: str) -> str:
         dossier_lines.append(f"  we discuss: {', '.join(d['topics'])}")
     if d["shared_context"]:
         dossier_lines.append(f"  shared context with me: {'; '.join(d['shared_context'])}")
+    if d.get("self_linkedin_url"):
+        same = d.get("self_linkedin_pub") == (task.get("candidate_key") or "").lower()
+        dossier_lines.append(
+            f"  *** a LinkedIn URL appears in this contact's own messages: {d['self_linkedin_url']} — "
+            + ("it MATCHES the attached profile below → strong confirmation, very high confidence."
+               if same else
+               f"it DIFFERS from the attached profile (/{task.get('candidate_key')}). If this shared URL is "
+               "THEIRS (name lines up), the attached profile is the wrong namesake → wrong_person. (It could "
+               "occasionally be a third party they mentioned, so weigh the name.)") + " ***")
     contact_ids = ", ".join((task.get("match_emails") or []) + (task.get("match_phones") or []))
     if contact_ids:
         dossier_lines.append(f"  my address-book contact handles for them: {contact_ids}")
@@ -892,9 +964,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if getattr(args, "reapply", False):
         tasks = load_tasks_from_verdicts(Path(args.verdicts_jsonl))
         people = load_people_rows(Path(args.people_csv))
+        facts_dir = Path(args.facts_dir)
         for t in tasks:
-            if not t.get("no_link") and _from_connections(t.get("person_ids") or [], people):
+            if t.get("no_link"):
+                continue
+            if _from_connections(t.get("person_ids") or [], people):
                 t["from_connections"], t["verdict"], t["error"] = True, connection_verdict(), ""
+            # Recompute the self-reported LinkedIn from facts so the free recovery also runs here.
+            url, pub = self_linkedin_from_facts(t.get("person_ids") or [], facts_dir)
+            t["dossier"] = {**(t.get("dossier") or {}), "self_linkedin_url": url, "self_linkedin_pub": pub}
         return _finalize(args, tasks, index, usage_total={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
                          use_llm=False, judged=sum(1 for t in tasks if not t.get("no_link")), started=started)
 
@@ -982,8 +1060,12 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
 
     override_stats = {"path": str(args.overrides_csv), "detached": 0, "verified": 0, "pending": 0, "total_rows": 0}
     consolidation = {"consolidated_parents": 0}
+    self_retargets = {"proposed": 0}
     if not args.no_overrides:
         override_stats = write_overrides(Path(args.overrides_csv), tasks)
+        # Free recovery: retarget to a LinkedIn the contact shared themselves (overrides any
+        # detach/verify on the wrong attached link). Sticky — won't clobber a user decision.
+        self_retargets = upsert_retargets(Path(args.overrides_csv), self_reported_retargets(tasks))
         # Fold each parent's children's contacts onto its kept LinkedIn (trust Phase 2).
         consolidation = write_consolidations(Path(args.consolidate_people_csv), tasks, Path(args.people_csv))
     write_applied(out_dir / "applied.csv", decided_report(tasks))
@@ -1007,6 +1089,7 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
         "judge": "llm" if use_llm else "deterministic",
         "parents": len(index.get("parents", {})), "tasks": len(tasks), "judged": judged,
         "ground_truth_connections": sum(1 for t in tasks if t.get("from_connections") and not t.get("no_link")),
+        "self_reported_retargets": self_retargets.get("proposed", 0),
         "verdicts": counts, "conflicts": len(conflict_tasks),
         "conflicts_auto_resolved": sum(1 for t in conflict_tasks if t.get("via") == "conflict_resolved"),
         "conflicts_to_review": sum(1 for t in conflict_tasks if t.get("action") == "review"),

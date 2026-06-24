@@ -866,6 +866,42 @@ class TestReviewWeb(unittest.TestCase):
                 web.apply_decision(review, verdicts, "janedoe", "fix", "", reconcile.DEFAULT_CONFIRM)
 
 
+class TestSelfReportedRetarget(unittest.TestCase):
+    """Recover the correct LinkedIn when the contact shared it themselves in their messages."""
+
+    def _task(self, name, attached_pub, self_url):
+        return {"no_link": False, "name": name, "candidate_key": attached_pub, "person_ids": ["pid-1"],
+                "match_emails": ["a@fb.com"], "match_phones": [],
+                "linkedin": {"linkedin_url": f"https://www.linkedin.com/in/{attached_pub}"},
+                "dossier": {"self_linkedin_url": self_url,
+                            "self_linkedin_pub": reconcile.extract_public_identifier(self_url).lower()}}
+
+    def test_retarget_when_self_reported_differs_and_name_matches(self):
+        # attached link is the WRONG namesake; the dossier has the URL they shared themselves
+        props = reconcile.self_reported_retargets([self._task(
+            "Ankita Goyal", "ankita-goyal-9aa66453", "https://www.linkedin.com/in/ankita-goyal")])
+        self.assertEqual(len(props), 1)
+        self.assertEqual(props[0]["old_public_identifier"], "ankita-goyal-9aa66453")
+        self.assertEqual(props[0]["new_public_identifier"], "ankita-goyal")
+        self.assertEqual(props[0]["approved"], "auto")   # name-compatible -> auto-recover
+
+    def test_pending_when_shared_url_is_a_third_party(self):
+        # the shared URL's name doesn't match the contact -> likely someone they mentioned -> pending
+        props = reconcile.self_reported_retargets([self._task(
+            "Ben Taft", "ben-taft-46830679", "https://www.linkedin.com/in/brandonmoak")])
+        self.assertEqual(len(props), 1)
+        self.assertEqual(props[0]["approved"], "")       # not auto — needs the user's yes
+
+    def test_no_retarget_when_self_reported_matches(self):
+        props = reconcile.self_reported_retargets([self._task(
+            "Ankita Goyal", "ankita-goyal", "https://www.linkedin.com/in/ankita-goyal")])
+        self.assertEqual(props, [])
+
+    def test_no_retarget_without_self_reported(self):
+        t = {"no_link": False, "name": "X", "candidate_key": "x", "person_ids": ["p"], "dossier": {}}
+        self.assertEqual(reconcile.self_reported_retargets([t]), [])
+
+
 class _ns:
     """Lightweight argparse.Namespace stand-in for run() calls."""
 

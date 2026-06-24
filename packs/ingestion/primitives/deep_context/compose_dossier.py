@@ -139,7 +139,16 @@ def headline(merged: dict[str, Any]) -> str:
     company = current.get("name") if current else ""
     if title and company:
         return f"{title} at {company}"
-    return title or company or (merged.get("relationship_to_owner") or "")[:80]
+    if title or company:
+        return title or company
+    # Fall back to the relationship line. Trim to a WORD boundary (never mid-word) and mark it
+    # with an ellipsis; the full text is preserved verbatim in the "## Relationship & cadence"
+    # section, so this is a compact one-liner, not lost content.
+    rel = (merged.get("relationship_to_owner") or "").strip()
+    if len(rel) <= 80:
+        return rel
+    head = rel[:80].rsplit(" ", 1)[0].rstrip(",;:")
+    return f"{head}…"
 
 
 def _yaml_list(values: list[str]) -> str:

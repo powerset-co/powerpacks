@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Any
 
 from openai import (
@@ -35,9 +36,10 @@ from packs.indexing.lib.llm_config import (
 )
 
 # Reasoning calls over a person's messages produce a compact structured object,
-# but high effort burns reasoning tokens — keep a generous cap so a strict-schema
-# response is never truncated mid-object (which the SDK surfaces as a parse error).
-DEFAULT_MAX_OUTPUT_TOKENS = 4000
+# but high effort burns reasoning tokens (which count against this cap) — keep it
+# generous so the OUTPUT is never truncated to make room for reasoning. It's a
+# ceiling, billed only for tokens actually generated, so raising it is ~free.
+DEFAULT_MAX_OUTPUT_TOKENS = 8000
 DEFAULT_REASONING_EFFORT = "medium"
 VALID_EFFORTS = ("minimal", "low", "medium", "high")
 
@@ -113,7 +115,15 @@ def response_text(response: Any) -> str:
 
 
 def parse_json_response(response: Any, context: str = "responses call") -> dict[str, Any]:
-    """Parse a strict-schema Responses result into a dict (raises on bad JSON)."""
+    """Parse a strict-schema Responses result into a dict (raises on bad JSON).
+
+    Surfaces a truncated completion: the Responses API marks a hit output cap as
+    status=incomplete (reason=max_output_tokens). A mid-object cut already fails the
+    json.loads below, but we warn explicitly so silent output loss is never invisible."""
+    if getattr(response, "status", None) == "incomplete":
+        reason = getattr(getattr(response, "incomplete_details", None), "reason", "unknown")
+        print(f"⚠️  {context}: LLM output was TRUNCATED (incomplete: {reason}) — raise "
+              "POWERPACKS_DEEP_CONTEXT_MAX_OUTPUT_TOKENS", file=sys.stderr)
     raw = response_text(response).strip()
     if not raw:
         raise ValueError(f"{context}: empty response")
