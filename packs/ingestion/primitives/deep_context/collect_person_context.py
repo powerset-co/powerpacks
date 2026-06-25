@@ -69,11 +69,11 @@ def collect_one(
     group_chat: list[dict[str, Any]] = []
     true_chat_total = 0
     if person.phones:
+        whatsapp = sources.read_whatsapp(person, wacli_db, cap=deep_cap)
         dm_chat.extend(sources.read_imessage(person, chat_db, cap=deep_cap))
-        dm_chat.extend(sources.read_whatsapp(person, wacli_db, cap=deep_cap))
-        true_chat_total = sources.count_imessage_dms(person, chat_db) + len(
-            sources.read_whatsapp(person, wacli_db, cap=deep_cap)
-        )
+        dm_chat.extend(whatsapp)
+        # Reuse the WhatsApp pull for the honest total instead of re-querying it.
+        true_chat_total = sources.count_imessage_dms(person, chat_db) + len(whatsapp)
         if include_groups:
             group_chat = sources.read_imessage_group_messages(
                 person, chat_db, max_group_size=max_group_size, cap=deep_cap)

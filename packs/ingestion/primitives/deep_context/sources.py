@@ -92,15 +92,29 @@ def gmail_thread_participants(person: Person, con: sqlite3.Connection, max_threa
     if not pids:
         return []
     pq = ",".join("?" * len(pids))
+    # Two index-driven arms UNION'd, not one OR-filter: a single `sender_id IN (..)
+    # OR id IN (subquery)` defeats both idx_messages_sender and
+    # idx_message_recipients_participant (SQLite can't use two indexes across an OR),
+    # forcing a full per-person scan of every email row — O(emails x people),
+    # quadratic in archive size. The UNION lets each arm use its index; the outer
+    # GROUP BY dedupes conversations a person both sent and received in. Same rows out.
     convs = con.execute(
-        f"""SELECT m.conversation_id,
-                   MAX(COALESCE(m.sent_at, m.received_at, m.internal_date)) AS at,
-                   MAX(m.subject) AS subject
-            FROM messages m
-            WHERE m.message_type='email' AND m.conversation_id IS NOT NULL
-              AND (m.sender_id IN ({pq})
-                   OR m.id IN (SELECT message_id FROM message_recipients WHERE participant_id IN ({pq})))
-            GROUP BY m.conversation_id ORDER BY at DESC LIMIT ?""",
+        f"""SELECT conversation_id, MAX(at) AS at, MAX(subject) AS subject FROM (
+                SELECT m.conversation_id AS conversation_id,
+                       COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
+                       m.subject AS subject
+                FROM messages m
+                WHERE m.message_type='email' AND m.conversation_id IS NOT NULL
+                  AND m.sender_id IN ({pq})
+                UNION ALL
+                SELECT m.conversation_id AS conversation_id,
+                       COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
+                       m.subject AS subject
+                FROM message_recipients mr
+                JOIN messages m ON m.id = mr.message_id
+                WHERE m.message_type='email' AND m.conversation_id IS NOT NULL
+                  AND mr.participant_id IN ({pq})
+            ) GROUP BY conversation_id ORDER BY at DESC LIMIT ?""",
         (*pids, *pids, max_threads)).fetchall()
     threads: list[dict[str, Any]] = []
     for conv_id, _at, subject in convs:
@@ -187,16 +201,29 @@ LIMIT ?
 """
 
 
-def _imessage_handle_ids(con: sqlite3.Connection, person: Person) -> list[int]:
+# The handle table (rowid -> identifier) is fixed for the duration of a collection
+# run, but every iMessage reader needs it. Scan + normalize it ONCE per chat.db
+# path and reuse, instead of re-running `SELECT ROWID,id FROM handle` (a full scan)
+# three times per person (read_imessage + count_imessage_dms + read_imessage_groups).
+_HANDLE_ROWS_CACHE: dict[str, list[tuple[int, str]]] = {}
+
+
+def _handle_rows(con: sqlite3.Connection, chat_db: Path) -> list[tuple[int, str]]:
+    key = str(chat_db)
+    cached = _HANDLE_ROWS_CACHE.get(key)
+    if cached is None:
+        cached = [(int(row["rid"]), phone_digits(str(row["ident"] or "")))
+                  for row in con.execute("SELECT ROWID AS rid, id AS ident FROM handle")]
+        _HANDLE_ROWS_CACHE[key] = cached
+    return cached
+
+
+def _imessage_handle_ids(con: sqlite3.Connection, person: Person, chat_db: Path) -> list[int]:
     """All handle ROWIDs whose identifier matches one of the person's phones."""
     wanted = {phone_digits(p) for p in person.phones if phone_digits(p)}
     if not wanted:
         return []
-    ids: list[int] = []
-    for row in con.execute("SELECT ROWID AS rid, id AS ident FROM handle"):
-        if phone_digits(str(row["ident"] or "")) in wanted:
-            ids.append(int(row["rid"]))
-    return ids
+    return [rid for rid, digits in _handle_rows(con, chat_db) if digits in wanted]
 
 
 def read_imessage(person: Person, chat_db: Path, cap: int = CHAT_MESSAGE_CAP) -> list[dict[str, Any]]:
@@ -210,7 +237,7 @@ def read_imessage(person: Person, chat_db: Path, cap: int = CHAT_MESSAGE_CAP) ->
         return []
     con.row_factory = sqlite3.Row
     try:
-        handle_ids = _imessage_handle_ids(con, person)
+        handle_ids = _imessage_handle_ids(con, person, chat_db)
         if not handle_ids:
             return []
         sql = _IMESSAGE_DM_SQL.format(handles=",".join("?" for _ in handle_ids))
@@ -256,7 +283,7 @@ def count_imessage_dms(person: Person, chat_db: Path) -> int:
         return 0
     con.row_factory = sqlite3.Row
     try:
-        handle_ids = _imessage_handle_ids(con, person)
+        handle_ids = _imessage_handle_ids(con, person, chat_db)
         if not handle_ids:
             return 0
         sql = _IMESSAGE_DM_COUNT_SQL.format(handles=",".join("?" for _ in handle_ids))
@@ -288,7 +315,7 @@ def read_imessage_groups(person: Person, chat_db: Path, cap: int = 25) -> list[s
         return []
     con.row_factory = sqlite3.Row
     try:
-        handle_ids = _imessage_handle_ids(con, person)
+        handle_ids = _imessage_handle_ids(con, person, chat_db)
         if not handle_ids:
             return []
         sql = _IMESSAGE_GROUPS_SQL.format(handles=",".join("?" for _ in handle_ids))
@@ -345,7 +372,7 @@ def read_imessage_group_messages(person: Person, chat_db: Path, *, max_group_siz
         return []
     con.row_factory = sqlite3.Row
     try:
-        handle_ids = _imessage_handle_ids(con, person)
+        handle_ids = _imessage_handle_ids(con, person, chat_db)
         if not handle_ids:
             return []
         sql = _IMESSAGE_GROUP_MSGS_SQL.format(handles=",".join("?" for _ in handle_ids))

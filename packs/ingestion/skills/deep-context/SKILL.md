@@ -6,6 +6,13 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-25: A `--force` rerun keeps the FULL checklist — pass `--force` to the two incremental
+  steps and finish every step. "How to run" now says: still create + walk the entire checklist;
+  add `--force` only to `collect` and `synthesize`; run to completion, pausing ONLY at the gate
+  items (owner-LinkedIn answer [skip the ask if owner.json exists], group/cap, the dry-run cost
+  OKs, review-wait). Names the failure mode: running one step (e.g. `collect --force`) and
+  halting — collect is step ~4 of ~20, mark it done and continue. Fixes Jake's rerun where the
+  agent ran a lone `collect --force` and dropped the step-1 LinkedIn ask.
 - 2026-06-24: Owner-alias EXCLUSION (the downstream half of is_owner detection). build_parents now
   skips any person flagged is_owner (you on another email — e.g. arthur.chen@spot2.mx) so you stop
   appearing as your own contact, and folds those alias emails into owner.json (so your addresses
@@ -157,6 +164,31 @@ Use your harness's plan/task tool:
   each to `in_progress` then `completed`.
 - **Codex:** `update_plan` with the steps, updating status as you go.
 - **Any other harness:** its equivalent todo/plan mechanism.
+
+**A `--force` rerun keeps the FULL checklist — you just pass `--force` to the two
+incremental steps and run every step to completion.** When the user says "rerun",
+"run again", or "`$deep-context --force`":
+
+- **Still create and walk the ENTIRE checklist below, in order.** `--force` does NOT
+  change the steps or let you skip any — it changes only *incrementality*
+  (re-process EVERYONE instead of skipping people who already have a bundle/facts).
+- **Add `--force` to exactly the two incremental steps:**
+  - `[Context] Gather each person's messages` → `bin/deep-context collect --force`
+  - `[Context] Build a profile for each person` → `bin/deep-context synthesize --force`
+
+  Every other step is run exactly as written (compose, cluster, parents, validate,
+  reconcile, review, realize). Equivalently, `bin/deep-context run --force` chains
+  all of them and propagates `--force` to both — but you still track each as its own
+  task so the user sees progress.
+- **Run the whole checklist to COMPLETION. The only places you stop for the user are
+  the explicit gate items:** the owner-LinkedIn answer (skip the *ask* if `owner.json`
+  already exists — just confirm its values), the group-chat / cap answers, each cost
+  confirmation (`dry` → OK before synthesize; `cluster --dry-run` → OK; `reconcile
+  --dry-run` → OK), and the review-wait. Do not pause anywhere else.
+
+**The one failure mode to avoid:** running a single step (e.g. `collect --force`) and
+halting. Collect is step ~4 of ~20 — finishing it is not finishing the skill. Mark it
+done and continue straight to the next task.
 
 Seed the checklist with these exact item titles. Each is tagged by phase —
 `[Context]` builds a profile of each person from your messages, `[Merge]` combines
