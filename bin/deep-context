@@ -25,7 +25,48 @@ cd "$ROOT"
 PY=(uv run --project . python -m)
 PKG="packs.ingestion.primitives.deep_context"
 
+usage() {
+  cat >&2 <<'USAGE'
+usage: bin/deep-context <command> [args]
+
+  owner        build owner.json from YOUR LinkedIn (run first)
+  check        readiness check (sources, Full Disk Access, keys)
+  dry          collect (free) + synthesize --dry-run cost estimate        [chained]
+  run          FULL pipeline, SPENDS OpenAI: collect->synthesize->compose->
+               cluster->parents->validate->reconcile. --force redoes everyone. [chained]
+  collect      gather message bodies into raw bundles (free, local)
+  synthesize   build per-person facts from bundles (spends OpenAI)
+  compose      render dossiers from facts (free)
+  cluster      LLM-judge same-person merge (spends OpenAI)
+  parents      build canonical parent dossiers (free)
+  validate     completeness report (free)
+  reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
+  review       open the self-heal review UI (local, free)
+  reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
+  apply-retargets           enrich approved retargets -> retarget-people.csv
+  realize      fan-in merge applying your decisions (free, local)
+  lookup       fetch a person's dossier by name/phone/email
+  probe        chat.db readability (Full Disk Access) check
+  purge-raw    delete the ephemeral raw bundles
+
+Pass --help after a single-step command (e.g. `collect --help`) for its flags.
+USAGE
+}
+
 cmd="${1:-}"; shift || true
+
+# Bare help request or no command: print usage, run nothing.
+case "$cmd" in
+  -h|--help|help|"") usage; exit 0 ;;
+esac
+
+# Did the user ask for help on this command? The CHAINED commands (dry/run) must
+# NOT execute their pipeline just because --help made the first primitive exit 0
+# — that silently ran (and spent on) the rest. Detect it and short-circuit below.
+wants_help=0
+for _a in "$@"; do
+  if [[ "$_a" == "-h" || "$_a" == "--help" ]]; then wants_help=1; fi
+done
 
 case "$cmd" in
   owner)
@@ -37,6 +78,11 @@ case "$cmd" in
     "${PY[@]}" "$PKG.check_readiness" "$@"
     ;;
   dry)
+    if (( wants_help )); then
+      echo "bin/deep-context dry — collect (free, local) then synthesize --dry-run (cost estimate)." >&2
+      echo "Chains 2 steps; args after 'dry' pass to collect (--limit, --person, --include-groups, --deep-cap)." >&2
+      exit 0
+    fi
     "${PY[@]}" "$PKG.collect_person_context" "$@"
     "${PY[@]}" "$PKG.synthesize_person_context" --dry-run
     echo "↑ review estimated_cost_floor_usd / ceiling, then run: bin/deep-context run" >&2
@@ -56,6 +102,13 @@ case "$cmd" in
     # bundle/facts. To re-process EVERYONE (e.g. to pick up new prompt/collection
     # changes), pass --force — it propagates to BOTH collect and synthesize here
     # (a bare `synthesize` would otherwise skip every existing person).
+    if (( wants_help )); then
+      echo "bin/deep-context run [--force] [--limit N] [--person ID] — FULL pipeline, SPENDS OpenAI." >&2
+      echo "  Chains: collect -> synthesize -> compose -> cluster -> parents -> validate -> reconcile." >&2
+      echo "  --force re-processes everyone (collect + synthesize); other args pass to collect." >&2
+      echo "  Free cost estimate first: bin/deep-context dry" >&2
+      exit 0
+    fi
     SYNTH_FORCE=()
     [[ " $* " == *" --force "* ]] && SYNTH_FORCE+=(--force)
     "${PY[@]}" "$PKG.collect_person_context" "$@"
@@ -124,7 +177,8 @@ case "$cmd" in
     echo "🧹 purged raw message bundles" >&2
     ;;
   *)
-    echo "usage: bin/deep-context {owner|check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|review|reconcile-deep-research|apply-retargets|validate|lookup|probe|purge-raw} [args]" >&2
+    echo "bin/deep-context: unknown command '$cmd'" >&2
+    usage
     exit 2
     ;;
 esac
