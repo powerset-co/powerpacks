@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.18.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.17.0...powerpacks-v0.18.0) (2026-06-25)
+
+
+### Features
+
+* **deep-context:** deep-research recovery also covers user-marked detaches ([aac16ff](https://github.com/powerset-co/powerpacks/commit/aac16ffd1e086cb899b183e6c40dab96b6db7da3))
+* **deep-context:** exclude the mailbox owner's aliases from the network ([b43006e](https://github.com/powerset-co/powerpacks/commit/b43006e14b32a262d8a640ad0331d1be4e6d9922))
+* **deep-context:** fold all clustered members into the parent (no needs_review limbo) ([612d04b](https://github.com/powerset-co/powerpacks/commit/612d04b2d1b5c993301250d6b560fc01c3dc2310))
+* **deep-context:** keep-biased LinkedIn self-heal + parent-grouped review UI ([8f90ed4](https://github.com/powerset-co/powerpacks/commit/8f90ed40ee327537bcc07bf22f2362e1edb2a10e))
+* **deep-context:** pass thread participants + detect owner aliases ([1f64505](https://github.com/powerset-co/powerpacks/commit/1f64505d9a50492c7c6acd70c825ddfdac835f7f))
+* **deep-context:** recover contacts from the LinkedIn they shared themselves ([8c26492](https://github.com/powerset-co/powerpacks/commit/8c26492273d8d5904d489b73afaf1301d19a4fc1))
+* **deep-context:** review UI defaults to Needs-review; rename Conflicts → Merged ([57c887d](https://github.com/powerset-co/powerpacks/commit/57c887db462d99ece9e80e6560008cf62a519f3c))
+* **deep-context:** show LinkedIn avatars in review UI + collapse Merged rows first ([#145](https://github.com/powerset-co/powerpacks/issues/145)) ([304b2ed](https://github.com/powerset-co/powerpacks/commit/304b2edc7d75f51ad13f6e39d737e16b36068cdf))
+* **deep-context:** treat LinkedIn Connections as ground-truth confirms ([2ab5373](https://github.com/powerset-co/powerpacks/commit/2ab5373764b4209e8e6cb311d3d782f32bcdaa61))
+* **deep-context:** trim review tabs to Merged / Needs review / All ([893b4b1](https://github.com/powerset-co/powerpacks/commit/893b4b101fabeca775095a3c9a0679e361ecb5a7))
+
+
+### Bug Fixes
+
+* **deep-context:** don't let a self-reported retarget override a confirmed link ([30ed04e](https://github.com/powerset-co/powerpacks/commit/30ed04e52070609a50d0258841a4d9e026f3ec8d))
+* **deep-context:** feed the judge the full LinkedIn work history (no cap) ([9eaab1e](https://github.com/powerset-co/powerpacks/commit/9eaab1e5a11c8470f40f32d269af9fe584ea81c9))
+* **deep-context:** linear-time message collection + --force keeps the full checklist ([#146](https://github.com/powerset-co/powerpacks/issues/146)) ([31e78b1](https://github.com/powerset-co/powerpacks/commit/31e78b126a9fa80dc2097ccc69f5fe02e2539de6))
+* **deep-context:** make `run`/`dry --help` safe (was running the pipeline) ([#149](https://github.com/powerset-co/powerpacks/issues/149)) ([746ea14](https://github.com/powerset-co/powerpacks/commit/746ea144d3f74fb354379aacd4efc94c7df14933))
+* **deep-context:** match US WhatsApp numbers whose JID keeps the +1 ([#148](https://github.com/powerset-co/powerpacks/issues/148)) ([78cb2de](https://github.com/powerset-co/powerpacks/commit/78cb2deff401ebdeeb181d0e72597a80e1c56c8d))
+* **deep-context:** propagate --force from `run` to synthesize ([1a60619](https://github.com/powerset-co/powerpacks/commit/1a606193f35ebb4fd542bc72e382748e0d86a599))
+* **deep-context:** review UI shows the rich child dossier, not the parent stub ([55d4940](https://github.com/powerset-co/powerpacks/commit/55d49405145a4142c46530a3de39281335105a13))
+* **network-import:** union resolved gmail emails onto the canonical row ([#144](https://github.com/powerset-co/powerpacks/issues/144)) ([57e5425](https://github.com/powerset-co/powerpacks/commit/57e5425a5b229be33be544bb8ddc5b797d549cdb))
+
 ## [0.17.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.16.0...powerpacks-v0.17.0) (2026-06-23)
 
 
