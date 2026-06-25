@@ -405,11 +405,20 @@ def read_whatsapp(person: Person, wacli_db: Path = DEFAULT_WACLI_DB, cap: int = 
             return []
         ts_col = "ts" if "ts" in cols else ("timestamp" if "timestamp" in cols else None)
         from_me_col = "from_me" if "from_me" in cols else ("is_from_me" if "is_from_me" in cols else None)
-        wanted = {phone_digits(p) for p in person.phones if phone_digits(p)}
+        # WhatsApp JIDs keep the country code (US: "1XXXXXXXXXX@s.whatsapp.net"),
+        # but phone_digits() strips a leading US 1 for comparison — so a US number's
+        # JID would never match the stripped key. Match BOTH forms: the stripped key
+        # and, for 10-digit (US-shaped) keys, the "1"-prefixed E.164 form.
+        wanted: set[str] = set()
+        for p in person.phones:
+            key = phone_digits(p)
+            if not key:
+                continue
+            wanted.add(key)
+            if len(key) == 10:
+                wanted.add(f"1{key}")
         # DM chat jids look like "<digits>@s.whatsapp.net"; groups end in @g.us.
-        jids = [
-            f"{d}@s.whatsapp.net" for d in wanted
-        ]
+        jids = [f"{d}@s.whatsapp.net" for d in wanted]
         placeholders = ",".join("?" for _ in jids)
         select = [f"{text_col} AS text"]
         select.append((f"{ts_col} AS ts") if ts_col else "NULL AS ts")
