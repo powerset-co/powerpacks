@@ -994,6 +994,39 @@ class TestWhatsAppUSJid(unittest.TestCase):
             rows = sources.read_whatsapp(person, db)
             self.assertEqual([r["text"] for r in rows], ["uk dm"])
 
+    def test_us_number_stored_without_country_code_also_matches(self):
+        # The other arm of the both-forms fix: a store that kept the bare 10-digit
+        # JID must still match a +1 contact.
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "wacli.db"
+            con = sqlite3.connect(db)
+            con.execute("CREATE TABLE messages (chat_jid TEXT, text TEXT, ts INTEGER, from_me INTEGER)")
+            con.execute("INSERT INTO messages VALUES ('4155551234@s.whatsapp.net', 'bare dm', 1700000000, 0)")
+            con.commit()
+            con.close()
+            person = common.Person(person_id="p3", full_name="US Person", phones=["+14155551234"])
+            rows = sources.read_whatsapp(person, db)
+            self.assertEqual([r["text"] for r in rows], ["bare dm"])
+
+    def test_direction_is_mapped_from_from_me(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "wacli.db"
+            con = sqlite3.connect(db)
+            con.execute("CREATE TABLE messages (chat_jid TEXT, text TEXT, ts INTEGER, from_me INTEGER)")
+            con.executemany(
+                "INSERT INTO messages VALUES (?,?,?,?)",
+                [("14155551234@s.whatsapp.net", "mine", 1700000200, 1),
+                 ("14155551234@s.whatsapp.net", "theirs", 1700000100, 0)],
+            )
+            con.commit()
+            con.close()
+            person = common.Person(person_id="p4", full_name="US Person", phones=["+14155551234"])
+            rows = sources.read_whatsapp(person, db)
+            by_text = {r["text"]: r["direction"] for r in rows}
+            self.assertEqual(by_text, {"mine": "from_me", "theirs": "from_them"})
+
 
 if __name__ == "__main__":
     unittest.main()
