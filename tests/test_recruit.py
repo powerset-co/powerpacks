@@ -22,6 +22,35 @@ def _load(name: str):
 jc = _load("judge_consensus")
 sg = _load("score_ground_truth_gaps")
 
+_sb_spec = importlib.util.spec_from_file_location(
+    "seniority_bands", ROOT / "packs" / "search" / "primitives" / "shared" / "seniority_bands.py"
+)
+sb = importlib.util.module_from_spec(_sb_spec)
+_sb_spec.loader.exec_module(sb)  # type: ignore[union-attr]
+
+
+class TestPreserveSemanticQuery(unittest.TestCase):
+    def test_preserves_raw_query_and_keeps_bm25_and_filters(self):
+        payload = {"role_search_filters": {
+            "semantic_query": "Engineers specializing in distributed systems design and implementation",
+            "bm25_queries": ["distributed systems engineer", "scheduler engineer"],
+            "seniority_bands": ["staff"], "cities": ["San Francisco"],
+        }}
+        raw = "Distributed systems engineer who built admission control and bin packing for a GPU cluster"
+        out = sb.pin_payload_semantic_query(payload, raw)
+        f = out["role_search_filters"]
+        self.assertEqual(f["semantic_query"], raw)          # raw query becomes the vector
+        self.assertTrue(f["semantic_query_preserved"])
+        self.assertEqual(f["bm25_queries"], ["distributed systems engineer", "scheduler engineer"])  # bm25 kept
+        self.assertEqual(f["seniority_bands"], ["staff"])   # filters kept
+        self.assertEqual(f["cities"], ["San Francisco"])
+        self.assertTrue(any("semantic_query preserved" in n for n in out["notes"]))
+
+    def test_does_not_mutate_input(self):
+        payload = {"role_search_filters": {"semantic_query": "orig", "bm25_queries": ["x"]}}
+        sb.pin_payload_semantic_query(payload, "new")
+        self.assertEqual(payload["role_search_filters"]["semantic_query"], "orig")
+
 
 class TestJudgeConsensus(unittest.TestCase):
     def _judges(self):

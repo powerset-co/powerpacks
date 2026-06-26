@@ -43,8 +43,17 @@ that's what drops good candidates. Keep recall high and let the judges gate.
    adjacent strong-signal companies. Defer seniority/location gating to the judges (keep
    retrieval loose).
 
-2. **Shotgun source (FREE, read-only).** One probe = one payload. Run each through the existing
-   pipeline with `--search-only` (no LLM) and a **UNIQUE `--ledger`** (shared ledger silently
+2. **Shotgun source (FREE, read-only).** One probe = one payload. Two ways:
+   - **Hand payload** (max control): `{"semantic_query":"<rich work-described sentence>",
+     "bm25_queries":["...",...],"set_id":"<set>"}` → `run --payload-json … --search-only`.
+   - **Deterministic via expansion** (preferred for repeatability): write each probe as a rich
+     NL query and run `prepare --query "<rich query>" --preserve-query-semantic`. This keeps the
+     raw query as the `semantic_query` (vector) and uses `expand_search_request` only to add BM25
+     synonyms **and structured filters** (location, education, company, seniority, headcount).
+     **Critical:** without `--preserve-query-semantic`, expansion rewrites the vector into generic
+     prose and homogenizes BM25, which collapses probes into one neighborhood and ~halves recall
+     (measured 58% vs 77% on identical seeds).
+   Always run with `--search-only` (no LLM) and a **UNIQUE `--ledger`** (shared ledger silently
    resumes a stale run — the #1 footgun):
    ```bash
    uv run --env-file .env --project . python \
@@ -52,9 +61,10 @@ that's what drops good candidates. Keep recall high and let the judges gate.
      --query "<label>" --payload-json <probe>/payload.json --ledger <probe>/ledger.json \
      --search-only --limit 80 --top-k 4000
    ```
-   payload = `{"semantic_query":"...","bm25_queries":["...",...],"set_id":"<set>"}`. Keep top
-   ~40–80 per probe. Dispatch the probe families as parallel sub-agents (Claude-priced) that can
-   read results and **expand-from-anchor** (seed a new probe from a strong hit's company/skills).
+   Keep top ~80–150 per probe (recall is the goal; the judge owns precision). Dispatch the probe
+   families as parallel sub-agents (Claude-priced) that read results and **expand-from-anchor**
+   (seed a new probe from a strong hit's company/skills). Diversity must come from the
+   **decomposition** (orthogonal, work-described seeds) — expansion homogenizes, so vary the seeds.
 
 3. **Merge** the union by `person_id`, attaching full hydrated profiles + lane provenance
    (which probe families surfaced each).

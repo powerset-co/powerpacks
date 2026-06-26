@@ -147,6 +147,27 @@ The vector side needs the specific wording to spread across the space. A fixed t
 emits ~18 diverse work-described seeds → each used directly as the semantic vector (+ expansion
 BM25) → judge reproduces hand-level recall without hand authoring.
 
+### Shipped fix + validation: `--preserve-query-semantic`
+
+Implemented as a flag on `search_network_pipeline prepare` (helper
+`pin_payload_semantic_query` in `shared/seniority_bands.py`): keep expansion's BM25 **and all
+structured filters** (location, education, company, seniority, headcount), but set
+`semantic_query` to the raw `--query`. Re-ran the **same 21 hand seeds** through it:
+
+| same 21 seeds | pool | GT recall |
+| --- | --- | --- |
+| expansion (lossy rewrite), top-80 | 510 | 58% |
+| **preserve-semantic, top-80** | 507 | **77%** |
+| **preserve-semantic, top-150** | 900 | **90%** |
+| raw hand, top-80 | 954 | 100% |
+
+Preserving the vector recovers most of the loss (58→77→90%). The residual ~10% vs raw-hand is
+the **BM25 channel**: expansion's BM25 is title-centric (every list leads "distributed systems
+engineer"), so its fusion contribution overlaps rather than diversifies — the 3 still missed at
+top-150 (Kourosh, Assaf, Rohun) were hand-found via *varied* BM25 probes. Net: the deterministic
+`--preserve-query-semantic` path + deeper keep + judge gets to ~90% with no hand authoring;
+closing the last 10% means diversifying BM25 too (or deeper keep / anchor expansion).
+
 ## New primitives + docs in this PR
 
 - `packs/search/docs/agentic-search.md` — the foundational agentic-search method (answers
