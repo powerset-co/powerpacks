@@ -304,6 +304,10 @@ Routes:
   (Gmail + iMessage/WhatsApp DMs), "context/dossier on a person", "who is
   <phone/name> in my messages", find same-person/merge candidates →
   `packs/ingestion/skills/deep-context/SKILL.md`
+- `$logbook`, raw verbatim message archive from a people CSV, "build a logbook",
+  "archive/dump everything I've said with these people", "every email/text/whatsapp
+  with <person> verbatim", append-only incremental sync (no LLM, no spend) →
+  `packs/ingestion/skills/logbook/SKILL.md`
 - `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
   `packs/ingestion/skills/import-twitter/SKILL.md`
 - `$discover-contacts`, local network ingestion orchestration, LinkedIn CSV plus
@@ -341,8 +345,13 @@ the primitive blocks/fails or the user asks for implementation details.
   `$deep-context` skill reads message bodies (Gmail + iMessage/WhatsApp DMs) to
   build per-person dossiers — deep body inspection is its whole purpose. DMs only;
   group bodies are never read; raw bodies are ephemeral/gitignored; dossiers store
-  synthesized facts, not verbatim text. This exception applies ONLY to
-  `$deep-context` — every other primitive stays metadata-only.
+  synthesized facts, not verbatim text. **Second scoped exception:** the
+  `$logbook` skill reads AND persists **verbatim** bodies — Gmail threads,
+  iMessage/WhatsApp DMs, and (with `--include-groups`) group chats — to build a
+  raw conversation archive; verbatim persistence including group bodies is its
+  whole purpose. Output lives gitignored under `.powerpacks/logbook/`; nothing is
+  sent anywhere (no LLM, no network). These two skills are the ONLY exceptions —
+  every other primitive stays metadata-only.
 - **Artifacts under `.powerpacks/`** are derivable. The agent can rebuild
   any of them from the source data; never paste full datasets into chat.
 
