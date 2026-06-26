@@ -65,6 +65,31 @@ role is founder/exec — exactly the IC discipline the rubric demands.
 `consensus_all.json` · `ground_truth_ranked.json` · `ground_truth_top10.md` ·
 `stage_matrix.csv` · `metrics.json` · `probes/<family>/…` (payloads + ledgers).
 
+## Epoch tracking (convergence)
+
+The thorough agentic + 3-judge run is the **gold yardstick** (`ground_truth/ground_truth_ranked.json`,
+31 strong). Each cheaper/tuned harness attempt is an **epoch** scored against it by
+`recruit/score_ground_truth_gaps.py`, appending a row to `convergence.csv`.
+
+**epoch-01 (naive baseline)** — single generic probe, top-50 by retrieval rank, no
+mixture-of-judges, no expand-from-anchor:
+- overall recall **16%** (5/31), recall@10 **3%**, recall@25 **6%**, precision@10 **10%**, 26 missed.
+
+That is the gap the agentic multi-probe + judge method closes. Future epochs (diverse probes,
+soft seniority + metro location, tool-evidence lanes, expand-from-anchor, then the judge panel)
+should climb recall@k toward 1.0 without re-admitting seniority-gate failures — watch
+`convergence.csv`.
+
+## New primitives + docs in this PR
+
+- `packs/search/docs/agentic-search.md` — the foundational agentic-search method (answers
+  "glob or primitives?": it's `search_network_pipeline --search-only`, hybrid BM25+vector, not glob).
+- `packs/search/primitives/recruit/judge_consensus.py` — combine N judge JSONL → consensus
+  stack-rank + ground-truth set (reproduces this run's 31-strong / top-10-unanimous result).
+- `packs/search/primitives/recruit/score_ground_truth_gaps.py` — score an epoch vs ground truth
+  (recall@k, precision@k, missed GT ids) + append to `convergence.csv`.
+- `tests/test_recruit.py` — unit tests for both (7 tests, green).
+
 ## Next (hill-climb / ralph loop — see `recruit-skill-plan.md`)
 
 This GT set is now the yardstick. Next: run the *default* `search-profile`/`$recruit` harness
