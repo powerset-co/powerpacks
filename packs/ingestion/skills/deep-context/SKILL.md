@@ -6,6 +6,13 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-26: Never rely on memory for ANY approval — always ask/confirm with the user, every
+  run. Added a top-level gate rule: a harness memory/auto-recall layer (Codex ~/.codex/memories,
+  Claude Code session memory, prior transcripts, a cached "previously accepted" answer) may
+  suggest a default but NEVER substitutes for the user's confirmation this run; do not mark a
+  gate "satisfied by a previous answer." Non-negotiable for --include-groups (reads others'
+  group bodies) and any paid step. Fixes a Codex run that skipped the group/cap ask by treating
+  a remembered "include groups, cap 1600" as pre-approved.
 - 2026-06-25: A `--force` rerun keeps the FULL checklist — pass `--force` to the two incremental
   steps and finish every step. "How to run" now says: still create + walk the entire checklist;
   add `--force` only to `collect` and `synthesize`; run to completion, pausing ONLY at the gate
@@ -164,6 +171,17 @@ Use your harness's plan/task tool:
   each to `in_progress` then `completed`.
 - **Codex:** `update_plan` with the steps, updating status as you go.
 - **Any other harness:** its equivalent todo/plan mechanism.
+
+**Never rely on memory for ANY approval — always ask and confirm with the user, every run.**
+This skill's gates are interactive: the owner-LinkedIn ask, the group-chat / message-cap
+choices, and every cost confirmation (synthesis, cluster, reconcile, deep-research). A harness
+memory / auto-recall layer (Codex `~/.codex/memories`, Claude Code session memory, prior
+transcripts, a cached "previously accepted" answer) MAY suggest a default — but it is **never**
+a substitute for the user's confirmation *this* run. Surface the suggested default and wait for
+an explicit OK; do not mark a gate "satisfied by a previous answer." This is non-negotiable for
+`--include-groups` (it reads other people's group-chat bodies) and for any paid step — never
+silently apply a remembered "yes." `--force` does not change this: it re-processes everyone, it
+does not pre-approve anything.
 
 **A `--force` rerun keeps the FULL checklist — you just pass `--force` to the two
 incremental steps and run every step to completion.** When the user says "rerun",
