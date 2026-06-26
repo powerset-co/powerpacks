@@ -94,6 +94,37 @@ quality by family (top-40, judged): company/observability/routing ~6% strong, in
 inference still held a top hire at rank 71, so **expand at the candidate level (anchor), not by
 shallow family precision**.
 
+## Benchmark: LLM expansion vs hand-decompose (is the deterministic path good enough?)
+
+Tested whether the existing `expand_search_request` (deterministic LLM query expansion) can
+match hand-written decomposed probes for recall. Each probe run `--search-only` top-80, union,
+scored vs the 31-person ground truth.
+
+| approach | probes | pool | GT recall |
+| --- | --- | --- | --- |
+| expansion, single full-JD query | 1 | 80 | 16% |
+| expansion, 6 archetype queries | 6 | 200 | 35% |
+| expansion, 16 archetype queries | 16 | 483 | 52% |
+| expansion, 16 archetypes @ top-200 | 16 | 936 | **61%** |
+| **hand-decompose, ~18 probes @ top-80** | 18 | 954 | **100%** |
+
+Findings:
+- **Per probe, expansion ≈ hand** (~10–16% each). Expansion generates *excellent keywords*
+  (14–16 BM25 synonyms: "cluster scheduler engineer", "vLLM engineer", "raft engineer"…).
+- The gap is **not** caused by: hard filters (expansion auto-adds `seniority_bands`/company-ids,
+  but stripping them changed nothing), probe count, retrieval depth (61% at hand-equal pool of
+  936), or expand-from-anchor (removing the 2 anchor probes left hand recall at 100%).
+- The gap **is** caused by **embedding-space diversity**. The LLM expansion produces
+  *title-centric, homogeneous* probes — nearly every archetype's BM25 began with "distributed
+  systems engineer" — so the probes overlap and the union saturates ~60%. The hand probes used
+  varied *work-described* semantic queries that spanned more of the space.
+
+Implication for `$recruit`: keep `expand_search_request` for deterministic *keyword* generation,
+but drive **diversity at the decomposition layer** (orthogonal axes: work-described not
+title-described, specific tech stacks, specific company tiers/problem domains) so the probe set
+covers the space. Precision is owned by the judge panel regardless. Pure auto-expansion of one
+(or a few title-y) queries tops out ~60% recall; diverse decomposition is what reaches 100%.
+
 ## New primitives + docs in this PR
 
 - `packs/search/docs/agentic-search.md` — the foundational agentic-search method (answers
