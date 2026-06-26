@@ -125,6 +125,28 @@ title-described, specific tech stacks, specific company tiers/problem domains) s
 covers the space. Precision is owned by the judge panel regardless. Pure auto-expansion of one
 (or a few title-y) queries tops out ~60% recall; diverse decomposition is what reaches 100%.
 
+### Controlled test: same seeds, expansion on vs off (the translation is lossy)
+
+To isolate the expansion step, the **same 21 hand-probe intents** were fed two ways, top-80, union:
+
+| same 21 seeds | pool | GT recall |
+| --- | --- | --- |
+| raw (rich query used verbatim as `semantic_query` + hand BM25) | 954 | **100%** |
+| expansion-rewritten | 510 | **58%** |
+
+Same seeds, same count — the only variable is expansion, and recall fell 100%→58% (pool shrank
+954→510 = more overlap). Why: expansion **genericizes the semantic_query** (e.g.
+"…building high-performance schedulers, control planes, global request routing…" →
+"Engineers specializing in distributed systems design and implementation…") and leads every
+BM25 list with "distributed systems engineer", so distinct intents collapse into the same
+embedding neighborhood.
+
+**Fix (deterministic, = the hand recipe):** use the NL seed **verbatim as `semantic_query`** and
+use `expand_search_request` only to *add* BM25 synonyms — never to rewrite the semantic vector.
+The vector side needs the specific wording to spread across the space. A fixed template that
+emits ~18 diverse work-described seeds → each used directly as the semantic vector (+ expansion
+BM25) → judge reproduces hand-level recall without hand authoring.
+
 ## New primitives + docs in this PR
 
 - `packs/search/docs/agentic-search.md` — the foundational agentic-search method (answers
