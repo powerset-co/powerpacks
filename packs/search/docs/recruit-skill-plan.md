@@ -31,7 +31,8 @@ emulates a full recruiting team end to end for a given JD:
 | `search-network` pipeline | **Real, merged.** Sources from TurboPuffer (Powerset set) or local DuckDB. `prepare`/`run`, `--filter-only`, `--seniority-bands`, `--current-role`, `--limit`. | `packs/search/primitives/search_network_pipeline/` |
 | Canonical JD evaluator | **Real, merged.** Bar-raiser rubric, per-trait evidence ladder, deterministic scoring, hard seniority gates. Default `gpt-5.4`, medium reasoning. | `packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py` |
 | LLM rerank / filter | **Real, merged.** Conservative cheap filter + full rerank with IC-vs-exec downranking. | `packs/search/primitives/llm_rerank_candidates/`, `.../llm_filter_candidates/` |
-| `search-highlight` harness | **NOT on `main`.** Lives only in the stale sibling worktree `powerpacks-highlight-orchestration` (branch `arthur/highlight-orchestration`, behind `main`). `highlight_search_pipeline.py` (1872 lines) + `search-highlight/SKILL.md` (314 lines). | sibling worktree only |
+| `search-highlight` harness | **DELETED (2026-06-26).** Was a stale unmerged sibling worktree, never on `main`; superseded by the `$recruit` skill below. | removed |
+| `$recruit` skill | **NEW on this branch.** Shotgun sourcing + mixture-of-judges + expand-from-anchor + epoch convergence. | `packs/search/skills/recruit/SKILL.md` |
 | Codex "ground truth" (Hebbia data-engineer) | **Invalid — do not trust.** Its "novel strong" picks were grepped from an **off-corpus** aleph-mvp Harmonic CSV (a different population than the searchable Powerset set), and **never run through the canonical judge**. Several aren't even in the set's TurboPuffer namespace. | `.powerpacks/search-highlight-ground-truth/` |
 
 ### Two foundational mistakes from the prior Codex session (do not repeat)
@@ -134,9 +135,9 @@ Once ground truth exists, treat each `$recruit` run as a version to score:
 
 1. **Ground truth v1 (this PR):** AgentMail JD plan → agentic scoped TP sourcing → canonical
    judge + consensus panel → top-10 for review. Artifacts + metrics + status doc.
-2. **Skill scaffolding:** port the `search-highlight` harness from the sibling worktree onto
-   `main` (rebase/cherry-pick), rename/route as `$recruit`, keep canonical eval/export as the
-   source of truth. (Later PR.)
+2. **Skill scaffolding:** ✅ `$recruit` skill created (`packs/search/skills/recruit/SKILL.md`),
+   built on the empirical shotgun/recall findings rather than porting the deleted
+   search-highlight harness. Canonical eval/export remain the source of truth.
 3. **Stage A — mixture-of-judges:** recruiter/talent-analyst/manager judge primitives;
    consensus + dissent. (Later PR.)
 4. **Stage B — expand-from-anchor sourcing loop + cross-round stack-rank.** (Later PR.)

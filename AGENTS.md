@@ -260,6 +260,10 @@ Routes:
 - `$search-profile`, job posting URLs, pasted job descriptions, complex role
   briefs, recruiter profile plan-and-execute →
   `packs/search/skills/search-profile/SKILL.md`
+- `$recruit`, emulate a recruiting team end-to-end for a JD, shotgun many small
+  archetype searches + mixture-of-judges shortlist + expand-from-anchor + epoch
+  convergence vs a judged ground-truth set (supersedes the deleted search-highlight) →
+  `packs/search/skills/recruit/SKILL.md`
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
 - `$search-sql`, relational/aggregate local people queries ("who overlapped

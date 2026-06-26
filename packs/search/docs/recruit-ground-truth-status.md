@@ -71,14 +71,28 @@ The thorough agentic + 3-judge run is the **gold yardstick** (`ground_truth/grou
 31 strong). Each cheaper/tuned harness attempt is an **epoch** scored against it by
 `recruit/score_ground_truth_gaps.py`, appending a row to `convergence.csv`.
 
-**epoch-01 (naive baseline)** — single generic probe, top-50 by retrieval rank, no
-mixture-of-judges, no expand-from-anchor:
-- overall recall **16%** (5/31), recall@10 **3%**, recall@25 **6%**, precision@10 **10%**, 26 missed.
+### Recall diagnostic (answers: "is the pipeline bad at recall, or are we misusing it?")
 
-That is the gap the agentic multi-probe + judge method closes. Future epochs (diverse probes,
-soft seniority + metro location, tool-evidence lanes, expand-from-anchor, then the judge panel)
-should climb recall@k toward 1.0 without re-admitting seniority-gate failures — watch
-`convergence.csv`.
+**Misusing it — recall is excellent; ranking + keep-depth is the lever.** A *single* naive broad
+probe at full depth contained **31/31** ground-truth people (ranks 5 → 5089). The pipeline finds
+everyone; one query's ranking just buries them, so a top-50 cap keeps ~16%. Diverse ("shotgun")
+probes fix it: each targeted probe pulls *its* relevant GT to the top (Kan Wu 3323→71, Sharma
+Podila 841→16, Kourosh 3830→41).
+
+### Convergence (`convergence.csv`)
+
+| epoch | sourcing | pool | GT recall |
+| --- | --- | --- | --- |
+| 01 naive | 1 probe, keep top-50 | 50 | **16%** |
+| 02 shotgun | ~18 probes, keep top-40 | 509 | **65%** |
+| 03 shotgun | ~18 probes, keep top-80 | 954 | **100%** |
+| 04 targeted-expansion | top-40 + deeper on productive families | 901 | **97%** |
+
+Takeaways for the harness: (1) **shotgun for recall, judge for precision** — never tighten
+retrieval to chase precision. (2) Keep ~top-80/probe (or top-40 + expand-from-anchor). (3) Pool
+quality by family (top-40, judged): company/observability/routing ~6% strong, inference ~1% — but
+inference still held a top hire at rank 71, so **expand at the candidate level (anchor), not by
+shallow family precision**.
 
 ## New primitives + docs in this PR
 
