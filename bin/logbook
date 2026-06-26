@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Thin runner for the $logbook raw-archive pipeline.
+#
+# Run this DIRECTLY in your own terminal (e.g. Ghostty with Full Disk Access) when
+# you want the iMessage channel — the Claude Code Bash tool spawns commands under a
+# helper process that does NOT inherit your terminal's Full Disk Access, so chat.db
+# reads can come back empty there. Gmail (msgvault) + WhatsApp (wacli) read fine
+# anywhere.
+#
+# Reads + PERSISTS verbatim message bodies (Gmail threads + iMessage/WhatsApp DMs,
+# and groups with --include-groups). Output is local + gitignored under
+# .powerpacks/logbook/. No LLM, no network, no spend.
+#
+# Usage:
+#   bin/logbook check    --csv "people.csv"          # per-channel reachability + depth
+#   bin/logbook estimate --csv "people.csv"          # cheap COUNT-only sizing + time
+#   bin/logbook deepen   --csv "people.csv" [--run]  # show/run the free local backfills
+#   bin/logbook export   --csv "people.csv" [--channels gmail,imessage,whatsapp] [--no-groups] [--slug S]
+#   bin/logbook sync     --csv "people.csv"          # incremental, append-only
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+PY=(uv run --project . python -m)
+MOD="packs.ingestion.primitives.logbook.logbook_export"
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  check|estimate|deepen|export|sync)
+    "${PY[@]}" "$MOD" "$cmd" "$@"
+    ;;
+  *)
+    echo "usage: bin/logbook {check|estimate|deepen|export|sync} --csv <people.csv> [args]" >&2
+    exit 2
+    ;;
+esac
