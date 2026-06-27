@@ -73,19 +73,10 @@ def build_modal_app(volume_name: str = DEFAULT_VOLUME_NAME):
     import modal  # type: ignore
 
     app = modal.App(APP_NAME)
-    image = (
-        modal.Image.debian_slim(python_version="3.12")
-        .workdir("/root")
-        .uv_sync(uv_project_dir=str(ROOT))
-        .add_local_dir(
-            ROOT,
-            remote_path="/root",
-            ignore=[".git", ".venv", ".powerpacks", "__pycache__", ".pytest_cache", ".ruff_cache"],
-        )
-    )
+    image = modal.Image.debian_slim(python_version="3.12").uv_sync()
     volume = modal.Volume.from_name(volume_name, create_if_missing=True)
 
-    @app.function(image=image, volumes={VOLUME_ROOT: volume}, timeout=60 * 60 * 2, serialized=True)
+    @app.function(image=image, volumes={VOLUME_ROOT: volume}, timeout=60 * 60 * 2)
     def run_remote_build(request: dict[str, Any]) -> dict[str, Any]:
         # The live implementation delegates to the repo-local deterministic CLI in
         # the Modal image. The plain request/response shape is intentionally kept
@@ -95,9 +86,7 @@ def build_modal_app(volume_name: str = DEFAULT_VOLUME_NAME):
 
         volume_run = _Path(request["volume_run_path"])
         volume_run.parent.mkdir(parents=True, exist_ok=True)
-        input_dir = volume_run.parent / "_inputs"
-        input_dir.mkdir(parents=True, exist_ok=True)
-        input_path = input_dir / f"{request['run_id']}.people.csv"
+        input_path = volume_run / "people.csv"
         input_path.write_text(request["people_csv_text"], encoding="utf-8")
         cmd = [
             sys.executable,
@@ -134,11 +123,11 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
             **plan,
             "status": "error",
             "kind": "modal_live_run_unverified",
-            "message": "Modal live execution is opt-in because it uses remote compute and a Modal Volume. Re-run with --allow-unverified-live-run for an explicit live run, or use the fallback local command.",
+            "message": "Modal live execution is a static scaffold until repo-source packaging and Volume behavior are verified by an explicit smoke. Re-run with --allow-unverified-live-run only for that opt-in smoke, or use the fallback local command.",
             "fallback_command": fallback_command(args),
         }
     try:
-        app, remote = build_modal_app(args.volume_name)
+        _app, remote = build_modal_app(args.volume_name)
     except ModuleNotFoundError:
         return modal_unavailable_payload(args, "modal_unavailable", "Modal SDK is not installed. Re-run with `uv run --with modal ...` for remote builds.")
     except Exception as exc:
@@ -146,15 +135,14 @@ def cmd_run(args: argparse.Namespace) -> dict[str, Any]:
 
     try:
         people_text = Path(args.input).read_text(encoding="utf-8-sig", errors="replace")
-        with app.run():
-            response = remote.remote({
-                "run_id": args.run_id,
-                "operator_id": args.operator_id,
-                "default_operator_id": args.default_operator_id,
-                "limit": args.limit,
-                "people_csv_text": people_text,
-                "volume_run_path": plan["volume"]["run_path"],
-            })
+        response = remote.remote({
+            "run_id": args.run_id,
+            "operator_id": args.operator_id,
+            "default_operator_id": args.default_operator_id,
+            "limit": args.limit,
+            "people_csv_text": people_text,
+            "volume_run_path": plan["volume"]["run_path"],
+        })
     except Exception as exc:
         return modal_unavailable_payload(args, "modal_execution_failed", f"Modal remote execution failed: {exc}")
 
@@ -180,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         cmd.add_argument("--volume-name", default=DEFAULT_VOLUME_NAME)
         cmd.add_argument("--pull-duckdb", action="store_true")
         cmd.add_argument("--materialize-compat-artifacts", action="store_true")
-        cmd.add_argument("--allow-unverified-live-run", action="store_true", help="Opt in to the live Modal path for a remote smoke/build")
+        cmd.add_argument("--allow-unverified-live-run", action="store_true", help="Opt in to the unverified live Modal path for a smoke test")
     return parser
 
 

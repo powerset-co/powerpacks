@@ -98,11 +98,7 @@ class ModalIndexBuildScaffoldTests(unittest.TestCase):
     def test_source_uses_lazy_modal_patterns_and_pyproject_has_no_modal_dependency(self) -> None:
         source = MODAL.read_text(encoding="utf-8")
         self.assertIn('modal.App(APP_NAME)', source)
-        self.assertIn('modal.Image.debian_slim(python_version="3.12")', source)
-        self.assertIn('.workdir("/root")', source)
-        self.assertIn('.uv_sync(uv_project_dir=str(ROOT))', source)
-        self.assertIn('.add_local_dir(', source)
-        self.assertIn('remote_path="/root"', source)
+        self.assertIn('modal.Image.debian_slim(python_version="3.12").uv_sync()', source)
         self.assertIn('modal.Volume.from_name(volume_name, create_if_missing=True)', source)
         self.assertIn('volume.commit()', source)
         before_lazy = source.split("def build_modal_app", 1)[0]

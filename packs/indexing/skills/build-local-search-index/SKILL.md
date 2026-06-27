@@ -73,14 +73,14 @@ For local hydration parity, use `POWERPACKS_LOCAL_SEARCH_DB` or `hydrate_people.
 
 ## Optional Modal acceleration
 
-Modal is opt-in only. Do not run Modal from setup/onboarding unless the user explicitly asks. The wrapper uses lazy Modal imports, packages repo source into the Modal image, and has been fixture-smoke verified for packaged source execution plus Modal Volume writes. Real `.powerpacks/network-import/merged/people.csv` data should still be validated separately in the target environment. Use a transient optional dependency:
+Modal is opt-in only. Do not run Modal from setup/onboarding unless the user explicitly asks. The wrapper is a lazy/static scaffold until an opt-in live Modal smoke verifies image source packaging and Volume behavior. Use a transient optional dependency:
 
 ```bash
 uv run --with modal --project . python packs/indexing/primitives/modal_index_build/modal_index_build.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --run-id modal-run --operator-id local:user
 uv run --with modal --project . python packs/indexing/primitives/modal_index_build/modal_index_build.py run --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --run-id modal-run --operator-id local:user --pull-duckdb
 ```
 
-The Modal wrapper uses lazy imports and no required `pyproject.toml` dependency. By default `run` returns structured `modal_live_run_unverified` JSON with a local fallback command; pass `--allow-unverified-live-run` only when an explicit remote Modal build/smoke is desired.
+The Modal wrapper uses lazy imports and no required `pyproject.toml` dependency. By default `run` returns structured `modal_live_run_unverified` JSON with a local fallback command until a live smoke is explicitly requested with `--allow-unverified-live-run`. Do not claim a live Modal Volume/app or remote execution path was verified unless an explicit live smoke was actually run.
 
 ## Constraints
 
