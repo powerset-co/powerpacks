@@ -96,6 +96,42 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_override_exclude_drops_person_with_valid_linkedin(self):
+        # `exclude` is a hard drop: even a person with a perfectly valid LinkedIn (who would
+        # otherwise be KEPT) must not make it into people.csv.
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                keep = Path(".powerpacks/network-import/gmail/run-1/keep.csv")
+                drop = Path(".powerpacks/network-import/gmail/run-1/drop.csv")
+                self.write_people_row(keep, {"id": "id-keep", "public_identifier": "patlee",
+                    "linkedin_url": "https://www.linkedin.com/in/patlee", "full_name": "Pat Lee",
+                    "primary_email": "pat@x.com", "source_channels": "gmail_msgvault"})
+                self.write_people_row(drop, {"id": "id-drop", "public_identifier": "samspam",
+                    "linkedin_url": "https://www.linkedin.com/in/samspam", "full_name": "Sam Spam",
+                    "primary_email": "sam@x.com", "source_channels": "gmail_msgvault"})
+                overrides = Path(".powerpacks/network-import/overrides/review.csv")
+                overrides.parent.mkdir(parents=True, exist_ok=True)
+                with overrides.open("w", newline="", encoding="utf-8") as fh:
+                    w = csv.DictWriter(fh, fieldnames=["public_identifier", "action", "approved",
+                        "match_emails", "match_phones", "confidence", "reason"])
+                    w.writeheader()
+                    w.writerow({"public_identifier": "samspam", "action": "exclude", "approved": "yes",
+                                "match_emails": "", "reason": "don't care about this person"})
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke(["run", "--output-dir", str(out_dir),
+                    "--input", str(keep), "--input", str(drop), "--overrides", str(overrides),
+                    "--retarget-people", ""])
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["overrides_excluded"], 1)
+                with (out_dir / "people.csv").open() as fh:
+                    rows = {r["full_name"]: r for r in csv.DictReader(fh)}
+                self.assertNotIn("Sam Spam", rows)   # excluded -> dropped despite valid LinkedIn
+                self.assertIn("Pat Lee", rows)        # untouched
+            finally:
+                os.chdir(old_cwd)
+
     def test_override_scope_mismatch_is_ignored(self):
         # An override scoped to a different email must NOT detach a same-public_id row.
         with tempfile.TemporaryDirectory() as tmp:

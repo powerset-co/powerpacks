@@ -285,17 +285,22 @@ def _scope_matches(ov: dict[str, Any], row: dict[str, Any]) -> bool:
 
 def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, Any]]) -> dict[str, int]:
     """Re-apply reconcile's self-heal during the fan-in, but ONLY for approved decisions
-    (auto = high-confidence, or a user `yes`): `detach`/`retarget` clear the wrong LinkedIn
-    (so the LinkedIn-only people.csv drops that old row — for a retarget the correct enriched
-    row arrives via retarget-people.csv); `verify` annotates the surviving row. Idempotent."""
-    detached = verified = retargeted = 0
+    (auto = high-confidence, or a user `yes`): `exclude` drops the person entirely (marks the
+    row `__excluded__` so the caller removes it regardless of LinkedIn — "I don't want this
+    person indexed"); `detach`/`retarget` clear the wrong LinkedIn (so the LinkedIn-only
+    people.csv drops that old row — for a retarget the correct enriched row arrives via
+    retarget-people.csv); `verify` annotates the surviving row. Idempotent."""
+    detached = verified = retargeted = excluded = 0
     if not overrides:
-        return {"detached": 0, "verified": 0, "retargeted": 0}
+        return {"detached": 0, "verified": 0, "retargeted": 0, "excluded": 0}
     for row in rows:
         ov = overrides.get(row_public_identifier(row))
         if not ov or ov["approved"] not in APPLIED_APPROVALS or not _scope_matches(ov, row):
             continue
-        if ov["action"] in ("detach", "retarget"):
+        if ov["action"] == "exclude":
+            row["__excluded__"] = True
+            excluded += 1
+        elif ov["action"] in ("detach", "retarget"):
             row["linkedin_url"] = ""
             row["public_identifier"] = ""
             detached += ov["action"] == "detach"
@@ -305,7 +310,7 @@ def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, A
             row["linkedin_verified_confidence"] = ov["confidence"]
             row["linkedin_verified_reason"] = ov["reason"]
             verified += 1
-    return {"detached": detached, "verified": verified, "retargeted": retargeted}
+    return {"detached": detached, "verified": verified, "retargeted": retargeted, "excluded": excluded}
 
 
 def stable_source_key(row: dict[str, str]) -> str:
@@ -654,6 +659,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     # clears the wrong link so that person drops out here; a `verify` annotates the row.
     overrides = load_overrides(override_path)
     override_stats = apply_overrides(merged_rows, overrides)
+    # `exclude` is a hard drop (user doesn't want this person indexed) — remove before the
+    # LinkedIn keep-filter so it's counted as an exclusion, not a missing-LinkedIn filter.
+    merged_rows = [row for row in merged_rows if not row.pop("__excluded__", False)]
     unfiltered_merged_rows = len(merged_rows)
     filtered_without_linkedin = sum(1 for row in merged_rows if not stable_linkedin_key(row))
     filtered_without_rapidapi_payload = sum(1 for row in merged_rows if not has_rapidapi_profile(row))
@@ -687,6 +695,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "overrides_detached": override_stats["detached"],
         "overrides_verified": override_stats["verified"],
         "overrides_retargeted": override_stats["retargeted"],
+        "overrides_excluded": override_stats["excluded"],
         "merged_rows": len(merged_rows),
         "rapidapi_payload_rows": len(merged_rows),
         "linkedin_groups": len(groups),

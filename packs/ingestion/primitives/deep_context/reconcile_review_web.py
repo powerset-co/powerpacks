@@ -57,7 +57,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 APPLIED_APPROVED = {"auto", "yes"}
-VALID_TABS = {"all", "review", "verified", "detached", "conflict", "fixed", "decided"}
+VALID_TABS = {"all", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided"}
 
 
 # --- model: join verdicts.jsonl (display) with review.csv (decisions) -------
@@ -66,6 +66,8 @@ def candidate_state(cand: dict[str, Any]) -> str:
     """The effective per-candidate state from its current decision row."""
     action = (cand.get("action") or "").strip().lower()
     approved = (cand.get("approved") or "").strip().lower()
+    if action == "exclude" and approved in APPLIED_APPROVED:
+        return "excluded"
     if action == "retarget" and approved in APPLIED_APPROVED:
         return "fixed"
     if approved in APPLIED_APPROVED:
@@ -78,6 +80,8 @@ def candidate_state(cand: dict[str, Any]) -> str:
 def parent_status(parent: dict[str, Any]) -> str:
     """One status chip per parent, by priority (what most needs the user's eye first)."""
     states = [candidate_state(c) for c in parent["candidates"]]
+    if "excluded" in states:
+        return "excluded"
     if "fixed" in states:
         return "fixed"
     if "review" in states:
@@ -192,7 +196,7 @@ def parent_matches_query(parent: dict[str, Any], q: str) -> bool:
 
 
 def summarize(parents: list[dict[str, Any]]) -> dict[str, int]:
-    s = {k: 0 for k in ("total", "review", "verified", "detached", "conflict", "fixed", "decided")}
+    s = {k: 0 for k in ("total", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided")}
     s["total"] = len(parents)
     for p in parents:
         s[parent_status(p)] += 1
@@ -216,6 +220,10 @@ def apply_decision(review_path: Path, verdicts_path: Path, pub: str, decision: s
         row["action"], row["approved"], row["new_linkedin_url"], row["new_public_identifier"] = "verify", "yes", "", ""
     elif decision == "detach":
         row["action"], row["approved"], row["new_linkedin_url"], row["new_public_identifier"] = "detach", "yes", "", ""
+    elif decision == "exclude":
+        # "I don't want this person indexed at all." The fan-in merge drops the row entirely
+        # (not just the link), and deep-research recovery skips it — unlike detach.
+        row["action"], row["approved"], row["new_linkedin_url"], row["new_public_identifier"] = "exclude", "yes", "", ""
     elif decision == "fix":
         url = normalize_linkedin_url(new_url or "")
         if not url:
@@ -287,7 +295,8 @@ def esc(value: Any) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
-STATUS_LABEL = {"review": "needs review", "verified": "verified", "detached": "detached", "fixed": "fixed"}
+STATUS_LABEL = {"review": "needs review", "verified": "verified", "detached": "detached",
+                "fixed": "fixed", "excluded": "excluded"}
 
 
 # Direction-aware judgment line: the confidence is confidence IN THE VERDICT, so a
@@ -357,6 +366,7 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any]) -> str:
         <button class='btn detach' data-act='detach'>Detach (wrong person)</button>
         <span class='fixwrap'><input class='fixurl' placeholder='paste correct LinkedIn URL'>
           <button class='btn fix' data-act='fix'>Fix</button></span>
+        <button class='btn exclude' data-act='exclude-person' title="Don't index this person at all — drops them from people.csv (whole person, all LinkedIns)">✕ Exclude person</button>
         <button class='btn reset' data-act='reset' title='revert to the model decision'>↺</button>
       </div>
     </div>"""
@@ -443,13 +453,14 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         "Every change autosaves.</div>",
         "</div><div class='stats'>",
         f"<div class='stat'><span>needs review</span><strong data-count='review'>{summary['review']}</strong></div>",
-        f"<div class='stat'><span>verified</span><strong>{summary['verified']}</strong></div>",
-        f"<div class='stat'><span>detached</span><strong>{summary['detached']}</strong></div>",
+        f"<div class='stat'><span>verified</span><strong data-count='verified'>{summary['verified']}</strong></div>",
+        f"<div class='stat'><span>excluded</span><strong data-count='excluded'>{summary['excluded']}</strong></div>",
         f"<div class='stat'><span>you decided</span><strong data-count='decided'>{summary['decided']}</strong></div>",
         "</div></header>",
         "<nav class='tabs'>",
         tab_link("conflict", "Merged", "conflict"),
         tab_link("review", "Needs review", "review"),
+        tab_link("excluded", "Excluded", "excluded"),
         tab_link("all", "All", "total"),
         "</nav>",
         "<form class='filters' method='get' action='/'>",
@@ -583,40 +594,93 @@ summary::-webkit-details-marker{display:none}
 .toast{position:fixed;right:16px;bottom:16px;background:#17202a;color:#fff;border-radius:8px;padding:9px 13px;font-size:13px;opacity:0;transform:translateY(8px);transition:.15s;pointer-events:none}
 .toast.show{opacity:1;transform:translateY(0)}
 .muted{color:var(--muted)}
+.chip-excluded{background:#e8eaed;color:#5b6876}
+.state-excluded{color:#5b6876}
+.cand-excluded{border-color:#cfd4da;background:#f3f4f6;opacity:.72}
+.parent.p-excluded{opacity:.62}
+.parent.p-excluded .pname{text-decoration:line-through}
+.btn.exclude{color:var(--bad)}
+.btn.exclude:hover{background:var(--badbg);border-color:#e6b0a6}
+.btn.exclude.on{background:var(--bad);border-color:var(--bad);color:#fff}
 @media(max-width:820px){header{display:block}.stats{grid-template-columns:repeat(2,1fr);min-width:0;margin-top:12px}summary{flex-wrap:wrap}.picked{flex-basis:100%}}
 """
 
 JS = r"""
 const toast=document.getElementById('toast');let tt=null;
-function showToast(t){toast.textContent=t;toast.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>toast.classList.remove('show'),1200)}
+function showToast(t){toast.textContent=t;toast.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>toast.classList.remove('show'),1300)}
+const LBL={review:'needs review',verified:'verified',detached:'detached',fixed:'fixed',excluded:'excluded'};
+function candStateOf(c){return ([...c.classList].find(x=>x.startsWith('cand-')&&x!=='cand')||'cand-review').slice(5)}
 function setCandState(cand,action,approved,newUrl){
-  cand.classList.remove('cand-verified','cand-detached','cand-fixed','cand-review');
-  let st='review';
-  if(action==='retarget'&&(approved==='yes'||approved==='auto'))st='fixed';
-  else if(approved==='yes'||approved==='auto')st=(action==='detach')?'detached':'verified';
+  cand.classList.remove('cand-verified','cand-detached','cand-fixed','cand-review','cand-excluded');
+  const ok=(approved==='yes'||approved==='auto');let st='review';
+  if(action==='exclude'&&ok)st='excluded';
+  else if(action==='retarget'&&ok)st='fixed';
+  else if(ok)st=(action==='detach')?'detached':'verified';
   cand.classList.add('cand-'+st);
-  const lbl={review:'needs review',verified:'verified',detached:'detached',fixed:'fixed'}[st];
-  const se=cand.querySelector('.cand-state');se.className='cand-state state-'+st;se.textContent=lbl;
+  const se=cand.querySelector('.cand-state');se.className='cand-state state-'+st;se.textContent=LBL[st];
   cand.querySelectorAll('.btn').forEach(b=>b.classList.remove('on'));
   if(st==='verified')cand.querySelector('.btn.keep').classList.add('on');
   if(st==='detached')cand.querySelector('.btn.detach').classList.add('on');
   if(st==='fixed')cand.querySelector('.btn.fix').classList.add('on');
+  if(st==='excluded')cand.querySelector('.btn.exclude').classList.add('on');
+}
+function parentStatusFromCands(parent){
+  const states=[...parent.querySelectorAll('.cand')].map(candStateOf);
+  if(states.includes('excluded'))return 'excluded';
+  if(states.includes('fixed'))return 'fixed';
+  if(states.includes('review'))return 'review';
+  if(states.includes('verified'))return 'verified';
+  if(states.length&&states.every(s=>s==='detached'||s==='rejected'))return 'detached';
+  return 'review';
+}
+function updateCounts(){
+  const c={review:0,verified:0,detached:0,fixed:0,excluded:0,decided:0};
+  document.querySelectorAll('.parent').forEach(p=>{c[parentStatusFromCands(p)]++;if(p.classList.contains('decided'))c.decided++;});
+  ['review','verified','detached','excluded','decided'].forEach(k=>{
+    const el=document.querySelector('.stat strong[data-count="'+k+'"]');if(el)el.textContent=c[k];});
+}
+// The fix for "looks like nothing happened": after any decision, repaint the PARENT row's
+// chip + the header counts, not just the inner card.
+function refreshParent(parent){
+  const st=parentStatusFromCands(parent);
+  ['p-review','p-verified','p-detached','p-fixed','p-excluded'].forEach(x=>parent.classList.remove(x));
+  parent.classList.add('p-'+st,'decided');
+  const chip=parent.querySelector(':scope > summary .chip');
+  if(chip){['chip-review','chip-verified','chip-detached','chip-fixed','chip-excluded'].forEach(x=>chip.classList.remove(x));
+    chip.classList.add('chip-'+st);chip.textContent=LBL[st];}
+  updateCounts();
+}
+async function postDecide(cand,act,newUrl){
+  const body=new URLSearchParams({pub:cand.dataset.pub,decision:act});
+  if(newUrl)body.set('new_url',newUrl);
+  const r=await fetch('/decide',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+  if(!r.ok)throw new Error(await r.text());return r.json();
 }
 async function decide(cand,act){
-  const pub=cand.dataset.pub;const body=new URLSearchParams({pub,decision:act});
-  if(act==='fix'){const u=cand.querySelector('.fixurl').value.trim();if(!u){showToast('paste a LinkedIn URL first');return}body.set('new_url',u)}
-  try{const r=await fetch('/decide',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
-    if(!r.ok)throw new Error(await r.text());const j=await r.json();
-    setCandState(cand,j.action,j.approved,j.new_url);
+  let url='';
+  if(act==='fix'){url=cand.querySelector('.fixurl').value.trim();if(!url){showToast('paste a LinkedIn URL first');return}}
+  try{const j=await postDecide(cand,act,url);setCandState(cand,j.action,j.approved,j.new_url);
+    refreshParent(cand.closest('.parent'));
     showToast({keep:'Kept',detach:'Detached',fix:'Re-targeted',reset:'Reset to model'}[act]||'Saved');
   }catch(e){showToast('Save failed: '+e.message)}
 }
-document.querySelectorAll('.cand .btn').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();decide(b.closest('.cand'),b.dataset.act)}));
+document.querySelectorAll('.cand .btn:not(.exclude)').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();decide(b.closest('.cand'),b.dataset.act)}));
+// "Exclude person" sits with the per-candidate buttons but acts on the WHOLE person:
+// excludes — or restores — every candidate at once. Click again to undo.
+document.querySelectorAll('.btn.exclude').forEach(x=>x.addEventListener('click',async e=>{
+  e.preventDefault();
+  const parent=x.closest('.parent');const cands=[...parent.querySelectorAll('.cand')];
+  const excluding=parentStatusFromCands(parent)!=='excluded';const act=excluding?'exclude':'reset';
+  try{for(const c of cands){const j=await postDecide(c,act,'');setCandState(c,j.action,j.approved,j.new_url);}
+    refreshParent(parent);showToast(excluding?"Excluded — won’t be indexed":'Restored');
+  }catch(err){showToast('Save failed: '+err.message)}
+}));
 // initialize button highlight from current state
-document.querySelectorAll('.cand').forEach(c=>{const st=[...c.classList].find(x=>x.startsWith('cand-')&&x!=='cand');
+document.querySelectorAll('.cand').forEach(c=>{
   if(c.classList.contains('cand-verified'))c.querySelector('.btn.keep').classList.add('on');
   if(c.classList.contains('cand-detached'))c.querySelector('.btn.detach').classList.add('on');
-  if(c.classList.contains('cand-fixed'))c.querySelector('.btn.fix').classList.add('on');});
+  if(c.classList.contains('cand-fixed'))c.querySelector('.btn.fix').classList.add('on');
+  if(c.classList.contains('cand-excluded'))c.querySelector('.btn.exclude').classList.add('on');});
 // lazy-load dossier on first expand
 document.querySelectorAll('details.dossier').forEach(d=>d.addEventListener('toggle',async()=>{
   if(!d.open||d.dataset.loaded)return;d.dataset.loaded='1';const pre=d.querySelector('.dosstext');
@@ -664,7 +728,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             pub = (form.get("pub") or [""])[0]
             decision = (form.get("decision") or [""])[0]
             new_url = (form.get("new_url") or [""])[0]
-            if not pub or decision not in {"keep", "detach", "fix", "reset"}:
+            if not pub or decision not in {"keep", "detach", "fix", "reset", "exclude"}:
                 self.send_bytes(b"bad request", "text/plain", status=400)
                 return
             try:
