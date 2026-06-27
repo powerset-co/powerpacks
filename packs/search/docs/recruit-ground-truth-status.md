@@ -197,6 +197,24 @@ JD confirms the recipe (decompose → preserve-semantic shotgun → mixture-of-j
 is **not overfit to distributed systems**. Two-tier judging also validated as the cost-saver
 (triage drops the bulk cheaply before the expensive panel).
 
+### JD#2 hill-climb against an INDEPENDENT thorough ground truth (not circular)
+
+To measure JD#2 honestly (guardrail #3), a thorough GT was built **independently** of the
+deterministic recipe: 5 hand-crafted sourcers (~25 diverse probes + expand-from-anchor) → 75
+union → 3-judge panel → **45 consensus-strong** (top-10 unanimous: Cooper Raterink, Hanson Wang,
+Gabor Angeli, Lucy Zhang, Saqib Ameen, …). Then the deterministic recipe was scored against it:
+
+| JD#2 epoch | sourcing | pool | recall vs independent GT (45) |
+| --- | --- | --- | --- |
+| 01 deterministic, 6 seeds | 6 | 339 | 36% |
+| 02 deterministic, 18 diverse seeds + preserve-semantic + diversify, top-200 | 18 | 1856 | **87%** |
+
+Same lever as AgentMail — **seed diversity/count** — now confirmed against a GT produced by a
+*different* process, so it is not circular and not overfit. The 18 seeds were written from the JD,
+**not** reverse-engineered from the misses (guardrail). The 6 still missed at top-200 (e.g. a
+Chroma founding eng, an xAI MTS) are anchor/company-reachable; closing 87→~95% is the
+**expand-from-anchor** lever seeded from the recipe's *own* judged-strong (never from the GT).
+
 ## New primitives + docs in this PR
 
 - `packs/search/docs/agentic-search.md` — the foundational agentic-search method (answers
