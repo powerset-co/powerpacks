@@ -22,6 +22,52 @@ def _load(name: str):
 jc = _load("judge_consensus")
 sg = _load("score_ground_truth_gaps")
 dv = _load("diversify_probe_bm25")
+dj = _load("decompose_jd")
+ea = _load("expand_from_anchor")
+
+
+class TestDecomposeJd(unittest.TestCase):
+    def test_parse_seeds_strings_and_objects(self):
+        self.assertEqual(dj.parse_seeds({"seeds": ["a", "b"]}),
+                         [{"key": "q00", "query": "a"}, {"key": "q01", "query": "b"}])
+        self.assertEqual(dj.parse_seeds({"seeds": [{"query": "x"}, {"seed": "y"}]}),
+                         [{"key": "q00", "query": "x"}, {"key": "q01", "query": "y"}])
+
+    def test_parse_seeds_truncates_and_skips_empty(self):
+        out = dj.parse_seeds({"seeds": ["a", "", "b", "c"]}, n=2)
+        self.assertEqual([s["query"] for s in out], ["a", "b"])
+
+    def test_parse_seeds_raises_on_empty(self):
+        with self.assertRaises(ValueError):
+            dj.parse_seeds({"seeds": []})
+
+    def test_build_messages_includes_jd_and_count(self):
+        msgs = dj.build_messages("Build RAG systems", 7)
+        self.assertIn("Build RAG systems", msgs[-1]["content"])
+        self.assertIn("7", msgs[-1]["content"])
+
+
+class TestExpandFromAnchor(unittest.TestCase):
+    def test_anchor_to_seed_from_profile(self):
+        prof = {"name": "Ada", "headline": "AI Engineer at Notion",
+                "positions": [{"title": "AI Engineer", "company_name": "Notion", "company_description": "productivity"}],
+                "tech_skills": ["RAG", "LLM"]}
+        seed = ea.anchor_to_seed(prof)
+        self.assertEqual(seed["anchor"], "Ada")
+        self.assertIn("Notion", seed["query"])
+        self.assertIn("proven-strong profile", seed["query"])
+
+    def test_anchor_to_seed_fallback_and_none(self):
+        self.assertIn("Acme", ea.anchor_to_seed({"current_title": "Eng", "current_company": "Acme"})["query"])
+        self.assertIsNone(ea.anchor_to_seed({"name": "x"}))  # no usable text
+
+    def test_build_seeds_takes_top_k_by_score_and_keys(self):
+        recs = [{"name": "lo", "headline": "h1", "mean_score": 0.3},
+                {"name": "hi", "headline": "h2", "mean_score": 0.9}]
+        seeds = ea.build_seeds(recs, top_k=1)
+        self.assertEqual(len(seeds), 1)
+        self.assertEqual(seeds[0]["anchor"], "hi")
+        self.assertEqual(seeds[0]["key"], "anchor00")
 
 _sb_spec = importlib.util.spec_from_file_location(
     "seniority_bands", ROOT / "packs" / "search" / "primitives" / "shared" / "seniority_bands.py"

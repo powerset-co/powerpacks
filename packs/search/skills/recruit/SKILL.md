@@ -36,77 +36,61 @@ people, etc. Measured convergence (recall vs a 31-person judged ground truth):
 So: **shotgun for recall, judge for precision.** Don't tighten retrieval to get precision —
 that's what drops good candidates. Keep recall high and let the judges gate.
 
-## Flow
+## Flow (every step is a callable primitive — Codex / any harness runs it identically)
 
-1. **Plan archetypes.** From the JD, design **many** distinct candidate archetypes (≈5 families ×
-   2–4 angles = 10–18 probes), not one query. Cover role synonyms, sub-skills, tool/evidence,
-   adjacent strong-signal companies. Defer seniority/location gating to the judges (keep
-   retrieval loose).
+Legend: 🆕 = new `recruit/` primitive · ✅ = existing primitive. No step relies on a harness
+improvising; the only LLM calls are `decompose_jd` (1 call) + the judge.
 
-2. **Shotgun source (FREE, read-only).** One probe = one payload. Two ways:
-   - **Hand payload** (max control): `{"semantic_query":"<rich work-described sentence>",
-     "bm25_queries":["...",...],"set_id":"<set>"}` → `run --payload-json … --search-only`.
-   - **Deterministic via expansion** (preferred for repeatability): write each probe as a rich
-     NL query and run `prepare --query "<rich query>" --preserve-query-semantic`. This keeps the
-     raw query as the `semantic_query` (vector) and uses `expand_search_request` only to add BM25
-     synonyms **and structured filters** (location, education, company, seniority, headcount).
-     **Critical:** without `--preserve-query-semantic`, expansion rewrites the vector into generic
-     prose and homogenizes BM25, which collapses probes into one neighborhood and ~halves recall
-     (measured 58% vs 77% on identical seeds).
-   Always run with `--search-only` (no LLM) and a **UNIQUE `--ledger`** (shared ledger silently
-   resumes a stale run — the #1 footgun):
+1. **Decompose the JD → diverse seeds** 🆕 (1 LLM call). Emits ~18 diverse, *work-described*
+   seeds (what the person built, not titles) — diversity here is what drives recall.
    ```bash
-   uv run --env-file .env --project . python \
-     packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
-     --query "<label>" --payload-json <probe>/payload.json --ledger <probe>/ledger.json \
-     --search-only --limit 80 --top-k 4000
+   uv run --env-file .env --project . python packs/search/primitives/recruit/decompose_jd.py \
+     --jd-file <run>/jd.txt --n 18 --out <run>/seeds.json
    ```
-   Keep top ~150–200 per probe (recall is the goal; the judge owns precision). Dispatch the probe
-   families as parallel sub-agents (Claude-priced) that read results and **expand-from-anchor**
-   (seed a new probe from a strong hit's company/skills). Diversity must come from the
-   **decomposition** (orthogonal, work-described seeds) — expansion homogenizes, so vary the seeds.
 
-   **Then de-homogenize BM25 (default).** After preparing all probe payloads, drop the shared
-   lead BM25 terms so the probes stop retrieving the same people (data-driven, generalizes):
+2. **Shotgun source** 🆕 runner over ✅ primitives (read-only, ~free). One command chains
+   `prepare --preserve-query-semantic` (raw query as vector + expansion BM25 + filters:
+   location/education/company/seniority/headcount) → `diversify_probe_bm25` (drop shared lead
+   terms) → `run --search-only` (unique `--ledger` per probe) → deduped union with profiles:
    ```bash
-   uv run --project . python packs/search/primitives/recruit/diversify_probe_bm25.py \
-     --payloads <run>/probes/*/payload.json --out-dir <run>/probes_diversified
+   uv run --env-file .env --project . python packs/search/primitives/recruit/run_shotgun.py \
+     --seeds <run>/seeds.json --run-dir <run> --limit 200 --top-k 6000
    ```
-   Run the diversified payloads. Measured lift: ~90% → 97% recall at top-200 (the distinctive
-   BM25 terms help; only the shared heads hurt).
+   Writes `<run>/union.jsonl`. (Validated end-to-end: 12 auto-seeds → 90% recall vs GT; 18 → ~97%.)
+   **Why the flags matter:** without `--preserve-query-semantic` expansion rewrites the vector and
+   ~halves recall; without diversify the probes overlap. Both are defaults in the runner.
 
-3. **Merge** the union by `person_id`, attaching full hydrated profiles + lane provenance
-   (which probe families surfaced each).
+3. **Triage (tier-1, only if the union is big > ~120)** ✅ `llm_filter_candidates` — cheap
+   conservative filter that drops obvious non-matches and passes borderline. Cap survivors to a
+   high-signal pool (~100, prioritizing multi-probe hits) so the panel stays sharp. Small unions
+   skip this.
 
-4. **Two-tier judging (the precision stage).** The full panel on a huge union is expensive, so:
-   - **Tier 1 — cheap triage (default for pools > ~120):** one lenient sub-agent reads the union
-     from metadata and drops only clear non-matches (recruiters, sales, pure investors,
-     non-technical PMs, off-domain). Keep borderline; the panel decides. Then cap to a high-signal
-     pool (~100, prioritizing multi-probe hits) so panel quality stays high.
-   - **Tier 2 — mixture-of-judges:** three independent Claude judges (talent-analyst / recruiter /
-     hiring-manager), each reading the canonical rubric
-     (`packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py`
-     SYSTEM_PROMPT) and scoring **every** survivor with the house seniority hard-gates. Write one
-     `judges/<name>.jsonl` per judge (`person_id, name, seniority_fit, in_band, verdict, score,
-     rationale`).
-   For small pools (≤ ~120) skip Tier 1 and run the panel directly.
+4. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
+   rubric with the IC seniority hard-gates. For a **mixture-of-judges**, run it 2–3× (vary model /
+   reasoning effort / seed) and combine; for a single canonical verdict, run it once. Each pass
+   writes a `judges/<name>.jsonl`.
+   *(Cheap alternative for Claude-Code-only sessions: dispatch 2–3 Claude sub-agents as judges
+   against the same rubric — same output schema, no OpenAI. Not portable to other harnesses.)*
 
-5. **Consensus + rank:**
+5. **Consensus + rank** 🆕:
    ```bash
    uv run --project . python packs/search/primitives/recruit/judge_consensus.py \
-     --judges-dir <run>/judges --union <run>/candidates_union.jsonl --out-dir <run>/shortlist
+     --judges-dir <run>/judges --union <run>/union.jsonl --out-dir <run>/shortlist
    ```
-   → `ground_truth_ranked.json` (consensus-strong, stack-ranked) = the shortlist. Default gate:
-   majority in-band AND majority not-out.
+   → `shortlist/ground_truth_ranked.json` (consensus-strong, stack-ranked). Gate: majority
+   in-band AND majority not-out. Then ✅ `export_candidate_shortlist` for the sendable CSV.
 
-6. **Expand the good pools.** Take the top 1–2 **judged-strong** candidates and run
-   expand-from-anchor probes seeded from their profile to pull similar people up; re-judge the
-   net-new. (Anchor-level expansion beats family-level heuristics: a family that looks weak at
-   top-40 can still hold strong candidates deeper — e.g. an inference probe surfaced a top hire
-   only at rank 71.)
+6. **Expand-from-anchor (optional, closes the last ~10%)** 🆕. Take your *own* judged-strong
+   picks as anchors, build "more like this" seeds from their profiles, and re-source (loop to
+   step 2). NEVER seed from the eval ground truth — that's looking up the answers.
+   ```bash
+   uv run --project . python packs/search/primitives/recruit/expand_from_anchor.py \
+     --anchors <run>/shortlist/ground_truth_ranked.json --top-k 3 --out <run>/anchor_seeds.json
+   uv run --env-file .env --project . python packs/search/primitives/recruit/run_shotgun.py \
+     --seeds <run>/anchor_seeds.json --run-dir <run>/anchor --limit 200
+   ```
 
-7. **Measure convergence (epochs).** Score any run against a trusted ground-truth set and track
-   it so successive tunings converge:
+7. **Measure convergence (epochs)** 🆕. Score any run against a trusted ground-truth set:
    ```bash
    uv run --project . python packs/search/primitives/recruit/score_ground_truth_gaps.py \
      --ground-truth <run>/ground_truth/ground_truth_ranked.json \
@@ -114,6 +98,10 @@ that's what drops good candidates. Keep recall high and let the judges gate.
      --epoch-dir <epoch> --epoch-label epoch-NN --convergence-csv <run>/convergence.csv
    ```
    `gaps.json` = recall@k / precision@k / missed-GT; `convergence.csv` = one row per epoch.
+
+**Ground truth** (the yardstick for hill-climbing) is built once by running steps 1–5 the
+*thorough* way — many hand-diverse seeds + the full judge panel — independently of the cheap
+recipe you are scoring (so the recall number isn't circular).
 
 ## Avoiding local maxima (be strict)
 
@@ -147,20 +135,28 @@ Judges run as Claude sub-agents → Claude-priced, **~zero OpenAI**. The canonic
 `shortlist/{consensus.json,ground_truth_ranked.json}` · `epochs/<epoch>/{config,candidates,gaps}.json` ·
 `convergence.csv`. Candidate PII stays gitignored; surface the shortlist to the user.
 
-## Default recipe (validated; ~97% recall on 2 different JDs, filters intact, ~zero OpenAI)
+## Default recipe (fully primitive-driven; validated ~90% from auto-seeds, ~97% tuned)
 
-decompose JD → ~15–18 **diverse, work-described** seeds → `prepare --preserve-query-semantic`
-(raw query as vector + expansion BM25 + filters) → `diversify_probe_bm25` (drop shared lead
-terms) → `run --search-only` top-150/200, unique `--ledger` per probe → merge union → two-tier
-judging (triage if large → 3-judge panel) → `judge_consensus` → `score_ground_truth_gaps`.
+`decompose_jd` → `run_shotgun` (prepare --preserve-query-semantic → diversify_probe_bm25 →
+run --search-only) → [`llm_filter_candidates` triage if big] → `evaluate_profile_candidates`
+(×N for a panel) → `judge_consensus` → `export_candidate_shortlist`; optional
+`expand_from_anchor` loop; `score_ground_truth_gaps` to track epochs. Every step is a CLI a
+harness can call — nothing depends on an agent improvising.
 
 ## Primitives
 
-- `search_network_pipeline … prepare --preserve-query-semantic` — expansion that keeps the raw
-  query as the semantic vector + adds BM25 + structured filters (location/education/company/
-  seniority/headcount). Without the flag, expansion rewrites the vector and ~halves recall.
-- `search_network_pipeline … run --search-only` — shotgun retrieval (hybrid BM25+vector, scoped).
-- `recruit/diversify_probe_bm25.py` — drop shared/homogeneous BM25 lead terms across the probe set.
-- `merge_candidate_frontier` — union/dedupe (or inline).
-- `recruit/judge_consensus.py` — combine judges → consensus shortlist.
-- `recruit/score_ground_truth_gaps.py` — epoch scoring + convergence.
+New (`packs/search/primitives/recruit/`):
+- `decompose_jd.py` 🆕 — JD → N diverse work-described seeds (1 LLM call).
+- `run_shotgun.py` 🆕 — runs the seed set through prepare→diversify→run, emits the union.
+- `diversify_probe_bm25.py` 🆕 — drop shared/homogeneous BM25 lead terms across the probe set.
+- `expand_from_anchor.py` 🆕 — judged-strong anchors → "more like this" seeds (no LLM).
+- `judge_consensus.py` 🆕 — combine judge passes → consensus shortlist.
+- `score_ground_truth_gaps.py` 🆕 — epoch scoring + convergence vs a ground-truth set.
+
+Existing (reused):
+- `search_network_pipeline … prepare --preserve-query-semantic` — keeps the raw query as the
+  semantic vector + adds BM25 + structured filters (location/education/company/seniority/
+  headcount). Without the flag, expansion rewrites the vector and ~halves recall.
+- `search_network_pipeline … run --search-only` — read-only hybrid (BM25+vector) scoped retrieval + Postgres hydrate.
+- `llm_filter_candidates` — cheap conservative triage. `evaluate_profile_candidates` — canonical
+  judge rubric + IC seniority gates. `export_candidate_shortlist` — sendable shortlist.
