@@ -16,6 +16,73 @@ from packs.indexing.lib.manifest import duckdb_checksum_file
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 LOCAL_TABLES = ["local_people_positions", "local_summaries", "local_people_education", "local_education", "local_profiles"]
 
+PEOPLE_POSITION_COLUMNS = [
+    ("id", "VARCHAR"),
+    ("position_id", "VARCHAR"),
+    ("person_id", "VARCHAR"),
+    ("base_id", "VARCHAR"),
+    ("position_title", "VARCHAR"),
+    ("company_id", "VARCHAR"),
+    ("company_name", "VARCHAR"),
+    ("city", "VARCHAR"),
+    ("state", "VARCHAR"),
+    ("country", "VARCHAR"),
+    ("macro_region", "VARCHAR"),
+    ("metro_areas", "VARCHAR[]"),
+    ("role_track", "VARCHAR"),
+    ("seniority_band", "VARCHAR"),
+    ("role_ids", "VARCHAR[]"),
+    ("is_current", "BOOLEAN"),
+    ("total_years_experience", "DOUBLE"),
+    ("allowed_operator_ids", "VARCHAR[]"),
+    ("start_date_epoch", "BIGINT"),
+    ("end_date_epoch", "BIGINT"),
+    ("inferred_birth_year", "INTEGER"),
+    ("x_twitter_followers", "INTEGER"),
+    ("linkedin_followers", "INTEGER"),
+    ("linkedin_connections", "INTEGER"),
+    ("ig_followers", "INTEGER"),
+    ("phrase_tokens", "VARCHAR[]"),
+    ("word_tokens", "VARCHAR[]"),
+    ("char_tokens", "VARCHAR[]"),
+    ("d2q_tokens", "VARCHAR[]"),
+    ("vector", "DOUBLE[]"),
+]
+SUMMARY_COLUMNS = [
+    ("id", "VARCHAR"),
+    ("person_id", "VARCHAR"),
+    ("base_id", "VARCHAR"),
+    ("summary", "VARCHAR"),
+    ("tech_skills", "VARCHAR[]"),
+    ("allowed_operator_ids", "VARCHAR[]"),
+    ("phrase_tokens", "VARCHAR[]"),
+    ("word_tokens", "VARCHAR[]"),
+    ("vector", "DOUBLE[]"),
+]
+PEOPLE_EDUCATION_COLUMNS = [
+    ("id", "VARCHAR"),
+    ("person_id", "VARCHAR"),
+    ("base_id", "VARCHAR"),
+    ("canonical_education_id", "VARCHAR"),
+    ("school_name", "VARCHAR"),
+    ("degree", "VARCHAR"),
+    ("degree_normalized", "VARCHAR"),
+    ("field_of_study", "VARCHAR"),
+    ("start_year", "INTEGER"),
+    ("end_year", "INTEGER"),
+    ("graduation_year", "INTEGER"),
+    ("allowed_operator_ids", "VARCHAR[]"),
+]
+EDUCATION_COLUMNS = [
+    ("id", "VARCHAR"),
+    ("canonical_education_id", "VARCHAR"),
+    ("school_name_tokens", "VARCHAR[]"),
+    ("school_name", "VARCHAR"),
+    ("display_value", "VARCHAR"),
+    ("person_count", "INTEGER"),
+]
+PROFILE_COLUMNS = [("person_id", "VARCHAR"), ("base_id", "VARCHAR"), ("name", "VARCHAR"), ("profile_json", "VARCHAR"), ("total_interactions", "INTEGER")]
+
 
 def _tokens(value: Any) -> list[str]:
     if value is None:
@@ -95,6 +162,29 @@ def _table_count(con: Any, table: str) -> int:
     return int(con.execute(f"select count(*) from {table}").fetchone()[0])
 
 
+def _create_table(con: Any, table: str, columns: list[tuple[str, str]]) -> None:
+    con.execute(f"create table {table} ({', '.join(f'{name} {kind.lower()}' for name, kind in columns)})")
+
+
+def _duckdb_columns_spec(columns: list[tuple[str, str]]) -> str:
+    return "{" + ", ".join(f"{name}:'{kind}'" for name, kind in columns) + "}"
+
+
+def _bulk_insert_jsonl(con: Any, table: str, columns: list[tuple[str, str]], rows: list[tuple[Any, ...]], path: Path) -> None:
+    if not rows:
+        return
+    names = [name for name, _ in columns]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(dict(zip(names, row)), ensure_ascii=False, separators=(",", ":")))
+            handle.write("\n")
+    con.execute(
+        f"insert into {table} select {', '.join(names)} from read_json(?, format='newline_delimited', columns={_duckdb_columns_spec(columns)})",
+        [str(path)],
+    )
+
+
 def build_local_duckdb(run_dir: str | Path, db_path: str | Path | None = None) -> dict[str, Any]:
     """Build local-search.duckdb from a completed search-index run directory."""
 
@@ -106,8 +196,13 @@ def build_local_duckdb(run_dir: str | Path, db_path: str | Path | None = None) -
     rd = Path(run_dir)
     db = Path(db_path) if db_path else rd / "local-search.duckdb"
     tmp = db.with_name(f".{db.name}.tmp")
+    load_dir = db.with_name(f".{db.name}.loads")
     if tmp.exists():
         tmp.unlink()
+    if load_dir.exists():
+        import shutil
+
+        shutil.rmtree(load_dir)
     db.parent.mkdir(parents=True, exist_ok=True)
 
     people_records = list(iter_jsonl(rd / "records/people.records.jsonl"))
@@ -119,7 +214,7 @@ def build_local_duckdb(run_dir: str | Path, db_path: str | Path | None = None) -
 
     con = duckdb.connect(str(tmp))
     try:
-        con.execute("create table local_people_positions (id varchar, position_id varchar, person_id varchar, base_id varchar, position_title varchar, company_id varchar, company_name varchar, city varchar, state varchar, country varchar, macro_region varchar, metro_areas varchar[], role_track varchar, seniority_band varchar, role_ids varchar[], is_current boolean, total_years_experience double, allowed_operator_ids varchar[], start_date_epoch bigint, end_date_epoch bigint, inferred_birth_year integer, x_twitter_followers integer, linkedin_followers integer, linkedin_connections integer, ig_followers integer, phrase_tokens varchar[], word_tokens varchar[], char_tokens varchar[], d2q_tokens varchar[], vector double[])")
+        _create_table(con, "local_people_positions", PEOPLE_POSITION_COLUMNS)
         people_rows = [
             (
                     _str(row.get("id")), _str(row.get("position_id") or row.get("id")), _str(row.get("person_id") or row.get("base_id")), _str(row.get("base_id") or row.get("person_id")),
@@ -131,33 +226,28 @@ def build_local_duckdb(run_dir: str | Path, db_path: str | Path | None = None) -
             )
             for row in people_records
         ]
-        if people_rows:
-            con.executemany("insert into local_people_positions values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", people_rows)
+        _bulk_insert_jsonl(con, "local_people_positions", PEOPLE_POSITION_COLUMNS, people_rows, load_dir / "local_people_positions.jsonl")
 
-        con.execute("create table local_summaries (id varchar, person_id varchar, base_id varchar, summary varchar, tech_skills varchar[], allowed_operator_ids varchar[], phrase_tokens varchar[], word_tokens varchar[], vector double[])")
+        _create_table(con, "local_summaries", SUMMARY_COLUMNS)
         summary_rows = []
         for row in summaries_records:
             pid = _str(row.get("person_id") or row.get("base_id") or row.get("id"))
             text_row = summary_text.get(pid) or summary_text.get(_str(row.get("id"))) or {}
             text = _str(text_row.get("text") or row.get("summary") or "")
             summary_rows.append((_str(row.get("id") or pid), pid, pid, text, [str(v) for v in _list(row.get("tech_skills"))], [str(v) for v in _list(row.get("allowed_operator_ids"))], _tokens(text), _tokens(text) + [str(v).lower() for v in _list(row.get("tech_skills"))], _vector(row)))
-        if summary_rows:
-            con.executemany("insert into local_summaries values (?, ?, ?, ?, ?, ?, ?, ?, ?)", summary_rows)
+        _bulk_insert_jsonl(con, "local_summaries", SUMMARY_COLUMNS, summary_rows, load_dir / "local_summaries.jsonl")
 
-        con.execute("create table local_people_education (id varchar, person_id varchar, base_id varchar, canonical_education_id varchar, school_name varchar, degree varchar, degree_normalized varchar, field_of_study varchar, start_year integer, end_year integer, graduation_year integer, allowed_operator_ids varchar[])")
+        _create_table(con, "local_people_education", PEOPLE_EDUCATION_COLUMNS)
         education_rows = [(_str(r.get("id")), _str(r.get("person_id") or r.get("base_id")), _str(r.get("base_id") or r.get("person_id")), _str(r.get("canonical_education_id")), _str(r.get("school_name")), _str(r.get("degree")), _str(r.get("degree_normalized")), _str(r.get("field_of_study")), _int(r.get("start_year")), _int(r.get("end_year")), _int(r.get("graduation_year")), [str(v) for v in _list(r.get("allowed_operator_ids"))]) for r in education_records]
-        if education_rows:
-            con.executemany("insert into local_people_education values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", education_rows)
+        _bulk_insert_jsonl(con, "local_people_education", PEOPLE_EDUCATION_COLUMNS, education_rows, load_dir / "local_people_education.jsonl")
 
-        con.execute("create table local_education (id varchar, canonical_education_id varchar, school_name_tokens varchar[], school_name varchar, display_value varchar, person_count integer)")
+        _create_table(con, "local_education", EDUCATION_COLUMNS)
         school_rows = [(_str(r.get("id") or r.get("canonical_education_id")), _str(r.get("canonical_education_id") or r.get("id")), _tokens(r.get("school_name")), _str(r.get("school_name")), _str(r.get("display_value") or r.get("school_name")), _int(r.get("person_count")) or 0) for r in schools_records]
-        if school_rows:
-            con.executemany("insert into local_education values (?, ?, ?, ?, ?, ?)", school_rows)
+        _bulk_insert_jsonl(con, "local_education", EDUCATION_COLUMNS, school_rows, load_dir / "local_education.jsonl")
 
-        con.execute("create table local_profiles (person_id varchar, base_id varchar, name varchar, profile_json varchar, total_interactions integer)")
+        _create_table(con, "local_profiles", PROFILE_COLUMNS)
         profile_rows = [(_str(p.get("person_id") or p.get("base_id") or p.get("id")), _str(p.get("base_id") or p.get("person_id") or p.get("id")), _str(p.get("name")), json.dumps(p, ensure_ascii=False, sort_keys=True), _int(p.get("total_interactions"))) for p in profiles]
-        if profile_rows:
-            con.executemany("insert into local_profiles values (?, ?, ?, ?, ?)", profile_rows)
+        _bulk_insert_jsonl(con, "local_profiles", PROFILE_COLUMNS, profile_rows, load_dir / "local_profiles.jsonl")
 
         counts = {table: _table_count(con, table) for table in LOCAL_TABLES}
         checksums = {table: table_checksum(con, table) for table in LOCAL_TABLES}
@@ -171,6 +261,10 @@ def build_local_duckdb(run_dir: str | Path, db_path: str | Path | None = None) -
             pass
         if tmp.exists():
             tmp.unlink()
+        if load_dir.exists():
+            import shutil
+
+            shutil.rmtree(load_dir)
 
     stats = {"duckdb": str(db), "checksum": str(checksum_path), "tables": counts, "content_checksums": checksums, "schema_version": "local-duckdb-v1"}
     write_json(rd / "stats/build_local_duckdb.json", stats)
