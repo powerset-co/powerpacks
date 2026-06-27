@@ -168,6 +168,35 @@ top-150 (Kourosh, Assaf, Rohun) were hand-found via *varied* BM25 probes. Net: t
 `--preserve-query-semantic` path + deeper keep + judge gets to ~90% with no hand authoring;
 closing the last 10% means diversifying BM25 too (or deeper keep / anchor expansion).
 
+## Hill-climb continued: closing the residual 10% (epoch-13)
+
+The preserve-semantic residual was the BM25 channel. Re-ran the 21 seeds varying the BM25:
+
+| variant (preserve-semantic) | top-150 | top-200 |
+| --- | --- | --- |
+| full BM25 | 90% | — |
+| pure-vector (no BM25) | 84% | 90% |
+| **BM25-diversified (drop shared lead terms)** | **94%** | **97%** |
+
+Dropping only the homogeneous lead terms ("distributed systems engineer", "infrastructure
+engineer", "member of technical staff") while keeping the distinctive BM25 terms reaches **97%**
+(epoch-13). So distinctive BM25 *helps*; only the shared heads hurt. Deterministic recipe now:
+preserve-semantic + drop-shared-BM25 + top-200 + judge ≈ hand-level, filters intact.
+
+## Generalization: a second, different JD (applied-AI, not distsys)
+
+Validated the tuned recipe on **"Founding Applied AI Engineer"** (LLM products / RAG / agents —
+a different role shape) against the same Powerset set. Deterministic preserve-semantic shotgun
+(6 work-described seeds, drop-shared-BM25, top-150) → **339** union → **two-tier judging**
+(cheap triage 339→279, then 3-judge panel on a 100-cap high-signal pool) → consensus.
+
+Result: **16 consensus-strong, top-10 unanimous** (3/3 in-band). The IC seniority gate again did
+the heavy lifting — most AI people in this network are *current founders/CTOs* → correctly
+`too_senior` for an IC role. Clean convergence on a role with no shared vocabulary with the first
+JD confirms the recipe (decompose → preserve-semantic shotgun → mixture-of-judges → consensus)
+is **not overfit to distributed systems**. Two-tier judging also validated as the cost-saver
+(triage drops the bulk cheaply before the expensive panel).
+
 ## New primitives + docs in this PR
 
 - `packs/search/docs/agentic-search.md` — the foundational agentic-search method (answers
