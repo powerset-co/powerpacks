@@ -29,6 +29,9 @@ Artifacts are written under:
 ```text
 .powerpacks/search-index/<run-id>/
 ├── ledger.json
+├── index-manifest.json
+├── local-search.duckdb
+├── local-search.duckdb.sha256
 ├── unified/
 │   ├── flattened_people.jsonl
 │   └── unified_person.csv
@@ -52,6 +55,20 @@ Artifacts are written under:
 └── stats/*.json
 ```
 
+After a run is fully ready, the latest validated local DB is also copied to:
+
+```text
+.powerpacks/search-index/local-search.duckdb
+.powerpacks/search-index/local-search.duckdb.sha256
+.powerpacks/search-index/latest-manifest.json
+```
+
+`ready` means contract validation passed, the DuckDB opened read-only, all local
+search namespaces were probed, and local hydration from `local_profiles` passed.
+Unchanged inputs/code/contracts/operator scope reuse an operator-scoped cache
+under `.powerpacks/search-index/cache/...`; default cache hits materialize the
+same compatibility artifacts as a rebuilt run.
+
 Resume/status commands use the ledger file:
 
 ```bash
@@ -61,4 +78,53 @@ uv run --project . python packs/indexing/primitives/build_processing_pipeline/bu
   --ledger .powerpacks/search-index/local-run/ledger.json
 ```
 
-All indexing code is stdlib-only/local-file only: no LLM, network, Supabase, Postgres, or TurboPuffer calls.
+`status` is read-only and reports the ledger, manifest, and ready state without
+adopting artifacts or mutating cache state.
+
+Validate the generated DB/searchability explicitly:
+
+```bash
+uv run --project . python packs/indexing/primitives/validate_local_search_index/validate_local_search_index.py run \
+  --db .powerpacks/search-index/local-run/local-search.duckdb
+uv run --project . python packs/indexing/primitives/validate_index_parity/validate_index_parity.py run \
+  --people-csv .powerpacks/network-import/merged/people.csv \
+  --run-dir .powerpacks/search-index/local-run \
+  --db .powerpacks/search-index/local-run/local-search.duckdb
+```
+
+All local indexing code is local-file only: no LLM, Supabase, Postgres, or
+TurboPuffer calls. The deterministic local build does not generate embeddings;
+vector parity is only checked when a vector-bearing source artifact/index is
+explicitly provided.
+
+## Optional Modal acceleration
+
+Powerpacks does not require Modal and does not run it from setup/onboarding. The
+wrapper added here is a lazy/static scaffold for explicit remote builds; do not
+describe it as live-verified unless a Modal smoke has actually run against a
+packaged image and Volume. Inspect the planned paths first with a transient
+Modal dependency:
+
+```bash
+uv run --with modal --project . python packs/indexing/primitives/modal_index_build/modal_index_build.py plan \
+  --input .powerpacks/network-import/merged/people.csv \
+  --output-dir .powerpacks/search-index \
+  --run-id modal-run \
+  --operator-id local:user
+
+# The run subcommand is gated until a live smoke verifies source packaging/Volume behavior.
+uv run --with modal --project . python packs/indexing/primitives/modal_index_build/modal_index_build.py run \
+  --input .powerpacks/network-import/merged/people.csv \
+  --output-dir .powerpacks/search-index \
+  --run-id modal-run \
+  --operator-id local:user \
+  --pull-duckdb
+```
+
+The Modal wrapper uses lazy imports, no required `pyproject.toml` dependency, an
+operator-scoped Volume path, and structured JSON errors/fallback commands when
+Modal is unavailable. Full compatibility artifacts stay in the Volume by default;
+pulling all JSONL/stats/profile artifacts should be explicit. By default `run`
+returns a structured `modal_live_run_unverified` error with the local fallback
+command; use `--allow-unverified-live-run` only for an explicit smoke to verify
+repo-source packaging and Volume behavior in the target Modal environment.

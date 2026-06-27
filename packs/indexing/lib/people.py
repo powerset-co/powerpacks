@@ -8,14 +8,13 @@ artifacts without LLM or network calls.
 
 from __future__ import annotations
 
-import csv
 import json
 import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from packs.indexing.lib.io import write_csv as _write_csv, write_jsonl as _write_jsonl
+from packs.indexing.lib.io import iter_csv_rows, write_csv as _write_csv, write_jsonl as _write_jsonl
 
 try:  # pragma: no cover - exercised by direct script execution paths
     from .identity import canonical_person_key, position_uuid, stable_company_id, stable_person_id_from_key
@@ -393,10 +392,9 @@ def flatten_people(rows: Iterable[dict[str, Any]] | str | Path) -> list[dict[str
     """Normalize Powerpacks people.csv rows into deterministic local profiles."""
 
     if isinstance(rows, (str, Path)):
-        with Path(rows).open(newline="", encoding="utf-8") as handle:
-            raw_rows = list(csv.DictReader(handle))
+        raw_rows = iter_csv_rows(rows)
     else:
-        raw_rows = list(rows)
+        raw_rows = rows
 
     flattened: list[dict[str, Any]] = []
     seen: set[str] = set()

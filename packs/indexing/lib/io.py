@@ -8,9 +8,16 @@ from __future__ import annotations
 import csv
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
+
+
+try:
+    csv.field_size_limit(sys.maxsize)
+except OverflowError:  # pragma: no cover - platform dependent fallback
+    csv.field_size_limit(2**31 - 1)
 
 
 def ensure_parent(path: str | Path) -> Path:
@@ -24,8 +31,14 @@ def ensure_parent(path: str | Path) -> Path:
 def read_csv(path: str | Path) -> list[dict[str, str]]:
     """Read a UTF-8/UTF-8-BOM CSV into dictionaries."""
 
+    return list(iter_csv_rows(path))
+
+
+def iter_csv_rows(path: str | Path) -> Iterator[dict[str, str]]:
+    """Yield UTF-8/UTF-8-BOM CSV rows without materializing the whole file."""
+
     with Path(path).open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(csv.DictReader(handle))
+        yield from csv.DictReader(handle)
 
 
 def csv_header(path: str | Path) -> list[str]:
@@ -50,8 +63,23 @@ def write_csv(path: str | Path, fieldnames: list[str], rows: Iterable[dict[str, 
 def write_jsonl(path: str | Path, records: Iterable[dict[str, Any]]) -> Path:
     """Write JSON objects as newline-delimited UTF-8 JSON."""
 
-    text = "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in records)
-    return atomic_write_text(path, text)
+    return write_jsonl_stream(path, records)
+
+
+def write_jsonl_stream(path: str | Path, records: Iterable[dict[str, Any]]) -> Path:
+    """Atomically stream JSONL records to disk without building one huge string."""
+
+    out = ensure_parent(path)
+    fd, tmp = tempfile.mkstemp(prefix=f".{out.name}.", suffix=".tmp", dir=str(out.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        os.replace(tmp, out)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return out
 
 
 def append_jsonl(path: str | Path, records: Iterable[dict[str, Any]]) -> Path:
@@ -67,16 +95,34 @@ def append_jsonl(path: str | Path, records: Iterable[dict[str, Any]]) -> Path:
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     """Read newline-delimited JSON objects, skipping blank lines."""
 
+    return list(iter_jsonl(path))
+
+
+def iter_jsonl(path: str | Path) -> Iterator[dict[str, Any]]:
+    """Yield newline-delimited JSON objects, skipping blank lines."""
+
     p = Path(path)
     if not p.exists():
-        return []
-    out: list[dict[str, Any]] = []
+        return
     with p.open(encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if line:
-                out.append(json.loads(line))
-    return out
+                yield json.loads(line)
+
+
+def count_jsonl(path: str | Path) -> int:
+    """Count non-blank JSONL lines without parsing the payloads."""
+
+    p = Path(path)
+    if not p.exists():
+        return 0
+    count = 0
+    with p.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                count += 1
+    return count
 
 
 def atomic_write_text(path: str | Path, text: str) -> Path:

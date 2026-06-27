@@ -52,6 +52,7 @@ import asyncio
 import concurrent.futures
 import csv
 import gzip
+import http.client
 import json
 import os
 import re
@@ -312,7 +313,7 @@ async def rerank_one(
                     continue
                 error = f"http {e.code}: {e.reason}"
                 break
-            except (urllib.error.URLError, TimeoutError, asyncio.TimeoutError) as e:
+            except (urllib.error.URLError, TimeoutError, asyncio.TimeoutError, http.client.RemoteDisconnected, OSError) as e:
                 if attempt < max_retries:
                     backoff = 0.5 * (2**attempt)
                     await asyncio.sleep(backoff)

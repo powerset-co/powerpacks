@@ -19,6 +19,9 @@ STEPS = [
     "build_unified_profiles",
     "build_summary_records",
     "validate_contracts",
+    "build_local_duckdb",
+    "validate_local_search_index",
+    "validate_local_hydration",
 ]
 
 
@@ -46,13 +49,23 @@ class IndexingPipelineTests(unittest.TestCase):
             result = run_cli("run", "--output-dir", str(base / "search-index"), "--run-id", "test-run", "--input", str(FIXTURE_PEOPLE), "--force")
             run_dir = base / "search-index/test-run"
             self.assertEqual(result["status"], "completed")
+            self.assertTrue(result["ready"])
             self.assertEqual(result["counts"]["flatten_people"]["people"], 4)
             self.assertEqual(result["counts"]["build_roles"]["roles"], 3)
             self.assertTrue((run_dir / "ledger.json").exists())
+            self.assertTrue((run_dir / "index-manifest.json").exists())
+            self.assertTrue((run_dir / "local-search.duckdb").exists())
+            self.assertTrue((base / "search-index/local-search.duckdb").exists())
             self.assertTrue((run_dir / "stats/validate_contracts.json").exists())
+            self.assertTrue((run_dir / "stats/validate_local_search_index.json").exists())
+            self.assertTrue((run_dir / "stats/validate_local_hydration.json").exists())
             self.assertTrue((run_dir / "records/people.records.jsonl").exists())
             self.assertTrue((run_dir / "records/summaries.records.jsonl").exists())
             self.assertEqual([row["id"] for row in json.loads((run_dir / "ledger.json").read_text())["steps"]], STEPS)
+            manifest = json.loads((run_dir / "index-manifest.json").read_text())
+            self.assertEqual(manifest["status"], "ready")
+            self.assertTrue(manifest["validation"]["namespace_probes_ok"])
+            self.assertTrue(manifest["validation"]["hydration_parity_ok"])
             self.assertTrue(json.loads((run_dir / "stats/validate_contracts.json").read_text())["people"]["ok"])
             for record_file in ["records/people.records.jsonl", "records/summaries.records.jsonl"]:
                 for row in read_jsonl(run_dir / record_file):
@@ -82,7 +95,7 @@ class IndexingPipelineTests(unittest.TestCase):
             self.assertEqual(result["status"], "completed")
             ledger_steps = [row["id"] for row in json.loads((run_dir / "ledger.json").read_text())["steps"] if row.get("status")=="completed"]
             self.assertEqual(ledger_steps.count("flatten_people"), 1)
-            self.assertEqual(ledger_steps[-1], "validate_contracts")
+            self.assertEqual(ledger_steps[-1], "validate_local_hydration")
 
 
 if __name__ == "__main__":

@@ -198,12 +198,12 @@ def _school_name(edu: dict[str, Any]) -> str:
 
 def _degree_normalized(degree: str) -> str:
     compact = re.sub(r"[^a-z]", "", degree.lower())
-    if compact in {"bs", "bsc", "ba", "bachelors", "bachelorofscience"}:
-        return "Bachelor"
+    if compact in {"bs", "bsc", "ba", "bachelors", "bachelor", "bachelorofscience"}:
+        return "Bachelors"
     if compact == "mba":
         return "MBA"
-    if compact in {"ms", "msc", "ma", "masters", "masterofscience"}:
-        return "Master"
+    if compact in {"ms", "msc", "ma", "masters", "master", "masterofscience"}:
+        return "Masters"
     if compact in {"phd", "doctorate"}:
         return "PhD"
     return degree.strip().title() if degree else ""

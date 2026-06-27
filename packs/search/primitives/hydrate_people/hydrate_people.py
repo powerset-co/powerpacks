@@ -19,6 +19,7 @@ sys.path.insert(0, str(LIB_DIR))
 
 from postgres_client import fetch_interaction_counts, fetch_person_rows  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
+from local_hydration_store import load_profiles_from_duckdb, load_profiles_from_jsonl  # noqa: E402
 
 
 DEFAULT_ENV_FILE = Path(os.getenv("POWERPACKS_ENV_FILE", ".env"))
@@ -257,15 +258,30 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         }, indent=2, sort_keys=True))
         return
 
-    env_file = Path(args.env_file) if args.env_file else None
-    rows = fetch_person_rows(requested, env_file=env_file)
-    interaction_counts = fetch_interaction_counts(requested, env_file=env_file)
     metadata = candidate_metadata(state)
+    source: dict[str, Any]
+    local_db = args.local_db or os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
+    if args.local_profiles:
+        raw_profiles, source = load_profiles_from_jsonl(args.local_profiles, requested)
+    elif local_db:
+        raw_profiles, source = load_profiles_from_duckdb(local_db, requested)
+    else:
+        env_file = Path(args.env_file) if args.env_file else None
+        rows = fetch_person_rows(requested, env_file=env_file)
+        interaction_counts = fetch_interaction_counts(requested, env_file=env_file)
+        raw_profiles = []
+        for row in rows:
+            if interaction_counts.get(str(row.get("id"))):
+                row["total_interactions"] = interaction_counts[str(row.get("id"))]
+            raw_profiles.append(normalize_hydrated_context(row))
+        source = {
+            "type": "postgres_contract",
+            "backend": "postgres_supabase",
+            "env_file": str(env_file) if env_file else None,
+        }
+
     profiles = []
-    for row in rows:
-        if interaction_counts.get(str(row.get("id"))):
-            row["total_interactions"] = interaction_counts[str(row.get("id"))]
-        profile = normalize_hydrated_context(row)
+    for profile in raw_profiles:
         profiles.append(apply_candidate_metadata(profile, metadata.get(str(profile.get("person_id")))))
     order = {pid: idx for idx, pid in enumerate(requested)}
     profiles.sort(key=lambda profile: order.get(str(profile.get("person_id")), len(order)))
@@ -290,11 +306,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         "llm_profiles_path": str(llm_profiles_jsonl),
         "profiles_compressed": not args.no_compress_profiles,
         "artifacts": artifacts,
-        "source": {
-            "type": "postgres_contract",
-            "backend": "postgres_supabase",
-            "env_file": str(env_file) if env_file else None,
-        },
+        "source": source,
     }
     elapsed_ms = int((time.time() - started) * 1000)
     if args.write_state:
@@ -306,6 +318,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Hydrate Powerpacks candidate IDs through the Postgres/Supabase contract")
     parser.add_argument("--state", required=True)
     parser.add_argument("--env-file", default=str(DEFAULT_ENV_FILE))
+    parser.add_argument("--local-db", help="Hydrate from a local-search.duckdb local_profiles table instead of Postgres")
+    parser.add_argument("--local-profiles", help="Hydrate from a profiles/hydrated_profiles.jsonl artifact instead of Postgres")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

@@ -16,6 +16,23 @@
     "people_csv": ".powerpacks/network-import/merged/people.csv"
   },
   "artifact_root": ".powerpacks/search-index/<run-id>",
+  "ready_artifacts": {
+    "manifest": ".powerpacks/search-index/<run-id>/index-manifest.json",
+    "duckdb": ".powerpacks/search-index/<run-id>/local-search.duckdb",
+    "latest_duckdb": ".powerpacks/search-index/local-search.duckdb"
+  },
+  "cache": {
+    "default": "operator-scoped content fingerprint cache",
+    "path": ".powerpacks/search-index/cache/<operator-scope-slug-or-hash>/<fingerprint>",
+    "compatibility_mode": "cache hits materialize full pipeline artifacts"
+  },
+  "optional_remote_acceleration": {
+    "provider": "modal",
+    "required": false,
+    "status": "lazy_static_scaffold_until_live_smoke_verified",
+    "command": "uv run --with modal --project . python packs/indexing/primitives/modal_index_build/modal_index_build.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --run-id modal-run --operator-id local:user",
+    "live_run_gate": "modal_index_build.py run requires --allow-unverified-live-run until a live smoke verifies source packaging and Volume behavior"
+  },
   "steps": [
     {"id": "flatten_people", "kind": "local_transform"},
     {"id": "build_roles", "kind": "local_transform"},
@@ -25,6 +42,9 @@
     {"id": "build_people_records", "kind": "local_transform"},
     {"id": "build_unified_profiles", "kind": "local_transform"},
     {"id": "build_summary_records", "kind": "local_transform"},
-    {"id": "validate_contracts", "kind": "local_validation"}
+    {"id": "validate_contracts", "kind": "local_validation"},
+    {"id": "build_local_duckdb", "kind": "local_transform"},
+    {"id": "validate_local_search_index", "kind": "local_validation"},
+    {"id": "validate_local_hydration", "kind": "local_validation"}
   ]
 }

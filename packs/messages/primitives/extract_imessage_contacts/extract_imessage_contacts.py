@@ -12,7 +12,6 @@ import argparse
 import csv
 import glob
 import json
-import os
 import re
 import sqlite3
 import subprocess
@@ -455,13 +454,13 @@ def cmd_open_privacy_settings(args: argparse.Namespace) -> None:
         "opened": False,
         "error": None,
     }
+    if args.print_only:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
     if sys.platform != "darwin":
         result["error"] = "privacy settings helper is macOS-only"
         print(json.dumps(result, indent=2, sort_keys=True))
         raise SystemExit(2)
-    if args.print_only:
-        print(json.dumps(result, indent=2, sort_keys=True))
-        return
 
     try:
         for url in urls:

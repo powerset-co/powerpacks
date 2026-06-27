@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 import unittest
@@ -76,6 +75,7 @@ class PipelineEvalPromptTests(unittest.TestCase):
         self.assertIn("extract-search-query", prompt)
 
 
+@unittest.skipUnless(pipeline_eval is not None, "pipeline eval module not loaded")
 class PipelineEvalSkipLlmTests(unittest.TestCase):
     def test_default_is_skip(self) -> None:
         self.assertTrue(pipeline_eval.skip_llm({}))

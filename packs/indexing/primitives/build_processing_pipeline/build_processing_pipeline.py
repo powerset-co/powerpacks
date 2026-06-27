@@ -24,10 +24,23 @@ from packs.indexing.lib.contracts import (  # noqa: E402
     normalize_record_for_contract,
     validate_jsonl,
 )
-from packs.indexing.lib.io import emit_json, read_jsonl, write_json, write_jsonl  # noqa: E402
+from packs.indexing.lib.duckdb_artifacts import build_local_duckdb, validate_local_search_index  # noqa: E402
+from packs.indexing.lib.io import emit_json, iter_jsonl, read_jsonl, write_json, write_jsonl  # noqa: E402
 from packs.indexing.lib.ledger import load_ledger, mark_step, save_ledger  # noqa: E402
+from packs.indexing.lib.manifest import (  # noqa: E402
+    build_manifest,
+    cache_dir,
+    manifest_path,
+    manifest_ready,
+    promote_latest,
+    read_manifest,
+    restore_cache,
+    store_cache,
+    write_manifest,
+)
 from packs.indexing.lib.people import build_people_records, build_unified_profiles, flatten_people  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
+from packs.search.primitives.lib.local_hydration_store import load_profiles_from_duckdb  # noqa: E402
 
 STEPS = [
     "flatten_people",
@@ -39,6 +52,9 @@ STEPS = [
     "build_unified_profiles",
     "build_summary_records",
     "validate_contracts",
+    "build_local_duckdb",
+    "validate_local_search_index",
+    "validate_local_hydration",
 ]
 
 
@@ -65,6 +81,8 @@ def paths(rd: Path) -> dict[str, Path]:
         "schools_records": rd / "records/schools.records.jsonl",
         "education_records": rd / "records/education.records.jsonl",
         "summaries_records": rd / "records/summaries.records.jsonl",
+        "duckdb": rd / "local-search.duckdb",
+        "manifest": rd / "index-manifest.json",
     }
 
 
@@ -105,7 +123,7 @@ def step_roles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, s
     import hashlib
 
     by_hash: dict[str, dict[str, Any]] = {}
-    for person in read_jsonl(ps["flattened"]):
+    for person in iter_jsonl(ps["flattened"]):
         for exp in person.get("work_experiences") or []:
             if not isinstance(exp, dict):
                 continue
@@ -178,7 +196,7 @@ def step_education(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[st
 
 
 def step_location(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
-    locations = build_location_corpus(read_jsonl(ps["flattened"]) + read_jsonl(ps["companies_corpus"]))
+    locations = build_location_corpus([*iter_jsonl(ps["flattened"]), *iter_jsonl(ps["companies_corpus"])])
     write_jsonl(ps["locations_corpus"], locations)
     stats = {"locations": len(locations), "internal_only": True}
     write_stats(ledger, "build_location_corpus", stats)
@@ -248,6 +266,32 @@ def step_validate(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str
     return {}, {"validation": validation}
 
 
+def step_local_duckdb(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    stats = build_local_duckdb(ledger["run_dir"], ps["duckdb"])
+    return {"local_search_duckdb": str(ps["duckdb"]), "local_search_duckdb_sha256": stats["checksum"]}, stats
+
+
+def step_validate_local_search(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    validation = validate_local_search_index(ps["duckdb"])
+    write_stats(ledger, "validate_local_search_index", validation)
+    return {}, validation
+
+
+def step_validate_local_hydration(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
+    profiles = list(iter_jsonl(ps["profiles"]))
+    requested = [str(p.get("person_id") or p.get("base_id") or p.get("id")) for p in profiles[:5] if p.get("person_id") or p.get("base_id") or p.get("id")]
+    hydrated, source = load_profiles_from_duckdb(ps["duckdb"], requested)
+    validation = {
+        "hydration_parity_ok": len(hydrated) == len(requested),
+        "requested": len(requested),
+        "hydrated": len(hydrated),
+        "profile_ids": [profile.get("person_id") or profile.get("base_id") or profile.get("id") for profile in hydrated],
+        "source": source,
+    }
+    write_stats(ledger, "validate_local_hydration", validation)
+    return {}, validation
+
+
 STEP_FUNCTIONS = {
     "flatten_people": step_flatten,
     "build_roles": step_roles,
@@ -258,11 +302,78 @@ STEP_FUNCTIONS = {
     "build_unified_profiles": step_profiles,
     "build_summary_records": step_summary,
     "validate_contracts": step_validate,
+    "build_local_duckdb": step_local_duckdb,
+    "validate_local_search_index": step_validate_local_search,
+    "validate_local_hydration": step_validate_local_hydration,
 }
+
+
+def _contracts_ok(ledger: dict[str, Any]) -> bool:
+    step = next((row for row in ledger.get("steps", []) if row.get("id") == "validate_contracts"), {})
+    validation = (step.get("stats") or {}).get("validation") or {}
+    return all((value.get("ok", True) if isinstance(value, dict) else True) for value in validation.values())
+
+
+def _final_manifest(ledger: dict[str, Any]) -> dict[str, Any]:
+    artifacts = dict(ledger.get("artifacts") or {})
+    ps = paths(Path(ledger["run_dir"]))
+    artifacts.update({"duckdb": str(ps["duckdb"]), "profiles": str(ps["profiles"]), "people_records": str(ps["people_records"])})
+    stages = {step["id"]: {"status": step.get("status"), "stats": step.get("stats", {})} for step in ledger.get("steps", [])}
+    search_stats = stages.get("validate_local_search_index", {}).get("stats", {})
+    hydration_stats = stages.get("validate_local_hydration", {}).get("stats", {})
+    validation = {
+        "contracts_ok": _contracts_ok(ledger),
+        "duckdb_opened": bool(search_stats.get("duckdb_opened")),
+        "namespace_probes_ok": bool(search_stats.get("namespace_probes_ok")),
+        "hydration_parity_ok": bool(hydration_stats.get("hydration_parity_ok")),
+    }
+    ready = ledger.get("status") == "completed" and all(validation.values())
+    return build_manifest(
+        run_id=ledger["run_id"],
+        run_dir=ledger["run_dir"],
+        input_path=ledger["input"],
+        default_operator_id=ledger.get("default_operator_id"),
+        limit=ledger.get("limit"),
+        status="ready" if ready else "partial",
+        stages=stages,
+        artifacts=artifacts,
+        validation=validation,
+    )
+
+
+def _replace_paths(value: Any, old: str, new: str) -> Any:
+    if isinstance(value, str):
+        return value.replace(old, new)
+    if isinstance(value, list):
+        return [_replace_paths(item, old, new) for item in value]
+    if isinstance(value, dict):
+        return {key: _replace_paths(item, old, new) for key, item in value.items()}
+    return value
+
+
+def rewrite_materialized_metadata(rd: Path, *, input_path: Path, run_id: str, default_operator_id: str | None, limit: int | None) -> dict[str, Any]:
+    ledger_path = paths(rd)["ledger"]
+    ledger = load_ledger(ledger_path)
+    old_run_dir = str(ledger.get("run_dir") or rd)
+    ledger = _replace_paths(ledger, old_run_dir, str(rd))
+    ledger["run_id"] = run_id
+    ledger["run_dir"] = str(rd)
+    ledger["input"] = str(input_path)
+    ledger["default_operator_id"] = default_operator_id
+    ledger["limit"] = limit
+    save_ledger(ledger_path, ledger)
+    manifest = _final_manifest(ledger)
+    write_manifest(rd, manifest)
+    return manifest
 
 
 def execute(ledger_path: Path) -> dict[str, Any]:
     ledger = load_ledger(ledger_path)
+    existing_steps = {step.get("id") for step in ledger.get("steps", [])}
+    for step in STEPS:
+        if step not in existing_steps:
+            ledger.setdefault("steps", []).append({"id": step, "status": "pending"})
+    save_ledger(ledger_path, ledger)
     ps = paths(Path(ledger["run_dir"]))
     for step in STEPS:
         current = next(item for item in ledger["steps"] if item["id"] == step)
@@ -272,6 +383,7 @@ def execute(ledger_path: Path) -> dict[str, Any]:
         ledger = mark_step(ledger_path, ledger, step, "completed", artifacts=artifacts, stats=stats)
     ledger["status"] = "completed"
     save_ledger(ledger_path, ledger)
+    write_manifest(Path(ledger["run_dir"]), _final_manifest(ledger))
     return ledger
 
 
@@ -289,6 +401,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--default-operator-id", default=None)
     run.add_argument("--limit", type=int)
     run.add_argument("--force", action="store_true")
+    run.add_argument("--no-cache", action="store_true", help="Do not reuse or populate the content-addressed local index cache")
     cont = sub.add_parser("continue")
     cont.add_argument("--ledger", required=True)
     status = sub.add_parser("status")
@@ -312,26 +425,62 @@ def main() -> None:
         )
         return
     if args.cmd == "run":
-        rd = run_dir(Path(args.output_dir), args.run_id)
+        output_dir = Path(args.output_dir)
+        rd = run_dir(output_dir, args.run_id)
         if rd.exists():
             if args.force:
                 shutil.rmtree(rd)
             else:
                 ledger_path = paths(rd)["ledger"]
                 raise SystemExit(f"run directory already exists: {rd}. Use continue --ledger {ledger_path} or rerun with --force.")
+        candidate = build_manifest(
+            run_id=args.run_id,
+            run_dir=rd,
+            input_path=Path(args.input),
+            default_operator_id=args.default_operator_id,
+            limit=args.limit,
+        )
+        candidate_cache = cache_dir(output_dir, candidate)
+        cached_manifest = read_manifest(candidate_cache)
+        use_cache = not args.no_cache and not args.force
+        if use_cache and manifest_ready(cached_manifest, candidate_cache):
+            restore_cache(candidate_cache, rd)
+            manifest = rewrite_materialized_metadata(
+                rd,
+                input_path=Path(args.input),
+                run_id=args.run_id,
+                default_operator_id=args.default_operator_id,
+                limit=args.limit,
+            )
+            latest = promote_latest(rd, output_dir)
+            ready = manifest_ready(manifest, rd)
+            emit_json({"status": "completed", "ready": ready, "cache_hit": True, "cache_dir": str(candidate_cache), "run_dir": str(rd), "latest": latest if ready else {}, "manifest": str(manifest_path(rd)), "counts": {step: data.get("stats", {}) for step, data in manifest.get("stages", {}).items()}})
+            return
         rd.mkdir(parents=True, exist_ok=True)
         ledger = default_ledger(Path(args.input), rd, args.run_id, args.default_operator_id, args.limit)
         ledger_path = paths(rd)["ledger"]
         save_ledger(ledger_path, ledger)
         ledger = execute(ledger_path)
-        emit_json({"status": ledger["status"], "run_dir": str(rd), "counts": {step["id"]: step.get("stats", {}) for step in ledger["steps"]}})
+        manifest = read_manifest(rd) or _final_manifest(ledger)
+        ready = manifest_ready(manifest, rd)
+        latest = promote_latest(rd, output_dir) if ready else {}
+        cache_path = None
+        if not args.no_cache and ready:
+            cache_path = store_cache(rd, output_dir, manifest)
+        emit_json({"status": ledger["status"], "ready": ready, "cache_hit": False, "cache_dir": str(cache_path) if cache_path else None, "run_dir": str(rd), "latest": latest, "manifest": str(manifest_path(rd)), "counts": {step["id"]: step.get("stats", {}) for step in ledger["steps"]}})
         return
     if args.cmd == "continue":
         ledger = execute(Path(args.ledger))
-        emit_json({"status": ledger["status"], "run_dir": ledger["run_dir"]})
+        rd = Path(ledger["run_dir"])
+        manifest = read_manifest(rd) or _final_manifest(ledger)
+        ready = manifest_ready(manifest, rd)
+        latest = promote_latest(rd, rd.parent) if ready else {}
+        emit_json({"status": ledger["status"], "ready": ready, "run_dir": ledger["run_dir"], "latest": latest, "manifest": str(manifest_path(rd))})
         return
     if args.cmd == "status":
-        emit_json(load_ledger(args.ledger))
+        ledger = load_ledger(args.ledger)
+        manifest = read_manifest(Path(args.ledger).parent)
+        emit_json({"ledger": ledger, "manifest": manifest, "ready": manifest_ready(manifest, Path(args.ledger).parent)})
         return
     build_parser().error("subcommand required")
 
