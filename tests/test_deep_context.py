@@ -765,6 +765,15 @@ class TestReconcileDeepResearch(unittest.TestCase):
         self.assertEqual(len(elig), 1)
         self.assertEqual(elig[0]["parent_slug"], "y")
 
+    def test_eligible_subset_skips_user_excluded(self):
+        # An X-ed-out person must never be deep-researched / re-attached, even though the
+        # model recommends it (unlike a detach, which IS eligible for recovery).
+        verdicts = [{"parent_slug": "z", "candidate_key": "zpub",
+                     "verdict": _verdict("wrong_person", 0.95, dr=True)}]
+        self.assertEqual(len(dresearch.eligible_subset(verdicts, 0.85)), 1)         # baseline: eligible
+        ov = {"zpub": {"action": "exclude", "approved": "yes"}}
+        self.assertEqual(dresearch.eligible_subset(verdicts, 0.85, ov), [])         # excluded: skipped
+
     def test_cost_gate_blocks_over_budget(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
@@ -865,6 +874,17 @@ class TestReviewWeb(unittest.TestCase):
             verdicts, review = self._fixture(d)
             with self.assertRaises(ValueError):
                 web.apply_decision(review, verdicts, "janedoe", "fix", "", reconcile.DEFAULT_CONFIRM)
+
+    def test_exclude_marks_person_excluded(self):
+        with tempfile.TemporaryDirectory() as dd:
+            d = Path(dd)
+            verdicts, review = self._fixture(d)
+            r = web.apply_decision(review, verdicts, "janedoe", "exclude", "", reconcile.DEFAULT_CONFIRM)
+            self.assertEqual((r["action"], r["approved"]), ("exclude", "yes"))
+            parents, _ = web.build_parents(verdicts, review)
+            jane = next(p for p in parents if p["name"] == "Jane Doe")
+            self.assertEqual(web.candidate_state(jane["candidates"][0]), "excluded")
+            self.assertEqual(web.parent_status(jane), "excluded")
 
 
 class TestSelfReportedRetarget(unittest.TestCase):

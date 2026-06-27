@@ -95,11 +95,14 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
         We honor that regardless of the judge's recommendation — if you say it's the wrong person,
         we try to find the right one.
 
-    Skipped either way: a link that already has a `retarget` (we know the correct one), or one the
+    Skipped either way: a link the user `exclude`d (don't want this person at all — never
+    re-attach them), one that already has a `retarget` (we know the correct one), or one the
     judge flagged `linkedin_plausibly_absent` (some people legitimately have no profile)."""
     overrides = overrides or {}
     has_retarget = {pub for pub, r in overrides.items()
                     if (r.get("action") or "").strip().lower() == "retarget"}
+    excluded = {pub for pub, r in overrides.items()
+                if (r.get("action") or "").strip().lower() == "exclude"}
     user_detached = {pub for pub, r in overrides.items()
                      if (r.get("action") or "").strip().lower() == "detach"
                      and (r.get("approved") or "").strip().lower() == "yes"}
@@ -113,7 +116,7 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
     for r in verdicts:
         v = r.get("verdict") or {}
         pub = (r.get("candidate_key") or "").strip().lower()
-        if v.get("linkedin_plausibly_absent") or (pub and (pub in seen or pub in has_retarget)):
+        if v.get("linkedin_plausibly_absent") or (pub and (pub in seen or pub in has_retarget or pub in excluded)):
             continue
         model_ok = (v.get("verdict") == "wrong_person"
                     and float(v.get("confidence") or 0) >= threshold
