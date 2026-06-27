@@ -2,6 +2,11 @@
 
 _Created: 2026-06-26_
 
+_Changelog:_
+- _2026-06-27: Added the fully-primitive, portable OpenAI-judge run + mixture-of-judges
+  hill-climb (no sub-agents). See "Full-chain portable run + mixture hill-climb (2026-06-27)"
+  at the end. Two new bridge primitives: `build_eval_inputs.py`, `triage_candidates.py`._
+
 _PII-free status for review. Candidate identities (names + LinkedIn + per-judge rationales)
 are surfaced to the requester in chat and kept under gitignored
 `.powerpacks/recruit/agentmail-distsys-mts-20260626/` — they are not committed._
@@ -232,3 +237,87 @@ against the same set and score it vs this GT (recall@stage, precision@k, gate-er
 lane contribution); have high-reasoning models adjust the probe construction + judge prompts;
 loop. Then port the `search-highlight` harness onto `main` and wire the mixture-of-judges +
 expand-from-anchor stages in as first-class steps.
+
+## Full-chain portable run + mixture hill-climb (2026-06-27)
+
+Ran the **entire `$recruit` chain as callable primitives — zero sub-agents, zero harness
+improvisation** — and hill-climbed the judge stage. This closes the portability gap (Codex / any
+harness reproduces it): `decompose_jd` → `run_shotgun` → `build_eval_inputs` →
+`triage_candidates` → `evaluate_profile_candidates` (gpt-5.4) → `judge_consensus` →
+`score_ground_truth_gaps`. Artifacts under
+`epochs/epoch-15-judged-fullchain/`. **Spend ≈ $47** (3 gpt-5.4 judge passes dominate; sourcing
++ triage + plan ≈ $0.3).
+
+### Two new bridge primitives this required
+
+- **`build_eval_inputs.py`** — the shotgun emits `union.jsonl`, but the canonical judge reads a
+  profile-search run dir (`plan.json` + `candidate_frontier.jsonl` + `probe_summaries.json` →
+  the already-on-disk `profiles.jsonl.gz`). This adapter rewrites the run into that contract with
+  **no recompute** (1 cheap LLM call extracts must/nice traits from the JD). Verified 1034/1034
+  profile coverage.
+- **`triage_candidates.py`** — the existing `llm_filter_candidates` is welded to a
+  `search_network_pipeline` run-state (merge step + hydration coverage), so it does **not** fit
+  the recruit union. This is the portable tier-1 filter over `candidate_frontier.jsonl`: cheap
+  `gpt-4.1-mini`, conservative (`keep`/`maybe` survive), reads the **profile, not probe count**.
+
+### Why not cap by probe count (recall guardrail, measured)
+
+Capping the judge pool by `found_by` count is tempting but **wrong**: 8 of 28 present GT are
+**single-probe** hits ranked 658–940 by probe count (e.g. Sharma Podila, found only by the
+`company` probe, rank 940). Any affordable probe-count cap throws away GT. Triage must look at
+the profile. (`triage 1034 → 606` kept 26/28 present GT.)
+
+### End-to-end results vs the 31-person judged GT
+
+| stage | pool | GT recall | precision@25 | note |
+| --- | --- | --- | --- | --- |
+| sourcing (epoch-14) | 1034 | 0.90 | — | recall is NOT the bottleneck |
+| → triage | 606 | 0.84 of pool | — | conservative; lost 2 GT |
+| single gpt-5.4 judge (epoch-15) | 58 strong | 0.48 | 0.36 | one strict judge |
+| **3-judge mixture, (2,2) gate (epoch-16)** | 62 strong | **0.52** | **0.44** | majority in-band AND not-out |
+
+The end-to-end shortlist recall (52%) is **judge-bounded, not retrieval-bounded** — sourcing
+already contains 90% of GT. Of the 16 missed: 3 not in pool, 2 dropped in triage, 11 judged-out
+— and **8 of those 11 were NOT seniority-gated** (5 "ideal", 3 "acceptable"), marked out on
+borderline trait score (jd 0.39–0.51). That borderline band is exactly where single-judge
+variance lives, so the **mixture is the right lever** (it lifted recall@10 0.13→0.16 and
+precision@10 0.40→0.50 — the top of the list improved most).
+
+### Hill-climb finding: the consensus GATE is a Pareto lever (NOT yet default)
+
+3-judge panel, gate sweep (free — pure re-aggregation):
+
+| gate (in-band, not-out) | strong | overall recall | p@25 | p@50 |
+| --- | --- | --- | --- | --- |
+| single judge | 58 | 0.484 | 0.36 | 0.30 |
+| (2,2) majority — canonical | 62 | 0.516 | 0.44 | 0.28 |
+| **(2,1) majority-in-band + ≥1 not-out** | 79 | **0.645** | **0.48** | **0.34** |
+| (1,1) | 83 | 0.645 | 0.48 | 0.34 |
+
+`(2,1)` **Pareto-beats** the canonical `(2,2)` — higher recall *and* precision — because it
+rescues borderline GT that one strict judge cut while another kept (real positives, so precision
+rises too). **Per the anti-local-maxima rule this stays NON-default until validated on a 2nd
+structurally-different JD** (the founding-applied-AI JD has an independent GT ready). Did not flip
+the `judge_consensus` default; recorded the finding only.
+
+### GT itself under-counts quality
+
+The independent 31-person GT was built by a Claude 3-judge panel; the gpt-5.4 panel surfaces
+strong people the GT simply missed — its top "net-new" (non-GT) picks are an NVIDIA AI/HPC infra
+eng, a Cursor SWE, a Meta production engineer, a Pinterest AI-infra eng. So "recall vs GT"
+**understates** true shortlist quality; treat it as a lower bound.
+
+### Updated primitive inventory (added this run)
+
+- `build_eval_inputs.py`, `triage_candidates.py` (above).
+- `judge_consensus.py` now ingests the `evaluate_profile_candidates` raw format directly
+  (`candidate_id`→`person_id`, `jd_score`→`score`, `in_band` derived from `seniority_fit`) so a
+  judges dir can mix OpenAI-judge and Claude-sub-agent verdicts.
+- `tests/test_recruit.py` — 33 tests green (added build_eval_inputs / triage_candidates /
+  normalize_verdict coverage).
+
+### Next
+
+Validate the `(2,1)` gate on the founding-applied-AI JD's independent GT (one 3-judge panel run,
+~$45) before promoting it to default; if it Pareto-wins there too, flip the `judge_consensus`
+default and add an `expand_from_anchor` round to lift the 3-not-in-pool sourcing gap.

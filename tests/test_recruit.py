@@ -24,6 +24,8 @@ sg = _load("score_ground_truth_gaps")
 dv = _load("diversify_probe_bm25")
 dj = _load("decompose_jd")
 ea = _load("expand_from_anchor")
+bei = _load("build_eval_inputs")
+tc = _load("triage_candidates")
 
 
 class TestDecomposeJd(unittest.TestCase):
@@ -216,6 +218,103 @@ class TestDiversifyProbeBm25(unittest.TestCase):
         # 2 probes sharing a term: with min_df=3 nothing is dropped (too small to trust)
         payloads = [self._p("ai product engineer", "rag"), self._p("ai product engineer", "agents")]
         self.assertEqual(dv.shared_bm25_terms(payloads, df_threshold=0.35, min_df=3), set())
+
+
+class TestBuildEvalInputs(unittest.TestCase):
+    def test_build_frontier_scores_by_probe_count(self):
+        union = [
+            {"person_id": "a", "name": "A", "found_by": ["q0", "q1", "q2"]},
+            {"person_id": "b", "name": "B", "found_by": ["q0"]},
+            {"name": "no-id"},  # dropped
+        ]
+        front = bei.build_frontier(union)
+        self.assertEqual({c["person_id"] for c in front}, {"a", "b"})
+        a = next(c for c in front if c["person_id"] == "a")
+        self.assertEqual(a["matched_probe_ids"], ["q0", "q1", "q2"])
+        self.assertEqual(a["source_rows"][0]["score"], 3.0)
+        self.assertEqual(a["candidate_id"], "a")
+
+    def test_build_frontier_single_probe_has_score_one(self):
+        front = bei.build_frontier([{"person_id": "b", "found_by": ["q0"]}])
+        self.assertEqual(front[0]["source_rows"][0]["score"], 1.0)
+
+    def test_plan_from_obj_shapes_traits_and_scope(self):
+        plan = bei.plan_from_obj(
+            {"job_title": "MTS", "normalized_archetype": "distsys engineer",
+             "hire_stage": "scale", "usable_cutoff": "Senior IC in band.",
+             "must_have": ["schedulers", "control plane", ""], "nice_to_have": ["gpus"]},
+            set_name="s", set_id="sid", source_url=None, created_at="2026-01-01T00:00:00Z")
+        self.assertEqual([t["trait"] for t in plan["traits"]["must_have"]], ["schedulers", "control plane"])
+        self.assertEqual(plan["traits"]["nice_to_have"], [{"trait": "gpus"}])
+        self.assertEqual(plan["set_scope"], {"name": "s", "set_id": "sid"})
+        self.assertEqual(plan["normalized_archetype"], "distsys engineer")
+        self.assertFalse(plan["retrieval_ran"])
+
+    def test_plan_from_obj_requires_must_have(self):
+        with self.assertRaises(ValueError):
+            bei.plan_from_obj({"must_have": []}, set_name="s", set_id="i", source_url=None, created_at="t")
+
+    def test_build_plan_messages_carries_jd(self):
+        msgs = bei.build_plan_messages("Design schedulers")
+        self.assertIn("Design schedulers", msgs[-1]["content"])
+
+
+class TestTriageCandidates(unittest.TestCase):
+    def test_compact_card_merges_front_and_profile(self):
+        card = tc.compact_card(
+            "p1",
+            {"current_title": "MTS", "current_company": "xAI", "name": "fallback"},
+            {"name": "Real Name", "headline": "Systems eng",
+             "positions": [{"title": "SWE", "company_name": "Google"}, {"title": "", "company_name": ""}],
+             "education": [{"school_name": "MIT", "degree": "BS", "field_of_study": "CS"}],
+             "tech_skills": ["go", "k8s", 5]})
+        self.assertEqual(card["id"], "p1")
+        self.assertEqual(card["name"], "Real Name")  # profile wins over front fallback
+        self.assertEqual(card["current"], "MTS @ xAI")
+        self.assertEqual(card["positions"], ["SWE @ Google"])  # empty position dropped
+        self.assertEqual(card["education"], ["MIT BS CS"])
+        self.assertEqual(card["skills"], ["go", "k8s"])  # non-str skill dropped
+
+    def test_compact_card_handles_missing_profile(self):
+        card = tc.compact_card("p2", {"name": "Only Front", "current_company": "Acme"}, None)
+        self.assertEqual(card["name"], "Only Front")
+        self.assertEqual(card["current"], "@ Acme")
+        self.assertEqual(card["positions"], [])
+
+    def test_parse_verdicts_lowercases(self):
+        out = tc.parse_verdicts('{"verdicts":[{"id":"a","v":"KEEP"},{"id":"b","v":"Drop"},{"v":"x"}]}')
+        self.assertEqual(out, {"a": "keep", "b": "drop"})
+
+    def test_parse_verdicts_bad_json(self):
+        self.assertEqual(tc.parse_verdicts("not json"), {})
+
+    def test_keep_set_is_conservative(self):
+        self.assertIn("maybe", tc.KEEP)
+        self.assertIn("keep", tc.KEEP)
+        self.assertNotIn("drop", tc.KEEP)
+
+    def test_build_batch_messages_lists_traits(self):
+        msgs = tc.build_batch_messages(
+            {"must_have": [{"trait": "schedulers"}], "nice_to_have": [{"trait": "gpus"}]},
+            [{"id": "a", "name": "A"}])
+        self.assertIn("schedulers", msgs[-1]["content"])
+        self.assertIn("gpus", msgs[-1]["content"])
+
+
+class TestNormalizeVerdict(unittest.TestCase):
+    def test_maps_eval_raw_to_consensus_schema(self):
+        r = jc.normalize_verdict({"candidate_id": "p1", "jd_score": 0.7, "seniority_fit": "ideal", "verdict": "top_tier"})
+        self.assertEqual(r["person_id"], "p1")
+        self.assertEqual(r["score"], 0.7)
+        self.assertTrue(r["in_band"])  # ideal is not gated
+
+    def test_gated_fit_is_not_in_band(self):
+        r = jc.normalize_verdict({"candidate_id": "p2", "jd_score": 0.2, "seniority_fit": "too_senior", "verdict": "out"})
+        self.assertFalse(r["in_band"])
+
+    def test_native_schema_passthrough(self):
+        native = {"person_id": "p3", "score": 0.5, "in_band": True, "seniority_fit": "in_band", "verdict": "high_potential"}
+        self.assertEqual(jc.normalize_verdict(dict(native)), native)
 
 
 if __name__ == "__main__":

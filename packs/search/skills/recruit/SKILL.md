@@ -60,27 +60,50 @@ improvising; the only LLM calls are `decompose_jd` (1 call) + the judge.
    **Why the flags matter:** without `--preserve-query-semantic` expansion rewrites the vector and
    ~halves recall; without diversify the probes overlap. Both are defaults in the runner.
 
-3. **Triage (tier-1, only if the union is big > ~120)** ✅ `llm_filter_candidates` — cheap
-   conservative filter that drops obvious non-matches and passes borderline. Cap survivors to a
-   high-signal pool (~100, prioritizing multi-probe hits) so the panel stays sharp. Small unions
-   skip this.
+3. **Bridge the union into the judge's contract** 🆕 (1 LLM call). The canonical judge reads a
+   profile-search run dir (`plan.json` + `candidate_frontier.jsonl` + `probe_summaries.json` →
+   the already-on-disk `profiles.jsonl.gz`). `build_eval_inputs` extracts must/nice traits from
+   the JD and rewrites the shotgun run into exactly that contract — no recompute:
+   ```bash
+   uv run --env-file .env --project . python packs/search/primitives/recruit/build_eval_inputs.py \
+     --run-dir <run> --jd-file <run>/jd.txt --set-name "<set>" --created-at <iso>
+   ```
 
-4. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
-   rubric with the IC seniority hard-gates. For a **mixture-of-judges**, run it 2–3× (vary model /
-   reasoning effort / seed) and combine; for a single canonical verdict, run it once. Each pass
-   writes a `judges/<name>.jsonl`.
+4. **Triage (tier-1, only if the union is big > ~120)** 🆕 `triage_candidates` — cheap-model
+   (`gpt-4.1-mini`) conservative filter over `candidate_frontier.jsonl` that drops obvious
+   non-matches and passes borderline (`keep`/`maybe` survive). It reads the PROFILE, not probe
+   count — **measured: probe count is a bad precision signal** (single-probe hits include true
+   top candidates), so don't cap by `found_by`. Survivors overwrite `candidate_frontier.jsonl`
+   (original saved to `candidate_frontier.full.jsonl`). Small unions skip this.
+   ```bash
+   uv run --env-file .env --project . python packs/search/primitives/recruit/triage_candidates.py --run-dir <run>
+   ```
+   *(NOTE: the search-profile `llm_filter_candidates` is welded to a `search_network_pipeline`
+   run-state — it does NOT fit the recruit union artifact; use `triage_candidates`.)*
+
+5. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
+   rubric with the IC seniority hard-gates (default `gpt-5.4`). For a **mixture-of-judges**, run
+   it 2–3× into sibling run dirs (vary `--reasoning-effort` / model) and collect each
+   `candidate_evaluations.raw.jsonl` into a `judges/` dir; for a single canonical verdict, run it
+   once. `judge_consensus` ingests the raw eval format directly (maps `candidate_id`/`jd_score`,
+   derives `in_band` from `seniority_fit`).
    *(Cheap alternative for Claude-Code-only sessions: dispatch 2–3 Claude sub-agents as judges
    against the same rubric — same output schema, no OpenAI. Not portable to other harnesses.)*
 
-5. **Consensus + rank** 🆕:
+6. **Consensus + rank** 🆕:
    ```bash
    uv run --project . python packs/search/primitives/recruit/judge_consensus.py \
-     --judges-dir <run>/judges --union <run>/union.jsonl --out-dir <run>/shortlist
+     --judges-dir <run>/judges --union <run>/union.jsonl --out-dir <run>/shortlist \
+     --min-inband-votes 2 --min-notout-votes 2   # single judge: use 1/1
    ```
-   → `shortlist/ground_truth_ranked.json` (consensus-strong, stack-ranked). Gate: majority
-   in-band AND majority not-out. Then ✅ `export_candidate_shortlist` for the sendable CSV.
+   → `shortlist/ground_truth_ranked.json` (consensus-strong, stack-ranked). Canonical gate:
+   majority in-band AND majority not-out (2/2 of a 3-judge panel). Then ✅
+   `export_candidate_shortlist` for the sendable CSV. **Measured (AgentMail JD):** single judge
+   → recall 48% / p@25 0.36; 3-judge (2,2) → 52% / 0.44; a `(2,1)` gate (majority in-band +
+   ≥1 not-out) Pareto-beats it (64% / 0.48) by rescuing borderline candidates one strict judge
+   cut — but per the anti-local-maxima rule it stays NON-default until validated on a 2nd JD.
 
-6. **Expand-from-anchor (optional, closes the last ~10%)** 🆕. Take your *own* judged-strong
+7. **Expand-from-anchor (optional, closes the last ~10%)** 🆕. Take your *own* judged-strong
    picks as anchors, build "more like this" seeds from their profiles, and re-source (loop to
    step 2). NEVER seed from the eval ground truth — that's looking up the answers.
    ```bash
@@ -90,7 +113,7 @@ improvising; the only LLM calls are `decompose_jd` (1 call) + the judge.
      --seeds <run>/anchor_seeds.json --run-dir <run>/anchor --limit 200
    ```
 
-7. **Measure convergence (epochs)** 🆕. Score any run against a trusted ground-truth set:
+8. **Measure convergence (epochs)** 🆕. Score any run against a trusted ground-truth set:
    ```bash
    uv run --project . python packs/search/primitives/recruit/score_ground_truth_gaps.py \
      --ground-truth <run>/ground_truth/ground_truth_ranked.json \
@@ -125,9 +148,14 @@ Hill-climbing the harness is easy to overfit to one JD. Hard rules:
 
 ## Cost
 
-Retrieval (TurboPuffer) is read-only and hydration is Postgres-only → sourcing is ~free.
-Judges run as Claude sub-agents → Claude-priced, **~zero OpenAI**. The canonical gpt-5.4
-`evaluate_profile_candidates` remains available as a paid deterministic cross-check.
+Sourcing is ~free: retrieval (TurboPuffer) is read-only, hydration is Postgres-only; the only
+OpenAI spend there is `decompose_jd` (1 call) + the per-seed `prepare` expansions (cheap `gpt-4o`).
+`build_eval_inputs` is 1 cheap call; `triage_candidates` is cheap `gpt-4.1-mini` batches
+(~$0.20 over ~1k candidates). **The real spend is the judge:** `evaluate_profile_candidates`
+(`gpt-5.4`) ≈ a few cents/candidate → ~$15–25 per pass over a ~600 triaged pool; a 3-judge
+mixture is ~3×. Measured AgentMail full-chain run (1034→606→3-judge panel) ≈ **~$47**. Triage
+HARD before judging to control cost. *(Claude-Code-only sessions can swap the OpenAI judge for
+2–3 Claude sub-agents on the same rubric — Claude-priced, ~zero OpenAI, but not portable.)*
 
 ## Artifacts (gitignored under `.powerpacks/recruit/<jd-slug>/`)
 
@@ -138,10 +166,12 @@ Judges run as Claude sub-agents → Claude-priced, **~zero OpenAI**. The canonic
 ## Default recipe (fully primitive-driven; validated ~90% from auto-seeds, ~97% tuned)
 
 `decompose_jd` → `run_shotgun` (prepare --preserve-query-semantic → diversify_probe_bm25 →
-run --search-only) → [`llm_filter_candidates` triage if big] → `evaluate_profile_candidates`
-(×N for a panel) → `judge_consensus` → `export_candidate_shortlist`; optional
-`expand_from_anchor` loop; `score_ground_truth_gaps` to track epochs. Every step is a CLI a
-harness can call — nothing depends on an agent improvising.
+run --search-only) → `build_eval_inputs` → [`triage_candidates` if big] →
+`evaluate_profile_candidates` (×N for a panel) → `judge_consensus` →
+`export_candidate_shortlist`; optional `expand_from_anchor` loop; `score_ground_truth_gaps` to
+track epochs. Every step is a CLI a harness can call — nothing depends on an agent improvising.
+Validated end-to-end on the AgentMail JD (1034 sourced → 606 triaged → 3-judge gpt-5.4 panel →
+62-person shortlist), zero sub-agents.
 
 ## Primitives
 
@@ -149,8 +179,12 @@ New (`packs/search/primitives/recruit/`):
 - `decompose_jd.py` 🆕 — JD → N diverse work-described seeds (1 LLM call).
 - `run_shotgun.py` 🆕 — runs the seed set through prepare→diversify→run, emits the union.
 - `diversify_probe_bm25.py` 🆕 — drop shared/homogeneous BM25 lead terms across the probe set.
+- `build_eval_inputs.py` 🆕 — union → `plan.json` + `candidate_frontier.jsonl` +
+  `probe_summaries.json` (bridges the shotgun run into the canonical judge's contract; 1 LLM call).
+- `triage_candidates.py` 🆕 — cheap-model conservative tier-1 filter over the frontier.
 - `expand_from_anchor.py` 🆕 — judged-strong anchors → "more like this" seeds (no LLM).
-- `judge_consensus.py` 🆕 — combine judge passes → consensus shortlist.
+- `judge_consensus.py` 🆕 — combine judge passes (native or `evaluate_profile_candidates` raw)
+  → consensus shortlist.
 - `score_ground_truth_gaps.py` 🆕 — epoch scoring + convergence vs a ground-truth set.
 
 Existing (reused):

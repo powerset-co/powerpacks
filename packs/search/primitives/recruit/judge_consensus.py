@@ -26,12 +26,29 @@ TIER = {"top_tier": 2, "high_potential": 1, "out": 0}
 GATED_FITS = {"too_senior", "too_junior", "wrong_track"}
 
 
+def normalize_verdict(r: dict[str, Any]) -> dict[str, Any]:
+    """Accept both the native judge schema and evaluate_profile_candidates raw output.
+
+    The canonical judge emits {candidate_id, jd_score, seniority_fit, verdict, rationale} with no
+    explicit `in_band`; the native (Claude sub-agent) judges emit {person_id, score, in_band, ...}.
+    Normalize to {person_id, score, in_band, verdict, seniority_fit, name, rationale} so a directory
+    can mix either format. `in_band` is derived from seniority_fit when absent (not gated = in-band).
+    """
+    if "person_id" not in r and r.get("candidate_id"):
+        r = {**r, "person_id": r["candidate_id"]}
+    if "score" not in r and r.get("jd_score") is not None:
+        r = {**r, "score": r["jd_score"]}
+    if "in_band" not in r:
+        r = {**r, "in_band": r.get("seniority_fit") not in GATED_FITS}
+    return r
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line:
-            rows.append(json.loads(line))
+            rows.append(normalize_verdict(json.loads(line)))
     return rows
 
 
