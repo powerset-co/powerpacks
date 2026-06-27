@@ -61,20 +61,35 @@ that's what drops good candidates. Keep recall high and let the judges gate.
      --query "<label>" --payload-json <probe>/payload.json --ledger <probe>/ledger.json \
      --search-only --limit 80 --top-k 4000
    ```
-   Keep top ~80–150 per probe (recall is the goal; the judge owns precision). Dispatch the probe
+   Keep top ~150–200 per probe (recall is the goal; the judge owns precision). Dispatch the probe
    families as parallel sub-agents (Claude-priced) that read results and **expand-from-anchor**
    (seed a new probe from a strong hit's company/skills). Diversity must come from the
    **decomposition** (orthogonal, work-described seeds) — expansion homogenizes, so vary the seeds.
 
+   **Then de-homogenize BM25 (default).** After preparing all probe payloads, drop the shared
+   lead BM25 terms so the probes stop retrieving the same people (data-driven, generalizes):
+   ```bash
+   uv run --project . python packs/search/primitives/recruit/diversify_probe_bm25.py \
+     --payloads <run>/probes/*/payload.json --out-dir <run>/probes_diversified
+   ```
+   Run the diversified payloads. Measured lift: ~90% → 97% recall at top-200 (the distinctive
+   BM25 terms help; only the shared heads hurt).
+
 3. **Merge** the union by `person_id`, attaching full hydrated profiles + lane provenance
    (which probe families surfaced each).
 
-4. **Mixture-of-judges (the precision stage).** Three independent Claude judges
-   (talent-analyst / recruiter / hiring-manager), each reading the canonical rubric
-   (`packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py`
-   SYSTEM_PROMPT) and scoring **every** candidate with the house seniority hard-gates. Write one
-   `judges/<name>.jsonl` per judge (`person_id, name, seniority_fit, in_band, verdict, score,
-   rationale`).
+4. **Two-tier judging (the precision stage).** The full panel on a huge union is expensive, so:
+   - **Tier 1 — cheap triage (default for pools > ~120):** one lenient sub-agent reads the union
+     from metadata and drops only clear non-matches (recruiters, sales, pure investors,
+     non-technical PMs, off-domain). Keep borderline; the panel decides. Then cap to a high-signal
+     pool (~100, prioritizing multi-probe hits) so panel quality stays high.
+   - **Tier 2 — mixture-of-judges:** three independent Claude judges (talent-analyst / recruiter /
+     hiring-manager), each reading the canonical rubric
+     (`packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py`
+     SYSTEM_PROMPT) and scoring **every** survivor with the house seniority hard-gates. Write one
+     `judges/<name>.jsonl` per judge (`person_id, name, seniority_fit, in_band, verdict, score,
+     rationale`).
+   For small pools (≤ ~120) skip Tier 1 and run the panel directly.
 
 5. **Consensus + rank:**
    ```bash
@@ -100,6 +115,26 @@ that's what drops good candidates. Keep recall high and let the judges gate.
    ```
    `gaps.json` = recall@k / precision@k / missed-GT; `convergence.csv` = one row per epoch.
 
+## Avoiding local maxima (be strict)
+
+Hill-climbing the harness is easy to overfit to one JD. Hard rules:
+
+- **Never tune to one JD.** Any change that improves recall/precision must be validated on **≥2
+  structurally different JDs** (e.g. distributed-systems infra *and* applied-AI product) before it
+  becomes a default. A change that helps one and not the other is a local maximum — reject it.
+- **Data-driven, not hardcoded.** No JD-specific term lists, company lists, or thresholds baked
+  into code. `diversify_probe_bm25` drops shared terms by *measured* document frequency, so it
+  adapts per JD (it dropped "distributed systems engineer" for one JD and "ai product engineer"
+  for another with the same code). Keep new heuristics this way.
+- **Recall via an independent yardstick.** Score epochs against a ground-truth set built the
+  *thorough* way (full agentic + judge), not against the cheap run's own output (that's circular
+  and rewards overfitting).
+- **Watch the whole curve, not one number.** A change that lifts recall@10 but tanks overall
+  recall (or re-admits seniority-gate failures) is regression, not progress. Track recall@k,
+  precision@k, gate-error, and cost together in `convergence.csv`.
+- **Keep the judge canonical.** Improve sourcing/orchestration; do not weaken the bar-raiser
+  rubric or the IC seniority gates to make numbers go up.
+
 ## Cost
 
 Retrieval (TurboPuffer) is read-only and hydration is Postgres-only → sourcing is ~free.
@@ -112,9 +147,20 @@ Judges run as Claude sub-agents → Claude-priced, **~zero OpenAI**. The canonic
 `shortlist/{consensus.json,ground_truth_ranked.json}` · `epochs/<epoch>/{config,candidates,gaps}.json` ·
 `convergence.csv`. Candidate PII stays gitignored; surface the shortlist to the user.
 
+## Default recipe (validated; ~97% recall on 2 different JDs, filters intact, ~zero OpenAI)
+
+decompose JD → ~15–18 **diverse, work-described** seeds → `prepare --preserve-query-semantic`
+(raw query as vector + expansion BM25 + filters) → `diversify_probe_bm25` (drop shared lead
+terms) → `run --search-only` top-150/200, unique `--ledger` per probe → merge union → two-tier
+judging (triage if large → 3-judge panel) → `judge_consensus` → `score_ground_truth_gaps`.
+
 ## Primitives
 
+- `search_network_pipeline … prepare --preserve-query-semantic` — expansion that keeps the raw
+  query as the semantic vector + adds BM25 + structured filters (location/education/company/
+  seniority/headcount). Without the flag, expansion rewrites the vector and ~halves recall.
 - `search_network_pipeline … run --search-only` — shotgun retrieval (hybrid BM25+vector, scoped).
+- `recruit/diversify_probe_bm25.py` — drop shared/homogeneous BM25 lead terms across the probe set.
 - `merge_candidate_frontier` — union/dedupe (or inline).
 - `recruit/judge_consensus.py` — combine judges → consensus shortlist.
 - `recruit/score_ground_truth_gaps.py` — epoch scoring + convergence.

@@ -21,6 +21,7 @@ def _load(name: str):
 
 jc = _load("judge_consensus")
 sg = _load("score_ground_truth_gaps")
+dv = _load("diversify_probe_bm25")
 
 _sb_spec = importlib.util.spec_from_file_location(
     "seniority_bands", ROOT / "packs" / "search" / "primitives" / "shared" / "seniority_bands.py"
@@ -138,9 +139,37 @@ class TestScoreGroundTruthGaps(unittest.TestCase):
         self.assertEqual(gaps["overall_recall"], round(2 / 3, 4))
         self.assertEqual(gaps["missed_count"], 1)
         self.assertEqual(gaps["missed"][0]["person_id"], "z")
-        rows = list(csv.DictReader((d / "convergence.csv").open()))
+        with (d / "convergence.csv").open() as fh:
+            rows = list(csv.DictReader(fh))
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["epoch"], "epoch-01")
+
+
+class TestDiversifyProbeBm25(unittest.TestCase):
+    def _p(self, *bm25):
+        return {"role_search_filters": {"semantic_query": "x", "bm25_queries": list(bm25)}}
+
+    def test_shared_terms_are_high_df_lead_terms(self):
+        payloads = [
+            self._p("distributed systems engineer", "scheduler engineer"),
+            self._p("distributed systems engineer", "routing engineer"),
+            self._p("distributed systems engineer", "consensus engineer"),
+            self._p("distributed systems engineer", "observability engineer"),
+        ]
+        shared = dv.shared_bm25_terms(payloads, df_threshold=0.35, min_df=1)
+        self.assertIn("distributed systems engineer", shared)   # in all 4
+        self.assertNotIn("scheduler engineer", shared)          # distinctive, in 1
+
+    def test_diversify_drops_shared_keeps_distinctive(self):
+        f = {"semantic_query": "x", "bm25_queries": ["distributed systems engineer", "raft engineer"]}
+        out = dv.diversify_filters(f, {"distributed systems engineer"})
+        self.assertEqual(out["bm25_queries"], ["raft engineer"])
+        self.assertTrue(out["bm25_diversified"])
+
+    def test_min_df_guards_small_sets(self):
+        # 2 probes sharing a term: with min_df=3 nothing is dropped (too small to trust)
+        payloads = [self._p("ai product engineer", "rag"), self._p("ai product engineer", "agents")]
+        self.assertEqual(dv.shared_bm25_terms(payloads, df_threshold=0.35, min_df=3), set())
 
 
 if __name__ == "__main__":
