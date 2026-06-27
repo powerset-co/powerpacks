@@ -29,9 +29,9 @@
   "optional_remote_acceleration": {
     "provider": "modal",
     "required": false,
-    "status": "lazy_static_scaffold_until_live_smoke_verified",
+    "status": "fixture_live_smoke_verified_packaged_source_and_volume",
     "command": "uv run --with modal --project . python packs/indexing/primitives/modal_index_build/modal_index_build.py plan --input .powerpacks/network-import/merged/people.csv --output-dir .powerpacks/search-index --run-id modal-run --operator-id local:user",
-    "live_run_gate": "modal_index_build.py run requires --allow-unverified-live-run until a live smoke verifies source packaging and Volume behavior"
+    "live_run_gate": "modal_index_build.py run remains opt-in and requires --allow-unverified-live-run for remote compute/Volume writes; fixture smoke verified source packaging and Volume behavior"
   },
   "steps": [
     {"id": "flatten_people", "kind": "local_transform"},

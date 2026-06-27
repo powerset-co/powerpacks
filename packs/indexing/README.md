@@ -100,10 +100,11 @@ explicitly provided.
 ## Optional Modal acceleration
 
 Powerpacks does not require Modal and does not run it from setup/onboarding. The
-wrapper added here is a lazy/static scaffold for explicit remote builds; do not
-describe it as live-verified unless a Modal smoke has actually run against a
-packaged image and Volume. Inspect the planned paths first with a transient
-Modal dependency:
+wrapper uses lazy Modal imports and packages the repo source into a Modal image
+for explicit remote builds. A fixture-sized live smoke has verified packaged
+source execution and Modal Volume writes; real `.powerpacks/network-import/merged/people.csv`
+data should still be validated separately in the target environment. Inspect the
+planned paths first with a transient Modal dependency:
 
 ```bash
 uv run --with modal --project . python packs/indexing/primitives/modal_index_build/modal_index_build.py plan \
@@ -112,7 +113,7 @@ uv run --with modal --project . python packs/indexing/primitives/modal_index_bui
   --run-id modal-run \
   --operator-id local:user
 
-# The run subcommand is gated until a live smoke verifies source packaging/Volume behavior.
+# The run subcommand remains opt-in because it uses remote compute and a Modal Volume.
 uv run --with modal --project . python packs/indexing/primitives/modal_index_build/modal_index_build.py run \
   --input .powerpacks/network-import/merged/people.csv \
   --output-dir .powerpacks/search-index \
@@ -126,5 +127,5 @@ operator-scoped Volume path, and structured JSON errors/fallback commands when
 Modal is unavailable. Full compatibility artifacts stay in the Volume by default;
 pulling all JSONL/stats/profile artifacts should be explicit. By default `run`
 returns a structured `modal_live_run_unverified` error with the local fallback
-command; use `--allow-unverified-live-run` only for an explicit smoke to verify
-repo-source packaging and Volume behavior in the target Modal environment.
+command; pass `--allow-unverified-live-run` only when an explicit remote
+Modal build/smoke is desired.
