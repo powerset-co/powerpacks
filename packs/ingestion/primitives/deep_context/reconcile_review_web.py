@@ -311,9 +311,42 @@ def judgment_line(verdict: str, confidence: float) -> str:
     return f"<div class='judgment j-review'>? Not enough to tell · {pct} sure either way</div>"
 
 
-def render_candidate(idx: int, total: int, cand: dict[str, Any]) -> str:
+# For merged (multi-candidate) people: rank the kept / most-confident LinkedIn first so it
+# floats to the top as the "parent", and collapse the high-confidence wrong matches.
+WRONG_COLLAPSE_CONF = 0.8  # judge ≥80% sure it's the wrong person → hide behind the expander
+
+
+def _cand_rank(cand: dict[str, Any]) -> tuple[int, float]:
+    st = candidate_state(cand)
+    if st in ("verified", "fixed"):
+        return (0, -cand["confidence"])
+    if st in ("detached", "excluded", "rejected"):
+        return (4, -cand["confidence"])
+    verdict = cand["verdict"]
+    if verdict == "confirmed":
+        return (1, -cand["confidence"])
+    if verdict == "wrong_person":
+        return (3, -cand["confidence"])
+    return (2, -cand["confidence"])  # needs_review / unknown
+
+
+def _is_collapsible_wrong(cand: dict[str, Any]) -> bool:
+    """A candidate we can hide by default: a keeper we never collapse; otherwise collapse it if
+    it's already resolved-wrong (detached/rejected/excluded) or the judge is ≥80% sure it's the
+    wrong person. The user keeps the option to expand and act on it."""
+    st = candidate_state(cand)
+    if st in ("verified", "fixed"):
+        return False
+    if st in ("detached", "rejected", "excluded"):
+        return True
+    return cand["verdict"] == "wrong_person" and cand["confidence"] >= WRONG_COLLAPSE_CONF
+
+
+def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
+                     show_exclude: bool = True, parent_label: bool = False) -> str:
     st = candidate_state(cand)
     option = f"<span class='opt'>Option {idx + 1} of {total}</span>" if total > 1 else ""
+    badge = "<span class='parentbadge' title='the LinkedIn we keep for this person'>parent</span>" if parent_label else ""
     judgment = judgment_line(cand["verdict"], cand["confidence"])
     profile = []
     if cand["headline"]:
@@ -345,28 +378,32 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any]) -> str:
     avatar = (f"<img class='avatar' src='{esc(pic)}' alt='' loading='lazy' referrerpolicy='no-referrer' "
               f"onerror='this.style.display=&quot;none&quot;'>" if pic else "<span class='avatar avatar-empty'></span>")
     return f"""
-    <div class='cand cand-{st}' data-pub='{esc(cand['pub'])}'>
+    <div class='cand cand-{st}{" cand-parent" if parent_label else ""}' data-pub='{esc(cand['pub'])}'>
       <div class='cand-top'>
         {avatar}
         <div class='cand-id'>
-          {option}
+          {badge}{option}
           <a href='{esc(cand['url'])}' target='_blank' rel='noreferrer'>{esc(cand['url'] or cand['pub'])}</a>
           {''.join(flags)}
+          {f"<div class='contacts'><strong>from your messages</strong> <b class='cval'>{esc(contacts)}</b></div>" if contacts else ""}
         </div>
         <div class='cand-state state-{st}'>{esc(STATUS_LABEL.get(st, st))}</div>
       </div>
       {judgment}
-      <div class='profile'>{''.join(profile) or "<div class='loc'>—</div>"}</div>
-      {f"<div class='contacts'><strong>from your messages:</strong> {esc(contacts)}</div>" if contacts else ""}
-      <div class='reason'>{esc(cand['reason'])}</div>
-      <div class='evidence'>{''.join(evid)}</div>
+      <div class='cand-body'>
+        <div class='profile'>{''.join(profile) or "<div class='loc'>—</div>"}</div>
+        <div class='col-evidence'>
+          <div class='reason'>{esc(cand['reason'])}</div>
+          {f"<div class='evidence'>{''.join(evid)}</div>" if evid else ""}
+        </div>
+      </div>
       {fixed_note}
       <div class='actions'>
         <button class='btn keep' data-act='keep'>Keep this LinkedIn</button>
         <button class='btn detach' data-act='detach'>Detach (wrong person)</button>
         <span class='fixwrap'><input class='fixurl' placeholder='paste correct LinkedIn URL'>
           <button class='btn fix' data-act='fix'>Fix</button></span>
-        <button class='btn exclude' data-act='exclude-person' title="Don't index this person at all — drops them from people.csv (whole person, all LinkedIns)">✕ Exclude person</button>
+        {"<button class='btn exclude' data-act='exclude-person' title=\"Don't index this person at all — drops them from people.csv (whole person, all LinkedIns)\">✕ Exclude person</button>" if show_exclude else ""}
         <button class='btn reset' data-act='reset' title='revert to the model decision'>↺</button>
       </div>
     </div>"""
@@ -386,9 +423,37 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
     # Collapse by default; only honor an explicit expand request. A multi-candidate
     # (Merged) row no longer force-opens — the user wants those collapsed first.
     open_attr = " open" if expanded else ""
+    # Merged people: float the kept / most-confident LinkedIn to the top (label it
+    # "parent"), and tuck the high-confidence wrong matches behind an expander so the
+    # default view shows just the one we keep.
+    ordered = sorted(cands_list, key=_cand_rank) if multi else list(cands_list)
+    shown = [c for c in ordered if not _is_collapsible_wrong(c)]
+    collapsed = [c for c in ordered if _is_collapsible_wrong(c)]
+    if not shown:  # nothing confident to keep — show them all rather than hide everything
+        shown, collapsed = ordered, []
+    if multi:
+        cand_html = "".join(
+            render_candidate(i, n_cand, c, show_exclude=False, parent_label=(i == 0))
+            for i, c in enumerate(shown))
+        if collapsed:
+            wrong = "".join(render_candidate(0, 1, c, show_exclude=False) for c in collapsed)
+            n_wrong = len(collapsed)
+            cand_html += (f"<details class='wrongones'><summary>show {n_wrong} likely-wrong "
+                          f"match{'es' if n_wrong != 1 else ''}</summary>{wrong}</details>")
+        exclude_top = ("<div class='parent-actions'><button class='btn exclude exclude-top' "
+                       "data-act='exclude-person' title=\"Drop this whole person from people.csv — "
+                       f"all {n_cand} LinkedIns, won't be indexed\">✕ Exclude this whole person</button></div>")
+    else:
+        cand_html = "".join(render_candidate(i, n_cand, c) for i, c in enumerate(shown))
+        exclude_top = ""
+    cands = cand_html
     banner = (f"<div class='conflictbanner'>⚠ Merged person — {n_cand} different LinkedIns ended up on "
               f"this one person. Keep the right one and detach the rest.</div>" if multi else "")
-    cands = "".join(render_candidate(i, n_cand, c) for i, c in enumerate(cands_list))
+    # Clarify which dossier this is: it's the whole person's combined message history, not
+    # tied to any single LinkedIn candidate (that confusion is what the label fixes).
+    doss_label = "show message dossier — all messages for this person"
+    if n_people > 1:
+        doss_label += f" ({n_people} clusters)"
     parent_cls = "parent multi" if multi else "parent"
     summary_pic = next((c.get("profile_pic_url") for c in cands_list if c.get("profile_pic_url")), "")
     summary_avatar = (f"<img class='avatar avatar-sm' src='{esc(summary_pic)}' alt='' loading='lazy' "
@@ -404,10 +469,11 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
         <span class='pmeta'>{n_people} message cluster{'s' if n_people != 1 else ''} · conf {conf}</span>
       </summary>
       <div class='pbody'>
+        {exclude_top}
         {banner}
         {cands}
         <details class='dossier' data-slug='{esc(parent['slug'])}'>
-          <summary>show message dossier</summary>
+          <summary>{doss_label}</summary>
           <pre class='dosstext'>loading…</pre>
         </details>
       </div>
@@ -524,35 +590,34 @@ button:hover{background:#2a3642}
 summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:11px;padding:11px 14px}
 summary::-webkit-details-marker{display:none}
 .parent>summary:hover{background:#fafbfc}
-.chip{font-size:11px;font-weight:700;border-radius:999px;padding:3px 9px;white-space:nowrap;text-transform:uppercase;letter-spacing:.03em}
-.chip-review{background:var(--warnbg);color:var(--warn)}
-.chip-verified{background:var(--okbg);color:var(--ok)}
-.chip-detached{background:var(--badbg);color:var(--bad)}
-.chip-fixed{background:var(--fixbg);color:var(--fix)}
+.chip{font-size:11px;font-weight:700;border-radius:999px;padding:3px 9px;white-space:nowrap;text-transform:uppercase;letter-spacing:.03em;background:#fff;border:1px solid var(--line);color:var(--muted)}
+.chip-review{color:var(--warn);border-color:#e7d3ad}
+.chip-verified{color:var(--ok);border-color:#a8d5cd}
+.chip-detached{color:var(--bad);border-color:#e6b8b0}
+.chip-fixed{color:var(--fix);border-color:#c9bce8}
 .pname{font-weight:700;font-size:15px;min-width:150px}
 .picked{font-size:12.5px;color:var(--muted);flex:1;overflow-wrap:anywhere}
 .picked a{color:var(--ok);text-decoration:none}.picked a:hover{text-decoration:underline}
 .nopick{color:var(--bad)}
 .pmeta{font-size:11.5px;color:var(--muted);white-space:nowrap}
-.multibadge{font-size:11.5px;font-weight:700;color:#8a5200;background:#ffe9c7;border-radius:999px;padding:2px 9px;flex:1;max-width:max-content}
-.parent.multi{border-color:#f0c167}
-.parent.multi[open]{box-shadow:0 2px 14px rgba(180,120,0,.14)}
+.multibadge{font-size:11.5px;font-weight:700;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 9px;flex:1;max-width:max-content}
+.parent.multi{border-color:var(--line)}
+.parent.multi[open]{box-shadow:0 2px 10px rgba(15,23,42,.06)}
 .pbody{border-top:1px solid var(--line);padding:12px 14px;display:flex;flex-direction:column;gap:11px}
-.conflictbanner{font-size:12.5px;font-weight:600;color:#8a5200;background:#fff6e6;border:1px solid #f0c167;border-radius:7px;padding:8px 11px}
-.parent.multi .pbody{padding-left:14px}
-.parent.multi .cand{border-left:4px solid #d7dde5;margin-left:2px}
-.parent.multi .cand-verified{border-left-color:#2bb39a}
-.parent.multi .cand-detached{border-left-color:#d97a68}
-.opt{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#8a5200;background:#ffe9c7;border-radius:999px;padding:2px 8px}
-.judgment{font-size:13px;border-radius:6px;padding:6px 10px;margin-bottom:8px}
+.conflictbanner{font-size:12.5px;font-weight:600;color:var(--muted);background:#fff;border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:6px;padding:8px 11px}
+.opt{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 8px}
+/* judgment: a plain line, color on the text only — no filled block */
+.judgment{font-size:13px;padding:1px 0;margin-bottom:6px}
 .judgment b{font-weight:700}
-.j-confirmed{background:var(--okbg);color:#0c5b53}
-.j-wrong{background:var(--badbg);color:#8a2318}
-.j-review{background:var(--warnbg);color:#7a4b00}
-.cand{border:1px solid var(--line);border-radius:8px;padding:11px 12px;background:#fcfdfe}
-.cand-verified{border-color:#9bd3c8;background:#f4fbf9}
-.cand-detached{border-color:#e6b0a6;background:#fdf6f4}
-.cand-fixed{border-color:#c3b1e6;background:#f8f5fd}
+.j-confirmed{color:var(--ok)}
+.j-wrong{color:var(--bad)}
+.j-review{color:var(--warn)}
+/* cards are neutral white; the only emphasis goes to the one we think is right */
+.cand{border:1px solid var(--line);border-radius:8px;padding:11px 12px;background:#fff}
+.cand-parent{border-color:#a8d5cd;background:#f6fbf9;box-shadow:inset 3px 0 0 var(--ok)}
+.cand-verified{border-color:#a8d5cd;background:#f6fbf9}
+.cand-detached{opacity:.66}
+.cand-fixed{border-color:#c9bce8}
 .cand-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:7px}
 .avatar{width:44px;height:44px;border-radius:50%;object-fit:cover;background:var(--soft);border:1px solid var(--line);flex:0 0 auto}
 .avatar-empty{display:inline-block;background:repeating-linear-gradient(45deg,#eef1f5,#eef1f5 6px,#e7ebf0 6px,#e7ebf0 12px)}
@@ -563,21 +628,28 @@ summary::-webkit-details-marker{display:none}
 .v-confirmed{background:var(--okbg);color:var(--ok)}.v-wrong_person{background:var(--badbg);color:var(--bad)}.v-needs_review{background:var(--warnbg);color:var(--warn)}
 .conf{font-size:12px;font-weight:700;color:#334155}
 .flag{font-size:10.5px;border-radius:999px;padding:2px 6px;background:#eef1f5;color:#5b6876}
-.flag.conflict{background:#ffe9c7;color:#8a5200}
+.flag.conflict{background:#fff;border:1px solid var(--line);color:var(--warn)}
 .cand-state{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
 .state-verified{color:var(--ok)}.state-detached{color:var(--bad)}.state-fixed{color:var(--fix)}.state-review{color:var(--warn)}
 .profile .hl{font-size:13px;color:#334155;font-weight:600}
 .profile .loc{font-size:12px;color:var(--muted)}
 .exp{margin:5px 0;padding-left:18px;font-size:12.5px;color:#334155}
 .edu{font-size:12px;color:var(--muted);margin-top:3px}
-.contacts{font-size:12px;color:#334155;margin-top:7px;overflow-wrap:anywhere}
-.contacts strong{color:var(--muted);font-weight:600}
-.reason{font-size:13px;color:#1f2937;margin:8px 0;line-height:1.45}
-.evidence{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
-.ev{font-size:12px;border-radius:6px;padding:6px 9px}
+.contacts{font-size:12.5px;color:#334155;margin-top:4px;flex-basis:100%;overflow-wrap:anywhere}
+.contacts strong{color:var(--muted);font-weight:700;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
+.contacts .cval{font-size:14px;font-weight:700;color:#0f172a;margin-left:3px}
+/* compact two-column card: who (profile) on the left, why (reason + evidence) on the right */
+.profile{min-width:0}
+.cand-body{display:grid;grid-template-columns:1fr;gap:6px 18px;margin:6px 0}
+.col-evidence{display:flex;flex-direction:column;gap:6px;min-width:0}
+.reason{font-size:13px;color:#1f2937;margin:0 0 2px;line-height:1.45}
+.evidence{display:flex;flex-direction:column;gap:6px}
+@media(min-width:760px){.cand-body{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);align-items:start}}
+.ev{font-size:12px;border-radius:6px;padding:6px 9px;background:#fff;border:1px solid var(--line);color:#334155}
 .ev span{font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:.04em;display:block;margin-bottom:3px}
 .ev ul{margin:0;padding-left:16px;line-height:1.4}
-.ev.good{background:var(--okbg);color:#0c5b53}.ev.bad{background:var(--badbg);color:#8a2318}
+.ev.good{border-left:3px solid var(--ok)}.ev.good span{color:var(--ok)}
+.ev.bad{border-left:3px solid var(--bad)}.ev.bad span{color:var(--bad)}
 .fixednote{font-size:12px;color:var(--fix);margin-bottom:6px;overflow-wrap:anywhere}
 .fixednote a{color:var(--fix)}
 .actions{display:flex;gap:7px;flex-wrap:wrap;align-items:center;border-top:1px dashed var(--line);padding-top:9px}
@@ -589,19 +661,34 @@ summary::-webkit-details-marker{display:none}
 .fixwrap{display:inline-flex;gap:4px;align-items:center}
 .fixurl{min-width:230px;font-size:12px;padding:6px 7px}
 .btn.reset{padding:6px 9px;color:var(--muted)}
-.dossier summary{padding:6px 0;font-size:12px;color:var(--muted)}
+/* expander toggles look like clickable pills with a caret that rotates when open */
+.dossier>summary,.wrongones>summary{display:inline-flex;align-items:center;gap:7px;cursor:pointer;
+  font-size:12px;font-weight:600;list-style:none;user-select:none;border-radius:7px;padding:5px 11px;margin:2px 0}
+.dossier>summary::-webkit-details-marker,.wrongones>summary::-webkit-details-marker{display:none}
+.dossier>summary::before,.wrongones>summary::before{content:'▸';font-size:9px;transition:transform .12s;display:inline-block}
+.dossier[open]>summary::before,.wrongones[open]>summary::before{transform:rotate(90deg)}
+.dossier>summary{color:var(--muted);background:#fff;border:1px solid var(--line)}
+.dossier>summary:hover{background:var(--soft)}
 .dosstext{white-space:pre-wrap;font-size:12px;line-height:1.5;background:#f8fafc;border:1px solid var(--line);border-radius:6px;padding:10px;max-height:340px;overflow:auto;color:#1f2937;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .toast{position:fixed;right:16px;bottom:16px;background:#17202a;color:#fff;border-radius:8px;padding:9px 13px;font-size:13px;opacity:0;transform:translateY(8px);transition:.15s;pointer-events:none}
 .toast.show{opacity:1;transform:translateY(0)}
 .muted{color:var(--muted)}
-.chip-excluded{background:#e8eaed;color:#5b6876}
+.chip-excluded{color:#5b6876;border-color:var(--line)}
 .state-excluded{color:#5b6876}
-.cand-excluded{border-color:#cfd4da;background:#f3f4f6;opacity:.72}
+.cand-excluded{border-color:var(--line);background:#fff;opacity:.55}
 .parent.p-excluded{opacity:.62}
 .parent.p-excluded .pname{text-decoration:line-through}
 .btn.exclude{color:var(--bad)}
 .btn.exclude:hover{background:var(--badbg);border-color:#e6b0a6}
 .btn.exclude.on{background:var(--bad);border-color:var(--bad);color:#fff}
+.parent-actions{display:flex;justify-content:flex-end;margin-bottom:2px}
+.exclude-top{font-size:12px}
+.parentbadge{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#fff;background:var(--ok);border-radius:999px;padding:2px 9px}
+.wrongones{margin-top:4px;border-top:1px dashed var(--line);padding-top:6px}
+.wrongones>summary{color:var(--bad);background:#fff;border:1px solid var(--line)}
+.wrongones>summary:hover{background:var(--soft)}
+.wrongones[open]>summary{margin-bottom:6px}
+.wrongones .cand{margin-top:6px}
 @media(max-width:820px){header{display:block}.stats{grid-template-columns:repeat(2,1fr);min-width:0;margin-top:12px}summary{flex-wrap:wrap}.picked{flex-basis:100%}}
 """
 
@@ -622,7 +709,7 @@ function setCandState(cand,action,approved,newUrl){
   if(st==='verified')cand.querySelector('.btn.keep').classList.add('on');
   if(st==='detached')cand.querySelector('.btn.detach').classList.add('on');
   if(st==='fixed')cand.querySelector('.btn.fix').classList.add('on');
-  if(st==='excluded')cand.querySelector('.btn.exclude').classList.add('on');
+  if(st==='excluded')cand.querySelector('.btn.exclude')?.classList.add('on');
 }
 function parentStatusFromCands(parent){
   const states=[...parent.querySelectorAll('.cand')].map(candStateOf);
@@ -648,6 +735,8 @@ function refreshParent(parent){
   const chip=parent.querySelector(':scope > summary .chip');
   if(chip){['chip-review','chip-verified','chip-detached','chip-fixed','chip-excluded'].forEach(x=>chip.classList.remove(x));
     chip.classList.add('chip-'+st);chip.textContent=LBL[st];}
+  const top=parent.querySelector(':scope > .pbody > .parent-actions .btn.exclude');
+  if(top)top.classList.toggle('on',st==='excluded');
   updateCounts();
 }
 async function postDecide(cand,act,newUrl){
@@ -680,7 +769,11 @@ document.querySelectorAll('.cand').forEach(c=>{
   if(c.classList.contains('cand-verified'))c.querySelector('.btn.keep').classList.add('on');
   if(c.classList.contains('cand-detached'))c.querySelector('.btn.detach').classList.add('on');
   if(c.classList.contains('cand-fixed'))c.querySelector('.btn.fix').classList.add('on');
-  if(c.classList.contains('cand-excluded'))c.querySelector('.btn.exclude').classList.add('on');});
+  if(c.classList.contains('cand-excluded'))c.querySelector('.btn.exclude')?.classList.add('on');});
+// merged people carry one "exclude whole person" button at the row top — light it if excluded
+document.querySelectorAll('.parent').forEach(p=>{
+  const t=p.querySelector(':scope > .pbody > .parent-actions .btn.exclude');
+  if(t)t.classList.toggle('on',parentStatusFromCands(p)==='excluded');});
 // lazy-load dossier on first expand
 document.querySelectorAll('details.dossier').forEach(d=>d.addEventListener('toggle',async()=>{
   if(!d.open||d.dataset.loaded)return;d.dataset.loaded='1';const pre=d.querySelector('.dosstext');
