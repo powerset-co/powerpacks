@@ -886,6 +886,50 @@ class TestReviewWeb(unittest.TestCase):
             self.assertEqual(web.candidate_state(jane["candidates"][0]), "excluded")
             self.assertEqual(web.parent_status(jane), "excluded")
 
+    def _merged_fixture(self, d: Path) -> tuple[Path, Path]:
+        """One Merged person: a confirmed keeper, a high-confidence wrong namesake, and a
+        still-needs-review third link, all on the same parent."""
+        def rec(key, verdict, conf):
+            return {"parent_slug": "sam-jones-p1", "name": "Sam Jones", "candidate_key": key,
+                    "person_ids": ["pid-1", "pid-2"], "conflict": True, "no_link": False,
+                    "linkedin": {"public_identifier": key, "linkedin_url": f"https://www.linkedin.com/in/{key}",
+                                 "full_name": "Sam Jones", "headline": "", "experiences": [], "education": [],
+                                 "location": "", "has_profile": True},
+                    "match_emails": [], "match_phones": [],
+                    "verdict": {"verdict": verdict, "confidence": conf, "supporting_evidence": [],
+                                "contradicting_evidence": [], "reason": "r", "linkedin_plausibly_absent": False,
+                                "recommend_deep_research": False}, "error": ""}
+        verdicts = d / "verdicts.jsonl"
+        review = d / "review.csv"
+        recs = [rec("samwrong", "wrong_person", 0.93), rec("samreal", "confirmed", 0.9),
+                rec("sammaybe", "needs_review", 0.4)]
+        verdicts.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
+        review.write_text("", encoding="utf-8")  # all pending
+        return verdicts, review
+
+    def test_render_merged_floats_parent_and_collapses_wrong(self):
+        with tempfile.TemporaryDirectory() as dd:
+            d = Path(dd)
+            verdicts, review = self._merged_fixture(d)
+            parents, _ = web.build_parents(verdicts, review)
+            sam = next(p for p in parents if p["name"] == "Sam Jones")
+            self.assertEqual(len(sam["candidates"]), 3)
+            html = web.render_parent(0, sam, expanded=True)
+            # one row-top "exclude whole person", no per-candidate exclude on a merged row
+            self.assertIn("exclude-top", html)
+            self.assertNotIn("Exclude person", html)
+            # the confirmed keeper floats first and is labeled "parent"
+            self.assertIn("parentbadge", html)
+            self.assertLess(html.index("samreal"), html.index("samwrong"))
+            self.assertLess(html.index("samreal"), html.index("sammaybe"))
+            # the high-confidence wrong namesake is tucked behind the expander; the
+            # still-uncertain one stays visible above it
+            self.assertIn("wrongones", html)
+            self.assertLess(html.index("wrongones"), html.index("samwrong"))
+            self.assertLess(html.index("sammaybe"), html.index("wrongones"))
+            # dossier label clarifies it's the whole person's messages
+            self.assertIn("all messages for this person", html)
+
 
 class TestSelfReportedRetarget(unittest.TestCase):
     """Recover the correct LinkedIn when the contact shared it themselves in their messages."""
