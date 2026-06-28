@@ -27,6 +27,7 @@ ea = _load("expand_from_anchor")
 bei = _load("build_eval_inputs")
 tc = _load("triage_candidates")
 cj_judge = _load("codex_judge")
+rs = _load("robust_source")
 
 
 class TestDecomposeJd(unittest.TestCase):
@@ -354,6 +355,38 @@ class TestConsensusScoreThreshold(unittest.TestCase):
         # without threshold, all verdicts are "out" -> nobody passes the not-out gate
         _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1)
         self.assertEqual(strong, [])
+
+
+class TestRobustSourceMerge(unittest.TestCase):
+    def _write(self, rows):
+        f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+        f.close()
+        return Path(f.name)
+
+    def test_merge_dedups_and_counts_net_new(self):
+        into = {}
+        p0 = self._write([{"person_id": "a", "found_by": ["q0"]}, {"person_id": "b", "found_by": ["q1"]}])
+        n0 = rs._merge(into, p0, "r0")
+        self.assertEqual(n0, 2)
+        self.assertEqual(set(into), {"a", "b"})
+        self.assertEqual(into["a"]["found_by"], ["r0:q0"])  # provenance tagged with round
+        # round 1: a is a repeat (no net-new), c is new
+        p1 = self._write([{"person_id": "a", "found_by": ["q5"]}, {"person_id": "c", "found_by": ["q9"]}])
+        n1 = rs._merge(into, p1, "r1")
+        self.assertEqual(n1, 1)  # only c is net-new
+        self.assertEqual(set(into), {"a", "b", "c"})
+        self.assertEqual(into["a"]["found_by"], ["r0:q0", "r1:q5"])  # accumulated across rounds
+
+    def test_merge_skips_idless_and_missing_file(self):
+        into = {"x": {"person_id": "x", "found_by": []}}
+        self.assertEqual(rs._merge(into, Path("/nonexistent/none.jsonl"), "r0"), 0)
+        p = self._write([{"found_by": ["q"]}, {"person_id": "y", "found_by": ["q"]}])
+        self.assertEqual(rs._merge(into, p, "r0"), 1)  # idless dropped, y added
+
+    def test_emphases_are_distinct(self):
+        self.assertEqual(len(set(rs.EMPHASES)), len(rs.EMPHASES))
 
 
 if __name__ == "__main__":

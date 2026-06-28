@@ -6,6 +6,10 @@ _Changelog:_
 - _2026-06-27: Added the fully-primitive, portable OpenAI-judge run + mixture-of-judges
   hill-climb (no sub-agents). See "Full-chain portable run + mixture hill-climb (2026-06-27)"
   at the end. Two new bridge primitives: `build_eval_inputs.py`, `triage_candidates.py`._
+- _2026-06-28b: Made SOURCING robust (non-flaky): `robust_source.py` unions independent
+  decompose+shotgun rounds → min 0.968 recall (was a flaky 0.87–0.97/round). Recall is now fixed
+  in sourcing, not by loosening the judge; triage dropped from the default flow. See "Robust
+  sourcing — killing the seed variance (2026-06-28)" at the end._
 - _2026-06-28: Added a FREE portable judge (`codex_judge.py`, spawns `codex exec`, reuses the
   canonical rubric+scorer) and the key calibration finding: recall-vs-GT was capped by the
   shortlist CUTOFF, not sourcing or judge vendor. See "Free codex judge + threshold
@@ -406,3 +410,57 @@ was sourced; the only residual misses are the 5 not in the pool. So the primitiv
 reproduces the original recall once the cutoff is dialed; the remaining lever is sourcing those
 last 5 (expand-from-anchor). Cross-vendor cleans the TOP of the list (p@10 0.40 → 0.50) at a
 smaller shortlist. Cost: **$0** (codex on ChatGPT subscription).
+
+## Robust sourcing — killing the seed variance (2026-06-28)
+
+User ask: the residual misses should be fixed in **sourcing**, and it must be **robust, not flaky
+due to seed variance** — hill-climb recall to ≥0.95 reliably.
+
+### Diagnosis: all 5 "missing" GT are reachable; it's variance + a lossy triage
+
+Tracing the 5 GT absent from the 12-seed epoch-14 run across ALL past artifacts: **none are
+corpus-absent.** 2 (Rob Benson, Jeremy Yoo) were sourced in 12–13 past runs and then **dropped by
+triage**; 3 (Matthew Kaufer, Alexey Maykov, Nicole Hubbard) are reachable but only by *some*
+probe sets — the deeper top-150/200 + more-seed runs caught them, the 12-seed run didn't. Pure
+**seed variance** + a lossy pre-filter.
+
+### Redundancy saturates (free, instant — union of past pools)
+
+| pool(s) | GT recall |
+| --- | --- |
+| epoch-03 (18 seeds, top-80) alone | 31/31 (1.00) |
+| single runs, range | 0.90–1.00 |
+| union(epoch-03, epoch-13) | 31/31 (1.00) |
+
+A single sufficiently-diverse run can hit 1.00, but single runs *vary*. The **union of any 2
+independent runs = 1.00**, because different runs miss different people.
+
+### `robust_source.py` + the non-flaky proof (3 independent trials)
+
+`robust_source` unions independent `decompose_jd`+`run_shotgun` rounds (each a fresh decompose with
+a rotated emphasis) until coverage saturates. Three independent end-to-end trials:
+
+| trial | single round0 (flaky) | multi-round union (robust) |
+| --- | --- | --- |
+| 1 | 0.968 | 0.968 |
+| 2 | 0.935 | **1.000** |
+| 3 | **0.871** | 0.968 |
+| **per-trial union** | — | **min 0.968 · mean 0.978 · all ≥0.95** |
+| **union of all 3 trials** | — | **1.000** |
+
+Single-round recall swings 0.87–0.97 (the flakiness); the multi-round union is tight and always
+≥0.95. Redundancy across independent rounds is the robustness mechanism — it is GT-agnostic (it
+stops on coverage saturation, no answer key needed at runtime).
+
+### Triage dropped from the default flow
+
+Triage existed to shrink the pool before the **paid** judge; it is lossy (dropped 2 reachable GT)
+and the `codex_judge` is **free**, so the default flow now judges the whole robust union and lets
+the rubric gate. (`triage_candidates` stays available for paid-judge, very-large-pool cases.)
+
+### Net: recall is solved in sourcing, robustly
+
+≥0.95 GT recall every trial from sourcing alone (min 0.968), no seed-luck dependence. The judge
+then sets precision (free codex + `--score-threshold`); the cross-vendor union cleans the top.
+Cost of this whole robustness round: cheap `gpt-4o` decompose/expand only (~$1–2); retrieval is
+read-only/free.

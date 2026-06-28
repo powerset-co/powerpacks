@@ -39,49 +39,37 @@ that's what drops good candidates. Keep recall high and let the judges gate.
 ## Flow (every step is a callable primitive — Codex / any harness runs it identically)
 
 Legend: 🆕 = new `recruit/` primitive · ✅ = existing primitive. No step relies on a harness
-improvising; the only LLM calls are `decompose_jd` (1 call) + the judge.
+improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
 
-1. **Decompose the JD → diverse seeds** 🆕 (1 LLM call). Emits ~18 diverse, *work-described*
-   seeds (what the person built, not titles) — diversity here is what drives recall.
+1. **Robust source** 🆕 (read-only retrieval; only LLM cost is cheap `gpt-4o` decompose/expand).
+   A single `decompose_jd → run_shotgun` round is **flaky** — the LLM seed set varies, so GT
+   recall swings (measured 0.87–0.97 across trials). `robust_source` removes that variance by
+   unioning several independent rounds (each a fresh decompose with a rotated emphasis) until
+   coverage saturates. **Measured (AgentMail, 3 trials): single round 0.87–0.97; 2-round union
+   min 0.968 / mean 0.978 (always ≥0.95); 3 independent runs union to 1.00.**
    ```bash
-   uv run --env-file .env --project . python packs/search/primitives/recruit/decompose_jd.py \
-     --jd-file <run>/jd.txt --n 18 --out <run>/seeds.json
+   uv run --env-file .env --project . python packs/search/primitives/recruit/robust_source.py \
+     --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --n 16 --keep 200 --max-rounds 3
    ```
+   Writes `<run>/union.jsonl`. (It chains `decompose_jd` + `run_shotgun` internally — those stay
+   callable on their own for a single quick pass.) **Recall is fixed HERE, in sourcing — not by
+   loosening the judge.**
 
-2. **Shotgun source** 🆕 runner over ✅ primitives (read-only, ~free). One command chains
-   `prepare --preserve-query-semantic` (raw query as vector + expansion BM25 + filters:
-   location/education/company/seniority/headcount) → `diversify_probe_bm25` (drop shared lead
-   terms) → `run --search-only` (unique `--ledger` per probe) → deduped union with profiles:
-   ```bash
-   uv run --env-file .env --project . python packs/search/primitives/recruit/run_shotgun.py \
-     --seeds <run>/seeds.json --run-dir <run> --limit 200 --top-k 6000
-   ```
-   Writes `<run>/union.jsonl`. (Validated end-to-end: 12 auto-seeds → 90% recall vs GT; 18 → ~97%.)
-   **Why the flags matter:** without `--preserve-query-semantic` expansion rewrites the vector and
-   ~halves recall; without diversify the probes overlap. Both are defaults in the runner.
-
-3. **Bridge the union into the judge's contract** 🆕 (1 LLM call). The canonical judge reads a
+2. **Bridge the union into the judge's contract** 🆕 (1 cheap LLM call). The judge reads a
    profile-search run dir (`plan.json` + `candidate_frontier.jsonl` + `probe_summaries.json` →
    the already-on-disk `profiles.jsonl.gz`). `build_eval_inputs` extracts must/nice traits from
-   the JD and rewrites the shotgun run into exactly that contract — no recompute:
+   the JD and rewrites the run into exactly that contract — no recompute:
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/recruit/build_eval_inputs.py \
      --run-dir <run> --jd-file <run>/jd.txt --set-name "<set>" --created-at <iso>
    ```
 
-4. **Triage (tier-1, only if the union is big > ~120)** 🆕 `triage_candidates` — cheap-model
-   (`gpt-4.1-mini`) conservative filter over `candidate_frontier.jsonl` that drops obvious
-   non-matches and passes borderline (`keep`/`maybe` survive). It reads the PROFILE, not probe
-   count — **measured: probe count is a bad precision signal** (single-probe hits include true
-   top candidates), so don't cap by `found_by`. Survivors overwrite `candidate_frontier.jsonl`
-   (original saved to `candidate_frontier.full.jsonl`). Small unions skip this.
-   ```bash
-   uv run --env-file .env --project . python packs/search/primitives/recruit/triage_candidates.py --run-dir <run>
-   ```
-   *(NOTE: the search-profile `llm_filter_candidates` is welded to a `search_network_pipeline`
-   run-state — it does NOT fit the recruit union artifact; use `triage_candidates`.)*
+   *No triage step.* Triage (`triage_candidates`, still available) was a cost hack to shrink the
+   pool before the **paid** judge — but it is lossy (measured: it dropped 2 reachable GT) and the
+   `codex_judge` is **free**, so judge the whole union and let the rubric gate. Only triage if you
+   are paying per judge call and the union is very large.
 
-5. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
+3. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
    rubric with the IC seniority hard-gates (default `gpt-5.4`). **Default to a CROSS-VENDOR panel:**
    one `gpt-5.4` judge at `--reasoning-effort low` (measured: ~as good as `high` here, far cheaper)
    **+ one Claude judge on the same rubric.** Cross-vendor agreement is the real confidence signal —
@@ -101,7 +89,7 @@ improvising; the only LLM calls are `decompose_jd` (1 call) + the judge.
      sourcing/vendor. A **cross-vendor union** (codex OR gpt keeps) lifts recall further (~0.96).
      Validate the threshold on a 2nd JD before hardcoding a default.
 
-6. **Consensus + rank** 🆕:
+4. **Consensus + rank** 🆕:
    ```bash
    uv run --project . python packs/search/primitives/recruit/judge_consensus.py \
      --judges-dir <run>/judges --union <run>/union.jsonl --out-dir <run>/shortlist \
@@ -114,9 +102,10 @@ improvising; the only LLM calls are `decompose_jd` (1 call) + the judge.
    ≥1 not-out) Pareto-beats it (64% / 0.48) by rescuing borderline candidates one strict judge
    cut — but per the anti-local-maxima rule it stays NON-default until validated on a 2nd JD.
 
-7. **Expand-from-anchor (optional, closes the last ~10%)** 🆕. Take your *own* judged-strong
-   picks as anchors, build "more like this" seeds from their profiles, and re-source (loop to
-   step 2). NEVER seed from the eval ground truth — that's looking up the answers.
+5. **Expand-from-anchor (optional, for the rarest stragglers)** 🆕. `robust_source` already gets
+   ≥0.95; for the last hard-to-source GT, take your *own* judged-strong picks as anchors, build
+   "more like this" seeds, and add a round. NEVER seed from the eval ground truth — that's looking
+   up the answers.
    ```bash
    uv run --project . python packs/search/primitives/recruit/expand_from_anchor.py \
      --anchors <run>/shortlist/ground_truth_ranked.json --top-k 3 --out <run>/anchor_seeds.json
@@ -124,7 +113,7 @@ improvising; the only LLM calls are `decompose_jd` (1 call) + the judge.
      --seeds <run>/anchor_seeds.json --run-dir <run>/anchor --limit 200
    ```
 
-8. **Measure convergence (epochs)** 🆕. Score any run against a trusted ground-truth set:
+6. **Measure convergence (epochs)** 🆕. Score any run against a trusted ground-truth set:
    ```bash
    uv run --project . python packs/search/primitives/recruit/score_ground_truth_gaps.py \
      --ground-truth <run>/ground_truth/ground_truth_ranked.json \
@@ -133,8 +122,8 @@ improvising; the only LLM calls are `decompose_jd` (1 call) + the judge.
    ```
    `gaps.json` = recall@k / precision@k / missed-GT; `convergence.csv` = one row per epoch.
 
-**Ground truth** (the yardstick for hill-climbing) is built once by running steps 1–5 the
-*thorough* way — many hand-diverse seeds + the full judge panel — independently of the cheap
+**Ground truth** (the yardstick for hill-climbing) is built once by running the sourcing+judge
+the *thorough* way — many hand-diverse seeds + the full judge panel — independently of the cheap
 recipe you are scoring (so the recall number isn't circular).
 
 ## Avoiding local maxima (be strict)
@@ -174,19 +163,25 @@ HARD before judging to control cost. *(Claude-Code-only sessions can swap the Op
 `shortlist/{consensus.json,ground_truth_ranked.json}` · `epochs/<epoch>/{config,candidates,gaps}.json` ·
 `convergence.csv`. Candidate PII stays gitignored; surface the shortlist to the user.
 
-## Default recipe (fully primitive-driven; validated ~90% from auto-seeds, ~97% tuned)
+## Default recipe (fully primitive-driven; robust ≥0.95 sourcing; $0-OpenAI option)
 
-`decompose_jd` → `run_shotgun` (prepare --preserve-query-semantic → diversify_probe_bm25 →
-run --search-only) → `build_eval_inputs` → [`triage_candidates` if big] →
-`evaluate_profile_candidates` (×N for a panel) → `judge_consensus` →
-`export_candidate_shortlist`; optional `expand_from_anchor` loop; `score_ground_truth_gaps` to
-track epochs. Every step is a CLI a harness can call — nothing depends on an agent improvising.
-Validated end-to-end on the AgentMail JD (1034 sourced → 606 triaged → 3-judge gpt-5.4 panel →
-62-person shortlist), zero sub-agents.
+`robust_source` (multi-round `decompose_jd`+`run_shotgun` union → non-flaky ≥0.95 recall) →
+`build_eval_inputs` → `codex_judge` (FREE; or paid `evaluate_profile_candidates`, ×N for a
+cross-vendor panel) → `judge_consensus --score-threshold ~0.40` → `export_candidate_shortlist`;
+optional `expand_from_anchor` for the rarest stragglers; `score_ground_truth_gaps` to track epochs.
+Every step is a CLI any harness can call — nothing depends on an agent improvising.
+
+**Validated on the AgentMail JD:** sourcing min 0.968 / mean 0.978 recall across 3 independent
+trials (single-round was a flaky 0.87–0.97); free codex judge at cutoff 0.30 recovers ~all sourced
+GT; cross-vendor union cleans the top (p@10 0.40→0.50). Recall is fixed in **sourcing** (redundant
+rounds), precision via the **judge** + **score-threshold** — not by loosening the rubric.
 
 ## Primitives
 
 New (`packs/search/primitives/recruit/`):
+- `robust_source.py` 🆕 — **non-flaky sourcing**: unions independent `decompose_jd`+`run_shotgun`
+  rounds (rotated emphasis) until coverage saturates. Turns flaky 0.87–0.97 single-round recall
+  into a tight min-0.968 / mean-0.978. This is the default sourcing entry point.
 - `decompose_jd.py` 🆕 — JD → N diverse work-described seeds (1 LLM call).
 - `run_shotgun.py` 🆕 — runs the seed set through prepare→diversify→run, emits the union.
 - `diversify_probe_bm25.py` 🆕 — drop shared/homogeneous BM25 lead terms across the probe set.
