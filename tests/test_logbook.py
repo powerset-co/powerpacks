@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
+from unittest import mock
 
 from packs.ingestion.primitives.logbook import logbook_common as lc
 from packs.ingestion.primitives.logbook import logbook_export as lx
@@ -156,6 +158,39 @@ class TestEntryWriter(unittest.TestCase):
         self.assertNotIn("wa-hi", imsg)       # WhatsApp must NOT leak into iMessage file
         self.assertIn("wa-hi", wa)
         self.assertNotIn("imsg-hi", wa)
+
+
+class TestDeepenCommands(unittest.TestCase):
+    def _write(self, text: str) -> Path:
+        d = Path(tempfile.mkdtemp())
+        p = d / "in.csv"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_whatsapp_deepen_uses_backfill_executor(self):
+        csv = self._write("Founder,Cell,Emails,WhatsApp Groups\nJake Z,+16508048613,,Powerset Braintrust\n")
+        args = Namespace(
+            csv=str(csv),
+            channels="whatsapp",
+            msgvault_db="unused-msgvault.db",
+            chat_db="unused-chat.db",
+            wacli_db=str(csv.parent / "wacli" / "wacli.db"),
+            limit=0,
+            slug="",
+            run=False,
+            rounds=3,
+        )
+
+        with mock.patch.object(lx.src, "whatsapp_target_jids", return_value=[
+            "120363419983815589@g.us",
+            "16508048613@s.whatsapp.net",
+        ]):
+            result = lx.cmd_deepen(args)
+
+        commands = "\n".join(result["recommended_commands"])
+        self.assertIn("history backfill --chat 120363419983815589@g.us --requests 3", commands)
+        self.assertIn("history backfill --chat 16508048613@s.whatsapp.net --requests 3", commands)
+        self.assertNotIn("history fill", commands)
 
 
 if __name__ == "__main__":

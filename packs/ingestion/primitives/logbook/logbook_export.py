@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -52,6 +53,11 @@ GMAIL_MSGS_PER_SEC = 3000
 CHAT_MSGS_PER_SEC = 8000
 
 CHANNEL_DIR = {"gmail": "gmail", "imessage": "imessage", "whatsapp": "whatsapp"}
+
+
+def _cmd(argv: list[str], comment: str = "") -> str:
+    text = shlex.join([str(part) for part in argv])
+    return f"{text}   # {comment}" if comment else text
 
 
 # --- filename / slug helpers ------------------------------------------------
@@ -342,9 +348,14 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
         today = date.today().isoformat()
         if gmail_accounts:
             for acct in gmail_accounts:
-                cmds.append(f"msgvault sync-full {acct} --after {today} --noresume   # PHASE 1 auth/refresh token (fast, ~0 msgs)")
+                cmds.append(_cmd(["msgvault", "sync-full", acct, "--after", today, "--noresume"],
+                                 "PHASE 1 auth/refresh token (fast, ~0 msgs)"))
             for acct in gmail_accounts:
-                cmds.append(f"uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail.py discover --account-email {acct} --fresh   # PHASE 2 deep sync")
+                cmds.append(_cmd([
+                    "uv", "run", "--project", ".",
+                    "python", "packs/ingestion/primitives/discover_contacts_pipeline/gmail.py",
+                    "discover", "--account-email", acct, "--fresh",
+                ], "PHASE 2 deep sync"))
             caveats.append(
                 f"Gmail auth-first: {len(gmail_accounts)} account(s) ({', '.join(gmail_accounts)}). "
                 "Approve each Google login window in PHASE 1 (they appear up front), then PHASE 2 "
@@ -359,25 +370,34 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
         store = paths["whatsapp"].parent
         # wacli `sync` only refreshes the group LIST + pulls recent/live messages going
         # forward (--max-messages is a DB-size cap, not a depth knob). OLDER history is
-        # requested with `history fill`/`backfill` (on-demand sync from your PRIMARY PHONE).
+        # requested with `history backfill` (on-demand sync from your PRIMARY PHONE).
         # We SCOPE the backfill to just the chats that matter (the CSV people's DMs +
         # their groups) via --chat <jid>, instead of the user's entire WhatsApp.
-        cmds.append(f"wacli --store {store} sync --once --refresh-contacts --refresh-groups")
+        cmds.append(_cmd(["wacli", "--store", str(store), "sync", "--once", "--refresh-contacts", "--refresh-groups"]))
         names = [g.name for g in group_targets if g.channel == "whatsapp"]
         for person in people:
             wa_jids.extend(src.whatsapp_target_jids(paths["whatsapp"], person, names))
         wa_jids = list(dict.fromkeys(wa_jids))  # dedupe, preserve order
         if wa_jids:
-            chat_flags = " ".join(f"--chat {j}" for j in wa_jids)
-            for r in range(max(1, args.rounds)):
-                cmds.append(f"wacli --store {store} history fill {chat_flags}   # round {r + 1}/{args.rounds} (re-run digs deeper)")
+            request_count = max(1, args.rounds)
+            for jid in wa_jids:
+                cmds.append(_cmd([
+                    "wacli", "--store", str(store),
+                    "history", "backfill",
+                    "--chat", jid,
+                    "--requests", str(request_count),
+                    "--count", "50",
+                    "--wait", "1m",
+                    "--idle-exit", "5s",
+                ], f"scoped backfill for {jid} ({request_count} request(s))"))
         else:
-            cmds.append(f"wacli --store {store} history fill   # no target chats resolved locally → whole-store backfill")
             caveats.append("No CSV-people WhatsApp chats found locally to scope backfill — "
-                           "either these people aren't in your WhatsApp, or run a plain `sync` first.")
+                           "either these people aren't in your WhatsApp, or run a plain `sync` first. "
+                           "`wacli history backfill` requires an explicit --chat JID, so logbook will not "
+                           "fall back to whole-store backfill.")
         caveats.append(
             "WhatsApp is the shallowest channel: `sync` is recent-forward only; scoped "
-            "`history fill --chat <jid>` backfills just the target conversations, but "
+            "`history backfill --chat <jid>` backfills just the target conversations, but "
             "on-demand sync only serves what your primary phone still has — full history "
             "is not guaranteed. Inspect with `wacli --store " + str(store) + " history coverage`."
         )
@@ -580,7 +600,7 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--no-groups", action="store_true", help="skip group chats (default: include every group a target is in)")
         if name == "deepen":
             p.add_argument("--run", action="store_true", help="actually run the free local syncs (default: print only)")
-            p.add_argument("--rounds", type=int, default=1, help="WhatsApp history fill rounds per chat (each digs deeper)")
+            p.add_argument("--rounds", type=int, default=1, help="WhatsApp history backfill requests per chat")
     args = parser.parse_args(argv)
     handler: Callable[[argparse.Namespace], dict[str, Any]] = {
         "check": cmd_check, "estimate": cmd_estimate, "deepen": cmd_deepen,
