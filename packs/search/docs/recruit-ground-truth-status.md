@@ -6,6 +6,10 @@ _Changelog:_
 - _2026-06-27: Added the fully-primitive, portable OpenAI-judge run + mixture-of-judges
   hill-climb (no sub-agents). See "Full-chain portable run + mixture hill-climb (2026-06-27)"
   at the end. Two new bridge primitives: `build_eval_inputs.py`, `triage_candidates.py`._
+- _2026-06-28: Added a FREE portable judge (`codex_judge.py`, spawns `codex exec`, reuses the
+  canonical rubric+scorer) and the key calibration finding: recall-vs-GT was capped by the
+  shortlist CUTOFF, not sourcing or judge vendor. See "Free codex judge + threshold
+  calibration (2026-06-28)" at the end. New knob: `judge_consensus --score-threshold`._
 
 _PII-free status for review. Candidate identities (names + LinkedIn + per-judge rationales)
 are surfaced to the requester in chat and kept under gitignored
@@ -321,3 +325,65 @@ eng, a Cursor SWE, a Meta production engineer, a Pinterest AI-infra eng. So "rec
 Validate the `(2,1)` gate on the founding-applied-AI JD's independent GT (one 3-judge panel run,
 ~$45) before promoting it to default; if it Pareto-wins there too, flip the `judge_consensus`
 default and add an `expand_from_anchor` round to lift the 3-not-in-pool sourcing gap.
+
+## Free codex judge + threshold calibration (2026-06-28)
+
+Goal this round (user): make the **primitives** reproduce the original recall/precision and
+hill-climb — **cheap/free first**, spawning `codex`/`claude` CLI subprocesses from a primitive
+instead of the paid gpt-5.4 API.
+
+### New primitive: `codex_judge.py` (free, portable)
+
+Spawns one `codex exec` subprocess per candidate. It is a **thin shim**: it reuses the canonical
+`SYSTEM_PROMPT`, `build_user_prompt`, frontier/profile loaders, AND `normalize_evaluation`
+(deterministic scorer) from `evaluate_profile_candidates` — so the **bar is byte-identical** to the
+paid judge; only the inference engine differs. Runs on ChatGPT-subscription auth → **$0 per token**.
+Output is the same `candidate_evaluations.raw.jsonl`, so `judge_consensus` ingests it unchanged.
+~20 s/candidate; 8-way concurrency. (Gotcha fixed: passing `--output-schema` conflicts with the
+rubric's own OUTPUT contract and makes the model return all-"out" — don't; rely on the rubric +
+robust JSON extraction.) This matches the approach the user had sketched in the original Codex
+session: "call codex in another shell to eval candidates, reuse canonical prompts/rubrics."
+
+### The real finding: recall was capped by the SHORTLIST CUTOFF, not the pipeline
+
+Head-to-head on a fair 68-candidate blind pool (26 GT + 42 non-GT), codex-low vs gpt-5.4-low,
+**same rubric + same scorer**:
+
+| judge (low effort) | GT recall | non-GT admitted |
+| --- | --- | --- |
+| codex (free) | 0.46 | 3 / 42 |
+| gpt-5.4 (paid) | 0.62 | 2 / 42 |
+| cross-vendor (either keeps) | 0.65 | — |
+
+So swapping vendor did NOT recover the original ~0.9 — because **both** strict judges reject ~40–50%
+of the GT. The GT was built by a *lenient* Claude panel; the canonical rubric/scorer is *strict by
+design* ("default disposition is OUT"). The grader and the answer key are calibrated differently.
+
+The fix is the **shortlist cutoff**, swept offline for free over the per-candidate scores we
+already have (the verdict is just a threshold on the canonical `jd_score` + the seniority gate):
+
+| score cutoff | codex recall / non-GT | gpt recall / non-GT | union recall / non-GT |
+| --- | --- | --- | --- |
+| 0.50 (≈ default verdict cutoff) | 0.62 / 3 | 0.50 / 2 | 0.69 / 3 |
+| **0.40** | **0.88 / 4** | 0.69 / 3 | 0.88 / 5 |
+| 0.35 | 0.92 / 5 | 0.81 / 3 | 0.92 / 6 |
+| 0.30 | 0.92 / 8 | 0.85 / 4 | **0.96 / 9** |
+
+**Conclusion:** the primitives DO reproduce ~0.9 recall. The lever is the cutoff, not sourcing,
+vendor, or a bug. Lowering the recruit shortlist cutoff from ~0.50 to ~**0.40** recovers
+**0.88–0.92 recall while admitting only 4–6 non-GT of 42** (and several of those "non-GT" are
+strong people the GT itself missed). Cross-vendor union pushes ~0.96. This is exposed as
+`judge_consensus --score-threshold` — it chooses the cutoff on the canonical score and does NOT
+weaken the rubric/scorer.
+
+### Local-maxima discipline
+
+`--score-threshold` defaults to OFF (canonical not-out gate). The ~0.40 sweet spot is measured on
+ONE JD; validate on the founding-applied-AI JD's independent GT before hardcoding it as the default.
+Watch the whole curve (recall AND non-GT admits), not one number.
+
+### Cost
+
+This entire round (codex judge on a 68-pool + the full 606 frontier, plus the offline sweeps) is
+**$0 OpenAI** — `codex exec` runs on the ChatGPT subscription. The earlier gpt-5.4 verdicts reused
+from the prior round were already paid; no new API spend.

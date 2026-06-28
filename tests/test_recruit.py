@@ -26,6 +26,7 @@ dj = _load("decompose_jd")
 ea = _load("expand_from_anchor")
 bei = _load("build_eval_inputs")
 tc = _load("triage_candidates")
+cj_judge = _load("codex_judge")
 
 
 class TestDecomposeJd(unittest.TestCase):
@@ -315,6 +316,44 @@ class TestNormalizeVerdict(unittest.TestCase):
     def test_native_schema_passthrough(self):
         native = {"person_id": "p3", "score": 0.5, "in_band": True, "seniority_fit": "in_band", "verdict": "high_potential"}
         self.assertEqual(jc.normalize_verdict(dict(native)), native)
+
+
+class TestCodexJudgeExtract(unittest.TestCase):
+    def test_plain_json(self):
+        self.assertEqual(cj_judge.extract_json('{"seniority_fit":"ideal"}'), {"seniority_fit": "ideal"})
+
+    def test_fenced_json(self):
+        self.assertEqual(cj_judge.extract_json('```json\n{"a":1}\n```'), {"a": 1})
+
+    def test_json_with_prose_around(self):
+        self.assertEqual(cj_judge.extract_json('Here is the result:\n{"verdict":"out"}\nDone.'), {"verdict": "out"})
+
+    def test_empty_and_garbage(self):
+        self.assertEqual(cj_judge.extract_json(""), {})
+        self.assertEqual(cj_judge.extract_json("no json here"), {})
+
+
+class TestConsensusScoreThreshold(unittest.TestCase):
+    def _judges(self):
+        # one judge file; in_band derived from seniority_fit
+        return {"j": [
+            {"person_id": "a", "seniority_fit": "ideal", "verdict": "out", "score": 0.45, "in_band": True},
+            {"person_id": "b", "seniority_fit": "ideal", "verdict": "out", "score": 0.30, "in_band": True},
+            {"person_id": "c", "seniority_fit": "too_senior", "verdict": "out", "score": 0.9, "in_band": False},
+        ]}
+
+    def test_threshold_keeps_inband_above_cutoff(self):
+        _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1, score_threshold=0.40)
+        self.assertEqual([r["person_id"] for r in strong], ["a"])  # a (0.45) in; b (0.30) below; c gated
+
+    def test_threshold_gates_out_of_band_even_if_high_score(self):
+        _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1, score_threshold=0.10)
+        self.assertNotIn("c", [r["person_id"] for r in strong])  # too_senior never kept
+
+    def test_no_threshold_uses_notout_gate(self):
+        # without threshold, all verdicts are "out" -> nobody passes the not-out gate
+        _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1)
+        self.assertEqual(strong, [])
 
 
 if __name__ == "__main__":

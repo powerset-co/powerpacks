@@ -64,6 +64,7 @@ def build_consensus(
     *,
     min_inband_votes: int,
     min_notout_votes: int,
+    score_threshold: float | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     judge_names = sorted(judges)
     by_pid: dict[str, dict[str, dict[str, Any]]] = {}
@@ -107,7 +108,12 @@ def build_consensus(
             },
         })
 
-    strong = [r for r in rows if r["inband_votes"] >= min_inband_votes and r["notout_votes"] >= min_notout_votes]
+    if score_threshold is not None:
+        # Shortlist by the canonical mean score (choose the recall/precision cutoff) +
+        # majority-in-band seniority gate. Does NOT touch the rubric/scorer — only the depth.
+        strong = [r for r in rows if r["inband_votes"] >= min_inband_votes and r["mean_score"] >= score_threshold]
+    else:
+        strong = [r for r in rows if r["inband_votes"] >= min_inband_votes and r["notout_votes"] >= min_notout_votes]
     strong.sort(key=lambda r: (-r["mean_score"], -r["notout_votes"], -r["inband_votes"], -len(r["found_by"])))
     rows.sort(key=lambda r: -r["mean_score"])
     return rows, strong
@@ -120,6 +126,10 @@ def main() -> None:
     ap.add_argument("--out-dir", required=True, help="Where to write consensus.json + ground_truth_ranked.json")
     ap.add_argument("--min-inband-votes", type=int, default=2)
     ap.add_argument("--min-notout-votes", type=int, default=2)
+    ap.add_argument("--score-threshold", type=float, default=None,
+                    help="If set, shortlist = majority-in-band AND mean_score >= threshold "
+                         "(tunable recall/precision cutoff; ~0.40 recovered ~0.9 recall on AgentMail). "
+                         "Overrides the not-out vote gate.")
     args = ap.parse_args()
 
     jdir = Path(args.judges_dir)
@@ -132,6 +142,7 @@ def main() -> None:
         judges, meta,
         min_inband_votes=args.min_inband_votes,
         min_notout_votes=args.min_notout_votes,
+        score_threshold=args.score_threshold,
     )
 
     out = Path(args.out_dir)

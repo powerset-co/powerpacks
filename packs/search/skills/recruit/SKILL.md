@@ -82,13 +82,24 @@ improvising; the only LLM calls are `decompose_jd` (1 call) + the judge.
    run-state — it does NOT fit the recruit union artifact; use `triage_candidates`.)*
 
 5. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
-   rubric with the IC seniority hard-gates (default `gpt-5.4`). For a **mixture-of-judges**, run
-   it 2–3× into sibling run dirs (vary `--reasoning-effort` / model) and collect each
-   `candidate_evaluations.raw.jsonl` into a `judges/` dir; for a single canonical verdict, run it
-   once. `judge_consensus` ingests the raw eval format directly (maps `candidate_id`/`jd_score`,
-   derives `in_band` from `seniority_fit`).
-   *(Cheap alternative for Claude-Code-only sessions: dispatch 2–3 Claude sub-agents as judges
-   against the same rubric — same output schema, no OpenAI. Not portable to other harnesses.)*
+   rubric with the IC seniority hard-gates (default `gpt-5.4`). **Default to a CROSS-VENDOR panel:**
+   one `gpt-5.4` judge at `--reasoning-effort low` (measured: ~as good as `high` here, far cheaper)
+   **+ one Claude judge on the same rubric.** Cross-vendor agreement is the real confidence signal —
+   when both vendors say strong, surface it; when they split, that's the human-review pile. Collect
+   each pass's verdicts into a `judges/` dir; `judge_consensus` ingests the
+   `evaluate_profile_candidates` raw format directly (maps `candidate_id`/`jd_score`, derives
+   `in_band` from `seniority_fit`) alongside native Claude-judge JSONL.
+   - **FREE / portable judge:** `recruit/codex_judge.py` spawns `codex exec` subprocesses, reusing
+     the *exact* canonical rubric + deterministic scorer (so the bar is identical, the engine is $0
+     via ChatGPT-subscription auth). This is the default cheap judge; the paid `gpt-5.4` API path is
+     an optional cross-vendor second opinion. A Claude-CLI variant is the same shape once `claude`
+     is installed.
+   - **Tune the shortlist cutoff, don't loosen the rubric.** Measured (AgentMail): every strict
+     LLM judge (gpt-5.4 *and* codex) rejects ~40–50% of a leniently-built GT at the default
+     verdict cutoff (~0.50). Lowering `judge_consensus --score-threshold` to ~**0.40** recovers
+     **~0.9 recall while admitting only ~4–6 non-GT of 42** — the gap was calibration, not
+     sourcing/vendor. A **cross-vendor union** (codex OR gpt keeps) lifts recall further (~0.96).
+     Validate the threshold on a 2nd JD before hardcoding a default.
 
 6. **Consensus + rank** 🆕:
    ```bash
@@ -182,9 +193,13 @@ New (`packs/search/primitives/recruit/`):
 - `build_eval_inputs.py` 🆕 — union → `plan.json` + `candidate_frontier.jsonl` +
   `probe_summaries.json` (bridges the shotgun run into the canonical judge's contract; 1 LLM call).
 - `triage_candidates.py` 🆕 — cheap-model conservative tier-1 filter over the frontier.
+- `codex_judge.py` 🆕 — **free, portable** judge: spawns `codex exec` subprocesses, reusing the
+  canonical rubric + deterministic scorer from `evaluate_profile_candidates` (same bar, $0 engine
+  via ChatGPT-subscription auth). Drop-in for the paid gpt-5.4 judge; same raw output shape.
 - `expand_from_anchor.py` 🆕 — judged-strong anchors → "more like this" seeds (no LLM).
-- `judge_consensus.py` 🆕 — combine judge passes (native or `evaluate_profile_candidates` raw)
-  → consensus shortlist.
+- `judge_consensus.py` 🆕 — combine judge passes (native, `evaluate_profile_candidates` raw, or
+  `codex_judge` raw) → consensus shortlist. `--score-threshold` tunes the shortlist cutoff on the
+  canonical score (recall/precision dial; ~0.40 recovered ~0.9 recall on AgentMail).
 - `score_ground_truth_gaps.py` 🆕 — epoch scoring + convergence vs a ground-truth set.
 
 Existing (reused):
