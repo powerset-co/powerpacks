@@ -107,7 +107,9 @@ def probe_artifact_dirs(run_dir: Path) -> list[str]:
     """Every probe ledger's artifact_dir (each holds hydrate_people/profiles.jsonl.gz)."""
     dirs: list[str] = []
     seen: set[str] = set()
-    for led in sorted(run_dir.glob("probes/*/ledger.json")):
+    # Match both run_shotgun (run_dir/probes/<k>) and robust_source (run_dir/round*/probes/<k>).
+    ledgers = sorted(run_dir.glob("probes/*/ledger.json")) + sorted(run_dir.glob("round*/probes/*/ledger.json"))
+    for led in ledgers:
         try:
             arts = json.loads(led.read_text()).get("artifacts") or {}
         except (json.JSONDecodeError, OSError):
