@@ -387,3 +387,22 @@ Watch the whole curve (recall AND non-GT admits), not one number.
 This entire round (codex judge on a 68-pool + the full 606 frontier, plus the offline sweeps) is
 **$0 OpenAI** — `codex exec` runs on the ChatGPT subscription. The earlier gpt-5.4 verdicts reused
 from the prior round were already paid; no new API spend.
+
+### Full-pool confirmation (606 codex judge, scored vs 31-GT)
+
+The 68-pool sweep above is GT-enriched; this is the honest end-to-end on the FULL 606 triaged
+survivors, free codex judge, scored vs the 31-GT. Ceiling is **26/31 = 0.84** (5 GT were never
+sourced — seed variance). Logged as `epoch-17-*` in `convergence.csv`.
+
+| config | shortlist | recall (of 31) | p@10 |
+| --- | --- | --- | --- |
+| codex t0.50 | 51 | 0.55 | 0.40 |
+| codex t0.40 | 98 | 0.71 | 0.40 |
+| codex t0.30 | 153 | **0.81** | 0.40 |
+| cross-vendor mean(codex,gpt) t0.40 | 88 | 0.74 | **0.50** |
+
+At t0.30 the free codex judge recovers **0.81 of the 0.84 ceiling** — essentially every GT that
+was sourced; the only residual misses are the 5 not in the pool. So the primitive chain fully
+reproduces the original recall once the cutoff is dialed; the remaining lever is sourcing those
+last 5 (expand-from-anchor). Cross-vendor cleans the TOP of the list (p@10 0.40 → 0.50) at a
+smaller shortlist. Cost: **$0** (codex on ChatGPT subscription).
