@@ -37,11 +37,13 @@ from packs.ingestion.primitives.deep_context.common import (
     write_json,
 )
 
-# Deep recency-first pool kept per person. Matches the incremental synth ceiling
-# (~20 batches x 80 msgs). Email (thread-deduped, high-signal) is always kept;
-# chat DMs fill the remaining budget newest-first. A safety char cap guards memory.
+# Each channel is its own vertical with this deep cap: Gmail, iMessage, and WhatsApp
+# each pool up to DEFAULT_DEEP_CAP recent messages independently, then they're
+# concatenated (so no channel crowds out another). The incremental synthesizer groks
+# the blended pool newest-first and stops on saturation/max-batches, so spend is bounded
+# regardless of pool size. A char cap guards memory (raised to fit ~3 full verticals).
 DEFAULT_DEEP_CAP = 1600
-SAFETY_CHAR_CAP = 600_000
+SAFETY_CHAR_CAP = 1_800_000
 
 
 def collect_one(
@@ -58,13 +60,16 @@ def collect_one(
     """Gather a deep, recency-first pool of one person's messages across sources.
 
     Returns ``(pool, available)`` where ``available`` is the TRUE total in the
-    sources (e.g. all 102k iMessage DMs), so ``capped = available > len(pool)``
-    is honest. Fill priority: email (thread-deduped, identity-dense) is always
-    kept, then DM bodies newest-first, then — only with ``include_groups`` —
-    group-chat bodies from small shared groups fill any remaining budget."""
+    sources (e.g. all 102k iMessage DMs, or every poolable email), so
+    ``capped = available > len(pool)`` is honest. Each channel is its own vertical,
+    already capped at ``deep_cap`` by its reader; they're concatenated by priority
+    (identity-dense email, then DM bodies newest-first, then — only with
+    ``include_groups`` — group-chat bodies), bounded only by the char safety cap."""
     gmail: list[dict[str, Any]] = []
+    gmail_total = 0
     if msgvault_con is not None and person.emails:
-        gmail = sources.read_gmail(person, msgvault_con, accounts)
+        gmail = sources.read_gmail(person, msgvault_con, accounts, cap=deep_cap)
+        gmail_total = sources.count_gmail(person, msgvault_con, accounts)
     dm_chat: list[dict[str, Any]] = []
     group_chat: list[dict[str, Any]] = []
     true_chat_total = 0
@@ -73,19 +78,22 @@ def collect_one(
         dm_chat.extend(sources.read_imessage(person, chat_db, cap=deep_cap))
         dm_chat.extend(whatsapp)
         # Reuse the WhatsApp pull for the honest total instead of re-querying it.
+        # (len(whatsapp) is post-cap; a count_whatsapp_dms() is a clean follow-up.)
         true_chat_total = sources.count_imessage_dms(person, chat_db) + len(whatsapp)
         if include_groups:
             group_chat = sources.read_imessage_group_messages(
                 person, chat_db, max_group_size=max_group_size, cap=deep_cap)
 
-    pool = list(gmail)
-    used = sum(len(m.get("text") or "") for m in pool)
-    # DMs fill before group bodies so the 1:1 signal is never crowded out.
-    fill = sorted(dm_chat, key=lambda m: m.get("at") or "", reverse=True) + \
-        sorted(group_chat, key=lambda m: m.get("at") or "", reverse=True)
-    for msg in fill:
-        if len(pool) >= deep_cap:
-            break
+    # No shared message cap: each vertical already pooled up to deep_cap, so an
+    # email-rich contact and a text-rich contact each keep their full vertical. The
+    # char cap is the only cross-channel bound (RAM guard). Priority order keeps the
+    # identity-dense email first, then DMs newest-first, then group bodies.
+    ordered = list(gmail) \
+        + sorted(dm_chat, key=lambda m: m.get("at") or "", reverse=True) \
+        + sorted(group_chat, key=lambda m: m.get("at") or "", reverse=True)
+    pool: list[dict[str, Any]] = []
+    used = 0
+    for msg in ordered:
         text = msg.get("text") or ""
         if not text:
             continue
@@ -94,7 +102,7 @@ def collect_one(
         pool.append(msg)
         used += len(text)
     pool.sort(key=lambda m: m.get("at") or "")
-    available = len(gmail) + true_chat_total + len(group_chat)
+    available = gmail_total + true_chat_total + len(group_chat)
     return pool, available
 
 
