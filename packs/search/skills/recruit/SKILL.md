@@ -19,6 +19,20 @@ Use for `$recruit`: source, judge, and rank candidates for a JD from a Powerset 
 recruiting team would. This is the productized version of the agentic-search method in
 `packs/search/docs/agentic-search.md`.
 
+## Run it (one command — the convergence loop)
+
+`recruit_loop` orchestrates the whole thing: robust source → judge → **expand-from-anchor →
+re-judge**, looping until no new strong candidates (converge-capped). Free judge by default.
+
+```bash
+uv run --env-file .env --project . python packs/search/primitives/recruit/recruit_loop.py \
+  --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
+  --max-epochs 3 --score-threshold 0.40 --judge codex
+```
+
+Writes `<run>/shortlist/ground_truth_ranked.json` + `<run>/loop.json` (per-epoch convergence). The
+stages below are what it chains — call them individually only to debug or customize.
+
 ## The core finding this skill is built on (read once)
 
 The existing `search_network_pipeline` is **not** recall-limited. A single broad probe at full
@@ -57,11 +71,15 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
 
 2. **Bridge the union into the judge's contract** 🆕 (1 cheap LLM call). The judge reads a
    profile-search run dir (`plan.json` + `candidate_frontier.jsonl` + `probe_summaries.json` →
-   the already-on-disk `profiles.jsonl.gz`). `build_eval_inputs` extracts must/nice traits from
-   the JD and rewrites the run into exactly that contract — no recompute:
+   the already-on-disk `profiles.jsonl.gz`). `build_eval_inputs` extracts must/nice traits **and a
+   `target_level`** from the JD (so the judge's seniority gate is asymmetric around the role: in-band
+   = target and one level below = *step up*; too_senior = one level above or higher = *won't step
+   down*; too_junior = two+ below). Defaults to `senior_ic`. Rewrites the run into the contract — no
+   recompute:
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/recruit/build_eval_inputs.py \
      --run-dir <run> --jd-file <run>/jd.txt --set-name "<set>" --created-at <iso>
+     # loop epochs reuse the plan (no re-extract): --plan <run>/epoch0/plan.json
    ```
 
    *No triage step.* Triage (`triage_candidates`, still available) was a cost hack to shrink the
@@ -102,13 +120,18 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    ≥1 not-out) Pareto-beats it (64% / 0.48) by rescuing borderline candidates one strict judge
    cut — but per the anti-local-maxima rule it stays NON-default until validated on a 2nd JD.
 
-5. **Expand-from-anchor (optional, for the rarest stragglers)** 🆕. `robust_source` already gets
-   ≥0.95; for the last hard-to-source GT, take your *own* judged-strong picks as anchors, build
-   "more like this" seeds, and add a round. NEVER seed from the eval ground truth — that's looking
-   up the answers.
+5. **Expand-from-anchor — the core Phase-2 loop (NOT optional)** 🆕. This is the hill-climb engine,
+   and `recruit_loop` runs it automatically every epoch after the first judge: take your *own*
+   judged-strong picks (a DIVERSE set — `recruit_loop` dedups anchors by company so you don't
+   echo-chamber one archetype), build "more like this" seeds from their profiles, re-source, and
+   judge **only the new** candidates; loop until an epoch adds no new strong (converged) or
+   `--max-epochs`. The JD is a lossy proxy — a proven-strong profile is the highest-signal query
+   for the adjacent people the JD wording never names. NEVER seed from the eval ground truth (that's
+   looking up the answers; only matters for the recall *metric*). Self-limiting: ~0 strong → no
+   anchors → loop ends (correct give-up). Manual form:
    ```bash
    uv run --project . python packs/search/primitives/recruit/expand_from_anchor.py \
-     --anchors <run>/shortlist/ground_truth_ranked.json --top-k 3 --out <run>/anchor_seeds.json
+     --anchors <run>/shortlist/ground_truth_ranked.json --top-k 6 --out <run>/anchor_seeds.json
    uv run --env-file .env --project . python packs/search/primitives/recruit/run_shotgun.py \
      --seeds <run>/anchor_seeds.json --run-dir <run>/anchor --limit 200
    ```
@@ -179,9 +202,12 @@ rounds), precision via the **judge** + **score-threshold** — not by loosening 
 ## Primitives
 
 New (`packs/search/primitives/recruit/`):
+- `recruit_loop.py` 🆕 — **the one-command orchestrator**: source → judge → expand-from-anchor →
+  re-judge, converge-capped. Incremental judging (only new candidates each epoch) keeps the free
+  judge tractable. Self-limiting give-up when there are no strong anchors.
 - `robust_source.py` 🆕 — **non-flaky sourcing**: unions independent `decompose_jd`+`run_shotgun`
   rounds (rotated emphasis) until coverage saturates. Turns flaky 0.87–0.97 single-round recall
-  into a tight min-0.968 / mean-0.978. This is the default sourcing entry point.
+  into a tight min-0.968 / mean-0.978.
 - `decompose_jd.py` 🆕 — JD → N diverse work-described seeds (1 LLM call).
 - `run_shotgun.py` 🆕 — runs the seed set through prepare→diversify→run, emits the union.
 - `diversify_probe_bm25.py` 🆕 — drop shared/homogeneous BM25 lead terms across the probe set.

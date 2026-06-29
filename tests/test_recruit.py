@@ -28,6 +28,7 @@ bei = _load("build_eval_inputs")
 tc = _load("triage_candidates")
 cj_judge = _load("codex_judge")
 rs = _load("robust_source")
+rl = _load("recruit_loop")
 
 
 class TestDecomposeJd(unittest.TestCase):
@@ -401,6 +402,27 @@ class TestRobustSourceMerge(unittest.TestCase):
 
     def test_emphases_are_distinct(self):
         self.assertEqual(len(set(rs.EMPHASES)), len(rs.EMPHASES))
+
+
+class TestRecruitLoopAnchors(unittest.TestCase):
+    def test_diverse_anchors_dedups_by_company_and_ranks_by_score(self):
+        strong = [
+            {"person_id": "a", "current_company": "SpaceX", "mean_score": 0.9},
+            {"person_id": "b", "current_company": "SpaceX", "mean_score": 0.8},  # same co -> skipped
+            {"person_id": "c", "current_company": "Meta", "mean_score": 0.85},
+            {"person_id": "d", "current_company": "NVIDIA", "mean_score": 0.7},
+        ]
+        union = {"a": {"person_id": "a", "tech_skills": ["x"]}}
+        out = rl.diverse_anchors(strong, union, k=3)
+        self.assertEqual([r["person_id"] for r in out], ["a", "c", "d"])  # b dropped (dup co), ranked by score
+        self.assertEqual(out[0]["tech_skills"], ["x"])  # enriched from union profile
+
+    def test_diverse_anchors_empty_when_no_strong(self):
+        self.assertEqual(rl.diverse_anchors([], {}, k=5), [])
+
+    def test_diverse_anchors_respects_k(self):
+        strong = [{"person_id": str(i), "current_company": f"co{i}", "mean_score": 1.0 - i / 10} for i in range(10)]
+        self.assertEqual(len(rl.diverse_anchors(strong, {}, k=4)), 4)
 
 
 if __name__ == "__main__":

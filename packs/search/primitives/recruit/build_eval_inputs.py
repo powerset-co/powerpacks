@@ -166,7 +166,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Build plan.json + candidate_frontier.jsonl + probe_summaries.json for the canonical judge.")
     ap.add_argument("--run-dir", required=True, help="Recruit run dir with union.jsonl + probes/<key>/ledger.json")
     ap.add_argument("--union", default=None, help="Override union path (default <run-dir>/union.jsonl)")
-    ap.add_argument("--jd-file", required=True, help="Path to the JD text (for trait extraction)")
+    ap.add_argument("--jd-file", default=None, help="Path to the JD text (for trait extraction; not needed with --plan)")
+    ap.add_argument("--plan", default=None, help="Reuse an existing plan.json (skip the LLM trait extraction — for loop epochs)")
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""))
     ap.add_argument("--set-name", default="recruit set")
     ap.add_argument("--source-url", default=None)
@@ -187,24 +188,30 @@ def main() -> None:
     artifact_dirs = probe_artifact_dirs(run_dir)
     covered = verify_profile_coverage(frontier, artifact_dirs)
 
-    key = args.api_key or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "OPENAI_API_KEY not set"}))
-        raise SystemExit(1)
+    if args.plan:  # reuse an existing plan (loop epochs) — no LLM call
+        plan = json.loads(Path(args.plan).read_text())
+    else:
+        if not args.jd_file:
+            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "need --jd-file or --plan"}))
+            raise SystemExit(1)
+        key = args.api_key or os.environ.get("OPENAI_API_KEY")
+        if not key:
+            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "OPENAI_API_KEY not set"}))
+            raise SystemExit(1)
 
-    import openai  # imported here so --help works without the dep
+        import openai  # imported here so --help works without the dep
 
-    client = openai.OpenAI(api_key=key, base_url=DEFAULT_API_BASE)
-    jd = Path(args.jd_file).read_text(encoding="utf-8")
-    resp = client.chat.completions.create(
-        model=args.model,
-        messages=build_plan_messages(jd),
-        response_format={"type": "json_object"},
-    )
-    plan = plan_from_obj(
-        json.loads(resp.choices[0].message.content or "{}"),
-        set_name=args.set_name, set_id=args.set_id, source_url=args.source_url, created_at=args.created_at,
-    )
+        client = openai.OpenAI(api_key=key, base_url=DEFAULT_API_BASE)
+        jd = Path(args.jd_file).read_text(encoding="utf-8")
+        resp = client.chat.completions.create(
+            model=args.model,
+            messages=build_plan_messages(jd),
+            response_format={"type": "json_object"},
+        )
+        plan = plan_from_obj(
+            json.loads(resp.choices[0].message.content or "{}"),
+            set_name=args.set_name, set_id=args.set_id, source_url=args.source_url, created_at=args.created_at,
+        )
 
     (run_dir / "plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
     with (run_dir / "candidate_frontier.jsonl").open("w", encoding="utf-8") as fh:
