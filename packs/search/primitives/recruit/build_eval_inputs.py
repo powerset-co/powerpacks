@@ -39,12 +39,22 @@ PLAN_SYSTEM = (
     "(what the person must have built/owned). nice_to_have: real pluses the JD mentions.\n"
     "- Each trait is a short evidence-checkable phrase, NOT a sentence and NOT a job title.\n"
     "- hire_stage: one of founding_early | early | growth | scale — infer from company stage/role.\n"
-    "- usable_cutoff: one sentence on the seniority band that is in-band vs out (the judge "
-    "hard-gates too-senior execs/founders/advisors and too-junior ICs).\n"
+    "- target_level: the role's career level — one of senior_ic | staff_ic | lead | manager | "
+    "director | vp | exec. Infer from the title/responsibilities (an IC eng role is senior_ic/"
+    "staff_ic; a 'VP of Engineering' is vp; a 'Head of X' is director/vp).\n"
+    "- usable_cutoff: ONE sentence stating the target level and the ASYMMETRIC seniority band — "
+    "hire people who STEP UP, not down. In-band = the target level AND exactly one level below it; "
+    "OUT(too_senior) = one level ABOVE the target or higher (they won't step down); "
+    "OUT(too_junior) = two+ levels below. Name the concrete titles that are in-band vs too-senior "
+    "for THIS role (e.g. for a VP-Eng role: Director/Head-of/Principal-lead are in-band step-ups, "
+    "CEO/founder/President/C-suite are too_senior; for a senior-IC role: VP/Head/Director/founder "
+    "are too_senior, interns/new-grads are too_junior).\n"
     "- normalized_archetype: a 2-4 word canonical role archetype (e.g. 'distributed systems engineer').\n"
-    'Return strict JSON: {"job_title","normalized_archetype","hire_stage","usable_cutoff",'
+    'Return strict JSON: {"job_title","normalized_archetype","hire_stage","target_level","usable_cutoff",'
     '"must_have":["..."],"nice_to_have":["..."]}.'
 )
+
+VALID_TARGET_LEVELS = {"senior_ic", "staff_ic", "lead", "manager", "director", "vp", "exec"}
 
 
 def build_plan_messages(jd: str) -> list[dict[str, str]]:
@@ -64,6 +74,9 @@ def plan_from_obj(obj: dict[str, Any], *, set_name: str, set_id: str, source_url
     nice = [{"trait": str(t).strip()} for t in (obj.get("nice_to_have") or []) if str(t).strip()]
     if not must:
         raise ValueError("plan extraction produced no must_have traits")
+    target_level = str(obj.get("target_level") or "senior_ic").strip().lower()
+    if target_level not in VALID_TARGET_LEVELS:
+        target_level = "senior_ic"
     return {
         "route": "recruit",
         "parse_only": False,
@@ -75,6 +88,7 @@ def plan_from_obj(obj: dict[str, Any], *, set_name: str, set_id: str, source_url
         "source_title": None,
         "set_scope": {"name": set_name, "set_id": set_id},
         "hire_stage": str(obj.get("hire_stage") or "early").strip(),
+        "target_level": target_level,
         "usable_cutoff": str(obj.get("usable_cutoff") or "Senior in-band IC; executives, founders, and advisors are out.").strip(),
         "traits": {"must_have": must, "nice_to_have": nice},
         "created_at": created_at,

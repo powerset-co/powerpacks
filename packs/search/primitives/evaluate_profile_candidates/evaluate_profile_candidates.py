@@ -115,15 +115,17 @@ You do NOT produce a final score or verdict. You produce structured judgments �
 
 === SENIORITY IS A HARD GATE, SEPARATE FROM SKILLS ===
 
-First decide seniority_fit from the candidate's CURRENT career level:
-- "ideal": current role is squarely in the target band
-- "acceptable": adjacent band but plausibly analogous after company-size context
-- "too_senior": current level is executive/founder/advisory or clearly above the band. CEOs, CTOs, CFOs, COOs, presidents, founders/co-founders (current), VPs, heads-of, managing directors, general partners, board members, angel investors, and advisors are too_senior for an IC search unless the policy explicitly includes them. A person whose CURRENT title mixes IC work with founder/advisor roles is too_senior when the founder/exec role is their primary current identity.
-- "too_junior": clearly below the band (interns, new grads, analysts for a senior role)
-- "wrong_track": different career lane (e.g. data scientist without pipeline ownership for a data engineering role, pure people-manager without hands-on evidence, consultant/agency when the role is in-house IC)
-- "unknown": genuinely cannot tell
+The policy names a TARGET LEVEL for this role (e.g. senior IC, staff IC, lead, manager, director, VP, executive). If none is stated, treat the target as a senior INDIVIDUAL-CONTRIBUTOR role. Seniority is judged ASYMMETRICALLY around that target: you hire people who STEP UP into the role, never people who would step DOWN.
 
-A candidate with deep matching skills but out-of-band seniority is OUT. Do not rescue a CTO because they once built ETL pipelines. Past founder roles are fine if the CURRENT role is an in-band IC role at a different company.
+First decide seniority_fit from the candidate's CURRENT career level relative to the target:
+- "ideal": current level is AT the target.
+- "acceptable": current level is exactly ONE level BELOW the target — a strong candidate who would step UP. This is IN-BAND and is frequently the best hire; do not penalize ambition or being one rung below.
+- "too_senior": current level is ONE level ABOVE the target, OR HIGHER. People do not step down, so they are OUT regardless of skill (they will decline or be a flight risk). For a senior-IC / lead target this means current CEOs, CTOs, CFOs, COOs, presidents, current founders/co-founders, VPs, heads-of, managing directors, general partners, board members, angel investors, and advisors are too_senior unless the target level explicitly includes them. (For a VP/exec target, a VP/Director IS in-band and only a CEO/founder/president/C-suite is too_senior.) A person whose CURRENT title mixes lower-level work with a founder/exec role is too_senior when the founder/exec role is their primary current identity.
+- "too_junior": current level is TWO OR MORE levels below the target (e.g. interns, new grads, analysts for a senior role; an IC two rungs down for a director target).
+- "wrong_track": different career lane (e.g. data scientist without pipeline ownership for a data-engineering role, pure people-manager without hands-on evidence, consultant/agency when the role is in-house).
+- "unknown": genuinely cannot tell.
+
+A candidate with deep matching skills but out-of-band seniority is OUT. Do NOT rescue someone one level too senior because of their skills — they will not step down. Past founder/exec roles are fine if the CURRENT role is in-band. The whole point: reach for people ready to step UP (target and one level below), never people who would step down (one level above and higher).
 
 === TRAIT EVIDENCE LADDER ===
 
@@ -255,6 +257,7 @@ def build_user_prompt(plan: dict[str, Any], profile: dict[str, Any]) -> str:
     parts = [
         f"Job: {plan.get('job_title') or ''} ({plan.get('normalized_archetype') or ''})",
         f"Hire stage: {hire_stage}",
+        f"Target level: {plan.get('target_level') or 'senior individual contributor (default)'}",
         f"Seniority / usable cutoff policy: {plan.get('usable_cutoff') or 'Senior in-band IC; executives, founders, and advisors are out.'}",
         "Must-have traits:",
         *[f"- {t}" for t in must],

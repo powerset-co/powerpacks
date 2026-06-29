@@ -464,3 +464,32 @@ the rubric gate. (`triage_candidates` stays available for paid-judge, very-large
 then sets precision (free codex + `--score-threshold`); the cross-vendor union cleans the top.
 Cost of this whole robustness round: cheap `gpt-4o` decompose/expand only (~$1–2); retrieval is
 read-only/free.
+
+## Asymmetric seniority — step up, not down (2026-06-29)
+
+The Realta give-up test exposed that the canonical rubric was hardcoded to *target = IC* and gated
+symmetrically, so a VP-target JD wrongly gated the VP/Director leaders. Fix (per the recruiting
+principle "you hire people who step UP, never down"): the rubric is now **directional around a
+TARGET LEVEL** carried in the plan.
+
+- `build_eval_inputs` infers `target_level` ∈ {senior_ic, staff_ic, lead, manager, director, vp,
+  exec} and writes an asymmetric `usable_cutoff`. Defaults to `senior_ic` (so search-profile / IC
+  runs are unchanged).
+- Rubric (`SYSTEM_PROMPT`, canonical): **in-band = target and ONE level below (step-up); too_senior
+  = one level ABOVE or higher (won't step down); too_junior = two+ below.** Backward-compatible: with
+  no target level it behaves exactly as the old senior-IC gate.
+
+Validated on Realta (VP-Eng) — re-judged the 126-slice with `target_level=vp`:
+
+| candidate (level vs VP) | IC rubric | VP-aware |
+| --- | --- | --- |
+| Director, Starship Propulsion (N-1) | high_potential | **top_tier** |
+| Director Eng, semiconductor (N-1) | high_potential | **top_tier** |
+| Director Battery, Meta (N-1) | high_potential | **top_tier** |
+| now-CEO, ex-Tesla SVP (N+2) | out | out |
+| SVP Hardware (N+1, step-down) | out | out |
+| ex-fusion lead, now fractional/advisory | too_senior | wrong_track (current lane) |
+
+Passers tightened 20→12 of 126; the Director-level step-up candidates became the top picks, while
+CEOs/SVPs/advisors stayed out. This replaces the earlier "build a separate VP rubric" plan with one
+target-parameterized rule that helps every search.

@@ -256,6 +256,20 @@ class TestBuildEvalInputs(unittest.TestCase):
         with self.assertRaises(ValueError):
             bei.plan_from_obj({"must_have": []}, set_name="s", set_id="i", source_url=None, created_at="t")
 
+    def test_plan_target_level_valid_passes_through(self):
+        plan = bei.plan_from_obj({"must_have": ["x"], "target_level": "VP"},
+                                 set_name="s", set_id="i", source_url=None, created_at="t")
+        self.assertEqual(plan["target_level"], "vp")  # normalized lowercase
+
+    def test_plan_target_level_invalid_defaults_to_senior_ic(self):
+        plan = bei.plan_from_obj({"must_have": ["x"], "target_level": "supreme_overlord"},
+                                 set_name="s", set_id="i", source_url=None, created_at="t")
+        self.assertEqual(plan["target_level"], "senior_ic")
+
+    def test_plan_target_level_absent_defaults_to_senior_ic(self):
+        plan = bei.plan_from_obj({"must_have": ["x"]}, set_name="s", set_id="i", source_url=None, created_at="t")
+        self.assertEqual(plan["target_level"], "senior_ic")
+
     def test_build_plan_messages_carries_jd(self):
         msgs = bei.build_plan_messages("Design schedulers")
         self.assertIn("Design schedulers", msgs[-1]["content"])
