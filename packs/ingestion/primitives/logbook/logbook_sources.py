@@ -695,7 +695,7 @@ def resolve_whatsapp_groups(wacli_db: Path, names: list[str], person: Person | N
 
 def whatsapp_target_jids(wacli_db: Path, person: Person, group_names: list[str]) -> list[str]:
     """Existing WhatsApp chat_jids (DMs + groups) relevant to a person, for SCOPED
-    `wacli history fill --chat <jid>` backfill — so we deepen only the conversations
+    `wacli history backfill --chat <jid>` backfill — so we deepen only the conversations
     that matter, not the user's entire WhatsApp."""
     jids: list[str] = [g["jid"] for g in resolve_whatsapp_groups(wacli_db, group_names, person=person)]
     con = _open_wacli(wacli_db)

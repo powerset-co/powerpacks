@@ -107,9 +107,10 @@ Gmail (msgvault) and WhatsApp (wacli) read fine from anywhere.
    the user's phone; mention that in passing, but still run it.) Per-channel depth:
    - **iMessage** — `chat.db` is already complete locally (beginning-of-time); deepen is a no-op.
    - **Gmail (msgvault)** — backfills the whole mailbox (`gmail.py discover --fresh`, OAuth, free).
-   - **WhatsApp (wacli)** — shallow by default; deepen runs scoped `wacli history fill`
-     (on-demand sync from the primary phone), repeated `--rounds` times. Depth is
-     bounded by what the phone still holds, so full WhatsApp history is not guaranteed.
+   - **WhatsApp (wacli)** — shallow by default; deepen runs scoped
+     `wacli history backfill --chat <jid> --requests <rounds>` (on-demand sync
+     from the primary phone). Depth is bounded by what the phone still holds, so
+     full WhatsApp history is not guaranteed.
 
 4. **Export** (full build — all channels + all groups by default):
    ```bash
