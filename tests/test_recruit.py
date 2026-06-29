@@ -151,6 +151,51 @@ class TestJudgeConsensus(unittest.TestCase):
         self.assertEqual(a["found_by"], ["routing", "scheduler"])
 
 
+class TestCoreGate(unittest.TestCase):
+    CORE = {"distributed systems"}  # normalized core-trait text
+
+    def _judges(self):
+        # GEM: lower score but DOES the core domain (doing_now). WRONG: higher score, strong+senior
+        # but only `capable` on the core (adjacent/wrong-domain). GATED: does the core but too_senior.
+        return {"j1": [
+            {"person_id": "GEM", "name": "Gem", "in_band": True, "verdict": "high_potential",
+             "score": 0.6, "seniority_fit": "in_band",
+             "must_have": [{"trait": "Distributed Systems", "status": "doing_now"}]},
+            {"person_id": "WRONG", "name": "Wrong", "in_band": True, "verdict": "top_tier",
+             "score": 0.9, "seniority_fit": "in_band",
+             "must_have": [{"trait": "distributed systems", "status": "capable"}]},
+            {"person_id": "GATED", "name": "Gated", "in_band": False, "verdict": "out",
+             "score": 0.8, "seniority_fit": "too_senior",
+             "must_have": [{"trait": "distributed systems", "status": "doing_now"}]},
+        ]}
+
+    def test_core_traits_from_plan_reads_core_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "plan.json"
+            p.write_text(json.dumps({"traits": {"must_have": [
+                {"trait": "Distributed Systems", "tier": "core"},
+                {"trait": "leadership", "tier": "table_stakes"}]}}))
+            self.assertEqual(jc.core_traits_from_plan(p), {"distributed systems"})
+
+    def test_meets_core_requires_experienced_not_capable(self):
+        j = self._judges()["j1"]
+        gem = {x["person_id"]: x for x in j}
+        self.assertTrue(jc.candidate_meets_core({"j1": gem["GEM"]}, ["j1"], self.CORE))
+        self.assertFalse(jc.candidate_meets_core({"j1": gem["WRONG"]}, ["j1"], self.CORE))
+
+    def test_core_gate_excludes_wrong_domain_keeps_gem(self):
+        _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1,
+                                       score_threshold=0.40, core_traits=self.CORE)
+        ids = [r["person_id"] for r in strong]
+        self.assertEqual(ids, ["GEM"])  # WRONG excluded (capable), GATED excluded (too_senior)
+
+    def test_no_core_traits_falls_back_to_score_gate(self):
+        _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1,
+                                       score_threshold=0.40, core_traits=set())
+        # No core-gate: WRONG (0.9, in-band) qualifies on score alone; GATED still out (not in-band).
+        self.assertIn("WRONG", [r["person_id"] for r in strong])
+
+
 class TestScoreGroundTruthGaps(unittest.TestCase):
     def test_recall_precision_and_missed(self):
         gt = {"x", "y", "z"}
@@ -274,6 +319,27 @@ class TestBuildEvalInputs(unittest.TestCase):
     def test_build_plan_messages_carries_jd(self):
         msgs = bei.build_plan_messages("Design schedulers")
         self.assertIn("Design schedulers", msgs[-1]["content"])
+
+    def test_must_trait_tagged_object_preserves_tier(self):
+        self.assertEqual(bei._must_trait({"trait": "distributed systems", "tier": "core"}),
+                         {"trait": "distributed systems", "tier": "core"})
+
+    def test_must_trait_invalid_tier_defaults_table_stakes(self):
+        # A mis-tagged/absent tier must NOT over-gate -> degrade to table_stakes (gate falls back).
+        self.assertEqual(bei._must_trait({"trait": "x", "tier": "bogus"})["tier"], "table_stakes")
+        self.assertEqual(bei._must_trait({"trait": "x"})["tier"], "table_stakes")
+
+    def test_must_trait_bare_string_is_table_stakes(self):
+        self.assertEqual(bei._must_trait("schedulers"), {"trait": "schedulers", "tier": "table_stakes"})
+        self.assertIsNone(bei._must_trait("   "))
+
+    def test_plan_from_obj_carries_core_tier(self):
+        plan = bei.plan_from_obj(
+            {"must_have": [{"trait": "fusion hardware", "tier": "core"},
+                           {"trait": "leadership", "tier": "table_stakes"}]},
+            set_name="s", set_id="i", source_url=None, created_at="t")
+        tiers = {t["trait"]: t["tier"] for t in plan["traits"]["must_have"]}
+        self.assertEqual(tiers, {"fusion hardware": "core", "leadership": "table_stakes"})
 
 
 class TestTriageCandidates(unittest.TestCase):
