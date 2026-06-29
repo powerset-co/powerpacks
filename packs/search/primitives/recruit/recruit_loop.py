@@ -144,7 +144,8 @@ def main() -> None:
 
         # consensus over everything judged so far
         run([sys.executable, CONSENSUS, "--judges-dir", judges_dir, "--union", master_union_path,
-             "--out-dir", run_dir / "shortlist", "--min-inband-votes", 1, "--score-threshold", args.score_threshold])
+             "--out-dir", run_dir / "shortlist", "--min-inband-votes", 1, "--score-threshold", args.score_threshold,
+             "--plan", plan_path])  # core-gate the shortlist on the plan's core domain must-haves
         strong_now = json.loads((run_dir / "shortlist" / "ground_truth_ranked.json").read_text())
         now_pids = {r["person_id"] for r in strong_now}
         new_strong = now_pids - strong_pids

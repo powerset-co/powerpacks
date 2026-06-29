@@ -11,6 +11,10 @@ Changelog:
   100% of ground truth at depth) but noisy single-query ranking — so the lever is SHOTGUN
   (many diverse probes) + a mixture-of-judges, not a new backend. See
   packs/search/docs/agentic-search.md and recruit-ground-truth-status.md.
+- 2026-06-29: Add the CORE-GATE + GATE 1. build_eval_inputs tags must-haves core|table_stakes;
+  judge_consensus --plan gates the shortlist on genuinely doing >=1 core domain capability (not the
+  blended score, which can't separate "filled" from "give-up"). One human touchpoint (GATE 1, the
+  plan), then autonomous. Measured: AgentMail distsys -> 88 filled; Realta fusion VP -> 12->7->2.
 -->
 
 # recruit
@@ -19,19 +23,51 @@ Use for `$recruit`: source, judge, and rank candidates for a JD from a Powerset 
 recruiting team would. This is the productized version of the agentic-search method in
 `packs/search/docs/agentic-search.md`.
 
-## Run it (one command — the convergence loop)
+## Run it ($recruit): ONE human gate, then autonomous
 
-`recruit_loop` orchestrates the whole thing: robust source → judge → **expand-from-anchor →
-re-judge**, looping until no new strong candidates (converge-capped). Free judge by default.
+Track the run as **native harness tasks (checkboxes)** so progress is visible/resumable. There is
+exactly **one human touchpoint — GATE 1, the plan** — and everything after it runs to a finished,
+ranked shortlist with no further prompts (judge auto, no spend confirm; expand-from-anchor auto).
+
+```
+☐ 1. Source + extract plan      robust_source → build_eval_inputs   (free / 1 cheap call)
+      ──▶ GATE 1: show the plan, get approval/edits   ← the ONLY human touch
+☐ 2. Judge → core-gate → expand-from-anchor (high reasoning on finalists)   (auto)
+☐ 3. Present the ranked shortlist
+```
+
+**GATE 1 — the one checkpoint.** After `build_eval_inputs` writes `plan.json`, STOP and show the
+user, grouped for a 10-second read:
+- the **core** must-haves (the domain differentiators that GATE the shortlist) vs the
+  **table_stakes** must-haves (generic seniority/leadership — these only RANK), and
+- the **target_level** + asymmetric seniority band.
+
+The plan is the highest-leverage artifact — the core must-haves *are* the shortlist gate — so this
+is where the human sharpens a niche role ("delivered large hardware" → "delivered large
+*fusion/plasma* hardware") or just confirms the domain for a common one. Let the user edit
+`plan.json`, then proceed. **Do NOT ask again** — judging + expansion run autonomously to the end.
+
+Then run the autonomous engine (reuses the approved plan, judges free by default, **core-gates** the
+shortlist, expands from your own judged-strong each epoch):
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/recruit/recruit_loop.py \
   --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
-  --max-epochs 3 --score-threshold 0.40 --judge codex
+  --max-epochs 3 --score-threshold 0.40 --judge codex --reasoning-effort high
 ```
 
-Writes `<run>/shortlist/ground_truth_ranked.json` + `<run>/loop.json` (per-epoch convergence). The
-stages below are what it chains — call them individually only to debug or customize.
+Writes `<run>/shortlist/ground_truth_ranked.json` + `<run>/loop.json` (per-epoch convergence). To
+drive GATE 1 by hand, run stages 1–2 below up to `build_eval_inputs`, review the plan, then continue
+from the judge. Pass the approved `plan.json` to `judge_consensus --plan` so the **core-gate** fires.
+
+**Why a gate at all (and why the score alone can't replace it).** A blended `jd_score` cannot tell
+a role with real candidates from one with none: pedigree + generic leadership inflate wrong-domain
+seniors, so the top of a fusion-VP search scores as high as a real distributed-systems search
+(both peak ~0.72–0.77). The fix is the **core-gate**, not a score cutoff — and a clean core comes
+from GATE 1. Measured (real judged data): **AgentMail distsys MTS → 88 shortlisted (filled)**, gems
+on top (Modal/Anyscale/NVIDIA AI-infra); **Realta fusion VP → 12 → 7 (broad "hardware" core, crypto/
+HFT/consumer false-positives excluded) → 2 (GATE-1-sharpened fusion core)** — a clean, self-limiting
+give-up driven entirely by core-trait sharpness.
 
 ## The core finding this skill is built on (read once)
 
@@ -74,8 +110,10 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    the already-on-disk `profiles.jsonl.gz`). `build_eval_inputs` extracts must/nice traits **and a
    `target_level`** from the JD (so the judge's seniority gate is asymmetric around the role: in-band
    = target and one level below = *step up*; too_senior = one level above or higher = *won't step
-   down*; too_junior = two+ below). Defaults to `senior_ic`. Rewrites the run into the contract — no
-   recompute:
+   down*; too_junior = two+ below). Defaults to `senior_ic`. It also **tags each must-have
+   `core` vs `table_stakes`** — `core` = the 1–3 domain differentiators that make THIS role hard
+   (the shortlist GATE); `table_stakes` = generic seniority/leadership/stage (RANK only). This is the
+   plan the human approves at **GATE 1**. Rewrites the run into the contract — no recompute:
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/recruit/build_eval_inputs.py \
      --run-dir <run> --jd-file <run>/jd.txt --set-name "<set>" --created-at <iso>
@@ -107,14 +145,19 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
      sourcing/vendor. A **cross-vendor union** (codex OR gpt keeps) lifts recall further (~0.96).
      Validate the threshold on a 2nd JD before hardcoding a default.
 
-4. **Consensus + rank** 🆕:
+4. **Consensus + rank** 🆕 (the **core-gate** lives here):
    ```bash
    uv run --project . python packs/search/primitives/recruit/judge_consensus.py \
      --judges-dir <run>/judges --union <run>/union.jsonl --out-dir <run>/shortlist \
-     --min-inband-votes 2 --min-notout-votes 2   # single judge: use 1/1
+     --plan <run>/plan.json --score-threshold 0.40 --min-inband-votes 2   # single judge: 1
    ```
-   → `shortlist/ground_truth_ranked.json` (consensus-strong, stack-ranked). Canonical gate:
-   majority in-band AND majority not-out (2/2 of a 3-judge panel). Then ✅
+   → `shortlist/ground_truth_ranked.json` (stack-ranked). **With `--plan`, the shortlist is
+   CORE-GATED:** membership = majority in-band AND the candidate genuinely DOES ≥1 `core` domain
+   capability (`experienced`/`doing_now`; `capable` does NOT count) AND clears the score floor.
+   `table_stakes` traits only rank — so a strong-but-wrong-domain senior is excluded no matter how
+   high their blended score (that is what collapses the give-up case). Without core tags it falls
+   back to the score gate. Reads the per-trait statuses the judge already emits — rubric untouched.
+   Then ✅
    `export_candidate_shortlist` for the sendable CSV. **Measured (AgentMail JD):** single judge
    → recall 48% / p@25 0.36; 3-judge (2,2) → 52% / 0.44; a `(2,1)` gate (majority in-band +
    ≥1 not-out) Pareto-beats it (64% / 0.48) by rescuing borderline candidates one strict judge
@@ -189,9 +232,10 @@ HARD before judging to control cost. *(Claude-Code-only sessions can swap the Op
 ## Default recipe (fully primitive-driven; robust ≥0.95 sourcing; $0-OpenAI option)
 
 `robust_source` (multi-round `decompose_jd`+`run_shotgun` union → non-flaky ≥0.95 recall) →
-`build_eval_inputs` → `codex_judge` (FREE; or paid `evaluate_profile_candidates`, ×N for a
-cross-vendor panel) → `judge_consensus --score-threshold ~0.40` → `export_candidate_shortlist`;
-optional `expand_from_anchor` for the rarest stragglers; `score_ground_truth_gaps` to track epochs.
+`build_eval_inputs` (tags must-haves core/table_stakes) → **GATE 1 (human approves the plan)** →
+`codex_judge` (FREE; or paid `evaluate_profile_candidates`, ×N for a cross-vendor panel) →
+`judge_consensus --plan <plan> --score-threshold ~0.40` (**core-gate**) → `export_candidate_shortlist`;
+`expand_from_anchor` each epoch (auto in `recruit_loop`); `score_ground_truth_gaps` to track epochs.
 Every step is a CLI any harness can call — nothing depends on an agent improvising.
 
 **Validated on the AgentMail JD:** sourcing min 0.968 / mean 0.978 recall across 3 independent
@@ -219,8 +263,9 @@ New (`packs/search/primitives/recruit/`):
   via ChatGPT-subscription auth). Drop-in for the paid gpt-5.4 judge; same raw output shape.
 - `expand_from_anchor.py` 🆕 — judged-strong anchors → "more like this" seeds (no LLM).
 - `judge_consensus.py` 🆕 — combine judge passes (native, `evaluate_profile_candidates` raw, or
-  `codex_judge` raw) → consensus shortlist. `--score-threshold` tunes the shortlist cutoff on the
-  canonical score (recall/precision dial; ~0.40 recovered ~0.9 recall on AgentMail).
+  `codex_judge` raw) → consensus shortlist. **`--plan` core-gates** membership on the plan's `core`
+  domain must-haves (genuinely doing ≥1 at `experienced`+) so wrong-domain seniors are excluded
+  regardless of score; `--score-threshold` is the floor/recall dial on the canonical score.
 - `score_ground_truth_gaps.py` 🆕 — epoch scoring + convergence vs a ground-truth set.
 
 Existing (reused):
