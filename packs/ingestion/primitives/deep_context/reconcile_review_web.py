@@ -726,6 +726,25 @@ function updateCounts(){
   ['review','verified','detached','excluded','decided'].forEach(k=>{
     const el=document.querySelector('.stat strong[data-count="'+k+'"]');if(el)el.textContent=c[k];});
 }
+// Which status-filtered tab are we on? (the Merged/decided/all tabs aren't pure-status, so a
+// decision never evicts a row from them — only the status tabs below do.)
+const STATUS_TABS=new Set(['review','verified','detached','fixed','excluded']);
+function activeTab(){
+  const a=document.querySelector('.tab.active');
+  const m=a&&(a.getAttribute('href')||'').match(/[?&]tab=([a-z]+)/);
+  return m?m[1]:'all';
+}
+// Once a row's new status no longer matches the status tab you're on (e.g. you Fix/Keep/Detach
+// someone while on "needs review"), slide it off the list — it lives on its own tab now.
+function reconcileTabMembership(parent){
+  const t=activeTab();
+  if(!STATUS_TABS.has(t)||parentStatusFromCands(parent)===t)return;
+  parent.style.transition='opacity .28s ease';parent.style.opacity='0';
+  setTimeout(()=>{parent.remove();updateCounts();
+    const list=document.querySelector('.list');
+    if(list&&!list.querySelector('.parent'))list.innerHTML="<div class='empty'>All clear on this tab — nothing left to review here.</div>";
+  },280);
+}
 // The fix for "looks like nothing happened": after any decision, repaint the PARENT row's
 // chip + the header counts, not just the inner card.
 function refreshParent(parent){
@@ -738,6 +757,7 @@ function refreshParent(parent){
   const top=parent.querySelector(':scope > .pbody > .parent-actions .btn.exclude');
   if(top)top.classList.toggle('on',st==='excluded');
   updateCounts();
+  reconcileTabMembership(parent);
 }
 async function postDecide(cand,act,newUrl){
   const body=new URLSearchParams({pub:cand.dataset.pub,decision:act});
