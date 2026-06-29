@@ -35,8 +35,22 @@ DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"
 PLAN_SYSTEM = (
     "You are a technical recruiter turning a job description into a structured evaluation plan "
     "for an automated candidate judge. Extract ONLY what the JD supports. Hard rules:\n"
-    "- must_have traits: the differentiating, non-negotiable capabilities the JD demands "
-    "(what the person must have built/owned). nice_to_have: real pluses the JD mentions.\n"
+    "- must_have traits: the non-negotiable capabilities the JD demands. Tag EACH must_have with a "
+    "`tier`:\n"
+    "    * 'core' = a domain-defining differentiator that makes THIS role hard — the specific "
+    "capability or domain a generically strong, senior person would NOT automatically have (e.g. "
+    "'delivered large fusion/plasma hardware programs', 'built distributed schedulers at scale', "
+    "'shipped LLM inference systems in production'). These are the GATES: someone who lacks a core "
+    "trait is not a real fit no matter how senior or impressive. Make core traits as SHARP and "
+    "domain-specific as the JD allows — prefer the narrowest true requirement over a broad one.\n"
+    "    * 'table_stakes' = generic competence most qualified seniors in this band already have "
+    "(leadership, communication, strategic thinking, people/eng management, relocation/logistics). "
+    "Real requirements, but NOT what separates a fit from a non-fit.\n"
+    "  Core is about WHAT DOMAIN/CAPABILITY the person has built — NOT how senior, how long, or "
+    "where. Stage/tenure/experience-amount traits ('early-stage startup experience', '10+ years', "
+    "'worked at a big company') are table_stakes, never core. Most roles have only 1-3 core traits. "
+    "NEVER mark generic leadership/communication/management/relocation/stage as core. "
+    "nice_to_have: real pluses the JD mentions.\n"
     "- Each trait is a short evidence-checkable phrase, NOT a sentence and NOT a job title.\n"
     "- hire_stage: one of founding_early | early | growth | scale — infer from company stage/role.\n"
     "- target_level: the role's career level — one of senior_ic | staff_ic | lead | manager | "
@@ -51,10 +65,11 @@ PLAN_SYSTEM = (
     "are too_senior, interns/new-grads are too_junior).\n"
     "- normalized_archetype: a 2-4 word canonical role archetype (e.g. 'distributed systems engineer').\n"
     'Return strict JSON: {"job_title","normalized_archetype","hire_stage","target_level","usable_cutoff",'
-    '"must_have":["..."],"nice_to_have":["..."]}.'
+    '"must_have":[{"trait":"...","tier":"core|table_stakes"}],"nice_to_have":["..."]}.'
 )
 
 VALID_TARGET_LEVELS = {"senior_ic", "staff_ic", "lead", "manager", "director", "vp", "exec"}
+VALID_TIERS = {"core", "table_stakes"}
 
 
 def build_plan_messages(jd: str) -> list[dict[str, str]]:
@@ -64,13 +79,27 @@ def build_plan_messages(jd: str) -> list[dict[str, str]]:
     ]
 
 
+def _must_trait(t: Any) -> dict[str, str] | None:
+    """Normalize one must_have entry into {trait, tier}. Accepts the tagged object form
+    ({"trait","tier"}) and the legacy bare-string form. An unrecognized/absent tier degrades to
+    'table_stakes' so a mis-tagged plan falls back to the score gate rather than over-gating
+    (the core-gate only fires on traits the model EXPLICITLY marked 'core')."""
+    if isinstance(t, dict):
+        text = str(t.get("trait") or "").strip()
+        tier = str(t.get("tier") or "").strip().lower()
+        tier = tier if tier in VALID_TIERS else "table_stakes"
+    else:
+        text, tier = str(t).strip(), "table_stakes"
+    return {"trait": text, "tier": tier} if text else None
+
+
 def plan_from_obj(obj: dict[str, Any], *, set_name: str, set_id: str, source_url: str | None, created_at: str) -> dict[str, Any]:
     """Normalize the model's JSON into a plan.json the judge can read.
 
     Only the fields the judge consumes are required to be meaningful; the rest are filled with
     sane, schema-shaped defaults so the artifact is self-describing.
     """
-    must = [{"trait": str(t).strip()} for t in (obj.get("must_have") or []) if str(t).strip()]
+    must = [o for o in (_must_trait(t) for t in (obj.get("must_have") or [])) if o]
     nice = [{"trait": str(t).strip()} for t in (obj.get("nice_to_have") or []) if str(t).strip()]
     if not must:
         raise ValueError("plan extraction produced no must_have traits")
