@@ -66,6 +66,96 @@ class TestCommon(unittest.TestCase):
             self.assertIn("+14155551234", people[0].phones)
 
 
+import sqlite3  # noqa: E402  (local to the msgvault-con helper below)
+
+_MSGVAULT_SCHEMA = """
+CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
+CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+CREATE TABLE messages (id INTEGER PRIMARY KEY, source_id INTEGER, conversation_id INTEGER, message_type TEXT,
+    sent_at TEXT, received_at TEXT, internal_date TEXT, deleted_at TEXT, deleted_from_source_at TEXT,
+    sender_id INTEGER, subject TEXT, snippet TEXT);
+CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER,
+    recipient_type TEXT, display_name TEXT);
+CREATE TABLE message_bodies (id INTEGER PRIMARY KEY, message_id INTEGER, body_text TEXT, body_html TEXT);
+"""
+
+
+class TestAdaptiveGmailCollection(unittest.TestCase):
+    """Gmail is its own 1600-vertical now: keep a thread's back-and-forth, honest counts,
+    and don't crowd out chat."""
+
+    def _con(self) -> sqlite3.Connection:
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript(_MSGVAULT_SCHEMA)
+        con.executescript("""
+            INSERT INTO sources (id, source_type, identifier, display_name) VALUES (1, 'gmail', 'me@gmail.com', 'Me');
+            INSERT INTO participants (id, email_address, display_name) VALUES
+                (1, 'jordan@acme.dev', 'Jordan Acme'), (2, 'me@gmail.com', 'Me');
+            -- One thread (100), a real 4-message back-and-forth (2 Jordan, 2 me).
+            INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at, sender_id, subject, snippet) VALUES
+                (10, 1, 100, 'email', '2026-01-01T00:00:00Z', 1, 'coffee', 'lets grab coffee next week sometime'),
+                (11, 1, 100, 'email', '2026-01-02T00:00:00Z', 2, 'Re: coffee', 'sure how about tuesday afternoon'),
+                (12, 1, 100, 'email', '2026-01-03T00:00:00Z', 1, 'Re: coffee', 'tuesday works great see you then'),
+                (13, 1, 100, 'email', '2026-01-04T00:00:00Z', 2, 'Re: coffee', 'perfect talk soon and take care');
+            INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES
+                (10, 2, 'to'), (11, 1, 'to'), (12, 2, 'to'), (13, 1, 'to');
+        """)
+        con.commit()
+        return con
+
+    def _person(self, phones=None):
+        return common.Person(person_id="p1", full_name="Jordan Acme",
+                             emails=["jordan@acme.dev"], phones=phones or [], source_channels=[])
+
+    def test_read_gmail_keeps_thread_back_and_forth(self):
+        con = self._con()
+        self.addCleanup(con.close)
+        accounts = sources.bec.account_emails(con)
+        msgs = sources.read_gmail(self._person(), con, accounts)
+        self.assertGreater(len(msgs), 1)            # was 1 (thread collapsed); now the back-and-forth
+        self.assertEqual(len(msgs), 4)
+
+    def test_collect_one_honest_available_and_capped(self):
+        con = self._con()
+        self.addCleanup(con.close)
+        accounts = sources.bec.account_emails(con)
+        nope = Path("/nonexistent-deepctx")
+        # deep_cap below the true total => pool trimmed, but `available` reports the true 4.
+        pool, available = collect.collect_one(
+            self._person(), msgvault_con=con, accounts=accounts,
+            chat_db=nope, wacli_db=nope, deep_cap=2)
+        self.assertEqual(available, 4)
+        self.assertEqual(len(pool), 2)
+        self.assertGreater(available, len(pool))    # capped == True downstream
+        # deep_cap above the total => honest, not capped (the Bretton case).
+        pool2, available2 = collect.collect_one(
+            self._person(), msgvault_con=con, accounts=accounts,
+            chat_db=nope, wacli_db=nope, deep_cap=50)
+        self.assertEqual(available2, 4)
+        self.assertEqual(len(pool2), 4)
+
+    def test_gmail_does_not_starve_chat(self):
+        con = self._con()
+        self.addCleanup(con.close)
+        accounts = sources.bec.account_emails(con)
+        fake_dms = [{"channel": "imessage", "at": "2026-03-01T00:00:00Z",
+                     "direction": "from_them", "text": "hey are we still on for friday"}]
+        orig = (sources.read_imessage, sources.count_imessage_dms, sources.read_whatsapp)
+        sources.read_imessage = lambda p, db, cap=0: list(fake_dms)
+        sources.count_imessage_dms = lambda p, db: len(fake_dms)
+        sources.read_whatsapp = lambda p, db, cap=0: []
+        try:
+            pool, _ = collect.collect_one(
+                self._person(phones=["+14155550000"]), msgvault_con=con, accounts=accounts,
+                chat_db=Path("/nope"), wacli_db=Path("/nope"), deep_cap=2)
+        finally:
+            sources.read_imessage, sources.count_imessage_dms, sources.read_whatsapp = orig
+        channels = {m["channel"] for m in pool}
+        self.assertIn("gmail", channels)            # gmail's capped vertical...
+        self.assertIn("imessage", channels)         # ...still leaves room for chat
+
+
 class TestSampling(unittest.TestCase):
     def test_signal_rank_prefers_signature(self):
         rich = {"text": "I'm CTO at Acme, call +1 415 555 1234 https://acme.com", "at": "2020"}

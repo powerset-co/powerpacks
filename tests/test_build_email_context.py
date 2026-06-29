@@ -221,6 +221,75 @@ class RecentEmailsTests(unittest.TestCase):
         self.assertIn(" … ", body)                        # middle elided
 
 
+class DepthSelectionTests(unittest.TestCase):
+    """max_per_thread: default 1 = today's one-rep-per-thread; None = keep the back-and-forth."""
+
+    def setUp(self):
+        self.con = make_con()
+        self.addCleanup(self.con.close)
+        self.accounts = bec.account_emails(self.con)
+
+    def _jane(self, **kw):
+        return bec.recent_emails_for(self.con, "jane@example.com", accounts=self.accounts, **kw)
+
+    def test_depth_keeps_thread_back_and_forth(self):
+        # Thread 100 has Jane's msg 10 AND my reply 11. Default keeps one; depth keeps both.
+        default, _ = self._jane(per_person=10, snippet_chars=100)
+        deep, _ = self._jane(per_person=10, snippet_chars=100, max_per_thread=None)
+        self.assertEqual(len(default), 3)                       # one per thread (100/200/300)
+        self.assertEqual(len(deep), 4)                          # thread 100 now contributes 10 AND 11
+        self.assertNotIn("Re: Hello", [r["subject"] for r in default])
+        self.assertIn("Re: Hello", [r["subject"] for r in deep])
+
+    def test_breadth_before_depth(self):
+        deep, _ = self._jane(per_person=10, snippet_chars=100, max_per_thread=None)
+        subjects = [r["subject"] for r in deep]
+        # every thread's leader appears before any thread's extra message
+        self.assertEqual(set(subjects[:3]), {"My new role", "Hello & welcome", "Intro to you"})
+        self.assertEqual(subjects[-1], "Re: Hello")             # the depth message comes last
+
+    def test_budget_bounds_and_is_breadth_first(self):
+        # Budget 2 with depth on: still 2 distinct thread leaders, NOT a thread's depth.
+        deep, _ = self._jane(per_person=2, snippet_chars=100, max_per_thread=None)
+        self.assertEqual(len(deep), 2)
+        self.assertNotIn("Re: Hello", [r["subject"] for r in deep])
+
+    def test_default_is_one_per_thread(self):
+        a, _ = self._jane(per_person=10, snippet_chars=100)                       # omitted arg
+        b, _ = self._jane(per_person=10, snippet_chars=100, max_per_thread=1)     # explicit
+        self.assertEqual([r["subject"] for r in a], [r["subject"] for r in b])
+        self.assertEqual(len(a), 3)
+
+    def test_near_dup_collapses_even_with_depth(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript(SCHEMA)
+        con.executescript("""
+            INSERT INTO sources (id, source_type, identifier) VALUES (1, 'gmail', 'me@gmail.com');
+            INSERT INTO participants (id, email_address) VALUES (1, 'jane@example.com'), (2, 'me@gmail.com');
+            -- All ONE thread (600): two near-identical Jane messages + one distinct high-signal.
+            INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at, sender_id, subject, snippet) VALUES
+                (1, 1, 600, 'email', '2026-02-01T00:00:00Z', 1, 'A', 'catching up about the weekend plans and dinner soon'),
+                (2, 1, 600, 'email', '2026-02-02T00:00:00Z', 1, 'B', 'catching up about the weekend plans and dinner soon'),
+                (3, 1, 600, 'email', '2026-02-03T00:00:00Z', 1, 'C', 'Founder at Metagloss, phone 310-555-0000, decade in private equity');
+            INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES (1, 2, 'to'), (2, 2, 'to'), (3, 2, 'to');
+        """)
+        con.commit()
+        self.addCleanup(con.close)
+        deep, _ = bec.recent_emails_for(con, "jane@example.com", per_person=10, snippet_chars=200,
+                                        accounts={"me@gmail.com"}, max_per_thread=None)
+        # Depth keeps the thread's messages, but the two near-dups still collapse to one.
+        self.assertEqual(len(deep), 2)
+
+    def test_count_messages_for_excludes_third_party(self):
+        n = bec.count_messages_for(self.con, "jane@example.com", self.accounts)
+        # Jane-sent (10, 20) + owner->Jane (11, 30) = 4; Bob's third-party msg 13 excluded.
+        self.assertEqual(n, 4)
+
+    def test_count_messages_for_unknown_email_is_zero(self):
+        self.assertEqual(bec.count_messages_for(self.con, "nobody@nowhere.com", self.accounts), 0)
+
+
 class StreamContactGroupsTests(unittest.TestCase):
     """The all-contacts windowed/streamed path must match the per-contact path."""
 

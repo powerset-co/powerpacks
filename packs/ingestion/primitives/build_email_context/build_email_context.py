@@ -72,6 +72,10 @@ DEFAULT_TAIL_CHARS = 300
 # Fetch this many recent candidate messages before sender-filtering, so we still
 # end up with per_person after dropping third-party-sent threads.
 FETCH_MULTIPLIER = 8
+# Depth mode (max_per_thread != 1) keeps multiple messages per thread, so a smaller
+# over-fetch already fills the budget — keeps the raw row pull sane when per_person
+# is large (the 1600-message Gmail vertical would otherwise fetch 12.8k rows).
+DEPTH_FETCH_MULTIPLIER = 3
 
 # Markers of a quoted reply / forwarded history block. We cut the body at the first
 # such marker so we keep only the new message text (and signature), not the thread.
@@ -349,6 +353,7 @@ def select_emails_from_rows(
     source: str = "snippet",
     head_chars: int = DEFAULT_HEAD_CHARS,
     tail_chars: int = DEFAULT_TAIL_CHARS,
+    max_per_thread: int | None = 1,
 ) -> tuple[list[dict[str, Any]], int]:
     """Pick a contact's context emails from already-fetched recent ``rows``.
 
@@ -365,15 +370,21 @@ def select_emails_from_rows(
     local body and keeps its head + tail (substance + signature), falling back to
     the snippet when no body is stored.
 
-    Selection is signal-dense, not just most-recent: one email per thread
-    (deduped by ``conversation_id``) so the slots are distinct conversations, and
-    within each thread we keep the message with the highest deterministic
-    ``signal_score`` (signature / bio features), tie-broken toward the contact's
-    own email then recency. Threads are then ordered by that signal so the
-    richest emails fill the ``per_person`` slots.
+    ``max_per_thread`` controls thread depth. The default ``1`` keeps the old
+    behavior exactly — one signal-densest message per thread — so the marker-review
+    build path is unchanged. ``None`` (or >1) keeps the back-and-forth: deep-context
+    passes ``None`` so synthesis sees the whole conversation, not one line of it.
+
+    Selection is signal-dense, not just most-recent: within each thread messages are
+    ranked by ``signal_score`` (signature / bio features), tie-broken toward the
+    contact's own email then recency, and truncated to ``max_per_thread``. We then
+    fill the ``per_person`` message budget BREADTH-first (every thread's best message,
+    threads ordered by that best signal) and only then DEPTH (each thread's remaining
+    messages) — so coverage across conversations degrades gracefully before any one
+    thread is allowed to contribute extra messages.
     """
     dropped = 0
-    by_thread: dict[Any, tuple[Any, dict[str, Any]]] = {}
+    by_thread: dict[Any, list[tuple[Any, dict[str, Any]]]] = {}
     for idx, row in enumerate(rows):
         sender = str(row["sender_email"] or "").strip()
         if sender == email:
@@ -394,16 +405,24 @@ def select_emails_from_rows(
         entry = {"at": at, "from": sender, "from_role": from_role, "subject": clean_text(row["subject"]), "snippet": text}
         cid = row["conversation_id"]
         key = ("thread", cid) if cid not in (None, "", "None") else ("msg", idx)
-        cur = by_thread.get(key)
-        if cur is None or rank > cur[0]:
-            by_thread[key] = (rank, entry)
-    # Signal-densest threads first, then greedily drop near-duplicate content
-    # (boilerplate / repeated chat blurbs / same quoted thread) so the slots are
-    # genuinely distinct — keeps the higher-signal of any near-dup pair.
-    ranked = sorted(by_thread.values(), key=lambda kv: kv[0], reverse=True)
+        by_thread.setdefault(key, []).append((rank, entry))
+    # Within each thread: signal-densest first; keep up to max_per_thread (None = all).
+    # Stable sort + ">" replacement parity: on a rank tie the first-seen message wins,
+    # matching the old single-rep behavior when max_per_thread == 1.
+    for msgs in by_thread.values():
+        msgs.sort(key=lambda re: re[0], reverse=True)
+        if max_per_thread is not None:
+            del msgs[max_per_thread:]
+    # Breadth pass = each thread's best message (threads ordered by that best rank);
+    # depth pass = the remaining per-thread messages, globally rank-ordered. With
+    # max_per_thread == 1 the depth pass is empty, so this is identical to before.
+    leaders = sorted((msgs[0] for msgs in by_thread.values()), key=lambda re: re[0], reverse=True)
+    rest = sorted((m for msgs in by_thread.values() for m in msgs[1:]), key=lambda re: re[0], reverse=True)
+    # Then greedily drop near-duplicate content (boilerplate / repeated chat blurbs /
+    # same quoted thread) so the slots are genuinely distinct.
     kept: list[dict[str, Any]] = []
     kept_shingles: list[frozenset[str]] = []
-    for _, entry in ranked:
+    for _, entry in leaders + rest:
         if len(kept) >= per_person:
             break
         sh = shingles(entry["snippet"])
@@ -423,17 +442,57 @@ def recent_emails_for(
     source: str = "snippet",
     head_chars: int = DEFAULT_HEAD_CHARS,
     tail_chars: int = DEFAULT_TAIL_CHARS,
+    max_per_thread: int | None = 1,
 ) -> tuple[list[dict[str, Any]], int]:
     """Per-contact wrapper: fetch this contact's recent rows then select from them.
 
     The all-contacts build path uses ``stream_contact_groups`` +
     ``select_emails_from_rows`` directly; this wrapper preserves the single-contact
     API used by callers and tests."""
-    rows = fetch_recent_rows(con, email, per_person * FETCH_MULTIPLIER)
+    # Breadth mode (max_per_thread == 1) over-fetches 8x so we still see many distinct
+    # threads after dropping third-party-sent ones. Depth mode keeps multiple messages
+    # per thread, so a smaller multiple already fills the budget — avoid pulling
+    # per_person*8 rows when per_person is large (e.g. the 1600 Gmail vertical).
+    mult = FETCH_MULTIPLIER if max_per_thread == 1 else DEPTH_FETCH_MULTIPLIER
+    rows = fetch_recent_rows(con, email, per_person * mult)
     return select_emails_from_rows(
         rows, email, per_person, snippet_chars, accounts,
         source=source, head_chars=head_chars, tail_chars=tail_chars,
+        max_per_thread=max_per_thread,
     )
+
+
+def count_messages_for(con: sqlite3.Connection, email: str, accounts: set[str]) -> int:
+    """True total of the messages ``select_emails_from_rows`` draws from for this contact:
+    messages the contact SENT, plus messages an owner account sent where the contact is a
+    recipient. Mirrors the selector's sender filter (and its not-deleted / email guards)
+    so ``capped`` is honest — it excludes third-party-sent mail the selector always drops,
+    unlike a naive "every message in the contact's threads" count.
+    """
+    contact_ids = [r["id"] for r in con.execute(PARTICIPANT_IDS_SQL, (email.lower(),)).fetchall()]
+    if not contact_ids:
+        return 0
+    owner_ids: list[Any] = []
+    if accounts:
+        oph = ",".join("?" for _ in accounts)
+        owner_ids = [r["id"] for r in con.execute(
+            f"SELECT id FROM participants WHERE LOWER(email_address) IN ({oph})",
+            tuple(sorted(a.lower() for a in accounts))).fetchall()]
+    cph = ",".join("?" for _ in contact_ids)
+    not_deleted = ("AND (m.deleted_at IS NULL OR m.deleted_at = '') "
+                   "AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')")
+    arms = [f"SELECT m.id FROM messages m WHERE m.message_type='email' {not_deleted} "
+            f"AND m.sender_id IN ({cph})"]
+    params: list[Any] = list(contact_ids)
+    if owner_ids:
+        oin = ",".join("?" for _ in owner_ids)
+        arms.append(f"SELECT m.id FROM message_recipients mr JOIN messages m ON m.id = mr.message_id "
+                    f"WHERE m.message_type='email' {not_deleted} "
+                    f"AND mr.participant_id IN ({cph}) AND m.sender_id IN ({oin})")
+        params += list(contact_ids) + list(owner_ids)
+    # UNION (not UNION ALL) dedupes a message matched by both arms.
+    sql = f"SELECT COUNT(*) AS n FROM ({' UNION '.join(arms)})"
+    return int(con.execute(sql, params).fetchone()["n"])
 
 
 def derive_candidates(
