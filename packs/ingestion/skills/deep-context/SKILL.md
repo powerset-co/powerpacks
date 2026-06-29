@@ -6,6 +6,11 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-06-29: Added a review-only fast path. `$deep-context review` (or "open/show the review
+  UI", "let me click through") now just runs `bin/deep-context review` — read-only over the
+  existing reconcile artifacts, opens the browser, no checklist, no spend — instead of walking
+  the full pipeline checklist. Same for other single read-only subcommands the user names
+  (lookup/check/validate). The mandatory full checklist stays for an actual build/run/--force.
 - 2026-06-26: Never rely on memory for ANY approval — always ask/confirm with the user, every
   run. Added a top-level gate rule: a harness memory/auto-recall layer (Codex ~/.codex/memories,
   Claude Code session memory, prior transcripts, a cached "previously accepted" answer) may
@@ -162,6 +167,21 @@ to `$deep-context`.
 - `OPENAI_API_KEY` in `.env`; `.venv/` ready (`bin/setup-python`).
 
 ## How to run this skill
+
+**Review-only fast path (no checklist, no spend).** If the user only wants to
+**open / look at the review UI** — `$deep-context review`, "open the review
+page", "show me the review UI", "pop the UI back up", "let me click through" —
+do NOT create the full checklist and do NOT run any pipeline or paid step. Just
+run `bin/deep-context review` (it serves the existing `reconcile/verdicts.jsonl`
+⨝ `overrides/review.csv` ⨝ `parents/*.md`, opens the browser, and is read-only +
+free), tell the user it's open and that their keep/detach/fix/exclude clicks
+autosave to `overrides/review.csv`, and stop there. The review UI does NOT
+require re-running anything — it shows whatever the last run produced. Only if
+the reconcile artifacts don't exist yet (Phase 3 never ran) should you say so
+and offer the full run below. Same goes for any other single read-only
+subcommand the user names explicitly (`lookup`, `check`, `validate`): run just
+that one, skip the checklist. The full checklist below is for an actual
+build/`run`/`--force` of the pipeline.
 
 **FIRST, before running anything: create a literal, visible checklist with all
 the steps below and step through it, marking each complete as you go.** Mandatory.
