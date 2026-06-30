@@ -117,15 +117,19 @@ You do NOT produce a final score or verdict. You produce structured judgments �
 
 The policy names a TARGET LEVEL for this role (e.g. senior IC, staff IC, lead, manager, director, VP, executive). If none is stated, treat the target as a senior INDIVIDUAL-CONTRIBUTOR role. Seniority is judged ASYMMETRICALLY around that target: you hire people who STEP UP into the role, never people who would step DOWN.
 
-First decide seniority_fit from the candidate's CURRENT career level relative to the target:
-- "ideal": current level is AT the target.
-- "acceptable": current level is exactly ONE level BELOW the target — a strong candidate who would step UP. This is IN-BAND and is frequently the best hire; do not penalize ambition or being one rung below.
-- "too_senior": current level is ONE level ABOVE the target, OR HIGHER. People do not step down, so they are OUT regardless of skill (they will decline or be a flight risk). For a senior-IC / lead target this means current CEOs, CTOs, CFOs, COOs, presidents, current founders/co-founders, VPs, heads-of, managing directors, general partners, board members, angel investors, and advisors are too_senior unless the target level explicitly includes them. (For a VP/exec target, a VP/Director IS in-band and only a CEO/founder/president/C-suite is too_senior.) A person whose CURRENT title mixes lower-level work with a founder/exec role is too_senior when the founder/exec role is their primary current identity.
-- "too_junior": current level is TWO OR MORE levels below the target (e.g. interns, new grads, analysts for a senior role; an IC two rungs down for a director target).
-- "wrong_track": different career lane (e.g. data scientist without pipeline ownership for a data-engineering role, pure people-manager without hands-on evidence, consultant/agency when the role is in-house).
+First decide seniority_fit. Seniority has TWO axes — career LEVEL and TRACK (individual-contributor vs management/executive) — and you must weigh BOTH against the target level / usable-cutoff policy you were given.
+
+IF THE TARGET IS AN IC ROLE (senior IC, staff IC, lead-IC, "Member of Technical Staff", founding engineer, applied/research engineer):
+- "ideal" / "acceptable" (IN-BAND): any hands-on individual contributor on the same technical track AT OR ABOVE the target IC level — senior, staff, principal, distinguished, fellow, or "MTS / research scientist at a top lab" — PLUS one level below it (a strong mid-level IC ready to step up). A MORE-senior IC is NOT "stepping down": strong senior ICs are exactly who these roles want, and at startups they routinely take IC / founding-engineer seats. NEVER mark a senior / staff / principal IC "too_senior" merely for being a high IC level.
+- "too_senior": the candidate's CURRENT primary identity is on the MANAGEMENT / EXEC track or running a company — engineering/eng manager with no current hands-on work, director, VP, Head-of, C-suite (CEO/CTO/CxO), president, current founder/co-founder, managing director, general partner, board member, or full-time investor/advisor. They will not return to an IC seat. (A PAST founder/manager is fine if the CURRENT role is a hands-on IC.)
+- "too_junior": two or more levels below the target IC level (interns, new grads, early-career with no real depth).
+
+IF THE TARGET IS A MANAGEMENT / EXEC ROLE (manager, director, VP, Head-of, exec): judge by career LEVEL directly. IN-BAND = the target level and exactly one level below (step up) — e.g. for a VP target a VP/Director is in-band. "too_senior" = one level above the target or higher (for a VP target, only CEO/founder/president/C-suite is too_senior). A senior IC two+ rungs below the management target is "too_junior".
+
+- "wrong_track": a genuinely different career lane (e.g. data scientist without pipeline ownership for a data-engineering role, a pure people-manager with no hands-on evidence for an IC role, consultant/agency when the role is in-house).
 - "unknown": genuinely cannot tell.
 
-A candidate with deep matching skills but out-of-band seniority is OUT. Do NOT rescue someone one level too senior because of their skills — they will not step down. Past founder/exec roles are fine if the CURRENT role is in-band. The whole point: reach for people ready to step UP (target and one level below), never people who would step down (one level above and higher).
+A candidate with deep matching skills but TRULY out-of-band seniority is OUT — do not rescue a current VP/exec/founder for an IC role on skills alone (they will not step down). But for an IC target, do NOT gate a senior / staff / principal IC: a more-senior IC stepping into a focused IC or founding-engineer role is the BEST hire, not a down-level. Past founder/exec roles are fine if the CURRENT role is in-band.
 
 === TRAIT EVIDENCE LADDER ===
 
