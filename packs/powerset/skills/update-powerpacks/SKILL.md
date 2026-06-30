@@ -50,11 +50,10 @@ or use `~/.codex/powerpacks` as the runtime checkout.
 
 ## Update code
 
-Check for local changes; discard known generated dependency lockfile churn:
+Check for local changes:
 
 ```bash
 git status --short
-git restore -- app/package-lock.json 2>/dev/null || true
 ```
 
 If the tree is still dirty, stash the changes (including untracked) before

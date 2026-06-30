@@ -18,7 +18,7 @@ Direct npm usage is supported:
 
 ```bash
 cd app
-npm install
+npm ci
 npm run dev
 ```
 

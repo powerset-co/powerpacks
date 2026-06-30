@@ -15,6 +15,7 @@ usage() {
 usage: bin/setup-app [--clean] [--repair-only] [--no-build] [--dev] [--host HOST] [--port PORT]
 
 Installs and verifies the local Powerpacks Vite app with npm.
+Uses app/package-lock.json when present so setup does not rewrite the lockfile.
 
   --clean        remove app/node_modules before installing
   --repair-only  skip npm install when node_modules passes the local health check
@@ -81,6 +82,16 @@ if [[ ! -f "$APP_DIR/package.json" ]]; then
   exit 1
 fi
 
+install_app_deps() {
+  if [[ -f "$APP_DIR/package-lock.json" ]]; then
+    echo "setup-app: npm ci"
+    (cd "$APP_DIR" && npm ci)
+  else
+    echo "setup-app: npm install"
+    (cd "$APP_DIR" && npm install)
+  fi
+}
+
 tailwind_preflight="$APP_DIR/node_modules/tailwindcss/lib/css/preflight.css"
 
 if [[ "$CLEAN" == "1" ]]; then
@@ -96,18 +107,17 @@ elif [[ "$REPAIR_ONLY" != "1" ]]; then
 fi
 
 if [[ "$needs_install" == "1" ]]; then
-  echo "setup-app: npm install"
-  (cd "$APP_DIR" && npm install)
+  install_app_deps
 fi
 
 if [[ ! -f "$tailwind_preflight" ]]; then
   echo "setup-app: repairing incomplete tailwindcss install"
   rm -rf "$APP_DIR/node_modules/tailwindcss"
-  (cd "$APP_DIR" && npm install)
+  install_app_deps
 fi
 
 if [[ ! -f "$tailwind_preflight" ]]; then
-  echo "error: tailwindcss is still missing lib/css/preflight.css after npm install." >&2
+  echo "error: tailwindcss is still missing lib/css/preflight.css after dependency install." >&2
   echo "Try: rm -rf app/node_modules && ./install.sh app" >&2
   exit 1
 fi
