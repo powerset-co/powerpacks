@@ -50,39 +50,36 @@ or use `~/.codex/powerpacks` as the runtime checkout.
 
 ## Update code
 
-Check for local changes:
+Always stash dirty work before updating. `$update-powerpacks` is an installer
+refresh path, so it should not block on a dirty checkout and should not restore
+the stash onto `main` after updating. Leave the stash in place and report the
+stash name so the user can recover it if needed.
 
 ```bash
 git status --short
-```
-
-If the tree is still dirty, stash the changes (including untracked) before
-updating:
-
-```bash
 stashed=""
 if [[ -n "$(git status --short --porcelain=v1)" ]]; then
-  git stash push -u -m "update-powerpacks $(date +%Y-%m-%dT%H:%M:%S)"
-  stashed=1
+  stash_name="update-powerpacks $(date +%Y-%m-%dT%H:%M:%S)"
+  git stash push -u -m "$stash_name"
+  stashed="$stash_name"
 fi
 ```
 
-Pull fast-forward:
+Switch the canonical checkout to `main`, then fast-forward from `origin/main`:
 
 ```bash
-git fetch --quiet || true
-git pull --ff-only || true
+git fetch --quiet origin main
+if git show-ref --verify --quiet refs/heads/main; then
+  git switch main
+else
+  git switch -c main --track origin/main
+fi
+git pull --ff-only origin main
 ```
 
-If a stash was created, restore it:
-
-```bash
-[[ -n "$stashed" ]] && git stash pop
-```
-
-If `git stash pop` conflicts, stop and report the status — the stash entry is
-preserved on conflict; leave it for the user. Do not resolve conflicts, reset,
-merge, or drop the stash automatically.
+Do not pop the stash automatically. This keeps the checkout clean for install
+and setup. If the user wants the old local work back, tell them to run
+`git stash list` and apply the named stash manually.
 
 ## Reinstall skills
 
@@ -114,8 +111,7 @@ Tell the user:
 - which repo path was updated;
 - which installer ran;
 - the current git commit;
-- whether local changes were stashed and popped (and the stash name if a pop
-  conflict left the stash in place);
+- whether local changes were stashed, including the stash name;
 - that they must restart/reload the agent to pick up changed skills.
 
 Do not run any post-update setup/status/import checks. `$update-powerpacks` is
