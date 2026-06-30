@@ -468,6 +468,7 @@ async def evaluate_one(
     profile: dict[str, Any] | None,
     timeout: int,
     max_retries: int,
+    service_tier: str | None = None,
 ) -> dict[str, Any]:
     pid = candidate.get("person_id") or candidate.get("candidate_id")
     base = {
@@ -507,6 +508,10 @@ async def evaluate_one(
                 }
                 if reasoning_effort and supports_reasoning_effort(model):
                     kwargs["reasoning_effort"] = reasoning_effort
+                if service_tier:
+                    # flex = ~50% cheaper, slower batch tier (resource_unavailable 429s are
+                    # retried by the loop below); ideal for non-latency-sensitive reranking.
+                    kwargs["service_tier"] = service_tier
                 response = await client.chat.completions.create(**kwargs)
                 content = response.choices[0].message.content or "{}"
                 parsed = json.loads(content)
@@ -570,6 +575,7 @@ async def evaluate_all(args: argparse.Namespace) -> dict[str, Any]:
             profiles.get(candidate.get("person_id") or candidate.get("candidate_id")),
             args.timeout,
             args.max_retries,
+            args.service_tier,
         )
         for candidate in selected
     ]
@@ -598,6 +604,7 @@ async def evaluate_all(args: argparse.Namespace) -> dict[str, Any]:
         "created_at": now_iso(),
         "run_dir": str(run_dir),
         "model": args.model,
+        "service_tier": args.service_tier,
         "evaluated": len(ordered),
         "frontier_total": len(frontier),
         "missing_profiles": len(selected) - len(profiles),
@@ -622,6 +629,10 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--max-retries", type=int, default=2)
+    parser.add_argument("--service-tier", default=None,
+                        help="OpenAI service tier: 'flex' (~50%% cheaper, slower batch tier — use for "
+                             "reranking; pair with a higher --timeout) | auto | default | priority. "
+                             "Default None = account default (unchanged behavior for other callers).")
     parser.add_argument("--api-base", default=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"))
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     args = parser.parse_args()

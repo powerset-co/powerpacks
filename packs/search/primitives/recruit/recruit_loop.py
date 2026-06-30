@@ -67,7 +67,10 @@ def run(cmd: list[str]) -> None:
 
 def judge(edir: Path, judge_kind: str, effort: str, concurrency: int) -> None:
     if judge_kind == "gpt":
-        run([sys.executable, GPT_JUDGE, "--run-dir", edir, "--concurrency", concurrency, "--reasoning-effort", effort])
+        # gpt-5.4 rerank on the FLEX tier (~50% cheaper batch tier); flex is slower + can 429, so
+        # give it a generous timeout (the judge retries transient errors internally).
+        run([sys.executable, GPT_JUDGE, "--run-dir", edir, "--concurrency", concurrency,
+             "--reasoning-effort", effort, "--service-tier", "flex", "--timeout", 600])
     else:
         run([sys.executable, CODEX_JUDGE, "--run-dir", edir, "--concurrency", concurrency, "--reasoning-effort", effort])
 
