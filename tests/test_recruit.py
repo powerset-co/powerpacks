@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import importlib.util
 import json
 import subprocess
@@ -379,18 +380,33 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(tiers, {"fusion hardware": "core", "leadership": "table_stakes"})
 
     def test_build_frontier_has_merge_compatible_fields(self):
-        front = bei.build_frontier([{
+        union_row = {
             "person_id": "p1", "name": "Ada", "linkedin_url": "https://linkedin.com/in/ada",
             "current_title": "Staff Engineer", "current_company": "Acme", "location": "SF",
             "found_by": ["q1", "q2"],
-        }])
+        }
+        # Source/Channel carry the REAL import provenance from the profile source_map, not the method
+        front = bei.build_frontier([union_row], {"p1": ("Jane Doe", "gmail")})
         row = front[0]
         self.assertEqual(row["candidate_id"], "p1")
         self.assertEqual(row["current_role"], "Staff Engineer")
-        self.assertEqual(row["source_operator"], "recruit")
-        self.assertEqual(row["source_channel"], "shotgun")
+        self.assertEqual(row["source_operator"], "Jane Doe")
+        self.assertEqual(row["source_channel"], "gmail")
         self.assertEqual(row["duplicate_signal"]["matched_probe_count"], 2)
         self.assertEqual(row["duplicate_signal"]["matched_probe_ids"], ["q1", "q2"])
+        # no provenance on file -> empty, never a placeholder like "recruit"/"shotgun"
+        bare = bei.build_frontier([union_row])[0]
+        self.assertEqual((bare["source_operator"], bare["source_channel"]), ("", ""))
+
+    def test_profile_source_map_reads_primary_provenance(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "hydrate_people").mkdir(parents=True)
+        with gzip.open(d / "hydrate_people" / "profiles.jsonl.gz", "wt") as fh:
+            fh.write(json.dumps({"person_id": "p1", "primary_source_operator": "Jane Doe", "primary_source_channel": "gmail"}) + "\n")
+            fh.write(json.dumps({"person_id": "p2", "source_operators": ["Bob"], "source_channels": ["linkedin"]}) + "\n")
+        m = bei.profile_source_map([str(d)])
+        self.assertEqual(m["p1"], ("Jane Doe", "gmail"))
+        self.assertEqual(m["p2"], ("Bob", "linkedin"))  # falls back to first of the *_operators/_channels lists
 
     def test_write_frontier_artifacts_writes_same_full_ids(self):
         d = Path(tempfile.mkdtemp())
@@ -442,7 +458,7 @@ class TestBuildEvalInputs(unittest.TestCase):
             "person_id": "p1", "name": "Ada", "linkedin_url": "https://linkedin.com/in/ada",
             "current_title": "Staff Engineer", "current_company": "Acme", "location": "SF",
             "found_by": ["q0", "q1"],
-        }])
+        }], {"p1": ("Jane Doe", "gmail")})
         bei.write_frontier_artifacts(d, frontier)
         (d / "plan.json").write_text(json.dumps({"traits": {"must_have": [{"trait": "systems"}], "nice_to_have": []}}))
         raw = {
@@ -462,8 +478,8 @@ class TestBuildEvalInputs(unittest.TestCase):
         with (d / "shortlist.csv").open() as fh:
             rows = list(csv.DictReader(fh))
         self.assertEqual(rows[0]["Current Role"], "Staff Engineer")
-        self.assertEqual(rows[0]["Source"], "recruit")
-        self.assertEqual(rows[0]["Channel"], "shotgun")
+        self.assertEqual(rows[0]["Source"], "Jane Doe")
+        self.assertEqual(rows[0]["Channel"], "gmail")
 
 
 class TestTriageCandidates(unittest.TestCase):

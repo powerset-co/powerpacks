@@ -124,8 +124,15 @@ def plan_from_obj(obj: dict[str, Any], *, set_name: str, set_id: str, source_url
     }
 
 
-def build_frontier(union: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """union row -> frontier candidate. score = #probes (multi-probe = stronger seed signal)."""
+def build_frontier(union: list[dict[str, Any]], source_map: dict[str, tuple[str, str]] | None = None) -> list[dict[str, Any]]:
+    """union row -> frontier candidate. score = #probes (multi-probe = stronger seed signal).
+
+    source_map: person_id -> (source_operator, source_channel) = the REAL import provenance — the
+    operator whose network the person came through and the platform they arrived on (gmail /
+    linkedin / imessage / whatsapp / ...), from the hydrated profiles. This is what the sendable
+    shortlist's Source/Channel columns mean — NOT the sourcing method. Falls back to "" (unknown)
+    when a candidate has no provenance on file."""
+    source_map = source_map or {}
     out: list[dict[str, Any]] = []
     for r in union:
         pid = r.get("person_id")
@@ -137,6 +144,7 @@ def build_frontier(union: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {"probe_id": k, "probe": k, "score": float(len(found))}
             for k in (found or ["_"])
         ]
+        op, ch = source_map.get(pid, ("", ""))
         out.append({
             "person_id": pid,
             "candidate_id": pid,
@@ -147,8 +155,8 @@ def build_frontier(union: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "current_role": r.get("current_title"),
             "current_company": r.get("current_company"),
             "location": r.get("location"),
-            "source_operator": "recruit",
-            "source_channel": "shotgun",
+            "source_operator": op,
+            "source_channel": ch,
             "matched_probe_ids": matched_probe_ids,
             "source_rows": source_rows,
             "duplicate_signal": {
@@ -216,6 +224,34 @@ def verify_profile_coverage(frontier: list[dict[str, Any]], artifact_dirs: list[
     return len(found)
 
 
+def profile_source_map(artifact_dirs: list[str]) -> dict[str, tuple[str, str]]:
+    """person_id -> (source_operator, source_channel) from the hydrated profiles: the operator
+    whose network the person came through and the platform they arrived on (gmail / linkedin /
+    imessage / whatsapp / ...). First profile wins; a candidate with no provenance maps to nothing
+    (build_frontier then fills ("", ""))."""
+    out: dict[str, tuple[str, str]] = {}
+    for d in artifact_dirs:
+        p = Path(d)
+        gz = (p if p.is_absolute() else ROOT / p) / "hydrate_people" / "profiles.jsonl.gz"
+        if not gz.exists():
+            continue
+        try:
+            with gzip.open(gz, "rt") as fh:
+                for line in fh:
+                    try:
+                        r = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    pid = r.get("person_id")
+                    if pid and pid not in out:
+                        op = r.get("primary_source_operator") or next(iter(r.get("source_operators") or []), "") or ""
+                        ch = r.get("primary_source_channel") or next(iter(r.get("source_channels") or []), "") or ""
+                        out[pid] = (op, ch)
+        except OSError:
+            continue
+    return out
+
+
 def _load_union(path: Path) -> list[dict[str, Any]]:
     return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
@@ -238,12 +274,12 @@ def main() -> None:
     if not run_dir.is_absolute():
         run_dir = ROOT / run_dir
     union = _load_union(Path(args.union) if args.union else run_dir / "union.jsonl")
-    frontier = build_frontier(union)
+    artifact_dirs = probe_artifact_dirs(run_dir)
+    frontier = build_frontier(union, profile_source_map(artifact_dirs))
     if not frontier:
         print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "empty union"}))
         raise SystemExit(1)
 
-    artifact_dirs = probe_artifact_dirs(run_dir)
     covered = verify_profile_coverage(frontier, artifact_dirs)
 
     if args.plan:  # reuse an existing plan (loop epochs) — no LLM call
