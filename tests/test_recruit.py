@@ -57,6 +57,54 @@ class TestSubprocessUtils(unittest.TestCase):
         self.assertTrue(hasattr(_load("run_shotgun"), "run_checked"))
 
 
+class TestRunShotgunPartialFailure(unittest.TestCase):
+    """A single flaky probe must NOT abort the whole shotgun (robustness: tolerate dead probes,
+    fail only when none survive)."""
+
+    def test_prepare_returns_none_on_probe_failure_instead_of_raising(self):
+        rsg = _load("run_shotgun")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            # rsg.CommandError (not su.CommandError): run_shotgun's except binds its own import.
+            boom = rsg.CommandError(["prepare"], returncode=1, description="prepare probe q00")
+            with mock.patch.object(rsg, "run_checked", side_effect=boom):
+                result = rsg._prepare({"key": "q00", "query": "flaky"}, probe_dir, ".env", True)
+        self.assertIsNone(result)  # tolerated (dropped by ok_seeds), not propagated
+
+    def test_prepare_returns_payload_path_on_success(self):
+        rsg = _load("run_shotgun")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            prep = probe_dir / "prep" / "sub"
+            prep.mkdir(parents=True)
+            (prep / "expand_search_request.json").write_text("{}")
+            with mock.patch.object(rsg, "run_checked", return_value=None):
+                dest = rsg._prepare({"key": "q00", "query": "ok"}, probe_dir, ".env", True)
+            self.assertEqual(dest, probe_dir / "payload.json")
+            self.assertTrue((probe_dir / "payload.json").exists())
+
+    def test_run_returns_false_on_probe_failure_instead_of_raising(self):
+        rsg = _load("run_shotgun")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            probe_dir.mkdir(parents=True)
+            (probe_dir / "payload.json").write_text(json.dumps({"role_search_filters": {}}))
+            boom = rsg.CommandError(["run"], returncode=1, description="run probe q00")
+            with mock.patch.object(rsg, "run_checked", side_effect=boom):
+                ok = rsg._run({"key": "q00", "query": "flaky"}, probe_dir, "set-123", ".env", 200, 6000)
+        self.assertFalse(ok)  # tolerated (build_union skips the missing ledger), not propagated
+
+    def test_run_returns_true_on_success(self):
+        rsg = _load("run_shotgun")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            probe_dir.mkdir(parents=True)
+            (probe_dir / "payload.json").write_text(json.dumps({"role_search_filters": {}}))
+            with mock.patch.object(rsg, "run_checked", return_value=None):
+                ok = rsg._run({"key": "q00", "query": "ok"}, probe_dir, None, ".env", 200, 6000)
+        self.assertTrue(ok)
+
+
 class TestDecomposeJd(unittest.TestCase):
     def test_parse_seeds_strings_and_objects(self):
         self.assertEqual(dj.parse_seeds({"seeds": ["a", "b"]}),

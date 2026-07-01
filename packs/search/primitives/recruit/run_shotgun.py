@@ -41,33 +41,50 @@ def _load_seeds(path: Path) -> list[dict[str, str]]:
 
 
 def _prepare(seed: dict[str, str], probe_dir: Path, env_file: str, preserve: bool) -> Path | None:
+    """Prepare one probe payload. Returns None (never raises) when this single probe fails so one
+    flaky expansion call cannot abort the whole shotgun: main drops None via ok_seeds and only fails
+    if NO probe survives. Each prepare makes an LLM expansion call, so transient 429/500 is expected."""
     probe_dir.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, str(SNP), "prepare", "--query", seed["query"],
            "--env-file", env_file, "--output-dir", str(probe_dir / "prep")]
     if preserve:
         cmd.append("--preserve-query-semantic")
-    run_checked(cmd, description=f"prepare probe {seed.get('key')}")
-    found = glob.glob(str(probe_dir / "prep" / "**" / "expand_search_request.json"), recursive=True)
-    if not found:
-        raise CommandError(cmd, missing=[probe_dir / "prep" / "**" / "expand_search_request.json"], description=f"prepare probe {seed.get('key')}")
-    dest = probe_dir / "payload.json"
-    shutil.copy(found[0], dest)
-    require_paths([dest], cmd=cmd, description=f"prepare probe {seed.get('key')}")
-    return dest
+    try:
+        run_checked(cmd, description=f"prepare probe {seed.get('key')}")
+        found = glob.glob(str(probe_dir / "prep" / "**" / "expand_search_request.json"), recursive=True)
+        if not found:
+            raise CommandError(cmd, missing=[probe_dir / "prep" / "**" / "expand_search_request.json"], description=f"prepare probe {seed.get('key')}")
+        dest = probe_dir / "payload.json"
+        shutil.copy(found[0], dest)
+        require_paths([dest], cmd=cmd, description=f"prepare probe {seed.get('key')}")
+        return dest
+    except CommandError as exc:
+        print(json.dumps({"primitive": "run_shotgun", "probe": seed.get("key"), "stage": "prepare",
+                          "status": "skipped", "error": str(exc)}), file=sys.stderr)
+        return None
 
 
-def _run(seed: dict[str, str], probe_dir: Path, set_id: str | None, env_file: str, limit: int, top_k: int) -> None:
+def _run(seed: dict[str, str], probe_dir: Path, set_id: str | None, env_file: str, limit: int, top_k: int) -> bool:
+    """Run one probe. Returns False (never raises) when this single probe fails so one flaky
+    retrieval cannot abort the shotgun: build_union skips probes without a ledger and main fails
+    only if the union ends up empty."""
     payload = probe_dir / "payload.json"
-    if set_id:  # ensure scoping even if the payload lacks it
-        p = json.loads(payload.read_text())
-        f = p.get("role_search_filters") if isinstance(p.get("role_search_filters"), dict) else p
-        f["set_id"] = set_id
-        payload.write_text(json.dumps(p, indent=2))
     ledger = probe_dir / "ledger.json"
-    run_checked([sys.executable, str(SNP), "run", "--query", seed["key"],
-                 "--payload-json", str(payload), "--ledger", str(ledger),
-                 "--env-file", env_file, "--search-only", "--limit", str(limit), "--top-k", str(top_k)],
-                expected_paths=[ledger], description=f"run probe {seed.get('key')}")
+    try:
+        if set_id:  # ensure scoping even if the payload lacks it
+            p = json.loads(payload.read_text())
+            f = p.get("role_search_filters") if isinstance(p.get("role_search_filters"), dict) else p
+            f["set_id"] = set_id
+            payload.write_text(json.dumps(p, indent=2))
+        run_checked([sys.executable, str(SNP), "run", "--query", seed["key"],
+                     "--payload-json", str(payload), "--ledger", str(ledger),
+                     "--env-file", env_file, "--search-only", "--limit", str(limit), "--top-k", str(top_k)],
+                    expected_paths=[ledger], description=f"run probe {seed.get('key')}")
+        return True
+    except (CommandError, OSError, json.JSONDecodeError) as exc:
+        print(json.dumps({"primitive": "run_shotgun", "probe": seed.get("key"), "stage": "run",
+                          "status": "skipped", "error": str(exc)}), file=sys.stderr)
+        return False
 
 
 def build_union(run_dir: Path, seeds: list[dict[str, str]], keep: int) -> list[dict[str, Any]]:
@@ -130,15 +147,18 @@ def main() -> None:
             payloads = list(ex.map(lambda s: _prepare(s, run_dir / "probes" / s["key"], args.env_file, preserve), seeds))
         ok_seeds = [s for s, p in zip(seeds, payloads) if p is not None]
 
-        if not ok_seeds:
-            raise CommandError(["run_shotgun"], description="prepare probes", missing=[run_dir / "probes"])
+        if not ok_seeds:  # every probe's prepare failed — nothing to search
+            raise CommandError(["run_shotgun"], description="prepare probes (all probes failed)", missing=[run_dir / "probes"])
 
-        if not args.no_diversify and ok_seeds:
+        if not args.no_diversify:
             files = [str(run_dir / "probes" / s["key"] / "payload.json") for s in ok_seeds]
             run_checked([sys.executable, str(DIVERSIFY), "--payloads", *files], description="diversify probe payloads")
 
         with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
-            list(ex.map(lambda s: _run(s, run_dir / "probes" / s["key"], args.set_id, args.env_file, args.limit, args.top_k), ok_seeds))
+            ran = list(ex.map(lambda s: _run(s, run_dir / "probes" / s["key"], args.set_id, args.env_file, args.limit, args.top_k), ok_seeds))
+        run_ok = sum(1 for r in ran if r)
+        if not run_ok:  # every surviving probe's retrieval failed
+            raise CommandError(["run_shotgun"], description="run probes (all probes failed)", missing=[run_dir / "probes"])
     except CommandError as exc:
         print(json.dumps({"primitive": "run_shotgun", "status": "failed", "error": str(exc), "details": exc.to_dict()}, indent=2))
         raise SystemExit(1) from exc
@@ -150,7 +170,7 @@ def main() -> None:
     out = run_dir / "union.jsonl"
     out.write_text("\n".join(json.dumps(r) for r in union) + "\n", encoding="utf-8")
     print(json.dumps({"primitive": "run_shotgun", "status": "completed", "seeds": len(seeds),
-                      "probes_ok": len(ok_seeds), "union": len(union), "out": str(out)}, indent=2))
+                      "probes_prepared": len(ok_seeds), "probes_run_ok": run_ok, "union": len(union), "out": str(out)}, indent=2))
 
 
 if __name__ == "__main__":
