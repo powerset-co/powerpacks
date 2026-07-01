@@ -44,6 +44,11 @@ CODEX_JUDGE = P / "codex_judge.py"
 GPT_JUDGE = ROOT / "packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py"
 CONSENSUS = P / "judge_consensus.py"
 
+# A fetched JD below this many chars is almost certainly a JS-rendered page that yielded no real
+# text; decomposing it produces a garbage plan. Mirrors fetch_jd._THIN_CHARS (fetch_jd flags "thin"
+# but exits 0, so the loop guards it explicitly before spending on sourcing).
+_MIN_JD_CHARS = 400
+
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
@@ -133,6 +138,12 @@ def main() -> None:
         run_dir.mkdir(parents=True, exist_ok=True)
         jd_txt = run_dir / "jd.txt"
         run([sys.executable, FETCH_JD, "--url", args.jd_url, "--out", jd_txt], expected_paths=[jd_txt], description="fetch_jd URL->JD")
+        jd_text = jd_txt.read_text(encoding="utf-8").strip()
+        if len(jd_text) < _MIN_JD_CHARS:
+            print(json.dumps({"primitive": "recruit_loop", "status": "failed",
+                              "error": "fetched JD is too thin (likely a JS-rendered page); paste the JD text and rerun with --jd-file",
+                              "jd_url": args.jd_url, "jd_chars": len(jd_text)}, indent=2))
+            raise SystemExit(1)
         args.jd_file = str(jd_txt)
 
     judges_dir = run_dir / "judges"

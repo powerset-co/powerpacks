@@ -955,14 +955,31 @@ class TestFetchJd(unittest.TestCase):
             argv = sys.argv
             sys.argv = ["loop", "--jd-url", "https://example.test/job", "--run-dir", str(run_dir), "--created-at", "t"]
             try:
-                # stub the fetch_jd subprocess: write jd.txt like the real primitive would
+                # stub the fetch_jd subprocess: write a realistic (non-thin) jd.txt like the real primitive would
                 def fake_run(cmd, **kw):
-                    (run_dir / "jd.txt").write_text("Senior Backend Engineer\nBuild APIs.\n")
+                    (run_dir / "jd.txt").write_text(
+                        "Senior Backend Engineer\n\n" + ("Build and operate high-throughput APIs. " * 20))
                 with mock.patch.object(rl, "run", side_effect=fake_run):
                     rl.main()  # returns at awaiting_plan_approval (no SystemExit)
             finally:
                 sys.argv = argv
             self.assertTrue((run_dir / "jd.txt").exists())  # URL was fetched to jd.txt before the loop
+
+    def test_recruit_loop_rejects_thin_fetched_jd(self):
+        with tempfile.TemporaryDirectory() as d:
+            run_dir = Path(d) / "run"
+            argv = sys.argv
+            sys.argv = ["loop", "--jd-url", "https://example.test/js-job", "--run-dir", str(run_dir), "--created-at", "t"]
+            try:
+                # a JS-rendered page fetches to near-empty text: the loop must stop, not build a garbage plan
+                def fake_run(cmd, **kw):
+                    (run_dir / "jd.txt").write_text("Apply now\n")
+                with mock.patch.object(rl, "run", side_effect=fake_run):
+                    with self.assertRaises(SystemExit) as ctx:
+                        rl.main()
+                self.assertEqual(ctx.exception.code, 1)  # thin JD -> hard fail before sourcing
+            finally:
+                sys.argv = argv
 
 
 if __name__ == "__main__":
