@@ -21,10 +21,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+try:  # direct script execution
+    from subprocess_utils import CommandError, run_checked
+except ImportError:  # module execution: python -m packs.search.primitives.recruit.robust_source
+    from .subprocess_utils import CommandError, run_checked
 
 ROOT = Path(__file__).resolve().parents[4]
 DECOMPOSE = ROOT / "packs/search/primitives/recruit/decompose_jd.py"
@@ -89,40 +93,51 @@ def main() -> None:
     union: dict[str, dict[str, Any]] = {}
     history: list[dict[str, Any]] = []
 
-    for r in range(args.max_rounds):
-        rdir = run_dir / f"round{r}"
-        rdir.mkdir(parents=True, exist_ok=True)
-        emphasis = EMPHASES[r % len(EMPHASES)]
-        # Fresh decompose for this round (rotated emphasis appended to the JD).
-        jd_text = Path(args.jd_file).read_text(encoding="utf-8")
-        round_jd = rdir / "jd.txt"
-        round_jd.write_text(jd_text + (f"\n\nSOURCING EMPHASIS FOR THIS PASS: {emphasis}" if emphasis else ""), encoding="utf-8")
-        dcmd = [sys.executable, str(DECOMPOSE), "--jd-file", str(round_jd), "--n", str(args.n), "--out", str(rdir / "seeds.json")]
-        if args.decompose_model:
-            dcmd += ["--model", args.decompose_model]
-        subprocess.run(dcmd, capture_output=True)
-        if not (rdir / "seeds.json").exists():
-            print(json.dumps({"round": r, "status": "decompose_failed"}))
-            continue
-        scmd = [sys.executable, str(SHOTGUN), "--seeds", str(rdir / "seeds.json"), "--run-dir", str(rdir),
-                "--env-file", args.env_file, "--limit", str(args.keep)]
-        if args.set_id:
-            scmd += ["--set-id", args.set_id]
-        subprocess.run(scmd, capture_output=True)
+    try:
+        for r in range(args.max_rounds):
+            rdir = run_dir / f"round{r}"
+            rdir.mkdir(parents=True, exist_ok=True)
+            emphasis = EMPHASES[r % len(EMPHASES)]
+            # Fresh decompose for this round (rotated emphasis appended to the JD).
+            jd_text = Path(args.jd_file).read_text(encoding="utf-8")
+            round_jd = rdir / "jd.txt"
+            round_jd.write_text(jd_text + (f"\n\nSOURCING EMPHASIS FOR THIS PASS: {emphasis}" if emphasis else ""), encoding="utf-8")
+            seeds_path = rdir / "seeds.json"
+            dcmd = [sys.executable, str(DECOMPOSE), "--jd-file", str(round_jd), "--n", str(args.n), "--out", str(seeds_path)]
+            if args.decompose_model:
+                dcmd += ["--model", args.decompose_model]
+            run_checked(dcmd, expected_paths=[seeds_path], description=f"decompose round {r}")
 
-        net_new = _merge(union, rdir / "union.jsonl", f"r{r}")
-        history.append({"round": r, "net_new": net_new, "union_total": len(union), "emphasis": emphasis or "(default)"})
-        print(json.dumps({"round": r, "net_new": net_new, "union_total": len(union)}))
-        if r > 0 and net_new < args.saturation_min_new:
-            break  # coverage saturated
+            round_union = rdir / "union.jsonl"
+            scmd = [sys.executable, str(SHOTGUN), "--seeds", str(seeds_path), "--run-dir", str(rdir),
+                    "--env-file", args.env_file, "--limit", str(args.keep)]
+            if args.set_id:
+                scmd += ["--set-id", args.set_id]
+            run_checked(scmd, expected_paths=[round_union], description=f"shotgun round {r}")
+
+            net_new = _merge(union, round_union, f"r{r}")
+            history.append({"round": r, "net_new": net_new, "union_total": len(union), "emphasis": emphasis or "(default)"})
+            print(json.dumps({"round": r, "net_new": net_new, "union_total": len(union)}))
+            if r > 0 and net_new < args.saturation_min_new:
+                break  # coverage saturated
+    except CommandError as exc:
+        print(json.dumps({
+            "primitive": "robust_source",
+            "status": "failed",
+            "error": str(exc),
+            "details": exc.to_dict(),
+            "history": history,
+        }, indent=2))
+        raise SystemExit(1) from exc
 
     out = run_dir / "union.jsonl"
     with out.open("w", encoding="utf-8") as fh:
         for rec in sorted(union.values(), key=lambda x: (-len(x.get("found_by", [])), x.get("name") or "")):
             fh.write(json.dumps(rec) + "\n")
     (run_dir / "rounds.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    saturated = history[-1]["net_new"] < args.saturation_min_new if len(history) > 1 else False
     print(json.dumps({"primitive": "robust_source", "status": "completed", "rounds": len(history),
-                      "union": len(union), "out": str(out), "saturated": history[-1]["net_new"] < args.saturation_min_new if len(history) > 1 else False}, indent=2))
+                      "union": len(union), "out": str(out), "saturated": saturated}, indent=2))
 
 
 if __name__ == "__main__":

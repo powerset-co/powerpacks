@@ -20,11 +20,15 @@ import glob
 import json
 import os
 import shutil
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+
+try:  # direct script execution
+    from subprocess_utils import CommandError, require_paths, run_checked
+except ImportError:  # module execution: python -m packs.search.primitives.recruit.run_shotgun
+    from .subprocess_utils import CommandError, require_paths, run_checked
 
 ROOT = Path(__file__).resolve().parents[4]
 SNP = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
@@ -42,12 +46,13 @@ def _prepare(seed: dict[str, str], probe_dir: Path, env_file: str, preserve: boo
            "--env-file", env_file, "--output-dir", str(probe_dir / "prep")]
     if preserve:
         cmd.append("--preserve-query-semantic")
-    subprocess.run(cmd, capture_output=True)
+    run_checked(cmd, description=f"prepare probe {seed.get('key')}")
     found = glob.glob(str(probe_dir / "prep" / "**" / "expand_search_request.json"), recursive=True)
     if not found:
-        return None
+        raise CommandError(cmd, missing=[probe_dir / "prep" / "**" / "expand_search_request.json"], description=f"prepare probe {seed.get('key')}")
     dest = probe_dir / "payload.json"
     shutil.copy(found[0], dest)
+    require_paths([dest], cmd=cmd, description=f"prepare probe {seed.get('key')}")
     return dest
 
 
@@ -58,10 +63,11 @@ def _run(seed: dict[str, str], probe_dir: Path, set_id: str | None, env_file: st
         f = p.get("role_search_filters") if isinstance(p.get("role_search_filters"), dict) else p
         f["set_id"] = set_id
         payload.write_text(json.dumps(p, indent=2))
-    subprocess.run([sys.executable, str(SNP), "run", "--query", seed["key"],
-                    "--payload-json", str(payload), "--ledger", str(probe_dir / "ledger.json"),
-                    "--env-file", env_file, "--search-only", "--limit", str(limit), "--top-k", str(top_k)],
-                   capture_output=True)
+    ledger = probe_dir / "ledger.json"
+    run_checked([sys.executable, str(SNP), "run", "--query", seed["key"],
+                 "--payload-json", str(payload), "--ledger", str(ledger),
+                 "--env-file", env_file, "--search-only", "--limit", str(limit), "--top-k", str(top_k)],
+                expected_paths=[ledger], description=f"run probe {seed.get('key')}")
 
 
 def build_union(run_dir: Path, seeds: list[dict[str, str]], keep: int) -> list[dict[str, Any]]:
@@ -119,18 +125,28 @@ def main() -> None:
     preserve = not args.no_preserve_semantic
     keep = args.keep or args.limit
 
-    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
-        payloads = list(ex.map(lambda s: _prepare(s, run_dir / "probes" / s["key"], args.env_file, preserve), seeds))
-    ok_seeds = [s for s, p in zip(seeds, payloads) if p is not None]
+    try:
+        with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+            payloads = list(ex.map(lambda s: _prepare(s, run_dir / "probes" / s["key"], args.env_file, preserve), seeds))
+        ok_seeds = [s for s, p in zip(seeds, payloads) if p is not None]
 
-    if not args.no_diversify and ok_seeds:
-        files = [str(run_dir / "probes" / s["key"] / "payload.json") for s in ok_seeds]
-        subprocess.run([sys.executable, str(DIVERSIFY), "--payloads", *files], capture_output=True)
+        if not ok_seeds:
+            raise CommandError(["run_shotgun"], description="prepare probes", missing=[run_dir / "probes"])
 
-    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
-        list(ex.map(lambda s: _run(s, run_dir / "probes" / s["key"], args.set_id, args.env_file, args.limit, args.top_k), ok_seeds))
+        if not args.no_diversify and ok_seeds:
+            files = [str(run_dir / "probes" / s["key"] / "payload.json") for s in ok_seeds]
+            run_checked([sys.executable, str(DIVERSIFY), "--payloads", *files], description="diversify probe payloads")
+
+        with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+            list(ex.map(lambda s: _run(s, run_dir / "probes" / s["key"], args.set_id, args.env_file, args.limit, args.top_k), ok_seeds))
+    except CommandError as exc:
+        print(json.dumps({"primitive": "run_shotgun", "status": "failed", "error": str(exc), "details": exc.to_dict()}, indent=2))
+        raise SystemExit(1) from exc
 
     union = build_union(run_dir, ok_seeds, keep)
+    if not union:
+        print(json.dumps({"primitive": "run_shotgun", "status": "failed", "error": "empty union after successful probe runs"}, indent=2))
+        raise SystemExit(1)
     out = run_dir / "union.jsonl"
     out.write_text("\n".join(json.dumps(r) for r in union) + "\n", encoding="utf-8")
     print(json.dumps({"primitive": "run_shotgun", "status": "completed", "seeds": len(seeds),
