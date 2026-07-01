@@ -35,6 +35,7 @@ except ImportError:  # module execution: python -m packs.search.primitives.recru
 
 ROOT = Path(__file__).resolve().parents[4]
 P = ROOT / "packs/search/primitives/recruit"
+FETCH_JD = P / "fetch_jd.py"
 ROBUST = P / "robust_source.py"
 BUILD = P / "build_eval_inputs.py"
 EXPAND = P / "expand_from_anchor.py"
@@ -101,7 +102,8 @@ def judge(edir: Path, candidates: list[dict[str, Any]], judge_kind: str, effort:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="The $recruit convergence loop (source -> judge -> expand) until converged.")
-    ap.add_argument("--jd-file", required=True)
+    ap.add_argument("--jd-file", default=None, help="Path to JD text. Provide this OR --jd-url.")
+    ap.add_argument("--jd-url", default=None, help="Job-posting URL; fetched to <run-dir>/jd.txt via fetch_jd (search-profile's URL input).")
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--set-id", default=None)
     ap.add_argument("--env-file", default=".env")
@@ -121,6 +123,18 @@ def main() -> None:
     run_dir = Path(args.run_dir)
     if not run_dir.is_absolute():
         run_dir = ROOT / run_dir
+
+    # JD input: exactly one of --jd-file / --jd-url. A URL is fetched to <run-dir>/jd.txt first
+    # (the search-profile URL intake), then treated as an ordinary --jd-file from here on.
+    if bool(args.jd_file) == bool(args.jd_url):
+        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": "provide exactly one of --jd-file or --jd-url"}, indent=2))
+        raise SystemExit(2)
+    if args.jd_url:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        jd_txt = run_dir / "jd.txt"
+        run([sys.executable, FETCH_JD, "--url", args.jd_url, "--out", jd_txt], expected_paths=[jd_txt], description="fetch_jd URL->JD")
+        args.jd_file = str(jd_txt)
+
     judges_dir = run_dir / "judges"
     judges_dir.mkdir(parents=True, exist_ok=True)
     master_judge = judges_dir / "loop.jsonl"      # accumulated verdicts (one growing judge file)

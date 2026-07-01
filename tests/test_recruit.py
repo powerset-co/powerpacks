@@ -37,6 +37,7 @@ tc = _load("triage_candidates")
 cj_judge = _load("codex_judge")
 rs = _load("robust_source")
 rl = _load("recruit_loop")
+fj = _load("fetch_jd")
 
 
 class TestSubprocessUtils(unittest.TestCase):
@@ -824,6 +825,96 @@ class TestRecruitLoopAnchors(unittest.TestCase):
             sys.argv = argv
         hist = json.loads((run_dir / "loop.json").read_text())
         self.assertEqual(hist[-1]["status"], "failed")
+
+
+class TestFetchJd(unittest.TestCase):
+    """URL->JD front-end that lets $recruit accept a job-posting URL (search-profile's input)."""
+
+    def test_extract_drops_chrome_keeps_content_and_title(self):
+        html = (
+            "<html><head><title> Senior Backend Engineer - Acme </title><style>.x{}</style></head>"
+            "<body><nav>Home About</nav><h1>Senior Backend Engineer</h1>"
+            "<p>Build production APIs.</p><ul><li>5+ years Python</li><li>Postgres</li></ul>"
+            "<script>var x=1;</script><footer>copyright 2026</footer></body></html>"
+        )
+        text, title = fj.extract(html)
+        self.assertEqual(title, "Senior Backend Engineer - Acme")
+        self.assertIn("Senior Backend Engineer", text)
+        self.assertIn("5+ years Python", text)
+        self.assertIn("Postgres", text)
+        # script/style/nav/footer chrome is dropped
+        for junk in ("var x=1", "copyright", "Home About"):
+            self.assertNotIn(junk, text)
+
+    def test_extract_separates_block_elements(self):
+        text, _ = fj.extract("<p>one</p><p>two</p><li>three</li>")
+        # block boundaries prevent words running together
+        self.assertNotIn("onetwo", text)
+        self.assertEqual([ln for ln in text.splitlines() if ln], ["one", "two", "three"])
+
+    def test_main_writes_jd_and_source_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "jd.txt"
+            html = "<html><head><title>Role X</title></head><body><p>" + ("do the work " * 100) + "</p></body></html>"
+            argv = sys.argv
+            sys.argv = ["fetch_jd", "--url", "https://example.test/job", "--out", str(out)]
+            try:
+                with mock.patch.object(fj, "fetch", return_value=(html, "https://example.test/job")):
+                    fj.main()  # status ok -> no SystemExit
+            finally:
+                sys.argv = argv
+            self.assertTrue(out.exists())
+            self.assertIn("do the work", out.read_text())
+            src = json.loads((Path(d) / "source.json").read_text())
+            self.assertEqual(src["source_url"], "https://example.test/job")
+            self.assertEqual(src["source_title"], "Role X")
+            self.assertIn("fetched_at", src)
+
+    def test_main_thin_content_still_writes_and_warns(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "jd.txt"
+            argv = sys.argv
+            sys.argv = ["fetch_jd", "--url", "https://example.test/js", "--out", str(out)]
+            try:
+                with mock.patch.object(fj, "fetch", return_value=("<html><body>App</body></html>", "https://example.test/js")):
+                    fj.main()  # thin is not a failure -> no SystemExit
+            finally:
+                sys.argv = argv
+            self.assertTrue(out.exists())  # thin content is still written
+
+    def test_recruit_loop_requires_exactly_one_jd_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            argv = sys.argv
+            # neither jd-file nor jd-url
+            sys.argv = ["loop", "--run-dir", str(Path(d) / "r"), "--created-at", "t"]
+            try:
+                with self.assertRaises(SystemExit) as ctx:
+                    rl.main()
+                self.assertEqual(ctx.exception.code, 2)
+                # both jd-file and jd-url
+                sys.argv = ["loop", "--jd-file", "x.txt", "--jd-url", "http://y", "--run-dir", str(Path(d) / "r2"), "--created-at", "t"]
+                with self.assertRaises(SystemExit) as ctx2:
+                    rl.main()
+                self.assertEqual(ctx2.exception.code, 2)
+            finally:
+                sys.argv = argv
+
+    def test_recruit_loop_jd_url_fetches_before_loop(self):
+        with tempfile.TemporaryDirectory() as d:
+            run_dir = Path(d) / "run"
+            (run_dir / "epoch0").mkdir(parents=True)
+            (run_dir / "epoch0" / "plan.json").write_text('{"traits":[]}')  # forces zero-spend awaiting_plan_approval
+            argv = sys.argv
+            sys.argv = ["loop", "--jd-url", "https://example.test/job", "--run-dir", str(run_dir), "--created-at", "t"]
+            try:
+                # stub the fetch_jd subprocess: write jd.txt like the real primitive would
+                def fake_run(cmd, **kw):
+                    (run_dir / "jd.txt").write_text("Senior Backend Engineer\nBuild APIs.\n")
+                with mock.patch.object(rl, "run", side_effect=fake_run):
+                    rl.main()  # returns at awaiting_plan_approval (no SystemExit)
+            finally:
+                sys.argv = argv
+            self.assertTrue((run_dir / "jd.txt").exists())  # URL was fetched to jd.txt before the loop
 
 
 if __name__ == "__main__":
