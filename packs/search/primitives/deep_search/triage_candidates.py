@@ -21,13 +21,18 @@ import argparse
 import gzip
 import json
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+from openai_client import make_openai_client  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = os.environ.get("RECRUIT_TRIAGE_MODEL", "gpt-4.1-mini")
-DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
 KEEP = {"keep", "maybe"}
 
 SYSTEM = (
@@ -141,9 +146,7 @@ def main() -> None:
         print(json.dumps({"primitive": "triage_candidates", "status": "failed", "error": "OPENAI_API_KEY not set"}))
         raise SystemExit(1)
 
-    import openai  # imported here so --help works without the dep
-
-    client = openai.OpenAI(api_key=key, base_url=DEFAULT_API_BASE)
+    client = make_openai_client(key)
 
     def run_batch(batch: list[dict[str, Any]]) -> dict[str, str]:
         try:

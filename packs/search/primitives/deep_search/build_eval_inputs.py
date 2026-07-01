@@ -25,12 +25,17 @@ import argparse
 import gzip
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
+SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+from openai_client import make_openai_client  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = os.environ.get("RECRUIT_PLAN_MODEL", "gpt-4o")
-DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
 
 PLAN_SYSTEM = (
     "You are a technical recruiter turning a job description into a structured evaluation plan "
@@ -301,9 +306,7 @@ def main() -> None:
             print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "OPENAI_API_KEY not set"}))
             raise SystemExit(1)
 
-        import openai  # imported here so --help works without the dep
-
-        client = openai.OpenAI(api_key=key, base_url=DEFAULT_API_BASE)
+        client = make_openai_client(key)
         jd = Path(args.jd_file).read_text(encoding="utf-8")
         resp = client.chat.completions.create(
             model=args.model,
