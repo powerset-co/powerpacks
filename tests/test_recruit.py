@@ -4,12 +4,18 @@ from __future__ import annotations
 import csv
 import importlib.util
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIM = ROOT / "packs" / "search" / "primitives" / "recruit"
+if str(PRIM) not in sys.path:
+    sys.path.insert(0, str(PRIM))
 
 
 def _load(name: str):
@@ -20,6 +26,7 @@ def _load(name: str):
 
 
 jc = _load("judge_consensus")
+su = _load("subprocess_utils")
 sg = _load("score_ground_truth_gaps")
 dv = _load("diversify_probe_bm25")
 dj = _load("decompose_jd")
@@ -29,6 +36,23 @@ tc = _load("triage_candidates")
 cj_judge = _load("codex_judge")
 rs = _load("robust_source")
 rl = _load("recruit_loop")
+
+
+class TestSubprocessUtils(unittest.TestCase):
+    def test_run_checked_raises_on_nonzero(self):
+        with self.assertRaises(su.CommandError) as ctx:
+            su.run_checked([sys.executable, "-c", "import sys; print('bad', file=sys.stderr); sys.exit(7)"], description="boom")
+        self.assertEqual(ctx.exception.returncode, 7)
+        self.assertIn("bad", ctx.exception.stderr_tail)
+
+    def test_run_checked_raises_on_missing_expected_path(self):
+        missing = Path(tempfile.mkdtemp()) / "missing.txt"
+        with self.assertRaises(su.CommandError) as ctx:
+            su.run_checked([sys.executable, "-c", "pass"], expected_paths=[missing], description="artifact")
+        self.assertEqual(ctx.exception.missing, [missing])
+
+    def test_run_shotgun_imports_sibling_subprocess_utils(self):
+        self.assertTrue(hasattr(_load("run_shotgun"), "run_checked"))
 
 
 class TestDecomposeJd(unittest.TestCase):
@@ -189,6 +213,19 @@ class TestCoreGate(unittest.TestCase):
         ids = [r["person_id"] for r in strong]
         self.assertEqual(ids, ["GEM"])  # WRONG excluded (capable), GATED excluded (too_senior)
 
+    def test_core_gate_passes_when_one_of_multiple_core_traits_met(self):
+        judges = {"j1": [
+            {"person_id": "ONE", "name": "One", "in_band": True, "verdict": "high_potential",
+             "score": 0.7, "seniority_fit": "in_band",
+             "must_have": [
+                 {"trait": "distributed systems", "status": "experienced"},
+                 {"trait": "gpu kernels", "status": "missing"},
+             ]},
+        ]}
+        _, strong = jc.build_consensus(judges, {}, min_inband_votes=1, min_notout_votes=1,
+                                       score_threshold=0.40, core_traits={"distributed systems", "gpu kernels"})
+        self.assertEqual([r["person_id"] for r in strong], ["ONE"])
+
     def test_no_core_traits_falls_back_to_score_gate(self):
         _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1,
                                        score_threshold=0.40, core_traits=set())
@@ -341,6 +378,93 @@ class TestBuildEvalInputs(unittest.TestCase):
         tiers = {t["trait"]: t["tier"] for t in plan["traits"]["must_have"]}
         self.assertEqual(tiers, {"fusion hardware": "core", "leadership": "table_stakes"})
 
+    def test_build_frontier_has_merge_compatible_fields(self):
+        front = bei.build_frontier([{
+            "person_id": "p1", "name": "Ada", "linkedin_url": "https://linkedin.com/in/ada",
+            "current_title": "Staff Engineer", "current_company": "Acme", "location": "SF",
+            "found_by": ["q1", "q2"],
+        }])
+        row = front[0]
+        self.assertEqual(row["candidate_id"], "p1")
+        self.assertEqual(row["current_role"], "Staff Engineer")
+        self.assertEqual(row["source_operator"], "recruit")
+        self.assertEqual(row["source_channel"], "shotgun")
+        self.assertEqual(row["duplicate_signal"]["matched_probe_count"], 2)
+        self.assertEqual(row["duplicate_signal"]["matched_probe_ids"], ["q1", "q2"])
+
+    def test_write_frontier_artifacts_writes_same_full_ids(self):
+        d = Path(tempfile.mkdtemp())
+        frontier = bei.build_frontier([
+            {"person_id": "a", "found_by": ["q0"], "current_title": "Eng"},
+            {"person_id": "b", "found_by": ["q1"], "current_title": "MTS"},
+        ])
+        bei.write_frontier_artifacts(d, frontier)
+        json_doc = json.loads((d / "candidate_frontier.json").read_text())
+        jsonl_rows = [json.loads(l) for l in (d / "candidate_frontier.jsonl").read_text().splitlines()]
+        self.assertEqual(json_doc["candidate_count"], 2)
+        self.assertEqual({r["person_id"] for r in json_doc["candidates"]}, {"a", "b"})
+        self.assertEqual({r["person_id"] for r in jsonl_rows}, {"a", "b"})
+        self.assertIn("duplicate_signal", json_doc["candidates"][0])
+
+    def test_main_reuses_plan_without_created_at_and_writes_json_and_jsonl(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "union.jsonl").write_text(json.dumps({"person_id": "p1", "found_by": ["q0"], "current_title": "Eng"}) + "\n")
+        plan = {"traits": {"must_have": [{"trait": "systems", "tier": "core"}], "nice_to_have": []},
+                "created_at": "original", "target_level": "staff_ic"}
+        plan_path = d / "approved.json"
+        plan_path.write_text(json.dumps(plan))
+        argv = sys.argv
+        sys.argv = ["build", "--run-dir", str(d), "--plan", str(plan_path)]
+        try:
+            bei.main()
+        finally:
+            sys.argv = argv
+        self.assertTrue((d / "candidate_frontier.json").exists())
+        self.assertTrue((d / "candidate_frontier.jsonl").exists())
+        self.assertEqual(json.loads((d / "plan.json").read_text())["created_at"], "original")
+
+    def test_main_requires_created_at_for_new_plan_before_openai(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "union.jsonl").write_text(json.dumps({"person_id": "p1", "found_by": ["q0"]}) + "\n")
+        jd = d / "jd.txt"
+        jd.write_text("Build distributed systems")
+        argv = sys.argv
+        sys.argv = ["build", "--run-dir", str(d), "--jd-file", str(jd)]
+        try:
+            with self.assertRaises(SystemExit):
+                bei.main()
+        finally:
+            sys.argv = argv
+
+    def test_emitted_frontier_works_with_capture_and_export_defaults(self):
+        d = Path(tempfile.mkdtemp())
+        frontier = bei.build_frontier([{
+            "person_id": "p1", "name": "Ada", "linkedin_url": "https://linkedin.com/in/ada",
+            "current_title": "Staff Engineer", "current_company": "Acme", "location": "SF",
+            "found_by": ["q0", "q1"],
+        }])
+        bei.write_frontier_artifacts(d, frontier)
+        (d / "plan.json").write_text(json.dumps({"traits": {"must_have": [{"trait": "systems"}], "nice_to_have": []}}))
+        raw = {
+            "candidate_id": "p1", "person_id": "p1", "rank": 1, "jd_score": 0.8,
+            "verdict": "top_tier", "seniority_fit": "in_band", "rationale": "strong fit",
+            "must_have": [{"trait": "systems", "status": "doing_now", "evidence": "built it"}],
+            "nice_to_have": [], "duplicate_signal": frontier[0]["duplicate_signal"], "caveats": [],
+        }
+        (d / "candidate_evaluations.raw.jsonl").write_text(json.dumps(raw) + "\n")
+        capture = ROOT / "packs/search/primitives/capture_jd_evaluations/capture_jd_evaluations.py"
+        export = ROOT / "packs/search/primitives/export_candidate_shortlist/export_candidate_shortlist.py"
+        cp = subprocess.run([sys.executable, str(capture), "--run-dir", str(d), "--evaluator-mode", "harness_single_agent", "--force"],
+                            text=True, capture_output=True, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr + cp.stdout)
+        cp = subprocess.run([sys.executable, str(export), "--run-dir", str(d)], text=True, capture_output=True, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr + cp.stdout)
+        with (d / "shortlist.csv").open() as fh:
+            rows = list(csv.DictReader(fh))
+        self.assertEqual(rows[0]["Current Role"], "Staff Engineer")
+        self.assertEqual(rows[0]["Source"], "recruit")
+        self.assertEqual(rows[0]["Channel"], "shotgun")
+
 
 class TestTriageCandidates(unittest.TestCase):
     def test_compact_card_merges_front_and_profile(self):
@@ -414,6 +538,52 @@ class TestCodexJudgeExtract(unittest.TestCase):
         self.assertEqual(cj_judge.extract_json(""), {})
         self.assertEqual(cj_judge.extract_json("no json here"), {})
 
+    def test_judge_one_passes_prompt_via_stdin_not_argv(self):
+        long_prompt = "PRIVATE PROFILE " * 100
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen["input"] = kwargs.get("input")
+            out_path = Path(cmd[cmd.index("-o") + 1])
+            out_path.write_text('{"seniority_fit":"ideal"}')
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(cj_judge.subprocess, "run", side_effect=fake_run):
+            parsed, err = cj_judge.judge_one(long_prompt, None, "low", 5)
+        self.assertEqual(parsed, {"seniority_fit": "ideal"})
+        self.assertIsNone(err)
+        self.assertEqual(seen["input"], long_prompt)
+        self.assertFalse(any(long_prompt in str(part) for part in seen["cmd"]))
+
+    def test_judge_one_surfaces_nonzero_exit(self):
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=42, stdout="", stderr="permission denied")
+
+        with mock.patch.object(cj_judge.subprocess, "run", side_effect=fake_run):
+            parsed, err = cj_judge.judge_one("prompt", None, "low", 5)
+        self.assertEqual(parsed, {})
+        self.assertIn("codex_exit_42", err)
+        self.assertIn("permission denied", err)
+
+    def test_main_fails_when_all_codex_subprocesses_error(self):
+        d = Path(tempfile.mkdtemp())
+        candidate = {"person_id": "p1", "candidate_id": "p1"}
+        argv = sys.argv
+        sys.argv = ["codex_judge", "--run-dir", str(d)]
+        try:
+            with mock.patch.object(cj_judge.EV, "read_json", return_value={"traits": {"must_have": []}}), \
+                 mock.patch.object(cj_judge.EV, "load_frontier", return_value=[candidate]), \
+                 mock.patch.object(cj_judge.EV, "collect_profiles", return_value={"p1": {"person_id": "p1"}}), \
+                 mock.patch.object(cj_judge.EV, "build_user_prompt", return_value="profile prompt"), \
+                 mock.patch.object(cj_judge, "judge_one", return_value=({}, "codex_exit_1: auth")):
+                with self.assertRaises(SystemExit) as ctx:
+                    cj_judge.main()
+            self.assertEqual(ctx.exception.code, 1)
+        finally:
+            sys.argv = argv
+        self.assertTrue((d / "candidate_evaluations.raw.jsonl").exists())
+
 
 class TestConsensusScoreThreshold(unittest.TestCase):
     def _judges(self):
@@ -469,6 +639,21 @@ class TestRobustSourceMerge(unittest.TestCase):
     def test_emphases_are_distinct(self):
         self.assertEqual(len(set(rs.EMPHASES)), len(rs.EMPHASES))
 
+    def test_main_fails_on_child_command_error(self):
+        d = Path(tempfile.mkdtemp())
+        jd = d / "jd.txt"
+        jd.write_text("Build distributed systems")
+        err = rs.CommandError(["fake"], returncode=9, stderr="boom", description="decompose round 0")
+        argv = sys.argv
+        sys.argv = ["robust", "--jd-file", str(jd), "--run-dir", str(d / "run"), "--max-rounds", "1"]
+        try:
+            with mock.patch.object(rs, "run_checked", side_effect=err):
+                with self.assertRaises(SystemExit) as ctx:
+                    rs.main()
+            self.assertEqual(ctx.exception.code, 1)
+        finally:
+            sys.argv = argv
+
 
 class TestRecruitLoopAnchors(unittest.TestCase):
     def test_diverse_anchors_dedups_by_company_and_ranks_by_score(self):
@@ -489,6 +674,140 @@ class TestRecruitLoopAnchors(unittest.TestCase):
     def test_diverse_anchors_respects_k(self):
         strong = [{"person_id": str(i), "current_company": f"co{i}", "mean_score": 1.0 - i / 10} for i in range(10)]
         self.assertEqual(len(rl.diverse_anchors(strong, {}, k=4)), 4)
+
+    def test_stage_judge_input_does_not_mutate_canonical_frontier(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "plan.json").write_text(json.dumps({"traits": {"must_have": []}}))
+        (d / "probe_summaries.json").write_text("[]")
+        full = [
+            {"person_id": "a", "candidate_id": "a"},
+            {"person_id": "b", "candidate_id": "b"},
+        ]
+        original = "".join(json.dumps(r, sort_keys=True) + "\n" for r in full)
+        (d / "candidate_frontier.jsonl").write_text(original)
+        (d / "candidate_frontier.json").write_text(json.dumps({"candidates": full}))
+
+        jdir = rl.stage_judge_input(d, [full[0]])
+        self.assertEqual((d / "candidate_frontier.jsonl").read_text(), original)
+        staged = [json.loads(l) for l in (jdir / "candidate_frontier.jsonl").read_text().splitlines()]
+        self.assertEqual([r["person_id"] for r in staged], ["a"])
+        self.assertTrue((jdir / "plan.json").exists())
+        self.assertTrue((jdir / "probe_summaries.json").exists())
+
+    def test_judge_consensus_help_says_at_least_one_core(self):
+        cp = subprocess.run([sys.executable, str(PRIM / "judge_consensus.py"), "--help"], text=True, capture_output=True, check=False)
+        self.assertEqual(cp.returncode, 0)
+        self.assertIn("at least one core", cp.stdout)
+        self.assertNotIn("every core must-have", cp.stdout)
+
+    def test_main_stops_at_gate_without_approval_and_does_not_judge(self):
+        d = Path(tempfile.mkdtemp())
+        jd = d / "jd.txt"
+        jd.write_text("Build systems")
+        run_dir = d / "run"
+
+        def fake_run(cmd, *, expected_paths=None, description=None):
+            if description == "epoch0 robust_source":
+                (run_dir / "epoch0" / "union.jsonl").write_text(json.dumps({"person_id": "p1", "found_by": ["q0"]}) + "\n")
+            elif description == "epoch0 build_eval_inputs":
+                e0 = run_dir / "epoch0"
+                (e0 / "plan.json").write_text(json.dumps({"traits": {"must_have": []}, "created_at": "t"}))
+                rows = [{"person_id": "p1", "candidate_id": "p1"}]
+                (e0 / "candidate_frontier.jsonl").write_text(json.dumps(rows[0]) + "\n")
+                (e0 / "candidate_frontier.json").write_text(json.dumps({"candidates": rows}))
+                (e0 / "probe_summaries.json").write_text("[]")
+            else:
+                self.fail(f"unexpected run before gate: {description}")
+
+        argv = sys.argv
+        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1"]
+        try:
+            with mock.patch.object(rl, "run", side_effect=fake_run), mock.patch.object(rl, "judge", side_effect=AssertionError("judge called")):
+                rl.main()
+        finally:
+            sys.argv = argv
+        hist = json.loads((run_dir / "loop.json").read_text())
+        self.assertEqual(hist[0]["status"], "awaiting_plan_approval")
+        self.assertTrue((run_dir / "epoch0" / "plan.json").exists())
+
+    def test_plan_approved_resume_preserves_existing_plan_and_skips_build(self):
+        d = Path(tempfile.mkdtemp())
+        jd = d / "jd.txt"
+        jd.write_text("Build systems")
+        run_dir = d / "run"
+        e0 = run_dir / "epoch0"
+        e0.mkdir(parents=True)
+        plan_bytes = b'{"traits":{"must_have":[]},"created_at":"human-edited"}\n'
+        (e0 / "plan.json").write_bytes(plan_bytes)
+        (e0 / "union.jsonl").write_text(json.dumps({"person_id": "p1", "found_by": ["q0"]}) + "\n")
+        rows = [{"person_id": "p1", "candidate_id": "p1"}]
+        (e0 / "candidate_frontier.jsonl").write_text(json.dumps(rows[0]) + "\n")
+        (e0 / "candidate_frontier.json").write_text(json.dumps({"candidates": rows}))
+        (e0 / "probe_summaries.json").write_text("[]")
+        calls = []
+
+        def fake_run(cmd, *, expected_paths=None, description=None):
+            calls.append(description)
+            self.assertNotEqual(description, "epoch0 build_eval_inputs")
+            if description == "epoch0 consensus":
+                out = run_dir / "shortlist"
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "consensus.json").write_text("[]")
+                (out / "ground_truth_ranked.json").write_text("[]")
+
+        def fake_judge(edir, candidates, judge_kind, effort, concurrency):
+            (edir / "candidate_evaluations.raw.jsonl").write_text(json.dumps({"candidate_id": "p1", "jd_score": 0.1}) + "\n")
+
+        argv = sys.argv
+        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1", "--plan-approved"]
+        try:
+            with mock.patch.object(rl, "run", side_effect=fake_run), mock.patch.object(rl, "judge", side_effect=fake_judge):
+                rl.main()
+        finally:
+            sys.argv = argv
+        self.assertEqual((e0 / "plan.json").read_bytes(), plan_bytes)
+        self.assertEqual(calls, ["epoch0 consensus"])
+
+    def test_unapproved_rerun_with_existing_plan_does_not_clobber_or_build(self):
+        d = Path(tempfile.mkdtemp())
+        jd = d / "jd.txt"
+        jd.write_text("Build systems")
+        run_dir = d / "run"
+        e0 = run_dir / "epoch0"
+        e0.mkdir(parents=True)
+        plan_bytes = b'{"traits":{"must_have":[{"trait":"edited"}]},"created_at":"human"}\n'
+        (e0 / "plan.json").write_bytes(plan_bytes)
+
+        argv = sys.argv
+        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1"]
+        try:
+            with mock.patch.object(rl, "run", side_effect=AssertionError("should not run child commands")), \
+                 mock.patch.object(rl, "judge", side_effect=AssertionError("judge called")):
+                rl.main()
+        finally:
+            sys.argv = argv
+        self.assertEqual((e0 / "plan.json").read_bytes(), plan_bytes)
+        hist = json.loads((run_dir / "loop.json").read_text())
+        self.assertTrue(hist[0]["existing_plan"])
+        self.assertEqual(hist[0]["status"], "awaiting_plan_approval")
+
+    def test_main_writes_failure_status_on_command_error(self):
+        d = Path(tempfile.mkdtemp())
+        jd = d / "jd.txt"
+        jd.write_text("Build systems")
+        run_dir = d / "run"
+        err = rl.CommandError(["fake"], returncode=2, stderr="bad", description="epoch0 robust_source")
+        argv = sys.argv
+        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1"]
+        try:
+            with mock.patch.object(rl, "run", side_effect=err):
+                with self.assertRaises(SystemExit) as ctx:
+                    rl.main()
+            self.assertEqual(ctx.exception.code, 1)
+        finally:
+            sys.argv = argv
+        hist = json.loads((run_dir / "loop.json").read_text())
+        self.assertEqual(hist[-1]["status"], "failed")
 
 
 if __name__ == "__main__":

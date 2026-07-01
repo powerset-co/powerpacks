@@ -47,13 +47,24 @@ is where the human sharpens a niche role ("delivered large hardware" → "delive
 *fusion/plasma* hardware") or just confirms the domain for a common one. Let the user edit
 `plan.json`, then proceed. **Do NOT ask again** — judging + expansion run autonomously to the end.
 
-Then run the autonomous engine (reuses the approved plan, judges free by default, **core-gates** the
-shortlist, expands from your own judged-strong each epoch):
+The first `recruit_loop` invocation sources and builds the plan, then stops at GATE 1 with
+`status: awaiting_plan_approval`:
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/recruit/recruit_loop.py \
   --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
   --max-epochs 3 --score-threshold 0.40 --judge codex --reasoning-effort high
+```
+
+Review/edit `<run>/epoch0/plan.json`, then resume the autonomous engine. Resume does **not**
+rebuild or overwrite the approved plan; it judges free by default, **core-gates** the shortlist,
+and expands from your own judged-strong each epoch:
+
+```bash
+uv run --env-file .env --project . python packs/search/primitives/recruit/recruit_loop.py \
+  --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
+  --max-epochs 3 --score-threshold 0.40 --judge codex --reasoning-effort high \
+  --plan-approved
 ```
 
 Writes `<run>/shortlist/ground_truth_ranked.json` + `<run>/loop.json` (per-epoch convergence). To
@@ -106,7 +117,7 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    loosening the judge.**
 
 2. **Bridge the union into the judge's contract** 🆕 (1 cheap LLM call). The judge reads a
-   profile-search run dir (`plan.json` + `candidate_frontier.jsonl` + `probe_summaries.json` →
+   profile-search run dir (`plan.json` + `candidate_frontier.json/jsonl` + `probe_summaries.json` →
    the already-on-disk `profiles.jsonl.gz`). `build_eval_inputs` extracts must/nice traits **and a
    `target_level`** from the JD (so the judge's seniority gate is asymmetric around the role: in-band
    = target and one level below = *step up*; too_senior = one level above or higher = *won't step
@@ -117,7 +128,7 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/recruit/build_eval_inputs.py \
      --run-dir <run> --jd-file <run>/jd.txt --set-name "<set>" --created-at <iso>
-     # loop epochs reuse the plan (no re-extract): --plan <run>/epoch0/plan.json
+     # loop epochs reuse the approved plan (no re-extract): --plan <run>/epoch0/plan.json
    ```
 
    *No triage step.* Triage (`triage_candidates`, still available) was a cost hack to shrink the
@@ -164,7 +175,7 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    cut — but per the anti-local-maxima rule it stays NON-default until validated on a 2nd JD.
 
 5. **Expand-from-anchor — the core Phase-2 loop (NOT optional)** 🆕. This is the hill-climb engine,
-   and `recruit_loop` runs it automatically every epoch after the first judge: take your *own*
+   and `recruit_loop --plan-approved` runs it automatically every epoch after the first judge: take your *own*
    judged-strong picks (a DIVERSE set — `recruit_loop` dedups anchors by company so you don't
    echo-chamber one archetype), build "more like this" seeds from their profiles, re-source, and
    judge **only the new** candidates; loop until an epoch adds no new strong (converged) or
@@ -246,21 +257,26 @@ rounds), precision via the **judge** + **score-threshold** — not by loosening 
 ## Primitives
 
 New (`packs/search/primitives/recruit/`):
-- `recruit_loop.py` 🆕 — **the one-command orchestrator**: source → judge → expand-from-anchor →
-  re-judge, converge-capped. Incremental judging (only new candidates each epoch) keeps the free
-  judge tractable. Self-limiting give-up when there are no strong anchors.
+- `recruit_loop.py` 🆕 — **the gate/resume orchestrator**: first run sources + builds the plan and
+  stops at `awaiting_plan_approval`; rerun with `--plan-approved` or `--approved-plan` to judge →
+  expand-from-anchor → re-judge, converge-capped. Incremental judging is staged through a separate
+  new-candidate frontier so canonical frontier artifacts stay intact. Self-limiting give-up when
+  there are no strong anchors. Child primitive failures and missing required artifacts fail loudly
+  with structured JSON instead of reporting false convergence.
 - `robust_source.py` 🆕 — **non-flaky sourcing**: unions independent `decompose_jd`+`run_shotgun`
   rounds (rotated emphasis) until coverage saturates. Turns flaky 0.87–0.97 single-round recall
   into a tight min-0.968 / mean-0.978.
 - `decompose_jd.py` 🆕 — JD → N diverse work-described seeds (1 LLM call).
 - `run_shotgun.py` 🆕 — runs the seed set through prepare→diversify→run, emits the union.
 - `diversify_probe_bm25.py` 🆕 — drop shared/homogeneous BM25 lead terms across the probe set.
-- `build_eval_inputs.py` 🆕 — union → `plan.json` + `candidate_frontier.jsonl` +
-  `probe_summaries.json` (bridges the shotgun run into the canonical judge's contract; 1 LLM call).
+- `build_eval_inputs.py` 🆕 — union → `plan.json` + canonical `candidate_frontier.json` +
+  streaming `candidate_frontier.jsonl` + `probe_summaries.json` (bridges the shotgun run into the
+  canonical judge/export contract; 1 LLM call, or `--plan` reuse without a new `--created-at`).
 - `triage_candidates.py` 🆕 — cheap-model conservative tier-1 filter over the frontier.
 - `codex_judge.py` 🆕 — **free, portable** judge: spawns `codex exec` subprocesses, reusing the
   canonical rubric + deterministic scorer from `evaluate_profile_candidates` (same bar, $0 engine
-  via ChatGPT-subscription auth). Drop-in for the paid gpt-5.4 judge; same raw output shape.
+  via ChatGPT-subscription auth). Prompt/profile content is passed via stdin rather than argv.
+  Drop-in for the paid gpt-5.4 judge; same raw output shape.
 - `expand_from_anchor.py` 🆕 — judged-strong anchors → "more like this" seeds (no LLM).
 - `judge_consensus.py` 🆕 — combine judge passes (native, `evaluate_profile_candidates` raw, or
   `codex_judge` raw) → consensus shortlist. **`--plan` core-gates** membership on the plan's `core`

@@ -132,18 +132,47 @@ def build_frontier(union: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not pid:
             continue
         found = r.get("found_by") or []
+        matched_probe_ids = list(found)
+        source_rows = [
+            {"probe_id": k, "probe": k, "score": float(len(found))}
+            for k in (found or ["_"])
+        ]
         out.append({
             "person_id": pid,
             "candidate_id": pid,
+            "public_identifier": None,
             "name": r.get("name"),
             "linkedin_url": r.get("linkedin_url"),
             "current_title": r.get("current_title"),
+            "current_role": r.get("current_title"),
             "current_company": r.get("current_company"),
             "location": r.get("location"),
-            "matched_probe_ids": list(found),
-            "source_rows": [{"probe": k, "score": float(len(found))} for k in (found or ["_"])],
+            "source_operator": "recruit",
+            "source_channel": "shotgun",
+            "matched_probe_ids": matched_probe_ids,
+            "source_rows": source_rows,
+            "duplicate_signal": {
+                "matched_probe_count": len(matched_probe_ids),
+                "matched_probe_ids": matched_probe_ids,
+                "interpretation": "matched multiple recruit probes" if len(matched_probe_ids) > 1 else "single recruit probe match",
+            },
         })
     return out
+
+
+def write_frontier_artifacts(run_dir: Path, frontier: list[dict[str, Any]]) -> None:
+    """Write the streaming and canonical candidate frontier artifacts from the same full list."""
+    with (run_dir / "candidate_frontier.jsonl").open("w", encoding="utf-8") as fh:
+        for c in frontier:
+            fh.write(json.dumps(c, sort_keys=True) + "\n")
+    (run_dir / "candidate_frontier.json").write_text(
+        json.dumps({
+            "candidates": frontier,
+            "candidate_count": len(frontier),
+            "source": "recruit/build_eval_inputs",
+        }, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def probe_artifact_dirs(run_dir: Path) -> list[str]:
@@ -200,7 +229,7 @@ def main() -> None:
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""))
     ap.add_argument("--set-name", default="recruit set")
     ap.add_argument("--source-url", default=None)
-    ap.add_argument("--created-at", required=True, help="ISO timestamp (passed in; primitives stay deterministic)")
+    ap.add_argument("--created-at", default=None, help="ISO timestamp (required unless --plan has created_at)")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--api-key", default=None)
     args = ap.parse_args()
@@ -219,7 +248,15 @@ def main() -> None:
 
     if args.plan:  # reuse an existing plan (loop epochs) — no LLM call
         plan = json.loads(Path(args.plan).read_text())
+        if not plan.get("created_at"):
+            if not args.created_at:
+                print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "approved plan missing created_at; pass --created-at to fill it"}))
+                raise SystemExit(1)
+            plan["created_at"] = args.created_at
     else:
+        if not args.created_at:
+            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "need --created-at unless --plan includes created_at"}))
+            raise SystemExit(1)
         if not args.jd_file:
             print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "need --jd-file or --plan"}))
             raise SystemExit(1)
@@ -243,9 +280,7 @@ def main() -> None:
         )
 
     (run_dir / "plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
-    with (run_dir / "candidate_frontier.jsonl").open("w", encoding="utf-8") as fh:
-        for c in frontier:
-            fh.write(json.dumps(c) + "\n")
+    write_frontier_artifacts(run_dir, frontier)
     (run_dir / "probe_summaries.json").write_text(
         json.dumps([{"artifact_dir": d} for d in artifact_dirs], indent=2), encoding="utf-8")
 

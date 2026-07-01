@@ -186,7 +186,7 @@ def main() -> None:
                          "Overrides the not-out vote gate; applies on top of --plan core-gate as a floor.")
     ap.add_argument("--plan", default=None,
                     help="plan.json. If its must_haves carry tier=='core', the shortlist is CORE-GATED: "
-                         "membership = majority-in-band AND every core must-have met (>= experienced). "
+                         "membership = majority-in-band AND at least one core must-have met (>= experienced). "
                          "Generic table_stakes traits only rank. No core tags => falls back to score gate.")
     args = ap.parse_args()
 

@@ -32,6 +32,15 @@ ROOT = Path(__file__).resolve().parents[4]
 EVAL_SRC = ROOT / "packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py"
 
 
+def _tail(text: str | bytes | None, limit: int = 2000) -> str:
+    if text is None:
+        return ""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    text = text.strip()
+    return text[-limit:] if len(text) > limit else text
+
+
 def _load_eval_module():
     spec = importlib.util.spec_from_file_location("evaluate_profile_candidates", EVAL_SRC)
     mod = importlib.util.module_from_spec(spec)
@@ -75,9 +84,11 @@ def judge_one(prompt: str, model: str | None, effort: str, timeout: int) -> tupl
                "-o", out.name, "-c", f'model_reasoning_effort="{effort}"']
         if model:
             cmd += ["-m", model]
-        cmd.append(prompt)
         try:
-            subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False)
+            cp = subprocess.run(cmd, input=prompt, text=True, capture_output=True, timeout=timeout, check=False)
+            if cp.returncode != 0:
+                detail = _tail(cp.stderr) or _tail(cp.stdout)
+                return ({}, f"codex_exit_{cp.returncode}" + (f": {detail}" if detail else ""))
             out.seek(0)
             parsed = extract_json(out.read())
             return (parsed, None if parsed else "empty_or_unparsable")
@@ -131,6 +142,11 @@ def main() -> None:
 
     counts = {v: sum(1 for r in results if r.get("verdict") == v) for v in ("top_tier", "high_potential", "out")}
     errors = sum(1 for r in results if r.get("error"))
+    if selected and errors == len(selected):
+        print(json.dumps({"primitive": "codex_judge", "status": "failed", "judged": len(results),
+                          "errors": errors, "error": "all codex subprocess judgments failed",
+                          "out": str(out_path)}, indent=2))
+        raise SystemExit(1)
     print(json.dumps({"primitive": "codex_judge", "status": "completed", "judged": len(results),
                       "verdicts": counts, "errors": errors, "model": args.model or "codex-default",
                       "reasoning_effort": args.reasoning_effort, "out": str(out_path)}, indent=2))

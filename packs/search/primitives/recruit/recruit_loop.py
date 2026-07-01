@@ -23,10 +23,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
+
+try:  # direct script execution
+    from subprocess_utils import CommandError, run_checked
+except ImportError:  # module execution: python -m packs.search.primitives.recruit.recruit_loop
+    from .subprocess_utils import CommandError, run_checked
 
 ROOT = Path(__file__).resolve().parents[4]
 P = ROOT / "packs/search/primitives/recruit"
@@ -61,18 +66,37 @@ def diverse_anchors(strong: list[dict[str, Any]], union: dict[str, dict[str, Any
     return out
 
 
-def run(cmd: list[str]) -> None:
-    subprocess.run([str(c) for c in cmd], capture_output=True)
+def run(cmd: list[object], *, expected_paths: list[Path] | None = None, description: str | None = None) -> None:
+    run_checked(cmd, expected_paths=expected_paths, description=description)
 
 
-def judge(edir: Path, judge_kind: str, effort: str, concurrency: int) -> None:
+def stage_judge_input(edir: Path, candidates: list[dict[str, Any]]) -> Path:
+    """Create a new-only judge run dir while leaving canonical frontier files untouched."""
+    jdir = edir / "judge_input"
+    jdir.mkdir(parents=True, exist_ok=True)
+    for name in ("plan.json", "probe_summaries.json"):
+        src = edir / name
+        if src.exists():
+            shutil.copyfile(src, jdir / name)
+    with (jdir / "candidate_frontier.jsonl").open("w", encoding="utf-8") as fh:
+        for c in candidates:
+            fh.write(json.dumps(c, sort_keys=True) + "\n")
+    return jdir
+
+
+def judge(edir: Path, candidates: list[dict[str, Any]], judge_kind: str, effort: str, concurrency: int) -> None:
+    jdir = stage_judge_input(edir, candidates)
+    raw = jdir / "candidate_evaluations.raw.jsonl"
     if judge_kind == "gpt":
         # gpt-5.4 rerank on the FLEX tier (~50% cheaper batch tier); flex is slower + can 429, so
         # give it a generous timeout (the judge retries transient errors internally).
-        run([sys.executable, GPT_JUDGE, "--run-dir", edir, "--concurrency", concurrency,
+        run([sys.executable, GPT_JUDGE, "--run-dir", jdir, "--concurrency", concurrency,
              "--reasoning-effort", effort, "--service-tier", "flex", "--timeout", 600])
     else:
-        run([sys.executable, CODEX_JUDGE, "--run-dir", edir, "--concurrency", concurrency, "--reasoning-effort", effort])
+        run([sys.executable, CODEX_JUDGE, "--run-dir", jdir, "--concurrency", concurrency, "--reasoning-effort", effort])
+    if not raw.exists():
+        raise CommandError(["judge", judge_kind], missing=[raw], description=f"{judge_kind} judge")
+    shutil.copyfile(raw, edir / "candidate_evaluations.raw.jsonl")
 
 
 def main() -> None:
@@ -90,6 +114,8 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=16, help="seeds per robust_source round (epoch 0)")
     ap.add_argument("--keep", type=int, default=200)
     ap.add_argument("--anchors", type=int, default=6, help="diverse anchors expanded per Phase-2 epoch")
+    ap.add_argument("--approved-plan", default=None, help="Reviewed plan.json to use without calling the plan LLM")
+    ap.add_argument("--plan-approved", action="store_true", help="Resume with the existing <run-dir>/epoch0/plan.json after human review")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -103,63 +129,128 @@ def main() -> None:
     master_union: dict[str, dict[str, Any]] = {}
     judged_pids: set[str] = set()
     strong_pids: set[str] = set()
-    plan_path = run_dir / "epoch0" / "plan.json"
+    epoch0_dir = run_dir / "epoch0"
+    plan_path = Path(args.approved_plan) if args.approved_plan else epoch0_dir / "plan.json"
+    if args.approved_plan and not plan_path.exists():
+        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": "approved plan not found", "plan": str(plan_path)}, indent=2))
+        raise SystemExit(1)
+    if args.plan_approved and args.approved_plan:
+        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": "use only one of --plan-approved or --approved-plan"}, indent=2))
+        raise SystemExit(1)
+    if args.plan_approved and not plan_path.exists():
+        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": "--plan-approved requires existing epoch0/plan.json", "plan": str(plan_path)}, indent=2))
+        raise SystemExit(1)
+    # Retry/resume safety: if a previous approved run already judged some candidates, do not
+    # rejudge them blindly on process restart. First gate resume has no such files, so this is a no-op.
+    master_union = {r["person_id"]: r for r in _jsonl(master_union_path) if r.get("person_id")}
+    for v in _jsonl(master_judge):
+        pid = v.get("person_id") or v.get("candidate_id")
+        if pid:
+            judged_pids.add(pid)
+    existing_shortlist = run_dir / "shortlist" / "ground_truth_ranked.json"
+    if existing_shortlist.exists():
+        try:
+            strong_pids = {r["person_id"] for r in json.loads(existing_shortlist.read_text()) if r.get("person_id")}
+        except (json.JSONDecodeError, OSError):
+            strong_pids = set()
     history: list[dict[str, Any]] = []
 
-    for epoch in range(args.max_epochs):
-        edir = run_dir / f"epoch{epoch}"
-        edir.mkdir(parents=True, exist_ok=True)
+    try:
+        for epoch in range(args.max_epochs):
+            edir = run_dir / f"epoch{epoch}"
+            edir.mkdir(parents=True, exist_ok=True)
 
-        if epoch == 0:
-            run([sys.executable, ROBUST, "--jd-file", args.jd_file, "--run-dir", edir, "--env-file", args.env_file,
-                 "--n", args.n, "--keep", args.keep, "--max-rounds", 2] + (["--set-id", args.set_id] if args.set_id else []))
-            run([sys.executable, BUILD, "--run-dir", edir, "--jd-file", args.jd_file, "--created-at", args.created_at]
-                + (["--set-id", args.set_id] if args.set_id else []))
-        else:
-            sr = run_dir / "shortlist" / "ground_truth_ranked.json"
-            strong = json.loads(sr.read_text()) if sr.exists() else []
-            anchors = diverse_anchors(strong, master_union, args.anchors)
-            if not anchors:
-                history.append({"epoch": epoch, "stopped": "no_anchors_giveup"})
+            if epoch == 0:
+                required = [edir / "union.jsonl", edir / "plan.json", edir / "candidate_frontier.jsonl", edir / "candidate_frontier.json", edir / "probe_summaries.json"]
+                if not args.plan_approved and not args.approved_plan and (edir / "plan.json").exists():
+                    history.append({"epoch": 0, "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"), "existing_plan": True})
+                    (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
+                    print(json.dumps({"primitive": "recruit_loop", "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"),
+                                      "existing_plan": True, "next": "review/edit the plan, then rerun with --plan-approved"}, indent=2))
+                    return
+                if args.plan_approved:
+                    missing = [str(p) for p in required if not p.exists()]
+                    if missing:
+                        raise CommandError(["recruit_loop", "--plan-approved"], missing=[Path(p) for p in missing], description="resume preflight")
+                else:
+                    if not (edir / "union.jsonl").exists():
+                        run([sys.executable, ROBUST, "--jd-file", args.jd_file, "--run-dir", edir, "--env-file", args.env_file,
+                             "--n", args.n, "--keep", args.keep, "--max-rounds", 2] + (["--set-id", args.set_id] if args.set_id else []),
+                            expected_paths=[edir / "union.jsonl"], description="epoch0 robust_source")
+                    build_cmd: list[object] = [sys.executable, BUILD, "--run-dir", edir, "--created-at", args.created_at]
+                    if args.approved_plan:
+                        build_cmd += ["--plan", plan_path]
+                    else:
+                        build_cmd += ["--jd-file", args.jd_file]
+                    if args.set_id:
+                        build_cmd += ["--set-id", args.set_id]
+                    run(build_cmd, expected_paths=[edir / "plan.json", edir / "candidate_frontier.jsonl", edir / "candidate_frontier.json", edir / "probe_summaries.json"],
+                        description="epoch0 build_eval_inputs")
+                    if not args.approved_plan:
+                        history.append({"epoch": 0, "status": "awaiting_plan_approval", "plan": str(edir / "plan.json")})
+                        (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
+                        print(json.dumps({"primitive": "recruit_loop", "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"),
+                                          "next": "review/edit the plan, then rerun with --plan-approved"}, indent=2))
+                        return
+                    plan_path = Path(args.approved_plan)
+            else:
+                sr = run_dir / "shortlist" / "ground_truth_ranked.json"
+                strong = json.loads(sr.read_text()) if sr.exists() else []
+                anchors = diverse_anchors(strong, master_union, args.anchors)
+                if not anchors:
+                    history.append({"epoch": epoch, "stopped": "no_anchors_giveup"})
+                    break
+                (edir / "anchors.json").write_text(json.dumps(anchors, indent=2))
+                run([sys.executable, EXPAND, "--anchors", edir / "anchors.json", "--top-k", len(anchors), "--out", edir / "anchor_seeds.json"],
+                    expected_paths=[edir / "anchor_seeds.json"], description=f"epoch{epoch} expand_from_anchor")
+                run([sys.executable, SHOTGUN, "--seeds", edir / "anchor_seeds.json", "--run-dir", edir, "--env-file", args.env_file,
+                     "--limit", args.keep] + (["--set-id", args.set_id] if args.set_id else []),
+                    expected_paths=[edir / "union.jsonl"], description=f"epoch{epoch} run_shotgun")
+                build_cmd = [sys.executable, BUILD, "--run-dir", edir, "--plan", plan_path, "--created-at", args.created_at]
+                if args.set_id:
+                    build_cmd += ["--set-id", args.set_id]
+                run(build_cmd, expected_paths=[edir / "plan.json", edir / "candidate_frontier.jsonl", edir / "candidate_frontier.json", edir / "probe_summaries.json"],
+                    description=f"epoch{epoch} build_eval_inputs")
+
+            # accumulate union; judge ONLY new pids without mutating canonical frontier artifacts
+            for r in _jsonl(edir / "union.jsonl"):
+                master_union.setdefault(r["person_id"], r)
+            frontier = _jsonl(edir / "candidate_frontier.jsonl")
+            new = [c for c in frontier if (c.get("person_id") or c.get("candidate_id")) not in judged_pids]
+            (edir / "candidate_frontier.to_judge.jsonl").write_text("".join(json.dumps(c, sort_keys=True) + "\n" for c in new))
+            new_judged = 0
+            if new:
+                judge(edir, new, args.judge, args.reasoning_effort, args.concurrency)
+                verds = _jsonl(edir / "candidate_evaluations.raw.jsonl")
+                with master_judge.open("a") as fh:
+                    for v in verds:
+                        fh.write(json.dumps(v) + "\n")
+                judged_pids |= {c.get("person_id") or c.get("candidate_id") for c in new}
+                new_judged = len(verds)
+            master_union_path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in master_union.values()))
+
+            # consensus over everything judged so far
+            run([sys.executable, CONSENSUS, "--judges-dir", judges_dir, "--union", master_union_path,
+                 "--out-dir", run_dir / "shortlist", "--min-inband-votes", 1, "--score-threshold", args.score_threshold,
+                 "--plan", plan_path],
+                expected_paths=[run_dir / "shortlist" / "consensus.json", run_dir / "shortlist" / "ground_truth_ranked.json"],
+                description=f"epoch{epoch} consensus")  # core-gate the shortlist on the plan's core domain must-haves
+            strong_now = json.loads((run_dir / "shortlist" / "ground_truth_ranked.json").read_text())
+            now_pids = {r["person_id"] for r in strong_now}
+            new_strong = now_pids - strong_pids
+            history.append({"epoch": epoch, "phase": "jd" if epoch == 0 else "anchor",
+                            "new_judged": new_judged, "judged_total": len(judged_pids),
+                            "strong_total": len(now_pids), "new_strong": len(new_strong)})
+            print(json.dumps(history[-1]))
+            strong_pids = now_pids
+            if epoch > 0 and len(new_strong) == 0:
+                history[-1]["stopped"] = "converged"
                 break
-            (edir / "anchors.json").write_text(json.dumps(anchors, indent=2))
-            run([sys.executable, EXPAND, "--anchors", edir / "anchors.json", "--top-k", len(anchors), "--out", edir / "anchor_seeds.json"])
-            run([sys.executable, SHOTGUN, "--seeds", edir / "anchor_seeds.json", "--run-dir", edir, "--env-file", args.env_file,
-                 "--limit", args.keep] + (["--set-id", args.set_id] if args.set_id else []))
-            run([sys.executable, BUILD, "--run-dir", edir, "--plan", plan_path] + (["--set-id", args.set_id] if args.set_id else []))
-
-        # accumulate union; judge ONLY new pids
-        for r in _jsonl(edir / "union.jsonl"):
-            master_union.setdefault(r["person_id"], r)
-        frontier = _jsonl(edir / "candidate_frontier.jsonl")
-        new = [c for c in frontier if (c.get("person_id") or c.get("candidate_id")) not in judged_pids]
-        (edir / "candidate_frontier.jsonl").write_text("".join(json.dumps(c) + "\n" for c in new))
-        new_judged = 0
-        if new:
-            judge(edir, args.judge, args.reasoning_effort, args.concurrency)
-            verds = _jsonl(edir / "candidate_evaluations.raw.jsonl")
-            with master_judge.open("a") as fh:
-                for v in verds:
-                    fh.write(json.dumps(v) + "\n")
-            judged_pids |= {c.get("person_id") or c.get("candidate_id") for c in new}
-            new_judged = len(verds)
-        master_union_path.write_text("".join(json.dumps(r) + "\n" for r in master_union.values()))
-
-        # consensus over everything judged so far
-        run([sys.executable, CONSENSUS, "--judges-dir", judges_dir, "--union", master_union_path,
-             "--out-dir", run_dir / "shortlist", "--min-inband-votes", 1, "--score-threshold", args.score_threshold,
-             "--plan", plan_path])  # core-gate the shortlist on the plan's core domain must-haves
-        strong_now = json.loads((run_dir / "shortlist" / "ground_truth_ranked.json").read_text())
-        now_pids = {r["person_id"] for r in strong_now}
-        new_strong = now_pids - strong_pids
-        history.append({"epoch": epoch, "phase": "jd" if epoch == 0 else "anchor",
-                        "new_judged": new_judged, "judged_total": len(judged_pids),
-                        "strong_total": len(now_pids), "new_strong": len(new_strong)})
-        print(json.dumps(history[-1]))
-        strong_pids = now_pids
-        if epoch > 0 and len(new_strong) == 0:
-            history[-1]["stopped"] = "converged"
-            break
+    except CommandError as exc:
+        history.append({"status": "failed", "error": str(exc), "details": exc.to_dict()})
+        (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
+        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": str(exc), "details": exc.to_dict(), "history": history}, indent=2))
+        raise SystemExit(1) from exc
 
     (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
     print(json.dumps({"primitive": "recruit_loop", "status": "completed", "epochs": len(history),
