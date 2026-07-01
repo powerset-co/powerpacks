@@ -287,6 +287,18 @@ Routes:
   `packs/search/skills/search-sql/SKILL.md`
 - `$search-contacts`, my contacts, set contacts, contact field filtering →
   `packs/contacts/skills/search-contacts/SKILL.md`
+
+> **Search family (consolidated 2026-06-30).** `$search` is the single people-search door: its
+> Step-0 router (`packs/search/primitives/route_query/route_query.py`, baseline strict 0.9375 on
+> `packs/search/evals/routing/cases.json`) dispatches to `$recruit` (deep JD / job-posting URL /
+> role brief / shortlist / "more people like <url>"), `$search-company`, `$search-sql`, and
+> `$search-contacts`, and keeps ordinary people searches on the fast local DuckDB / TurboPuffer
+> path. `$search-company` / `$search-sql` / `$search-contacts` remain **distinct surfaces (kept,
+> not folded)** — reached through `$search`'s router or directly. **Deprecated aliases, kept for a
+> release:** `$search-network` → `$search`; `$search-profile` → `$recruit` (both still resolve; new
+> work uses the new names). The retrieval primitive is still `search_network_pipeline.py` and the
+> `search-network-jd-*` schemas/tasks keep their names — only the skill routes were renamed.
+
 - `$build-local-search-index`, local indexing, build local search index,
   prepare `.powerpacks/search-index` artifacts →
   `packs/indexing/skills/build-local-search-index/SKILL.md`

@@ -3,6 +3,15 @@ name: search
 description: "The single people-search door for Powerpacks. Run a people search from a natural-language query and route automatically: simple people searches go to fast local DuckDB / TurboPuffer retrieval; deep JD / job-posting-URL / role-brief / shortlist requests go to the $recruit engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
 ---
 
+<!--
+Changelog:
+- 2026-06-30: Renamed from `search-network` to `search` (search consolidation Stage 3). Added the
+  Step-0 router (route_query.py) that dispatches deep JD/URL/brief/shortlist to $recruit and
+  company/sql/contacts to their surfaces; ordinary people searches stay on the fast local/TurboPuffer
+  path. $search-network is a deprecated alias. The retrieval primitive (search_network_pipeline.py)
+  and search-network-jd-* schemas/tasks keep their names.
+-->
+
 # Search
 
 The single entry point for people search. `$search` routes every query to the right surface, then
