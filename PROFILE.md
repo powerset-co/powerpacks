@@ -23,10 +23,10 @@ Never paste secret env values into chat.
 
 ## Powerpacks Skill Routing
 
-- `$search-network`, people search, network search, role/title/location/school
+- `$search`, people search, network search, role/title/location/school
   searches, or company-directory people lookups →
-  `packs/search/skills/search-network/SKILL.md`
-- job posting URLs, pasted job descriptions, or complex role briefs →
-  `packs/search/skills/search-network-jd/SKILL.md`
+  `packs/search/skills/search/SKILL.md`
+- `$recruit`, job posting URLs, pasted job descriptions, or complex role briefs →
+  `packs/search/skills/recruit/SKILL.md`
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`

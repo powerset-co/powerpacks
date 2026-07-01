@@ -34,16 +34,16 @@ brew install uv git
 The adapter install also runs `bin/setup-python`; if `uv` is missing and
 Homebrew is available, setup installs `uv` automatically.
 
-### `search-network` / `search-company`
+### `search` / `search-company`
 
-Use `$search-network <jd-or-brief>` when you want the agent to do the work. For
+Use `$search <jd-or-brief>` when you want the agent to do the work. For
 complex JDs, it plans the recruiter loop internally, shows one search-plan approval, then
 orchestrates the planned searches against Powerset infrastructure. The default
 LLM review budget is 100 unique profiles across initial probes plus fan-out; this
 limits expensive review/rerank volume, not retrieval/count checks or final found
 count.
 
-`$search-network` and `$search-company` hit Powerset infrastructure, so you need
+`$search` and `$search-company` hit Powerset infrastructure, so you need
 a working `.env`. Run `$powerset setup` (below) to populate it, or copy
 `packs/powerset/templates/env.example` to `.env` and fill it in manually.
 
@@ -164,10 +164,10 @@ runtime keys into `.env` (no values printed), and installs/refreshes the
 `powerset-search` MCP. `$powerset login` remains available as a smaller
 credential-refresh/backcompat command.
 
-### `$search-network` — recruiting search
+### `$search` — recruiting search
 
 ```text
-$search-network senior infra engineers at fintech infra startups in NYC, Stanford
+$search senior infra engineers at fintech infra startups in NYC, Stanford
 ```
 
 The skill walks you through decomposition → plan → user approval → retrieval →
@@ -186,7 +186,7 @@ $search-company crypto trading infra companies that raised series B
 ```
 
 Resolves to canonical TurboPuffer company IDs you can hand to
-`search-network` as `company_filter`.
+`search` as `company_filter`.
 
 ### Messages pack — `$import-contacts`
 

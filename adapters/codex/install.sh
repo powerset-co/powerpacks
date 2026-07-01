@@ -7,7 +7,7 @@ SKILLS_DIR="${1:-$CODEX_HOME/skills}"
 BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 MANAGED_SKILLS=(
-  search-network search-network-jd search-profile search-company search-contacts build-local-search-index
+  search search-network search-network-jd search-profile search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
   import-email import-gmail enrich-email-markers discover-contacts import-twitter deep-context logbook
@@ -96,7 +96,7 @@ install_skill() {
 
 install_powerpacks_bundle
 
-install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKILL.md"
+install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
 install_skill search-profile "$REPO_ROOT/packs/search/skills/search-profile/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
@@ -131,5 +131,5 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search-network search-profile search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context logbook discover-contacts import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-profile search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context logbook discover-contacts import-twitter"
 echo "restart Codex to pick up the skill list"

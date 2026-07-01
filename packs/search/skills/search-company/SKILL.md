@@ -37,7 +37,7 @@ company set from the user's current request every time.
    artifact/state path when available.
 6. If the user wants people at those companies, pass `company_ids` and
    `operator_ids` into
-   `search-network`; for large company sets, use `apply_prefilters` so people
+   `search`; for large company sets, use `apply_prefilters` so people
    search batches company IDs instead of sending one giant `company_id In [...]`.
 
 ## Query Guidance

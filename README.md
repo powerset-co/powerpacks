@@ -73,7 +73,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`search-network`](packs/search/skills/search-network/SKILL.md) | `$search-network <query-or-jd>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. For complex JDs, it detects that one query would be too broad, plans a bounded multi-query recruiter loop, shows one search-plan approval with an LLM review budget (default 100 profiles) and `score >= 0.3` cutoff, then executes initial probes, reviews, clusters exemplars, runs bounded fan-out, and exports results. |
+| [`search`](packs/search/skills/search/SKILL.md) | `$search <query-or-jd>` | Role-first people search. Decomposes a NL query / job description / URL, plans, retrieves from TurboPuffer, hydrates from Postgres, optionally reranks, persists CSV/JSONL artifacts. For complex JDs, it detects that one query would be too broad, plans a bounded multi-query recruiter loop, shows one search-plan approval with an LLM review budget (default 100 profiles) and `score >= 0.3` cutoff, then executes initial probes, reviews, clusters exemplars, runs bounded fan-out, and exports results. |
 | [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
 | [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds deterministic local indexing artifacts from `.powerpacks/network-import/merged/people.csv` under `.powerpacks/search-index/<run-id>/` with no remote calls. |
 
@@ -103,7 +103,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
-- give the agent operational entrypoints: `$search-network <query-or-jd>`,
+- give the agent operational entrypoints: `$search <query-or-jd>`,
   `$search-company <query>`, `$powerset setup`, and the messages-pack import
   skill
 - decompose broad recruiting queries into bounded retrieval plans
@@ -140,13 +140,13 @@ powerpacks/
 │   │   ├── lib/            contracts, identity, people/artifact builders
 │   │   └── tasks/          build-local-search-index.task.json
 │   ├── search/             recruiting people / company search
-│   │   ├── skills/         search-network, search-company
+│   │   ├── skills/         search, search-company
 │   │   ├── primitives/     ~21 search primitives + lib/ + contracts CLI +
 │   │   │                   task_state/
 │   │   ├── schemas/        decomposed-query, role-search-filters,
 │   │   │                   task-run.schema.json, etc.
 │   │   ├── contracts/      checked-in Postgres + TurboPuffer schemas
-│   │   ├── tasks/          search-network.task.json
+│   │   ├── tasks/          search.task.json
 │   │   ├── docs/           search-surface, slice-planning, turbopuffer-*,
 │   │   │                   harnesses/, workflows/
 │   │   └── evals/          recall, company-search, founder parity
@@ -200,7 +200,7 @@ codex mcp get powerset-search
 # 4. Restart the agent host so it reloads skills and MCP config.
 
 # 5. Inside the agent, run what you need:
-$search-network senior infra eng at fintech
+$search senior infra eng at fintech
 $search-company stripe-like fintech infra companies
 $powerset setup                   # login + .env pull + powerset-search MCP
 $import-contacts                  # guided iMessage + WhatsApp import harness
@@ -212,7 +212,7 @@ $import-whatsapp                  # isolated WhatsApp sync test via wacli
 | You want to use… | Install on the host running Codex / Claude Code / Pi |
 | --- | --- |
 | Any skill | `uv`, git. Powerpacks uses uv-managed Python 3.12 from `.python-version`. |
-| `search-network` / `search-company` | `.env` populated with Powerpacks runtime secrets; see [Secrets / env vars](#secrets--env-vars). |
+| `search` / `search-company` | `.env` populated with Powerpacks runtime secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `powerset setup` | Powerset/Auth0 account. Runtime keys are pulled from the Powerset API when provisioned. |
 | `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, plus optional review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `sales-nav-search` | `$powerset setup` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
@@ -305,7 +305,7 @@ adapter installs also work:
 ```
 
 The NanoClaw adapter copies the core Powerpacks directory into the target,
-installs `search-network`, wires the
+installs `search`, wires the
 threaded CLI channel, and keeps NanoClaw-specific TUI/runtime code under
 `powerpacks/adapters/nanoclaw`.
 
@@ -372,7 +372,7 @@ Then, **inside the agent host**, sanity-check each skill family:
 | Skill | Test prompt |
 | --- | --- |
 | `powerset setup` | Type `$powerset setup` — the agent should run the doctor, handle missing login, pull runtime keys, and finish with `mcp_install`. |
-| `search-network` | `$search-network senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
+| `search` | `$search senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
 | `import-contacts` | `$import-contacts` — should show a task checklist, ask once for local metadata import consent, then run until permissions/QR/cost approval are needed. |
 | `import-whatsapp` | `$import-whatsapp` — should install/find wacli, show QR if needed, sync once, and export WhatsApp metadata. |
@@ -429,7 +429,7 @@ The lint command runs `ruff` and `flake8` through `uv` using the repo lockfile.
 
 ## Testing
 
-Use `scripts/test-search-network check` for local readiness. For parallel query
+Use `scripts/test-search check` for local readiness. For parallel query
 expansion and recall harness details, see `docs/testing.md`.
 
 ## Current Scope

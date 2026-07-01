@@ -11,7 +11,7 @@ PI_HOME="${PI_HOME:-$HOME/.pi/agent}"
 SKILLS_DIR="${1:-$PI_HOME/skills}"
 
 MANAGED_SKILLS=(
-  search-network search-network-jd search-profile search-company search-contacts build-local-search-index
+  search search-network search-network-jd search-profile search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
   import-email import-gmail discover-contacts import-twitter
@@ -75,7 +75,7 @@ Pi loads skills from \`~/.pi/agent/skills\` at startup and exposes them as
 EOF
 }
 
-install_skill search-network "$REPO_ROOT/packs/search/skills/search-network/SKILL.md"
+install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
 install_skill search-profile "$REPO_ROOT/packs/search/skills/search-profile/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"

@@ -4,8 +4,8 @@ Use the Powerpacks docs as a hard contract when calling search tools.
 
 - Decompose free text first.
 - Treat that decomposition as the `expand` phase.
-- Use `$search-network` as the top-level operational retrieval entrypoint. If a
-  `$search-network` request contains a complex JD, plan a recruiter loop
+- Use `$search` as the top-level operational retrieval entrypoint. If a
+  `$search` request contains a complex JD, plan a recruiter loop
   internally, show one search-plan approval, then orchestrate bounded per-query
   probes, review, clustering, fan-out, and export. Default the LLM review budget
   to 100 unique reviewed profiles unless the user states another number.
@@ -20,7 +20,7 @@ Use the Powerpacks docs as a hard contract when calling search tools.
 - If a filter shape is unclear, consult:
   - `powerpacks/docs/turbopuffer-contract.md`
   - `powerpacks/docs/task-harness.md`
-  - `powerpacks/tasks/search-network.task.json`
+  - `powerpacks/tasks/search.task.json`
   - `powerpacks/schemas/search-network-task.schema.json`
   - `powerpacks/packs/search/schemas/task-run.schema.json`
   - `powerpacks/schemas/role-search-filters.schema.json`

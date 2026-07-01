@@ -9,7 +9,7 @@ Own validation for powerpack workers. Run focused tests/evals and, when requeste
 tests/
 evals/
 scripts/test-powerpacks
-scripts/test-search-network
+scripts/test-search
 scripts/lint-powerpacks
 tasks/
 ```
@@ -34,7 +34,7 @@ tasks/
 ```bash
 bash scripts/lint-powerpacks
 bash scripts/test-powerpacks
-bash scripts/test-search-network
+bash scripts/test-search
 uv run pytest tests -k '<selector>'
 uv run python evals/run_company_search_harness.py
 pi --models gpt-5.5,claude-opus-4-6 --session .pi/team/runtime/pi-sessions/<name>.jsonl

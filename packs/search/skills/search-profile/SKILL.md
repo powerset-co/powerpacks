@@ -384,7 +384,7 @@ Before writing `plan.json`, check:
 
 Design **2-3 candidate profiles**. Each profile is a distinct archetype of
 person who could do this job, expressed as one natural-language query string
-that will be passed to `$search-network`.
+that will be passed to `$search`.
 
 #### Profile design rules
 
@@ -416,7 +416,7 @@ title anchor, and only when their company-context framing clearly differs.
 stuff the entire JD into one query.
 
 **Profile queries are the exact natural-language input passed to
-`$search-network`.** They must read like an English people-search request, not
+`$search`.** They must read like an English people-search request, not
 JSON, not trait IDs, and not schema labels.
 
 **Do not list more than 3 industry/sector terms in a single profile query.**
@@ -439,7 +439,7 @@ strings) it is designed to surface candidates for. This enables coverage gap
 analysis in Task 3.
 
 **Budget every profile.** Each profile carries a `limit` (default 200; use
-100 only for quick/cheap previews). The limit is passed to `$search-network`
+100 only for quick/cheap previews). The limit is passed to `$search`
 and caps the candidates kept after retrieval, which caps the entire
 downstream pipeline cost. A too-small limit lets a noisy archetype crowd out
 better candidates before the aggregate evaluator ever sees them.
@@ -481,7 +481,7 @@ Important schema semantics:
   Task 2 pins it on every profile search. Empty list = no retrieval filter.
 - `initial_probes[]` holds the candidate profiles (legacy field name).
 - `initial_probes[].query` is the exact English query passed to
-  `$search-network`; `targets_traits` must reference actual English trait
+  `$search`; `targets_traits` must reference actual English trait
   names.
 
 Show the plan compactly — traits, then each candidate profile with one line of
@@ -490,7 +490,7 @@ archetype description and its query — and ask exactly:
 `Execute this search plan or modify it?`
 
 **This checkpoint is a hard stop.** It applies even when the user's input
-reads as an execution command (a pasted URL, a `$search-network ... in local`
+reads as an execution command (a pasted URL, a `$search ... in local`
 invocation, "run this JD"). General harness autonomy rules like "don't stop at
 a proposal — implement" do NOT apply here: searches spend money and the plan
 preview is the user's only chance to correct traits and seniority before
@@ -531,12 +531,12 @@ not the original one.
 ### Execution
 
 Each candidate profile is one self-contained people search. Delegate each to
-the `$search-network` skill by passing:
+the `$search` skill by passing:
 
 1. the profile's `query` string as the search query
-2. the profile's `limit` (default 200) — `$search-network` appends
+2. the profile's `limit` (default 200) — `$search` appends
    `--limit <N>` to the pipeline command
-3. **filter-only mode** — `$search-network` appends `--filter-only` so the run
+3. **filter-only mode** — `$search` appends `--filter-only` so the run
    keeps the cheap conservative LLM filter (reject clear junk, pass anything
    uncertain) but skips the expensive per-search LLM rerank. Final ranking is
    owned by the evaluation primitive in Task 5, which sees the full JD context.
@@ -578,14 +578,14 @@ matches.
 
 Do not call `search_network_pipeline.py` directly from this skill except to
 append the `--limit`, `--filter-only`, `--seniority-bands`, and
-`--current-role` flags to the `execute_command` that `$search-network`
+`--current-role` flags to the `execute_command` that `$search`
 produced.
 
 The delegated input must be only the profile's English `query` value. Do not
 send a JSON object or internal labels.
 
 For each profile search:
-1. Run `$search-network` with the profile's `query`, limit, filter-only mode,
+1. Run `$search` with the profile's `query`, limit, filter-only mode,
    `--current-role`, and the plan's pinned seniority bands (when non-empty)
 2. Skip the user approval gate — the plan approval covers all profile searches
 3. Capture the `state` path from the pipeline's JSON output — it is the only
@@ -679,7 +679,7 @@ one line so the choice is visible.
 
 ### Run that one lane deep
 
-Run the winning lane's `query` through `$search-network` with a large limit
+Run the winning lane's `query` through `$search` with a large limit
 and the full reranker:
 
 ```
@@ -687,7 +687,7 @@ and the full reranker:
 ```
 
 - **`--limit 1000`** (up to 2000) — go deep; this is the point of the step.
-- **WITHOUT `--filter-only`** — the full `$search-network` pipeline
+- **WITHOUT `--filter-only`** — the full `$search` pipeline
   (retrieval → hydrate → filter → **LLM rerank**) scores the deep pool for
   you, instead of dumping 1000+ raw candidates into the JD evaluator.
 - Keep the plan's pinned `--seniority-bands` and `--current-role`. The deeper
@@ -701,7 +701,7 @@ evaluation. Only one lane goes deep — never run 1000-2000 on every lane.
 
 Why this shape: a deep `--filter-only` run would push 1000-2000 candidates
 straight into the JD evaluator (expensive, and the cheap filter barely
-narrows). Letting `$search-network` rerank the deep pool first is the
+narrows). Letting `$search` rerank the deep pool first is the
 cost-controlled way to go deep on the lane that already proved productive.
 
 ### Coverage / extra expansion (only if still thin)
@@ -879,7 +879,7 @@ just that one.
   noisy lane cannot crowd out better candidates, without paying rerank on
   every lane. First JD evaluation runs on this merged pool.
 - **Deep phase:** exactly **one** lane (highest precision) runs at
-  `--limit 1000` WITHOUT `--filter-only`, so `$search-network`'s own rerank
+  `--limit 1000` WITHOUT `--filter-only`, so `$search`'s own rerank
   scores the deep pool before it reaches the JD evaluator. One deep lane, not
   all of them.
 - The JD evaluator runs twice (shallow pool, then combined pool) and sees the

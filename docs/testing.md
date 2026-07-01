@@ -5,7 +5,7 @@ Use these checks before handing Powerpacks to users.
 ## Local Readiness
 
 ```bash
-scripts/test-search-network check
+scripts/test-search check
 ```
 
 This installs the current skills into `~/.codex/skills`, runs lint, runs unit
@@ -21,14 +21,14 @@ and investor-backed filters into resolver-ready payloads?
 Dry-run contract validation:
 
 ```bash
-scripts/test-search-network company-dry-run
-scripts/test-search-network company-dry-run --case-glob investor
+scripts/test-search company-dry-run
+scripts/test-search company-dry-run --case-glob investor
 ```
 
 Live resolver execution:
 
 ```bash
-scripts/test-search-network company-live --max-cases 2
+scripts/test-search company-live --max-cases 2
 ```
 
 The live mode creates task state, resolves investors when needed, runs
@@ -51,9 +51,9 @@ Primitive recall answers: if the query payload is correct, do the packaged
 primitives retrieve representative data?
 
 ```bash
-scripts/test-search-network primitive-recall --bucket education
-scripts/test-search-network primitive-recall --bucket company
-scripts/test-search-network primitive-recall --case-glob stanford --max-cases 2
+scripts/test-search primitive-recall --bucket education
+scripts/test-search primitive-recall --bucket company
+scripts/test-search primitive-recall --case-glob stanford --max-cases 2
 ```
 
 This uses deterministic decomposition in `packs/search/evals/run_recall_parity.py`, then
@@ -72,11 +72,11 @@ used by `search_network_pipeline.py prepare`.
 
 ### CI-safe component test
 
-Use this when you want to verify the harness-facing search-network happy path
+Use this when you want to verify the harness-facing search happy path
 without any live credentials:
 
 ```bash
-scripts/test-search-network component
+scripts/test-search component
 ```
 
 This runs the real subprocess CLI path against local mocks/fixtures:
@@ -103,19 +103,19 @@ Postgres credentials. Use live `pipeline-eval` for that final integration tier.
 Dry-run selected recall cases:
 
 ```bash
-scripts/test-search-network pipeline-eval-dry-run --bucket education --max-cases 1
+scripts/test-search pipeline-eval-dry-run --bucket education --max-cases 1
 ```
 
 Live expansion plus primitive execution:
 
 ```bash
-scripts/test-search-network pipeline-eval --bucket education --max-cases 1
+scripts/test-search pipeline-eval --bucket education --max-cases 1
 ```
 
 Optional model override:
 
 ```bash
-EXPAND_SEARCH_MODEL=gpt-5.4-mini scripts/test-search-network pipeline-eval --case-glob stanford --max-cases 1
+EXPAND_SEARCH_MODEL=gpt-5.4-mini scripts/test-search pipeline-eval --case-glob stanford --max-cases 1
 ```
 
 Environment knobs:
@@ -147,10 +147,10 @@ under:
 
 For a small external test, require:
 
-- `scripts/test-search-network check` passes.
+- `scripts/test-search check` passes.
 - Representative primitive recall buckets pass or have documented known gaps.
-- `scripts/test-search-network company-dry-run` passes.
-- `scripts/test-search-network component` passes in CI or locally.
+- `scripts/test-search company-dry-run` passes.
+- `scripts/test-search component` passes in CI or locally.
 - At least 5 live `pipeline-eval` cases produce schema-valid JSON when API
   credentials are available.
 - For real searches, every run returns a task state path plus CSV/JSONL/manifest
