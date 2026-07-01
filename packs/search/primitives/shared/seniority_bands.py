@@ -103,6 +103,35 @@ def pin_payload_seniority_bands(payload: dict[str, Any], bands: list[str]) -> di
     return out
 
 
+def pin_payload_semantic_query(payload: dict[str, Any], query: str) -> dict[str, Any]:
+    """Return a copy with role_search_filters.semantic_query set to the raw query.
+
+    Query expansion rewrites the user's specific, work-described query into
+    generic prose ("Engineers specializing in distributed systems design...") and
+    leads every bm25 list with the same head term, which collapses distinct probe
+    intents into the same embedding neighborhood and caps recall. Preserving the
+    raw query as the semantic (vector) side keeps each probe specific so a shotgun
+    of probes spreads across the space — while expansion's bm25 + structured
+    filters (location, education, company, seniority, headcount, ...) are kept.
+    """
+    out = dict(payload)
+    filters = out.get("role_search_filters")
+    filters = dict(filters) if isinstance(filters, dict) else {}
+    previous = filters.get("semantic_query")
+    filters["semantic_query"] = query
+    filters["semantic_query_preserved"] = True
+    out["role_search_filters"] = filters
+    notes = out.get("notes")
+    notes = list(notes) if isinstance(notes, list) else []
+    note = "semantic_query preserved from raw --query (expansion rewrite skipped); bm25 + filters kept"
+    if previous and previous != query:
+        note += f" (replaced expansion semantic: {str(previous)[:80]})"
+    if note not in notes:
+        notes.append(note)
+    out["notes"] = notes
+    return out
+
+
 def pin_payload_current_role(payload: dict[str, Any], value: bool = True) -> dict[str, Any]:
     """Return a copy of an expand_search_request payload with is_current_role pinned.
 

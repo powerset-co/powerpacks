@@ -1,6 +1,6 @@
 ---
 name: search-sql
-description: "Agentic SQL search vertical over the local search DuckDB. Use for relational/aggregate people queries the structured filter DSL cannot express (per-person aggregates, overlap joins, career-shape predicates), or as a sub-agent fan-out from search-network. Read-only; local only."
+description: "Agentic SQL search vertical over the local search DuckDB. Use for relational/aggregate people queries the structured filter DSL cannot express (per-person aggregates, overlap joins, career-shape predicates), or as a sub-agent fan-out from search. Read-only; local only."
 ---
 
 # Search SQL (agentic SQL vertical)
@@ -14,7 +14,7 @@ Run read-only SQL against the local search DuckDB to answer people-search
 questions that row-at-a-time filters and BM25/vector/regex retrieval cannot
 express. This skill is used two ways:
 
-1. **Sub-agent vertical** — `search-network` (local mode) fans out to a
+1. **Sub-agent vertical** — `search` (local mode) fans out to a
    sub-agent running this skill when the query has a relational or aggregate
    component. The sub-agent returns candidate `person_id`s + evidence, which
    the parent fans in to the main candidate pool before reranking.

@@ -1,0 +1,86 @@
+{
+  "primitive": "run_routing_eval",
+  "n_cases": 48,
+  "strict_accuracy": 0.9375,
+  "lenient_accuracy": 0.9792,
+  "strict_correct": 45,
+  "lenient_correct": 47,
+  "subroute_accuracy": 1.0,
+  "subroute_n": 2,
+  "per_route": {
+    "recruit": {
+      "n": 9,
+      "correct": 8,
+      "recall": 0.8889
+    },
+    "contacts": {
+      "n": 7,
+      "correct": 7,
+      "recall": 1.0
+    },
+    "sql": {
+      "n": 9,
+      "correct": 9,
+      "recall": 1.0
+    },
+    "company": {
+      "n": 9,
+      "correct": 7,
+      "recall": 0.7778
+    },
+    "network": {
+      "n": 14,
+      "correct": 14,
+      "recall": 1.0
+    }
+  },
+  "confusion": {
+    "recruit": {
+      "recruit": 8,
+      "contacts": 0,
+      "sql": 0,
+      "company": 0,
+      "network": 1
+    },
+    "contacts": {
+      "recruit": 0,
+      "contacts": 7,
+      "sql": 0,
+      "company": 0,
+      "network": 0
+    },
+    "sql": {
+      "recruit": 0,
+      "contacts": 0,
+      "sql": 9,
+      "company": 0,
+      "network": 0
+    },
+    "company": {
+      "recruit": 1,
+      "contacts": 0,
+      "sql": 0,
+      "company": 7,
+      "network": 1
+    },
+    "network": {
+      "recruit": 0,
+      "contacts": 0,
+      "sql": 0,
+      "company": 0,
+      "network": 14
+    }
+  },
+  "misses": [
+    {
+      "id": "adv-shortlist-companies",
+      "query": "shortlist the fintech companies that raised a Series B",
+      "expected": "company",
+      "acceptable": [
+        "company"
+      ],
+      "predicted": "recruit",
+      "rule": "recruit-intent"
+    }
+  ]
+}

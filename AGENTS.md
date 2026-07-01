@@ -227,17 +227,20 @@ only; keep that scoped to the msgvault primitives.
   `.powerpacks/network-import/merged/people.csv` and writes
   `.powerpacks/search-index/`; do not run LLM, network, Supabase,
   Postgres, or TurboPuffer calls for this workflow.
-- **Search pack** (search-network, search-profile, search-company):
-  `$search-network` and `$search-company` require `.env` with TurboPuffer +
+- **Search pack** (search, search-company, search-sql):
+  `$search` and `$search-company` require `.env` with TurboPuffer +
   Postgres credentials. If `.env` is present, run the search
   primitive directly and use its error to diagnose; use the doctor only if env or
-  auth looks broken and the cause is unclear. For `$search-network`, after
-  loading `packs/search/skills/search-network/SKILL.md`, use the
+  auth looks broken and the cause is unclear. For `$search`, after
+  loading `packs/search/skills/search/SKILL.md`, run its Step-0 router
+  (`route_query.py`) and, for `network` queries, use the
   `search_network_pipeline.py prepare --query ...` path for ordinary people
   searches and company-only lookups; the primitive owns company-directory fast
   path detection. For job posting URLs, pasted JDs, or broad role briefs, load
-  `packs/search/skills/search-profile/SKILL.md`. Do not grep/search/read
-  search docs, schemas, primitive source, or prior artifacts on the happy path.
+  `packs/search/skills/recruit/SKILL.md` (`$recruit` supersedes the deprecated
+  `$search-profile`; a job URL runs through `recruit_loop.py --jd-url`). Do not
+  grep/search/read search docs, schemas, primitive source, or prior artifacts on
+  the happy path.
 
 Don't run pack-specific checks pre-emptively. Only when the user's request
 implies that pack.
@@ -252,14 +255,30 @@ internals, primitive sequences, or orchestration details.
 
 Routes:
 
-- `$search-network`, people search, network search, local network search,
+- `$search` (formerly `$search-network`; the old name still works as an
+  alias), people search, network search, local network search,
   role/title/location/school searches, "who is...", "find people...",
   company-directory queries →
-  `packs/search/skills/search-network/SKILL.md`
-  (routes internally between local DuckDB, TurboPuffer, and profile modes)
-- `$search-profile`, job posting URLs, pasted job descriptions, complex role
-  briefs, recruiter profile plan-and-execute →
-  `packs/search/skills/search-profile/SKILL.md`
+  `packs/search/skills/search/SKILL.md`
+  The single people-search door: its **Step 0** runs
+  `packs/search/primitives/route_query/route_query.py` to classify the query,
+  then dispatches — deep JD/URL/brief/shortlist → `$recruit`, company →
+  `$search-company`, relational/aggregate → `$search-sql`, my/set contacts →
+  `$search-contacts`, and ordinary people searches stay here on the fast local
+  DuckDB / TurboPuffer path. The retrieval primitive is still
+  `search_network_pipeline.py` (only the skill/route was renamed).
+- `$recruit`, emulate a recruiting team end-to-end for a JD — **job posting
+  URLs** (via `recruit_loop.py --jd-url`), **pasted job descriptions**, and
+  **complex role briefs** all route here — shotgun many small archetype searches
+  + mixture-of-judges shortlist + core-gate + expand-from-anchor + epoch
+  convergence vs a judged ground-truth set (supersedes the deleted
+  search-highlight) → `packs/search/skills/recruit/SKILL.md`
+- `$search-profile` — **deprecated alias of `$recruit`.** Job-posting URLs,
+  pasted JDs, complex role briefs, and recruiter plan-and-execute are now
+  handled by `$recruit`, which does the same JD→judged-shortlist job with a
+  core-tagged plan, mixture-of-judges, core-gate, and IC-track-aware seniority.
+  Route these to `$recruit`; `packs/search/skills/search-profile/SKILL.md` still
+  works for back-compat but new work should use `$recruit`.
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
 - `$search-sql`, relational/aggregate local people queries ("who overlapped
@@ -268,6 +287,18 @@ Routes:
   `packs/search/skills/search-sql/SKILL.md`
 - `$search-contacts`, my contacts, set contacts, contact field filtering →
   `packs/contacts/skills/search-contacts/SKILL.md`
+
+> **Search family (consolidated 2026-06-30).** `$search` is the single people-search door: its
+> Step-0 router (`packs/search/primitives/route_query/route_query.py`, baseline strict 0.9375 on
+> `packs/search/evals/routing/cases.json`) dispatches to `$recruit` (deep JD / job-posting URL /
+> role brief / shortlist / "more people like <url>"), `$search-company`, `$search-sql`, and
+> `$search-contacts`, and keeps ordinary people searches on the fast local DuckDB / TurboPuffer
+> path. `$search-company` / `$search-sql` / `$search-contacts` remain **distinct surfaces (kept,
+> not folded)** — reached through `$search`'s router or directly. **Deprecated aliases, kept for a
+> release:** `$search-network` → `$search`; `$search-profile` → `$recruit` (both still resolve; new
+> work uses the new names). The retrieval primitive is still `search_network_pipeline.py` and the
+> `search-network-jd-*` schemas/tasks keep their names — only the skill routes were renamed.
+
 - `$build-local-search-index`, local indexing, build local search index,
   prepare `.powerpacks/search-index` artifacts →
   `packs/indexing/skills/build-local-search-index/SKILL.md`
@@ -369,9 +400,9 @@ powerpacks/
 │   │   ├── docs/
 │   │   └── README.md
 │   ├── indexing/               # build-local-search-index local artifacts
-│   ├── search/                 # search-network, search-company
+│   ├── search/                 # search (router), recruit, search-company, search-sql
 │   └── powerset/               # cross-pack tooling (doctor, auth, ...)
-├── skills/                     # core skills (search-network, search-company)
+├── skills/                     # core skills (search, search-company)
 ├── tests/                      # unittest, run with uv run --project . python -m unittest discover
 ├── adapters/codex/install.sh   # installs skills into ~/.codex/skills
 ├── bin/                        # update-codex, update-claude-code, agent-bootstrap, sync-agent-files.sh, etc.

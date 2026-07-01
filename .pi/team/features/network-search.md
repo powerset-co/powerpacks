@@ -6,7 +6,7 @@ Own reusable network-search, people-search, and company-search skills/primitives
 ## Primary scope
 
 ```txt
-skills/search-network/
+skills/search/
 skills/search-company/
 primitives/execute_role_search/
 primitives/execute_search_slice/
@@ -18,7 +18,7 @@ tests/test_company_search_harness.py
 
 ## Responsibilities
 
-- `search-network` skill behavior and docs
+- `search` skill behavior and docs
 - company/people search primitives
 - query decomposition and slice/role workflows
 - recall/harness parity evals
@@ -34,7 +34,7 @@ tests/test_company_search_harness.py
 ## Regression checks
 
 ```bash
-bash scripts/test-search-network
+bash scripts/test-search
 uv run pytest tests/test_company_search_harness.py tests/test_core_layout.py
 uv run python evals/run_company_search_harness.py
 ```
@@ -42,5 +42,5 @@ uv run python evals/run_company_search_harness.py
 ## Startup checklist
 
 1. Read this dossier and `.pi/team/manifest.yaml`.
-2. Read `skills/search-network/SKILL.md`, `skills/search-company/SKILL.md`, and relevant workflow docs.
+2. Read `skills/search/SKILL.md`, `skills/search-company/SKILL.md`, and relevant workflow docs.
 3. Summarize the search primitive/skill contract before editing.

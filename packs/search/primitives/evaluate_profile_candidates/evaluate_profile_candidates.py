@@ -115,15 +115,21 @@ You do NOT produce a final score or verdict. You produce structured judgments �
 
 === SENIORITY IS A HARD GATE, SEPARATE FROM SKILLS ===
 
-First decide seniority_fit from the candidate's CURRENT career level:
-- "ideal": current role is squarely in the target band
-- "acceptable": adjacent band but plausibly analogous after company-size context
-- "too_senior": current level is executive/founder/advisory or clearly above the band. CEOs, CTOs, CFOs, COOs, presidents, founders/co-founders (current), VPs, heads-of, managing directors, general partners, board members, angel investors, and advisors are too_senior for an IC search unless the policy explicitly includes them. A person whose CURRENT title mixes IC work with founder/advisor roles is too_senior when the founder/exec role is their primary current identity.
-- "too_junior": clearly below the band (interns, new grads, analysts for a senior role)
-- "wrong_track": different career lane (e.g. data scientist without pipeline ownership for a data engineering role, pure people-manager without hands-on evidence, consultant/agency when the role is in-house IC)
-- "unknown": genuinely cannot tell
+The policy names a TARGET LEVEL for this role (e.g. senior IC, staff IC, lead, manager, director, VP, executive). If none is stated, treat the target as a senior INDIVIDUAL-CONTRIBUTOR role. Seniority is judged ASYMMETRICALLY around that target: you hire people who STEP UP into the role, never people who would step DOWN.
 
-A candidate with deep matching skills but out-of-band seniority is OUT. Do not rescue a CTO because they once built ETL pipelines. Past founder roles are fine if the CURRENT role is an in-band IC role at a different company.
+First decide seniority_fit. Seniority has TWO axes — career LEVEL and TRACK (individual-contributor vs management/executive) — and you must weigh BOTH against the target level / usable-cutoff policy you were given.
+
+IF THE TARGET IS AN IC ROLE (senior IC, staff IC, lead-IC, "Member of Technical Staff", founding engineer, applied/research engineer):
+- "ideal" / "acceptable" (IN-BAND): any hands-on individual contributor on the same technical track AT OR ABOVE the target IC level — senior, staff, principal, distinguished, fellow, or "MTS / research scientist at a top lab" — PLUS one level below it (a strong mid-level IC ready to step up). A MORE-senior IC is NOT "stepping down": strong senior ICs are exactly who these roles want, and at startups they routinely take IC / founding-engineer seats. NEVER mark a senior / staff / principal IC "too_senior" merely for being a high IC level.
+- "too_senior": the candidate's CURRENT primary identity is on the MANAGEMENT / EXEC track or running a company — engineering/eng manager with no current hands-on work, director, VP, Head-of, C-suite (CEO/CTO/CxO), president, current founder/co-founder, managing director, general partner, board member, or full-time investor/advisor. They will not return to an IC seat. (A PAST founder/manager is fine if the CURRENT role is a hands-on IC.)
+- "too_junior": two or more levels below the target IC level (interns, new grads, early-career with no real depth).
+
+IF THE TARGET IS A MANAGEMENT / EXEC ROLE (manager, director, VP, Head-of, exec): judge by career LEVEL directly. IN-BAND = the target level and exactly one level below (step up) — e.g. for a VP target a VP/Director is in-band. "too_senior" = one level above the target or higher (for a VP target, only CEO/founder/president/C-suite is too_senior). A senior IC two+ rungs below the management target is "too_junior".
+
+- "wrong_track": a genuinely different career lane (e.g. data scientist without pipeline ownership for a data-engineering role, a pure people-manager with no hands-on evidence for an IC role, consultant/agency when the role is in-house).
+- "unknown": genuinely cannot tell.
+
+A candidate with deep matching skills but TRULY out-of-band seniority is OUT — do not rescue a current VP/exec/founder for an IC role on skills alone (they will not step down). But for an IC target, do NOT gate a senior / staff / principal IC: a more-senior IC stepping into a focused IC or founding-engineer role is the BEST hire, not a down-level. Past founder/exec roles are fine if the CURRENT role is in-band.
 
 === TRAIT EVIDENCE LADDER ===
 
@@ -255,6 +261,7 @@ def build_user_prompt(plan: dict[str, Any], profile: dict[str, Any]) -> str:
     parts = [
         f"Job: {plan.get('job_title') or ''} ({plan.get('normalized_archetype') or ''})",
         f"Hire stage: {hire_stage}",
+        f"Target level: {plan.get('target_level') or 'senior individual contributor (default)'}",
         f"Seniority / usable cutoff policy: {plan.get('usable_cutoff') or 'Senior in-band IC; executives, founders, and advisors are out.'}",
         "Must-have traits:",
         *[f"- {t}" for t in must],
@@ -465,6 +472,7 @@ async def evaluate_one(
     profile: dict[str, Any] | None,
     timeout: int,
     max_retries: int,
+    service_tier: str | None = None,
 ) -> dict[str, Any]:
     pid = candidate.get("person_id") or candidate.get("candidate_id")
     base = {
@@ -504,6 +512,10 @@ async def evaluate_one(
                 }
                 if reasoning_effort and supports_reasoning_effort(model):
                     kwargs["reasoning_effort"] = reasoning_effort
+                if service_tier:
+                    # flex = ~50% cheaper, slower batch tier (resource_unavailable 429s are
+                    # retried by the loop below); ideal for non-latency-sensitive reranking.
+                    kwargs["service_tier"] = service_tier
                 response = await client.chat.completions.create(**kwargs)
                 content = response.choices[0].message.content or "{}"
                 parsed = json.loads(content)
@@ -567,6 +579,7 @@ async def evaluate_all(args: argparse.Namespace) -> dict[str, Any]:
             profiles.get(candidate.get("person_id") or candidate.get("candidate_id")),
             args.timeout,
             args.max_retries,
+            args.service_tier,
         )
         for candidate in selected
     ]
@@ -595,6 +608,7 @@ async def evaluate_all(args: argparse.Namespace) -> dict[str, Any]:
         "created_at": now_iso(),
         "run_dir": str(run_dir),
         "model": args.model,
+        "service_tier": args.service_tier,
         "evaluated": len(ordered),
         "frontier_total": len(frontier),
         "missing_profiles": len(selected) - len(profiles),
@@ -619,6 +633,10 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--max-retries", type=int, default=2)
+    parser.add_argument("--service-tier", default=None,
+                        help="OpenAI service tier: 'flex' (~50%% cheaper, slower batch tier — use for "
+                             "reranking; pair with a higher --timeout) | auto | default | priority. "
+                             "Default None = account default (unchanged behavior for other callers).")
     parser.add_argument("--api-base", default=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"))
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     args = parser.parse_args()

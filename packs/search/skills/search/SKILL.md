@@ -1,35 +1,71 @@
 ---
-name: search-network
-description: "Run a Powerpacks people search from a natural-language query, job description URL, or pasted JD. Routes automatically between local DuckDB search (your imported network), TurboPuffer remote search (non-personal set / team network), and multi-probe JD workflows based on the input and environment."
+name: search
+description: "The single people-search door for Powerpacks. Run a people search from a natural-language query and route automatically: simple people searches go to fast local DuckDB / TurboPuffer retrieval; deep JD / job-posting-URL / role-brief / shortlist requests go to the $recruit engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
 ---
 
-# Search Network
+<!--
+Changelog:
+- 2026-06-30: Renamed from `search-network` to `search` (search consolidation Stage 3). Added the
+  Step-0 router (route_query.py) that dispatches deep JD/URL/brief/shortlist to $recruit and
+  company/sql/contacts to their surfaces; ordinary people searches stay on the fast local/TurboPuffer
+  path. $search-network is a deprecated alias. The retrieval primitive (search_network_pipeline.py)
+  and search-network-jd-* schemas/tasks keep their names.
+-->
+
+# Search
+
+The single entry point for people search. `$search` routes every query to the right surface, then
+runs fast local/TurboPuffer retrieval itself for ordinary people searches.
 
 Use this for any people search request:
 
-- `$search-network software engineers in sf`
-- `$search-network local: product managers in nyc`
-- `$search-network https://jobs.lever.co/company/abc123`
-- `$search-network senior engineers at series a fintech companies`
-- `$search-network stanford engineers with 3-5 yoe in new york`
-- `$search-network people who work at OpenAI`
+- `$search software engineers in sf`
+- `$search local: product managers in nyc`
+- `$search https://jobs.lever.co/company/abc123`   ← deep JD → routes to `$recruit`
+- `$search senior engineers at series a fintech companies`
+- `$search stanford engineers with 3-5 yoe in new york`
+- `$search people who work at OpenAI`
+
+> `$search` supersedes `$search-network` (the old name still works as an alias). The retrieval
+> primitive is still `search_network_pipeline.py` — only the skill/route was renamed.
+
+## Step 0 — Route the query (run this first)
+
+Classify the query deterministically, then dispatch. Do not hand-guess the route:
+
+```bash
+uv run --project . python packs/search/primitives/route_query/route_query.py --query "<the user's query>"
+```
+
+It prints `{route, rule, subroute}`. Dispatch on `route`:
+
+| route | action |
+|-------|--------|
+| `recruit`  | deep JD / job-posting URL / role brief / "build a shortlist" / "more people like <url>" → load `packs/search/skills/recruit/SKILL.md` and run the `$recruit` engine (a job URL goes straight in via `recruit_loop.py --jd-url`). |
+| `company`  | company lookup / ids / investors / funding / sector → load `packs/search/skills/search-company/SKILL.md`. |
+| `sql`      | relational / aggregate / career-shape predicate → load `packs/search/skills/search-sql/SKILL.md`. |
+| `contacts` | my/set contacts + contact-field filtering → load `packs/contacts/skills/search-contacts/SKILL.md`. |
+| `network`  | ordinary people search → stay here; use the `subroute` (`local` \| `turbopuffer`) and the Mode Detection + Happy Paths below. |
+
+The classifier encodes this skill-routing heuristic and is regression-tested against a labeled
+query set (`packs/search/evals/routing/cases.json`, baseline strict 0.9375). When `route` is
+`network`, continue with Mode Detection to pick local vs TurboPuffer. If the router is unavailable,
+fall back to reading the intent yourself using the same rules.
 
 ## Mode Detection
 
-Apply these rules in order:
+For `network` queries, apply these rules in order:
 
-1. **Profile mode** — if the input is a URL pointing to a job posting, a
+1. **Deep JD / role-brief guard** — if the input is a URL pointing to a job posting, a
    pasted multi-paragraph job description, a broad multi-trait role brief
    that needs multiple distinct candidate profiles, **or a similar-person
    request** ("find me more people like <linkedin url>", "people similar to
-   X" with a LinkedIn profile URL), load and follow the **`search-profile`**
-   skill entirely. Read its instructions from the installed skill directory
-   at `../search-profile/SKILL.md` (relative to this skill) or from the repo
-   at `packs/search/skills/search-profile/SKILL.md`. Do not run
-   `search_network_pipeline.py` directly for these inputs — the profile skill
-   owns the orchestration (including resolving the person's profile for
-   similar-person requests) and delegates individual profile searches back
-   here (TurboPuffer mode) with a per-search `limit` and filter-only flag.
+   X" with a LinkedIn profile URL), the router already sent it to `recruit` —
+   load `packs/search/skills/recruit/SKILL.md` and run the `$recruit` engine.
+   Do not run `search_network_pipeline.py` directly for these inputs; the
+   `$recruit` engine owns the orchestration and delegates individual profile
+   searches back here (TurboPuffer mode) with a per-search `limit` and
+   filter-only flag. (`$search-profile` is a deprecated alias of `$recruit`.)
 
 2. **Local mode** — if any of these are true:
    - The user says "local", "local search", "offline", or "my imported
@@ -83,7 +119,7 @@ modes, and they bind any fallback behavior too:
   hands-on and appropriate depending on company stage. Keep them unless
   the user excludes them; the rerank judges hands-on fit.
 - **"People like <person>"** anchors seniority to that person's current
-  role and band (same rule as `search-profile`). If the anchor is still
+  role and band (same rule as the `$recruit` engine). If the anchor is still
   ambiguous, ask exactly one question before executing: "Hands-on IC
   engineers only, or are technical leaders (VP/director/CTO) acceptable
   if still hands-on?"
@@ -280,7 +316,7 @@ files on the happy path. Start a fresh run for every search request.
 
 5. If the user chooses `execute`, run the returned `execute_command` exactly.
    It already includes `--execute-approved`; do not ask for another approval.
-   - If a **limit** was provided (e.g. by the `search-profile` skill for a
+   - If a **limit** was provided (e.g. by the `$recruit` engine for a
      capped profile search), append `--limit <N>` to the execute_command (or
      pass `--limit` to `prepare`, which threads it through). This caps
      retrieval and the whole downstream pipeline. For standalone user

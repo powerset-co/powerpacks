@@ -22,7 +22,7 @@ class CoreLayoutTests(unittest.TestCase):
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(search_pack, ["search-company", "search-network", "search-profile", "search-sql"])
+        self.assertEqual(search_pack, ["recruit", "search", "search-company", "search-profile", "search-sql"])
         messages_pack = sorted(
             path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
         )
@@ -68,7 +68,7 @@ class CoreLayoutTests(unittest.TestCase):
                 self.assertIn("---", lines[1:])
 
     def test_no_legacy_add_skill_references_in_core_skill(self) -> None:
-        text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
+        text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
         self.assertNotIn("skills/add-", text)
         self.assertNotIn("view_search_results", text)
         self.assertNotIn("workflows/query-decomposition.md", text)
@@ -94,7 +94,7 @@ class CoreLayoutTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "search-network" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "search" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "search-profile" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-email" / "SKILL.md").exists())
@@ -222,7 +222,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertEqual(expand_step["primitive"], "expand_search_request")
         self.assertNotIn("skill", expand_step)
 
-        text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
+        text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
         self.assertIn("Happy Path", text)
         self.assertIn("search_network_pipeline.py prepare", text)
         self.assertIn("company_directory_fast_path", text)
@@ -256,7 +256,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("Retarget feedback is automatic", text)
 
     def test_search_network_uses_single_execute_preview_gate(self) -> None:
-        text = (ROOT / "packs/search/skills/search-network/SKILL.md").read_text()
+        text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
         self.assertIn("Execute this search or modify it?", text)
         self.assertNotIn("execute`, `modify`, or `search only`", text)
         self.assertIn("--execute-approved", text)
