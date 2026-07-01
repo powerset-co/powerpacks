@@ -1,7 +1,20 @@
 ---
 name: search-profile
-description: Run the recruiter profile-search loop for Powerpacks when the user provides a job posting URL, pasted job description, broad multi-trait role brief, or a LinkedIn profile URL to find more people like. Fetch/read job URLs or resolve the person's profile (local cache, local index, Postgres, then RapidAPI with approval), extract differentiating traits, design recruiter-style candidate profiles, execute one capped search per profile, merge and dedupe the pool, then run the automated evaluation primitive with seniority hard-gating and export a shortlist.
+description: DEPRECATED alias of $recruit. Run the recruiter profile-search loop for Powerpacks when the user provides a job posting URL, pasted job description, broad multi-trait role brief, or a LinkedIn profile URL to find more people like. Fetch/read job URLs or resolve the person's profile (local cache, local index, Postgres, then RapidAPI with approval), extract differentiating traits, design recruiter-style candidate profiles, execute one capped search per profile, merge and dedupe the pool, then run the automated evaluation primitive with seniority hard-gating and export a shortlist.
 ---
+
+<!--
+Changelog:
+- 2026-06-30: DEPRECATED. Superseded by $recruit (search consolidation Stage 1). $recruit does the
+  same JD→judged-shortlist job with a core-tagged plan, mixture-of-judges, a core-gate, and
+  IC-track-aware seniority, and now accepts job-posting URLs too (recruit_loop.py --jd-url). This
+  skill still works for back-compat; new work should use packs/search/skills/recruit/SKILL.md.
+-->
+
+> ⚠️ **Deprecated — use `$recruit`.** `$recruit` supersedes `$search-profile`: same job (JD /
+> job-posting URL / role brief → judged shortlist), strictly more evolved (core-tagged plan,
+> mixture-of-judges, core-gate, IC-track-aware seniority). Route new work to
+> `packs/search/skills/recruit/SKILL.md`. This file remains for back-compat only.
 
 # Search Profile
 

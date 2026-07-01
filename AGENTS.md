@@ -236,8 +236,10 @@ only; keep that scoped to the msgvault primitives.
   `search_network_pipeline.py prepare --query ...` path for ordinary people
   searches and company-only lookups; the primitive owns company-directory fast
   path detection. For job posting URLs, pasted JDs, or broad role briefs, load
-  `packs/search/skills/search-profile/SKILL.md`. Do not grep/search/read
-  search docs, schemas, primitive source, or prior artifacts on the happy path.
+  `packs/search/skills/recruit/SKILL.md` (`$recruit` supersedes the deprecated
+  `$search-profile`; a job URL runs through `recruit_loop.py --jd-url`). Do not
+  grep/search/read search docs, schemas, primitive source, or prior artifacts on
+  the happy path.
 
 Don't run pack-specific checks pre-emptively. Only when the user's request
 implies that pack.
@@ -257,13 +259,18 @@ Routes:
   company-directory queries →
   `packs/search/skills/search-network/SKILL.md`
   (routes internally between local DuckDB, TurboPuffer, and profile modes)
-- `$search-profile`, job posting URLs, pasted job descriptions, complex role
-  briefs, recruiter profile plan-and-execute →
-  `packs/search/skills/search-profile/SKILL.md`
-- `$recruit`, emulate a recruiting team end-to-end for a JD, shotgun many small
-  archetype searches + mixture-of-judges shortlist + expand-from-anchor + epoch
-  convergence vs a judged ground-truth set (supersedes the deleted search-highlight) →
-  `packs/search/skills/recruit/SKILL.md`
+- `$recruit`, emulate a recruiting team end-to-end for a JD — **job posting
+  URLs** (via `recruit_loop.py --jd-url`), **pasted job descriptions**, and
+  **complex role briefs** all route here — shotgun many small archetype searches
+  + mixture-of-judges shortlist + core-gate + expand-from-anchor + epoch
+  convergence vs a judged ground-truth set (supersedes the deleted
+  search-highlight) → `packs/search/skills/recruit/SKILL.md`
+- `$search-profile` — **deprecated alias of `$recruit`.** Job-posting URLs,
+  pasted JDs, complex role briefs, and recruiter plan-and-execute are now
+  handled by `$recruit`, which does the same JD→judged-shortlist job with a
+  core-tagged plan, mixture-of-judges, core-gate, and IC-track-aware seniority.
+  Route these to `$recruit`; `packs/search/skills/search-profile/SKILL.md` still
+  works for back-compat but new work should use `$recruit`.
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
 - `$search-sql`, relational/aggregate local people queries ("who overlapped

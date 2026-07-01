@@ -15,7 +15,14 @@ Changelog:
   judge_consensus --plan gates the shortlist on genuinely doing >=1 core domain capability (not the
   blended score, which can't separate "filled" from "give-up"). One human touchpoint (GATE 1, the
   plan), then autonomous. Measured: AgentMail distsys -> 88 filled; Realta fusion VP -> 12->7->2.
+- 2026-06-30: Absorb $search-profile (search consolidation Stage 1). recruit_loop now accepts a
+  job-posting URL via --jd-url (fetch_jd.py, stdlib/no spend) in addition to --jd-file, closing the
+  only input-shape gap vs $search-profile. $search-profile is now a deprecated alias of $recruit.
 -->
+
+> **`$recruit` supersedes `$search-profile`.** Job-posting URLs, pasted JDs, and complex role
+> briefs all route here (same JD→judged-shortlist job, plus core-tagged plan, mixture-of-judges,
+> core-gate, and IC-track-aware seniority). `$search-profile` still works for back-compat.
 
 # recruit
 
@@ -47,6 +54,13 @@ is where the human sharpens a niche role ("delivered large hardware" → "delive
 *fusion/plasma* hardware") or just confirms the domain for a common one. Let the user edit
 `plan.json`, then proceed. **Do NOT ask again** — judging + expansion run autonomously to the end.
 
+**JD input.** Supply the role either way — `$recruit` supersedes `$search-profile`, so job
+posting URLs, pasted JDs, and complex role briefs all run here:
+- **pasted JD / role brief** → write it to `<run>/jd.txt` and pass `--jd-file <run>/jd.txt`.
+- **job-posting URL** → pass `--jd-url <url>` instead; `recruit_loop` fetches it to `<run>/jd.txt`
+  via `fetch_jd.py` (stdlib, no spend) before sourcing. Provide exactly one of `--jd-file` /
+  `--jd-url`. JS-rendered careers pages come back `thin` with a warning — paste the JD instead.
+
 The first `recruit_loop` invocation sources and builds the plan, then stops at GATE 1 with
 `status: awaiting_plan_approval`:
 
@@ -54,6 +68,8 @@ The first `recruit_loop` invocation sources and builds the plan, then stops at G
 uv run --env-file .env --project . python packs/search/primitives/recruit/recruit_loop.py \
   --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
   --max-epochs 3 --score-threshold 0.40 --judge codex --reasoning-effort high
+# or, from a job-posting URL (no separate fetch step):
+#   ... recruit_loop.py --jd-url "https://job-boards.greenhouse.io/acme/jobs/123" --run-dir <run> ...
 ```
 
 Review/edit `<run>/epoch0/plan.json`, then resume the autonomous engine. Resume does **not**
