@@ -1,4 +1,4 @@
-"""The `$recruit` convergence loop: source -> judge -> expand-from-anchor -> ... until converged.
+"""The `$search` deep-mode convergence loop: source -> judge -> expand-from-anchor -> ... until converged.
 
 expand-from-anchor is NOT a cleanup afterthought — it is the core Phase-2 hill-climb. The JD is a
 lossy proxy for "what good looks like"; once the judge confirms strong candidates, THEIR profiles
@@ -9,7 +9,7 @@ never names (the barely-reachable stragglers that more JD-decompose rounds can't
     robust_source(JD) -> build_eval_inputs -> judge -> consensus  => strong set S0
   epoch k>=1 (Phase 2, expand from our OWN judged-strong):
     pick DIVERSE anchors from S(k-1) (dedup by company so we don't echo-chamber one archetype)
-    expand_from_anchor -> run_shotgun -> build_eval_inputs(--plan reuse) -> judge ONLY new pids
+    expand_from_anchor -> run_wide_search -> build_eval_inputs(--plan reuse) -> judge ONLY new pids
     consensus over everything judged so far => S(k)
   stop when a Phase-2 epoch adds NO new strong (converged) or --max-epochs hit (default 3).
 
@@ -17,7 +17,7 @@ Self-limiting give-up: if the judge returns ~0 strong there are no anchors, so P
 the loop ends with an (almost) empty shortlist — correct behavior when the set has nobody.
 
 Judging is INCREMENTAL (only candidates not yet judged) so the free `codex_judge` stays tractable
-across epochs. Everything chains the existing recruit primitives as subprocesses. See SKILL.md.
+across epochs. Everything chains the existing deep-search primitives as subprocesses. See SKILL.md.
 """
 from __future__ import annotations
 
@@ -30,16 +30,16 @@ from typing import Any
 
 try:  # direct script execution
     from subprocess_utils import CommandError, run_checked
-except ImportError:  # module execution: python -m packs.search.primitives.recruit.recruit_loop
+except ImportError:  # module execution: python -m packs.search.primitives.deep_search.deep_search_loop
     from .subprocess_utils import CommandError, run_checked
 
 ROOT = Path(__file__).resolve().parents[4]
-P = ROOT / "packs/search/primitives/recruit"
+P = ROOT / "packs/search/primitives/deep_search"
 FETCH_JD = P / "fetch_jd.py"
 ROBUST = P / "robust_source.py"
 BUILD = P / "build_eval_inputs.py"
 EXPAND = P / "expand_from_anchor.py"
-SHOTGUN = P / "run_shotgun.py"
+WIDE_SEARCH = P / "run_wide_search.py"
 CODEX_JUDGE = P / "codex_judge.py"
 GPT_JUDGE = ROOT / "packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py"
 CONSENSUS = P / "judge_consensus.py"
@@ -106,9 +106,9 @@ def judge(edir: Path, candidates: list[dict[str, Any]], judge_kind: str, effort:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="The $recruit convergence loop (source -> judge -> expand) until converged.")
+    ap = argparse.ArgumentParser(description="The $search deep-mode convergence loop (source -> judge -> expand) until converged.")
     ap.add_argument("--jd-file", default=None, help="Path to JD text. Provide this OR --jd-url.")
-    ap.add_argument("--jd-url", default=None, help="Job-posting URL; fetched to <run-dir>/jd.txt via fetch_jd (search-profile's URL input).")
+    ap.add_argument("--jd-url", default=None, help="Job-posting URL; fetched to <run-dir>/jd.txt via fetch_jd before sourcing.")
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--set-id", default=None)
     ap.add_argument("--env-file", default=".env")
@@ -130,9 +130,9 @@ def main() -> None:
         run_dir = ROOT / run_dir
 
     # JD input: exactly one of --jd-file / --jd-url. A URL is fetched to <run-dir>/jd.txt first
-    # (the search-profile URL intake), then treated as an ordinary --jd-file from here on.
+    # (the URL intake via fetch_jd), then treated as an ordinary --jd-file from here on.
     if bool(args.jd_file) == bool(args.jd_url):
-        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": "provide exactly one of --jd-file or --jd-url"}, indent=2))
+        print(json.dumps({"primitive": "deep_search_loop", "status": "failed", "error": "provide exactly one of --jd-file or --jd-url"}, indent=2))
         raise SystemExit(2)
     if args.jd_url:
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +140,7 @@ def main() -> None:
         run([sys.executable, FETCH_JD, "--url", args.jd_url, "--out", jd_txt], expected_paths=[jd_txt], description="fetch_jd URL->JD")
         jd_text = jd_txt.read_text(encoding="utf-8").strip()
         if len(jd_text) < _MIN_JD_CHARS:
-            print(json.dumps({"primitive": "recruit_loop", "status": "failed",
+            print(json.dumps({"primitive": "deep_search_loop", "status": "failed",
                               "error": "fetched JD is too thin (likely a JS-rendered page); paste the JD text and rerun with --jd-file",
                               "jd_url": args.jd_url, "jd_chars": len(jd_text)}, indent=2))
             raise SystemExit(1)
@@ -157,13 +157,13 @@ def main() -> None:
     epoch0_dir = run_dir / "epoch0"
     plan_path = Path(args.approved_plan) if args.approved_plan else epoch0_dir / "plan.json"
     if args.approved_plan and not plan_path.exists():
-        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": "approved plan not found", "plan": str(plan_path)}, indent=2))
+        print(json.dumps({"primitive": "deep_search_loop", "status": "failed", "error": "approved plan not found", "plan": str(plan_path)}, indent=2))
         raise SystemExit(1)
     if args.plan_approved and args.approved_plan:
-        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": "use only one of --plan-approved or --approved-plan"}, indent=2))
+        print(json.dumps({"primitive": "deep_search_loop", "status": "failed", "error": "use only one of --plan-approved or --approved-plan"}, indent=2))
         raise SystemExit(1)
     if args.plan_approved and not plan_path.exists():
-        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": "--plan-approved requires existing epoch0/plan.json", "plan": str(plan_path)}, indent=2))
+        print(json.dumps({"primitive": "deep_search_loop", "status": "failed", "error": "--plan-approved requires existing epoch0/plan.json", "plan": str(plan_path)}, indent=2))
         raise SystemExit(1)
     # Retry/resume safety: if a previous approved run already judged some candidates, do not
     # rejudge them blindly on process restart. First gate resume has no such files, so this is a no-op.
@@ -190,13 +190,13 @@ def main() -> None:
                 if not args.plan_approved and not args.approved_plan and (edir / "plan.json").exists():
                     history.append({"epoch": 0, "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"), "existing_plan": True})
                     (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
-                    print(json.dumps({"primitive": "recruit_loop", "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"),
+                    print(json.dumps({"primitive": "deep_search_loop", "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"),
                                       "existing_plan": True, "next": "review/edit the plan, then rerun with --plan-approved"}, indent=2))
                     return
                 if args.plan_approved:
                     missing = [str(p) for p in required if not p.exists()]
                     if missing:
-                        raise CommandError(["recruit_loop", "--plan-approved"], missing=[Path(p) for p in missing], description="resume preflight")
+                        raise CommandError(["deep_search_loop", "--plan-approved"], missing=[Path(p) for p in missing], description="resume preflight")
                 else:
                     if not (edir / "union.jsonl").exists():
                         run([sys.executable, ROBUST, "--jd-file", args.jd_file, "--run-dir", edir, "--env-file", args.env_file,
@@ -214,7 +214,7 @@ def main() -> None:
                     if not args.approved_plan:
                         history.append({"epoch": 0, "status": "awaiting_plan_approval", "plan": str(edir / "plan.json")})
                         (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
-                        print(json.dumps({"primitive": "recruit_loop", "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"),
+                        print(json.dumps({"primitive": "deep_search_loop", "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"),
                                           "next": "review/edit the plan, then rerun with --plan-approved"}, indent=2))
                         return
                     plan_path = Path(args.approved_plan)
@@ -228,9 +228,9 @@ def main() -> None:
                 (edir / "anchors.json").write_text(json.dumps(anchors, indent=2))
                 run([sys.executable, EXPAND, "--anchors", edir / "anchors.json", "--top-k", len(anchors), "--out", edir / "anchor_seeds.json"],
                     expected_paths=[edir / "anchor_seeds.json"], description=f"epoch{epoch} expand_from_anchor")
-                run([sys.executable, SHOTGUN, "--seeds", edir / "anchor_seeds.json", "--run-dir", edir, "--env-file", args.env_file,
+                run([sys.executable, WIDE_SEARCH, "--seeds", edir / "anchor_seeds.json", "--run-dir", edir, "--env-file", args.env_file,
                      "--limit", args.keep] + (["--set-id", args.set_id] if args.set_id else []),
-                    expected_paths=[edir / "union.jsonl"], description=f"epoch{epoch} run_shotgun")
+                    expected_paths=[edir / "union.jsonl"], description=f"epoch{epoch} run_wide_search")
                 build_cmd = [sys.executable, BUILD, "--run-dir", edir, "--plan", plan_path, "--created-at", args.created_at]
                 if args.set_id:
                     build_cmd += ["--set-id", args.set_id]
@@ -274,11 +274,11 @@ def main() -> None:
     except CommandError as exc:
         history.append({"status": "failed", "error": str(exc), "details": exc.to_dict()})
         (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
-        print(json.dumps({"primitive": "recruit_loop", "status": "failed", "error": str(exc), "details": exc.to_dict(), "history": history}, indent=2))
+        print(json.dumps({"primitive": "deep_search_loop", "status": "failed", "error": str(exc), "details": exc.to_dict(), "history": history}, indent=2))
         raise SystemExit(1) from exc
 
     (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
-    print(json.dumps({"primitive": "recruit_loop", "status": "completed", "epochs": len(history),
+    print(json.dumps({"primitive": "deep_search_loop", "status": "completed", "epochs": len(history),
                       "strong_total": len(strong_pids), "shortlist": str(run_dir / "shortlist" / "ground_truth_ranked.json"),
                       "history": history}, indent=2))
 

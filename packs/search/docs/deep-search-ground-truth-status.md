@@ -1,13 +1,16 @@
-# `$recruit` — ground-truth run v1 status (AgentMail Distributed Systems)
+# `$search` deep mode — ground-truth run v1 status (AgentMail Distributed Systems)
 
 _Created: 2026-06-26_
 
 _Changelog:_
+- _2026-07-01: Folded $recruit into $search deep mode; renamed doc
+  (recruit-ground-truth-status.md → deep-search-ground-truth-status.md) and de-jargoned
+  engine references (recruit → deep-search, shotgun → wide search)._
 - _2026-06-27: Added the fully-primitive, portable OpenAI-judge run + mixture-of-judges
   hill-climb (no sub-agents). See "Full-chain portable run + mixture hill-climb (2026-06-27)"
   at the end. Two new bridge primitives: `build_eval_inputs.py`, `triage_candidates.py`._
 - _2026-06-28b: Made SOURCING robust (non-flaky): `robust_source.py` unions independent
-  decompose+shotgun rounds → min 0.968 recall (was a flaky 0.87–0.97/round). Recall is now fixed
+  decompose+wide search rounds → min 0.968 recall (was a flaky 0.87–0.97/round). Recall is now fixed
   in sourcing, not by loosening the judge; triage dropped from the default flow. See "Robust
   sourcing — killing the seed variance (2026-06-28)" at the end._
 - _2026-06-28: Added a FREE portable judge (`codex_judge.py`, spawns `codex exec`, reuses the
@@ -17,14 +20,14 @@ _Changelog:_
 
 _PII-free status for review. Candidate identities (names + LinkedIn + per-judge rationales)
 are surfaced to the requester in chat and kept under gitignored
-`.powerpacks/recruit/agentmail-distsys-mts-20260626/` — they are not committed._
+`.powerpacks/deep-search/agentmail-distsys-mts-20260626/` — they are not committed._
 
 ## What this run proves
 
 A trustworthy **within-corpus, judged** ground-truth set can be built for a JD using only
 existing `main` primitives + Claude sub-agents, at **~zero OpenAI spend**. This is the
 correct baseline the prior Codex session failed to produce (it used off-corpus Harmonic CSV
-grep and never judged the labels — see `recruit-skill-plan.md`).
+grep and never judged the labels — see `deep-search-plan.md`).
 
 ## JD
 
@@ -52,7 +55,7 @@ Schedulers / control plane / global routing / traffic management / LLM inference
 `search_network_pipeline` uses a **shared ledger** and silently resumes a stale prior run.
 Every probe MUST pass a unique `--ledger`. Documented in the run BRIEF and the plan.
 
-## Results (metrics — see `.powerpacks/recruit/.../metrics.json`)
+## Results (metrics — see `.powerpacks/deep-search/.../metrics.json`)
 
 - Probe families: **5** · union unique candidates: **79**
 - Consensus strong (≥2/3 in-band & ≥2/3 not-out): **31**
@@ -62,7 +65,7 @@ Every probe MUST pass a unique `--ledger`. Documented in the run BRIEF and the p
   (pure SRE without systems depth, ML-research/training-only, hardware-only).
 - **Lane contribution to the ground truth:** routing 12, scheduler 8, company 6, inference 6,
   observability 4 — i.e. routing/scheduler probes were the highest-yield; observability was
-  noisiest. Useful signal for tuning the default `$recruit` probe mix.
+  noisiest. Useful signal for tuning the default `$search` probe mix.
 
 ## Read on quality
 
@@ -72,7 +75,7 @@ of a well-known OSS cluster scheduler; #2 an inference-serving-systems MTS at a 
 seniority gate correctly demoted several deepest-on-paper distsys people whose **current**
 role is founder/exec — exactly the IC discipline the rubric demands.
 
-## Artifacts (gitignored, under `.powerpacks/recruit/agentmail-distsys-mts-20260626/`)
+## Artifacts (gitignored, under `.powerpacks/deep-search/agentmail-distsys-mts-20260626/`)
 
 `BRIEF.md` · `candidates_union.jsonl` · `judges/{talent_analyst,recruiter,manager}.jsonl` ·
 `consensus_all.json` · `ground_truth_ranked.json` · `ground_truth_top10.md` ·
@@ -82,13 +85,13 @@ role is founder/exec — exactly the IC discipline the rubric demands.
 
 The thorough agentic + 3-judge run is the **gold yardstick** (`ground_truth/ground_truth_ranked.json`,
 31 strong). Each cheaper/tuned harness attempt is an **epoch** scored against it by
-`recruit/score_ground_truth_gaps.py`, appending a row to `convergence.csv`.
+`deep_search/score_ground_truth_gaps.py`, appending a row to `convergence.csv`.
 
 ### Recall diagnostic (answers: "is the pipeline bad at recall, or are we misusing it?")
 
 **Misusing it — recall is excellent; ranking + keep-depth is the lever.** A *single* naive broad
 probe at full depth contained **31/31** ground-truth people (ranks 5 → 5089). The pipeline finds
-everyone; one query's ranking just buries them, so a top-50 cap keeps ~16%. Diverse ("shotgun")
+everyone; one query's ranking just buries them, so a top-50 cap keeps ~16%. Diverse ("wide search")
 probes fix it: each targeted probe pulls *its* relevant GT to the top (Kan Wu 3323→71, Sharma
 Podila 841→16, Kourosh 3830→41).
 
@@ -97,11 +100,11 @@ Podila 841→16, Kourosh 3830→41).
 | epoch | sourcing | pool | GT recall |
 | --- | --- | --- | --- |
 | 01 naive | 1 probe, keep top-50 | 50 | **16%** |
-| 02 shotgun | ~18 probes, keep top-40 | 509 | **65%** |
-| 03 shotgun | ~18 probes, keep top-80 | 954 | **100%** |
+| 02 wide search | ~18 probes, keep top-40 | 509 | **65%** |
+| 03 wide search | ~18 probes, keep top-80 | 954 | **100%** |
 | 04 targeted-expansion | top-40 + deeper on productive families | 901 | **97%** |
 
-Takeaways for the harness: (1) **shotgun for recall, judge for precision** — never tighten
+Takeaways for the harness: (1) **wide search for recall, judge for precision** — never tighten
 retrieval to chase precision. (2) Keep ~top-80/probe (or top-40 + expand-from-anchor). (3) Pool
 quality by family (top-40, judged): company/observability/routing ~6% strong, inference ~1% — but
 inference still held a top hire at rank 71, so **expand at the candidate level (anchor), not by
@@ -132,7 +135,7 @@ Findings:
   systems engineer" — so the probes overlap and the union saturates ~60%. The hand probes used
   varied *work-described* semantic queries that spanned more of the space.
 
-Implication for `$recruit`: keep `expand_search_request` for deterministic *keyword* generation,
+Implication for `$search`: keep `expand_search_request` for deterministic *keyword* generation,
 but drive **diversity at the decomposition layer** (orthogonal axes: work-described not
 title-described, specific tech stacks, specific company tiers/problem domains) so the probe set
 covers the space. Precision is owned by the judge panel regardless. Pure auto-expansion of one
@@ -199,14 +202,14 @@ preserve-semantic + drop-shared-BM25 + top-200 + judge ≈ hand-level, filters i
 ## Generalization: a second, different JD (applied-AI, not distsys)
 
 Validated the tuned recipe on **"Founding Applied AI Engineer"** (LLM products / RAG / agents —
-a different role shape) against the same Powerset set. Deterministic preserve-semantic shotgun
+a different role shape) against the same Powerset set. Deterministic preserve-semantic wide search
 (6 work-described seeds, drop-shared-BM25, top-150) → **339** union → **two-tier judging**
 (cheap triage 339→279, then 3-judge panel on a 100-cap high-signal pool) → consensus.
 
 Result: **16 consensus-strong, top-10 unanimous** (3/3 in-band). The IC seniority gate again did
 the heavy lifting — most AI people in this network are *current founders/CTOs* → correctly
 `too_senior` for an IC role. Clean convergence on a role with no shared vocabulary with the first
-JD confirms the recipe (decompose → preserve-semantic shotgun → mixture-of-judges → consensus)
+JD confirms the recipe (decompose → preserve-semantic wide search → mixture-of-judges → consensus)
 is **not overfit to distributed systems**. Two-tier judging also validated as the cost-saver
 (triage drops the bulk cheaply before the expensive panel).
 
@@ -232,15 +235,15 @@ Chroma founding eng, an xAI MTS) are anchor/company-reachable; closing 87→~95%
 
 - `packs/search/docs/agentic-search.md` — the foundational agentic-search method (answers
   "glob or primitives?": it's `search_network_pipeline --search-only`, hybrid BM25+vector, not glob).
-- `packs/search/primitives/recruit/judge_consensus.py` — combine N judge JSONL → consensus
+- `packs/search/primitives/deep_search/judge_consensus.py` — combine N judge JSONL → consensus
   stack-rank + ground-truth set (reproduces this run's 31-strong / top-10-unanimous result).
-- `packs/search/primitives/recruit/score_ground_truth_gaps.py` — score an epoch vs ground truth
+- `packs/search/primitives/deep_search/score_ground_truth_gaps.py` — score an epoch vs ground truth
   (recall@k, precision@k, missed GT ids) + append to `convergence.csv`.
-- `tests/test_recruit.py` — unit tests for both (7 tests, green).
+- `tests/test_deep_search.py` — unit tests for both (7 tests, green).
 
-## Next (hill-climb / ralph loop — see `recruit-skill-plan.md`)
+## Next (hill-climb / ralph loop — see `deep-search-plan.md`)
 
-This GT set is now the yardstick. Next: run the *default* `search-profile`/`$recruit` harness
+This GT set is now the yardstick. Next: run the *default* deep-search harness
 against the same set and score it vs this GT (recall@stage, precision@k, gate-error, cost,
 lane contribution); have high-reasoning models adjust the probe construction + judge prompts;
 loop. Then port the `search-highlight` harness onto `main` and wire the mixture-of-judges +
@@ -248,9 +251,9 @@ expand-from-anchor stages in as first-class steps.
 
 ## Full-chain portable run + mixture hill-climb (2026-06-27)
 
-Ran the **entire `$recruit` chain as callable primitives — zero sub-agents, zero harness
+Ran the **entire deep-search chain as callable primitives — zero sub-agents, zero harness
 improvisation** — and hill-climbed the judge stage. This closes the portability gap (Codex / any
-harness reproduces it): `decompose_jd` → `run_shotgun` → `build_eval_inputs` →
+harness reproduces it): `decompose_jd` → `run_wide_search` → `build_eval_inputs` →
 `triage_candidates` → `evaluate_profile_candidates` (gpt-5.4) → `judge_consensus` →
 `score_ground_truth_gaps`. Artifacts under
 `epochs/epoch-15-judged-fullchain/`. **Spend ≈ $47** (3 gpt-5.4 judge passes dominate; sourcing
@@ -258,7 +261,7 @@ harness reproduces it): `decompose_jd` → `run_shotgun` → `build_eval_inputs`
 
 ### Two new bridge primitives this required
 
-- **`build_eval_inputs.py`** — the shotgun emits `union.jsonl`, but the canonical judge reads a
+- **`build_eval_inputs.py`** — the wide search emits `union.jsonl`, but the canonical judge reads a
   profile-search run dir (`plan.json` + `candidate_frontier.jsonl` + `probe_summaries.json` →
   the already-on-disk `profiles.jsonl.gz`). This adapter rewrites the run into that contract with
   **no recompute** (1 cheap LLM call extracts must/nice traits from the JD). Verified 1034/1034
@@ -321,7 +324,7 @@ eng, a Cursor SWE, a Meta production engineer, a Pinterest AI-infra eng. So "rec
 - `judge_consensus.py` now ingests the `evaluate_profile_candidates` raw format directly
   (`candidate_id`→`person_id`, `jd_score`→`score`, `in_band` derived from `seniority_fit`) so a
   judges dir can mix OpenAI-judge and Claude-sub-agent verdicts.
-- `tests/test_recruit.py` — 33 tests green (added build_eval_inputs / triage_candidates /
+- `tests/test_deep_search.py` — 33 tests green (added build_eval_inputs / triage_candidates /
   normalize_verdict coverage).
 
 ### Next
@@ -437,7 +440,7 @@ independent runs = 1.00**, because different runs miss different people.
 
 ### `robust_source.py` + the non-flaky proof (3 independent trials)
 
-`robust_source` unions independent `decompose_jd`+`run_shotgun` rounds (each a fresh decompose with
+`robust_source` unions independent `decompose_jd`+`run_wide_search` rounds (each a fresh decompose with
 a rotated emphasis) until coverage saturates. Three independent end-to-end trials:
 
 | trial | single round0 (flaky) | multi-round union (robust) |

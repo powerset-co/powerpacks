@@ -1,12 +1,12 @@
 ---
 name: search
-description: "The single people-search door for Powerpacks. Run a people search from a natural-language query and route automatically: simple people searches go to fast local DuckDB / TurboPuffer retrieval; deep JD / job-posting-URL / role-brief / shortlist requests go to the $recruit engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
+description: "The single people-search door for Powerpacks. Run a people search from a natural-language query and route automatically: simple people searches go to fast local DuckDB / TurboPuffer retrieval; deep JD / job-posting-URL / role-brief / shortlist requests go to the deep-search engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
 ---
 
 <!--
 Changelog:
 - 2026-06-30: Renamed from `search-network` to `search` (search consolidation Stage 3). Added the
-  Step-0 router (route_query.py) that dispatches deep JD/URL/brief/shortlist to $recruit and
+  Step-0 router (route_query.py) that dispatches deep JD/URL/brief/shortlist to $search's deep mode and
   company/sql/contacts to their surfaces; ordinary people searches stay on the fast local/TurboPuffer
   path. $search-network is a deprecated alias. The retrieval primitive (search_network_pipeline.py)
   and search-network-jd-* schemas/tasks keep their names.
@@ -21,7 +21,7 @@ Use this for any people search request:
 
 - `$search software engineers in sf`
 - `$search local: product managers in nyc`
-- `$search https://jobs.lever.co/company/abc123`   ← deep JD → routes to `$recruit`
+- `$search https://jobs.lever.co/company/abc123`   ← deep JD → runs deep mode
 - `$search senior engineers at series a fintech companies`
 - `$search stanford engineers with 3-5 yoe in new york`
 - `$search people who work at OpenAI`
@@ -41,7 +41,7 @@ It prints `{route, rule, subroute}`. Dispatch on `route`:
 
 | route | action |
 |-------|--------|
-| `recruit`  | deep JD / job-posting URL / role brief / "build a shortlist" / "more people like <url>" → load `packs/search/skills/recruit/SKILL.md` and run the `$recruit` engine (a job URL goes straight in via `recruit_loop.py --jd-url`). |
+| `deep`     | deep JD / job-posting URL / role brief / "build a shortlist" / "more people like <url>" → load `packs/search/skills/search/deep-mode.md` and run the deep-search engine (a job URL goes straight in via `deep_search_loop.py --jd-url`). |
 | `company`  | company lookup / ids / investors / funding / sector → load `packs/search/skills/search-company/SKILL.md`. |
 | `sql`      | relational / aggregate / career-shape predicate → load `packs/search/skills/search-sql/SKILL.md`. |
 | `contacts` | my/set contacts + contact-field filtering → load `packs/contacts/skills/search-contacts/SKILL.md`. |
@@ -60,12 +60,12 @@ For `network` queries, apply these rules in order:
    pasted multi-paragraph job description, a broad multi-trait role brief
    that needs multiple distinct candidate profiles, **or a similar-person
    request** ("find me more people like <linkedin url>", "people similar to
-   X" with a LinkedIn profile URL), the router already sent it to `recruit` —
-   load `packs/search/skills/recruit/SKILL.md` and run the `$recruit` engine.
+   X" with a LinkedIn profile URL), the router already sent it to `deep` —
+   load `packs/search/skills/search/deep-mode.md` and run the deep-search engine.
    Do not run `search_network_pipeline.py` directly for these inputs; the
-   `$recruit` engine owns the orchestration and delegates individual profile
+   deep-search engine owns the orchestration and delegates individual profile
    searches back here (TurboPuffer mode) with a per-search `limit` and
-   filter-only flag. (`$search-profile` is a deprecated alias of `$recruit`.)
+   filter-only flag.
 
 2. **Local mode** — if any of these are true:
    - The user says "local", "local search", "offline", or "my imported
@@ -92,7 +92,7 @@ Disambiguation:
 
 ---
 
-## Hiring seniority & recruitability defaults
+## Hiring seniority & hireability defaults
 
 These apply to every hiring-intent search (a JD, a role brief, "find
 candidates", "people like X for this role") in both local and TurboPuffer
@@ -109,7 +109,7 @@ modes, and they bind any fallback behavior too:
   ("8+ years" does not mean senior). Preserve extractor-inferred bands
   unless they contradict the query.
 - **Exclude current founders / co-founders / CEOs / C-suite by default**
-  for role searches. They are rarely recruitable for an IC or leadership
+  for role searches. They are rarely hireable for an IC or leadership
   hire. State the default in the preview (one line such as
   `Excluding current founders/C-suite — say "include founders" to keep
   them`) so the user can flip it. Include them only when the user
@@ -119,7 +119,7 @@ modes, and they bind any fallback behavior too:
   hands-on and appropriate depending on company stage. Keep them unless
   the user excludes them; the rerank judges hands-on fit.
 - **"People like <person>"** anchors seniority to that person's current
-  role and band (same rule as the `$recruit` engine). If the anchor is still
+  role and band (same rule as the deep-search engine). If the anchor is still
   ambiguous, ask exactly one question before executing: "Hands-on IC
   engineers only, or are technical leaders (VP/director/CTO) acceptable
   if still hands-on?"
@@ -316,7 +316,7 @@ files on the happy path. Start a fresh run for every search request.
 
 5. If the user chooses `execute`, run the returned `execute_command` exactly.
    It already includes `--execute-approved`; do not ask for another approval.
-   - If a **limit** was provided (e.g. by the `$recruit` engine for a
+   - If a **limit** was provided (e.g. by the deep-search engine for a
      capped profile search), append `--limit <N>` to the execute_command (or
      pass `--limit` to `prepare`, which threads it through). This caps
      retrieval and the whole downstream pipeline. For standalone user

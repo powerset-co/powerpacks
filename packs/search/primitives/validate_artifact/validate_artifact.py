@@ -7,7 +7,7 @@ hand-roll jsonschema imports in ad-hoc scripts.
 
 Usage:
     uv run --project . python packs/search/primitives/validate_artifact/validate_artifact.py \
-        --schema search-network-jd-plan --file .powerpacks/search-profile/<run>/plan.json
+        --schema search-network-jd-plan --file .powerpacks/deep-search/<run>/plan.json
 
     ... --list-schemas
 """

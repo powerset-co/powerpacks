@@ -8,7 +8,7 @@
   "subroute_accuracy": 1.0,
   "subroute_n": 2,
   "per_route": {
-    "recruit": {
+    "deep": {
       "n": 9,
       "correct": 8,
       "recall": 0.8889
@@ -35,36 +35,36 @@
     }
   },
   "confusion": {
-    "recruit": {
-      "recruit": 8,
+    "deep": {
+      "deep": 8,
       "contacts": 0,
       "sql": 0,
       "company": 0,
       "network": 1
     },
     "contacts": {
-      "recruit": 0,
+      "deep": 0,
       "contacts": 7,
       "sql": 0,
       "company": 0,
       "network": 0
     },
     "sql": {
-      "recruit": 0,
+      "deep": 0,
       "contacts": 0,
       "sql": 9,
       "company": 0,
       "network": 0
     },
     "company": {
-      "recruit": 1,
+      "deep": 1,
       "contacts": 0,
       "sql": 0,
       "company": 7,
       "network": 1
     },
     "network": {
-      "recruit": 0,
+      "deep": 0,
       "contacts": 0,
       "sql": 0,
       "company": 0,
@@ -79,8 +79,8 @@
       "acceptable": [
         "company"
       ],
-      "predicted": "recruit",
-      "rule": "recruit-intent"
+      "predicted": "deep",
+      "rule": "deep-intent"
     }
   ]
 }

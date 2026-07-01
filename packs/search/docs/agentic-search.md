@@ -2,7 +2,7 @@
 
 _Created: 2026-06-26_
 
-This is the foundational "agentic search" method behind `$recruit`. It builds a **trustworthy,
+This is the foundational "agentic search" method behind `$search`'s deep mode. It builds a **trustworthy,
 within-corpus, judged ground-truth set** for a JD from a Powerset set, then lets the cheaper
 default harness be measured against it and tuned over **epochs** until it converges.
 
@@ -35,7 +35,7 @@ backend.** The intelligence is in *how many* and *which* probes get issued, and 
 `search_network_pipeline` writes to a **shared ledger** by default and will silently **resume a
 stale prior run** (you get someone else's results). **Always pass a unique `--ledger` per probe.**
 
-## The method (what `$recruit` automates)
+## The method (what `$search` deep mode automates)
 
 ```
 JD ──► PLAN (traits + seniority policy)
@@ -76,7 +76,7 @@ Ground truth (the thorough agentic+panel run) is the **yardstick**. Each cheaper
 attempt is an **epoch**; we score it against ground truth and converge.
 
 ```
-.powerpacks/recruit/<jd-slug>/
+.powerpacks/deep-search/<jd-slug>/
   ground_truth/ground_truth_ranked.json     # gold (built once by the full method)
   epochs/
     epoch-01/{config.json, candidates.jsonl, gaps.json}
@@ -99,14 +99,14 @@ No ledgers / run-ids / parallel state stores (repo rule) — just per-epoch dirs
 | source | `search_network_pipeline … run --search-only` (hybrid TurboPuffer + Postgres hydrate) | ~none |
 | merge | `merge_candidate_frontier` (or inline union) | none |
 | judge | Claude sub-agents on the canonical rubric (`evaluate_profile_candidates` SYSTEM_PROMPT) | Claude tokens |
-| consensus | `recruit/judge_consensus.py` | none |
-| score | `recruit/score_ground_truth_gaps.py` | none |
+| consensus | `deep_search/judge_consensus.py` | none |
+| score | `deep_search/score_ground_truth_gaps.py` | none |
 
 The canonical `evaluate_profile_candidates.py` (gpt-5.4) remains available as a paid,
 deterministic cross-check — but the default loop is Claude-priced.
 
 ## Reproduce the AgentMail run
 
-See `recruit-ground-truth-status.md` for the v1 numbers (79 union → 31 consensus-strong →
+See `deep-search-ground-truth-status.md` for the v1 numbers (79 union → 31 consensus-strong →
 top-10 unanimous, ~zero OpenAI). The brief + payloads live (gitignored) under
-`.powerpacks/recruit/agentmail-distsys-mts-20260626/`.
+`.powerpacks/deep-search/agentmail-distsys-mts-20260626/`.

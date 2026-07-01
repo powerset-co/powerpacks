@@ -5,9 +5,9 @@ harness (Claude Code, Codex, another skill) produces the seeds identically. Each
 RICH, work-described sentence (what the person *built/did*, not a job title) — diversity across
 seeds is the whole point, because the downstream `--preserve-query-semantic` path uses each seed
 verbatim as the retrieval vector, and overlapping/title-y seeds collapse recall (see
-packs/search/docs/recruit-ground-truth-status.md).
+packs/search/docs/deep-search-ground-truth-status.md).
 
-Output: seeds.json = [{"key": "q00", "query": "..."}, ...] — consumed by recruit/run_shotgun.py.
+Output: seeds.json = [{"key": "q00", "query": "..."}, ...] — consumed by deep_search/run_wide_search.py.
 One OpenAI call (json_object), mirroring expand_search_request's client pattern.
 """
 from __future__ import annotations

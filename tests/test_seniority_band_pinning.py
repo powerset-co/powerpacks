@@ -1,6 +1,6 @@
 """Tests for pinned seniority bands on the search pipelines.
 
-The JD/profile flow ($search-profile) derives canonical seniority bands from a
+The deep-search JD/profile flow derives canonical seniority bands from a
 job description's explicit level language and pins them on every profile
 search via --seniority-bands. The pin must validate against the canonical band
 vocabulary, REPLACE expansion-derived bands in the final payload, survive role

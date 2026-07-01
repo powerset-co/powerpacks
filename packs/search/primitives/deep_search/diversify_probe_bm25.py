@@ -1,4 +1,4 @@
-"""Drop homogeneous (shared) BM25 lead terms across a set of shotgun probes.
+"""Drop homogeneous (shared) BM25 lead terms across a set of wide-search probes.
 
 When many probes are LLM-expanded from a JD, expansion tends to give every probe the
 same lead BM25 term ("distributed systems engineer", "ai product engineer", ...).

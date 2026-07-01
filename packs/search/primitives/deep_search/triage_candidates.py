@@ -1,9 +1,9 @@
-"""Cheap-model triage over a recruit candidate frontier (tier-1 filter).
+"""Cheap-model triage over a deep-search candidate frontier (tier-1 filter).
 
 The canonical judge (`evaluate_profile_candidates`, gpt-5.4) is expensive, so we DON'T run it on
-the full shotgun union. The existing `llm_filter_candidates` only operates on a search_network
-run-state (merge step + hydration coverage), which the recruit artifact model deliberately
-avoids. This is the portable equivalent for the recruit `candidate_frontier.jsonl`:
+the full wide-search union. The existing `llm_filter_candidates` only operates on a search_network
+run-state (merge step + hydration coverage), which the deep-search artifact model deliberately
+avoids. This is the portable equivalent for the deep-search `candidate_frontier.jsonl`:
 
   - load each candidate's hydrated profile (same probe_summaries -> profiles.jsonl.gz path the
     judge uses), build a compact profile card,
@@ -13,7 +13,7 @@ avoids. This is the portable equivalent for the recruit `candidate_frontier.json
 
 IMPORTANT (recall guardrail): triage is conservative on purpose. Probe-count is a BAD precision
 signal — measured: single-probe hits include true top candidates — so triage looks at the PROFILE,
-not how many probes found them, and only drops obvious non-matches. See recruit/SKILL.md.
+not how many probes found them, and only drops obvious non-matches. See packs/search/skills/search/SKILL.md.
 """
 from __future__ import annotations
 

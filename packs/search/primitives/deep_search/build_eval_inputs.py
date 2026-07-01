@@ -1,13 +1,13 @@
-"""Bridge a recruit shotgun run into the inputs the canonical judge expects.
+"""Bridge a deep-search wide-search run into the inputs the canonical judge expects.
 
 `evaluate_profile_candidates` reads a *profile-search* run dir:
   - plan.json            (job_title, normalized_archetype, hire_stage, usable_cutoff, traits)
   - candidate_frontier.jsonl  (one {person_id, source_rows:[{score}], matched_probe_ids} per candidate)
   - probe_summaries.json (list of {artifact_dir} -> <dir>/hydrate_people/profiles.jsonl.gz)
 
-The recruit pipeline instead emits `union.jsonl` (deduped candidates + found_by) plus
+The deep-search pipeline instead emits `union.jsonl` (deduped candidates + found_by) plus
 `probes/<key>/ledger.json` (each pointing at a search-network artifact dir that ALREADY holds
-the hydrated profiles.jsonl.gz). This adapter rewrites the recruit run into the judge's contract
+the hydrated profiles.jsonl.gz). This adapter rewrites the deep-search run into the judge's contract
 WITHOUT recomputing anything expensive:
 
   - probe_summaries.json  <- artifact_dir from every probe ledger (profiles already on disk)
@@ -15,9 +15,9 @@ WITHOUT recomputing anything expensive:
     signal), matched_probe_ids = found_by. The judge re-ranks by its own rubric afterwards, so
     this only seeds selection order.
   - plan.json  <- ONE LLM call extracts must/nice traits + hire_stage + usable_cutoff from the JD
-    (mirrors the hand-authored plan.json in search-profile Task 1, made callable & portable).
+    (mirrors the hand-authored plan.json step, made callable & portable).
 
-One OpenAI call total (traits). See packs/search/skills/recruit/SKILL.md.
+One OpenAI call total (traits). See packs/search/skills/search/SKILL.md.
 """
 from __future__ import annotations
 
@@ -107,10 +107,10 @@ def plan_from_obj(obj: dict[str, Any], *, set_name: str, set_id: str, source_url
     if target_level not in VALID_TARGET_LEVELS:
         target_level = "senior_ic"
     return {
-        "route": "recruit",
+        "route": "deep",
         "parse_only": False,
         "retrieval_ran": False,
-        "job_id": "recruit",
+        "job_id": "deep",
         "job_title": str(obj.get("job_title") or "role").strip(),
         "normalized_archetype": str(obj.get("normalized_archetype") or "engineer").strip(),
         "source_url": source_url,
@@ -162,7 +162,7 @@ def build_frontier(union: list[dict[str, Any]], source_map: dict[str, tuple[str,
             "duplicate_signal": {
                 "matched_probe_count": len(matched_probe_ids),
                 "matched_probe_ids": matched_probe_ids,
-                "interpretation": "matched multiple recruit probes" if len(matched_probe_ids) > 1 else "single recruit probe match",
+                "interpretation": "matched multiple deep-search probes" if len(matched_probe_ids) > 1 else "single deep-search probe match",
             },
         })
     return out
@@ -177,7 +177,7 @@ def write_frontier_artifacts(run_dir: Path, frontier: list[dict[str, Any]]) -> N
         json.dumps({
             "candidates": frontier,
             "candidate_count": len(frontier),
-            "source": "recruit/build_eval_inputs",
+            "source": "deep_search/build_eval_inputs",
         }, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -187,7 +187,7 @@ def probe_artifact_dirs(run_dir: Path) -> list[str]:
     """Every probe ledger's artifact_dir (each holds hydrate_people/profiles.jsonl.gz)."""
     dirs: list[str] = []
     seen: set[str] = set()
-    # Match both run_shotgun (run_dir/probes/<k>) and robust_source (run_dir/round*/probes/<k>).
+    # Match both run_wide_search (run_dir/probes/<k>) and robust_source (run_dir/round*/probes/<k>).
     ledgers = sorted(run_dir.glob("probes/*/ledger.json")) + sorted(run_dir.glob("round*/probes/*/ledger.json"))
     for led in ledgers:
         try:
@@ -258,12 +258,12 @@ def _load_union(path: Path) -> list[dict[str, Any]]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build plan.json + candidate_frontier.jsonl + probe_summaries.json for the canonical judge.")
-    ap.add_argument("--run-dir", required=True, help="Recruit run dir with union.jsonl + probes/<key>/ledger.json")
+    ap.add_argument("--run-dir", required=True, help="Deep-search run dir with union.jsonl + probes/<key>/ledger.json")
     ap.add_argument("--union", default=None, help="Override union path (default <run-dir>/union.jsonl)")
     ap.add_argument("--jd-file", default=None, help="Path to the JD text (for trait extraction; not needed with --plan)")
     ap.add_argument("--plan", default=None, help="Reuse an existing plan.json (skip the LLM trait extraction — for loop epochs)")
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""))
-    ap.add_argument("--set-name", default="recruit set")
+    ap.add_argument("--set-name", default="deep-search set")
     ap.add_argument("--source-url", default=None)
     ap.add_argument("--created-at", default=None, help="ISO timestamp (required unless --plan has created_at)")
     ap.add_argument("--model", default=DEFAULT_MODEL)

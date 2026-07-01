@@ -36,13 +36,9 @@ rm -rf "$TARGET/.claude/skills/add-slice-search"
 rm -rf "$TARGET/.claude/skills/add-candidate-review-planning"
 rm -rf "$TARGET/.claude/skills/search-network" "$TARGET/.claude/skills/search"
 cp -R "$REPO_ROOT/packs/search/skills/search" "$TARGET/.claude/skills/search"
-rm -rf "$TARGET/.claude/skills/search-profile"
-cp -R "$REPO_ROOT/packs/search/skills/search-profile" "$TARGET/.claude/skills/search-profile"
 
 rm -rf "$TARGET/container/skills/search-network" "$TARGET/container/skills/search"
 cp -R "$REPO_ROOT/packs/search/skills/search" "$TARGET/container/skills/search"
-rm -rf "$TARGET/container/skills/search-profile"
-cp -R "$REPO_ROOT/packs/search/skills/search-profile" "$TARGET/container/skills/search-profile"
 
 rm -rf "$TARGET/powerpacks/primitives"
 rm -rf "$TARGET/powerpacks/mcp"

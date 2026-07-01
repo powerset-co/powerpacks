@@ -1,4 +1,4 @@
-"""Run a shotgun of probes from a seeds file and emit a deduped candidate union.
+"""Run a wide search of probes from a seeds file and emit a deduped candidate union.
 
 One callable command that chains the EXISTING primitives so any harness reproduces sourcing
 identically (no inline scripting, no shared-ledger footgun):
@@ -10,7 +10,7 @@ identically (no inline scripting, no shared-ledger footgun):
 
 Input seeds.json = [{"key","query", ...}] from decompose_jd.py or expand_from_anchor.py.
 Retrieval is read-only (TurboPuffer) + Postgres hydrate -> no OpenAI here (the LLM cost was the
-one prepare() expansion call per seed). See packs/search/skills/recruit/SKILL.md.
+one prepare() expansion call per seed). See packs/search/skills/search/SKILL.md.
 """
 from __future__ import annotations
 
@@ -27,12 +27,12 @@ from typing import Any
 
 try:  # direct script execution
     from subprocess_utils import CommandError, require_paths, run_checked
-except ImportError:  # module execution: python -m packs.search.primitives.recruit.run_shotgun
+except ImportError:  # module execution: python -m packs.search.primitives.deep_search.run_wide_search
     from .subprocess_utils import CommandError, require_paths, run_checked
 
 ROOT = Path(__file__).resolve().parents[4]
 SNP = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
-DIVERSIFY = ROOT / "packs/search/primitives/recruit/diversify_probe_bm25.py"
+DIVERSIFY = ROOT / "packs/search/primitives/deep_search/diversify_probe_bm25.py"
 
 
 def _load_seeds(path: Path) -> list[dict[str, str]]:
@@ -42,7 +42,7 @@ def _load_seeds(path: Path) -> list[dict[str, str]]:
 
 def _prepare(seed: dict[str, str], probe_dir: Path, env_file: str, preserve: bool) -> Path | None:
     """Prepare one probe payload. Returns None (never raises) when this single probe fails so one
-    flaky expansion call cannot abort the whole shotgun: main drops None via ok_seeds and only fails
+    flaky expansion call cannot abort the whole wide search: main drops None via ok_seeds and only fails
     if NO probe survives. Each prepare makes an LLM expansion call, so transient 429/500 is expected."""
     probe_dir.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, str(SNP), "prepare", "--query", seed["query"],
@@ -59,14 +59,14 @@ def _prepare(seed: dict[str, str], probe_dir: Path, env_file: str, preserve: boo
         require_paths([dest], cmd=cmd, description=f"prepare probe {seed.get('key')}")
         return dest
     except CommandError as exc:
-        print(json.dumps({"primitive": "run_shotgun", "probe": seed.get("key"), "stage": "prepare",
+        print(json.dumps({"primitive": "run_wide_search", "probe": seed.get("key"), "stage": "prepare",
                           "status": "skipped", "error": str(exc)}), file=sys.stderr)
         return None
 
 
 def _run(seed: dict[str, str], probe_dir: Path, set_id: str | None, env_file: str, limit: int, top_k: int) -> bool:
     """Run one probe. Returns False (never raises) when this single probe fails so one flaky
-    retrieval cannot abort the shotgun: build_union skips probes without a ledger and main fails
+    retrieval cannot abort the wide search: build_union skips probes without a ledger and main fails
     only if the union ends up empty."""
     payload = probe_dir / "payload.json"
     ledger = probe_dir / "ledger.json"
@@ -82,7 +82,7 @@ def _run(seed: dict[str, str], probe_dir: Path, set_id: str | None, env_file: st
                     expected_paths=[ledger], description=f"run probe {seed.get('key')}")
         return True
     except (CommandError, OSError, json.JSONDecodeError) as exc:
-        print(json.dumps({"primitive": "run_shotgun", "probe": seed.get("key"), "stage": "run",
+        print(json.dumps({"primitive": "run_wide_search", "probe": seed.get("key"), "stage": "run",
                           "status": "skipped", "error": str(exc)}), file=sys.stderr)
         return False
 
@@ -124,7 +124,7 @@ def build_union(run_dir: Path, seeds: list[dict[str, str]], keep: int) -> list[d
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Run a shotgun of seeds -> deduped candidate union (chains existing primitives).")
+    ap = argparse.ArgumentParser(description="Run a wide search of seeds -> deduped candidate union (chains existing primitives).")
     ap.add_argument("--seeds", required=True)
     ap.add_argument("--run-dir", required=True, help="Output dir: probes/<key>/ + union.jsonl")
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID"))
@@ -148,7 +148,7 @@ def main() -> None:
         ok_seeds = [s for s, p in zip(seeds, payloads) if p is not None]
 
         if not ok_seeds:  # every probe's prepare failed — nothing to search
-            raise CommandError(["run_shotgun"], description="prepare probes (all probes failed)", missing=[run_dir / "probes"])
+            raise CommandError(["run_wide_search"], description="prepare probes (all probes failed)", missing=[run_dir / "probes"])
 
         if not args.no_diversify:
             files = [str(run_dir / "probes" / s["key"] / "payload.json") for s in ok_seeds]
@@ -158,18 +158,18 @@ def main() -> None:
             ran = list(ex.map(lambda s: _run(s, run_dir / "probes" / s["key"], args.set_id, args.env_file, args.limit, args.top_k), ok_seeds))
         run_ok = sum(1 for r in ran if r)
         if not run_ok:  # every surviving probe's retrieval failed
-            raise CommandError(["run_shotgun"], description="run probes (all probes failed)", missing=[run_dir / "probes"])
+            raise CommandError(["run_wide_search"], description="run probes (all probes failed)", missing=[run_dir / "probes"])
     except CommandError as exc:
-        print(json.dumps({"primitive": "run_shotgun", "status": "failed", "error": str(exc), "details": exc.to_dict()}, indent=2))
+        print(json.dumps({"primitive": "run_wide_search", "status": "failed", "error": str(exc), "details": exc.to_dict()}, indent=2))
         raise SystemExit(1) from exc
 
     union = build_union(run_dir, ok_seeds, keep)
     if not union:
-        print(json.dumps({"primitive": "run_shotgun", "status": "failed", "error": "empty union after successful probe runs"}, indent=2))
+        print(json.dumps({"primitive": "run_wide_search", "status": "failed", "error": "empty union after successful probe runs"}, indent=2))
         raise SystemExit(1)
     out = run_dir / "union.jsonl"
     out.write_text("\n".join(json.dumps(r) for r in union) + "\n", encoding="utf-8")
-    print(json.dumps({"primitive": "run_shotgun", "status": "completed", "seeds": len(seeds),
+    print(json.dumps({"primitive": "run_wide_search", "status": "completed", "seeds": len(seeds),
                       "probes_prepared": len(ok_seeds), "probes_run_ok": run_ok, "union": len(union), "out": str(out)}, indent=2))
 
 

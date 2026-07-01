@@ -151,7 +151,7 @@ def build_consensus(
         })
 
     if core_traits:
-        # CORE-GATE (the recruit shortlist rule): membership = majority-in-band AND the candidate
+        # CORE-GATE (the deep-search shortlist rule): membership = majority-in-band AND the candidate
         # genuinely does >= 1 core domain capability (experienced+) AND clears the score floor.
         # Generic seniority/leadership traits (table_stakes) only affect ranking, never membership —
         # so a strong-but-wrong-domain candidate (parks at `capable`/`missing` on every core trait)

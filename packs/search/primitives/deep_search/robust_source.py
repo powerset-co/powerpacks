@@ -1,6 +1,6 @@
-"""Robust, non-flaky sourcing: union independent shotgun rounds until coverage saturates.
+"""Robust, non-flaky sourcing: union independent wide-search rounds until coverage saturates.
 
-A single `decompose_jd -> run_shotgun` round is stochastic (the LLM seed set varies, so which
+A single `decompose_jd -> run_wide_search` round is stochastic (the LLM seed set varies, so which
 candidates get sourced varies run-to-run — measured 0.90-1.00 recall on AgentMail). The fix is
 REDUNDANCY: run several independent rounds and union them. Measured: the union of any 2 independent
 rounds saturates to 100% GT coverage, because different rounds miss different people.
@@ -10,12 +10,12 @@ it keeps adding rounds until a new round contributes fewer than `--saturation-mi
 new candidates (coverage stopped growing). Each round gets a FRESH decompose call with a rotated
 emphasis so the rounds explore different regions instead of resampling the same seeds.
 
-  round r: decompose_jd (fresh, rotated emphasis) -> run_shotgun (top-`keep`) -> fold into union
+  round r: decompose_jd (fresh, rotated emphasis) -> run_wide_search (top-`keep`) -> fold into union
   stop when net-new < saturation-min-new (or --max-rounds hit)
   -> <run-dir>/union.jsonl  (the saturated, redundant pool; feed straight to the free codex judge)
 
 No triage: the judge is free (codex_judge), so there is no reason to pre-filter and risk dropping
-reachable candidates. See packs/search/skills/recruit/SKILL.md.
+reachable candidates. See packs/search/skills/search/SKILL.md.
 """
 from __future__ import annotations
 
@@ -27,12 +27,12 @@ from typing import Any
 
 try:  # direct script execution
     from subprocess_utils import CommandError, run_checked
-except ImportError:  # module execution: python -m packs.search.primitives.recruit.robust_source
+except ImportError:  # module execution: python -m packs.search.primitives.deep_search.robust_source
     from .subprocess_utils import CommandError, run_checked
 
 ROOT = Path(__file__).resolve().parents[4]
-DECOMPOSE = ROOT / "packs/search/primitives/recruit/decompose_jd.py"
-SHOTGUN = ROOT / "packs/search/primitives/recruit/run_shotgun.py"
+DECOMPOSE = ROOT / "packs/search/primitives/deep_search/decompose_jd.py"
+WIDE_SEARCH = ROOT / "packs/search/primitives/deep_search/run_wide_search.py"
 
 # Rotated emphases so each round explores a different region (diversity, not resampling).
 EMPHASES = [
@@ -70,7 +70,7 @@ def _merge(into: dict[str, dict[str, Any]], rnd_union: Path, round_tag: str) -> 
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Robust sourcing: union independent shotgun rounds until coverage saturates.")
+    ap = argparse.ArgumentParser(description="Robust sourcing: union independent wide-search rounds until coverage saturates.")
     ap.add_argument("--jd-file", required=True)
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--set-id", default=None)
@@ -109,11 +109,11 @@ def main() -> None:
             run_checked(dcmd, expected_paths=[seeds_path], description=f"decompose round {r}")
 
             round_union = rdir / "union.jsonl"
-            scmd = [sys.executable, str(SHOTGUN), "--seeds", str(seeds_path), "--run-dir", str(rdir),
+            scmd = [sys.executable, str(WIDE_SEARCH), "--seeds", str(seeds_path), "--run-dir", str(rdir),
                     "--env-file", args.env_file, "--limit", str(args.keep)]
             if args.set_id:
                 scmd += ["--set-id", args.set_id]
-            run_checked(scmd, expected_paths=[round_union], description=f"shotgun round {r}")
+            run_checked(scmd, expected_paths=[round_union], description=f"wide-search round {r}")
 
             net_new = _merge(union, round_union, f"r{r}")
             history.append({"round": r, "net_new": net_new, "union_total": len(union), "emphasis": emphasis or "(default)"})

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Shared subprocess helpers for recruit primitives.
+"""Shared subprocess helpers for deep-search primitives.
 
-The recruit harness is an orchestration layer: most work happens in child
+The deep-search harness is an orchestration layer: most work happens in child
 primitives. Silent child failures are therefore product failures, not merely
 debug noise. Keep all subprocess execution checked and artifact-aware here so
 callers cannot accidentally report success after a failed stage.
