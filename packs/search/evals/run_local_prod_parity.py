@@ -411,8 +411,10 @@ def run_local_search(
     ledger = run_dir / slug / "local-search.pipeline.json"
     cmd = [
         sys.executable,
-        str(ROOT / "packs/search/primitives/local_search_pipeline/local_search_pipeline.py"),
+        str(ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"),
         "run",
+        "--backend",
+        "local",
         "--db",
         str(db),
         "--ledger",

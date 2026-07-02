@@ -379,7 +379,7 @@
         "local": {
           "repo": "powerpacks",
           "paths": [
-            "packs/search/primitives/local_search_pipeline/local_search_pipeline.py",
+            "packs/search/primitives/search_network_pipeline/search_network_pipeline.py",
             "packs/search/primitives/execute_role_search/execute_role_search.py"
           ],
           "symbols": [
@@ -506,7 +506,7 @@
         "local": {
           "repo": "powerpacks",
           "paths": [
-            "packs/search/primitives/local_search_pipeline/local_search_pipeline.py"
+            "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
           ],
           "symbols": [],
           "artifacts": [

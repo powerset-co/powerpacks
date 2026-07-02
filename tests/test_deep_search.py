@@ -1,6 +1,7 @@
 """Unit tests for the $search deep-mode consensus + ground-truth-gap primitives (pure functions)."""
 from __future__ import annotations
 
+import argparse
 import csv
 import gzip
 import importlib.util
@@ -68,7 +69,7 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
             # rsg.CommandError (not su.CommandError): run_wide_search's except binds its own import.
             boom = rsg.CommandError(["prepare"], returncode=1, description="prepare probe q00")
             with mock.patch.object(rsg, "run_checked", side_effect=boom):
-                result = rsg._prepare({"key": "q00", "query": "flaky"}, probe_dir, ".env", True)
+                result = rsg._prepare({"key": "q00", "query": "flaky"}, probe_dir, ".env", True, "powerset", None)
         self.assertIsNone(result)  # tolerated (dropped by ok_seeds), not propagated
 
     def test_prepare_returns_payload_path_on_success(self):
@@ -79,7 +80,7 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
             prep.mkdir(parents=True)
             (prep / "expand_search_request.json").write_text("{}")
             with mock.patch.object(rsg, "run_checked", return_value=None):
-                dest = rsg._prepare({"key": "q00", "query": "ok"}, probe_dir, ".env", True)
+                dest = rsg._prepare({"key": "q00", "query": "ok"}, probe_dir, ".env", True, "powerset", None)
             self.assertEqual(dest, probe_dir / "payload.json")
             self.assertTrue((probe_dir / "payload.json").exists())
 
@@ -91,7 +92,7 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
             (probe_dir / "payload.json").write_text(json.dumps({"role_search_filters": {}}))
             boom = rsg.CommandError(["run"], returncode=1, description="run probe q00")
             with mock.patch.object(rsg, "run_checked", side_effect=boom):
-                ok = rsg._run({"key": "q00", "query": "flaky"}, probe_dir, "set-123", ".env", 200, 6000)
+                ok = rsg._run({"key": "q00", "query": "flaky"}, probe_dir, "set-123", ".env", 200, 6000, "powerset", None)
         self.assertFalse(ok)  # tolerated (build_union skips the missing ledger), not propagated
 
     def test_run_returns_true_on_success(self):
@@ -101,8 +102,57 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
             probe_dir.mkdir(parents=True)
             (probe_dir / "payload.json").write_text(json.dumps({"role_search_filters": {}}))
             with mock.patch.object(rsg, "run_checked", return_value=None):
-                ok = rsg._run({"key": "q00", "query": "ok"}, probe_dir, None, ".env", 200, 6000)
+                ok = rsg._run({"key": "q00", "query": "ok"}, probe_dir, None, ".env", 200, 6000, "powerset", None)
         self.assertTrue(ok)
+
+
+class TestLocalBackendThreading(unittest.TestCase):
+    """--backend/--db threading through the deep-search sourcing chain (post search-backend fold)."""
+
+    class _HaltAfterParse(Exception):
+        pass
+
+    def test_backend_args_local_vs_powerset(self):
+        rsg = _load("run_wide_search")
+        self.assertEqual(rsg._backend_args("local", "x.duckdb"), ["--backend", "local", "--db", "x.duckdb"])
+        self.assertEqual(rsg._backend_args("powerset", None), [])
+
+    def _parse_with_real_parser(self, mod, argv: list[str]) -> argparse.Namespace:
+        """Drive mod.main() only through its real argparse parse, then halt (no execution)."""
+        captured: dict[str, argparse.Namespace] = {}
+        real_parse_args = argparse.ArgumentParser.parse_args
+
+        def spy(parser, *args, **kwargs):
+            captured["args"] = real_parse_args(parser, *args, **kwargs)
+            raise TestLocalBackendThreading._HaltAfterParse()
+
+        old_argv = sys.argv
+        sys.argv = argv
+        try:
+            with mock.patch.object(argparse.ArgumentParser, "parse_args", spy):
+                with self.assertRaises(TestLocalBackendThreading._HaltAfterParse):
+                    mod.main()
+        finally:
+            sys.argv = old_argv
+        return captured["args"]
+
+    def test_deep_search_loop_parser_accepts_local_backend(self):
+        args = self._parse_with_real_parser(
+            rl,
+            ["loop", "--jd-file", "jd.txt", "--run-dir", "run", "--created-at", "t",
+             "--backend", "local", "--db", "x.duckdb"],
+        )
+        self.assertEqual(args.backend, "local")
+        self.assertEqual(args.db, "x.duckdb")
+
+    def test_robust_source_parser_accepts_local_backend(self):
+        args = self._parse_with_real_parser(
+            rs,
+            ["robust", "--jd-file", "jd.txt", "--run-dir", "run",
+             "--backend", "local", "--db", "x.duckdb"],
+        )
+        self.assertEqual(args.backend, "local")
+        self.assertEqual(args.db, "x.duckdb")
 
 
 class TestDecomposeJd(unittest.TestCase):

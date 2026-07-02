@@ -74,6 +74,8 @@ def main() -> None:
     ap.add_argument("--jd-file", required=True)
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--set-id", default=None)
+    ap.add_argument("--backend", choices=("powerset", "local"), default="powerset", help="Threaded to run_wide_search; local = the local DuckDB index")
+    ap.add_argument("--db", default=".powerpacks/search-index/local-search.duckdb", help="Local DuckDB path (used only with --backend local)")
     ap.add_argument("--env-file", default=".env")
     ap.add_argument("--n", type=int, default=16, help="Seeds per round")
     ap.add_argument("--keep", type=int, default=200, help="Top-N per probe folded into the union")
@@ -111,6 +113,8 @@ def main() -> None:
             round_union = rdir / "union.jsonl"
             scmd = [sys.executable, str(WIDE_SEARCH), "--seeds", str(seeds_path), "--run-dir", str(rdir),
                     "--env-file", args.env_file, "--limit", str(args.keep)]
+            if args.backend == "local":
+                scmd += ["--backend", "local", "--db", args.db]
             if args.set_id:
                 scmd += ["--set-id", args.set_id]
             run_checked(scmd, expected_paths=[round_union], description=f"wide-search round {r}")

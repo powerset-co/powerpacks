@@ -235,8 +235,8 @@ only; keep that scoped to the msgvault primitives.
   loading `packs/search/skills/search/SKILL.md`, make its Step-1 decision
   yourself (surface/backend/depth, recorded to the run dir's `decision.json`)
   and dispatch from its table — ordinary people searches use the
-  `search_network_pipeline.py prepare --query ...` (powerset) or
-  `local_search_pipeline.py prepare` (local) path; the primitive owns
+  `search_network_pipeline.py prepare --query ...` path (add
+  `--backend local --db <db>` for the local DuckDB index); the primitive owns
   company-directory fast path detection. Job posting URLs and pasted JDs decide
   `depth: deep` — load `packs/search/skills/search/deep-mode.md` and run the
   deep-search engine (a job URL runs through `deep_search_loop.py --jd-url`). Do not

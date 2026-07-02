@@ -44,8 +44,9 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
             sys.path.insert(0, {str(PRIMITIVES / 'execute_role_search')!r})
             sys.path.insert(0, {str(PRIMITIVES / 'apply_prefilters')!r})
             sys.path.insert(0, {str(PRIMITIVES / 'count_candidates')!r})
+            sys.path.insert(0, {str(PRIMITIVES / 'search_network_pipeline')!r})
 
-            blocked = {{'local_search_backend', 'local_search_verticals', 'local_resolve_companies', 'local_resolve_education', 'local_duckdb_store'}}
+            blocked = {{'duckdb', 'local_search_backend', 'local_search_verticals', 'local_resolve_companies', 'local_resolve_education', 'local_duckdb_store'}}
             for name in list(sys.modules):
                 if name.split('.')[0] in blocked:
                     sys.modules.pop(name, None)
@@ -67,6 +68,7 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
                 'execute_role_search',
                 'apply_prefilters',
                 'count_candidates',
+                'search_network_pipeline',
             ]:
                 importlib.import_module(module)
         """)
@@ -86,10 +88,9 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
             sys.path.insert(0, {str(PRIMITIVES / 'execute_role_search')!r})
             sys.path.insert(0, {str(PRIMITIVES / 'apply_prefilters')!r})
             sys.path.insert(0, {str(PRIMITIVES / 'count_candidates')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'local_search_pipeline')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'local_duckdb')!r})
+            sys.path.insert(0, {str(PRIMITIVES / 'search_network_pipeline')!r})
 
-            blocked = {{'turbopuffer_search_backend', 'turbopuffer_resolve_companies', 'turbopuffer_resolve_education'}}
+            blocked = {{'turbopuffer', 'turbopuffer_search_backend', 'turbopuffer_resolve_companies', 'turbopuffer_resolve_education'}}
             for name in list(sys.modules):
                 if name.split('.')[0] in blocked:
                     sys.modules.pop(name, None)
@@ -112,8 +113,7 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
                 'execute_role_search',
                 'apply_prefilters',
                 'count_candidates',
-                'local_search_pipeline',
-                '_dispatch',
+                'search_network_pipeline',
             ]:
                 importlib.import_module(module)
         """)

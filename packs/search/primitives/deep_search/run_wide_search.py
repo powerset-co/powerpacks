@@ -40,13 +40,17 @@ def _load_seeds(path: Path) -> list[dict[str, str]]:
     return data if isinstance(data, list) else data.get("seeds", [])
 
 
-def _prepare(seed: dict[str, str], probe_dir: Path, env_file: str, preserve: bool) -> Path | None:
+def _backend_args(backend: str, db: str | None) -> list[str]:
+    return ["--backend", "local", "--db", str(db)] if backend == "local" else []
+
+
+def _prepare(seed: dict[str, str], probe_dir: Path, env_file: str, preserve: bool, backend: str, db: str | None) -> Path | None:
     """Prepare one probe payload. Returns None (never raises) when this single probe fails so one
     flaky expansion call cannot abort the whole wide search: main drops None via ok_seeds and only fails
     if NO probe survives. Each prepare makes an LLM expansion call, so transient 429/500 is expected."""
     probe_dir.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, str(SNP), "prepare", "--query", seed["query"],
-           "--env-file", env_file, "--output-dir", str(probe_dir / "prep")]
+           "--env-file", env_file, "--output-dir", str(probe_dir / "prep"), *_backend_args(backend, db)]
     if preserve:
         cmd.append("--preserve-query-semantic")
     try:
@@ -64,21 +68,22 @@ def _prepare(seed: dict[str, str], probe_dir: Path, env_file: str, preserve: boo
         return None
 
 
-def _run(seed: dict[str, str], probe_dir: Path, set_id: str | None, env_file: str, limit: int, top_k: int) -> bool:
+def _run(seed: dict[str, str], probe_dir: Path, set_id: str | None, env_file: str, limit: int, top_k: int, backend: str, db: str | None) -> bool:
     """Run one probe. Returns False (never raises) when this single probe fails so one flaky
     retrieval cannot abort the wide search: build_union skips probes without a ledger and main fails
     only if the union ends up empty."""
     payload = probe_dir / "payload.json"
     ledger = probe_dir / "ledger.json"
     try:
-        if set_id:  # ensure scoping even if the payload lacks it
+        if set_id and backend != "local":  # ensure scoping even if the payload lacks it; local scope is the DB file
             p = json.loads(payload.read_text())
             f = p.get("role_search_filters") if isinstance(p.get("role_search_filters"), dict) else p
             f["set_id"] = set_id
             payload.write_text(json.dumps(p, indent=2))
         run_checked([sys.executable, str(SNP), "run", "--query", seed["key"],
                      "--payload-json", str(payload), "--ledger", str(ledger),
-                     "--env-file", env_file, "--search-only", "--limit", str(limit), "--top-k", str(top_k)],
+                     "--env-file", env_file, "--search-only", "--limit", str(limit), "--top-k", str(top_k),
+                     *_backend_args(backend, db)],
                     expected_paths=[ledger], description=f"run probe {seed.get('key')}")
         return True
     except (CommandError, OSError, json.JSONDecodeError) as exc:
@@ -128,6 +133,8 @@ def main() -> None:
     ap.add_argument("--seeds", required=True)
     ap.add_argument("--run-dir", required=True, help="Output dir: probes/<key>/ + union.jsonl")
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID"))
+    ap.add_argument("--backend", choices=("powerset", "local"), default="powerset", help="powerset = TurboPuffer/Postgres (default); local = the local DuckDB index (set-id scoping is skipped; no seniority bands are pinned)")
+    ap.add_argument("--db", default=".powerpacks/search-index/local-search.duckdb", help="Local DuckDB path (used only with --backend local)")
     ap.add_argument("--env-file", default=".env")
     ap.add_argument("--limit", type=int, default=200, help="Kept per probe at retrieval")
     ap.add_argument("--top-k", type=int, default=6000)
@@ -144,7 +151,7 @@ def main() -> None:
 
     try:
         with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
-            payloads = list(ex.map(lambda s: _prepare(s, run_dir / "probes" / s["key"], args.env_file, preserve), seeds))
+            payloads = list(ex.map(lambda s: _prepare(s, run_dir / "probes" / s["key"], args.env_file, preserve, args.backend, args.db), seeds))
         ok_seeds = [s for s, p in zip(seeds, payloads) if p is not None]
 
         if not ok_seeds:  # every probe's prepare failed — nothing to search
@@ -155,7 +162,7 @@ def main() -> None:
             run_checked([sys.executable, str(DIVERSIFY), "--payloads", *files], description="diversify probe payloads")
 
         with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
-            ran = list(ex.map(lambda s: _run(s, run_dir / "probes" / s["key"], args.set_id, args.env_file, args.limit, args.top_k), ok_seeds))
+            ran = list(ex.map(lambda s: _run(s, run_dir / "probes" / s["key"], args.set_id, args.env_file, args.limit, args.top_k, args.backend, args.db), ok_seeds))
         run_ok = sum(1 for r in ran if r)
         if not run_ok:  # every surviving probe's retrieval failed
             raise CommandError(["run_wide_search"], description="run probes (all probes failed)", missing=[run_dir / "probes"])

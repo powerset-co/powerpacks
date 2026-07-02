@@ -111,6 +111,8 @@ def main() -> None:
     ap.add_argument("--jd-url", default=None, help="Job-posting URL; fetched to <run-dir>/jd.txt via fetch_jd before sourcing.")
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--set-id", default=None)
+    ap.add_argument("--backend", choices=("powerset", "local"), default="powerset", help="Sourcing backend threaded through robust_source/run_wide_search; local = the local DuckDB index (no set scoping, no pinned seniority bands)")
+    ap.add_argument("--db", default=".powerpacks/search-index/local-search.duckdb", help="Local DuckDB path (used only with --backend local)")
     ap.add_argument("--env-file", default=".env")
     ap.add_argument("--created-at", required=True, help="ISO timestamp for the plan")
     ap.add_argument("--max-epochs", type=int, default=3, help="Total epochs incl. epoch 0 (converge-capped)")
@@ -200,7 +202,9 @@ def main() -> None:
                 else:
                     if not (edir / "union.jsonl").exists():
                         run([sys.executable, ROBUST, "--jd-file", args.jd_file, "--run-dir", edir, "--env-file", args.env_file,
-                             "--n", args.n, "--keep", args.keep, "--max-rounds", 2] + (["--set-id", args.set_id] if args.set_id else []),
+                             "--n", args.n, "--keep", args.keep, "--max-rounds", 2]
+                            + (["--backend", "local", "--db", args.db] if args.backend == "local" else [])
+                            + (["--set-id", args.set_id] if args.set_id else []),
                             expected_paths=[edir / "union.jsonl"], description="epoch0 robust_source")
                     build_cmd: list[object] = [sys.executable, BUILD, "--run-dir", edir, "--created-at", args.created_at]
                     if args.approved_plan:
@@ -229,7 +233,9 @@ def main() -> None:
                 run([sys.executable, EXPAND, "--anchors", edir / "anchors.json", "--top-k", len(anchors), "--out", edir / "anchor_seeds.json"],
                     expected_paths=[edir / "anchor_seeds.json"], description=f"epoch{epoch} expand_from_anchor")
                 run([sys.executable, WIDE_SEARCH, "--seeds", edir / "anchor_seeds.json", "--run-dir", edir, "--env-file", args.env_file,
-                     "--limit", args.keep] + (["--set-id", args.set_id] if args.set_id else []),
+                     "--limit", args.keep]
+                    + (["--backend", "local", "--db", args.db] if args.backend == "local" else [])
+                    + (["--set-id", args.set_id] if args.set_id else []),
                     expected_paths=[edir / "union.jsonl"], description=f"epoch{epoch} run_wide_search")
                 build_cmd = [sys.executable, BUILD, "--run-dir", edir, "--plan", plan_path, "--created-at", args.created_at]
                 if args.set_id:

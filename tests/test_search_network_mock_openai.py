@@ -29,7 +29,6 @@ from packs.shared.csv_io import CsvIO
 
 ROOT = Path(__file__).resolve().parents[1]
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
-LOCAL_PIPELINE = ROOT / "packs/search/primitives/local_search_pipeline/local_search_pipeline.py"
 PERSON_1 = "00000000-0000-0000-0000-000000000001"
 PERSON_2 = "00000000-0000-0000-0000-000000000002"
 PERSON_3 = "00000000-0000-0000-0000-000000000003"
@@ -258,8 +257,10 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 run_proc = subprocess.run(
                     [
                         sys.executable,
-                        str(LOCAL_PIPELINE),
+                        str(PIPELINE),
                         "run",
+                        "--backend",
+                        "local",
                         "--db",
                         str(local_db),
                         "--ledger",
