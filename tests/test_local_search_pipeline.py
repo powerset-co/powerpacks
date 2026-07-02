@@ -13,7 +13,7 @@ from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PIPELINE = ROOT / "packs/search/primitives/local_search_pipeline/local_search_pipeline.py"
+PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
 PERSON_STANFORD = "00000000-0000-0000-0000-000000000001"
 PERSON_OTHER = "00000000-0000-0000-0000-000000000002"
 PERSON_ADJACENT = "00000000-0000-0000-0000-000000000003"
@@ -27,7 +27,7 @@ STANFORD_ID = "linkedin:school:stanford-university"
 
 
 def load_pipeline_module():
-    spec = importlib.util.spec_from_file_location("local_search_pipeline_test", PIPELINE)
+    spec = importlib.util.spec_from_file_location("search_network_pipeline_test", PIPELINE)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -511,6 +511,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(PIPELINE),
                     "run",
+                    "--backend",
+                    "local",
                     "--search-only",
                     "--db",
                     str(db),
@@ -582,6 +584,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(PIPELINE),
                     "run",
+                    "--backend",
+                    "local",
                     "--search-only",
                     "--db",
                     str(db),
@@ -644,6 +648,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(PIPELINE),
                     "run",
+                    "--backend",
+                    "local",
                     "--search-only",
                     "--db",
                     str(db),
@@ -714,6 +720,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(PIPELINE),
                     "run",
+                    "--backend",
+                    "local",
                     "--search-only",
                     "--db",
                     str(db),
@@ -768,6 +776,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(PIPELINE),
                     "run",
+                    "--backend",
+                    "local",
                     "--search-only",
                     "--db",
                     str(db),
@@ -851,6 +861,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(PIPELINE),
                     "run",
+                    "--backend",
+                    "local",
                     "--db",
                     str(db),
                     "--ledger",
@@ -909,6 +921,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(PIPELINE),
                     "run",
+                    "--backend",
+                    "local",
                     "--search-only",
                     "--db",
                     str(db),
@@ -990,6 +1004,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(PIPELINE),
                     "run",
+                    "--backend",
+                    "local",
                     "--search-only",
                     "--db",
                     str(db),
@@ -1047,10 +1063,23 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertIn("hybrid", retrieval["output"]["candidates"][0]["vertical_sources"])
 
             ledger_doc = json.loads(ledger.read_text())
-            for step in ["resolve_education", "apply_prefilters", "execute_role_search", "hydrate_people"]:
+            resolved_db = str(db.resolve())
+            self.assertEqual(ledger_doc["duckdb"], resolved_db)
+            # Local run children are the CANONICAL primitives (no local_duckdb
+            # shim layer); the DuckDB binding travels via the child env, never
+            # via .env merging (--env-file /dev/null).
+            expected_child_paths = {
+                "resolve_education": "packs/search/primitives/local/local_resolve_education.py",
+                "apply_prefilters": "packs/search/primitives/apply_prefilters/apply_prefilters.py",
+                "execute_role_search": "packs/search/primitives/execute_role_search/execute_role_search.py",
+                "hydrate_people": "packs/search/primitives/hydrate_people/hydrate_people.py",
+            }
+            for step, child_path in expected_child_paths.items():
                 command = ledger_doc["steps"][step]["command"]
-                self.assertIn("packs/search/primitives/local_duckdb/", command)
-                self.assertIn("--db", command)
+                self.assertIn(child_path, command)
+                self.assertIn("--env-file /dev/null", command)
+            self.assertIn(f"--local-db {resolved_db}", ledger_doc["steps"]["hydrate_people"]["command"])
+            self.assertNotIn("packs/search/primitives/local_duckdb/", json.dumps(ledger_doc))
             self.assertNotIn("POWERPACKS_LOCAL_SEARCH_DB", json.dumps(ledger_doc))
 
             with Path(out["artifacts"]["csv"]).open(newline="") as handle:

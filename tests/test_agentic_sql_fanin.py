@@ -26,8 +26,8 @@ def load_module(name: str, path: Path):
 execute_role_search = load_module(
     "execute_role_search_fanin", PRIMITIVES / "execute_role_search" / "execute_role_search.py"
 )
-local_pipeline = load_module(
-    "local_search_pipeline_fanin", PRIMITIVES / "local_search_pipeline" / "local_search_pipeline.py"
+pipeline = load_module(
+    "search_network_pipeline_fanin", PRIMITIVES / "search_network_pipeline" / "search_network_pipeline.py"
 )
 
 
@@ -131,7 +131,7 @@ class CompactPreviewPoolEstimateTests(unittest.TestCase):
 
     def preview(self, filters: dict) -> dict:
         payload = {"normalized_query": "q", "role_search_filters": filters}
-        return local_pipeline.compact_preview(payload, Path(self.tmp.name) / "payload.json", self.db_path, [])
+        return pipeline.compact_preview_local(payload, Path(self.tmp.name) / "payload.json", self.db_path, [])
 
     def test_narrow_search_reports_pool_without_breadth_note(self):
         preview = self.preview({"seniority_bands": ["senior"]})
@@ -151,7 +151,7 @@ class CompactPreviewPoolEstimateTests(unittest.TestCase):
 
     def test_missing_db_skips_estimate(self):
         payload = {"normalized_query": "q", "role_search_filters": {}}
-        preview = local_pipeline.compact_preview(payload, Path(self.tmp.name) / "p.json", Path(self.tmp.name) / "absent.duckdb", [])
+        preview = pipeline.compact_preview_local(payload, Path(self.tmp.name) / "p.json", Path(self.tmp.name) / "absent.duckdb", [])
         self.assertEqual(preview["pool_estimate"]["status"], "skipped_no_db")
 
     def test_env_default_set_id_does_not_scope_local_pool_estimate(self):

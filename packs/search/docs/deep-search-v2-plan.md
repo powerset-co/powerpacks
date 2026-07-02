@@ -62,15 +62,17 @@ TurboPuffer — I never built that on the cloud/app version; we can leverage it
 here."* This is a capability unique to the local Powerpacks context.
 
 ### Proposed design (phased, keep it small)
-1. **Local sourcing backend for deep mode.** Give `run_wide_search` / `robust_source`
-   a `--backend {cloud,local}` switch. `local` dispatches each probe to the
-   existing `local_search_backend` (DuckDB) instead of `search_network_pipeline
-   run`, emitting the **same `ledger.json` + union shape** so `build_union` and
-   everything downstream are untouched. This is an adapter, not a rewrite —
-   read the backend from the run's `decision.json` (`backend: local`), the
-   agent-made Step-1 decision that replaced the deleted `route_query.py`
-   classifier. (An explicit deep+local ask currently gets the remote-only
-   message from `$search` until this ships.)
+1. **Local sourcing backend for deep mode.** ✅ **DELIVERED (differently).** Instead of
+   dispatching probes in-process to `local_search_backend`, the two pipeline
+   orchestrators were folded: `search_network_pipeline.py` owns
+   `--backend {powerset,local}` (+ `--db`), `local_search_pipeline.py` and the
+   `local_duckdb/` shims are deleted, and `deep_search_loop` / `robust_source` /
+   `run_wide_search` thread `--backend local --db <db>` through the same
+   `prepare`/`run` calls — same `ledger.json` + union shape, `build_union` and
+   everything downstream untouched. The backend comes from the run's
+   `decision.json` (`backend: local`), the agent-made Step-1 decision that
+   replaced the deleted `route_query.py` classifier. Local sourcing skips
+   `--set-id` scoping and pins no seniority bands.
 2. **Sandboxed relational lane (optional, higher value).** Let the loop run
    ad-hoc read-only SQL over the local DuckDB (the `$search-sql` capability)
    as an in-loop sourcing probe — e.g. "2+ startup stints AND worked at a

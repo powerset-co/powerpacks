@@ -67,6 +67,9 @@ all run here:
 - **job-posting URL** → pass `--jd-url <url>` instead; `deep_search_loop` fetches it to `<run>/jd.txt`
   via `fetch_jd.py` (stdlib, no spend) before sourcing. Provide exactly one of `--jd-file` /
   `--jd-url`. JS-rendered careers pages come back `thin` with a warning — paste the JD instead.
+- **backend** — when the recorded decision says `backend: local`, add `--backend local --db <db>`
+  to every `deep_search_loop` invocation: sourcing probes run against the local DuckDB index
+  instead of TurboPuffer/Postgres (no `--set-id`, no pinned seniority bands; judging is unchanged).
 
 The first `deep_search_loop` invocation sources and builds the plan, then stops at GATE 1 with
 `status: awaiting_plan_approval`:

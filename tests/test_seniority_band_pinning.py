@@ -27,7 +27,6 @@ LIB = PRIMITIVES / "lib"
 SHARED = PRIMITIVES / "shared"
 LOCAL = PRIMITIVES / "local"
 TURBOPUFFER = PRIMITIVES / "turbopuffer"
-LOCAL_PIPELINE = PRIMITIVES / "local_search_pipeline/local_search_pipeline.py"
 NETWORK_PIPELINE = PRIMITIVES / "search_network_pipeline/search_network_pipeline.py"
 for _path in [LIB, SHARED, LOCAL, TURBOPUFFER]:
     if str(_path) not in sys.path:
@@ -197,8 +196,10 @@ class LocalPipelineSeniorityPinningTests(unittest.TestCase):
         payload_path.write_text(json.dumps(self.PAYLOAD, indent=2), encoding="utf-8")
         cmd = [
             sys.executable,
-            str(LOCAL_PIPELINE),
+            str(NETWORK_PIPELINE),
             "run",
+            "--backend",
+            "local",
             "--search-only",
             "--db",
             str(db),

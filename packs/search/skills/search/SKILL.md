@@ -119,9 +119,9 @@ Then dispatch — this table is the whole routing contract:
 | surface `company` | load `packs/search/skills/search-company/SKILL.md` (decision.json still written first) |
 | surface `sql` | load `packs/search/skills/search-sql/SKILL.md` (decision.json still written first) |
 | surface `contacts` | load `packs/contacts/skills/search-contacts/SKILL.md` (decision.json still written first) |
-| `people` + `fast` + `local` | **Local Happy Path** below |
-| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below |
-| `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; deep runs on powerset only today — for an explicit deep+local ask, say so and offer fast local now or deep on powerset) |
+| `people` + `fast` + `local` | **Local Happy Path** below (`search_network_pipeline.py prepare --backend local --db <db>`) |
+| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare`) |
+| `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
 
 The deep engine owns its own orchestration and delegates capped per-profile searches back to
 this skill's TurboPuffer path with a per-search `limit` and `--filter-only` — do not run
@@ -227,7 +227,8 @@ the agentic SQL fan-out gate.
 3. Run:
 
    ```bash
-   uv run --env-file .env --project . python packs/search/primitives/local_search_pipeline/local_search_pipeline.py prepare \
+   uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
+     --backend local \
      --query "<user query>" \
      --db "<db-path>" \
      --output-dir ".powerpacks/search/<slug>"
