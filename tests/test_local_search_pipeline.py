@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from packs.shared.csv_io import CsvIO
@@ -1087,6 +1088,25 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["person_id"], PERSON_STANFORD)
             self.assertEqual(rows[0]["hydrated"], "True")
+
+
+class NarrowPoolPreviewTests(unittest.TestCase):
+    def test_suspiciously_narrow_pool_is_flagged(self):
+        module = load_pipeline_module()
+        payload = {"normalized_query": "product managers in nyc",
+                   "role_search_filters": {"seniority_bands": ["manager"], "cities": ["New York"]}}
+        with mock.patch.object(module, "local_pool_estimate",
+                               return_value={"status": "completed", "matched_people": 1, "total_people": 500}):
+            preview = module.compact_preview_local(payload, Path("payload.json"), Path("db.duckdb"), [])
+        self.assertTrue(any("suspiciously narrow" in note for note in preview["runtime_notes"]), preview["runtime_notes"])
+
+    def test_healthy_pool_not_flagged(self):
+        module = load_pipeline_module()
+        payload = {"normalized_query": "engineers", "role_search_filters": {"cities": ["New York"]}}
+        with mock.patch.object(module, "local_pool_estimate",
+                               return_value={"status": "completed", "matched_people": 150, "total_people": 500}):
+            preview = module.compact_preview_local(payload, Path("payload.json"), Path("db.duckdb"), [])
+        self.assertFalse(any("suspiciously narrow" in note for note in preview["runtime_notes"]), preview["runtime_notes"])
 
 
 if __name__ == "__main__":

@@ -129,16 +129,22 @@ this skill's TurboPuffer path with a per-search `limit` and `--filter-only` — 
 
 Input shapes normalize before `prepare`, never before the decision:
 
+- **backend directives are directives, not query text** — strip words like `local:`, "offline",
+  "in powerset", "search powerset for", or a set name from the text you pass as `--query`; they
+  bound the decision, and leaving them in pollutes query expansion.
+
 - **job-posting URL** — deep mode fetches it itself (`--jd-url`). Only when the user
   explicitly forces `fast` on a URL, fetch first with
   `uv run --project . python packs/search/primitives/deep_search/fetch_jd.py --url <url> --out <run>/jd.txt`
-  (a thin fetch under ~400 chars → ask for a paste) and use the fetched text as the query.
+  (a thin fetch under ~400 chars → ask for a paste; Ashby URLs resolve via the public
+  posting API automatically) and use the fetched text as the query.
 - **pasted JD forced to `fast`** — use the JD text directly as `--query`; expansion condenses it.
 - **one-liner** — the query as-is.
 
 **The gate (checklist item 3):** every search stops exactly once for user confirmation before
-executing — fast mode at the prepare preview (`Execute this search or modify it?`), deep mode
-at GATE 1 (plan approval). Never run an `execute_command` without that answer; never ask twice.
+executing — fast mode at the prepare preview (`Execute this search or modify it?`, or the local
+path's `Execute this local search or modify it?`), deep mode at GATE 1 (plan approval). Never
+run an `execute_command` without that answer; never ask twice.
 
 ---
 
@@ -238,12 +244,16 @@ the agentic SQL fan-out gate.
 
 4. Show the preview compactly (it will include `scope: local_duckdb` and a
    `pool_estimate` with `matched_people` / `total_people`). Include one line
-   like `Pool: 150 of 500 people`. If `runtime_notes` flags a broad search
+   like `Pool: 150 of 500 people`. When the extracted filters include
+   `seniority_bands` (or the query names a band), include one compact line
+   such as `Targeting: senior/staff ICs` so the user can correct the band
+   before executing — a role noun like "product managers" must not silently
+   become a `manager` seniority band. If `runtime_notes` flags a broad search
    (hard filters match more than ~60% of the index), surface that note and
    recommend narrowing before executing — running LLM stages over most of
    the index is usually a query problem, not a retrieval problem. If it
-   flags 0 matches, recommend `modify` (or expect the zero-result fallback
-   below). Then ask exactly:
+   flags 0 matches or a suspiciously narrow pool, recommend `modify` (or
+   expect the zero-result fallback below). Then ask exactly:
 
    `Execute this local search or modify it?`
 
@@ -362,9 +372,9 @@ files on the happy path. Start a fresh run for every search request.
    Use the same `<slug>` run dir where `decision.json` was recorded. (Deep-engine delegated
    profile searches pass their own output dir; follow the engine's instructions there.)
 
-3. If `prepare` returns `status: company_directory_fast_path`, follow the
+2. If `prepare` returns `status: company_directory_fast_path`, follow the
    returned tool request and skip semantic retrieval.
-4. If `prepare` returns a preview, show it compactly. When the extracted
+3. If `prepare` returns a preview, show it compactly. When the extracted
    filters include `seniority_bands` (or the query names a band), include one
    compact line such as `Targeting: senior/staff ICs` so the user can correct
    the band before executing. If there is no seniority target, omit the line
@@ -372,7 +382,7 @@ files on the happy path. Start a fresh run for every search request.
 
    `Execute this search or modify it?`
 
-5. If the user chooses `execute`, run the returned `execute_command` exactly.
+4. If the user chooses `execute`, run the returned `execute_command` exactly.
    It already includes `--execute-approved`; do not ask for another approval.
    - If a **limit** was provided (e.g. by the deep-search engine for a
      capped profile search), append `--limit <N>` to the execute_command (or
@@ -384,7 +394,7 @@ files on the happy path. Start a fresh run for every search request.
      skips the expensive per-search LLM rerank; final ranking is owned by the
      caller's evaluation pass. Never use `--filter-only` for standalone user
      searches — they need the rerank for good ordering.
-6. Keep execution quiet until the command finishes or emits a concrete
+5. Keep execution quiet until the command finishes or emits a concrete
    `blocked_approval` / `blocked_user_action`.
 
 ## Final Summary

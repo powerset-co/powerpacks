@@ -22,6 +22,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -115,6 +116,49 @@ def extract(raw_html: str) -> tuple[str, str]:
     return parser.text(), re.sub(r"\s+", " ", parser.title).strip()
 
 
+_ASHBY_HOST = "jobs.ashbyhq.com"
+_ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{org}"
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+
+
+def fetch_ashby(url: str, timeout: int = 30) -> tuple[str, str] | None:
+    """Ashby job pages are fully JS-rendered (the HTML extracts to 0 chars), but the
+    board exposes a public posting API with descriptionHtml. Return (jd_text, title),
+    or None when the URL isn't a resolvable Ashby posting so the caller falls back to
+    the generic HTML fetch."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.hostname != _ASHBY_HOST:
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    job_id_match = _UUID_RE.search(parsed.path)
+    if not parts or not job_id_match:
+        return None
+    org, job_id = parts[0], job_id_match.group(0).lower()
+    req = urllib.request.Request(
+        _ASHBY_API.format(org=urllib.parse.quote(org)),
+        headers={
+            "Accept": "application/json",
+            # The API 403s urllib's default UA; the browser UA (same as fetch()) passes.
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+            ),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            board = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        return None
+    for job in board.get("jobs") or []:
+        if str(job.get("id", "")).lower() == job_id:
+            text, _ = extract(str(job.get("descriptionHtml") or ""))
+            title = str(job.get("title") or "").strip()
+            if text:
+                return (f"{title}\n\n{text}" if title else text), title
+    return None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Fetch a job-posting URL -> clean JD text (URL->JD front-end for $search deep mode).")
     ap.add_argument("--url", required=True, help="Job-posting URL to fetch")
@@ -128,18 +172,23 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     source_json = Path(args.source_json) if args.source_json else out.parent / "source.json"
 
-    try:
-        raw_html, final_url = fetch(args.url, timeout=args.timeout)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
-        print(json.dumps({"primitive": "fetch_jd", "status": "failed", "url": args.url, "error": str(exc)}, indent=2))
-        raise SystemExit(1)
-
-    text, title = extract(raw_html)
+    raw_html = ""
+    ashby = fetch_ashby(args.url, timeout=args.timeout)
+    if ashby is not None:
+        (text, title), final_url, via = ashby, args.url, "ashby_posting_api"
+    else:
+        try:
+            raw_html, final_url = fetch(args.url, timeout=args.timeout)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
+            print(json.dumps({"primitive": "fetch_jd", "status": "failed", "url": args.url, "error": str(exc)}, indent=2))
+            raise SystemExit(1)
+        text, title = extract(raw_html)
+        via = "html"
     fetched_at = datetime.now(timezone.utc).isoformat()
 
     out.write_text(text + "\n", encoding="utf-8")
-    source_json.write_text(json.dumps({"source_url": final_url, "source_title": title, "fetched_at": fetched_at}, indent=2) + "\n", encoding="utf-8")
-    if args.raw_html:
+    source_json.write_text(json.dumps({"source_url": final_url, "source_title": title, "fetched_at": fetched_at, "via": via}, indent=2) + "\n", encoding="utf-8")
+    if args.raw_html and raw_html:
         Path(args.raw_html).write_text(raw_html, encoding="utf-8")
 
     status = "thin" if len(text) < _THIN_CHARS else "ok"
@@ -148,6 +197,7 @@ def main() -> None:
         "status": status,
         "url": final_url,
         "title": title,
+        "via": via,
         "chars": len(text),
         "out": str(out),
         "source_json": str(source_json),
