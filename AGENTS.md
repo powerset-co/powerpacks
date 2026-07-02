@@ -232,13 +232,14 @@ only; keep that scoped to the msgvault primitives.
   Postgres credentials. If `.env` is present, run the search
   primitive directly and use its error to diagnose; use the doctor only if env or
   auth looks broken and the cause is unclear. For `$search`, after
-  loading `packs/search/skills/search/SKILL.md`, run its Step-0 router
-  (`route_query.py`) and, for `network` queries, use the
-  `search_network_pipeline.py prepare --query ...` path for ordinary people
-  searches and company-only lookups; the primitive owns company-directory fast
-  path detection. For job posting URLs, pasted JDs, or broad role briefs, the
-  router returns `deep` — load `packs/search/skills/search/deep-mode.md` and run
-  the deep-search engine (a job URL runs through `deep_search_loop.py --jd-url`). Do not
+  loading `packs/search/skills/search/SKILL.md`, make its Step-1 decision
+  yourself (surface/backend/depth, recorded to the run dir's `decision.json`)
+  and dispatch from its table — ordinary people searches use the
+  `search_network_pipeline.py prepare --query ...` (powerset) or
+  `local_search_pipeline.py prepare` (local) path; the primitive owns
+  company-directory fast path detection. Job posting URLs and pasted JDs decide
+  `depth: deep` — load `packs/search/skills/search/deep-mode.md` and run the
+  deep-search engine (a job URL runs through `deep_search_loop.py --jd-url`). Do not
   grep/search/read search docs, schemas, primitive source, or prior artifacts on
   the happy path.
 
@@ -260,12 +261,15 @@ Routes:
   role/title/location/school searches, "who is...", "find people...",
   company-directory queries →
   `packs/search/skills/search/SKILL.md`
-  The single people-search door: its **Step 0** runs
-  `packs/search/primitives/route_query/route_query.py` to classify the query,
-  then dispatches — deep JD/URL/brief/shortlist → **`$search` deep mode**, company →
-  `$search-company`, relational/aggregate → `$search-sql`, my/set contacts →
-  `$search-contacts`, and ordinary people searches stay here on the fast local
-  DuckDB / TurboPuffer path. The retrieval primitive is still
+  The single people-search door: the agent makes the **Step-1 decision**
+  (surface `people|company|sql|contacts`, backend `powerset|local`, depth
+  `fast|deep`) per the SKILL's decision-rules block, records it to the run
+  dir's `decision.json`, then dispatches — JD/URL/deep asks → **`$search` deep
+  mode**, company → `$search-company`, relational/aggregate → `$search-sql`,
+  my/set contacts → `$search-contacts`, and ordinary people searches stay here
+  on the fast local DuckDB / TurboPuffer path. Explicit words bind the backend:
+  "powerset"/set/team network → TurboPuffer+Postgres, "local"/"offline"/
+  "my imported network" → local DuckDB. The retrieval primitive is still
   `search_network_pipeline.py` (only the skill/route was renamed).
   **Deep mode** (job-posting URLs via `deep_search_loop.py --jd-url`, pasted JDs,
   complex role briefs, "build a shortlist", "more people like <url>") loads
@@ -282,10 +286,11 @@ Routes:
   `packs/contacts/skills/search-contacts/SKILL.md`
 
 > **Search family (single `$search` door, consolidated 2026-07-01).** `$search` is the one
-> people-search door: its Step-0 router (`packs/search/primitives/route_query/route_query.py`,
-> baseline strict 0.9375 on `packs/search/evals/routing/cases.json`) dispatches to its own **deep
-> mode** (deep JD / job-posting URL / role brief / shortlist / "more people like <url>" →
-> `packs/search/skills/search/deep-mode.md`, the deep-search engine), plus `$search-company`,
+> people-search door: the agent-made Step-1 decision (recorded to `decision.json`; rules live in
+> the SKILL's decision-rules block and are benchmarked by the agent decision eval,
+> `packs/search/evals/run_decision_eval.py` on `packs/search/evals/decision/cases.json`) dispatches
+> to its own **deep mode** (JD / job-posting URL / role brief / shortlist / "more people like
+> <url>" → `packs/search/skills/search/deep-mode.md`, the deep-search engine), plus `$search-company`,
 > `$search-sql`, and `$search-contacts`, and keeps ordinary people searches on the fast local
 > DuckDB / TurboPuffer path. `$search-company` / `$search-sql` / `$search-contacts` remain
 > **distinct surfaces (kept, not folded)** — reached through `$search`'s router or directly.

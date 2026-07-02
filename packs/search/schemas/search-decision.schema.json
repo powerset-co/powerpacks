@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/search-decision.schema.json",
+  "title": "SearchDecision",
+  "description": "The agent-made $search Step-1 routing decision, recorded to decision.json in the run dir before any search runs. The decision rules live in packs/search/skills/search/SKILL.md between the decision-rules markers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["surface", "backend", "depth", "reason"],
+  "properties": {
+    "surface": {
+      "type": "string",
+      "enum": ["people", "company", "sql", "contacts"]
+    },
+    "backend": {
+      "type": "string",
+      "enum": ["powerset", "local"]
+    },
+    "depth": {
+      "type": "string",
+      "enum": ["fast", "deep"]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
