@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.18.0...powerpacks-v1.0.0) (2026-07-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **search:** packs/search/primitives/local_search_pipeline/ and packs/search/primitives/local_duckdb/ are removed; local runs use search_network_pipeline.py --backend local.
+* **search:** packs/search/primitives/route_query/ is removed; the $search skill contract changed from classifier-dispatch to the recorded decision contract.
+* **search:** $recruit and $search-profile are removed; use $search (a job URL / pasted JD / role brief routes to its deep mode automatically).
+
+### Features
+
+* **deep-context:** adaptive Gmail collection (1600 per vertical) ([#160](https://github.com/powerset-co/powerpacks/issues/160)) ([19a536e](https://github.com/powerset-co/powerpacks/commit/19a536ef031ddf84a8c46c27e331c3f8ea827e20))
+* **deep-context:** clearer, calmer merged-person review UI ([#156](https://github.com/powerset-co/powerpacks/issues/156)) ([475cb51](https://github.com/powerset-co/powerpacks/commit/475cb51dc1d9668539cc725ab20e0e66a6a15e97))
+* **deep-context:** exclude ("X out") people from the network + live review-UI feedback ([#154](https://github.com/powerset-co/powerpacks/issues/154)) ([963795f](https://github.com/powerset-co/powerpacks/commit/963795fe635731927ed1da8a5ff20a24ee7b3e75))
+* **deep-context:** review-only fast path for the skill ([#158](https://github.com/powerset-co/powerpacks/issues/158)) ([b6bf4df](https://github.com/powerset-co/powerpacks/commit/b6bf4dfc3d2cc48184825e99556427efdd966170))
+* **logbook:** add $logbook raw verbatim message archive skill ([#150](https://github.com/powerset-co/powerpacks/issues/150)) ([d4ae236](https://github.com/powerset-co/powerpacks/commit/d4ae236bab584074092ca9980935d16a6950698f))
+* **search:** $recruit engine + consolidate search-* into $search (router, URL intake, routing eval) ([#153](https://github.com/powerset-co/powerpacks/issues/153)) ([ff89e59](https://github.com/powerset-co/powerpacks/commit/ff89e59030f27e52b173a0214fe48e2ddffa5d8f))
+* **search:** agent-made decision contract replaces the route_query classifier ([#164](https://github.com/powerset-co/powerpacks/issues/164)) ([4bc3699](https://github.com/powerset-co/powerpacks/commit/4bc3699940d3b1798489e7f730427f6cc19e635d))
+* **search:** two-phase deep judging — triage filter by default, judge engine preference ([#168](https://github.com/powerset-co/powerpacks/issues/168)) ([045ef48](https://github.com/powerset-co/powerpacks/commit/045ef48fe94ac1185a6356395af1bb5cac6f633e))
+
+
+### Bug Fixes
+
+* **deep-context:** evict decided rows from status-filtered review tabs live ([#159](https://github.com/powerset-co/powerpacks/issues/159)) ([f566a7c](https://github.com/powerset-co/powerpacks/commit/f566a7cc51804593145a2a24608893207108af34))
+* **deep-context:** never rely on memory for approvals + register skill in Claude Code adapter ([#151](https://github.com/powerset-co/powerpacks/issues/151)) ([cbb63dd](https://github.com/powerset-co/powerpacks/commit/cbb63dd42485bc09e40aabbeb6d4037a80c62e8e))
+* **search:** Ashby JD fetch via posting API + narrow-pool preview nudge + skill polish ([#166](https://github.com/powerset-co/powerpacks/issues/166)) ([8c83f1c](https://github.com/powerset-co/powerpacks/commit/8c83f1c644c0bc303fc90b286f4b20e090c95347))
+* **search:** CLI agent judges never bulk-filter — hard guard, no fallback ([#170](https://github.com/powerset-co/powerpacks/issues/170)) ([019c4cc](https://github.com/powerset-co/powerpacks/commit/019c4cca2ea39d732443b3e14f0ba7492aac6780))
+* **search:** retry errored judge verdicts; never cache a failure as a rejection ([#167](https://github.com/powerset-co/powerpacks/issues/167)) ([aff9b48](https://github.com/powerset-co/powerpacks/commit/aff9b48fdaf741687aed4c5f96bf1fcef8876815))
+* use wacli backfill for logbook deepen ([64c4826](https://github.com/powerset-co/powerpacks/commit/64c482691990eb2255a042c383e440fbd5b13efd))
+
+
+### Code Refactoring
+
+* **search:** one orchestrator — fold local pipeline behind --backend, deep-on-local ([#165](https://github.com/powerset-co/powerpacks/issues/165)) ([53bc9e7](https://github.com/powerset-co/powerpacks/commit/53bc9e72b4749b8c4edb7ab22eb02e2b6abc96e2))
+* **search:** single $search door — fold $recruit into deep mode (+ thin-JD guard, v2 scope) ([#163](https://github.com/powerset-co/powerpacks/issues/163)) ([98142ac](https://github.com/powerset-co/powerpacks/commit/98142ac0ad9ffa11ef2e833391683be7777325fe))
+
 ## [0.18.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.17.0...powerpacks-v0.18.0) (2026-06-25)
 
 
