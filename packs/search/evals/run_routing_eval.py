@@ -2,7 +2,7 @@
 """Score the deterministic query router (route_query.classify) against labeled queries.
 
 This is the ROUTING eval the search consolidation was missing: before folding search-network
-into a `$search` that routes deep queries to `$recruit`, we need a measurable baseline for
+into a `$search` that routes deep queries to its deep mode, we need a measurable baseline for
 "picks the right surface". Pure string rules, no LLM, no spend — runnable in CI.
 
 Reads packs/search/evals/routing/cases.json (each: {query, expected, [acceptable], [subroute]}).

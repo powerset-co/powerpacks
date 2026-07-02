@@ -1,4 +1,4 @@
-# `$recruit` — emulate a recruiting team (source → judge → hill-climb)
+# `$search` deep mode — emulate a recruiting team (source → judge → hill-climb)
 
 _Created: 2026-06-26_
 
@@ -7,11 +7,14 @@ _Changelog:_
   under `.powerpacks/search-highlight-ground-truth/`. Fixes the off-corpus ground-truth
   mistake, reframes `search-highlight` as the unmerged sibling-worktree harness, and adds
   the two missing pipeline stages (mixture-of-judges + iterative expand-from-anchor)._
+- _2026-07-01: Folded $recruit into $search deep mode; renamed doc
+  (recruit-skill-plan.md → deep-search-plan.md) and de-jargoned engine references
+  (recruit → deep-search, shotgun → wide search)._
 
 ## What this is
 
-Evolve the existing recruiting search into a skill — working name **`$recruit`** — that
-emulates a full recruiting team end to end for a given JD:
+Evolve the existing recruiting search into **`$search`'s deep mode** (the deep-search
+engine) — that emulates a full recruiting team end to end for a given JD:
 
 1. **Source** candidates from the user's Powerset network (agentic TurboPuffer search,
    scoped to a set id).
@@ -31,8 +34,8 @@ emulates a full recruiting team end to end for a given JD:
 | `search-network` pipeline | **Real, merged.** Sources from TurboPuffer (Powerset set) or local DuckDB. `prepare`/`run`, `--filter-only`, `--seniority-bands`, `--current-role`, `--limit`. | `packs/search/primitives/search_network_pipeline/` |
 | Canonical JD evaluator | **Real, merged.** Bar-raiser rubric, per-trait evidence ladder, deterministic scoring, hard seniority gates. Default `gpt-5.4`, medium reasoning. | `packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py` |
 | LLM rerank / filter | **Real, merged.** Conservative cheap filter + full rerank with IC-vs-exec downranking. | `packs/search/primitives/llm_rerank_candidates/`, `.../llm_filter_candidates/` |
-| `search-highlight` harness | **DELETED (2026-06-26).** Was a stale unmerged sibling worktree, never on `main`; superseded by the `$recruit` skill below. | removed |
-| `$recruit` skill | **NEW on this branch.** Shotgun sourcing + mixture-of-judges + expand-from-anchor + epoch convergence. | `packs/search/skills/recruit/SKILL.md` |
+| `search-highlight` harness | **DELETED (2026-06-26).** Was a stale unmerged sibling worktree, never on `main`; superseded by the deep-search engine below. | removed |
+| `$search` deep mode | **NEW on this branch.** Wide-search sourcing + mixture-of-judges + expand-from-anchor + epoch convergence. | `packs/search/skills/search/deep-mode.md` |
 | Codex "ground truth" (Hebbia data-engineer) | **Invalid — do not trust.** Its "novel strong" picks were grepped from an **off-corpus** aleph-mvp Harmonic CSV (a different population than the searchable Powerset set), and **never run through the canonical judge**. Several aren't even in the set's TurboPuffer namespace. | `.powerpacks/search-highlight-ground-truth/` |
 
 ### Two foundational mistakes from the prior Codex session (do not repeat)
@@ -58,13 +61,13 @@ Current `search-profile` flow (5 stages, all real):
 5. Canonical JD evaluation → shortlist.
 
 **Missing stage A — mixture-of-judges.** Today a single evaluator pass produces verdicts.
-`$recruit` adds a **panel**: independent high-reasoning judges (e.g. a *talent analyst*
+`$search` deep mode adds a **panel**: independent high-reasoning judges (e.g. a *talent analyst*
 calibrating seniority/geo/center-of-gravity, a *recruiter* surfacing high-trajectory near
 misses, a *manager* owning hard gates and the export decision). Consensus = trustworthy
 label; dissent = flag for review. This is exactly what makes a **ground-truth** set credible.
 
 **Missing stage B — iterative expand-from-anchor in the sourcerers.** `search-profile` does
-*one* deep lane after the first eval. `$recruit` repeats the idea **inside sourcing across
+*one* deep lane after the first eval. `$search` deep mode repeats the idea **inside sourcing across
 rounds**: once 1–2 strong candidates are confirmed, generate "more like this, with missing
 trait X fixed" probes, re-source (bounded), re-judge, and **stack-rank across all rounds**.
 Deepen `top_k` only on lanes that recovered positives — not everywhere (cost control).
@@ -116,13 +119,13 @@ Goal: **~10 robust, judged ground-truth candidates from within Powerset set
    beyond the warm network — never mixed into the scoped ground truth.
 
 PII handling: raw candidate artifacts (names, LinkedIn) live under gitignored
-`.powerpacks/recruit/agentmail-distsys-mts-20260626/`. The PR tracks the **plan, method,
+`.powerpacks/deep-search/agentmail-distsys-mts-20260626/`. The PR tracks the **plan, method,
 status, metrics, and hill-climb iterations** — the finalist list is surfaced to the user for
 review (tracked only if the user opts in).
 
 ## Evaluate-the-skill loop (the "ralph loop")
 
-Once ground truth exists, treat each `$recruit` run as a version to score:
+Once ground truth exists, treat each `$search` deep-mode run as a version to score:
 - **Metrics:** recall@{retrieved, hydrated, filtered, reranked-top-25, judged, shortlist};
   precision@{10,25}; founder/C-suite false-positive count; `too_senior` sendable violations;
   unique positives by lane; cost USD; cost per recovered strong-yes; lane contribution.
@@ -135,8 +138,8 @@ Once ground truth exists, treat each `$recruit` run as a version to score:
 
 1. **Ground truth v1 (this PR):** AgentMail JD plan → agentic scoped TP sourcing → canonical
    judge + consensus panel → top-10 for review. Artifacts + metrics + status doc.
-2. **Skill scaffolding:** ✅ `$recruit` skill created (`packs/search/skills/recruit/SKILL.md`),
-   built on the empirical shotgun/recall findings rather than porting the deleted
+2. **Skill scaffolding:** ✅ `$search` deep mode created (`packs/search/skills/search/deep-mode.md`),
+   built on the empirical wide-search/recall findings rather than porting the deleted
    search-highlight harness. Canonical eval/export remain the source of truth.
 3. **Stage A — mixture-of-judges:** recruiter/talent-analyst/manager judge primitives;
    consensus + dissent. (Later PR.)

@@ -14,7 +14,7 @@ return all-"out"); instead we rely on the rubric's "Return ONLY a JSON object" +
 
 Why subprocess: `codex exec` runs on the user's ChatGPT-subscription auth (no per-token spend) and
 is portable — any harness with the `codex` CLI runs it. A Claude-CLI variant is the same shape.
-See packs/search/skills/recruit/SKILL.md.
+See packs/search/skills/search/SKILL.md.
 """
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ def judge_one(prompt: str, model: str | None, effort: str, timeout: int) -> tupl
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Free portable judge over a recruit run dir via `codex exec` subprocesses (same rubric+scorer as the paid judge).")
+    ap = argparse.ArgumentParser(description="Free portable judge over a deep-search run dir via `codex exec` subprocesses (same rubric+scorer as the paid judge).")
     ap.add_argument("--run-dir", required=True, help="Dir with plan.json + candidate_frontier.jsonl + probe_summaries.json")
     ap.add_argument("--max-candidates", type=int, default=0, help="Top-N frontier by best probe score (0 = all)")
     ap.add_argument("--concurrency", type=int, default=8)

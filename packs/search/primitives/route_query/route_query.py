@@ -1,22 +1,22 @@
-"""Deterministic query router for the search-* family.
+"""Deterministic query router for the `$search` family.
 
-Encodes TODAY's routing heuristic — the AGENTS.md skill-routing prose + the
-`search-network` SKILL "Profile mode / Local mode / TurboPuffer mode" rules —
-as inspectable, ordered, first-match-wins rules. This is:
+Encodes the routing heuristic — the AGENTS.md skill-routing prose + the `$search`
+SKILL "deep mode / local mode / TurboPuffer mode" rules — as inspectable,
+ordered, first-match-wins rules. This is:
 
-  1. the BASELINE the routing eval scores (Stage 2 of the search consolidation), and
-  2. the router `$search` wires up (Stage 3), replacing "agent reads the prose" with a
+  1. the BASELINE the routing eval scores, and
+  2. the router `$search` wires up, replacing "agent reads the prose" with a
      deterministic classifier that can be measured and regression-tested.
 
 Routes (the surfaces a people/JD/company query can land on):
-  recruit   deep JD -> judged shortlist ($recruit; absorbed $search-profile): job-posting URL,
+  deep      deep JD -> judged shortlist ($search's deep mode): job-posting URL,
             pasted JD, multi-trait role brief, "build a shortlist", "more people like <url>".
   contacts  my/set contacts + contact-field filtering ($search-contacts).
   sql       relational / aggregate / career-shape predicates ($search-sql).
   company   company lookup / ids / investors / funding / sector / company-set ($search-company).
-  network   fast people retrieval — the default ($search-network today; the $search fast path).
+  network   fast people retrieval — the default ($search fast path).
 
-For `network`, a secondary `subroute` (local | turbopuffer) mirrors the search-network SKILL's
+For `network`, a secondary `subroute` (local | turbopuffer) mirrors the $search SKILL's
 local-vs-TurboPuffer signals; it is advisory (retrieval env decides the rest).
 
 No LLM, no network, no spend — pure string rules.
@@ -29,7 +29,7 @@ import re
 import sys
 from dataclasses import dataclass, asdict
 
-ROUTES = ("recruit", "contacts", "sql", "company", "network")
+ROUTES = ("deep", "contacts", "sql", "company", "network")
 
 # --- signal vocabularies (kept explicit + inspectable) -------------------------------------------
 
@@ -41,11 +41,13 @@ _JD_MARKERS = ("responsibilities", "qualifications", "requirements", "about the 
                "what you'll do", "what you will do", "who you are", "nice to have",
                "minimum qualifications", "preferred qualifications", "you may be a good fit",
                "about the job", "the role", "what we're looking for")
-_RECRUIT_INTENT = ("build a shortlist", "build me a shortlist", "shortlist of candidates",
-                   "shortlist", "recruit ", "recruit a", "recruit for", "candidates for",
-                   "strong candidates", "source candidates", "sourcing for", "fill this role",
-                   "fits this jd", "fit this jd", "for this role", "for this jd", "hire for",
-                   "more people like", "people similar to", "people like this", "similar to this profile")
+# Natural-language triggers a user might type for a deep JD/shortlist search (matches user input,
+# not our feature name).
+_DEEP_INTENT = ("build a shortlist", "build me a shortlist", "shortlist of candidates",
+                "shortlist", "recruit ", "recruit a", "recruit for", "candidates for",
+                "strong candidates", "source candidates", "sourcing for", "fill this role",
+                "fits this jd", "fit this jd", "for this role", "for this jd", "hire for",
+                "more people like", "people similar to", "people like this", "similar to this profile")
 
 _CONTACTS_INTENT = ("my contacts", "my set contacts", "set contacts", "contacts at", "contacts with",
                     "contacts who", "contacts tagged", "contacts in my", "in my contacts",
@@ -78,10 +80,10 @@ _PEOPLE_NOUNS = ("people", "person", "who", "engineers", "engineer", "designers"
 _LOCAL_SIGNALS = ("local:", "local ", " offline", "my imported", "imported network", "imported contacts")
 _TURBOPUFFER_SIGNALS = ("powerset", "team network", "shared network", "the set", " set ", "set id", "set-id")
 
-# Explicit skill-prefix -> route (highest-priority intent signal).
+# Explicit skill-prefix -> route (highest-priority intent signal). $search-network stays a
+# recognized deprecated alias for $search; deep JD/shortlist searches fold into $search deep mode.
 _PREFIX_ROUTE = {
     "$search-sql": "sql", "$search-company": "company", "$search-contacts": "contacts",
-    "$recruit": "recruit", "$search-profile": "recruit",  # deprecated alias
     "$search-network": "network", "$search": "network",
 }
 
@@ -145,22 +147,22 @@ def classify(query: str) -> Decision:
     sub = _network_subroute(ql)
 
     # 0. Explicit skill prefix is the strongest intent — honor it, except a network prefix carrying
-    #    a JD/URL still means the deep recruiter lane (search-network's "Profile mode").
+    #    a JD/URL still means the deep-search lane ($search's deep mode).
     prefix = _explicit_prefix(q)
     if prefix:
         if prefix == "network" and (_looks_like_job_url(q) or _looks_like_pasted_jd(q)):
-            return Decision("recruit", "prefix-network-but-jd", None)
+            return Decision("deep", "prefix-network-but-jd", None)
         return Decision(prefix, "explicit-prefix", sub if prefix == "network" else None)
 
-    # 1. RECRUIT — deep JD -> shortlist: job URL, pasted JD, role brief, shortlist intent, similar-person.
+    # 1. DEEP — deep JD -> shortlist: job URL, pasted JD, role brief, shortlist intent, similar-person.
     if _looks_like_job_url(q):
-        return Decision("recruit", "job-url", None)
+        return Decision("deep", "job-url", None)
     if _looks_like_pasted_jd(q):
-        return Decision("recruit", "pasted-jd", None)
+        return Decision("deep", "pasted-jd", None)
     if "more people like" in ql and _looks_like_linkedin_profile(q):
-        return Decision("recruit", "similar-person", None)
-    if _any(ql, _RECRUIT_INTENT):
-        return Decision("recruit", "recruit-intent", None)
+        return Decision("deep", "similar-person", None)
+    if _any(ql, _DEEP_INTENT):
+        return Decision("deep", "deep-intent", None)
 
     # 2. CONTACTS — the "contacts" noun wins over company/network ("my contacts at X" != "people at X").
     if _any(ql, _CONTACTS_INTENT):
@@ -179,7 +181,7 @@ def classify(query: str) -> Decision:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Route a search query to a surface (recruit/contacts/sql/company/network).")
+    ap = argparse.ArgumentParser(description="Route a search query to a surface (deep/contacts/sql/company/network).")
     ap.add_argument("--query", required=True)
     args = ap.parse_args()
     d = classify(args.query)

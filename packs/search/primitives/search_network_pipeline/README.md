@@ -61,7 +61,7 @@ shortcuts (founder queries normally drop bands), and unknown band values fail
 loudly. `prepare` applies the pin to the prepared payload and threads the flag
 into the emitted `execute_command`; on `run` it requires a fresh
 `--query`/`--payload-json` start (it cannot retroactively apply to an existing
-`--state`). The `$search-profile` JD flow uses this to enforce the JD's
+`--state`). The `$search` deep-mode JD flow uses this to enforce the JD's
 seniority band at retrieval on both the TurboPuffer and local DuckDB paths.
 
 The orchestrator is intentionally Sales-Nav-like: it runs sub-primitives

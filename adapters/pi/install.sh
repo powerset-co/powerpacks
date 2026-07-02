@@ -11,7 +11,7 @@ PI_HOME="${PI_HOME:-$HOME/.pi/agent}"
 SKILLS_DIR="${1:-$PI_HOME/skills}"
 
 MANAGED_SKILLS=(
-  search search-network search-network-jd search-profile search-company search-sql search-contacts build-local-search-index
+  search search-network search-network-jd search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
   import-email import-gmail discover-contacts import-twitter
@@ -76,7 +76,6 @@ EOF
 }
 
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
-install_skill search-profile "$REPO_ROOT/packs/search/skills/search-profile/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
 install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
@@ -100,6 +99,6 @@ install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-sear
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
-printf '  search-network search-profile search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'
+printf '  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'
 printf '  setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail discover-contacts import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

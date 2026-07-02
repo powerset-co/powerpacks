@@ -37,19 +37,19 @@ BASELINE_LENIENT = 0.9792
 
 
 class TestClassify(unittest.TestCase):
-    def test_job_url_routes_recruit(self):
-        self.assertEqual(rq.classify("https://job-boards.greenhouse.io/anthropic/jobs/123").route, "recruit")
-        self.assertEqual(rq.classify("https://jobs.lever.co/acme/abc").route, "recruit")
+    def test_job_url_routes_deep(self):
+        self.assertEqual(rq.classify("https://job-boards.greenhouse.io/anthropic/jobs/123").route, "deep")
+        self.assertEqual(rq.classify("https://jobs.lever.co/acme/abc").route, "deep")
 
-    def test_pasted_jd_routes_recruit(self):
+    def test_pasted_jd_routes_deep(self):
         jd = "Senior Engineer\n\nResponsibilities\n- build APIs\n\nQualifications\n- 5+ years Python"
-        self.assertEqual(rq.classify(jd).route, "recruit")
+        self.assertEqual(rq.classify(jd).route, "deep")
 
-    def test_shortlist_intent_routes_recruit(self):
-        self.assertEqual(rq.classify("build me a shortlist of candidates for a founding engineer role").route, "recruit")
+    def test_shortlist_intent_routes_deep(self):
+        self.assertEqual(rq.classify("build me a shortlist of candidates for a founding engineer role").route, "deep")
 
-    def test_similar_person_routes_recruit(self):
-        self.assertEqual(rq.classify("find me more people like https://www.linkedin.com/in/janedoe").route, "recruit")
+    def test_similar_person_routes_deep(self):
+        self.assertEqual(rq.classify("find me more people like https://www.linkedin.com/in/janedoe").route, "deep")
 
     def test_contacts_noun_beats_company_and_network(self):
         self.assertEqual(rq.classify("search my contacts at OpenAI").route, "contacts")
@@ -81,19 +81,19 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(rq.classify("$search-sql find engineers who became PMs").route, "sql")
         self.assertEqual(rq.classify("$search-company look up Ramp").route, "company")
         # a network prefix carrying a JD still means the deep lane
-        self.assertEqual(rq.classify("$search-network https://jobs.lever.co/x/y").route, "recruit")
+        self.assertEqual(rq.classify("$search-network https://jobs.lever.co/x/y").route, "deep")
 
     def test_documented_seam_shortlist_companies(self):
-        # KNOWN baseline miss: 'shortlist' recruit verb + company subject -> mispredicts recruit.
+        # KNOWN baseline miss: 'shortlist' deep-search verb + company subject -> mispredicts deep.
         # If a future change fixes this, update the baseline + this assertion together.
-        self.assertEqual(rq.classify("shortlist the fintech companies that raised a Series B").route, "recruit")
+        self.assertEqual(rq.classify("shortlist the fintech companies that raised a Series B").route, "deep")
 
 
 class TestRoutingEvalHarness(unittest.TestCase):
     def test_run_computes_accuracy_and_confusion(self):
         tiny = [
             {"query": "staff engineers in SF", "expected": "network"},
-            {"query": "https://jobs.lever.co/x/y", "expected": "recruit"},
+            {"query": "https://jobs.lever.co/x/y", "expected": "deep"},
             {"query": "my contacts at OpenAI", "expected": "contacts"},
         ]
         r = rr.run(tiny)

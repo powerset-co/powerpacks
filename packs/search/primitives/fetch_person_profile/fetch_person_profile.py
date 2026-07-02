@@ -7,7 +7,7 @@ Lookup order (cheapest first):
 3. Postgres persons.hydrated_context (when remote creds are available)
 4. RapidAPI get-profile-data-by-url (runs by default; disable with --no-fetch)
 
-Output is a compact, source-agnostic profile summary the search-profile skill
+Output is a compact, source-agnostic profile summary $search deep mode
 uses to derive traits and build one similar-person candidate search. The
 RapidAPI path reuses enrich_people's fetch + cache handling, so a paid fetch
 seeds the same cache used by ingestion.

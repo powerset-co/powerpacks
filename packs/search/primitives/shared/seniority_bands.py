@@ -1,6 +1,6 @@
 """Canonical seniority-band parsing for pinned retrieval filters.
 
-The JD/profile search flow (packs/search/skills/search-profile) derives
+The JD/profile search flow (packs/search/skills/search) derives
 canonical seniority bands from a job description's explicit level language and
 pins them on every profile search so retrieval — local DuckDB and prod
 TurboPuffer alike — only returns in-band candidates instead of relying on the
@@ -110,8 +110,8 @@ def pin_payload_semantic_query(payload: dict[str, Any], query: str) -> dict[str,
     generic prose ("Engineers specializing in distributed systems design...") and
     leads every bm25 list with the same head term, which collapses distinct probe
     intents into the same embedding neighborhood and caps recall. Preserving the
-    raw query as the semantic (vector) side keeps each probe specific so a shotgun
-    of probes spreads across the space — while expansion's bm25 + structured
+    raw query as the semantic (vector) side keeps each probe specific so a wide
+    search of probes spreads across the space — while expansion's bm25 + structured
     filters (location, education, company, seniority, headcount, ...) are kept.
     """
     out = dict(payload)

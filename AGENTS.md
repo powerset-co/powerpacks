@@ -236,9 +236,9 @@ only; keep that scoped to the msgvault primitives.
   (`route_query.py`) and, for `network` queries, use the
   `search_network_pipeline.py prepare --query ...` path for ordinary people
   searches and company-only lookups; the primitive owns company-directory fast
-  path detection. For job posting URLs, pasted JDs, or broad role briefs, load
-  `packs/search/skills/recruit/SKILL.md` (`$recruit` supersedes the deprecated
-  `$search-profile`; a job URL runs through `recruit_loop.py --jd-url`). Do not
+  path detection. For job posting URLs, pasted JDs, or broad role briefs, the
+  router returns `deep` — load `packs/search/skills/search/deep-mode.md` and run
+  the deep-search engine (a job URL runs through `deep_search_loop.py --jd-url`). Do not
   grep/search/read search docs, schemas, primitive source, or prior artifacts on
   the happy path.
 
@@ -262,23 +262,16 @@ Routes:
   `packs/search/skills/search/SKILL.md`
   The single people-search door: its **Step 0** runs
   `packs/search/primitives/route_query/route_query.py` to classify the query,
-  then dispatches — deep JD/URL/brief/shortlist → `$recruit`, company →
+  then dispatches — deep JD/URL/brief/shortlist → **`$search` deep mode**, company →
   `$search-company`, relational/aggregate → `$search-sql`, my/set contacts →
   `$search-contacts`, and ordinary people searches stay here on the fast local
   DuckDB / TurboPuffer path. The retrieval primitive is still
   `search_network_pipeline.py` (only the skill/route was renamed).
-- `$recruit`, emulate a recruiting team end-to-end for a JD — **job posting
-  URLs** (via `recruit_loop.py --jd-url`), **pasted job descriptions**, and
-  **complex role briefs** all route here — shotgun many small archetype searches
-  + mixture-of-judges shortlist + core-gate + expand-from-anchor + epoch
-  convergence vs a judged ground-truth set (supersedes the deleted
-  search-highlight) → `packs/search/skills/recruit/SKILL.md`
-- `$search-profile` — **deprecated alias of `$recruit`.** Job-posting URLs,
-  pasted JDs, complex role briefs, and recruiter plan-and-execute are now
-  handled by `$recruit`, which does the same JD→judged-shortlist job with a
-  core-tagged plan, mixture-of-judges, core-gate, and IC-track-aware seniority.
-  Route these to `$recruit`; `packs/search/skills/search-profile/SKILL.md` still
-  works for back-compat but new work should use `$recruit`.
+  **Deep mode** (job-posting URLs via `deep_search_loop.py --jd-url`, pasted JDs,
+  complex role briefs, "build a shortlist", "more people like <url>") loads
+  `packs/search/skills/search/deep-mode.md` and runs the deep-search engine — a
+  wide search of many small archetype probes + mixture-of-judges shortlist +
+  core-gate + expand-from-anchor + epoch convergence vs a judged ground-truth set.
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
 - `$search-sql`, relational/aggregate local people queries ("who overlapped
@@ -288,15 +281,17 @@ Routes:
 - `$search-contacts`, my contacts, set contacts, contact field filtering →
   `packs/contacts/skills/search-contacts/SKILL.md`
 
-> **Search family (consolidated 2026-06-30).** `$search` is the single people-search door: its
-> Step-0 router (`packs/search/primitives/route_query/route_query.py`, baseline strict 0.9375 on
-> `packs/search/evals/routing/cases.json`) dispatches to `$recruit` (deep JD / job-posting URL /
-> role brief / shortlist / "more people like <url>"), `$search-company`, `$search-sql`, and
-> `$search-contacts`, and keeps ordinary people searches on the fast local DuckDB / TurboPuffer
-> path. `$search-company` / `$search-sql` / `$search-contacts` remain **distinct surfaces (kept,
-> not folded)** — reached through `$search`'s router or directly. **Deprecated aliases, kept for a
-> release:** `$search-network` → `$search`; `$search-profile` → `$recruit` (both still resolve; new
-> work uses the new names). The retrieval primitive is still `search_network_pipeline.py` and the
+> **Search family (single `$search` door, consolidated 2026-07-01).** `$search` is the one
+> people-search door: its Step-0 router (`packs/search/primitives/route_query/route_query.py`,
+> baseline strict 0.9375 on `packs/search/evals/routing/cases.json`) dispatches to its own **deep
+> mode** (deep JD / job-posting URL / role brief / shortlist / "more people like <url>" →
+> `packs/search/skills/search/deep-mode.md`, the deep-search engine), plus `$search-company`,
+> `$search-sql`, and `$search-contacts`, and keeps ordinary people searches on the fast local
+> DuckDB / TurboPuffer path. `$search-company` / `$search-sql` / `$search-contacts` remain
+> **distinct surfaces (kept, not folded)** — reached through `$search`'s router or directly.
+> **`$recruit` and `$search-profile` were removed** (folded into `$search` deep mode); the engine
+> package is `packs/search/primitives/deep_search/`. `$search-network` stays a recognized deprecated
+> alias of `$search`. The retrieval primitive is still `search_network_pipeline.py` and the
 > `search-network-jd-*` schemas/tasks keep their names — only the skill routes were renamed.
 
 - `$build-local-search-index`, local indexing, build local search index,
@@ -400,7 +395,7 @@ powerpacks/
 │   │   ├── docs/
 │   │   └── README.md
 │   ├── indexing/               # build-local-search-index local artifacts
-│   ├── search/                 # search (router), recruit, search-company, search-sql
+│   ├── search/                 # search (router + deep mode), search-company, search-sql
 │   └── powerset/               # cross-pack tooling (doctor, auth, ...)
 ├── skills/                     # core skills (search, search-company)
 ├── tests/                      # unittest, run with uv run --project . python -m unittest discover

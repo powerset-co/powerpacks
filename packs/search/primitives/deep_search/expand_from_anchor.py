@@ -2,7 +2,7 @@
 
 Expand-from-anchor: once the judge confirms strong candidates, search for their neighbors by
 building a work-described query from each anchor's OWN profile (headline + recent positions +
-companies + skills). Those seeds feed recruit/run_shotgun.py exactly like decompose_jd seeds, and
+companies + skills). Those seeds feed deep_search/run_wide_search.py exactly like decompose_jd seeds, and
 because they describe a *proven-good* profile they surface similar people the generic JD seeds
 missed.
 

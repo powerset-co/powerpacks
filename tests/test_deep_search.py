@@ -1,4 +1,4 @@
-"""Unit tests for the $recruit consensus + ground-truth-gap primitives (pure functions)."""
+"""Unit tests for the $search deep-mode consensus + ground-truth-gap primitives (pure functions)."""
 from __future__ import annotations
 
 import csv
@@ -14,7 +14,7 @@ from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIM = ROOT / "packs" / "search" / "primitives" / "recruit"
+PRIM = ROOT / "packs" / "search" / "primitives" / "deep_search"
 if str(PRIM) not in sys.path:
     sys.path.insert(0, str(PRIM))
 
@@ -36,7 +36,7 @@ bei = _load("build_eval_inputs")
 tc = _load("triage_candidates")
 cj_judge = _load("codex_judge")
 rs = _load("robust_source")
-rl = _load("recruit_loop")
+rl = _load("deep_search_loop")
 fj = _load("fetch_jd")
 
 
@@ -53,26 +53,26 @@ class TestSubprocessUtils(unittest.TestCase):
             su.run_checked([sys.executable, "-c", "pass"], expected_paths=[missing], description="artifact")
         self.assertEqual(ctx.exception.missing, [missing])
 
-    def test_run_shotgun_imports_sibling_subprocess_utils(self):
-        self.assertTrue(hasattr(_load("run_shotgun"), "run_checked"))
+    def test_run_wide_search_imports_sibling_subprocess_utils(self):
+        self.assertTrue(hasattr(_load("run_wide_search"), "run_checked"))
 
 
-class TestRunShotgunPartialFailure(unittest.TestCase):
-    """A single flaky probe must NOT abort the whole shotgun (robustness: tolerate dead probes,
+class TestRunWideSearchPartialFailure(unittest.TestCase):
+    """A single flaky probe must NOT abort the whole wide search (robustness: tolerate dead probes,
     fail only when none survive)."""
 
     def test_prepare_returns_none_on_probe_failure_instead_of_raising(self):
-        rsg = _load("run_shotgun")
+        rsg = _load("run_wide_search")
         with tempfile.TemporaryDirectory() as td:
             probe_dir = Path(td) / "probes" / "q00"
-            # rsg.CommandError (not su.CommandError): run_shotgun's except binds its own import.
+            # rsg.CommandError (not su.CommandError): run_wide_search's except binds its own import.
             boom = rsg.CommandError(["prepare"], returncode=1, description="prepare probe q00")
             with mock.patch.object(rsg, "run_checked", side_effect=boom):
                 result = rsg._prepare({"key": "q00", "query": "flaky"}, probe_dir, ".env", True)
         self.assertIsNone(result)  # tolerated (dropped by ok_seeds), not propagated
 
     def test_prepare_returns_payload_path_on_success(self):
-        rsg = _load("run_shotgun")
+        rsg = _load("run_wide_search")
         with tempfile.TemporaryDirectory() as td:
             probe_dir = Path(td) / "probes" / "q00"
             prep = probe_dir / "prep" / "sub"
@@ -84,7 +84,7 @@ class TestRunShotgunPartialFailure(unittest.TestCase):
             self.assertTrue((probe_dir / "payload.json").exists())
 
     def test_run_returns_false_on_probe_failure_instead_of_raising(self):
-        rsg = _load("run_shotgun")
+        rsg = _load("run_wide_search")
         with tempfile.TemporaryDirectory() as td:
             probe_dir = Path(td) / "probes" / "q00"
             probe_dir.mkdir(parents=True)
@@ -95,7 +95,7 @@ class TestRunShotgunPartialFailure(unittest.TestCase):
         self.assertFalse(ok)  # tolerated (build_union skips the missing ledger), not propagated
 
     def test_run_returns_true_on_success(self):
-        rsg = _load("run_shotgun")
+        rsg = _load("run_wide_search")
         with tempfile.TemporaryDirectory() as td:
             probe_dir = Path(td) / "probes" / "q00"
             probe_dir.mkdir(parents=True)
@@ -443,7 +443,7 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(row["source_channel"], "gmail")
         self.assertEqual(row["duplicate_signal"]["matched_probe_count"], 2)
         self.assertEqual(row["duplicate_signal"]["matched_probe_ids"], ["q1", "q2"])
-        # no provenance on file -> empty, never a placeholder like "recruit"/"shotgun"
+        # no provenance on file -> empty, never a hardcoded placeholder value
         bare = bei.build_frontier([union_row])[0]
         self.assertEqual((bare["source_operator"], bare["source_channel"]), ("", ""))
 
@@ -876,7 +876,7 @@ class TestRecruitLoopAnchors(unittest.TestCase):
 
 
 class TestFetchJd(unittest.TestCase):
-    """URL->JD front-end that lets $recruit accept a job-posting URL (search-profile's input)."""
+    """URL->JD front-end that lets $search deep mode accept a job-posting URL."""
 
     def test_extract_drops_chrome_keeps_content_and_title(self):
         html = (
@@ -930,7 +930,7 @@ class TestFetchJd(unittest.TestCase):
                 sys.argv = argv
             self.assertTrue(out.exists())  # thin content is still written
 
-    def test_recruit_loop_requires_exactly_one_jd_input(self):
+    def test_deep_search_loop_requires_exactly_one_jd_input(self):
         with tempfile.TemporaryDirectory() as d:
             argv = sys.argv
             # neither jd-file nor jd-url
@@ -947,7 +947,7 @@ class TestFetchJd(unittest.TestCase):
             finally:
                 sys.argv = argv
 
-    def test_recruit_loop_jd_url_fetches_before_loop(self):
+    def test_deep_search_loop_jd_url_fetches_before_loop(self):
         with tempfile.TemporaryDirectory() as d:
             run_dir = Path(d) / "run"
             (run_dir / "epoch0").mkdir(parents=True)
@@ -955,14 +955,31 @@ class TestFetchJd(unittest.TestCase):
             argv = sys.argv
             sys.argv = ["loop", "--jd-url", "https://example.test/job", "--run-dir", str(run_dir), "--created-at", "t"]
             try:
-                # stub the fetch_jd subprocess: write jd.txt like the real primitive would
+                # stub the fetch_jd subprocess: write a realistic (non-thin) jd.txt like the real primitive would
                 def fake_run(cmd, **kw):
-                    (run_dir / "jd.txt").write_text("Senior Backend Engineer\nBuild APIs.\n")
+                    (run_dir / "jd.txt").write_text(
+                        "Senior Backend Engineer\n\n" + ("Build and operate high-throughput APIs. " * 20))
                 with mock.patch.object(rl, "run", side_effect=fake_run):
                     rl.main()  # returns at awaiting_plan_approval (no SystemExit)
             finally:
                 sys.argv = argv
             self.assertTrue((run_dir / "jd.txt").exists())  # URL was fetched to jd.txt before the loop
+
+    def test_deep_search_loop_rejects_thin_fetched_jd(self):
+        with tempfile.TemporaryDirectory() as d:
+            run_dir = Path(d) / "run"
+            argv = sys.argv
+            sys.argv = ["loop", "--jd-url", "https://example.test/js-job", "--run-dir", str(run_dir), "--created-at", "t"]
+            try:
+                # a JS-rendered page fetches to near-empty text: the loop must stop, not build a garbage plan
+                def fake_run(cmd, **kw):
+                    (run_dir / "jd.txt").write_text("Apply now\n")
+                with mock.patch.object(rl, "run", side_effect=fake_run):
+                    with self.assertRaises(SystemExit) as ctx:
+                        rl.main()
+                self.assertEqual(ctx.exception.code, 1)  # thin JD -> hard fail before sourcing
+            finally:
+                sys.argv = argv
 
 
 if __name__ == "__main__":

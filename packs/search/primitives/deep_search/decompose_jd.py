@@ -5,9 +5,9 @@ harness (Claude Code, Codex, another skill) produces the seeds identically. Each
 RICH, work-described sentence (what the person *built/did*, not a job title) — diversity across
 seeds is the whole point, because the downstream `--preserve-query-semantic` path uses each seed
 verbatim as the retrieval vector, and overlapping/title-y seeds collapse recall (see
-packs/search/docs/recruit-ground-truth-status.md).
+packs/search/docs/deep-search-ground-truth-status.md).
 
-Output: seeds.json = [{"key": "q00", "query": "..."}, ...] — consumed by recruit/run_shotgun.py.
+Output: seeds.json = [{"key": "q00", "query": "..."}, ...] — consumed by deep_search/run_wide_search.py.
 One OpenAI call (json_object), mirroring expand_search_request's client pattern.
 """
 from __future__ import annotations
@@ -15,11 +15,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
+SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+from openai_client import make_openai_client  # noqa: E402
+
 DEFAULT_MODEL = os.environ.get("RECRUIT_DECOMPOSE_MODEL", "gpt-4o")
-DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
 
 SYSTEM = (
     "You are a technical recruiting sourcer. Decompose a job description into a set of DIVERSE "
@@ -77,9 +82,7 @@ def main() -> None:
         print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": "OPENAI_API_KEY not set"}))
         raise SystemExit(1)
 
-    import openai  # imported here so --help works without the dep installed
-
-    client = openai.OpenAI(api_key=key, base_url=DEFAULT_API_BASE)
+    client = make_openai_client(key)
     resp = client.chat.completions.create(
         model=args.model,
         messages=build_messages(jd, args.n),

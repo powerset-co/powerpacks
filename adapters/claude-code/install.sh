@@ -68,7 +68,6 @@ EOF
 }
 
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
-install_skill search-profile "$REPO_ROOT/packs/search/skills/search-profile/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
 install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
@@ -92,7 +91,7 @@ install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-sear
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search search-profile search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search build-outbound"
+echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search build-outbound"
 echo "  setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context discover-contacts import-twitter"
 echo
 echo "restart Claude Code to pick up the skill list"
