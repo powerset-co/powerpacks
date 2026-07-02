@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -42,6 +43,7 @@ EXPAND = P / "expand_from_anchor.py"
 WIDE_SEARCH = P / "run_wide_search.py"
 CODEX_JUDGE = P / "codex_judge.py"
 GPT_JUDGE = ROOT / "packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py"
+TRIAGE = P / "triage_candidates.py"
 CONSENSUS = P / "judge_consensus.py"
 
 # A fetched JD below this many chars is almost certainly a JS-rendered page that yielded no real
@@ -117,7 +119,10 @@ def main() -> None:
     ap.add_argument("--created-at", required=True, help="ISO timestamp for the plan")
     ap.add_argument("--max-epochs", type=int, default=3, help="Total epochs incl. epoch 0 (converge-capped)")
     ap.add_argument("--score-threshold", type=float, default=0.40, help="Shortlist cutoff on the canonical score")
-    ap.add_argument("--judge", choices=["codex", "gpt"], default="codex", help="codex = free; gpt = paid gpt-5.4")
+    ap.add_argument("--judge", choices=["codex", "gpt"], default=os.environ.get("POWERPACKS_DEEP_JUDGE", "codex"),
+                    help="Phase-2 judge engine: codex = free (subscription, slower); gpt = paid gpt-5.4 on the flex tier (fast). Default from POWERPACKS_DEEP_JUDGE env, else codex.")
+    ap.add_argument("--triage", action=argparse.BooleanOptionalAction, default=True,
+                    help="Phase-1 cheap conservative filter (triage_candidates) over each epoch's frontier before the judge; --no-triage judges the full frontier")
     ap.add_argument("--reasoning-effort", default="low")
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--n", type=int, default=16, help="seeds per robust_source round (epoch 0)")
@@ -245,10 +250,25 @@ def main() -> None:
                 run(build_cmd, expected_paths=[edir / "plan.json", edir / "candidate_frontier.jsonl", edir / "candidate_frontier.json", edir / "probe_summaries.json"],
                     description=f"epoch{epoch} build_eval_inputs")
 
-            # accumulate union; judge ONLY new pids without mutating canonical frontier artifacts
+            # accumulate union; judge ONLY new pids without mutating canonical union artifacts
             for r in _jsonl(edir / "union.jsonl"):
                 master_union.setdefault(r["person_id"], r)
+            # Phase 1 — cheap conservative triage (keep/maybe pass; only clear misses drop) so
+            # the expensive per-candidate judge sees a much smaller frontier. Resume-safe twice
+            # over: it only runs when the frontier still has unjudged candidates, and
+            # candidate_frontier.full.jsonl is the pre-triage backup/marker so a rerun never
+            # re-filters survivors.
+            triage_pool = None
             frontier = _jsonl(edir / "candidate_frontier.jsonl")
+            if args.triage:
+                pending = [c for c in frontier if (c.get("person_id") or c.get("candidate_id")) not in judged_pids]
+                if pending and not (edir / "candidate_frontier.full.jsonl").exists():
+                    run([sys.executable, TRIAGE, "--run-dir", edir, "--concurrency", max(args.concurrency, 8)],
+                        expected_paths=[edir / "candidate_frontier.jsonl", edir / "candidate_frontier.full.jsonl"],
+                        description=f"epoch{epoch} triage")
+                    frontier = _jsonl(edir / "candidate_frontier.jsonl")
+                if (edir / "candidate_frontier.full.jsonl").exists():
+                    triage_pool = len(_jsonl(edir / "candidate_frontier.full.jsonl"))
             new = [c for c in frontier if (c.get("person_id") or c.get("candidate_id")) not in judged_pids]
             (edir / "candidate_frontier.to_judge.jsonl").write_text("".join(json.dumps(c, sort_keys=True) + "\n" for c in new))
             new_judged = 0
@@ -286,6 +306,7 @@ def main() -> None:
             now_pids = {r["person_id"] for r in strong_now}
             new_strong = now_pids - strong_pids
             history.append({"epoch": epoch, "phase": "jd" if epoch == 0 else "anchor",
+                            "triage_pool": triage_pool, "frontier": len(frontier),
                             "new_judged": new_judged, "judged_total": len(judged_pids),
                             "judge_errors_dropped": judge_errors_dropped,
                             "strong_total": len(now_pids), "new_strong": len(new_strong)})
