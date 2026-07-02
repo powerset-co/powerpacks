@@ -87,7 +87,10 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line:
-            rows.append(normalize_verdict(json.loads(line)))
+            row = json.loads(line)
+            if row.get("error"):
+                continue  # transient judge failure, not a verdict — must not count as a 0.0 rejection
+            rows.append(normalize_verdict(row))
     return rows
 
 
