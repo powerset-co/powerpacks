@@ -874,7 +874,8 @@ class TestRecruitLoopAnchors(unittest.TestCase):
             (edir / "candidate_evaluations.raw.jsonl").write_text(json.dumps({"candidate_id": "p1", "jd_score": 0.1}) + "\n")
 
         argv = sys.argv
-        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1", "--plan-approved"]
+        # --no-triage: this test pins plan preservation + build skip on resume, not phase-1 filtering
+        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1", "--plan-approved", "--no-triage"]
         try:
             with mock.patch.object(rl, "run", side_effect=fake_run), mock.patch.object(rl, "judge", side_effect=fake_judge):
                 rl.main()
