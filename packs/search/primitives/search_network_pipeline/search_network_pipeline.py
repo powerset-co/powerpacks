@@ -625,6 +625,12 @@ def compact_preview_local(payload: dict[str, Any], payload_json: Path, db_path: 
                 f"broad search: hard filters match {matched} of {total} people in the local index; "
                 "consider narrowing or an agentic SQL prefilter before running LLM stages over most of the index"
             )
+        elif matched <= max(3, total // 100):
+            runtime_notes.append(
+                f"suspiciously narrow pool: hard filters match only {matched} of {total} people; "
+                "check the extracted hard filters before executing — a seniority band inferred from a role noun "
+                "(e.g. 'product managers' -> seniority_bands: [manager]) is a common cause; recommend modify"
+            )
     return {
         "normalized_query": payload.get("normalized_query"),
         "payload_json": str(payload_json),

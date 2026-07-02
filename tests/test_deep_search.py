@@ -1032,5 +1032,17 @@ class TestFetchJd(unittest.TestCase):
                 sys.argv = argv
 
 
+class TestFetchJDAshby(unittest.TestCase):
+    """fetch_ashby early-outs (no network in either case)."""
+
+    def test_non_ashby_host_returns_none(self):
+        fj = _load("fetch_jd")
+        self.assertIsNone(fj.fetch_ashby("https://jobs.lever.co/acme/2e718684-4f75-4a99-8d6b-3b6bd44e4228"))
+
+    def test_ashby_url_without_job_uuid_returns_none(self):
+        fj = _load("fetch_jd")
+        self.assertIsNone(fj.fetch_ashby("https://jobs.ashbyhq.com/supabase"))
+
+
 if __name__ == "__main__":
     unittest.main()
