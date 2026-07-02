@@ -157,10 +157,15 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
      # loop epochs reuse the approved plan (no re-extract): --plan <run>/epoch0/plan.json
    ```
 
-   *No triage step.* Triage (`triage_candidates`, still available) was a cost hack to shrink the
-   pool before the **paid** judge — but it is lossy (measured: it dropped 2 reachable GT) and the
-   `codex_judge` is **free**, so judge the whole union and let the rubric gate. Only triage if you
-   are paying per judge call and the union is very large.
+   *Two-phase judging is the default.* The loop runs **phase 1: triage** (`triage_candidates`,
+   cheap batched `gpt-4.1-mini`, conservative keep/maybe pass — only clear misses drop) over each
+   epoch's frontier, then **phase 2: the judge** over the survivors. Rationale: the codex judge is
+   token-free but not time-free (~40s/candidate — a 2k union is hours), and the gpt judge is paid
+   per candidate; triage cuts the judged pool several-fold for cents. It is mildly lossy
+   (measured on an earlier pass: 2 reachable GT dropped) — pass `--no-triage` for a
+   maximum-fidelity run where wall-clock/cost don't matter. Pick the phase-2 engine with
+   `--judge codex|gpt` (or the `POWERPACKS_DEEP_JUDGE` env preference): codex = free/slower,
+   gpt = paid `gpt-5.4` on the flex tier, fast.
 
 3. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
    rubric with the IC seniority hard-gates (default `gpt-5.4`). **Default to a CROSS-VENDOR panel:**

@@ -1060,5 +1060,42 @@ class TestJudgeErrorHandling(unittest.TestCase):
         self.assertEqual([r["person_id"] for r in rows], ["p1"])
 
 
+class TestTwoPhaseJudging(unittest.TestCase):
+    def test_loop_parser_accepts_triage_and_judge_flags(self):
+        argv_seen = {}
+        real_parse = argparse.ArgumentParser.parse_args
+
+        def spy(self, *a, **k):
+            ns = real_parse(self, ["--jd-file", "x", "--run-dir", "y", "--created-at", "z",
+                                   "--no-triage", "--judge", "gpt"])
+            argv_seen.update(vars(ns))
+            raise SystemExit(0)
+
+        dsl = _load("deep_search_loop")
+        with unittest.mock.patch.object(argparse.ArgumentParser, "parse_args", spy):
+            with self.assertRaises(SystemExit):
+                dsl.main()
+        self.assertFalse(argv_seen["triage"])
+        self.assertEqual(argv_seen["judge"], "gpt")
+
+    def test_triage_default_on(self):
+        dsl = _load("deep_search_loop")
+        ns = argparse.Namespace()
+        # parse defaults directly via a fresh parser run
+        import io, contextlib
+        parser_defaults = None
+        real_parse = argparse.ArgumentParser.parse_args
+
+        def spy(self, *a, **k):
+            nonlocal parser_defaults
+            parser_defaults = real_parse(self, ["--jd-file", "x", "--run-dir", "y", "--created-at", "z"])
+            raise SystemExit(0)
+
+        with unittest.mock.patch.object(argparse.ArgumentParser, "parse_args", spy):
+            with self.assertRaises(SystemExit):
+                dsl.main()
+        self.assertTrue(parser_defaults.triage)
+
+
 if __name__ == "__main__":
     unittest.main()
